@@ -179,6 +179,21 @@ The entry point handles *one task*. The `task_generator` enumerates the **N task
 
 The skill does **not** invent a `task_generator` — refuse with `spec_invalid` if absent. (The slash command elicits this from the user; MARs supplies it explicitly.)
 
+### 5b. Cover non-axis required params (fixed_params)
+
+The entry point's signature may require params the `task_generator` does NOT vary — e.g. an executor `monte_carlo_pi(seed, samples)` where only `seed` is swept. If nothing supplies `samples`, the generated `tasks.py` `resolve(i)` returns only the axis kwargs, the cluster never exports `HPC_KW_SAMPLES`, and the executor crashes on every task (#195).
+
+Partition the signature params:
+
+- **Axis params** — names the `task_generator` produces (cartesian axes, the `param` of a numeric sweep, keys in enumerated/items dicts). Handled per-task; leave them out of `fixed_params`.
+- **Covered-by-default params** — params with a default in the entry point's CLI surface (argparse `default=`, a Python default value). The executor supplies its own value; safe to omit (no `fixed_params` entry needed), though you MAY pin one to make the run reproducible.
+- **Uncovered required params** — required (no default) AND not an axis. These MUST be resolved or every task fails. For each, set a constant in `entry_point.fixed_params`:
+  - Use the entry point's argparse/CLI **default** if it has one you're pinning.
+  - Else the caller-supplied value (the slash elicits it; see `/submit-hpc`'s `uncovered_param` dialog).
+  - Never invent a value silently — if there's no default and the caller gave none, that's an ambiguity to surface, not a guess.
+
+`fixed_params` is baked into every `resolve(i)` dict (same seam as frozen-config shas), so the param ships per-task. A swept axis of the same name wins. `fixed_params` requires `task_generator` (the framework can only thread constants into a materialized `tasks.py`). The submit-time `validate-executor-signatures` gate refuses an uncovered required param (`uncovered_required_param`) — covering it here is what keeps that gate green.
+
 ### 6. Pre-declare the DataAxis hint (autonomous tree walk)
 
 In the **direct-decoration path (3a)**, `classify-axis` can introspect the decorated function directly later — pre-declaring is optional, since the framework will infer the axis from the function body at submit time. The skill can still pre-fill the hint to short-circuit one round-trip.
@@ -208,10 +223,13 @@ Assemble the `InterviewSpec` JSON. The `entry_point` block differs by pathway:
   "task_generator": { "kind": "...", "params": { ... } },
   "entry_point": {
     "kind": "register_run",
-    "run_name": "<the function name decorated in Step 3a>"
+    "run_name": "<the function name decorated in Step 3a>",
+    "fixed_params": { "<uncovered required param>": <value from Step 5b>, ... }
   }
 }
 ```
+
+(`fixed_params` omitted when every signature param is an axis or has a default — Step 5b.)
 
 **Wrapper path (3b):**
 
@@ -227,6 +245,7 @@ Assemble the `InterviewSpec` JSON. The `entry_point` block differs by pathway:
     "argv": [ ... from Step 3b.i ... ],
     "signature": { ... from Step 3b.i ... },
     "frozen_configs": [ ... from Step 4 ... ],
+    "fixed_params": { ... uncovered required params from Step 5b, else omit ... },
     "data_axis_hint": { ... from Step 6 if resolved, else omit ... }
   }
 }

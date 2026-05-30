@@ -205,6 +205,38 @@ _PARAM_NAME = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
 # maps these to Python annotations.
 _SignatureType = Literal["str", "int", "float", "bool"]
 
+# Shared description for the ``fixed_params`` field on every entry-point kind.
+# A *fixed* param is one the executor requires but that does NOT vary per task
+# (not a sweep axis) — e.g. ``samples`` when only ``seed`` is swept. Without
+# this, resolve(i) returns only the axis params, the cluster never exports
+# HPC_KW_<param>, and the executor crashes on every task (#195). The interview
+# threads each entry into every materialized task's kwargs (same seam as the
+# frozen-config shas), so resolve() returns the merged dict.
+_FIXED_PARAMS_DESC = (
+    "Constant (non-axis) kwargs the executor requires but that do not vary per "
+    "task — e.g. {'samples': 10000} when only 'seed' is a sweep axis. Each is "
+    "baked into every materialized task's kwargs (resolve(i)), so the cluster "
+    "exports HPC_KW_<param> and the executor command is complete. Keys must be "
+    "valid Python identifiers; values are JSON scalars. A swept axis of the "
+    "same name wins (the axis value is per-task; this is the constant fallback). "
+    "Requires task_generator — a hand-written tasks.py must include the constants "
+    "itself. Resolves #195: a required signature param left uncovered."
+)
+
+
+def _validate_fixed_params(value: dict[str, Any]) -> dict[str, Any]:
+    """Reject non-identifier keys in a ``fixed_params`` mapping."""
+    import re
+
+    name_re = re.compile(_PARAM_NAME)
+    for key in value:
+        if not name_re.match(key):
+            raise ValueError(
+                f"fixed_params key {key!r} is not a valid Python identifier; "
+                "fixed params become kwargs on tasks.resolve(i)"
+            )
+    return value
+
 
 class _RegisterRunEntry(BaseModel):
     """Canonical Python entry point: an ``@register_run``-decorated function.
@@ -228,6 +260,12 @@ class _RegisterRunEntry(BaseModel):
         min_length=1,
         description="The ``@register_run`` function name to discover (in notebooks/ or .py files under the experiment).",
     )
+    fixed_params: dict[str, Any] = Field(default_factory=dict, description=_FIXED_PARAMS_DESC)
+
+    @model_validator(mode="after")
+    def _check_fixed_params(self) -> _RegisterRunEntry:
+        _validate_fixed_params(self.fixed_params)
+        return self
 
 
 class _PythonModuleEntry(BaseModel):
@@ -396,11 +434,13 @@ class _ShellCommandEntry(BaseModel):
             "interactive classification interview."
         ),
     )
+    fixed_params: dict[str, Any] = Field(default_factory=dict, description=_FIXED_PARAMS_DESC)
 
     @model_validator(mode="after")
     def _validate(self) -> _ShellCommandEntry:
         import re
 
+        _validate_fixed_params(self.fixed_params)
         param_re = re.compile(_PARAM_NAME)
         bad = [name for name in self.signature if not param_re.match(name)]
         if bad:

@@ -140,6 +140,15 @@ def validate_executor_signatures(
     parameters = inspect.signature(fn).parameters
     accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
+    # Accumulate the keys resolve(i) actually produced across the sampled
+    # tasks, so we can cross-check the REVERSE direction after the loop: every
+    # REQUIRED signature param must be covered by resolve()'s kwargs (#195).
+    # The per-kwarg loop below catches the forward direction (a kwarg with no
+    # matching param); a required param with no kwarg is the opposite gap and
+    # is what makes the cluster executor crash on every task ($HPC_KW_<param>
+    # is never exported, the templated command runs `--<param>` with no value).
+    resolved_keys: set[str] = set()
+
     try:
         n = int(tasks_module.total())
     except Exception as exc:  # noqa: BLE001
@@ -190,6 +199,7 @@ def validate_executor_signatures(
                 )
             )
             continue
+        resolved_keys.update(kwargs.keys())
         for key, value in kwargs.items():
             if key not in parameters:
                 if accepts_kwargs:
@@ -241,5 +251,56 @@ def validate_executor_signatures(
                             },
                         )
                     )
+
+    # Reverse direction (#195): every REQUIRED signature param must be covered
+    # by resolve()'s kwargs. A required param (no default) that resolve() never
+    # supplies isn't exported as HPC_KW_<param> on the cluster, so the templated
+    # executor command runs `--<param>` with an empty/absent value and crashes
+    # on EVERY task (e.g. argparse "expected one argument"). Catch it statically
+    # at submit time rather than after N failed cluster tasks. ``_VAR`` kinds
+    # (`*args` / `**kwargs`) are never "required" in this sense.
+    # Only meaningful once we've actually observed resolve()'s output: if no
+    # task was sampled (n == 0 — caught upstream by the interview's total()>=1
+    # gate, but this validator can run standalone), resolved_keys is empty and
+    # every required param would false-positive. Skip the check in that case.
+    _VAR = (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+    uncovered = (
+        [
+            name
+            for name, p in parameters.items()
+            if p.default is inspect.Parameter.empty
+            and p.kind not in _VAR
+            and name not in resolved_keys
+        ]
+        if resolved_keys
+        else []
+    )
+    for name in uncovered:
+        findings.append(
+            ValidatorFinding(
+                validator=_VALIDATOR,
+                severity="error",
+                code="uncovered_required_param",
+                message=(
+                    f"{spec.executor_module}.{spec.executor_function} requires "
+                    f"parameter {name!r} but tasks.resolve(i) never supplies it "
+                    f"(checked the first {min(n, spec.sample_n_tasks)} task(s)). "
+                    f"On the cluster HPC_KW_{name.upper()} is never exported, so "
+                    f"the executor command runs with --{name} unset and fails on "
+                    "every task."
+                ),
+                suggested_fix=(
+                    f"Cover {name!r}: declare it as an axis (so resolve() varies "
+                    "it per task), bake a fixed value into every resolve() dict, "
+                    f"or give {name!r} a default in {spec.executor_function}'s "
+                    "signature."
+                ),
+                evidence={
+                    "param_name": name,
+                    "available_kwargs": sorted(resolved_keys),
+                    "required_uncovered": uncovered,
+                },
+            )
+        )
 
     return ValidateExecutorSignaturesResult(findings=findings)

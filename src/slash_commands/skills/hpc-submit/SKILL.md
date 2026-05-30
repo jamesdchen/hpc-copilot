@@ -76,6 +76,17 @@ Otherwise, invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generat
 {"field": "entry_point", "candidates": ["train.py", "main.py"], "depends_on": [], "safe_default": "<first match>"}
 ```
 
+### 3b. Cover non-axis required executor params
+
+Once the entry point is resolved, cross-check its signature against the `task_generator`'s axes (this is what `validate-executor-signatures` gates on at submit — `uncovered_required_param`). A param that is **required** (no default in the executor's CLI surface) and **not a swept axis** must be given a constant, or every cluster task crashes at argparse (#195).
+
+- Resolved automatically when `wrap-entry-point` already wrote `fixed_params` (Step 5b), or the param has an argparse default.
+- Else add to ambiguities — the value can't be invented:
+  ```json
+  {"field": "uncovered_param", "candidates": ["samples"], "depends_on": ["entry_point"], "safe_default": {"samples": <argparse default if any, else null>}, "context": {"executor": "<run_name>", "required_no_default": ["samples"]}}
+  ```
+  The caller resolves to a `{param: value}` map; it's threaded into `entry_point.fixed_params` and baked into every `tasks.resolve(i)`. `depends_on: ["entry_point"]` — the signature isn't known until the entry point is.
+
 ### 4. Resolve data axis
 
 Check `.hpc/axes.yaml` for `executors.<run_name>` matching the current sha. If present, resolved — continue.

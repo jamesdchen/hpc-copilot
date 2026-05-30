@@ -138,6 +138,60 @@ def test_missing_parameter_emits_finding(tmp_path: Path) -> None:
     assert "horizon" in finding.evidence["available_params"]
 
 
+# ─── #195: the REVERSE direction — a required param resolve() never covers ──
+
+
+def test_uncovered_required_param_emits_finding(tmp_path: Path) -> None:
+    """The #195 bug class: the executor requires ``samples`` but the user only
+    declared ``seed`` as an axis, so resolve() never supplies it. On the cluster
+    HPC_KW_SAMPLES is never exported and every task crashes at argparse. Catch
+    it statically as an error before any cluster work."""
+    modname = _write_executor(
+        tmp_path,
+        textwrap.dedent("""
+            def main(seed: int, samples: int) -> None:
+                pass
+        """).strip(),
+    )
+    _write_tasks_py(tmp_path, [{"seed": 0}, {"seed": 1}])
+    out = validate_executor_signatures(tmp_path, spec=_spec(modname))
+    finding = next(f for f in out.findings if f.code == "uncovered_required_param")
+    assert finding.severity == "error"
+    assert finding.evidence["param_name"] == "samples"
+    assert finding.evidence["available_kwargs"] == ["seed"]
+    # The message names the cluster failure mode so the agent can act on it.
+    assert "HPC_KW_SAMPLES" in finding.message
+
+
+def test_param_with_default_is_not_required(tmp_path: Path) -> None:
+    """A signature param with a default is NOT required — resolve() may omit it
+    (the executor's argparse default applies). No uncovered_required_param."""
+    modname = _write_executor(
+        tmp_path,
+        textwrap.dedent("""
+            def main(seed: int, samples: int = 10000) -> None:
+                pass
+        """).strip(),
+    )
+    _write_tasks_py(tmp_path, [{"seed": 0}, {"seed": 1}])
+    out = validate_executor_signatures(tmp_path, spec=_spec(modname))
+    assert [f.code for f in out.findings if f.code == "uncovered_required_param"] == []
+
+
+def test_var_keyword_param_is_not_required(tmp_path: Path) -> None:
+    """``**kwargs`` is never a 'required' param — resolve() needn't fill it."""
+    modname = _write_executor(
+        tmp_path,
+        textwrap.dedent("""
+            def main(seed: int, **kwargs) -> None:
+                pass
+        """).strip(),
+    )
+    _write_tasks_py(tmp_path, [{"seed": 0}])
+    out = validate_executor_signatures(tmp_path, spec=_spec(modname))
+    assert [f.code for f in out.findings if f.code == "uncovered_required_param"] == []
+
+
 # ─── degraded paths ────────────────────────────────────────────────────
 
 
