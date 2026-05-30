@@ -28,10 +28,16 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import yaml
+
+# Regen scripts default to a core-only view — pro-plugin primitives don't
+# belong in this repo's docs/primitives/ tree. Must be set BEFORE the first
+# hpc_agent import so the registry's cached load_plugins() observes it (#198).
+os.environ.setdefault("HPC_AGENT_DISABLE_PLUGINS", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))

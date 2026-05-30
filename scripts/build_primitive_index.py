@@ -13,10 +13,16 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import yaml
+
+# Regen scripts default to a core-only view — pro-plugin primitives don't
+# belong in this repo's docs/primitives/README.md catalog. Must precede
+# the deferred hpc_agent import inside primitives_from_registry() (#198).
+os.environ.setdefault("HPC_AGENT_DISABLE_PLUGINS", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _shared import REPO_ROOT, sort_verbs, summarize_side_effects  # noqa: E402

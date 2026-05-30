@@ -23,6 +23,7 @@ All are optional; a plugin may provide any combination, or none.
 
 from __future__ import annotations
 
+import os
 import warnings
 from functools import cache
 from importlib.metadata import entry_points
@@ -39,6 +40,7 @@ __all__ = [
 ]
 
 PLUGIN_GROUP = "hpc_agent.plugins"
+DISABLE_ENV_VAR = "HPC_AGENT_DISABLE_PLUGINS"
 
 
 @cache
@@ -52,7 +54,17 @@ def load_plugins() -> tuple[Any, ...]:
     but the failure is surfaced via :func:`warnings.warn` so the
     operator notices a silently-disabled plugin (was previously a bare
     ``continue`` that swallowed every load error).
+
+    ``HPC_AGENT_DISABLE_PLUGINS=1`` short-circuits the entry-point scan
+    and returns ``()`` — the chokepoint that makes the dev-loop regen
+    scripts (``build_primitive_frontmatter`` / ``build_primitive_index``
+    / ``build_operations_index``) produce core-only output even with
+    ``hpc-agent-pro`` installed in the venv. Inherits across the
+    subprocess used by ``build_operations_index``, so a single env-var
+    read at this chokepoint covers every plugin hook below (#198).
     """
+    if os.environ.get(DISABLE_ENV_VAR) == "1":
+        return ()
     loaded: list[Any] = []
     for ep in entry_points(group=PLUGIN_GROUP):
         try:
