@@ -7,7 +7,10 @@ run_combiner / run_combiner_checked return-shape contract.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -181,47 +184,45 @@ class TestDeployRuntime:
     """
 
     def test_ssh_mkdir_then_scps_in_order(self):
-        # subprocess.run is used both inside ssh_run (mkdir) and for each scp.
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        # The mkdir runs through ssh_run (capture=True) → the close-pipes
+        # capture seam (#209); the file pushes are scp via subprocess.run.
+        # Patch both so we can assert the mkdir command and the scp order.
+        with (
+            patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
+            patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
+        ):
+            mock_ssh.return_value = _cp()
             mock_run.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
 
-        all_calls = mock_run.call_args_list
-        # Expect 11 subprocess.run invocations:
-        #   1 ssh (mkdir -p hpc_agent/models/mapreduce, .hpc/templates, .hpc/templates/common),
-        #   1 scp into hpc_agent/models/mapreduce/ (metrics_io.py),
-        #   1 scp into hpc_agent/ (executor_cli.py — for tasks.py imports),
-        #   1 scp into .hpc/_hpc_dispatch.py,
-        #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
-        #   2 scp into .hpc/templates/common/ (hpc_preamble.sh, gpu_preamble.sh),
-        #   1 scp into .hpc/_hpc_combiner.py.
-        assert len(all_calls) == 11, [c[0][0][:3] for c in all_calls]
+        # ssh mkdir: exactly one capture-seam call, and it is the mkdir. The
+        # command resolves through _ssh_binary() (bare "ssh" on Linux/macOS;
+        # the native OpenSSH abs path on Windows, per #145), so assert against
+        # the resolver rather than a hardcoded name to stay platform-agnostic.
+        assert mock_ssh.call_count == 1
+        mkdir_argv = mock_ssh.call_args[0][0]
+        assert mkdir_argv[0] == _ssh_binary()
+        assert "mkdir -p" in mkdir_argv[-1]
+        assert ".hpc/templates" in mkdir_argv[-1]
+        assert ".hpc/templates/common" in mkdir_argv[-1]
+        # Deployed hpc_agent/ must be a PEP 420 namespace package so it never
+        # shadows a pip-installed hpc_agent on the cluster: no __init__.py is
+        # created, and stale ones from old deploys are removed.
+        assert "touch" not in mkdir_argv[-1]
+        assert "rm -f" in mkdir_argv[-1]
+        assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
-        argvs = [c[0][0] for c in all_calls]
-
-        # ssh mkdir is first. The command resolves through _ssh_binary()
-        # (bare "ssh" on Linux/macOS; the native OpenSSH abs path on
-        # Windows, per #145), so assert against the resolver rather than a
-        # hardcoded name to stay platform-agnostic.
-        assert argvs[0][0] == _ssh_binary()
-        assert "mkdir -p" in argvs[0][-1]
-        assert ".hpc/templates" in argvs[0][-1]
-        assert ".hpc/templates/common" in argvs[0][-1]
-        # Deployed hpc_agent/ must be a PEP 420 namespace package so it
-        # never shadows a pip-installed hpc_agent on the cluster: no
-        # __init__.py is created, and stale ones from old deploys are
-        # removed.
-        assert "touch" not in argvs[0][-1]
-        assert "rm -f" in argvs[0][-1]
-        assert "/p/hpc_agent/__init__.py" in argvs[0][-1]
+        # Ten scp pushes via subprocess.run, in order.
+        argvs = [c[0][0] for c in mock_run.call_args_list]
+        assert len(argvs) == 10, [a[:3] for a in argvs]
 
         # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
         # missing key fails fast instead of blocking on a password prompt.
         # Layout per call: [scp, "-o", "BatchMode=yes", src, dst]. scp[0]
         # resolves through _scp_binary() (bare "scp" on Linux/macOS; the
         # native OpenSSH abs path on Windows, per #145).
-        assert all(argv[:3] == [_scp_binary(), "-o", "BatchMode=yes"] for argv in argvs[1:]), [
-            argv[:3] for argv in argvs[1:]
+        assert all(argv[:3] == [_scp_binary(), "-o", "BatchMode=yes"] for argv in argvs), [
+            argv[:3] for argv in argvs
         ]
 
         # src/dst are the final two argv elements. We index from the end
@@ -229,33 +230,33 @@ class TestDeployRuntime:
         # (``-o ControlMaster=no -o ControlPath=none``, per #154/#158) ahead
         # of src, shifting positional indices. Tail indexing is platform-agnostic.
         # Importable stub into hpc_agent/models/mapreduce/
-        assert argvs[1][-2].endswith("metrics_io.py")
-        assert argvs[1][-1].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
+        assert argvs[0][-2].endswith("metrics_io.py")
+        assert argvs[0][-1].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
 
         # executor_cli stub into hpc_agent/ (so tasks.py top-level
         # ``from hpc_agent.executor_cli import ...`` resolves on cluster).
-        assert argvs[2][-2].endswith("executor_cli.py")
-        assert argvs[2][-1].endswith(":/p/hpc_agent/executor_cli.py")
+        assert argvs[1][-2].endswith("executor_cli.py")
+        assert argvs[1][-1].endswith(":/p/hpc_agent/executor_cli.py")
 
         # Framework executor into .hpc/
-        assert argvs[3][-2].endswith("dispatch.py")
-        assert argvs[3][-1].endswith(":/p/.hpc/_hpc_dispatch.py")
+        assert argvs[2][-2].endswith("dispatch.py")
+        assert argvs[2][-1].endswith(":/p/.hpc/_hpc_dispatch.py")
 
         # Four templates into .hpc/templates/
-        template_dsts = {argv[-1] for argv in argvs[4:8]}
+        template_dsts = {argv[-1] for argv in argvs[3:7]}
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
         # Two shared preambles into .hpc/templates/common/
-        common_dsts = {argv[-1] for argv in argvs[8:10]}
+        common_dsts = {argv[-1] for argv in argvs[7:9]}
         assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
         assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
 
         # Combiner is last
-        assert argvs[10][-2].endswith("combiner.py")
-        assert argvs[10][-1].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert argvs[9][-2].endswith("combiner.py")
+        assert argvs[9][-1].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +265,15 @@ class TestDeployRuntime:
 
 
 class TestSshRunCapture:
-    def test_capture_true_by_default(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
-            mock_run.return_value = _cp()
+    def test_capture_true_routes_through_select_seam(self):
+        # capture=True (the default) funnels through the close-pipes-on-exit
+        # capture seam, not the blocking streaming subprocess.run path (#209).
+        with patch("hpc_agent.infra.remote._capture_via_select") as seam:
+            seam.return_value = _cp()
             remote.ssh_run("ls", ssh_target="u@c")
-        kwargs = mock_run.call_args.kwargs
-        assert kwargs.get("capture_output") is True
+        assert seam.call_count == 1
+        # argv (remote command last) is the seam's first positional argument.
+        assert seam.call_args[0][0][-1] == "ls"
 
     def test_capture_false_toggles_capture_output(self):
         with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
@@ -286,7 +290,7 @@ class TestSshRunCapture:
 
 class TestRunCombiner:
     def test_run_combiner_default_no_force(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(ssh_target="u@c", remote_path="/p", wave=3, run_id="r1")
         argv = mock_run.call_args[0][0]
@@ -297,7 +301,7 @@ class TestRunCombiner:
         assert "--force" not in cmd_str
 
     def test_run_combiner_force_appends_flag(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(
                 ssh_target="u@c", remote_path="/p", wave=3, run_id="r1", force=True
@@ -308,7 +312,7 @@ class TestRunCombiner:
 
 class TestRunCombinerChecked:
     def test_returns_true_on_success(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp(stdout="ok\n", stderr="", returncode=0)
             ok, out, err = transport.run_combiner_checked(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1"
@@ -318,7 +322,7 @@ class TestRunCombinerChecked:
         assert err == ""
 
     def test_returns_false_on_failure(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp(stdout="", stderr="boom", returncode=1)
             ok, out, err = transport.run_combiner_checked(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1"
@@ -328,7 +332,7 @@ class TestRunCombinerChecked:
         assert err == "boom"
 
     def test_force_threaded_through(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner_checked(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", force=True
@@ -339,7 +343,7 @@ class TestRunCombinerChecked:
 
 class TestRunCombinerShellQuoting:
     def test_remote_path_with_space_is_quoted(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(
                 ssh_target="u@c",
@@ -379,24 +383,25 @@ class TestModuleTimeoutConstants:
 
 class TestSshRunTimeout:
     def test_default_timeout_applied_when_omitted(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", ssh_target="u@c")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_overrides_default(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", ssh_target="u@c", timeout=7.5)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 7.5
 
     def test_explicit_none_disables_enforcement(self):
-        """Passing ``timeout=None`` is the documented escape hatch and
-        must propagate as a literal ``None`` to ``subprocess.run``.
+        """Passing ``timeout=None`` is the documented escape hatch and must
+        propagate as a literal ``None`` through the capture seam (and on to
+        ``subprocess.run`` / ``Popen.wait``).
         """
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", ssh_target="u@c", timeout=None)
         kwargs = mock_run.call_args.kwargs
@@ -405,7 +410,7 @@ class TestSshRunTimeout:
 
     def test_timeout_expired_reraised_as_timeout_error(self):
         cmd = "sleep 9999"
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.ssh_run(cmd, ssh_target="alice@cluster.example")
@@ -416,7 +421,7 @@ class TestSshRunTimeout:
 
     def test_timeout_message_truncates_long_command(self):
         long_cmd = "echo " + ("x" * 500)
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=long_cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.ssh_run(long_cmd, ssh_target="u@c")
@@ -526,23 +531,30 @@ class TestDeployRuntimeTimeout:
     """
 
     def test_each_subprocess_call_has_ssh_timeout(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with (
+            patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
+            patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
+        ):
+            mock_ssh.return_value = _cp()
             mock_run.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
+        # The ssh mkdir (capture seam) and every scp (subprocess.run) must
+        # carry the SSH timeout so a stuck cluster cannot block submit.
+        assert mock_ssh.call_args.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
         for call in mock_run.call_args_list:
             assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
 
 class TestRunCombinerTimeout:
     def test_default_timeout_threaded_through_to_ssh_run(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through_to_ssh_run(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=15
@@ -551,7 +563,7 @@ class TestRunCombinerTimeout:
         assert kwargs.get("timeout") == 15
 
     def test_explicit_none_threaded_through_to_ssh_run(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=None
@@ -563,14 +575,14 @@ class TestRunCombinerTimeout:
 
 class TestRunCombinerCheckedTimeout:
     def test_default_timeout_threaded_through(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner_checked(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = _cp()
             transport.run_combiner_checked(
                 ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=21
@@ -583,7 +595,7 @@ class TestRunCombinerCheckedTimeout:
         callers can distinguish "remote returned non-zero" from "we
         never heard back".
         """
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
                 transport.run_combiner_checked(
@@ -612,7 +624,7 @@ class TestSshBackoff:
             returncode=255,
         )
         ok_cp = _cp(stdout="hi\n", returncode=0)
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = [throttle_cp, throttle_cp, ok_cp]
             result = remote.ssh_run("ls", ssh_target="u@c")
         assert result.returncode == 0
@@ -621,7 +633,7 @@ class TestSshBackoff:
     def test_ssh_run_does_not_retry_on_normal_failure(self):
         """Auth failures, command-not-found etc must surface immediately."""
         bad_cp = _cp(stderr="Permission denied (publickey).", returncode=255)
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = bad_cp
             result = remote.ssh_run("ls", ssh_target="u@c")
         assert result.returncode == 255
@@ -629,7 +641,7 @@ class TestSshBackoff:
 
     def test_ssh_run_retries_then_gives_up_after_schedule(self):
         throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = throttle_cp
             result = remote.ssh_run("ls", ssh_target="u@c")
         # 1 initial + 4 retries = 5 attempts total when all return throttle.
@@ -652,8 +664,82 @@ class TestSshBackoff:
         assert mock_run.call_count == 2
 
     def test_timeout_error_retries_then_raises(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
                 remote.ssh_run("ls", ssh_target="u@c")
         assert mock_run.call_count == 5  # 1 initial + 4 retries
+
+
+# ---------------------------------------------------------------------------
+# Close-pipes-on-exit capture reader (#209): real-subprocess behaviour
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="select-loop reader is POSIX-only")
+@pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX /bin/sh")
+class TestCaptureSelectReader:
+    """Exercise the real ``_communicate_select`` / ``_capture_via_select`` path
+    against a local ``sh`` so the anti-hang behaviour is verified without a
+    cluster. POSIX-only (select(2) over pipes).
+    """
+
+    def test_captures_stdout_stderr_and_returncode(self):
+        proc = subprocess.Popen(
+            ["sh", "-c", "printf out; printf err 1>&2; exit 3"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = remote._communicate_select(proc, argv=["sh"], timeout=10)
+        assert out == "out"
+        assert err == "err"
+        assert proc.returncode == 3
+
+    def test_capture_via_select_returns_completedprocess(self):
+        cp = remote._capture_via_select(["sh", "-c", "echo hi"], timeout=10)
+        assert isinstance(cp, subprocess.CompletedProcess)
+        assert cp.returncode == 0
+        assert cp.stdout == "hi\n"
+        assert cp.stderr == ""
+
+    def test_large_output_is_not_truncated(self):
+        # Exceeds a single pipe buffer / one os.read chunk, proving the loop
+        # drains across many reads rather than losing data past 64 KiB.
+        n = 100_000
+        proc = subprocess.Popen(
+            ["sh", "-c", f"yes x | head -c {n}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, _ = remote._communicate_select(proc, argv=["sh"], timeout=30)
+        assert len(out) == n
+
+    @pytest.mark.slow
+    def test_returns_before_backgrounded_child_closes_pipe(self):
+        # THE regression (#209): a remote-style command whose foreground exits
+        # immediately but which leaves a child holding the stdout/stderr pipe
+        # must return at ~foreground speed, NOT wait for the child or the
+        # timeout. A blocking read would block until the 3s child exits (pipe
+        # EOF); the select reader returns as soon as the shell does.
+        proc = subprocess.Popen(
+            ["sh", "-c", "printf done; sleep 3 &"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        start = time.monotonic()
+        out, _ = remote._communicate_select(proc, argv=["sh"], timeout=30)
+        elapsed = time.monotonic() - start
+        assert out == "done"
+        assert elapsed < 1.5, f"reader waited {elapsed:.2f}s for a backgrounded child"
+
+    @pytest.mark.slow
+    def test_runaway_foreground_raises_timeout_and_is_killed(self):
+        proc = subprocess.Popen(
+            ["sh", "-c", "sleep 30"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            remote._communicate_select(proc, argv=["sh", "-c", "sleep 30"], timeout=0.5)
+        # The child was killed + reaped, not left running.
+        assert proc.returncode is not None

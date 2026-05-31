@@ -30,8 +30,11 @@ __all__ = [
     "ssh_run",
 ]
 
+import contextlib
 import os
+import select
 import subprocess
+import sys
 import time
 from typing import TYPE_CHECKING, Any, Final
 
@@ -186,6 +189,184 @@ def _with_ssh_backoff(
     return last_cp
 
 
+# ---------------------------------------------------------------------------
+# Capture reader (#209): close-pipes-on-exit, anti backgrounded-child hang
+# ---------------------------------------------------------------------------
+#
+# A plain ``subprocess.run`` (or ``Popen.communicate``) reads each pipe to
+# EOF, and EOF only arrives when the *last* writer closes the fd. When a
+# remote command backgrounds a child that inherited ssh's stdout/stderr pipe,
+# that child keeps the write end open after the foreground process exits — so
+# the parent ``ssh`` (and therefore we) block until the child dies or our
+# timeout fires. For an unattended agent polling ``status`` that turns a
+# finished job into a full ``SSH_TIMEOUT_SEC`` stall.
+#
+# The reader below borrows the *technique* (not the code, not the dependency)
+# from ``remotemanager``'s ``CMD._communicate_with_select`` (MIT,
+# https://gitlab.com/l_sim/remotemanager): a ``select()`` loop drains whatever
+# stdout/stderr have ready while re-checking ``proc.poll()`` on a fixed
+# cadence; the moment the process has exited it does one final *non-blocking*
+# drain of the already-buffered bytes and stops, never waiting for EOF. The
+# ``ssh_argv`` seam (BatchMode, ControlMaster multiplexing, native-binary
+# resolution in :mod:`ssh_options`) is untouched — only the inner read changes.
+
+# select(2) over anonymous pipes is POSIX-only; native Windows has no
+# equivalent, and the backgrounded-child hang is itself a POSIX process-group
+# artefact, so the reader is gated to POSIX and Windows keeps the blocking
+# ``subprocess.run`` path.
+_WINDOWS: Final[bool] = sys.platform == "win32"
+
+# Re-check process liveness on this cadence even when no pipe bytes arrive, so
+# a backgrounded grandchild holding the pipe open cannot keep us parked in
+# ``select()`` past the foreground exit. 0.2s is imperceptible for an
+# interactive poll yet bounds post-exit latency tightly.
+_SELECT_POLL_INTERVAL_SEC: Final[float] = 0.2
+
+# Bytes pulled per ready-fd read; 64 KiB comfortably exceeds a typical pipe
+# buffer so one ``os.read`` drains what ``select`` reported ready.
+_READ_CHUNK_BYTES: Final[int] = 65536
+
+
+def _kill_and_reap(proc: subprocess.Popen[bytes]) -> None:
+    """Best-effort kill + wait so a timed-out child isn't left a zombie."""
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=5)
+
+
+def _communicate_select(
+    proc: subprocess.Popen[bytes],
+    *,
+    argv: list[str],
+    timeout: float | None,
+) -> tuple[str, str]:
+    """Drain *proc*'s stdout/stderr, closing our pipe ends the instant the
+    child exits rather than waiting for EOF (see the module note above).
+
+    Returns the decoded ``(stdout, stderr)`` (UTF-8, ``errors="replace"`` so a
+    stray non-UTF-8 byte in cluster output can't crash a status poll). Raises
+    :class:`subprocess.TimeoutExpired` — after killing and reaping *proc* —
+    when *timeout* elapses before the foreground process exits; the caller
+    translates that into :class:`TimeoutError`, exactly as the blocking path
+    does.
+    """
+    assert proc.stdout is not None and proc.stderr is not None
+    out_fd = proc.stdout.fileno()
+    err_fd = proc.stderr.fileno()
+    buffers: dict[int, bytearray] = {out_fd: bytearray(), err_fd: bytearray()}
+    open_fds = {out_fd, err_fd}
+    deadline = None if timeout is None else time.monotonic() + timeout
+
+    def _read_ready(block_for: float) -> None:
+        """One ``select`` pass: append from every readable fd, drop fds at EOF."""
+        if not open_fds:
+            return
+        try:
+            ready, _, _ = select.select(list(open_fds), [], [], block_for)
+        except (OSError, ValueError):
+            # An fd was closed under us — nothing readable this pass.
+            return
+        for fd in ready:
+            try:
+                chunk = os.read(fd, _READ_CHUNK_BYTES)
+            except OSError:
+                open_fds.discard(fd)
+                continue
+            if chunk:
+                buffers[fd] += chunk
+            else:  # EOF on this stream
+                open_fds.discard(fd)
+
+    try:
+        while True:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    assert timeout is not None  # deadline set ⇒ timeout set
+                    _kill_and_reap(proc)
+                    raise subprocess.TimeoutExpired(
+                        argv,
+                        timeout,
+                        output=bytes(buffers[out_fd]),
+                        stderr=bytes(buffers[err_fd]),
+                    )
+                block_for = min(remaining, _SELECT_POLL_INTERVAL_SEC)
+            else:
+                block_for = _SELECT_POLL_INTERVAL_SEC
+
+            _read_ready(block_for)
+
+            if proc.poll() is not None:
+                # Foreground process is done. Drain only what is already
+                # buffered (non-blocking) and stop — do NOT wait for EOF, which
+                # a backgrounded child holding the pipe may never send.
+                while open_fds:
+                    ready, _, _ = select.select(list(open_fds), [], [], 0)
+                    if not ready:
+                        break
+                    for fd in ready:
+                        chunk = os.read(fd, _READ_CHUNK_BYTES)
+                        if chunk:
+                            buffers[fd] += chunk
+                        else:
+                            open_fds.discard(fd)
+                break
+
+            if not open_fds:
+                # Both pipes hit real EOF while the process was still being
+                # reaped (the common, no-backgrounded-child case): wait for
+                # exit, bounded by the deadline.
+                wait_for = None if deadline is None else max(0.0, deadline - time.monotonic())
+                try:
+                    proc.wait(timeout=wait_for)
+                except subprocess.TimeoutExpired:
+                    _kill_and_reap(proc)
+                    raise
+                break
+    finally:
+        # We own these pipes (opened via Popen); close our read ends so the fds
+        # don't leak even when we bail out early on a backgrounded child.
+        for stream in (proc.stdout, proc.stderr):
+            with contextlib.suppress(OSError):
+                stream.close()
+
+    if proc.returncode is None:
+        proc.wait()
+    out = bytes(buffers[out_fd]).decode("utf-8", "replace")
+    err = bytes(buffers[err_fd]).decode("utf-8", "replace")
+    return out, err
+
+
+def _capture_via_select(
+    argv: list[str],
+    *,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run *argv* capturing stdout/stderr, returning a ``CompletedProcess``.
+
+    POSIX uses the close-pipes-on-exit :func:`_communicate_select` reader so a
+    backgrounded remote child can't wedge the read; Windows falls back to the
+    blocking ``subprocess.run`` (select(2) over pipes is POSIX-only). Both
+    surfaces raise :class:`subprocess.TimeoutExpired` on *timeout*, so the
+    caller's single translation to :class:`TimeoutError` covers either. This is
+    the one capture seam ``ssh_run`` funnels through (and the point tests patch
+    to fake remote output).
+    """
+    if _WINDOWS:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = _communicate_select(proc, argv=argv, timeout=timeout)
+    assert proc.returncode is not None  # set by _communicate_select
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 def ssh_run(
     cmd: str,
     *,
@@ -232,9 +413,18 @@ def ssh_run(
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:
+            if capture:
+                # POSIX: close-pipes-on-exit reader so a remote command that
+                # backgrounds a child holding the stdout/stderr pipe returns
+                # the instant the foreground process exits instead of stalling
+                # until ``effective_timeout`` (#209). Windows falls back to
+                # subprocess.run inside the seam.
+                return _capture_via_select(argv, timeout=effective_timeout)
+            # Streaming mode inherits the parent's stdout/stderr — there are no
+            # pipes for us to manage, so the original blocking call is correct.
             return subprocess.run(
                 argv,
-                capture_output=capture,
+                capture_output=False,
                 text=True,
                 encoding="utf-8",
                 timeout=effective_timeout,
