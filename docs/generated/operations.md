@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**63 operations total**: 56 primitive atoms + 7 workflow atoms.
+**64 operations total**: 57 primitive atoms + 7 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (30)
+## `query` (31)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -36,6 +36,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `hpc_agent.cli.setup.describe` | — | — |
 | [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
 | [`discover-reducers`](../primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_reducers` | — | — |
+| [`discover-runs`](../primitives/discover-runs.md) | ✓ | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_runs` | — | — |
 | [`failures`](../primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `hpc_agent.ops.recover.failures_atom.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
 | [`find-prior-run`](../primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` | `hpc_agent.cli.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
 | [`list-in-flight`](../primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` | `hpc_agent.ops.monitor.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |

@@ -97,6 +97,21 @@ class AggregateFlowSpec(BaseModel):
         ),
     )
 
+    reconcile_terminal: bool = Field(
+        default=False,
+        description=(
+            "Skip-monitor escape hatch. When the journal still says "
+            "in_flight (the caller went straight to aggregate on a short "
+            "run without running monitor-flow), poll the cluster once and, "
+            "if it confirms the run is done, mark the journal terminal "
+            "before the terminal-state gate — using the SAME completion "
+            "logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). "
+            "If the cluster shows the run still genuinely running, the gate "
+            "still fires. Default false preserves the strict gate: aggregate "
+            "never silently reconciles unless the caller opts in."
+        ),
+    )
+
     @model_validator(mode="after")
     def _require_summary_glob_when_pulling(self) -> AggregateFlowSpec:
         if self.pull_summaries and not self.summary_glob:

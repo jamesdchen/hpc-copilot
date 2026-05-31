@@ -275,18 +275,22 @@ Cluster connection details are in `hpc_agent/config/clusters.yaml` (or whatever 
 
 ## Python API
 
+**Prefer the CLI verbs.** Anything an agent or workflow does — compute a run
+id, find a prior run, write a sidecar, plan throughput, submit, aggregate —
+has a `hpc-agent <verb>` primitive with a validated JSON contract (`hpc-agent
+capabilities`, then `hpc-agent describe <name>`). Drive a cluster through those,
+not by importing internals and re-implementing a workflow step: the primitives
+carry the idempotency, schema validation, and journal/dedup guarantees that
+bare functions don't. The headless worker is in fact restricted to the CLI.
+
+### Library surface (standalone, non-agent use)
+
+When you're embedding hpc-agent as a Python library rather than driving it as
+an agent, these are the stable, intended imports:
+
 ```python
 # Framework subdirectory layout
 from hpc_agent import RUNS_SUBDIR, RepoLayout, TASKS_FILENAME, load_tasks_module
-
-# Per-run sidecars (canonical home)
-from hpc_agent.state.runs import (
-    compute_cmd_sha,
-    find_existing_runs,
-    find_run_by_cmd_sha,
-    read_run_sidecar,
-    write_run_sidecar,
-)
 
 # Cluster config + templates
 from hpc_agent import _PACKAGE_ROOT, get_template_path, load_clusters_config
@@ -303,6 +307,19 @@ from hpc_agent.infra.throughput import (
 from hpc_agent.infra.backends import get_backend
 from hpc_agent.infra.remote import deploy_runtime
 ```
+
+### Primitive-backing internals — import only to read, not to re-implement
+
+These functions *are* the internals that back CLI verbs; they remain importable
+for inspection and tests, but reaching for them to reproduce a workflow step is
+the freestyle path the CLI exists to replace. Each maps to a verb — use the verb:
+
+| Internal | Use this verb instead |
+|---|---|
+| `hpc_agent.state.run_sha.compute_cmd_sha` | `hpc-agent compute-run-id` |
+| `hpc_agent.state.runs.find_run_by_cmd_sha` / `find_existing_runs` | `hpc-agent find-prior-run` |
+| `hpc_agent.state.runs.write_run_sidecar` | `hpc-agent write-run-sidecar` |
+| `hpc_agent.state.runs.read_run_sidecar` | `hpc-agent load-context` (envelope carries run state) |
 
 ## Development
 

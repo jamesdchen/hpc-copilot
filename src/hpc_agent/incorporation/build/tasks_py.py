@@ -392,6 +392,7 @@ def _build_tasks_py_arg_pre(ns: Any) -> dict[str, Any]:
     verb="scaffold",
     side_effects=[
         SideEffect("writes-sidecar", "<experiment>/.hpc/tasks.py"),
+        SideEffect("writes-sidecar", "<experiment>/.hpc/cli.py"),
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
@@ -571,6 +572,20 @@ def build_tasks_py(
         with _contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+    # Deploy the sibling dispatcher (.hpc/cli.py) alongside tasks.py. The two
+    # are the dispatch-contract pair the cluster needs; emitting both here lets
+    # the submit worker scaffold with one `build-tasks-py` call instead of a
+    # hand-rolled `python -c "shutil.copy(...)"` (which a strict worker
+    # allowlist forbids). Self-healing: rewritten on every scaffold/--force.
+    import shutil as _shutil
+
+    from hpc_agent import _PACKAGE_ROOT
+
+    _shutil.copy(
+        _PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py",
+        target.parent / "cli.py",
+    )
 
     return {
         "path": str(target),

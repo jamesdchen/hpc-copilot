@@ -287,6 +287,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent discover-runs [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "discover-runs",
+    "output_schema": null,
+    "python": "hpc_agent.state.discover.discover_runs",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]",
     "idempotent": true,
     "input_schema": null,

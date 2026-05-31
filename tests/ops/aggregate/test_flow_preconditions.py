@@ -97,6 +97,49 @@ def test_aggregate_flow_allows_terminal_run_past_gate(journal_home, experiment):
     assert not isinstance(exc_info.value, errors.PreconditionFailed)
 
 
+def _stub_poll(monkeypatch, last_status: dict) -> None:
+    """Stub the cluster poll (record_status) to report *last_status* without SSH."""
+    import hpc_agent.ops.aggregate_flow as agg
+    from hpc_agent.state.journal import update_run_status
+
+    def _fake(experiment_dir, run_id, **_kw):
+        return update_run_status(experiment_dir, run_id, last_status=last_status)
+
+    monkeypatch.setattr(agg, "record_status", _fake)
+
+
+def test_aggregate_flow_reconcile_terminal_marks_done_run(journal_home, experiment, monkeypatch):
+    # Skip-monitor path: journal says in_flight, but the cluster shows every
+    # task complete. reconcile_terminal=True polls, derives terminal via the
+    # same _is_terminal logic monitor-flow uses, marks the journal terminal,
+    # and lets aggregate through the gate. The empty ssh_target then fails it
+    # at ssh validation (a step AFTER the gate), proving the gate passed.
+    from hpc_agent.state.journal import load_run
+
+    upsert_run(experiment, _record(status="in_flight", ssh_target="", total_tasks=4))
+    _stub_poll(monkeypatch, {"complete": 4})
+    spec = AggregateFlowSpec(run_id=_RUN_ID, reconcile_terminal=True)
+    with pytest.raises(errors.HpcError) as exc_info:
+        aggregate_flow(experiment, spec=spec)
+    assert not isinstance(exc_info.value, errors.PreconditionFailed)
+    # mark-run-terminal's second consumer drove the journal to complete.
+    rec = load_run(experiment, _RUN_ID)
+    assert rec is not None and rec.status == "complete"
+
+
+def test_aggregate_flow_reconcile_terminal_still_running_keeps_gate(
+    journal_home, experiment, monkeypatch
+):
+    # reconcile_terminal must NOT aggregate a genuinely-running run: when the
+    # cluster shows work still in flight, _is_terminal returns None, nothing
+    # is marked, and the terminal gate still fires.
+    upsert_run(experiment, _record(status="in_flight", total_tasks=4))
+    _stub_poll(monkeypatch, {"complete": 1, "running": 3})
+    spec = AggregateFlowSpec(run_id=_RUN_ID, reconcile_terminal=True)
+    with pytest.raises(errors.PreconditionFailed, match="not terminal"):
+        aggregate_flow(experiment, spec=spec)
+
+
 def test_aggregate_flow_refuses_output_dir_basename_combiner(experiment):
     """#188: output_dir whose basename is ``_combiner`` would nest the wave
     partials at ``_combiner/_combiner/wave_*.json`` (aggregate-flow + the

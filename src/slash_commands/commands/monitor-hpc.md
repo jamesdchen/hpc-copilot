@@ -48,11 +48,18 @@ The default is `investigate` because >10% failure usually means a real bug, and 
 
 ## On final envelope
 
-Surface to the user:
-- `data.report.result.lifecycle_state` (or `data.lifecycle_state` on snapshot path)
-- `data.report.result.complete_count`, `failed_task_ids`
+Render the user-facing status with the canonical `monitor-summary` primitive — do **not** hand-assemble the framing from raw `lifecycle_state` / `complete_count` fields. Hand-framing reintroduces per-tick wording drift, which is exactly what this primitive removes (it reads the journal + the latest `.monitor.jsonl` tick and returns byte-stable `headline` + `body`):
+
+```bash
+hpc-agent monitor-summary --run-id <run_id> --experiment-dir .
+```
+
+Print the returned `headline` and `body` **verbatim**. `armed_hint` is non-null only while the run is still in flight — it's the one-line reminder to schedule the next monitor tick.
+
+Then surface the decision-grade detail the summary doesn't carry:
 - `data.report.decisions` — especially auto-resubmit decisions
 - `data.report.anomalies`
+- `data.report.result.failed_task_ids` when non-empty
 
 ## On `spec_invalid` (not `needs_resolution`)
 

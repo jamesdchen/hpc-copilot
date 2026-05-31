@@ -30,6 +30,7 @@ __all__ = [
     "ReducerInfo",
     "discover_executors",
     "discover_reducers",
+    "discover_runs",
     "is_executor_source",
 ]
 
@@ -39,6 +40,8 @@ from pathlib import Path
 
 if TYPE_CHECKING:
     import argparse
+
+    from hpc_agent.experiment_kit.discover import RunInfo
 
 
 def _discover_executors_arg_pre(ns: argparse.Namespace) -> dict[str, object]:
@@ -85,6 +88,49 @@ def _discover_reducers_result_post(infos: list[ReducerInfo]) -> dict[str, object
             for i in infos
         ]
     }
+
+
+def _discover_runs_result_post(infos: list[RunInfo]) -> dict[str, object]:
+    """Project RunInfo dataclasses into the JSON envelope shape."""
+    return {
+        "runs": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "gpu": i.gpu,
+                "run_signature_sha": i.run_signature_sha,
+                "flags": [getattr(f, "name", str(f)) for f in i.flags],
+            }
+            for i in infos
+        ]
+    }
+
+
+@primitive(
+    name="discover-runs",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+    cli=CliShape(
+        help="List @register_run functions under --experiment-dir (path, name, gpu, sha, flags).",
+        verb="discover-runs",
+        experiment_dir_arg=True,
+        args=(),
+        result_post=_discover_runs_result_post,
+    ),
+    agent_facing=True,
+)
+def discover_runs(experiment_dir: Path | str) -> list[RunInfo]:
+    """Scan *experiment_dir* for ``@register_run`` functions — the run contract.
+
+    Gives the headless submit worker a CLI verb for run discovery so it never
+    shells ``python .hpc/scaffold.py discover`` (arbitrary Python) to find the
+    decorated function. Mirrors :func:`discover_executors` for the executor
+    contract. Pure local AST walk over ``.py`` / ``.ipynb``; no SSH.
+    """
+    from hpc_agent.experiment_kit.discover import discover_runs as _impl
+
+    return _impl(experiment_dir)
 
 
 # Module names that signal a CLI framework. Matched against any ``import X``

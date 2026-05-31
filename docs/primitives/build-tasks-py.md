@@ -3,6 +3,7 @@ name: build-tasks-py
 verb: scaffold
 side_effects:
 - writes-sidecar: <experiment>/.hpc/tasks.py
+- writes-sidecar: <experiment>/.hpc/cli.py
 idempotent: true
 idempotency_key: experiment_dir
 error_codes:

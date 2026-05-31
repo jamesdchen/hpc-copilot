@@ -42,10 +42,10 @@ They are orthogonal and live in the same file under different keys. This skill *
 Discover the `@register_run` functions over `notebooks/`:
 
 ```bash
-python .hpc/scaffold.py discover
+hpc-agent discover-runs --experiment-dir .
 ```
 
-Each line is `<path>::<name>  gpu=<bool>  sha=<run_signature_sha>  flags=[...]`. Resolve to a single run:
+The envelope's `data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`. Resolve to a single run:
 
 - If the caller supplied `run_name`, scope to it.
 - Else if exactly one run exists, use it.

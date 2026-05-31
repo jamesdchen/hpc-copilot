@@ -32,8 +32,13 @@ When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (
 
 If a value you need later is absent here, derive it from the run sidecar on disk — never from memory.
 
-Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from hpc_agent import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+Read cluster definitions with the [clusters-describe](../../docs/primitives/clusters-describe.md) primitive — never resolve and parse `clusters.yaml` by hand:
+
+```bash
+hpc-agent clusters describe <cluster>   # resolved block: host, user, scheduler, scratch, modules, conda_source, gpu_types
+```
+
+Run `hpc-agent clusters list` first if you don't yet know the cluster key.
 
 Call [suggest-setup-action](../../docs/primitives/suggest-setup-action.md) to figure out where in the priority ladder the experiment sits — it returns `{priority, action, run_id, candidates, reason}`:
 
@@ -64,18 +69,9 @@ hpc-agent export-package --experiment-dir .
 
 **The default mature-repo path is `@register_run` on the user's function** — same as the greenfield notebook case. Step 1's existing `discover_runs` scan finds the decorated function regardless of whether it lives in `notebooks/`, `train.py`, or `main.py`. No special branch is needed for that case.
 
-This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), `/wrap-entry-point-hpc` materializes a `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` declaring a `shell_command` entry_point that points at it. Read the block:
+This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), `/wrap-entry-point-hpc` materializes a `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` declaring a `shell_command` entry_point that points at it. **Read `interview.json` with the Read tool** (do not shell `python -c "json.load(...)"`) and look at `_materialized.entry_point`.
 
-```bash
-test -f interview.json && python -c "
-import json, sys
-doc = json.load(open('interview.json'))
-ep = doc.get('_materialized', {}).get('entry_point')
-if ep: print(json.dumps(ep))
-" | tee /tmp/_entry_point.json
-```
-
-If the block is non-empty, branch on `kind`:
+If that block is present, branch on its `kind`:
 
 | `kind` | Procedure behavior |
 |---|---|
@@ -85,15 +81,12 @@ If the block is non-empty, branch on `kind`:
 
 Both `register_run` and `python_module` are **pointers, not wrappers** — they declare which function the worker should target but don't materialize anything. They get resolved through the normal Step 1 discovery flow; only `shell_command` short-circuits it.
 
-If `interview.json` doesn't exist, or `_materialized.entry_point` is absent, **probe whether this is a mature-repo case** that needs an interview the headless worker can't conduct:
+If `interview.json` doesn't exist, or `_materialized.entry_point` is absent, **probe whether this is a mature-repo case** that needs an interview the headless worker can't conduct, using the Read/Glob/Grep tools (not shell `grep`/`test`):
 
-```bash
-# Mature-repo signals: an entry point exists, but no @register_run anywhere.
-HAS_MAIN=$([ -f main.py ] || [ -f src/main.py ] && echo yes || echo no)
-HAS_REGISTER_RUN=$(grep -rl '@register_run' notebooks/ src/ 2>/dev/null | head -1 && echo yes || echo no)
-```
+- `HAS_MAIN`: use **Glob** for `main.py` and `src/main.py`.
+- `HAS_REGISTER_RUN`: use **Grep** for `@register_run` across `notebooks/` and `src/`.
 
-If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record this in `anomalies` (prefix the line `mature_repo_needs_interview: main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke`) and stop. Direct decoration is the cheap path — a two-line edit on the function `main.py` ultimately calls; `/wrap-entry-point-hpc` is the guided path that walks the user through that edit and falls back to wrapper materialization only when direct decoration isn't possible.
+If `main.py` is present and `@register_run` is found nowhere: the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record this in `anomalies` (prefix the line `mature_repo_needs_interview: main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke`) and stop. Direct decoration is the cheap path — a two-line edit on the function `main.py` ultimately calls; `/wrap-entry-point-hpc` is the guided path that walks the user through that edit and falls back to wrapper materialization only when direct decoration isn't possible.
 
 Otherwise (no mature-repo signals): the rest of the procedure runs unchanged (the notebook-discovery default).
 
@@ -101,13 +94,13 @@ This step is what makes the wrapper-fallback path end-to-end usable: when the `i
 
 ## Step 1: Discover runs
 
-**Function-first.** The researcher's contract is a `@register_run def run(...)` — a typed-kwarg Python function with no axis declaration, no `tasks.py`, no CLI glue. The function may live in a notebook (`.ipynb`), a script (`.py`), or a package module — `discover_runs` AST-walks all three (skipping `.hpc/`). The example invocation below scans `notebooks/`; for repos whose entry point lives at the repo root or under `src/`, the discovery walks those too:
+**Function-first.** The researcher's contract is a `@register_run def run(...)` — a typed-kwarg Python function with no axis declaration, no `tasks.py`, no CLI glue. The function may live in a notebook (`.ipynb`), a script (`.py`), or a package module. Invoke the [discover-runs](../../docs/primitives/discover-runs.md) primitive — it AST-walks all three (skipping `.hpc/`) — instead of shelling `python .hpc/scaffold.py`:
 
 ```bash
-python .hpc/scaffold.py discover
+hpc-agent discover-runs --experiment-dir .
 ```
 
-Each line is `<path>::<name>  gpu=<bool>  sha=<run_signature_sha>  flags=[...]`.
+The envelope's `data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`.
 
 - **Bare `/submit-hpc`** (the default) — list every `@register_run` and let the user pick one.
 - **`/submit-hpc <file>`** — scope discovery to that one file (a notebook or a script).
@@ -194,18 +187,9 @@ The envelope's `data` carries `{headline, body, confirm_prompt}`. Surface `headl
 
 ### 6a: Reuse if `.hpc/tasks.py` exists
 
-```python
-from pathlib import Path
-from hpc_agent import RepoLayout, load_tasks_module
-from hpc_agent.state.run_sha import compute_cmd_sha
+The Setup-step `action` already told you whether tasks.py exists: `reuse` / `interview` ⇒ present, `fresh` ⇒ absent. If you need to confirm, use the **Glob** tool for `.hpc/tasks.py` — do **not** shell `test`/`mkdir`, and do **not** import `hpc_agent` internals (`RepoLayout`, `load_tasks_module`, `hpc_agent.state.run_sha`); 6c's `compute-run-id` owns the `cmd_sha`, and 6b's `build-tasks-py` creates `.hpc/` itself.
 
-experiment_dir = Path("<experiment_dir>")  # the value from the invocation context (you cd'd here at the start); do not depend on the process cwd
-layout = RepoLayout(experiment_dir)
-_ = layout.hpc  # mkdir's .hpc/ + writes .gitignore on first read
-tp = layout.tasks
-```
-
-If `tp.exists()`, read it as-is — never regenerate. To change the axis, the user edits `.hpc/tasks.py` directly and re-runs. Skip to 6c.
+If it exists, read it as-is — never regenerate. To change the axis, the user edits `.hpc/tasks.py` directly and re-runs. Skip to 6c.
 
 ### 6b: Scaffold from canonical example (first submit only)
 
@@ -217,14 +201,7 @@ The serial-elision gate (Step 3c) must have passed before the file is committed.
 
 **Axis naming**: prefer experiment-prefixed axis names (`exp_horizon`, `ridge_alpha`) over bare ones (`horizon`, `alpha`) — a bare name whose uppercase form is a real env var (an axis `home` → `$HOME`) corrupts the executor's environment. `build-tasks-py` rejects names that collide with a reserved set at scaffold time; the mechanism and the recommended `HPC_KW_NAMESPACE_ONLY=1` default are in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md).
 
-Copy the dispatcher:
-```python
-import shutil
-from hpc_agent import _PACKAGE_ROOT
-shutil.copy(_PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py", experiment_dir / ".hpc" / "cli.py")
-```
-
-Commit `.hpc/tasks.py` + `.hpc/cli.py`. No push — user controls upstream.
+`build-tasks-py` also deploys the sibling dispatcher `.hpc/cli.py` in the same call (the two are the dispatch-contract pair the cluster needs) — no separate copy step. Commit `.hpc/tasks.py` + `.hpc/cli.py` with `git`. No push — user controls upstream.
 
 ### 6c: Compute `cmd_sha` + `run_id`, check for resume
 
@@ -257,15 +234,7 @@ The spec is a `WriteRunSidecarInput` JSON (see `schemas/write_run_sidecar.input.
 
 **`executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED` / `python3 .hpc/_hpc_dispatch.py`'s *resolved* target), NOT the job-script dispatcher command (`python3 .hpc/_hpc_dispatch.py`) itself — a dispatcher-as-executor sidecar makes the dispatcher run itself and the whole array self-recurses (#162). `write-run-sidecar` refuses dispatcher-shaped values at intake.
 
-**Write-first is a hard precondition, not a manual unblock (#171).** `submit-flow` (Step 7-8) now *refuses* to run when the per-run sidecar is absent, or present but "pending" with an empty/dispatcher-only `executor` — it raises a `spec_invalid` telling you to write the sidecar first. So do this step; never skip it expecting `submit-flow` to synthesize one from the job-script command. Confirm it landed before building the submit-flow spec:
-
-```python
-from hpc_agent.state.runs import read_run_sidecar
-sc = read_run_sidecar(experiment_dir, run_id)  # raises FileNotFoundError if Step 6d was skipped
-assert sc["executor"] and "_hpc_dispatch.py" not in sc["executor"], (
-    "sidecar executor must be the real per-task command, not the dispatcher (#162/#171)"
-)
-```
+**Write-first is a hard precondition, not a manual unblock (#171).** `submit-flow` (Step 7-8) now *refuses* to run when the per-run sidecar is absent, or present but "pending" with an empty/dispatcher-only `executor` — it raises a `spec_invalid` telling you to write the sidecar first. And `write-run-sidecar` itself **refuses dispatcher-shaped `executor` values at intake** (#162). So the "sidecar present + real per-task executor" invariant is enforced by the two primitives you just called — do **not** re-read the sidecar with `hpc_agent.state.runs` internals to re-assert it by hand. A non-error envelope from `write-run-sidecar` is the confirmation; if it errored, fix the spec and re-run before building the submit-flow spec.
 
 ## Step 6b: Pre-flight Gate (cached per cluster)
 
