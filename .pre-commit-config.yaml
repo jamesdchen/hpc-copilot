@@ -22,7 +22,7 @@ repos:
         entry: python scripts/lint_text_io_encoding.py
         language: system
         pass_filenames: false
-        files: '^(src/hpc_agent/.*\.py|hpc-agent-pro/src/.*\.py|scripts/[^/]+\.py)$'
+        files: '^(src/hpc_agent/.*\.py|scripts/[^/]+\.py)$'
 
       - id: lint-subject-init
         name: subject __init__.py must be docstring-only
@@ -57,10 +57,9 @@ repos:
         entry: python scripts/build_schemas.py --write
         language: system
         pass_filenames: false
-        # ``build_schemas.py`` walks ``hpc_agent._wire`` for core models and
-        # ``hpc_agent_pro._wire`` for the plugin's models — so the
-        # hook fires whenever either package's Pydantic surface changes.
-        files: '^(src/hpc_agent/_wire/.*\.py|hpc-agent-pro/src/hpc_agent_pro/_wire/.*\.py)$'
+        # ``build_schemas.py`` walks ``hpc_agent._wire`` for the core
+        # Pydantic models — fires whenever that surface changes.
+        files: '^src/hpc_agent/_wire/.*\.py$'
 
       - id: bake-operations-json
         name: regenerate baked operations.json (wheel-install fallback)
@@ -107,4 +106,4 @@ repos:
         entry: python scripts/lint_plugin_manifests.py
         language: system
         pass_filenames: false
-        files: '^(src/hpc_agent/_wire/plugin_manifest\.py|hpc-agent-pro/src/hpc_agent_pro/plugin\.py|scripts/lint_plugin_manifests\.py)$'
+        files: '^(src/hpc_agent/_wire/plugin_manifest\.py|scripts/lint_plugin_manifests\.py)$'

@@ -114,13 +114,8 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 "src/hpc_agent/_wire/*.py" = ["E501"]
 
-# ``hpc_agent_pro`` is a sibling monorepo package living under
-# ``hpc-agent-pro/src/`` — ruff's default src-layout detection only
-# sees ``src/`` and would otherwise classify it as third-party,
-# producing churned import order in files (scripts/, tests, plugin
-# modules) that import both.
 [tool.ruff.lint.isort]
-known-first-party = ["hpc_agent", "hpc_agent_pro"]
+known-first-party = ["hpc_agent"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -182,7 +177,6 @@ also_copy = [
     "src/slash_commands/",
     "scripts/",
     "docs/",
-    "hpc-agent-pro/",
 ]
 tests_dir = ["tests/"]
 # Field name is do_not_mutate in mutmut 3.x (was exclude in 2.x).
@@ -213,10 +207,5 @@ dev = [
     "pytest-xdist>=3.8.0",
 ]
 
-# hpc-agent-pro/ is a sibling package in this monorepo — built, tested,
-# and versioned independently (it depends on an unpublished local
-# hpc-agent). Excluding it keeps `uv run` here resolving only the
-# public package, so the public test env never has the plugin loaded.
 [tool.uv.workspace]
 members = []
-exclude = ["hpc-agent-pro"]
