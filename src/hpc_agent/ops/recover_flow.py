@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory  # noqa: F401 — re-export
 from hpc_agent._wire._shared import FailureCategoryResubmittable
+from hpc_agent.infra.resource_format import walltime_hms
 from hpc_agent.ops.recover.batching import resubmit_plan
 from hpc_agent.ops.recover.runner import derive_resubmit_request_id, resubmit_failed
 from hpc_agent.state.runs import read_run_sidecar
@@ -164,11 +165,15 @@ def render_overrides_to_extra_flags(
 
 
 def _format_walltime(walltime_sec: int) -> str:
-    """Format seconds as ``HH:MM:SS`` for Slurm/SGE walltime flags."""
-    h = walltime_sec // 3600
-    m = (walltime_sec % 3600) // 60
-    s = walltime_sec % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    """Format seconds as ``HH:MM:SS`` for Slurm/SGE walltime flags.
+
+    Thin alias over the canonical :func:`~hpc_agent.infra.resource_format.walltime_hms`
+    so the resubmit path and the SGE backend share one formatter (the old
+    hand-rolled copy here agreed with that one for all positive inputs,
+    and every caller below is guarded by ``walltime_sec > 0``, so this is
+    a pure de-duplication with no output change).
+    """
+    return walltime_hms(walltime_sec)
 
 
 def resubmit_flow(

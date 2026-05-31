@@ -13,6 +13,7 @@ import re
 
 from hpc_agent import errors
 from hpc_agent.infra.backends import HPCBackend
+from hpc_agent.infra.resource_format import coerce
 
 
 class SlurmBackend(HPCBackend):
@@ -62,7 +63,11 @@ class SlurmBackend(HPCBackend):
         mem_mb = getattr(resources, "mem_mb", None)
         cpus = getattr(resources, "cpus", None)
         if walltime_sec:
-            minutes = -(-int(walltime_sec) // 60)  # ceil division
+            # SLURM ``--time`` takes whole minutes. Round *up* via the
+            # shared coercer (the "no fractional unit, never truncate a
+            # sub-minute ask to 0" rule lives in one place now) instead of
+            # the old hand-rolled ``-(-x // 60)`` ceil-division idiom.
+            minutes = coerce(int(walltime_sec) / 60, ceil=True)
             flags += ["--time", str(minutes)]
         if mem_mb:
             flags += ["--mem", f"{int(mem_mb)}M"]
