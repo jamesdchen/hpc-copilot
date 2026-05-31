@@ -145,6 +145,49 @@ class ValidateCampaignSpec(BaseModel):
         ),
     )
 
+    # Local pre-flight execution gate (#205). When ``result_dir_template``
+    # is set, the workflow invokes ``dry-run-local`` — the only gate that
+    # exercises the EXECUTION path locally before any SSH. The template
+    # render is default-on (it catches the broken-grid class — an unfilled
+    # placeholder or a cross-id collision — that otherwise only surfaces at
+    # the cluster canary). The executor smoke-exec is OPT-IN via
+    # ``dry_run_smoke`` because a local run can't stand in for the cluster
+    # (modules / GPUs / scale); it complements the canary, never replaces it.
+    result_dir_template: str | None = Field(
+        default=None,
+        description=(
+            "The per-run result-directory template. When set, the workflow "
+            "runs dry-run-local: it renders the template for the sampled "
+            "tasks.resolve(i) ids and flags unfilled {fields} / cross-id "
+            "result_dir collisions before any SSH. ``None`` skips the gate."
+        ),
+    )
+    dry_run_smoke: bool = Field(
+        default=False,
+        description=(
+            "Opt in to dry-run-local's executor smoke-exec: actually run the "
+            "executor locally for ONE sampled grid point (import/--help-level "
+            "by default) to catch import + arg-binding bugs before the cluster. "
+            "Requires ``executor``. Off by default — the template render still runs."
+        ),
+    )
+    executor: str | None = Field(
+        default=None,
+        description=(
+            "The real per-task command (e.g. `python train.py --seed $SEED`), "
+            "passed to dry-run-local's smoke-exec. Only consulted when "
+            "``dry_run_smoke`` is set."
+        ),
+    )
+    smoke_command: str | None = Field(
+        default=None,
+        description=(
+            "Override dry-run-local's smoke command with a cheap import/--help "
+            "probe (e.g. `python -c 'import train'`). Falls back to ``executor`` "
+            "verbatim when omitted."
+        ),
+    )
+
 
 class ValidateCampaignReport(BaseModel):
     """Workflow output: aggregated findings + per-validator raw output.

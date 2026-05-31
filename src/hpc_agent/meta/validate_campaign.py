@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire.validators.dry_run_local import DryRunLocalSpec
 from hpc_agent._wire.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesSpec,
 )
@@ -35,6 +36,7 @@ from hpc_agent._wire.workflows.validate_campaign import (
     ValidatorFinding,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.ops.validate.dry_run_local import dry_run_local
 from hpc_agent.ops.validate.executor_signatures import validate_executor_signatures
 from hpc_agent.ops.validate.input_dataset import validate_input_dataset
 from hpc_agent.ops.validate.stochastic_marker import validate_stochastic_marker
@@ -68,6 +70,7 @@ def _aggregate_overall(findings: list[ValidatorFinding]) -> Literal["pass", "war
         "validate-input-dataset",
         "validate-stochastic-marker",
         "validate-walltime-against-history",
+        "dry-run-local",
     ],
     side_effects=[],
     idempotent=True,
@@ -200,6 +203,30 @@ def validate_campaign(
                 spec=ValidateStochasticMarkerSpec(
                     campaign_id=campaign_id,
                     expected_cmd_sha=expected_cmd_sha,
+                ),
+            ),
+        )
+
+    # Local pre-flight execution gate (#205). The only gate that exercises
+    # the EXECUTION path before any SSH: when ``result_dir_template`` is
+    # supplied it renders the template for the sampled resolve(i) ids and
+    # flags the broken-grid class (unfilled placeholder / cross-id
+    # collision) that otherwise first surfaces at the cluster canary —
+    # after rsync + deploy + qsub. The executor smoke-exec is OPT-IN
+    # (``dry_run_smoke``): a local run can't model the cluster's
+    # modules/GPUs/scale, so it stays scoped to "catch broken code, not
+    # broken cluster" and complements verify-canary rather than replacing it.
+    if spec.result_dir_template:
+        result_dir_template = spec.result_dir_template
+        _safe_run(
+            "dry-run-local",
+            lambda: dry_run_local(
+                experiment_dir,
+                spec=DryRunLocalSpec(
+                    result_dir_template=result_dir_template,
+                    smoke=spec.dry_run_smoke,
+                    executor=spec.executor,
+                    smoke_command=spec.smoke_command,
                 ),
             ),
         )
