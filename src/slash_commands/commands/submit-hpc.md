@@ -1,4 +1,4 @@
-`/submit-hpc` is the **human-interview wrapper** around the `hpc-submit` skill — the agent-autonomous decision layer that resolves every HPC submission input and hands off to the submit-flow worker.
+`/submit-hpc` is the **human-interview wrapper** around the `hpc-submit` skill — the agent-autonomous decision layer that resolves every HPC submission input and hands off to a fresh-context worker. The slash's job is to call `Skill("hpc-submit", …)`; the skill body owns the handoff CLI (do not shell it from this slash).
 
 The slash conducts the user-facing dialogs **after** the skill identifies what needs resolving. The flow is:
 

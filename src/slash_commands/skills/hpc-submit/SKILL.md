@@ -1,12 +1,12 @@
 ---
 name: hpc-submit
-description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off to the submit-flow worker. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
+description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off via `hpc-agent run --workflow submit`. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
 allowed-tools: Bash Read Write Skill Agent
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[submit-flow](../../../../docs/primitives/submit-flow.md) workflow**. This skill is the *experiment-aware* decision surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification?) and resolves each one — from caller-supplied input, autonomous heuristics, or composed sub-skill. Once everything's resolved, it shells out to `hpc-agent run --workflow submit`, which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the experiment-agnostic execution layer (rsync, qsub, canary, journal, scheduler verify).
+Agent-facing decision layer for HPC submission. This skill is the *experiment-aware* decision surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification?) and resolves each one — from caller-supplied input, autonomous heuristics, or composed sub-skill. Once everything's resolved, it shells out to **`hpc-agent run --workflow submit`** (Step 9), which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the experiment-agnostic execution layer (rsync, qsub, canary, journal, scheduler verify). The worker's pipeline is the [submit-flow](../../../../docs/primitives/submit-flow.md) primitive; this skill **never** invokes that primitive directly — `hpc-agent run` is the only handoff verb.
 
 The slash `/submit-hpc` is the human-interview wrapper around this skill; an external autonomous agent (MARs experiment-runner, notebook driver) invokes this skill directly with whatever it pre-resolved.
 
@@ -165,15 +165,30 @@ Assemble every resolved value:
 }
 ```
 
-### 9. Hand off to the submit-flow worker
+### 9. Hand off — invoke `hpc-agent run --workflow submit`
 
 ```bash
 hpc-agent run --workflow submit --fields-json '<fields>'
 ```
 
-Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.
+Or, when the JSON contains Windows paths or other shell-hostile escapes, write it to a tempfile and pass `--fields-file <path>` instead — `hpc-agent run` accepts either.
 
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When the env knob is set, `hpc-agent run` does NOT spawn a `claude -p` worker — its envelope carries `data.mode == "inline"`, `data.prompt` (the same canonical procedure the worker would have run), and `data.instructions`. Produce the `{result, decisions, anomalies}` worker report by running that procedure, then return an envelope shaped exactly like the spawn path: `data.report` = that JSON, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". **How you run it is capability-gated:** if you have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or your harness's equivalent), dispatch exactly ONE subagent with `data.prompt` as its whole task and return the report it produces — that keeps the rsync/qsub transcript out of your context, recovering the isolation inline would otherwise trade away. If you have no such tool, run the procedure yourself in this session (full tools + credentials). Either path stays in-session — do NOT start another `claude -p` worker or re-invoke `hpc-agent run`, and the subagent (when used) is the leaf: it runs every step and spawns nothing further. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
+**This is the ONLY handoff verb for this skill.** `hpc-agent run` spawns a fresh-context bare worker that runs `worker_prompts/submit.md` and returns its envelope. You consume `data.report` from that envelope. Done.
+
+**⚠ Do NOT call `hpc-agent submit-flow` from this skill.** That primitive is the low-level pipeline atom the *worker* invokes internally (after building its own `run_id`, sidecar, and spec). The catalog lists it as `agent_facing: true` because the worker is also an agent — not because this decision-layer skill calls it. Calling `submit-flow` here skips the worker's pre-flight, context loading, and report shaping, and forces you to fabricate inputs (`run_id`, `script`, full submit spec) the worker would have built for you.
+
+**⚠ Do NOT pass `--inline` or set `HPC_AGENT_INVOKER=inline` yourself.** Inline is a *user* opt-in (see *Execution style*). `hpc-agent run` refuses an agent-supplied `--inline` when a spawning worker can authenticate (#155). If the default spawn errors with `worker authentication unavailable` or a worker-launch `internal` error, **escalate to the caller** — return a `needs_resolution`-style anomaly. Do NOT retry with `HPC_AGENT_INVOKER=inline` to "work around" it; that flips an explicit user-only knob behind the user's back.
+
+#### Inline branch — only reached when the *user* set `HPC_AGENT_INVOKER=inline`
+
+If the envelope you got back has `data.mode == "inline"` (instead of `data.mode == "spawn"` and `data.report`), the user opted into inline mode. The envelope carries `data.prompt` (the same canonical procedure the spawned worker would have run) and `data.instructions`. Your job is to produce the worker report `{result, decisions, anomalies}` and return an envelope shaped like the spawn path: `data.report` = that JSON, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline".
+
+**How you run it is capability-gated — check in this order:**
+
+1. **You have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or your harness's equivalent).** → **Dispatch exactly ONE subagent** with `data.prompt` as its whole task; return the report it produces. This is the default inline path in Claude Code and **not optional when the `Agent` tool exists** — running `data.prompt` in your own context defeats the whole point of inline mode (it floods this session with the rsync/qsub transcript that spawn-mode isolation would have kept out). If you find yourself about to execute step 1 of `data.prompt` in this session while the `Agent` tool is listed in your toolset, stop and dispatch instead.
+2. **You have no such tool.** → Run the procedure yourself in this session (full tools + credentials). This is the harness-fallback path, not the default.
+
+Either path stays in-session: do NOT start another `claude -p` worker, do NOT re-invoke `hpc-agent run`, and the subagent (when used) is the leaf — it runs every step and spawns nothing further.
 
 <!-- decision-content:inline-isolation-ceiling start -->
 **Isolation ceiling:** a subagent recovers *context* isolation but not *environment* isolation — it shares this session's sandbox posture and auto-loads project CLAUDE.md, unlike the default `--bare` spawn (sandbox forced off, CLAUDE.md stripped). If a sandboxed session would block the cluster SSH, or project memory must not color the run, that's a sign the *user* wants the default spawn, not inline.
