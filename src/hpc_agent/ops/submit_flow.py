@@ -325,6 +325,18 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # tasks_py_sha is provenance only (drift detection); compute it from the
     # local tasks.py when present, else leave empty — the dispatcher does
     # not require it.
+    #
+    # #207: this is the explicit boundary between the two identities the
+    # sidecar carries. ``cmd_sha`` (above) is PARAMETER identity — the
+    # dedup key, hashed solely from the materialized swept params (see
+    # compute_cmd_sha). ``tasks_py_sha`` (below) is CODE identity —
+    # provenance, NOT folded into the dedup key by default. An
+    # executor-body edit with unchanged params keeps the same cmd_sha and
+    # dedups against the prior run BY DESIGN (params define the
+    # experiment). The opt-in --invalidate-on-code-change lever
+    # (spec.invalidate_on_code_change → submit_and_record →
+    # find_run_by_cmd_sha) is what folds this tasks_py_sha into the dedup
+    # decision when a caller wants a code-only change to force a fresh run.
     tasks_py_sha = ""
     tasks_py = experiment_dir / ".hpc" / "tasks.py"
     if tasks_py.is_file():
@@ -579,6 +591,20 @@ def _make_single_array_submission(
                     "the wave with lifecycle_state=failed."
                 ),
             ),
+            CliArg(
+                "--invalidate-on-code-change",
+                action="store_true",
+                help=(
+                    "Opt-in code-iteration safety (#207). cmd_sha (the dedup key) "
+                    "is PARAMETER identity only — editing the executor body "
+                    "without changing any swept parameter keeps the same cmd_sha, "
+                    "so a cross-machine resubmit could silently replay the prior "
+                    "run's OLD code. With this flag, the run's tasks.py drift sha "
+                    "is folded into the cmd_sha dedup so a code-only change forces "
+                    "a fresh run. Default off (param-only dedup); a detected drift "
+                    "still warns regardless."
+                ),
+            ),
         ),
         handler=_submit_flow_handler,
     ),
@@ -751,6 +777,19 @@ def _submit_one_spec(
     )
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
+    # #207 opt-in code-iteration lever. Default (flag off): pass NO cmd_sha
+    # here so _submit_one_spec's dedup behaviour is byte-for-byte what it
+    # was — the only gate stays the journal run_id check in
+    # submit_and_record, and submit-flow never folds parameter-identity
+    # cmd_sha into a new dedup. Flag on: thread cmd_sha (PARAMETER identity,
+    # from job_env['HPC_CMD_SHA']) so submit_and_record's cross-machine
+    # fallback engages, then invalidate_on_code_change folds the run's
+    # tasks.py drift sha into it — an executor-body edit with unchanged
+    # swept params forces a FRESH run instead of replaying the prior
+    # submission's code, while a same-code resubmit still dedups.
+    dedup_cmd_sha = (
+        (spec.job_env.get("HPC_CMD_SHA") or None) if spec.invalidate_on_code_change else None
+    )
     submit_and_record(
         experiment_dir,
         spec=_SubmitSpec(
@@ -763,7 +802,10 @@ def _submit_one_spec(
             job_ids=job_ids,
             total_tasks=spec.total_tasks,
             campaign_id=spec.campaign_id or None,
+            invalidate_on_code_change=spec.invalidate_on_code_change,
         ),
+        cmd_sha=dedup_cmd_sha,
+        invalidate_on_code_change=spec.invalidate_on_code_change,
     )
 
     if spec.partial_ok:

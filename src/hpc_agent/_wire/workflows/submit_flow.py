@@ -217,6 +217,22 @@ class SubmitFlowSpec(BaseModel):
             "reporting `partial_failures`."
         ),
     )
+    invalidate_on_code_change: bool = Field(
+        default=False,
+        description=(
+            "Opt-in code-iteration safety (#207). cmd_sha (the dedup key, "
+            "carried in job_env['HPC_CMD_SHA']) is PARAMETER identity only: "
+            "editing the executor body without changing any swept parameter "
+            "keeps the same cmd_sha, so a cross-machine resubmit (journal "
+            "wiped, sidecar surviving) would dedup against — and silently "
+            "replay — the prior run's OLD code. When true, the run's tasks.py "
+            "drift sha (already recorded on the sidecar as tasks_py_sha) is "
+            "folded into the cmd_sha dedup fallback so a code-only change "
+            "forces a fresh run. Default false leaves the param-only dedup "
+            "key untouched; a detected drift still warns regardless of this "
+            "flag. Threads through to submit_and_record."
+        ),
+    )
 
     @model_validator(mode="after")
     def _canary_only_requires_canary(self) -> SubmitFlowSpec:

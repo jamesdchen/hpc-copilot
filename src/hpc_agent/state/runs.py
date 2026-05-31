@@ -418,12 +418,25 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
 
 
 def find_run_by_cmd_sha(
-    experiment_dir: Path, cmd_sha: str, *, skip_orphans: bool = False
+    experiment_dir: Path,
+    cmd_sha: str,
+    *,
+    skip_orphans: bool = False,
+    tasks_py_sha: str | None = None,
+    invalidate_on_code_change: bool = False,
 ) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
     Compares the full cmd_sha string. Iterates newest-first so a fresh
     resume detection picks the most recent matching run.
+
+    Dedup identity is PARAMETER identity, not code identity (#207):
+    ``cmd_sha`` is hashed solely from the materialized per-task kwargs
+    (see :func:`hpc_agent.state.run_sha.compute_cmd_sha`), so an
+    executor-body edit that leaves every swept parameter unchanged
+    matches here and dedups against the prior run BY DESIGN. The
+    executor's source is provenance, recorded separately on the sidecar
+    as ``tasks_py_sha``.
 
     *skip_orphans* (default False) preserves the journal-wipe recovery
     contract: a sidecar with no journal record is the canonical signal
@@ -433,6 +446,34 @@ def find_run_by_cmd_sha(
     Pass ``skip_orphans=True`` only after a known-failed batch where the
     sidecars without journal records are guaranteed to be half-baked
     (e.g. inside the prune primitive) — see :func:`prune_orphan_sidecars`.
+
+    *tasks_py_sha* / *invalidate_on_code_change* are the OPT-IN
+    code-iteration safety lever (#207). Both default to off, in which
+    case this function behaves EXACTLY as the historical
+    match-on-cmd_sha-string version — the dedup key is unchanged.
+
+    * When *tasks_py_sha* is supplied (the drift sha of the
+      about-to-submit ``tasks.py``, via
+      :func:`hpc_agent.state.run_sha.compute_tasks_py_sha`) and the
+      matched sidecar recorded a *different* non-empty ``tasks_py_sha``,
+      the executor body changed since that run even though the swept
+      params did not. We emit a :class:`UserWarning` ("deduping against
+      run X, but the code changed since; pass
+      --invalidate-on-code-change to force a fresh run") — a safety net
+      that NEVER alters the dedup decision on its own.
+    * When *invalidate_on_code_change* is also True, a drifted match is
+      treated as NOT a match: this folds ``tasks_py_sha`` into the dedup
+      key for this one lookup, so the caller proceeds to a fresh submit
+      instead of replaying the stale run. Scanning continues to older
+      sidecars (an older run whose ``tasks_py_sha`` matches the current
+      code is still a legitimate dedup target); ``None`` is returned when
+      no param-and-code match remains.
+
+    A sidecar with an empty/absent recorded ``tasks_py_sha`` (drift
+    detection was disabled for that run, e.g. ``tasks.py`` was unreadable
+    at submit; see ``ops/submit_flow.py``) is NOT treated as drift — we
+    cannot prove the code changed, so we fall back to the param-only
+    dedup and neither warn nor invalidate.
     """
     if not cmd_sha:
         return None
@@ -445,6 +486,34 @@ def find_run_by_cmd_sha(
             continue
         if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
             continue
+        # Param identity matched. Now consider code identity only if the
+        # caller opted in by supplying the current tasks_py_sha AND the
+        # matched run recorded a non-empty one to compare against.
+        recorded_tasks_py_sha = data.get("tasks_py_sha")
+        code_changed = bool(
+            tasks_py_sha
+            and recorded_tasks_py_sha
+            and str(recorded_tasks_py_sha) != str(tasks_py_sha)
+        )
+        if code_changed:
+            if invalidate_on_code_change:
+                # Fold tasks_py_sha into the dedup key for this lookup:
+                # this run's params match but its code differs, so it is
+                # NOT a valid replay target — keep scanning for an older
+                # run whose code also matches (returns None if none does).
+                continue
+            warnings.warn(
+                f"deduping against run {path.stem!r} (same cmd_sha "
+                f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
+                f"recorded tasks.py drift sha {str(recorded_tasks_py_sha)[:8]}… "
+                f"differs from the current {str(tasks_py_sha)[:8]}… — the "
+                "executor code changed since that run. The replay will run "
+                "the PRIOR submission's code (dedup keys on parameters by "
+                "design, #207). Pass --invalidate-on-code-change (or set "
+                "invalidate_on_code_change=True) to force a fresh run.",
+                UserWarning,
+                stacklevel=2,
+            )
         return path
     return None
 
