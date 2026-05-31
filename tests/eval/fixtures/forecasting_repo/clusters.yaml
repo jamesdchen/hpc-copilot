@@ -1,0 +1,35 @@
+# Self-contained cluster definitions for the forecasting eval fixture repo.
+#
+# Two clusters with DIFFERENT schedulers so the corpus can assert that
+# `backend` follows the cluster's scheduler (hoffman2 → sge, discovery →
+# slurm) rather than a hard-coded default. The `constraints:` block is what
+# `plan-throughput` reads to pack the task grid into concurrency-bounded
+# waves: `max_array_size` caps a single scheduler array, `max_concurrent_jobs`
+# caps how many arrays run at once (→ the wave count). These mirror the
+# placeholders in the shipped `config/clusters.yaml` but are scrubbed of any
+# real host/user so the fixture is fully offline and self-contained.
+hoffman2:
+  host: hoffman2.example.edu
+  user: eval_user
+  scheduler: sge
+  scratch: /scratch/eval_user
+  modules: []
+  constraints:
+    max_array_size: 100
+    max_walltime: "3:00:00"
+    max_concurrent_jobs: 2
+    est_spin_up: "5m"
+
+discovery:
+  host: discovery.example.edu
+  user: eval_user
+  scheduler: slurm
+  account: eval_account
+  scratch: /scratch/eval_user
+  modules: []
+  gpu_types: [a100, v100]
+  constraints:
+    max_array_size: 50
+    max_walltime: "24:00:00"
+    max_concurrent_jobs: 4
+    est_spin_up: "2m"

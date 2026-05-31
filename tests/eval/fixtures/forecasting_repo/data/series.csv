@@ -1,0 +1,12 @@
+# Minimal stand-in dataset for the forecasting eval fixture repo.
+# The eval grades the agent's DECISION to run the executors over these axes on
+# this cluster — it does not consume this data. Present so the fixture is a
+# self-contained "repo" (executors + clusters.yaml + data), mirroring the
+# shape a real forecasting experiment ships.
+t,y
+0,0.10
+1,0.32
+2,0.51
+3,0.40
+4,0.62
+5,0.55
