@@ -244,6 +244,18 @@
       "default": null,
       "title": "Skip Preflight"
     },
+    "invalidate_on_code_change": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Invalidate On Code Change"
+    },
     "pass_env_keys": {
       "anyOf": [
         {

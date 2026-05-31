@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/dry_run_local.input.json",
+  "title": "DryRunLocalSpec",
+  "description": "Input spec for the local pre-flight execution gate.\n\n``executor`` is the REAL per-task command (the same string the\ncluster dispatcher resolves from the run sidecar — e.g.\n``python train.py --seed $SEED``), NOT the job-script's dispatcher\ncommand. It is only consulted when ``smoke`` is set; the default-on\ntemplate-render layer needs ``result_dir_template`` + ``tasks.py``\nalone.",
+  "type": "object",
+  "required": [
+    "result_dir_template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "result_dir_template": {
+      "description": "The per-run result-directory template the cluster dispatcher renders with str.format over {task_id}/{run_id}/<kwargs>. Checked for unfilled placeholder fields and cross-id collisions.",
+      "minLength": 1,
+      "title": "Result Dir Template",
+      "type": "string"
+    },
+    "tasks_py_path": {
+      "default": ".hpc/tasks.py",
+      "description": "Path to the campaign's tasks.py (relative to experiment_dir).",
+      "title": "Tasks Py Path",
+      "type": "string"
+    },
+    "run_id": {
+      "default": "dry-run-local",
+      "description": "run_id fed into the template render + the smoke run's HPC_RUN_ID. A placeholder is fine — the gate never touches the journal; it only needs a value so a template referencing {run_id} resolves.",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "sample_n_tasks": {
+      "default": 8,
+      "description": "Number of task ids to sample from tasks.resolve(i) for the template-render / collision check. Sampling (not an exhaustive walk) keeps the gate fast for large grids; collisions are still caught across the sampled window, which is where the bug class lives.",
+      "minimum": 1,
+      "title": "Sample N Tasks",
+      "type": "integer"
+    },
+    "smoke": {
+      "default": false,
+      "description": "Opt in to actually executing the executor locally for ONE sampled grid point (default OFF). Runs `executor` (or `smoke_command` when given) under a shell with the same HPC_KW_*/bare-upper env the cluster dispatcher exports, to catch import errors + arg-binding bugs before any SSH. Scoped to 'broken code, not broken cluster'.",
+      "title": "Smoke",
+      "type": "boolean"
+    },
+    "executor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The real per-task command (e.g. `python train.py --seed $SEED`). Required when smoke=true. Must not be the dispatcher command itself (the #162 self-recursion footgun) — the gate refuses it.",
+      "title": "Executor"
+    },
+    "smoke_command": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override the smoke-exec command with an import/--help-level probe the executor opts into (e.g. `python -c 'import train'` or `python train.py --help`). When omitted, the gate runs `executor` verbatim — appropriate only for executors that no-op cheaply.",
+      "title": "Smoke Command"
+    },
+    "smoke_task_id": {
+      "default": 0,
+      "description": "Which sampled task id supplies the kwargs/env for the smoke run.",
+      "minimum": 0,
+      "title": "Smoke Task Id",
+      "type": "integer"
+    },
+    "smoke_timeout_sec": {
+      "default": 60,
+      "description": "Hard wall-clock cap on the local smoke run. A local probe that outlives this is killed and reported as smoke_timeout — the gate is meant to be fast (import/--help), not a real training run.",
+      "minimum": 1,
+      "title": "Smoke Timeout Sec",
+      "type": "integer"
+    }
+  }
+}

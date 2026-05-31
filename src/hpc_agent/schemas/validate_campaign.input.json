@@ -160,6 +160,51 @@
       "default": null,
       "description": "The cmd_sha the about-to-submit run will have. Required alongside ``campaign_id`` to enable the stochastic-marker check; ignored otherwise. Minimum 8 hex chars (matches the inner stochastic-marker validator's constraint).",
       "title": "Expected Cmd Sha"
+    },
+    "result_dir_template": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The per-run result-directory template. When set, the workflow runs dry-run-local: it renders the template for the sampled tasks.resolve(i) ids and flags unfilled {fields} / cross-id result_dir collisions before any SSH. ``None`` skips the gate.",
+      "title": "Result Dir Template"
+    },
+    "dry_run_smoke": {
+      "default": false,
+      "description": "Opt in to dry-run-local's executor smoke-exec: actually run the executor locally for ONE sampled grid point (import/--help-level by default) to catch import + arg-binding bugs before the cluster. Requires ``executor``. Off by default — the template render still runs.",
+      "title": "Dry Run Smoke",
+      "type": "boolean"
+    },
+    "executor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The real per-task command (e.g. `python train.py --seed $SEED`), passed to dry-run-local's smoke-exec. Only consulted when ``dry_run_smoke`` is set.",
+      "title": "Executor"
+    },
+    "smoke_command": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override dry-run-local's smoke command with a cheap import/--help probe (e.g. `python -c 'import train'`). Falls back to ``executor`` verbatim when omitted.",
+      "title": "Smoke Command"
     }
   }
 }

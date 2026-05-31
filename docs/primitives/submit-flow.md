@@ -22,6 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]
+    [--invalidate-on-code-change]
   python: hpc_agent.ops.submit_flow.submit_flow
 ---
 

@@ -630,6 +630,17 @@
     "agent_facing": true,
     "cli": null,
     "idempotent": true,
+    "input_schema": "dry_run_local.input.json",
+    "name": "dry-run-local",
+    "output_schema": "dry_run_local.output.json",
+    "python": "hpc_agent.ops.validate.dry_run_local.dry_run_local",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
     "input_schema": "validate_executor_signatures.input.json",
     "name": "validate-executor-signatures",
     "output_schema": "validate_executor_signatures.output.json",
@@ -726,7 +737,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]",
+    "cli": "hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok] [--invalidate-on-code-change]",
     "idempotent": true,
     "input_schema": "submit_flow.input.json",
     "name": "submit-flow",
