@@ -188,6 +188,15 @@ def test_dry_run_local_runs_and_collision_fails_campaign(tmp_path: Path) -> None
     )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "executor uses POSIX single-quoted `-c 'import …'`; on cmd.exe the quotes "
+        "are part of the argument, so the broken-import surfaces as a generic "
+        "nonzero exit (`smoke_nonzero_exit`) rather than `smoke_import_error`. "
+        "Same POSIX-shell constraint as the test_dispatch #163 skips."
+    ),
+)
 def test_dry_run_local_smoke_opt_in_threads_executor(tmp_path: Path) -> None:
     """``dry_run_smoke=true`` threads ``executor`` into dry-run-local's smoke
     layer; a broken import surfaces as a dry-run-local error finding."""

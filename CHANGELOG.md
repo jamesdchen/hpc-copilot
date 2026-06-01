@@ -7,6 +7,10 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.9.0 — 2026-06-01
+
+Highlights: worker-prompt invoke-only fence (#203), local dry-run gate before the cluster canary (#205), behavioral eval harness for agent decisions (#204), `--invalidate-on-code-change` opt-in dedup lever + code-drift warning (#207), centralized resource clamp/ceil + canonical walltime formatter (#206), `ssh_run` returns at foreground-exit speed when a remote child holds the pipe (#209), generic-plugin `setup` integration / drop named-plugin coupling (#213), unambiguous Step 9 in `hpc-submit/SKILL.md`. Also rolls up the 0.7.2–0.8.1 chain that landed without per-version CHANGELOG entries; for those, `git log --oneline` on `main` is the authoritative history.
+
 ### Changed — `setup` plugin integration is fully generic; host names no plugin
 
 The `setup` primitive carries no plugin-specific code. It invokes a

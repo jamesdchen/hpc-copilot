@@ -21,11 +21,24 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+import pytest
+
 from hpc_agent._wire.validators.dry_run_local import DryRunLocalSpec
 from hpc_agent.ops.validate.dry_run_local import dry_run_local
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# Smoke-exec tests below issue `python -c '…'` with POSIX single-quoting; the
+# dispatcher's `subprocess.run(shell=True)` contract uses /bin/sh on POSIX and
+# cmd.exe on Windows — and cmd.exe treats the single quotes as part of the
+# argument, so the stderr signature differs and the smoke layer can't
+# distinguish import / nonzero / override paths. Same POSIX-shell constraint
+# as the test_dispatch #163 skips.
+_smoke_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="smoke-exec uses POSIX-shell single-quoted `python -c '…'` (see #163)",
+)
 
 
 def _write_tasks_py(tmp_path: Path, tasks: list[dict]) -> None:
@@ -143,6 +156,7 @@ def test_smoke_off_by_default_does_not_run_executor(tmp_path: Path) -> None:
     assert out.findings == []
 
 
+@_smoke_posix_only
 def test_smoke_catches_import_error(tmp_path: Path) -> None:
     """The motivating case: an executor that fails to import is caught
     LOCALLY, before any SSH, with the stderr tail captured."""
@@ -163,6 +177,7 @@ def test_smoke_catches_import_error(tmp_path: Path) -> None:
     assert "ModuleNotFoundError" in finding.evidence["stderr_tail"]
 
 
+@_smoke_posix_only
 def test_smoke_healthy_executor_passes_and_sees_hpc_kw_env(tmp_path: Path) -> None:
     """A healthy executor exits 0 → no findings. The body also asserts the
     dispatcher's env contract (``HPC_KW_SEED`` + bare ``SEED``) is exported,
@@ -180,6 +195,7 @@ def test_smoke_healthy_executor_passes_and_sees_hpc_kw_env(tmp_path: Path) -> No
     assert out.findings == []
 
 
+@_smoke_posix_only
 def test_smoke_command_override_runs_instead_of_executor(tmp_path: Path) -> None:
     """``smoke_command`` (a cheap import/--help probe) runs in place of the
     real ``executor`` — the executor here would exit 1, the probe exits 0."""
@@ -196,6 +212,7 @@ def test_smoke_command_override_runs_instead_of_executor(tmp_path: Path) -> None
     assert out.findings == []
 
 
+@_smoke_posix_only
 def test_smoke_nonzero_exit_emits_error(tmp_path: Path) -> None:
     """A non-import runtime failure surfaces as ``smoke_nonzero_exit`` with
     the exit code recorded."""
