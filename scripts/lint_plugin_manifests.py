@@ -25,7 +25,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
-sys.path.insert(0, str(REPO / "hpc-agent-pro" / "src"))
 
 from hpc_agent._kernel.registry.plugins import (  # noqa: E402
     get_plugin_manifests,

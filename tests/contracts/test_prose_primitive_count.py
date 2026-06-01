@@ -73,7 +73,7 @@ _PROSE_RE = re.compile(r"~?\b(\d+)\s+primitives?\b")
 @pytest.fixture(scope="module")
 def registry() -> dict[str, PrimitiveMeta]:
     # Filter to core-only: the prose docs scanned below describe core's
-    # primitive surface. When hpc-agent-pro is also installed, its primitives
+    # primitive surface. When a plugin is also installed, its primitives
     # show up in the live registry but the prose counts don't track them.
     return core_only_registry()
 

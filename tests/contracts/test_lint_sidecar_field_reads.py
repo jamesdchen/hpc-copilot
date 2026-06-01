@@ -15,7 +15,7 @@ silently degrading the call site. See the audit-fixes commit history
 for four bugs of this exact shape (``update-run-constraints``,
 ``campaign-health``, …).
 
-The lint walks every ``.py`` under ``src/`` and ``hpc-agent-pro/src/``,
+The lint walks every ``.py`` under ``src/``,
 finds ``<receiver>.get(<literal>)`` and ``<receiver>[<literal>]`` calls
 where the receiver name matches a sidecar-pattern, and flags any key
 not in the authoritative allowed set.
@@ -109,7 +109,7 @@ _EXCLUDE_FILES = frozenset(
 
 def _python_files() -> list[Path]:
     out: list[Path] = []
-    for root in (REPO_ROOT / "src", REPO_ROOT / "hpc-agent-pro" / "src"):
+    for root in (REPO_ROOT / "src",):
         if root.is_dir():
             out.extend(p for p in root.rglob("*.py") if p.is_file())
     return out

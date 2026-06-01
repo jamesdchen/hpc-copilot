@@ -11,7 +11,7 @@
   "additionalProperties": false,
   "properties": {
     "name": {
-      "description": "Plugin distribution name (e.g. ``hpc-agent-pro``).",
+      "description": "Plugin distribution name (e.g. ``hpc-agent-myplugin``).",
       "title": "Name",
       "type": "string"
     },

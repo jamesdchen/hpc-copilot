@@ -106,8 +106,8 @@ def cli_verbs() -> set[str]:
 def test_every_agent_facing_primitive_has_a_cli_subcommand(cli_verbs: set[str]) -> None:
     """Pin: agent-facing primitives are reachable via the CLI."""
     missing: list[str] = []
-    # Filter to core-only: hpc-agent-pro primitives are wired into the CLI by
-    # the plugin itself (separate cli_register entry point); the core CLI parser
+    # Filter to core-only: a plugin's primitives are wired into the CLI by
+    # the plugin itself (its own cli_register entry point); the core CLI parser
     # this test inspects intentionally only sees core verbs.
     for entry in core_only_operations_catalog():
         if not entry.get("agent_facing"):

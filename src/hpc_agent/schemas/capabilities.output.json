@@ -102,7 +102,7 @@
       "description": "Self-declared metadata for one ``hpc_agent.plugins`` entry.",
       "properties": {
         "name": {
-          "description": "Plugin distribution name (e.g. ``hpc-agent-pro``).",
+          "description": "Plugin distribution name (e.g. ``hpc-agent-myplugin``).",
           "title": "Name",
           "type": "string"
         },

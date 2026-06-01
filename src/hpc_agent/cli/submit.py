@@ -17,7 +17,7 @@ auto-dispatcher cannot model:
 
 Helpers come from :mod:`hpc_agent.cli._helpers` (the adapter SDK) —
 external plugins import the same symbols, so the adapter contract here
-is the same one ``hpc-agent-pro`` consumes.
+is the same one any plugin's CLI subcommands consume.
 """
 
 from __future__ import annotations

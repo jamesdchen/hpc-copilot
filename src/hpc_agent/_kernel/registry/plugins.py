@@ -17,6 +17,13 @@ attributes of the informal plugin contract:
 * ``slash_command_assets`` — a traversable directory holding
   ``commands/`` and/or ``skills/`` subtrees, installed over the core
   assets by ``hpc-agent install-commands``.
+* ``schema_assets`` — a traversable directory of wire-schema JSON
+  (``<name>.input.json`` / ``<name>.output.json``) for the plugin's
+  primitives, consulted by the CLI input boundary so ``--spec``
+  validation fires for plugin-owned primitives too. When absent, the
+  host falls back to the ``<plugin-module-root>.schemas`` package by
+  convention — so a plugin laid out the conventional way needs no
+  explicit hook.
 
 All are optional; a plugin may provide any combination, or none.
 """
@@ -27,6 +34,7 @@ import os
 import warnings
 from functools import cache
 from importlib.metadata import entry_points
+from importlib.resources import files as _resource_files
 from typing import Any
 
 __all__ = [
@@ -34,9 +42,11 @@ __all__ = [
     "get_plugin_manifests",
     "load_plugins",
     "plugin_primitive_modules",
+    "plugin_schema_roots",
     "plugin_slash_command_roots",
     "plugin_worker_prompt_roots",
     "register_plugin_cli",
+    "run_plugin_setup_actions",
 ]
 
 PLUGIN_GROUP = "hpc_agent.plugins"
@@ -59,7 +69,7 @@ def load_plugins() -> tuple[Any, ...]:
     and returns ``()`` — the chokepoint that makes the dev-loop regen
     scripts (``build_primitive_frontmatter`` / ``build_primitive_index``
     / ``build_operations_index``) produce core-only output even with
-    ``hpc-agent-pro`` installed in the venv. Inherits across the
+    a plugin installed in the venv. Inherits across the
     subprocess used by ``build_operations_index``, so a single env-var
     read at this chokepoint covers every plugin hook below (#198).
     """
@@ -129,6 +139,61 @@ def register_plugin_cli(subparsers: Any) -> None:
             hook(subparsers)
 
 
+def run_plugin_setup_actions(context: dict[str, Any]) -> dict[str, Any]:
+    """Collect every plugin's optional ``setup`` contributions.
+
+    A plugin may expose a ``run_setup_actions(context) -> Mapping | None``
+    callable. The host's ``setup`` primitive invokes it — passing a
+    context dict (``cluster``, ``experiment_dir``, ``install``,
+    ``dry_run``) — and merges each plugin's returned mapping into the
+    ``setup`` envelope's ``plugin_actions`` field, keyed by the plugin's
+    manifest name (falling back to the plugin module name).
+
+    This is the generic seam that replaces host-side knowledge of any
+    specific plugin verb: the host invokes the hook blindly and never
+    names what a plugin does at setup time. A plugin without the hook,
+    or one whose hook returns ``None``/empty, contributes nothing. A
+    hook that raises is isolated so one plugin can't break ``setup`` —
+    the failure surfaces as a ``warnings.warn`` and that plugin's entry
+    is omitted.
+    """
+    actions: dict[str, Any] = {}
+    for plugin in load_plugins():
+        hook = getattr(plugin, "run_setup_actions", None)
+        if not callable(hook):
+            continue
+        try:
+            result = hook(dict(context))
+        except Exception as exc:  # noqa: BLE001 — a plugin hook may raise anything
+            warnings.warn(
+                f"plugin setup hook failed for {getattr(plugin, '__name__', plugin)!r}: {exc!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        if not result:
+            continue
+        key = _plugin_key(plugin)
+        actions[key] = dict(result)
+    return actions
+
+
+def _plugin_key(plugin: Any) -> str:
+    """Stable key for a plugin in the ``plugin_actions`` map.
+
+    Prefers the manifest name (the operator-facing distribution name);
+    falls back to the plugin object's ``__name__`` top-level package.
+    """
+    manifest = getattr(plugin, "MANIFEST", None)
+    name = getattr(manifest, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    mod = getattr(plugin, "__name__", None)
+    if isinstance(mod, str) and mod:
+        return mod.split(".", 1)[0]
+    return repr(plugin)
+
+
 def plugin_slash_command_roots() -> tuple[Any, ...]:
     """Return the slash-command asset roots contributed by plugins.
 
@@ -165,4 +230,55 @@ def plugin_worker_prompt_roots() -> tuple[Any, ...]:
         root = getattr(plugin, "worker_prompt_assets", None)
         if root is not None:
             roots.append(root)
+    return tuple(roots)
+
+
+def _conventional_schema_package(plugin: Any) -> str | None:
+    """Derive the ``<plugin-root>.schemas`` package name from *plugin*.
+
+    The plugin entry point points at a module
+    (``hpc_agent_myplugin.plugin``) or a package; its top-level
+    distribution package is the first dotted segment of ``__name__``. By
+    convention a plugin keeps its wire
+    schemas in ``<that package>.schemas`` — the same ``schemas/`` layout
+    the host uses. Returns ``None`` for a plugin object without a usable
+    ``__name__`` (e.g. an instance), in which case it must expose an
+    explicit ``schema_assets`` to participate.
+    """
+    name = getattr(plugin, "__name__", None)
+    if not isinstance(name, str) or not name:
+        return None
+    return f"{name.split('.', 1)[0]}.schemas"
+
+
+def plugin_schema_roots() -> tuple[Any, ...]:
+    """Return the wire-schema asset roots contributed by plugins.
+
+    Each element is an :mod:`importlib.resources` traversable directory
+    holding ``<name>.input.json`` / ``<name>.output.json`` files for a
+    plugin's primitives. A plugin may name the directory explicitly via a
+    ``schema_assets`` attribute; otherwise the host resolves the
+    conventional ``<plugin-module-root>.schemas`` package (see
+    :func:`_conventional_schema_package`). A plugin that has neither
+    contributes no root and is simply skipped.
+
+    Consumed by the CLI input boundary
+    (``hpc_agent.cli._helpers._validate_against_schema``) so ``--spec``
+    validation resolves a plugin-owned primitive's schema after the
+    core ``hpc_agent.schemas`` lookup — previously this iterated a
+    hard-coded plugin package name, so only one specific plugin's
+    schemas were ever found.
+    """
+    roots: list[Any] = []
+    for plugin in load_plugins():
+        root = getattr(plugin, "schema_assets", None)
+        if root is None:
+            pkg = _conventional_schema_package(plugin)
+            if pkg is None:
+                continue
+            try:
+                root = _resource_files(pkg)
+            except (ModuleNotFoundError, ImportError):
+                continue
+        roots.append(root)
     return tuple(roots)

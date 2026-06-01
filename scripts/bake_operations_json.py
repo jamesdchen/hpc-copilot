@@ -46,7 +46,7 @@ def _emit() -> str:
 
     Filters to core-only primitives — the baked artifact lives inside
     the core package (``src/hpc_agent/operations.json``) and CI bakes
-    it without ``hpc-agent-pro`` installed. When a dev has the plugin
+    it without any plugin installed. When a dev has a plugin
     installed in the same env, its primitives are skipped so the
     artifact stays stable. Plugins publish their primitives at runtime
     via the ``hpc_agent.plugins`` entry-point group; baking their

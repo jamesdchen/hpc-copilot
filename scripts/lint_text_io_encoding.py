@@ -32,7 +32,6 @@ REPO = Path(__file__).resolve().parent.parent
 # Source trees that ship to users — every text I/O here must be explicit.
 SCAN_GLOBS: tuple[tuple[str, str], ...] = (
     ("src/hpc_agent", "**/*.py"),
-    ("hpc-agent-pro/src", "**/*.py"),
     ("scripts", "*.py"),
 )
 

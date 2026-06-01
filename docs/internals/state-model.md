@@ -103,7 +103,7 @@ Written by: `campaign-advance` (on each tick), `campaign-init`.
 ### `runtime_priors/<profile>__<cluster>__<cmd_sha>.json` — historical walltimes
 
 Quantile rollup of observed task walltimes for a specific
-`(profile, cluster, cmd_sha)` combination. Used by the pro plugin's
+`(profile, cluster, cmd_sha)` combination. Used by an optional plugin's
 walltime-right-sizing and by the core's `validate-walltime-against-history`.
 
 ```json
@@ -117,21 +117,21 @@ walltime-right-sizing and by the core's `validate-walltime-against-history`.
 }
 ```
 
-Read by: `read-runtime-prior` (pro plugin), `validate-walltime-against-history`, `plan-submit` (pro).
+Read by: `read-runtime-prior` (optional plugin), `validate-walltime-against-history`, `plan-submit` (optional plugin).
 
 Written by: `aggregate-flow`'s runtime-sample ingestion step.
 
-### `squeue_snapshots/<YYYYMMDDTHHMMSS>.tsv.gz` (pro plugin only)
+### `squeue_snapshots/<YYYYMMDDTHHMMSS>.tsv.gz` (optional plugin only)
 
 Cron-collected snapshots of `squeue` output, used to train the
-LightGBM-residual queue-wait predictor. Only present when the pro
+LightGBM-residual queue-wait predictor. Only present when an optional
 plugin's `install-cron` has been run.
 
 Read by: `train_wait_predictor` (the nightly trainer), `predict-start-time` (the residual lookup).
 
 Written by: `snapshot_squeue` cron entry.
 
-### `wait_predictor/` (pro plugin only)
+### `wait_predictor/` (optional plugin only)
 
 The persisted LightGBM model + feature list + training summary.
 Written by the nightly trainer; read by `predict-start-time` at
@@ -303,8 +303,8 @@ A reverse index — given a primitive, which state files it touches.
 | `recall` | `campaigns/`, `interview.json` files in sibling experiments | — |
 | `campaign-init` / `campaign-advance` | `campaigns/<slug>/` | `campaigns/<slug>/` |
 | `campaign-status` / `campaign-list` | `campaigns/` | — |
-| `install-cron` (pro) | — | user crontab |
-| `predict-start-time` (pro) | `runtime_priors/`, `squeue_snapshots/`, `wait_predictor/` | — |
+| `install-cron` (plugin) | — | user crontab |
+| `predict-start-time` (plugin) | `runtime_priors/`, `squeue_snapshots/`, `wait_predictor/` | — |
 | `validate-campaign` | `tasks.py`, dataset paths, `runtime_priors/`, `playbook.yaml` | — |
 
 ## Invariants
@@ -322,7 +322,7 @@ A few cross-cutting properties worth knowing:
 
 | Lives at | Scope | Contents |
 |---|---|---|
-| `~/.claude/hpc/<repo_hash>/` | Per-user, per-repo | Run sidecars, journal, preflight cache, campaign state, runtime priors, (pro) snapshots + model |
+| `~/.claude/hpc/<repo_hash>/` | Per-user, per-repo | Run sidecars, journal, preflight cache, campaign state, runtime priors, (plugin) snapshots + model |
 | `<experiment>/.hpc/` | Per-experiment (version controlled) | `tasks.py`, `axes.yaml`, `interview.json`, wrappers, `playbook.yaml`, run output mirrors |
 | `<cluster>:<scratch>/<run_id>/` | Per-run, on cluster | Per-task working dirs, combiner partials, deploy bundle |
 | `~/.claude/{commands,skills}/` | Per-user | Installed slash commands + skills (placed by `install-commands`) |

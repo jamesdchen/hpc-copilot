@@ -49,9 +49,9 @@ def _load_registry() -> list[tuple[Any, str, Path]]:
     """Import ``scripts/build_schemas.py:SCHEMA_REGISTRY`` without running ``main()``.
 
     Entries are ``(model_or_adapter, output_filename, schemas_dir)`` —
-    the ``schemas_dir`` is per-entry because the script discovers across
-    multiple authoring packages (core ``hpc_agent._wire`` + pro plugin
-    ``hpc_agent_pro._wire``) into different output directories.
+    the ``schemas_dir`` is per-entry so the generator can, in principle,
+    write models from different authoring packages into different output
+    directories. Core registers the ``hpc_agent._wire`` package.
     """
     spec = importlib.util.spec_from_file_location("_build_schemas_for_test", BUILD_SCRIPT)
     assert spec is not None and spec.loader is not None

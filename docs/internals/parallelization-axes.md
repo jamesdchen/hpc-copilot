@@ -181,14 +181,14 @@ Inter-wave aggregation rolls up to the final result.
 - **Monitoring**: `monitor-flow` polls per-wave status; reports "wave 2 of 4 complete" to the user.
 - **Mid-flight kill**: the user can stop a campaign at any wave boundary by not letting the next wave's dependency clear.
 - **Campaign integration**: each campaign tick is a wave-of-waves — the iteration's outputs gate the next iteration's submission.
-- **Backfill optimisation**: small waves fit into backfill windows better than one big array. The pro plugin's `plan-submit` may recommend smaller waves to exploit predicted backfill gaps.
+- **Backfill optimisation**: small waves fit into backfill windows better than one big array. An optional plugin's `plan-submit` may recommend smaller waves to exploit predicted backfill gaps.
 
 ### Why it's framework-internal
 
 The user doesn't see `wave_map` directly — they don't need to. The
 framework computes it from cluster constraints + sweep size at submit
 time. The user might tune it indirectly (by setting
-`target_backfill_window_sec` for the pro planner, or
+`target_backfill_window_sec` for the optional planner plugin, or
 `max_concurrent_jobs` in their `clusters.yaml`) but they don't write
 the wave layout.
 
@@ -366,7 +366,7 @@ Mapping each axis to the primitives, state, and validators that consume it:
 |---|---|---|---|
 | Sweep dimensions | `tasks.py.resolve()` | `cmd_sha` per task | `validate-input-dataset`, `validate-executor-signatures`, `validate-campaign` (per-task kwargs check) |
 | Scheduling axis | `axes.yaml.homogeneous_axes` | Array submissions per heterogeneous-axis value | `axes-init` writes; no specific validator |
-| Wave structure | Cluster constraints + total task count | `wave_map` (transient at submit time) | `plan-throughput` produces; pro plugin's `plan-submit` may re-tune |
+| Wave structure | Cluster constraints + total task count | `wave_map` (transient at submit time) | `plan-throughput` produces; an optional plugin's `plan-submit` may re-tune |
 | Stage DAG | Multiple `@register_run` functions + I/O paths | Inter-stage dependencies | `stages.py`'s loader validates DAG consistency |
 | DataAxis | `axes.yaml.executors.<run>.data_axis` | Per-task chunking spec | `assert_elision_equivalent` runtime check |
 

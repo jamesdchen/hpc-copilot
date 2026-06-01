@@ -20,11 +20,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Regen scripts default to a core-only view — pro-plugin operations don't
-# belong in this repo's docs/generated/operations.md. The env var inherits
-# into the `hpc-agent capabilities` subprocess invoked below, so a single
-# setdefault here suppresses pro contamination in both the parent process
-# and the child capabilities call (#198).
+# Regen scripts default to a core-only view — plugin-contributed operations
+# don't belong in this repo's docs/generated/operations.md. The env var
+# inherits into the `hpc-agent capabilities` subprocess invoked below, so a
+# single setdefault here suppresses plugin contributions in both the parent
+# process and the child capabilities call (#198).
 os.environ.setdefault("HPC_AGENT_DISABLE_PLUGINS", "1")
 
 # Import via direct path append so this script runs without an editable

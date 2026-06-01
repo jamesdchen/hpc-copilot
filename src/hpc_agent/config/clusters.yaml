@@ -56,11 +56,11 @@ hoffman2:
   # walltime ceiling.
   max_walltime_sec: 86400
   # Cold-start walltime ask (seconds): used on the FIRST submit, before any
-  # runtime prior exists, when the pro `read-runtime-prior` verb can't supply
-  # one (it's absent on a core install). Omit to let the resolver fall back to
+  # measured runtime prior is available (an optional prior-reading verb, when
+  # installed, would otherwise supply one). Omit to let the resolver fall back to
   # a conservative built-in default (4h), clamped to max_walltime_sec; set it
   # here to match your typical job so the very first array isn't over- or
-  # under-provisioned. Once a prior exists the planner overrides this.
+  # under-provisioned. Once a prior exists it takes precedence over this.
   # default_walltime_sec: 14400
   # Largest single-node memory ask the cluster will schedule (MB).
   # When set, the planner clamps the cold-start mem buffer (and any
@@ -106,11 +106,11 @@ discovery:
   # queue-wait buffer) so a long task survives the cluster's hard
   # walltime ceiling.
   max_walltime_sec: 172800
-  # Cold-start walltime ask (seconds) for the FIRST submit, before a runtime
-  # prior exists (the pro `read-runtime-prior` verb is absent on a core
-  # install). Omit to fall back to a conservative built-in default (4h),
-  # clamped to max_walltime_sec; set it to match your typical job. The planner
-  # overrides this once a prior exists.
+  # Cold-start walltime ask (seconds) for the FIRST submit, before a measured
+  # runtime prior is available (an optional prior-reading verb, when installed,
+  # would otherwise supply one). Omit to fall back to a conservative built-in
+  # default (4h), clamped to max_walltime_sec; set it to match your typical job.
+  # A prior takes precedence over this once one exists.
   # default_walltime_sec: 14400
   # Largest single-node memory ask the cluster will schedule (MB).
   # USC CARC Discovery has nodes up to ~256 GB on most partitions;

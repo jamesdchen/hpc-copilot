@@ -39,8 +39,6 @@ def _scan_dirs() -> list[Path]:
     for rel in (
         "src/slash_commands",
         "src/hpc_agent/_kernel/extension/worker_prompts",
-        "hpc-agent-pro/src/hpc_agent_pro/slash_commands",
-        "hpc-agent-pro/src/hpc_agent_pro/worker_prompts",
     ):
         d = REPO_ROOT / rel
         if d.is_dir():

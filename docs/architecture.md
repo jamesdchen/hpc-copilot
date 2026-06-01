@@ -197,9 +197,10 @@ keeps planning replayable and unit-testable, and keeps audits of "what
 does this primitive touch?" trivial.
 
 The advisory / forecasting layer (queue-wait prediction, submit-plan
-scoring) lives in the optional `hpc-agent-pro` plugin, which
+scoring) lives in an optional, separately-distributed plugin, which
 re-attaches through the `hpc_agent.plugins` entry-point seam wired up
-in `_kernel/registry/plugins.py`.
+in `_kernel/registry/plugins.py`. The host names no specific plugin;
+any distribution registering that entry point is discovered.
 
 ### Plugin discovery (Item 5)
 
@@ -427,7 +428,8 @@ in order of preference:
    metadata, lint-clean, also drives the agent-readable workflow graph
    in the operations catalog. Cross-package composition works the same
    way: a plugin primitive can compose a core primitive by wire name
-   (see `hpc-agent-pro/src/hpc_agent_pro/smart_resubmit_flow.py`).
+   (e.g. a forecasting plugin's `smart_resubmit_flow` composing core
+   resubmit primitives).
 
 3. **Callable cross-subject calls → workflow at role root.** Keep
    the workflow file at the `ops/` or `meta/` *role root*

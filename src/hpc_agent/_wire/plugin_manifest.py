@@ -35,7 +35,7 @@ class PluginManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="hpc-agent plugin manifest")
 
-    name: str = Field(description="Plugin distribution name (e.g. ``hpc-agent-pro``).")
+    name: str = Field(description="Plugin distribution name (e.g. ``hpc-agent-myplugin``).")
     version: str = Field(description="Plugin distribution version (e.g. ``0.6.0``).")
     primitives: tuple[str, ...] = Field(
         default=(),

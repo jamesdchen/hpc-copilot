@@ -1,8 +1,8 @@
 """Tests for the plugin entry-point loader.
 
 The disable env var is the single chokepoint that lets the dev-loop regen
-scripts produce core-only output when ``hpc-agent-pro`` (or any other
-``hpc_agent.plugins`` entry point) is installed in the venv — see #198.
+scripts produce core-only output when any ``hpc_agent.plugins`` entry
+point is installed in the venv — see #198.
 """
 
 from __future__ import annotations
@@ -31,15 +31,15 @@ def test_disable_env_var_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_disable_env_var_only_exact_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only the literal value ``"1"`` disables. ``"true"`` / ``"0"`` / empty all fall through.
 
-    Conservative: a typo'd ``DISABLE_PLUGINS=true`` should NOT silently turn pro off in
-    a contributor's editor — the failure mode of the env-var lever working too eagerly
-    is the same dev-loop friction this exists to remove.
+    Conservative: a typo'd ``DISABLE_PLUGINS=true`` should NOT silently turn plugins
+    off in a contributor's editor — the failure mode of the env-var lever working too
+    eagerly is the same dev-loop friction this exists to remove.
     """
     for sentinel in ("true", "yes", "0", "", "01"):
         monkeypatch.setenv(plugins.DISABLE_ENV_VAR, sentinel)
         plugins.load_plugins.cache_clear()
         # The result depends on what's installed; we just assert the short-circuit
-        # DIDN'T fire. With or without pro installed, the function executes its
+        # DIDN'T fire. With or without a plugin installed, the function executes its
         # entry-point scan and the disable branch is not taken — we can prove that
         # negatively by clearing the env var and getting the same answer.
         with_sentinel = plugins.load_plugins()

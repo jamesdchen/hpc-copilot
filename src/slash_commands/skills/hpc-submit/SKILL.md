@@ -105,20 +105,20 @@ Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, 
 
 ### 6. Resolve walltime, gpu_type, partition
 
-Auto-resolve `walltime_sec` from runtime priors **when available**. `read-runtime-prior` is a **pro-plugin-only** verb — on a core install (e.g. plain PyPI `hpc-agent`) it does not exist, and on the very first submit there is no prior anyway. So treat a missing/erroring `read-runtime-prior` as **cold-start**, NOT as a problem to surface:
+Auto-resolve `walltime_sec` from runtime priors **when available**. `read-runtime-prior` is an **optional-plugin-only** verb — on a core install (e.g. plain PyPI `hpc-agent`) it does not exist, and on the very first submit there is no prior anyway. So treat a missing/erroring `read-runtime-prior` as **cold-start**, NOT as a problem to surface:
 
 ```bash
-# Optional: only the pro plugin registers this verb. Missing verb (argparse
+# Optional: only an installed plugin registers this verb. Missing verb (argparse
 # "invalid choice", exit 2) or no prior yet → cold-start; do NOT report it.
 hpc-agent read-runtime-prior --experiment-dir <dir> --profile <run_name> --cluster <cluster> --cmd-sha <sha> 2>/dev/null || true
 ```
 
 - **Prior found** (verb present AND ≥1 sample): `walltime_sec = prior.p95_sec * 1.30` (default safety_mult).
-- **Cold-start** (verb absent, or present with no prior): fall back to the cluster cold-start walltime, which **always resolves** — `clusters.<cluster>.default_walltime_sec` when the operator set it, otherwise a conservative built-in default (4h) clamped to `max_walltime_sec`. The `get_default_walltime_sec` resolver (`hpc_agent.infra.clusters`) guarantees a value, so a core install never stalls on the optional pro verb.
+- **Cold-start** (verb absent, or present with no prior): fall back to the cluster cold-start walltime, which **always resolves** — `clusters.<cluster>.default_walltime_sec` when the operator set it, otherwise a conservative built-in default (4h) clamped to `max_walltime_sec`. The `get_default_walltime_sec` resolver (`hpc_agent.infra.clusters`) guarantees a value, so a core install never stalls on the optional verb.
 
 `gpu_type` from caller or `clusters.<cluster>.gpu_types[0]`. `partition` from `recommend-partition` primitive.
 
-These never go into the ambiguities list and the missing pro verb is never an ambiguity — they always auto-resolve to a conservative default.
+These never go into the ambiguities list and the missing optional verb is never an ambiguity — they always auto-resolve to a conservative default.
 
 ### 7. Return ambiguities if any
 

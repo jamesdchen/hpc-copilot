@@ -62,8 +62,8 @@ def test_every_registered_primitive_has_a_doc() -> None:
     scaffold step was skipped.
 
     Filters to core-only primitives — ``docs/primitives/`` ships with the
-    core package and plugins (``hpc-agent-pro``) own their own per-plugin
-    docs trees. The filter is a no-op when no plugin is installed.
+    core package and plugins own their own per-plugin docs trees. The
+    filter is a no-op when no plugin is installed.
     """
     from tests._registry_helpers import core_only_registry
 

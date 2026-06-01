@@ -121,8 +121,8 @@ class ClusterConfig(BaseModel):
         default=None,
         description=(
             "Cold-start walltime ask in seconds, used on the very first submit "
-            "when no runtime prior exists yet (the pro `read-runtime-prior` verb, "
-            "which would otherwise supply it, is absent on a core install). When "
+            "when no measured runtime prior is available yet (an optional "
+            "prior-reading verb, when installed, would otherwise supply it). When "
             "unset the resolver falls back to a conservative built-in default, "
             "clamped to max_walltime_sec — see get_default_walltime_sec."
         ),
@@ -509,11 +509,13 @@ def get_default_walltime_sec(
 ) -> int:
     """Resolve the cold-start walltime (seconds) — ALWAYS returns a usable value.
 
-    The submit procedure auto-resolves walltime from runtime priors via the
-    pro-only ``read-runtime-prior`` verb. On a core install that verb is absent,
-    and on the very first submit there is no prior anyway, so the procedure
-    falls back here. This MUST always resolve (#170): a fallback that can't
-    resolve stalls the whole submit on an optional pro feature.
+    This is the host's baseline walltime: the value the submit procedure
+    uses whenever a measured runtime prior isn't available — on the very
+    first submit (no prior yet), or on any install where the optional
+    prior-reading verb isn't registered. An optional plugin may offer a
+    smarter prior-based walltime, but the host never depends on it: this
+    fallback MUST always resolve (#170), or a submit would stall waiting
+    on a feature that may not be installed.
 
     Resolution order:
 

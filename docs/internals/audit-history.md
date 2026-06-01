@@ -60,7 +60,7 @@ agent confirmed every prior fix is sound with zero regressions.
 - `models/mapreduce/templates/scaffolds/cli_dispatcher.py` — missing `spec is None` guard.
 
 ### Packaging / config
-- `hpc-agent-pro/pyproject.toml` — `hpc-agent>=0.3,<0.4` excluded the host's 0.4.0.
+- plugin `pyproject.toml` — `hpc-agent>=0.3,<0.4` excluded the host's 0.4.0.
 - `.pre-commit-config.yaml` — frontmatter hook missed `@primitive` outside `atoms/`.
 
 ### Docs / contracts corrected

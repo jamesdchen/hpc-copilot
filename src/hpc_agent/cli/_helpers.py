@@ -3,8 +3,8 @@
 This module is the **public adapter contract** for both host-internal CLI
 modules (``hpc_agent.cli.*``) and external plugins. Plugins import these
 symbols (``_ok``, ``_err``, ``_load_spec``, ``_err_from_hpc``, …)
-to build their own CLI subcommands — see ``hpc-agent-pro``'s
-``register_cli`` for the pattern. The underscore prefix is historical;
+to build their own CLI subcommands — a plugin's ``register_cli`` hook is
+where this pattern is used. The underscore prefix is historical;
 **these are the extension SDK and rename will require a release**.
 
 The helpers split into two boundaries that frame every cmd_*:
@@ -269,19 +269,24 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
             stacklevel=2,
         )
         return
-    # Search core first, then known plugin schema roots. A pro-only
-    # primitive (e.g. ``predict_queue_wait``, ``run_pre_submit_gates``)
-    # has its schema under ``hpc_agent_pro.schemas/``; the bare
-    # ``hpc_agent.schemas`` lookup would silently no-op and the
-    # defence-in-depth layer would never fire for any pro primitive.
+    # Search the core schema package first, then every plugin-contributed
+    # schema root. A plugin-owned primitive (e.g. a forecasting plugin's
+    # ``predict_queue_wait``) keeps its schema in the plugin's own
+    # ``schemas/`` tree; without consulting those roots the bare
+    # ``hpc_agent.schemas`` lookup would silently no-op and this
+    # defence-in-depth layer would never fire for any plugin primitive.
+    # ``plugin_schema_roots`` resolves each loaded plugin's root by
+    # convention (or its explicit ``schema_assets``), so the host stays
+    # agnostic to which plugins are installed.
+    from hpc_agent._kernel.registry.plugins import plugin_schema_roots
+
     schema_text: str | None = None
-    for pkg in ("hpc_agent.schemas", "hpc_agent_pro.schemas"):
+    roots = (_resource_files("hpc_agent.schemas"), *plugin_schema_roots())
+    for root in roots:
         try:
-            schema_text = (_resource_files(pkg) / f"{schema_name}.input.json").read_text(
-                encoding="utf-8"
-            )
+            schema_text = (root / f"{schema_name}.input.json").read_text(encoding="utf-8")
             break
-        except (FileNotFoundError, ModuleNotFoundError):
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
             continue
     if schema_text is None:
         return

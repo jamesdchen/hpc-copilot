@@ -44,8 +44,8 @@ def test_render_inlines_the_procedure_body() -> None:
 def test_procedure_body_resolves_plugin_override(tmp_path, monkeypatch) -> None:
     # A plugin's worker_prompt_assets/<workflow>.md is the canonical
     # SoT for the worker when that plugin is installed — this is the
-    # symmetry that lets a plugin (e.g. hpc-agent-pro) extend the
-    # worker's behavior, not just the interactive context.
+    # symmetry that lets a plugin extend the worker's behavior, not
+    # just the interactive context.
     from hpc_agent._kernel.extension import spawn_prompt
     from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 

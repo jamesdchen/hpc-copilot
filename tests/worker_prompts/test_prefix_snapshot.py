@@ -29,7 +29,7 @@ import pytest
 
 from hpc_agent._kernel.extension.spawn_prompt import render_spawn_parts
 from hpc_agent._wire.spawn_contract import WorkflowName
-from tests._registry_helpers import pro_overlaid_workflows
+from tests._registry_helpers import plugin_overlaid_workflows
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 WORKFLOWS: tuple[WorkflowName, ...] = ("submit", "status", "aggregate", "campaign")
@@ -42,10 +42,10 @@ def _fixture_path(workflow: str) -> Path:
 @pytest.mark.parametrize("workflow", WORKFLOWS)
 def test_cacheable_prefix_matches_fixture(workflow: WorkflowName) -> None:
     """The rendered prefix bytes equal the committed fixture, verbatim."""
-    if workflow in pro_overlaid_workflows():
+    if workflow in plugin_overlaid_workflows():
         pytest.skip(
-            f"hpc-agent-pro overlays the {workflow!r} worker prompt; "
-            "the core fixture doesn't apply when pro is installed in the same env"
+            f"a loaded plugin overlays the {workflow!r} worker prompt; "
+            "the core fixture doesn't apply when that plugin is installed in the same env"
         )
     actual = render_spawn_parts(
         workflow=workflow, experiment_dir="/exp", fields={}

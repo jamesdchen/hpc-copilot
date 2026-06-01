@@ -89,7 +89,7 @@ def _procedure_body(workflow: str) -> str:
     Resolution order: every plugin's ``worker_prompt_assets`` tree
     (first plugin to provide ``<workflow>.md`` wins) is checked before
     the host's ``hpc_agent._kernel.extension.worker_prompts`` package data. This is what
-    lets a plugin like ``hpc-agent-pro`` ship an overriding procedure
+    lets a plugin ship an overriding procedure
     that the worker actually sees.
 
     Cached: procedure text is process-stable (plugin set cannot change

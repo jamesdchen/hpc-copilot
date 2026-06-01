@@ -98,7 +98,7 @@ For each field the skill needs to fill in:
 - **Entry point**: `@register_run` on disk? Resolve. `interview.json` exists? Honor. Neither? Compose `hpc-wrap-entry-point` sub-skill.
 - **DataAxis**: cache hit in `axes.yaml`? Use. Otherwise compose `hpc-classify-axis` sub-skill → which itself calls `classify-axis-easy` (the matcher) → which usually commits autonomously.
 - **Homogeneous axes**: cache hit in `axes.yaml`? Use. Otherwise compose `hpc-build-executor` sub-skill (axes-init companion).
-- **Walltime / GPU / partition**: auto-resolve from runtime priors via `read-runtime-prior` (pro plugin if installed) or cluster defaults.
+- **Walltime / GPU / partition**: auto-resolve from runtime priors via `read-runtime-prior` (optional plugin, if installed) or cluster defaults.
 
 If any field can't auto-resolve, add to `ambiguities` list. Continue
 walking — don't early-return.
@@ -199,7 +199,7 @@ hpc-agent validate-campaign --spec spec.json --experiment-dir .
 Catches fabricated kwargs, NaN-trap row references, walltime/GPU
 mismatches. Errors block; warnings proceed with a note.
 
-### Step 3.5: (Optional, pro plugin) Predict start time
+### Step 3.5: (Optional, plugin) Predict start time
 
 ```bash
 hpc-agent predict-start-time --spec ...

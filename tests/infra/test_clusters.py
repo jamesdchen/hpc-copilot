@@ -98,7 +98,7 @@ class TestGetMaxWalltimeSec:
 
 class TestGetDefaultWalltimeSec:
     def test_absent_returns_conservative_floor(self):
-        # No prior, no operator override, no pro `read-runtime-prior` verb: the
+        # No prior, no operator override, no optional prior-reading verb: the
         # fallback MUST still resolve (#170) to the conservative built-in floor.
         assert get_default_walltime_sec({}) == _COLD_START_WALLTIME_SEC
 

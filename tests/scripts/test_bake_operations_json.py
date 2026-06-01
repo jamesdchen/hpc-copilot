@@ -48,7 +48,7 @@ def test_baked_lists_every_registered_primitive():
     """Every primitive in the live registry appears in the baked JSON.
 
     The baked artifact is core's ``operations.json``; plugin primitives
-    (when ``hpc-agent-pro`` is co-installed) are filtered out so the
+    (when a plugin is co-installed) are filtered out so the
     comparison is core-vs-core.
     """
     registry_names = {meta.name for meta in core_only_registry().values()}
