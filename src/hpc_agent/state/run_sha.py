@@ -31,6 +31,29 @@ def compute_cmd_sha(tasks_module: Any) -> str:
 
     Returns a 64-char hex string.
 
+    Semantics — ``cmd_sha`` IS THE PARAMETER IDENTITY OF THE EXPERIMENT,
+    NOT ITS CODE IDENTITY (#207). The hashed material is exclusively the
+    materialized per-task kwargs (``[resolve(i) for i in range(total())]``);
+    it deliberately does NOT fold in the executor's source, the rendered
+    job command, or ``tasks.py``'s bytes. The design rationale: the swept
+    parameters DEFINE the experiment, while the executor body is treated as
+    provenance, captured separately as ``tasks_py_sha`` on the run sidecar
+    (see :func:`compute_tasks_py_sha`). Two consequences follow directly:
+
+    * Editing an executor's body (a bug fix, a refactor, a changed model
+      hyperparameter that is NOT one of the swept ``resolve`` kwargs) while
+      leaving every materialized kwargs dict unchanged produces the SAME
+      ``cmd_sha``. A re-submit therefore dedups against the prior run and
+      runs the OLD code forward — by design, the params say "same
+      experiment".
+    * To make that code edit force a fresh run, the caller must opt in:
+      ``find_run_by_cmd_sha(..., tasks_py_sha=<current>,
+      invalidate_on_code_change=True)`` folds the recorded ``tasks_py_sha``
+      into the dedup decision for that one submit. The default path is
+      unchanged — params alone still key the dedup, and a code edit with
+      unchanged params still dedups (with only a drift warning, see
+      :func:`find_run_by_cmd_sha`).
+
     Raises
     ------
     AttributeError

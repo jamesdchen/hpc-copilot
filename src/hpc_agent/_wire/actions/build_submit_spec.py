@@ -57,6 +57,11 @@ class BuildSubmitSpecInput(BaseModel):
     canary: bool | None = None
     partial_ok: bool | None = None
     skip_preflight: bool | None = None
+    # Opt-in code-iteration safety (#207). Threaded verbatim onto the
+    # emitted submit_flow spec so an executor-body edit with unchanged
+    # swept params forces a fresh run instead of a stale cmd_sha replay.
+    # Null/false leaves the default param-only dedup key in force.
+    invalidate_on_code_change: bool | None = None
     pass_env_keys: list[str] | None = None
     rsync_excludes: list[str] | None = None
     slurm_account: str | None = None

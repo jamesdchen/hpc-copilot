@@ -59,12 +59,10 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
-sys.path.insert(0, str(REPO_ROOT / "hpc-agent-pro" / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 import hpc_agent._wire  # noqa: E402
-import hpc_agent_pro._wire  # noqa: E402
 
 # Authoring packages and the directory their emitted JSON schemas land in.
 # Each package is walked independently; discovered names must be unique
@@ -74,10 +72,6 @@ _AUTHORING_PACKAGES: tuple[tuple[Any, Path], ...] = (
     (
         hpc_agent._wire,
         REPO_ROOT / "src" / "hpc_agent" / "schemas",
-    ),
-    (
-        hpc_agent_pro._wire,
-        REPO_ROOT / "hpc-agent-pro" / "src" / "hpc_agent_pro" / "schemas",
     ),
 )
 

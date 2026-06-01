@@ -13,6 +13,7 @@ import math
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
+from hpc_agent.infra.resource_format import coerce
 
 if TYPE_CHECKING:
     from hpc_agent.infra.constraints import ClusterConstraints
@@ -119,8 +120,14 @@ def compute_submission_plan(
                 f"task into smaller sub-tasks or requesting a longer walltime."
             )
 
-    # 3. Even distribution
-    tasks_per_batch = min(math.ceil(total / n_batches), constraints.max_array_size)
+    # 3. Even distribution. Round the per-batch share *up* (a remainder
+    # task must land in some batch) and clamp to the hard array ceiling —
+    # the same "ceil then clamp-to-max" coercion the render layer applies,
+    # routed through the shared helper so the policy is auditable in one
+    # place. ``coerce(ceil=True)`` yields a whole number at runtime; the
+    # ``int(...)`` makes that explicit for the type-checker (the overload's
+    # static return is the wider ``int | float``) and is a no-op here.
+    tasks_per_batch = int(coerce(total / n_batches, maximum=constraints.max_array_size, ceil=True))
 
     batches: list[JobBatch] = []
     assigned = 0

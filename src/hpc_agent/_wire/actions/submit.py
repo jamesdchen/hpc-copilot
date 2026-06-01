@@ -28,6 +28,19 @@ class SubmitSpec(BaseModel):
     total_tasks: int = Field(ge=1)
     runtime: Runtime | None = None
     campaign_id: CampaignId | None = None
+    invalidate_on_code_change: bool = Field(
+        default=False,
+        description=(
+            "Opt-in code-iteration safety (#207). The cmd_sha dedup key is "
+            "PARAMETER identity only — an executor-body edit with unchanged "
+            "swept params would otherwise dedup against (and replay) the "
+            "prior run's code on a journal-wiped cross-machine resubmit. When "
+            "true, the run's tasks.py drift sha is folded into the cmd_sha "
+            "dedup fallback so a code-only change forces a fresh run instead "
+            "of a stale replay. Default false preserves param-only dedup; a "
+            "detected drift still emits a warning regardless of this flag."
+        ),
+    )
 
 
 class SubmitResult(BaseModel):

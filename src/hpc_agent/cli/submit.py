@@ -118,6 +118,12 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     if getattr(args, "partial_ok", False):
         spec = dict(spec)
         spec["partial_ok"] = True
+    # #207: same flag-or-spec opt-in for the code-iteration lever. The CLI
+    # flag (dest invalidate_on_code_change) folds the run's tasks.py drift
+    # sha into the cmd_sha dedup so a code-only change forces a fresh run.
+    if getattr(args, "invalidate_on_code_change", False):
+        spec = dict(spec)
+        spec["invalidate_on_code_change"] = True
     _validate_against_schema(spec, "submit_flow")
 
     if args.dry_run:

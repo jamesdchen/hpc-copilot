@@ -157,6 +157,11 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     canary = bool(spec.canary) if spec.canary is not None else True
     partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
     skip_preflight = bool(spec.skip_preflight) if spec.skip_preflight is not None else True
+    invalidate_on_code_change = (
+        bool(spec.invalidate_on_code_change)
+        if spec.invalidate_on_code_change is not None
+        else False
+    )
     pass_env_keys = list(spec.pass_env_keys) if spec.pass_env_keys is not None else None
     rsync_excludes = list(spec.rsync_excludes) if spec.rsync_excludes is not None else None
     slurm_account = spec.slurm_account
@@ -244,6 +249,10 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         out["campaign_id"] = campaign_id
     if runtime is not None:
         out["runtime"] = runtime
+    # Emit only when opted in so the common spec stays byte-identical to
+    # the pre-#207 shape (the default param-only dedup needs no flag).
+    if invalidate_on_code_change:
+        out["invalidate_on_code_change"] = True
 
     _validate(out)
     return out

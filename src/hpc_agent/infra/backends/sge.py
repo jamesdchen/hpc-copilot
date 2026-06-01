@@ -14,18 +14,14 @@ import re
 
 from hpc_agent import errors
 from hpc_agent.infra.backends import HPCBackend
+from hpc_agent.infra.resource_format import walltime_hms
 
-
-def _fmt_hms(total_seconds: int) -> str:
-    """Format *total_seconds* as ``HH:MM:SS`` for SGE ``-l h_rt``.
-
-    Hours are not zero-padded to two digits (SGE accepts >99h), so a
-    multi-day walltime still renders correctly.
-    """
-    seconds = max(0, int(total_seconds))
-    hours, rem = divmod(seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+# ``-l h_rt`` wants the canonical ``HH:MM:SS`` walltime string. This used
+# to be a local ``_fmt_hms`` (clamp-to-0, two-digit-min hours, no >99h
+# cap); it is now the single shared formatter so the SGE and recover-flow
+# paths can't drift. Re-exported under the old private name for any caller
+# that imported it (and to keep the diff a pure de-duplication).
+_fmt_hms = walltime_hms
 
 
 class SGEBackend(HPCBackend):

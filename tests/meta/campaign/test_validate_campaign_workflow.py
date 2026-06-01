@@ -150,6 +150,65 @@ def test_overall_pass_when_only_info_findings(tmp_path: Path) -> None:
     assert any(f.severity == "info" for f in report.findings)
 
 
+# ─── dry-run-local wiring (#205) ───────────────────────────────────────
+
+
+def test_dry_run_local_skipped_when_no_template(tmp_path: Path) -> None:
+    """No ``result_dir_template`` → the local pre-flight execution gate is
+    skipped, exactly like every other optional atom."""
+    report = validate_campaign(
+        tmp_path,
+        spec=ValidateCampaignSpec(
+            profile=_PROFILE,
+            cluster=_CLUSTER,
+            requested_walltime_sec=3600,
+            gpu_type="a100",
+        ),
+    )
+    assert "dry-run-local" not in report.validators_run
+
+
+def test_dry_run_local_runs_and_collision_fails_campaign(tmp_path: Path) -> None:
+    """With a template that collides across ids, dry-run-local fires inside
+    the cascade and its error finding pulls ``overall`` to fail — before any
+    SSH would have happened."""
+    _write_tasks_py(tmp_path, [{"seed": 1}, {"seed": 2}])
+    report = validate_campaign(
+        tmp_path,
+        spec=ValidateCampaignSpec(
+            profile=_PROFILE,
+            cluster=_CLUSTER,
+            result_dir_template="results/fixed_dir",
+        ),
+    )
+    assert "dry-run-local" in report.validators_run
+    assert report.overall == "fail"
+    assert any(
+        f.validator == "dry-run-local" and f.code == "result_dir_collision" for f in report.findings
+    )
+
+
+def test_dry_run_local_smoke_opt_in_threads_executor(tmp_path: Path) -> None:
+    """``dry_run_smoke=true`` threads ``executor`` into dry-run-local's smoke
+    layer; a broken import surfaces as a dry-run-local error finding."""
+    _write_tasks_py(tmp_path, [{"seed": 1}])
+    report = validate_campaign(
+        tmp_path,
+        spec=ValidateCampaignSpec(
+            profile=_PROFILE,
+            cluster=_CLUSTER,
+            result_dir_template="results/seed_{seed}",
+            dry_run_smoke=True,
+            executor=f"{sys.executable} -c 'import a_module_that_does_not_exist_xyz'",
+        ),
+    )
+    assert "dry-run-local" in report.validators_run
+    assert report.overall == "fail"
+    assert any(
+        f.validator == "dry-run-local" and f.code == "smoke_import_error" for f in report.findings
+    )
+
+
 # ─── findings carry validator name (provenance) ────────────────────────
 
 

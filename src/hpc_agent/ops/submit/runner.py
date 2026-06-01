@@ -75,6 +75,8 @@ def submit_and_record(
     *,
     spec: SubmitSpec,
     cmd_sha: str | None = None,
+    tasks_py_sha: str | None = None,
+    invalidate_on_code_change: bool = False,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -94,6 +96,21 @@ def submit_and_record(
     network errors gets dedup for free — the cluster does not see
     duplicate ``qsub``/``sbatch`` calls because the caller checks the
     returned ``deduped`` flag before issuing them.
+
+    *cmd_sha* / *tasks_py_sha* / *invalidate_on_code_change* drive the
+    cross-machine (journal-wiped) dedup fallback below. ``cmd_sha`` is
+    PARAMETER identity (#207): an executor-body edit with unchanged swept
+    params keeps the same ``cmd_sha`` and dedups against the prior run by
+    design. Supplying *invalidate_on_code_change* (the opt-in
+    ``--invalidate-on-code-change`` lever) folds the run's
+    ``tasks_py_sha`` — the code-provenance drift sha — into that dedup
+    decision so a code-only change forces a fresh run. When the lever is
+    off but a drift is detected, :func:`find_run_by_cmd_sha` emits a
+    warning and still dedups (default behaviour is unchanged). When
+    *tasks_py_sha* is None it is computed from
+    ``<experiment>/.hpc/tasks.py`` (the same source the run sidecar
+    records), so callers that already pass ``cmd_sha`` get the drift
+    guard for free.
     """
     profile = spec.profile
     cluster = spec.cluster
@@ -115,8 +132,37 @@ def submit_and_record(
     # still exists. Without this fallback, submit_and_record would
     # generate a fresh RunRecord and the caller would re-submit a job
     # the cluster already has running.
+    #
+    # cmd_sha is PARAMETER identity, not code identity (#207). When the
+    # caller wants an executor-body edit (unchanged swept params) to be
+    # treated as a NEW experiment, it passes invalidate_on_code_change;
+    # we fold the current tasks.py drift sha into the lookup. Default
+    # path (lever off) is unchanged — find_run_by_cmd_sha still matches
+    # on cmd_sha alone and only warns on detected drift.
     if cmd_sha:
-        sidecar_path = find_run_by_cmd_sha(experiment_dir, cmd_sha)
+        # Resolve the current code-provenance drift sha once. When the
+        # caller did not hand us one, derive it from the on-disk tasks.py
+        # — the same source write_run_sidecar stamps onto the sidecar —
+        # so even callers that only thread cmd_sha get the drift guard.
+        current_tasks_py_sha = tasks_py_sha
+        if current_tasks_py_sha is None:
+            tasks_py = Path(experiment_dir) / ".hpc" / "tasks.py"
+            if tasks_py.is_file():
+                from hpc_agent.state.run_sha import compute_tasks_py_sha
+
+                try:
+                    current_tasks_py_sha = compute_tasks_py_sha(tasks_py)
+                except OSError:
+                    # Unreadable tasks.py disables drift detection for this
+                    # lookup (falls back to param-only dedup); mirrors the
+                    # empty-sha tolerance in _ensure_run_sidecar.
+                    current_tasks_py_sha = None
+        sidecar_path = find_run_by_cmd_sha(
+            experiment_dir,
+            cmd_sha,
+            tasks_py_sha=current_tasks_py_sha,
+            invalidate_on_code_change=invalidate_on_code_change,
+        )
         if sidecar_path is not None:
             existing_run_id = sidecar_path.stem
             sidecar_data = None

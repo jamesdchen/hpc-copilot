@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 from hpc_agent.ops.submit.runner import submit_and_record
 
@@ -117,3 +119,101 @@ def test_cmd_sha_param_is_optional(tmp_path: Path) -> None:
     )
     assert deduped is False
     assert record.run_id == "20260102-000000-noshahere"
+
+
+# ─── #207: code-iteration safety at the submit_and_record dedup gate ─────
+
+
+def _spec(run_id: str, **kw: object) -> _WireSubmitSpec:
+    """A minimal SubmitSpec; identical fields → identical experiment."""
+    base = dict(
+        profile="gpu-a100",
+        cluster="discovery",
+        ssh_target="me@cluster",
+        remote_path="/scratch/exp",
+        job_name="ml",
+        run_id=run_id,
+        job_ids=["99999"],
+        total_tasks=4,
+    )
+    base.update(kw)
+    return _WireSubmitSpec(**base)  # type: ignore[arg-type]
+
+
+def test_207_default_dedups_against_stale_code(tmp_path: Path) -> None:
+    """Default (lever off): same cmd_sha dedups against the prior run even
+    when the recorded tasks_py_sha differs — params define the experiment,
+    so the code edit replays the prior run BY DESIGN. We still get a drift
+    warning (observability), but deduped=True and the OLD run_id wins."""
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,  # the code AT submit time
+        job_ids=["12345"],
+    )
+
+    with pytest.warns(UserWarning, match="invalidate-on-code-change"):
+        record, deduped = submit_and_record(
+            tmp_path,
+            spec=_spec("20260102-000000-newone1"),
+            cmd_sha=cmd_sha,
+            tasks_py_sha="2" * 64,  # the code AFTER an executor-body edit
+            # invalidate_on_code_change defaults False
+        )
+
+    assert deduped is True
+    assert record.run_id == "20260101-000000-existin"
+    assert record.job_ids == ["12345"]
+
+
+def test_207_opt_in_forces_fresh_run_on_code_change(tmp_path: Path) -> None:
+    """Lever on: a code-only change (same cmd_sha, different tasks_py_sha)
+    is NOT deduped — submit_and_record creates a fresh record with the
+    caller's run_id so the new code actually runs."""
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        job_ids=["12345"],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec("20260102-000000-newone1"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="2" * 64,
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is False
+    assert record.run_id == "20260102-000000-newone1"  # the fresh run_id
+    assert record.job_ids == ["99999"]  # the caller's job_ids, not the stale ones
+
+
+def test_207_opt_in_still_dedups_when_code_unchanged(tmp_path: Path) -> None:
+    """Lever on but the code is unchanged: ordinary param-and-code dedup —
+    a transient-retry resubmit of the SAME code still short-circuits."""
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        job_ids=["12345"],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec("20260102-000000-newone1"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,  # SAME code as the recorded run
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is True
+    assert record.run_id == "20260101-000000-existin"
+    assert record.job_ids == ["12345"]

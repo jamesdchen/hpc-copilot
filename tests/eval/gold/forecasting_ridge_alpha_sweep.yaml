@@ -1,0 +1,23 @@
+# AUTO-GENERATED gold snapshot of the offline-resolved submit spec.
+# Regenerate with:  HPC_EVAL_REGEN=1 pytest -q tests/eval
+# (or:  python -m tests.eval.regen [<case_id> ...])
+# Do not hand-edit — edit the EvalCase.expect block instead and regen.
+axes:
+  alpha:
+  - 0.1
+  - 1.0
+  - 10.0
+  executor:
+  - ml_ridge
+backend: sge
+cluster: hoffman2
+grid_points: 3
+resources:
+  cpus: 1
+  mem_mb: 16384
+  walltime_sec: 14400
+wave_plan:
+  max_concurrent: 2
+  n_waves: 1
+  total_batches: 1
+workflow: submit

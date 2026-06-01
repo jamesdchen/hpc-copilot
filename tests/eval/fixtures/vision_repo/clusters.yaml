@@ -1,0 +1,23 @@
+# Cluster definitions for the vision (GPU) eval fixture repo.
+#
+# Only the SLURM cluster `discovery` is defined here, carrying `gpu_types` so
+# a GPU request resolves cleanly. The GPU-vs-CPU resource decision in the
+# corpus is driven by the EXECUTOR's imports (torch → GPU/DL profile), not by
+# the cluster; this file just supplies the scheduler + constraints the wave
+# planner reads. Scrubbed of any real host/user — fully offline.
+discovery:
+  host: discovery.example.edu
+  user: eval_user
+  scheduler: slurm
+  account: eval_account
+  scratch: /scratch/eval_user
+  modules: []
+  conda_source: /apps/conda/etc/profile.d/conda.sh
+  conda_envs: [vision_env]
+  gpu_types: [a100, v100]
+  gpu_constraint: "a100|v100"
+  constraints:
+    max_array_size: 50
+    max_walltime: "24:00:00"
+    max_concurrent_jobs: 4
+    est_spin_up: "2m"
