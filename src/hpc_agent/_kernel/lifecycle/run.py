@@ -54,21 +54,27 @@ def run_workflow(
     try:
         report = parse_worker_report(invocation.output, workflow=workflow)
     except SpawnContractError as exc:
-        # Include the worker's stderr tail (when present) so the error
-        # surfaces what the worker actually said before crashing —
-        # otherwise debugging a malformed-report failure means "rerun
-        # the worker manually and hope it repros".
-        stderr_tail = (invocation.stderr or "").strip()
+        # Include the worker's stderr AND stdout tails (when present) so
+        # the error surfaces what the worker actually said before crashing
+        # — otherwise debugging a malformed-report failure means "rerun
+        # the worker manually with HPC_AGENT_WORKER_DEBUG=1 and hope it
+        # repros". `claude -p --bare` often prints informational text to
+        # stdout before dying without an envelope; the stderr tail alone
+        # is empty in that case (observed on Windows demos).
+        def _tail(text: str | None, *, cap: int = 2000) -> str:
+            t = (text or "").strip()
+            return ("…" + t[-cap:]) if len(t) > cap else t
+
+        stderr_tail = _tail(invocation.stderr)
+        stdout_tail = _tail(invocation.output)
+        suffix_parts = []
         if stderr_tail:
-            # Cap at a sensible length to keep envelopes readable.
-            if len(stderr_tail) > 2000:
-                stderr_tail = "…" + stderr_tail[-2000:]
-            raise errors.HpcError(
-                f"the {workflow!r} worker did not return a valid report "
-                f"(exit {invocation.exit_code}): {exc}\nworker stderr: {stderr_tail}"
-            ) from exc
+            suffix_parts.append(f"worker stderr: {stderr_tail}")
+        if stdout_tail:
+            suffix_parts.append(f"worker stdout: {stdout_tail}")
+        suffix = ("\n" + "\n".join(suffix_parts)) if suffix_parts else ""
         raise errors.HpcError(
             f"the {workflow!r} worker did not return a valid report "
-            f"(exit {invocation.exit_code}): {exc}"
+            f"(exit {invocation.exit_code}): {exc}{suffix}"
         ) from exc
     return report, invocation.exit_code
