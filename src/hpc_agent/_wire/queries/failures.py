@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._wire._shared import RunIdLoose, Scheduler
+from hpc_agent._wire.fixtures.failure_features import FailureFeatures
 
 
 class _FailureCluster(BaseModel):
@@ -14,6 +15,19 @@ class _FailureCluster(BaseModel):
 
     error_class: str | None = None
     task_ids: list[int] | None = None
+    failure_features: FailureFeatures | None = Field(
+        default=None,
+        description=(
+            "Representative diagnostic evidence (#230) shared by this cluster. The "
+            "tasks grouped here share a stderr signature, so the structural "
+            "evidence (resource_spec, temporal_context, liveness_vs_correctness) is "
+            "common to them — this is the per-failure evidence atom the "
+            "run-aggregate composes from, distinct from the coarse 'error_class' / "
+            "'task_ids' grouping keys. Optional; present where the fetch path can "
+            "populate it. Note 'error_class' here is the fine catalog signature, "
+            "while failure_features.error_class is the coarser FailureCategory."
+        ),
+    )
 
 
 class FailuresResult(BaseModel):

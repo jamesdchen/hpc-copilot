@@ -81,6 +81,7 @@ _ID_BASE = "https://github.com/jamesdchen/hpc-agent/schemas"
 # have no class-name suffix to dispatch on).
 _NON_SUFFIX_MAPPING: dict[str, str] = {
     "EnvelopeAdapter": "envelope.json",
+    "FailureFeatures": "failure_features.json",
     "CampaignAdapter": "campaign.output.json",
     "StagesAdapter": "stages.input.json",
     "AxesConfig": "axes.json",

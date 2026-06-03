@@ -107,6 +107,157 @@
     }
   },
   "$defs": {
+    "FailureFeatures": {
+      "additionalProperties": false,
+      "description": "Structured diagnostic evidence attached to an ``ok=false`` envelope on\noperation failure. Evidence only; no recovery logic. See issue #230.",
+      "properties": {
+        "error_class_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The failure signature exactly as the producer (a failing op or a caller-supplied probe hook) wrote it. Open, ungoverned, preserved verbatim — the framework cannot enforce a vocabulary across producers it does not own, and never rejects or rewrites this value. Used for audit and as the input to normalization.",
+          "title": "Error Class Raw"
+        },
+        "error_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "gpu_oom",
+                "system_oom",
+                "segv",
+                "walltime",
+                "node_failure",
+                "queue_stall",
+                "code_bug",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The canonical failure class. Reuses the framework-owned 'FailureCategory' vocabulary (the values 'classify_failure' returns and that DEFAULT_AUTO_RETRY_POLICY keys on) — NOT a parallel taxonomy. Populated by the existing classifier ('ops/recover/failure_signatures.py:classify' + 'models/mapreduce/reduce/classify.py:classify_failure') from the raw stderr signature in 'error_class_raw', not by a new normalizer. 'unknown' is the escape hatch: the classifier could not categorize the failure — the well-defined trigger to escalate to a decision-maker (e.g. the agentic layer). Service/staging classes (#231/#232) extend FailureCategory in '_shared.py' — the single governed place the vocabulary grows — rather than introducing a new enum here. Distinct from the coarser envelope 'error_code'.",
+          "title": "Error Class"
+        },
+        "resource_spec": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The resource/sweep spec in effect at the moment of failure (e.g. GPU type/count, scheduler-level params, sampling width). The discriminator that turns a shared signature into opposite fixes — e.g. OOM at tp_size=2 vs OOM at n=128.",
+          "title": "Resource Spec"
+        },
+        "temporal_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_TemporalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "attempts_this_episode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_AttemptsThisEpisode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "liveness_vs_correctness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_LivenessVsCorrectness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "log_tail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_LogTail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "probes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/_Probe"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional targeted probe outputs from caller-supplied probe hooks.",
+          "title": "Probes"
+        }
+      },
+      "title": "FailureFeatures",
+      "type": "object"
+    },
+    "_AttemptsThisEpisode": {
+      "additionalProperties": false,
+      "description": "What recovery has already been tried this failure episode — lets a\ndecision-maker avoid re-trying an exhausted strategy.\n\nReuses the journal's existing per-task retry record\n(``state/run_record.py:RunRecord.retries`` = ``{task_id: {attempts,\ncategory, overrides}}``, written by ``ops/recover/runner.py``): ``count``\nsnapshots that ``attempts`` counter rather than tracking attempts\nseparately. ``strategies`` is the only new piece — it generalizes the\nrecord's single ``category``/``overrides`` into the ordered list of what\nwas tried.",
+      "properties": {
+        "count": {
+          "description": "Number of recovery attempts already made this episode.",
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "strategies": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ordered list of recovery strategies already applied (e.g. 'retry', 'resubmit', 'restart_service', 'increase_walltime').",
+          "title": "Strategies"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "_AttemptsThisEpisode",
+      "type": "object"
+    },
     "_FailureCluster": {
       "additionalProperties": true,
       "properties": {
@@ -136,9 +287,169 @@
           ],
           "default": null,
           "title": "Task Ids"
+        },
+        "failure_features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureFeatures"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Representative diagnostic evidence (#230) shared by this cluster. The tasks grouped here share a stderr signature, so the structural evidence (resource_spec, temporal_context, liveness_vs_correctness) is common to them — this is the per-failure evidence atom the run-aggregate composes from, distinct from the coarse 'error_class' / 'task_ids' grouping keys. Optional; present where the fetch path can populate it. Note 'error_class' here is the fine catalog signature, while failure_features.error_class is the coarser FailureCategory."
         }
       },
       "title": "_FailureCluster",
+      "type": "object"
+    },
+    "_LivenessVsCorrectness": {
+      "additionalProperties": false,
+      "description": "Distinguishes 'down' from 'up-but-broken' by separating a liveness\nsignal (does it respond?) from a correctness signal (does a real request\nreturn a valid result?). The classic silent-rot case is liveness=pass,\ncorrectness=fail.",
+      "properties": {
+        "liveness": {
+          "description": "Result of a liveness check (port open / process alive / health endpoint).",
+          "enum": [
+            "pass",
+            "fail",
+            "unknown"
+          ],
+          "title": "Liveness",
+          "type": "string"
+        },
+        "correctness": {
+          "description": "Result of a real-path request (an actual request that exercises the backing work, not a port ping).",
+          "enum": [
+            "pass",
+            "fail",
+            "unknown"
+          ],
+          "title": "Correctness",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "required": [
+        "liveness",
+        "correctness"
+      ],
+      "title": "_LivenessVsCorrectness",
+      "type": "object"
+    },
+    "_LogTail": {
+      "additionalProperties": false,
+      "description": "Bounded, normalized tail of the relevant log. Callers MUST bound this\n(the schema does not transport unbounded logs) and SHOULD normalize\nvolatile tokens (timestamps, paths, addresses) so signatures cluster.\n\nReuses the existing capture/normalize path rather than re-fetching:\npopulate ``text`` from ``infra/cluster_logs.py:fetch_task_logs(...)``\noutput run through\n``ops/recover/runner_failures.py:fingerprint_stderr_tail`` (which already\nstrips volatile tokens). ``truncated`` and ``source`` are the only new\nmetadata.",
+      "properties": {
+        "text": {
+          "description": "The normalized log tail.",
+          "title": "Text",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "description": "True when content was dropped to fit the bound.",
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the tail came from, e.g. 'stderr', 'task.log', 'service.stdout'.",
+          "title": "Source"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "_LogTail",
+      "type": "object"
+    },
+    "_Probe": {
+      "additionalProperties": false,
+      "description": "One targeted probe result from a caller-supplied probe hook.",
+      "properties": {
+        "name": {
+          "description": "Probe identifier, e.g. 'gpu_visible', 'service_real_request', 'scratch_writable'.",
+          "title": "Name",
+          "type": "string"
+        },
+        "ok": {
+          "description": "Whether the probe passed.",
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "required": [
+        "name",
+        "ok"
+      ],
+      "title": "_Probe",
+      "type": "object"
+    },
+    "_TemporalContext": {
+      "additionalProperties": false,
+      "description": "When in the operation's life it failed — the single most\ndiscriminating feature (structural vs. runtime).",
+      "properties": {
+        "phase": {
+          "description": "'first_attempt' = failed before any unit of work succeeded (points at a structural/config problem). 'after_progress' = failed after N units succeeded (points at a runtime/data-dependent problem). 'unknown' when the operation cannot tell.",
+          "enum": [
+            "first_attempt",
+            "after_progress",
+            "unknown"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "successful_units": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Count of units (tasks, requests, rounds) that succeeded before the failure, when known.",
+          "title": "Successful Units"
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "title": "_TemporalContext",
       "type": "object"
     }
   }
