@@ -164,9 +164,13 @@ def check_result_columns(
             CliArg(
                 "--combiner-dir",
                 type=Path,
-                required=True,
+                default=None,
                 dest="combiner_dir_local",
-                help="Local path the cluster's _combiner/ was rsync_pull'd to.",
+                help=(
+                    "Local path the cluster's _combiner/ was rsync_pull'd to. "
+                    "Defaults to <experiment_dir>/_aggregated/<run_id>/_combiner "
+                    "(the canonical destination aggregate-flow writes to)."
+                ),
             ),
             CliArg(
                 "--results-dir",
@@ -187,7 +191,7 @@ def verify_aggregation_complete(
     experiment_dir: Path,
     *,
     run_id: str,
-    combiner_dir_local: Path | str,
+    combiner_dir_local: Path | str | None = None,
     aggregated_metrics: dict[str, Any] | None = None,
     aggregated_keying: str | None = None,
     results_dir_local: Path | str | None = None,
@@ -252,9 +256,24 @@ def verify_aggregation_complete(
         raise errors.SpecInvalid("run_id is required")
     from pathlib import Path as _Path
 
-    combiner_dir = _Path(combiner_dir_local)
+    # When omitted, derive the canonical aggregate-flow destination:
+    # `<experiment_dir>/_aggregated/<run_id>/_combiner`. Same layout
+    # aggregate-flow writes to (see ops/aggregate_flow.py:574,
+    # `combiner_local = out / "_combiner"`), so a `--run-id`-only call
+    # right after an aggregate-flow run just works.
+    if combiner_dir_local is None:
+        combiner_dir = _Path(experiment_dir) / "_aggregated" / run_id / "_combiner"
+    else:
+        combiner_dir = _Path(combiner_dir_local)
     if not combiner_dir.is_dir():
-        raise errors.SpecInvalid(f"combiner_dir_local is not a directory: {combiner_dir}")
+        origin = (
+            "derived from --experiment-dir and --run-id"
+            if combiner_dir_local is None
+            else "passed via --combiner-dir"
+        )
+        raise errors.SpecInvalid(
+            f"combiner_dir_local is not a directory: {combiner_dir} (was {origin})"
+        )
 
     from hpc_agent.state.runs import read_run_sidecar
 

@@ -583,9 +583,49 @@ def aggregate_flow(
     if pull.returncode != 0:
         # No partials at all is a terminal pull failure; partials present
         # but rsync hiccupped is recoverable on retry — surface either way.
+        stderr_tail = (pull.stderr or "").strip()
+        # Diagnose the most common failure shape: the cluster-side
+        # ``_combiner/`` directory doesn't exist at all. That means the
+        # cluster combiner step never ran (usually: the reporter died on
+        # a missing module / env issue), not that rsync had a transient
+        # hiccup. Surface the three concrete recovery paths so the
+        # caller doesn't waste a retry-loop on a precondition failure.
+        # Match both rsync's wording and OpenSSH scp's — different
+        # transports surface the same condition with slightly different
+        # phrasing depending on the platform.
+        no_such = "No such file or directory" in stderr_tail or "does not exist" in stderr_tail
+        if no_such:
+            has_agg_cmd = False
+            try:
+                sidecar = read_run_sidecar(experiment_dir, run_id)
+                has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                pass
+            cluster_reduce_hint = (
+                f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
+                f"sidecar's aggregate_cmd directly, no combiner needed."
+                if has_agg_cmd
+                else (
+                    f"`hpc-agent cluster-reduce --run-id {run_id}` is NOT available "
+                    f"here because the run sidecar has no aggregate_defaults.aggregate_cmd. "
+                    f"Configure one at submit time (write_run_sidecar's aggregate_defaults arg) "
+                    f"to enable this path on future runs."
+                )
+            )
+            raise errors.RemoteCommandFailed(
+                f"the cluster-side _combiner/ for run_id {run_id!r} does not "
+                f"exist at {record.remote_path}/{run_id}/_combiner/ — the "
+                f"combiner step never ran. Usually this means the cluster-side "
+                f"reporter died (check per-task stderr under "
+                f"{record.remote_path}/{run_id}/logs/). Three recovery paths: "
+                f"(1) fix the cluster env (likely a missing Python module) and "
+                f"resubmit — addresses the root cause. "
+                f"(2) {cluster_reduce_hint} "
+                f"(3) scp the raw per-task results locally and reduce on the laptop. "
+                f"rsync_pull stderr: {stderr_tail[:300]}"
+            )
         raise errors.RemoteCommandFailed(
-            f"rsync_pull of _combiner failed (exit {pull.returncode}): "
-            f"{(pull.stderr or '').strip()[:300]}"
+            f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
         )
 
     # Reduce locally.

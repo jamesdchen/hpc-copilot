@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id>
-    --combiner-dir <combiner_dir_local> [--results-dir <results_dir_local>]
+    [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]
   python: hpc_agent.ops.aggregate.invariants.verify_aggregation_complete
 exit_codes:
 - 0: ok
