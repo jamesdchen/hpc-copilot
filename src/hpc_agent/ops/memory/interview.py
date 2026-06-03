@@ -440,28 +440,68 @@ def _validate_python_module_entry(ep: Mapping[str, Any], campaign_dir: Path) -> 
 def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:
     """Confirm a ``@register_run`` function named ``run_name`` is discoverable.
 
-    Walks the canonical ``notebooks/`` dir first (the framework's default),
-    falling back to ``campaign_dir`` for tiny-repo layouts where everything
-    sits at the root. The scan uses ``discover_runs`` — same primitive the
-    rest of the framework keys off — so this validation matches the
-    runtime discovery behavior exactly.
+    Walks ``campaign_dir`` recursively (via ``discover_runs``) — same primitive
+    the rest of the framework keys off, so this validation matches the runtime
+    discovery behavior exactly. The skip list (``.hpc``, ``.git``,
+    ``__pycache__``, ``.mypy_cache``) is owned by ``discover_runs``.
     """
     from hpc_agent.experiment_kit.discover import discover_runs
 
     run_name = ep["run_name"]
-    search_roots = [campaign_dir / "notebooks", campaign_dir]
-    for root in search_roots:
-        if not root.is_dir():
-            continue
-        for run in discover_runs(root):
-            if run.name == run_name:
-                return
+    for run in discover_runs(campaign_dir):
+        if run.name == run_name:
+            return
+    candidates = _undecorated_candidates(campaign_dir, run_name)
+    hint = ""
+    if candidates:
+        listed = ", ".join(str(p.relative_to(campaign_dir)) for p in candidates[:3])
+        hint = (
+            f" Found a function named {run_name!r} without @register_run in: "
+            f"{listed}. Either add `@register_run` to that function (the "
+            f"two-line edit: `from hpc_agent import register_run`; "
+            f"`@register_run` above the def), or set "
+            f"`entry_point.kind=shell_command` to invoke it as a subprocess."
+        )
     raise errors.SpecInvalid(
         f"register_run.entry_point: no @register_run function named "
-        f"{run_name!r} found under {campaign_dir}/notebooks or "
-        f"{campaign_dir}. Either the run isn't decorated yet or its file "
-        f"isn't on disk."
+        f"{run_name!r} found by scanning {campaign_dir} recursively "
+        f"(skips .hpc/, .git/, __pycache__/, .mypy_cache/). The function "
+        f"may not be decorated yet, its name may not match `run_name`, or "
+        f"its file may not be on disk.{hint}"
     )
+
+
+def _undecorated_candidates(campaign_dir: Path, run_name: str) -> list[Path]:
+    """Find ``.py`` files that define a top-level function named ``run_name``
+    but lack the ``@register_run`` decorator. Lets the SpecInvalid message
+    name the likely fix site (decorate this file) instead of leaving the
+    agent to grep. Notebooks are skipped — the agent can't AST-edit them
+    cleanly anyway, and the false-negative ("missed an .ipynb candidate")
+    is cheaper than walking nb cells here.
+    """
+    import ast as _ast
+
+    _SKIP = {".hpc", ".git", "__pycache__", ".mypy_cache"}
+    found: list[Path] = []
+    if not campaign_dir.is_dir():
+        return found
+    for path in sorted(campaign_dir.rglob("*.py")):
+        if any(part in _SKIP for part in path.parts):
+            continue
+        try:
+            tree = _ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in tree.body:
+            if not isinstance(node, _ast.FunctionDef | _ast.AsyncFunctionDef):
+                continue
+            if node.name != run_name:
+                continue
+            # ``discover_runs`` already would have returned this file if it
+            # had the decorator, so a hit here is by definition undecorated.
+            found.append(path)
+            break
+    return found
 
 
 def _expected_count(generator: Mapping[str, Any]) -> int:

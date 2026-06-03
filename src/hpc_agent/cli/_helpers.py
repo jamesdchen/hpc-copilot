@@ -297,6 +297,14 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
         _validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
+        # Schema names are underscored (interview, submit_flow); CLI verbs are
+        # hyphenated (interview, submit-flow). The mapping is mechanical.
+        verb = schema_name.replace("_", "-")
         raise errors.SpecInvalid(
-            f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}"
+            f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}",
+            remediation=(
+                f"Inspect the schema: `hpc-agent describe {verb}` (returns the "
+                f"input_schema name) or read hpc_agent/schemas/"
+                f"{schema_name}.input.json directly. Failing JSON path: {path}."
+            ),
         ) from exc
