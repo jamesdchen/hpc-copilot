@@ -13,13 +13,18 @@ from __future__ import annotations
 import os
 import shlex
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
+
+# Scheduler families the framework ships golden profiles for. A
+# ``scheduler`` value outside this set is permitted ONLY when the entry
+# also carries a pinned ``scheduler_profile`` (see the validators below).
+_KNOWN_SCHEDULER_FAMILIES = frozenset({"slurm", "sge", "pbspro", "torque"})
 
 # ---------------------------------------------------------------------------
 # ClusterConfig — single Pydantic SoT for the clusters.yaml shape.
@@ -49,8 +54,24 @@ class ClusterConfig(BaseModel):
     # accessors only consume declared fields.
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    scheduler: Literal["sge", "slurm"] = Field(
-        description="Scheduler family. Routes the submission to the right backend."
+    scheduler: str = Field(
+        description=(
+            "Scheduler family. Routes the submission to the right backend. "
+            "A known family (``slurm``/``sge``/``pbspro``/``torque``) needs "
+            "nothing else; an unknown family is permitted ONLY when "
+            "``scheduler_profile`` pins a concrete SchedulerProfile dict."
+        )
+    )
+    scheduler_profile: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Pinned SchedulerProfile dict. When present it overrides / "
+            "augments the golden family profile and is the profile that "
+            "gets registered for this cluster. Round-trips through "
+            "``SchedulerProfile.from_dict`` at load time so a malformed "
+            "pin fails loudly. Required when ``scheduler`` is not a known "
+            "family (``slurm``/``sge``/``pbspro``/``torque``)."
+        ),
     )
     host: str | None = Field(
         default=None,
@@ -153,6 +174,96 @@ class ClusterConfig(BaseModel):
             return None
         return f"{self.user}@{self.host}"
 
+    @field_validator("scheduler_profile")
+    @classmethod
+    def _validate_scheduler_profile(cls, value: dict | None) -> dict | None:
+        """Round-trip a pinned ``scheduler_profile`` through the spine model.
+
+        When a cluster pins a profile dict we want a malformed pin (a
+        missing required field, a wrong-typed regex) to fail loudly here
+        at config-load time rather than deep in the submit path. We feed
+        the dict to ``SchedulerProfile.from_dict`` purely for its side
+        effect of raising on a bad shape; the original dict is returned
+        unchanged so the registered profile is exactly what the operator
+        wrote.
+
+        The spine module (``hpc_agent.infra.backends.profile``) may not
+        exist yet during the parallel refactor. We import it lazily and,
+        on ``ImportError``, skip the structural check rather than reject
+        a valid pin just because the validator can't be loaded yet.
+
+        Schema validation: rejects a non-dict pin and (when the spine is
+        present) any dict that ``SchedulerProfile.from_dict`` can't build.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise errors.SpecInvalid(
+                f"scheduler_profile must be a mapping when set, got "
+                f"{value!r} ({type(value).__name__})"
+            )
+        try:
+            from hpc_agent.infra.backends.profile import SchedulerProfile
+        except ImportError:
+            # TODO(Phase-3): spine's profile module not present yet during
+            # the parallel refactor — skip the structural round-trip and
+            # accept the dict as-is. Once the spine lands this becomes a
+            # hard validation point.
+            return value
+        try:
+            SchedulerProfile.from_dict(value)
+        except Exception as exc:  # noqa: BLE001 — surface as a config error
+            raise errors.SpecInvalid(
+                f"scheduler_profile is not a valid SchedulerProfile: {exc}"
+            ) from exc
+        return value
+
+    @field_validator("scheduler")
+    @classmethod
+    def _validate_scheduler_family(cls, value: str) -> str:
+        """Reject an empty ``scheduler`` value early.
+
+        The known-family-or-pinned cross-field rule lives in
+        ``_require_pin_for_unknown_family`` (a model validator) because it
+        needs to see ``scheduler_profile`` too; here we only catch the
+        degenerate empty/blank value so the cross-field check can assume a
+        usable string.
+        """
+        if not isinstance(value, str) or not value.strip():
+            raise errors.SpecInvalid(f"scheduler must be a non-empty string, got {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _require_pin_for_unknown_family(self) -> ClusterConfig:
+        """Enforce: an unknown scheduler family must carry a pinned profile.
+
+        A known family (``slurm``/``sge``/``pbspro``/``torque``) ships a
+        golden profile, so the pin is optional there. Any other
+        ``scheduler`` value has no golden
+        seed, so the entry is only resolvable when it also pins a concrete
+        ``scheduler_profile`` dict — otherwise the submit path would have
+        nothing to register. This is a model (cross-field) validator
+        rather than a ``scheduler_profile`` field validator because the
+        field defaults to ``None`` and field validators don't fire for an
+        omitted field — the check must run even when ``scheduler_profile``
+        is absent entirely.
+
+        Schema validation: rejects an unknown ``scheduler`` family that
+        lacks a ``scheduler_profile`` pin.
+        """
+        if (
+            isinstance(self.scheduler, str)
+            and self.scheduler.strip().lower() not in _KNOWN_SCHEDULER_FAMILIES
+            and self.scheduler_profile is None
+        ):
+            raise errors.SpecInvalid(
+                f"scheduler {self.scheduler!r} is not a known family "
+                f"({sorted(_KNOWN_SCHEDULER_FAMILIES)}); such an entry must "
+                f"also set 'scheduler_profile' to pin a concrete "
+                f"SchedulerProfile dict."
+            )
+        return self
+
 
 def _allowed_cluster_keys() -> frozenset[str]:
     """Canonical set of allowed top-level keys in a clusters.yaml entry.
@@ -248,6 +359,53 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
         # downstream `.get(...)` calls on the result don't AttributeError.
         result: dict[str, Any] = yaml.safe_load(f) or {}
     return result
+
+
+def writable_clusters_config_path() -> Path:
+    """The clusters.yaml path safe to WRITE (to cache a resolved profile).
+
+    Mirrors :func:`load_clusters_config`'s search but only ever returns a
+    *writable* user/env location — never the packaged read-only default
+    under ``hpc_agent/config/``. Returns ``HPC_CLUSTERS_CONFIG`` when set,
+    else ``~/.hpc-agent/clusters.yaml``.
+    """
+    env_path = os.environ.get("HPC_CLUSTERS_CONFIG")
+    if env_path:
+        return Path(env_path)
+    return Path("~/.hpc-agent/clusters.yaml").expanduser()
+
+
+def write_back_scheduler_profile(cluster_name: str, profile_dict: dict[str, Any]) -> bool:
+    """Best-effort: cache a resolved ``scheduler_profile`` into clusters.yaml.
+
+    Sets ``data[cluster_name]["scheduler_profile"] = profile_dict`` in the
+    writable config so a later experiment on the same cluster skips
+    re-resolution. Returns ``True`` on success; ``False`` (never raises)
+    when there is no writable target or the cluster has no existing entry to
+    attach to — an *ad-hoc* cluster (absent from clusters.yaml) relies on
+    the per-run ``experiment_meta.json`` pin instead, which is the source of
+    truth regardless.
+    """
+    try:
+        target = writable_clusters_config_path()
+        data: dict[str, Any] = {}
+        if target.is_file():
+            loaded = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+            if not isinstance(loaded, dict):
+                return False
+            data = loaded
+        entry = data.get(cluster_name)
+        if not isinstance(entry, dict):
+            # Only attach to an existing entry — inventing a cluster record
+            # from a resolve would be surprising and could mask a typo.
+            return False
+        entry["scheduler_profile"] = profile_dict
+        data[cluster_name] = entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
+        return True
+    except (OSError, yaml.YAMLError):
+        return False
 
 
 def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | None = None) -> str:

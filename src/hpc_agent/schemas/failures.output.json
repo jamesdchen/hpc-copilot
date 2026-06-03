@@ -34,7 +34,9 @@
         {
           "enum": [
             "sge",
-            "slurm"
+            "slurm",
+            "pbspro",
+            "torque"
           ],
           "type": "string"
         },

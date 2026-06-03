@@ -68,7 +68,7 @@ def test_capabilities_envelope_shape() -> None:
     assert "submit" in data["subcommands"]
     assert "status" in data["subcommands"]
     assert "preflight" in data["subcommands"]
-    assert data["supported_schedulers"] == ["sge", "slurm"]
+    assert data["supported_schedulers"] == ["sge", "slurm", "pbspro", "torque"]
     assert isinstance(data["ssh_multiplexing"], bool)
 
 

@@ -86,7 +86,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     return {
         "version": hpc_agent.__version__,
         "subcommands": list(subcommands),
-        "supported_schedulers": ["sge", "slurm"],
+        "supported_schedulers": ["sge", "slurm", "pbspro", "torque"],
         "schemas_dir": str(hpc_agent._PACKAGE_ROOT / "schemas"),
         "journal_dir": str(HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",

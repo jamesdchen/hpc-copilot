@@ -10,6 +10,8 @@ follow-up to this canary.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
@@ -134,6 +136,18 @@ class SubmitFlowSpec(BaseModel):
             "SLURM-only: cluster name for federated SLURM "
             "installations (sbatch --clusters=). Most installs don't "
             "need this."
+        ),
+    )
+    scheduler_profile: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Pinned SchedulerProfile (as a dict) for a cluster whose scheduler "
+            "differs from the golden slurm/sge defaults. When set, the backend "
+            "is built bound to this profile: its 'family' (slurm/sge) selects "
+            "the command grammar and its data (job_id_regex, scripts, "
+            "error_states) overrides the golden default. Null = use the golden "
+            "profile for 'backend'. Typically sourced from the cluster's "
+            "clusters.yaml 'scheduler_profile' entry."
         ),
     )
     tasks_per_array: int | None = Field(

@@ -24,7 +24,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tests._paths import TEMPLATES_DIR
+from tests._paths import rendered_templates_dir
 
 
 def _spec(**overrides):
@@ -155,7 +155,7 @@ def test_array_template_fences_executor(template: str) -> None:
     """The cluster-side shell guard is the last line of defense: a job that
     reaches the node with $EXECUTOR unset must fail loudly (``EXECUTOR is not
     set``) instead of running ``time`` with no command and exiting 0."""
-    body = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    body = (rendered_templates_dir() / template).read_text(encoding="utf-8")
     assert '"${EXECUTOR:?' in body, (
         f'{template} is missing the `: "${{EXECUTOR:?...}}"` guard — without it '
         "an unset EXECUTOR runs `time` with no command and 'succeeds' silently "
@@ -166,7 +166,7 @@ def test_array_template_fences_executor(template: str) -> None:
 def test_executor_guard_follows_the_task_id_guard() -> None:
     """Structural: the EXECUTOR guard sits with the other critical-var guards
     near the top (after the scheduler task-id guard), not buried mid-script."""
-    body = (TEMPLATES_DIR / "runtime/sge/cpu_array.sh").read_text(encoding="utf-8")
+    body = (rendered_templates_dir() / "runtime/sge/cpu_array.sh").read_text(encoding="utf-8")
     task_id_at = body.index("SGE_TASK_ID:?")
     executor_at = body.index("EXECUTOR:?")
     assert task_id_at < executor_at < task_id_at + 400

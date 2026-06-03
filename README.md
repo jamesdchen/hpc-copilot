@@ -1,6 +1,6 @@
 # hpc-agent
 
-HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
+HPC orchestrator for array-batch experiments on SGE / SLURM / PBS (PBS Pro & TORQUE) clusters. Two surfaces over one core:
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. The four workflow triggers cover every end-user moment; entry-point onboarding, axis classification, and axes-init are folded into `/submit-hpc`'s escalation playbook (the worker escalates when it can't proceed; the playbook walks the user through the dialog and the agent invokes the relevant skill with a resolved spec). Environment preflight (SSH agent, cluster reachability) is a one-time-per-machine CLI step: `hpc-agent setup --cluster <name>` probes the cluster and writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
@@ -257,12 +257,16 @@ Claude remembers your preferences (cluster, executor directory, environment, res
 
 ## Job Templates
 
-| Template | SGE | SLURM |
-|----------|-----|-------|
-| CPU array | `hpc_agent/models/mapreduce/templates/runtime/sge/cpu_array.sh` | `hpc_agent/models/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
-| GPU array | `hpc_agent/models/mapreduce/templates/runtime/sge/gpu_array.sh` | `hpc_agent/models/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
+The per-scheduler CPU/GPU array job scripts are **rendered from the scheduler profile** (`hpc_agent.infra.backends.profile.SchedulerProfile`) rather than shipped as static files — `deploy_runtime` renders them and transfers the bytes to `.hpc/templates/{cpu_array,gpu_array}.{sh,slurm,pbs}` on the cluster. The golden `SLURM_PROFILE` / `SGE_PROFILE` / `PBSPRO_PROFILE` / `TORQUE_PROFILE` reproduce each family's templates exactly; a resolved profile (for a non-default cluster) carries its own script bodies.
 
-Templates are parameterized via environment variables injected at submission time. Resolve paths via `hpc_agent.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
+| Profile | Family | Rendered scripts |
+|---------|--------|------------------|
+| `SLURM_PROFILE` | slurm | `cpu_array.slurm`, `gpu_array.slurm` |
+| `SGE_PROFILE` | sge | `cpu_array.sh`, `gpu_array.sh` |
+| `PBSPRO_PROFILE` | pbspro | `cpu_array.pbs`, `gpu_array.pbs` |
+| `TORQUE_PROFILE` | torque | `cpu_array.pbs`, `gpu_array.pbs` |
+
+Scripts are parameterized via environment variables injected at submission time. Render one in-process with `hpc_agent.infra.backends.get_backend_class(scheduler).render_script(kind="cpu"|"gpu")`. The GPU script is used when the configured resources include `gpus`; otherwise the CPU script is used. (`hpc_agent.get_template_path` is retained as a deprecated shim that materialises a rendered script to a temp path.)
 
 ## Supported Clusters
 

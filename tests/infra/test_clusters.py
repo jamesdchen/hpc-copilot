@@ -13,11 +13,33 @@ import pytest
 from hpc_agent import errors
 from hpc_agent.infra.clusters import (
     _COLD_START_WALLTIME_SEC,
+    _KNOWN_SCHEDULER_FAMILIES,
+    ClusterConfig,
     get_auto_daisy_chain,
     get_default_walltime_sec,
     get_max_walltime_sec,
     get_walltime_arbitrage,
 )
+
+# ─── known scheduler families (pbspro / torque wiring) ───────────────────────
+
+
+class TestKnownSchedulerFamilies:
+    def test_pbs_families_are_known(self):
+        # The frozen family-name strings the engine registers under.
+        assert frozenset({"slurm", "sge", "pbspro", "torque"}) == _KNOWN_SCHEDULER_FAMILIES
+
+    @pytest.mark.parametrize("fam", ["slurm", "sge", "pbspro", "torque"])
+    def test_known_family_needs_no_pin(self, fam):
+        # A cluster can declare a known family with no scheduler_profile pin.
+        cfg = ClusterConfig.model_validate({"scheduler": fam, "host": "h", "user": "u"})
+        assert cfg.scheduler == fam
+        assert cfg.scheduler_profile is None
+
+    def test_unknown_family_still_requires_pin(self):
+        with pytest.raises(errors.SpecInvalid, match="not a known family"):
+            ClusterConfig.model_validate({"scheduler": "moab"})
+
 
 # ─── get_walltime_arbitrage ─────────────────────────────────────────────────
 

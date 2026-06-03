@@ -466,6 +466,7 @@ def deploy_runtime(
     *,
     ssh_target: str,
     remote_path: str,
+    scheduler: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Deploy framework runtime files to the cluster.
 
@@ -556,6 +557,24 @@ def deploy_runtime(
 
         return _with_ssh_backoff(_run, label=f"scp {src.name}")
 
+    def _scp_text(content: str, dst_rel: str) -> subprocess.CompletedProcess[str]:
+        """Transfer in-memory *content* to ``{remote_path}/{dst_rel}``.
+
+        Phase 2 helper for payloads that are RENDERED at deploy time
+        (the cpu/gpu array job scripts) rather than read verbatim from a
+        shipped file. Writes *content* to a short-lived local temp file
+        named like the remote destination (so any error message / backoff
+        label names the right artifact) and reuses :func:`_scp` so the
+        timeout, BatchMode, and retry behaviour are identical to the
+        static-file path. UTF-8, newline-preserving — ``render_script``
+        returns text byte-identical to the old static template file.
+        """
+        dst_name = Path(dst_rel).name
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp) / dst_name
+            tmp_path.write_text(content, encoding="utf-8", newline="")
+            return _scp(tmp_path, dst_rel)
+
     # Importable stubs (used inside cluster jobs by user code).
     #
     # Cluster-side imports we have to support:
@@ -579,24 +598,36 @@ def deploy_runtime(
     _scp(pkg_dir / "models" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Job templates inside .hpc/templates/.
-    # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
-    # registry owns the canonical extension via ``template_ext``. This
-    # keeps remote.py and __init__.py:get_template_path in sync.
-    from hpc_agent.infra.backends import template_ext_for
+    #
+    # Phase 2 (Option C): the per-scheduler cpu/gpu array scripts are no
+    # longer static files on disk that we scp verbatim. They are RENDERED
+    # from the profile by the backend's ``render_script`` and the rendered
+    # text is transferred. The remote destination paths/filenames are
+    # preserved exactly (``.hpc/templates/cpu_array.{sh,slurm}`` etc.) so
+    # downstream submit code (incorporation/build/submit_spec.py's
+    # _TEMPLATE_BY_SCHED) keeps resolving them.
+    #
+    # ``template_ext`` (the backend class attribute, ".sh" for SGE,
+    # ".slurm" for SLURM) still owns the on-remote filename extension;
+    # ``kind`` ("cpu"/"gpu") selects the cpu_array vs gpu_array variant —
+    # the same cpu_array/gpu_array distinction the old static loop made.
+    from hpc_agent.infra.backends import get_backend_class, template_ext_for
 
-    for sched in ("sge", "slurm"):
+    # cpu_array/gpu_array remote basenames <- render_script(kind=...).
+    _KIND_FOR_BASENAME = {"cpu_array": "cpu", "gpu_array": "gpu"}
+
+    # Deploy only the cluster's own family's scripts when *scheduler* is
+    # known (the submit path passes it). Falls back to sge+slurm when it
+    # isn't — preserving legacy callers — but a single-family deploy is
+    # what makes pbspro/torque (which share the ``.pbs`` ext) safe: only
+    # one PBS fork's scripts ever land on a given cluster.
+    schedulers = (scheduler,) if scheduler else ("sge", "slurm")
+    for sched in schedulers:
+        backend_cls = get_backend_class(sched)
         ext = template_ext_for(sched).lstrip(".")
-        for kind in ("cpu_array", "gpu_array"):
-            _scp(
-                pkg_dir
-                / "models"
-                / "mapreduce"
-                / "templates"
-                / "runtime"
-                / sched
-                / f"{kind}.{ext}",
-                f".hpc/templates/{kind}.{ext}",
-            )
+        for basename, kind in _KIND_FOR_BASENAME.items():
+            rendered = backend_cls.render_script(kind=kind)
+            _scp_text(rendered, f".hpc/templates/{basename}.{ext}")
 
     # Shared preambles sourced by the templates above. Source layout is
     # ``templates/runtime/common/<name>.sh`` (per the templates split);

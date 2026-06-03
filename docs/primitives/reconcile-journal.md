@@ -6,8 +6,8 @@ inputs:
   type: string
 - name: scheduler
   type: enum
-  description: One of `sge`, `slurm`. Determines which on-cluster query backend to
-    invoke.
+  description: One of `sge`, `slurm`, `pbspro`, `torque`. Determines which on-cluster
+    query backend to invoke.
 - name: experiment_dir
   type: path
   description: Repo root. Defaults to cwd.

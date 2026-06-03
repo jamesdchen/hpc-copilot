@@ -19,7 +19,9 @@
     "scheduler_kind": {
       "enum": [
         "sge",
-        "slurm"
+        "slurm",
+        "pbspro",
+        "torque"
       ],
       "title": "Scheduler Kind",
       "type": "string"

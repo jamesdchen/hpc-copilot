@@ -638,7 +638,9 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     spec = _spec("rC", canary=True)  # _spec carries a real per-task EXECUTOR
     seen: dict[str, bool] = {}
 
-    def _capture_at_deploy(*, experiment_dir, ssh_target, remote_path, rsync_excludes):
+    def _capture_at_deploy(
+        *, experiment_dir, ssh_target, remote_path, rsync_excludes, scheduler=None
+    ):
         seen["canary_on_disk"] = run_sidecar_path(experiment_dir, "rC-canary").is_file()
 
     with (

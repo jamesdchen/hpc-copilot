@@ -90,7 +90,9 @@
         "backend": {
           "enum": [
             "sge",
-            "slurm"
+            "slurm",
+            "pbspro",
+            "torque"
           ],
           "title": "Backend",
           "type": "string"
@@ -149,6 +151,20 @@
           "default": null,
           "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this.",
           "title": "Slurm Cluster"
+        },
+        "scheduler_profile": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pinned SchedulerProfile (as a dict) for a cluster whose scheduler differs from the golden slurm/sge defaults. When set, the backend is built bound to this profile: its 'family' (slurm/sge) selects the command grammar and its data (job_id_regex, scripts, error_states) overrides the golden default. Null = use the golden profile for 'backend'. Typically sourced from the cluster's clusters.yaml 'scheduler_profile' entry.",
+          "title": "Scheduler Profile"
         },
         "tasks_per_array": {
           "anyOf": [

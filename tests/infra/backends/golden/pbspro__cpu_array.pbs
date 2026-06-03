@@ -1,0 +1,98 @@
+#!/bin/bash
+# Fail loudly: -e exits on error, -o pipefail propagates failures
+# through `time $EXECUTOR | ...`. -u is intentionally NOT set because
+# the sourced preambles use the `if [ -n "$VAR" ]` pattern on
+# optionally-set vars; switching them en masse to `${VAR:-}` is a
+# separate change. Explicit guards on the critical scheduler vars
+# below catch the "task -1" dispatch failure mode.
+set -eo pipefail
+: "${PBS_ARRAY_INDEX:?PBS_ARRAY_INDEX is not set; refusing to dispatch task -1}"
+: "${EXECUTOR:?EXECUTOR is not set; refusing to dispatch (would run \`time\` with no command and exit 0 silently — see hpc-agent #191/#192)}"
+
+# ==============================================================
+# PBS Pro CPU Array Job Template (hpc-agent)
+#
+# Environment variables (injected by hpc-agent from clusters.yaml
+# and project.yaml before submission):
+#
+#   $CONDA_SOURCE  — path to conda.sh (e.g. /apps/conda/miniforge3/.../conda.sh)
+#   $CONDA_ENV     — conda environment name
+#   $MODULES       — space-separated modules to load (e.g. "python gcc")
+#   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.run")
+#   $RESULT_DIR    — output directory for results
+#   $REPO_DIR      — repository root to cd into
+#   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
+#   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before
+#                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)
+#
+# Submit with:
+#   qsub -J 1-100 -v TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh
+# ==============================================================
+
+# --- PBS Pro directives ---
+#PBS -J 1-100
+#PBS -l select=1:ncpus=4:mem=16gb
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o logs/
+
+# PBS jobs start in $HOME, not the submit dir — cd to where qsub ran.
+cd "$PBS_O_WORKDIR"
+
+# Pin the per-task log to the name hpc-agent's log-fetch expects
+# (<job_name>.o<seq>.<array-index>), independent of PBS Pro vs TORQUE
+# default array-log naming (which differ). PBS_SEQ is the leading-digit
+# job id (matches the id captured at submit); the index is the raw
+# scheduler array id. The directive ``-o logs/`` still captures any
+# pre-redirect guard failures in PBS's own spool file.
+mkdir -p logs
+PBS_SEQ="${PBS_JOBID%%[!0-9]*}"
+exec >"logs/${PBS_JOBNAME}.o${PBS_SEQ}.${PBS_ARRAY_INDEX}" 2>&1
+
+# --- Diagnostics ---
+echo "============================================"
+echo "Job ID:       $PBS_JOBID"
+echo "Array Task:   $PBS_ARRAY_INDEX"
+echo "Hostname:     $(hostname)"
+echo "============================================"
+
+# --- Defaults ---
+RESULT_DIR="${RESULT_DIR:-.}"
+REPO_DIR="${REPO_DIR:-.}"
+
+# --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
+# See hpc_agent/models/mapreduce/templates/common/hpc_preamble.sh — deployed alongside
+# this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
+source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
+
+# Re-export thread caps to the PBS-allocated core count. The preamble
+# defaults OMP/MKL threads to 1 (safe for the common single-core case);
+# a multi-threaded CPU array job must raise them to its $NCPUS core
+# allocation or it silently runs single-threaded. An explicit
+# HPC_*_NUM_THREADS override still wins. Mirrors slurm/cpu_array.slurm.
+export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${NCPUS:-1}}"
+export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${NCPUS:-1}}"
+
+# --- Prepare Output ---
+mkdir -p "$RESULT_DIR"
+
+# Convert 1-based PBS_ARRAY_INDEX to 0-based, add offset for batched submission
+TASK_ID=$((PBS_ARRAY_INDEX - 1 + ${TASK_OFFSET:-0}))
+HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
+
+echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
+echo "Result dir:   $RESULT_DIR"
+echo "Executor:     $EXECUTOR"
+echo "============================================"
+
+# --- Execute ---
+# HPC_RUN_ID arrives via qsub -v from the submit-side env; re-exported here
+# so the dispatcher inside $EXECUTOR sees it. HPC_CAMPAIGN_ID is optional —
+# present when the run is part of a closed-loop campaign — and lets the
+# user's tasks.py call hpc_agent.models.mapreduce.reduce.history.prior() to learn what
+# prior iterations of the same campaign produced.
+export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR
+hpc_run_with_retry
+
+echo "Job finished."

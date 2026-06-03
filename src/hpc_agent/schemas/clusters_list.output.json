@@ -32,7 +32,9 @@
         "scheduler": {
           "enum": [
             "sge",
-            "slurm"
+            "slurm",
+            "pbspro",
+            "torque"
           ],
           "title": "Scheduler",
           "type": "string"

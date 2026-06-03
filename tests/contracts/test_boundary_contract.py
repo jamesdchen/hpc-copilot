@@ -216,18 +216,27 @@ def test_templates_do_not_import_core() -> None:
     ``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``). New entries require a matching
     update to ``docs/reference/boundary-contract.md``.
 
-    Only the *deployed* runtime template subdirectories
-    (``templates/runtime/{sge,slurm,common}/``) are scanned; the
+    Only the *deployed* runtime template subdirectories are scanned; the
     ``templates/scaffolds/`` files are deployed by code-paths that
     handle their own import boundary (``deploy_runtime`` for
     ``cli_dispatcher`` / ``executor_template`` patterns; the user's
     submit flow for ``tasks_example``), so the deployed-runtime
     boundary applies only on the runtime subdirectory.
+
+    Phase 2 (Option C): the per-scheduler ``cpu_array`` / ``gpu_array``
+    scripts are no longer static files under ``runtime/{sge,slurm}/`` —
+    they are *rendered* from the scheduler profile by ``render_script``.
+    So the on-disk scan now covers the still-shipped ``runtime/common/``
+    preambles, and the boundary is additionally enforced on the rendered
+    array-script bodies (which, being bash, must likewise never reference
+    the core package).
     """
     templates_root = (
         REPO_ROOT / "src" / "hpc_agent" / "models" / "mapreduce" / "templates" / "runtime"
     )
-    deployed_subdirs = ("sge", "slurm", "common")
+    # ``common`` still ships as static files; ``sge`` / ``slurm`` array
+    # scripts are now rendered (see below), so they have no on-disk dir.
+    deployed_subdirs = ("common",)
     offenders: list[tuple[str, list[str]]] = []
     for subdir in deployed_subdirs:
         subdir_path = templates_root / subdir
@@ -250,6 +259,23 @@ def test_templates_do_not_import_core() -> None:
         f"templates/** must not import from hpc_agent (except deployed "
         f"runtime modules). See {CONTRACT_DOC}.\n"
         + "\n".join(f"  {p}: {mods}" for p, mods in offenders)
+    )
+
+    # The rendered array scripts are deployed too — assert they never
+    # reference the core package (no ``import hpc_agent`` / ``from
+    # hpc_agent`` smuggled into a rendered body).
+    from hpc_agent.infra.backends import get_backend_class
+
+    rendered_offenders: list[str] = []
+    for sched in ("sge", "slurm"):
+        backend_cls = get_backend_class(sched)
+        for kind in ("cpu", "gpu"):
+            body = backend_cls.render_script(kind=kind)
+            if "import hpc_agent" in body or "from hpc_agent" in body:
+                rendered_offenders.append(f"{sched}/{kind}_array")
+    assert not rendered_offenders, (
+        "rendered runtime array scripts must not reference the core "
+        f"package. See {CONTRACT_DOC}. Offenders: {rendered_offenders}"
     )
 
 

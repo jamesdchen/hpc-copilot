@@ -64,10 +64,8 @@ from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 import hpc_agent._wire  # noqa: E402
 
-# Authoring packages and the directory their emitted JSON schemas land in.
-# Each package is walked independently; discovered names must be unique
-# WITHIN a package (cross-package name collisions are fine since they
-# write to different directories).
+# Authoring package and the directory its emitted JSON schemas land in.
+# The package is walked for models; discovered names must be unique.
 _AUTHORING_PACKAGES: tuple[tuple[Any, Path], ...] = (
     (
         hpc_agent._wire,

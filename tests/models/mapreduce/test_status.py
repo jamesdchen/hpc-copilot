@@ -212,6 +212,26 @@ class TestDetectSchedulerMetaHint:
         with patch("hpc_agent.models.mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             assert detect_scheduler(tmp_path) == "sge"
 
+    def test_meta_file_recognizes_pbspro_hint(self, tmp_path):
+        """A ``pbspro`` backend hint resolves to ``pbspro`` (contains neither
+        "sge" nor "slurm", so the new fork branches must catch it)."""
+        from hpc_agent.models.mapreduce.reduce.status import detect_scheduler
+
+        exp = tmp_path / "exp"
+        task = exp / "task0"
+        task.mkdir(parents=True)
+        (exp / "experiment_meta.json").write_text('{"backend": "pbspro"}')
+        assert detect_scheduler(task) == "pbspro"
+
+    def test_meta_file_recognizes_torque_hint(self, tmp_path):
+        from hpc_agent.models.mapreduce.reduce.status import detect_scheduler
+
+        exp = tmp_path / "exp_t"
+        task = exp / "task0"
+        task.mkdir(parents=True)
+        (exp / "experiment_meta.json").write_text('{"backend": "torque"}')
+        assert detect_scheduler(task) == "torque"
+
     def test_report_status_from_tasks_uses_first_task_meta(self, tmp_path, monkeypatch):
         """``report_status_from_tasks`` previously called
         ``detect_scheduler()`` with no args, bypassing every meta hint.

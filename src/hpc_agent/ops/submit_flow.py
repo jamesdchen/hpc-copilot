@@ -157,6 +157,7 @@ def _push_and_deploy(
     ssh_target: str,
     remote_path: str,
     rsync_excludes: list[str] | None,
+    scheduler: str | None = None,
 ) -> None:
     """rsync_push + deploy_runtime — the expensive ssh fan-out, done once.
 
@@ -177,7 +178,7 @@ def _push_and_deploy(
             f"rsync push failed (exit {push_result.returncode}): "
             f"{(push_result.stderr or '').strip()[:300]}"
         )
-    deploy_runtime(ssh_target=ssh_target, remote_path=remote_path)
+    deploy_runtime(ssh_target=ssh_target, remote_path=remote_path, scheduler=scheduler)
 
 
 def _is_runnable_executor(executor: str | None) -> bool:
@@ -701,6 +702,7 @@ def _submit_one_spec(
         job_env_keys=tuple(job_env_full.keys()),
         slurm_account=spec.slurm_account,
         slurm_cluster=spec.slurm_cluster,
+        scheduler_profile=spec.scheduler_profile,
     )
 
     canary_run_id: str | None = None
@@ -1045,6 +1047,9 @@ def _submit_flow_batch_locked(
             ssh_target=ssh_target,
             remote_path=remote_path,
             rsync_excludes=rsync_excludes,
+            # All specs in a batch share (ssh_target, remote_path) ⇒ same
+            # cluster ⇒ same scheduler; deploy only that family's scripts.
+            scheduler=specs[0].backend if specs else None,
         )
 
     # Per-spec submission work.

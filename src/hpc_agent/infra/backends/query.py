@@ -28,6 +28,7 @@ from __future__ import annotations
 __all__ = [
     "query_sacct",
     "query_sge",
+    "query_pbs",
     "parse_gpu_count_from_tres",
     "parse_gpu_count_from_sge_resources",
 ]
@@ -230,6 +231,155 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
             "gpu_s": gpus * elapsed_s,
         }
 
+    return {"tasks": task_info, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# PBS (PBS Pro / OpenPBS + TORQUE)
+# ---------------------------------------------------------------------------
+
+# PBS *live* job_state -> normalized state. Finished jobs (PBS Pro ``F`` /
+# TORQUE ``C``) are NOT in this map: their success-vs-failure is read from
+# ``Exit_status`` (0 -> COMPLETED, else FAILED), which is the one place PBS
+# differs structurally from SLURM (where failure has its own state tokens).
+_PBS_LIVE_STATE: dict[str, str] = {
+    "R": "RUNNING",
+    "E": "RUNNING",  # exiting/cleanup — not yet final (per pbs-drmaa)
+    "B": "RUNNING",  # array has >=1 subjob running
+    "Q": "PENDING",
+    "W": "PENDING",
+    "T": "PENDING",
+    "H": "PENDING",  # held — waiting, not terminal
+    "S": "PENDING",
+    "U": "PENDING",
+    "M": "PENDING",  # moved to another server
+}
+
+
+def _pbs_walltime_to_s(value: str) -> int:
+    """Parse a PBS ``HH:MM:SS`` (or ``MM:SS``) duration to whole seconds."""
+    parts = value.strip().split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        pass
+    return 0
+
+
+def _process_pbs_block(
+    job_id_field: str, block: dict[str, str], task_info: dict[int, dict]
+) -> None:
+    """Map one ``qstat -f`` subjob stanza to a task entry.
+
+    Only array subjobs (``<seq>[<idx>].<server>``) yield an entry — the array
+    parent (``<seq>[].<server>``) and non-array jobs carry no per-task index
+    and are skipped. ``Exit_status`` (present only once finished) drives the
+    success/failure split; otherwise the live ``job_state`` letter is mapped.
+    """
+    m = re.match(r"^(\d+)\[(\d+)\]", job_id_field)
+    if not m:
+        return  # array parent ``[]`` / non-array job — no task index
+    base_job, tid = m.group(1), int(m.group(2))
+    if tid in task_info:
+        return  # first stanza wins
+
+    exit_status = block.get("Exit_status")
+    if exit_status is not None:
+        try:
+            ec = int(exit_status)
+        except ValueError:
+            ec = -1
+        state = "COMPLETED" if ec == 0 else "FAILED"
+        exit_code: str | None = exit_status
+    else:
+        state = _PBS_LIVE_STATE.get(block.get("job_state", "").strip(), "UNKNOWN")
+        exit_code = None
+
+    elapsed_s = _pbs_walltime_to_s(block.get("resources_used.walltime", ""))
+    cpus = _to_int(block.get("resources_used.ncpus") or block.get("Resource_List.ncpus") or "")
+    gpus = _to_int(block.get("resources_used.ngpus") or block.get("Resource_List.ngpus") or "")
+    task_info[tid] = {
+        "state": state,
+        "exit_code": exit_code,
+        "job_id": base_job,
+        "elapsed_s": elapsed_s,
+        "cpu_s": cpus * elapsed_s,
+        "gpu_s": gpus * elapsed_s,
+    }
+
+
+def _parse_qstat_full_pbs(text: str, task_info: dict[int, dict]) -> None:
+    """Split a ``qstat -f`` buffer into ``Job Id:`` stanzas + feed each one."""
+    current_id: str | None = None
+    current: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("Job Id:"):
+            if current_id is not None:
+                _process_pbs_block(current_id, current, task_info)
+            current_id = line.split(":", 1)[1].strip()
+            current = {}
+            continue
+        if current_id is None:
+            continue
+        # Attribute lines are ``    key = value`` (continuations of a wrapped
+        # value are deeper-indented; our short fields never wrap).
+        stripped = line.strip()
+        if "=" in stripped and not raw.startswith(("\t\t", "        ")):
+            key, _, val = stripped.partition("=")
+            current[key.strip()] = val.strip()
+    if current_id is not None:
+        _process_pbs_block(current_id, current, task_info)
+
+
+def query_pbs(job_ids: list[str], fork: str = "pbspro") -> dict:
+    """Query PBS for array-subjob states via ``qstat -f`` (per job id).
+
+    PBS Pro/OpenPBS needs ``-x`` to surface FINISHED jobs (``F``) and their
+    ``Exit_status``; TORQUE retains a ``C`` record in plain ``qstat`` for a
+    grace window, so it uses ``qstat -f``. ``-t`` expands array subjobs so
+    each task gets its own stanza. Mirrors :func:`query_sge`'s per-id loop +
+    uniform ``{"tasks", "errors"}`` return shape.
+    """
+    if not job_ids:
+        return {"tasks": {}, "errors": []}
+
+    task_info: dict[int, dict] = {}
+    errors: list[dict] = []
+    base_cmd = ["qstat", "-x", "-f", "-t"] if fork == "pbspro" else ["qstat", "-f", "-t"]
+
+    seen: set[str] = set()
+    any_ok = False
+    for job_id in job_ids:
+        key = str(job_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            result = subprocess.run(
+                [*base_cmd, key],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            errors.append({"code": "qstat_unavailable", "detail": f"job {key} timeout: {exc}"})
+            continue
+        except FileNotFoundError as exc:
+            errors.append({"code": "qstat_unavailable", "detail": f"binary not found: {exc}"})
+            break  # no point trying more ids if qstat is missing
+        if result.returncode != 0:
+            # Nonzero is common (history disabled, job aged out) — not fatal.
+            continue
+        any_ok = True
+        _parse_qstat_full_pbs(result.stdout, task_info)
+
+    if not any_ok and not task_info:
+        errors.append({"code": "pbs_unavailable", "detail": "qstat returned no usable data"})
     return {"tasks": task_info, "errors": errors}
 
 

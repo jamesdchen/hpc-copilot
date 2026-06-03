@@ -68,8 +68,9 @@ LifecycleStateObservableWithTimeout = Literal[
 # ── infra ────────────────────────────────────────────────────────────────────
 
 # Scheduler driver. 'sge' covers Sun/Univa/Open Grid Engine variants;
-# 'slurm' covers Slurm-Workload-Manager clusters.
-Scheduler = Literal["sge", "slurm"]
+# 'slurm' covers Slurm-Workload-Manager clusters; 'pbspro' covers PBS Pro /
+# OpenPBS and 'torque' covers TORQUE (distinct PBS forks — see KNOWN_FAMILIES).
+Scheduler = Literal["sge", "slurm", "pbspro", "torque"]
 
 # Cluster-specific GPU label (e.g. 'A100', 'H100', 'L40S'). Semantic checks
 # live in inspect_cluster; the schema only enforces non-empty.
@@ -151,9 +152,8 @@ FailureCategoryResubmittable = Literal[
 # Optional execution runtime override. Today only ``uv`` is supported.
 Runtime = Literal["uv"]
 
-# Submit backend names exposed on the wire. The registered backend keys
-# in ``infra.backends`` are ``sge`` and ``slurm``; both resolve to the
-# remote-over-ssh variant since submit-flow only ever submits across an
-# SSH boundary (the local SGE/Slurm backend classes are kept as base
-# classes for the remote subclasses but are not registered).
-BackendName = Literal["sge", "slurm"]
+# Submit backend names exposed on the wire — the curated scheduler
+# families. All resolve to the remote-over-ssh variant since submit-flow
+# only ever submits across an SSH boundary. ``pbspro`` and ``torque`` are
+# the two PBS forks (distinct command grammars; see SchedulerProfile).
+BackendName = Literal["sge", "slurm", "pbspro", "torque"]

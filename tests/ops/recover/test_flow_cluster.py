@@ -169,6 +169,39 @@ class TestRenderOverridesToExtraFlags:
             "8",
         ]
 
+    def test_pbspro_renders_select_chunk_and_separate_walltime(self):
+        flags = render_overrides_to_extra_flags(
+            "pbspro",
+            {"mem_mb": 4096, "walltime_sec": 7200, "gpus": 2, "cpus": 8},
+        )
+        # cpus/mem/gpus combine into one select= chunk; walltime is its own -l.
+        assert flags == [
+            "-l",
+            "select=1:ncpus=8:mem=4096mb:ngpus=2",
+            "-l",
+            "walltime=02:00:00",
+        ]
+
+    def test_pbspro_partial_override_only_walltime(self):
+        # walltime alone must not emit an empty select= chunk.
+        assert render_overrides_to_extra_flags("pbspro", {"walltime_sec": 3600}) == [
+            "-l",
+            "walltime=01:00:00",
+        ]
+
+    def test_torque_renders_single_comma_joined_l(self):
+        flags = render_overrides_to_extra_flags(
+            "torque",
+            {"mem_mb": 4096, "walltime_sec": 7200, "gpus": 2, "cpus": 8},
+        )
+        assert flags == ["-l", "nodes=1:ppn=8:gpus=2,mem=4096mb,walltime=02:00:00"]
+
+    def test_torque_partial_override_mem_only(self):
+        assert render_overrides_to_extra_flags("torque", {"mem_mb": 8192}) == [
+            "-l",
+            "mem=8192mb",
+        ]
+
     def test_unknown_keys_drop_silently(self):
         flags = render_overrides_to_extra_flags("slurm", {"unknown_knob": 42, "mem_mb": 16_000})
         assert flags == ["--mem=16000M"]

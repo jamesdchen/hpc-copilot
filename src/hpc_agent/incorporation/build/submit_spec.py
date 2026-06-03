@@ -39,6 +39,13 @@ _DEFAULT_SCRIPTS: dict[tuple[str, bool], str] = {
     ("sge", True): ".hpc/templates/gpu_array.sh",
     ("slurm", False): ".hpc/templates/cpu_array.slurm",
     ("slurm", True): ".hpc/templates/gpu_array.slurm",
+    # pbspro/torque both render to ``.pbs`` (a cluster is exactly one PBS
+    # fork, and deploy_runtime ships only that family's scripts, so the
+    # shared ``.pbs`` name never collides on a given cluster).
+    ("pbspro", False): ".hpc/templates/cpu_array.pbs",
+    ("pbspro", True): ".hpc/templates/gpu_array.pbs",
+    ("torque", False): ".hpc/templates/cpu_array.pbs",
+    ("torque", True): ".hpc/templates/gpu_array.pbs",
 }
 
 # Job-env keys the cluster-side dispatcher / template ALWAYS need. The
@@ -80,8 +87,8 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     profile, cluster, ssh_target, remote_path, run_id, total_tasks,
     backend:
         Required identity fields that flow straight through to the
-        spec. ``backend`` is one of ``sge`` / ``slurm`` (both resolve
-        to the remote-over-ssh backend).
+        spec. ``backend`` is one of ``sge`` / ``slurm`` / ``pbspro`` /
+        ``torque`` (all resolve to the remote-over-ssh backend).
     cmd_sha:
         SHA-256 of the materialized task list, computed by
         :func:`compute_cmd_sha`. Stamped into ``job_env["HPC_CMD_SHA"]``

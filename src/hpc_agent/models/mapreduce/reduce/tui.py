@@ -541,7 +541,9 @@ def _main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--job-ids", default="", help="Comma-separated scheduler job IDs")
     parser.add_argument("--job-name", default="")
-    parser.add_argument("--scheduler", default=None, choices=[None, "sge", "slurm"])
+    parser.add_argument(
+        "--scheduler", default=None, choices=[None, "sge", "slurm", "pbspro", "torque"]
+    )
     parser.add_argument("--poll-interval", type=int, default=30)
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--scratch-dir", default="")

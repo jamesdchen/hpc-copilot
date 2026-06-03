@@ -117,7 +117,7 @@ def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
             CliArg(
                 flag="--scheduler",
                 required=True,
-                choices=("sge", "slurm"),
+                choices=("sge", "slurm", "pbspro", "torque"),
                 help="Scheduler family — needed to query alive job IDs.",
             ),
         ),

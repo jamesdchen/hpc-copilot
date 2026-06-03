@@ -15,9 +15,13 @@ from __future__ import annotations
 
 __all__ = [
     "HPCBackend",
+    "ProfileBackend",
+    "RemoteProfileBackend",
+    "build_backend_class",
     "get_backend",
     "get_backend_class",
     "register",
+    "register_profile",
     "template_ext_for",
 ]
 
@@ -177,6 +181,15 @@ class HPCBackend(abc.ABC):
     ) -> dict[str, Any]:
         """Return per-job state map for *job_ids* via the scheduler's history."""
         raise NotImplementedError("backend does not implement query_jobs")
+
+    @classmethod
+    def render_script(cls, *, kind: str, **_opts: Any) -> str:
+        """Return the runtime array-job script body for *kind* (cpu/gpu).
+
+        Profile-driven backends render it from ``cls.profile``; the base
+        raises so an unmigrated backend is loud rather than silently wrong.
+        """
+        raise NotImplementedError("backend does not implement render_script")
 
     @staticmethod
     def inspect_cluster(
@@ -403,6 +416,15 @@ def _populate_registry() -> None:
     from hpc_agent.infra.backends import sge_remote as _sge_remote  # noqa: F401
     from hpc_agent.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
 
+    # PBS family (pbspro / torque) ships as golden profiles rather than
+    # hand-written remote classes — register them directly (not via
+    # register_profile, which would recurse into this populator).
+    from hpc_agent.infra.backends.profile import PBSPRO_PROFILE, TORQUE_PROFILE
+
+    for _prof in (PBSPRO_PROFILE, TORQUE_PROFILE):
+        if _prof.name not in _REGISTRY:
+            _REGISTRY[_prof.name] = build_backend_class(_prof, remote=True)
+
 
 def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     """Instantiate a backend by name.  *kwargs* are forwarded to the constructor."""
@@ -431,3 +453,74 @@ def get_backend_class(name: str) -> type[HPCBackend]:
 def template_ext_for(scheduler: str) -> str:
     """Convenience accessor for ``get_backend_class(scheduler).template_ext``."""
     return get_backend_class(scheduler).template_ext
+
+
+# Re-export the profile-driven engine at the package root. Imported at the
+# bottom (after ``HPCBackend`` and the registry are defined) so the engine's
+# ``from hpc_agent.infra.backends import HPCBackend`` resolves against this
+# partially-initialised module without a circular-import failure.
+from hpc_agent.infra.backends._engine import (  # noqa: E402
+    ProfileBackend,
+    RemoteProfileBackend,
+)
+
+
+def build_backend_class(profile: Any, *, remote: bool = True) -> type[HPCBackend]:
+    """Synthesise a backend *class* bound to *profile*.
+
+    The class derives its capability metadata (``scheduler_name`` /
+    ``template_ext`` / ``supports_test_only_eta`` / ``JOB_ID_REGEX``) from
+    the profile via ``ProfileBackend.__init_subclass__``. With
+    ``remote=True`` (the default) the SSH transport mixin is placed first
+    in the MRO so ``_execute_command`` / ``_setup_log_dir`` run over SSH —
+    matching how the golden ``slurm`` / ``sge`` labels submit.
+
+    Used by :func:`register_profile` to wire a *resolved* (LLM-authored or
+    seed-from-golden) scheduler profile into the registry at cluster-setup
+    time. The two golden labels keep their hand-written
+    ``RemoteSlurmBackend`` / ``RemoteSGEBackend`` (imported by name from
+    ``remote_factory``); this covers every other resolved profile.
+    """
+    from hpc_agent.infra.backends._engine import ProfileBackend, RemoteProfileBackend
+
+    if remote:
+        from hpc_agent.infra.backends._remote_base import RemoteHPCBackend
+
+        bases: tuple[type, ...] = (RemoteHPCBackend, RemoteProfileBackend)
+    else:
+        bases = (ProfileBackend,)
+    safe = "".join(part.title() for part in str(profile.name).replace("-", "_").split("_"))
+    cls_name = f"{'Remote' if remote else ''}{safe or 'Profile'}Backend"
+    return type(cls_name, bases, {"profile": profile})
+
+
+def register_profile(profile: Any, *, remote: bool = True) -> type[HPCBackend]:
+    """Register a resolved scheduler *profile* under ``profile.name``.
+
+    After this, ``get_backend_class(profile.name)`` and
+    ``get_backend(profile.name, ...)`` return a class bound to *profile*.
+
+    Idempotent for an *equivalent* profile: a name already mapped to an
+    equal profile (e.g. the golden ``slurm`` / ``sge`` registered via
+    their dedicated remote classes, re-seeded by the resolver) is left
+    untouched. A name already mapped to a *different* profile raises
+    :class:`~hpc_agent.errors.SpecInvalid` rather than silently
+    overwriting — two clusters claiming the same scheduler label with
+    divergent profiles is a configuration error that would otherwise make
+    backend selection order-dependent. Give each distinct profile its own
+    ``name``.
+    """
+    _populate_registry()
+    existing = _REGISTRY.get(profile.name)
+    if existing is not None:
+        existing_profile = getattr(existing, "profile", None)
+        if existing_profile == profile:
+            return existing  # idempotent re-registration of the same profile
+        raise errors.SpecInvalid(
+            f"scheduler label {profile.name!r} is already registered with a "
+            "different profile; refusing to silently override it. Two clusters "
+            "with divergent schedulers must use distinct scheduler names."
+        )
+    cls = build_backend_class(profile, remote=remote)
+    _REGISTRY[profile.name] = cls
+    return cls

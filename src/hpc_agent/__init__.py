@@ -222,44 +222,48 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
 
 
 def get_template_path(scheduler: str, template: str) -> Path:
-    """Return the absolute path to a job template shipped with hpc-agent.
+    """Deprecated. Materialise a rendered job script and return its path.
+
+    .. deprecated::
+        The runtime array scripts are no longer static files on disk —
+        they are *rendered* from the scheduler profile (Phase 2 / Option
+        C). Prefer the text directly::
+
+            from hpc_agent.infra.backends import get_backend_class
+            body = get_backend_class(scheduler).render_script(kind="cpu")
+
+        This shim is retained for back-compat: it renders the script and
+        writes it to a stable per-(scheduler, template) path under the temp
+        dir (overwritten in place — no unbounded accumulation), then
+        returns that path.
 
     Parameters
     ----------
-    scheduler : ``"sge"`` or ``"slurm"``
-    template : template name without extension (e.g. ``"cpu_array"``, ``"gpu_array"``)
-
-    Returns
-    -------
-    Path to the template file.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the resolved template does not exist on disk.
+    scheduler : ``"sge"``, ``"slurm"``, ``"pbspro"`` or ``"torque"``
+    template : template basename (e.g. ``"cpu_array"`` / ``"gpu_array"``);
+        the ``_array`` suffix maps to the profile script ``kind``.
     """
-    # B5-PR2: route through the backend registry instead of an inline
-    # ladder. ``template_ext`` is a class attribute on each backend
-    # (".sh" for SGE, ".slurm" for SLURM); this keeps the on-disk layout
-    # under the backend's authority.
-    from hpc_agent.infra.backends import template_ext_for
+    import tempfile
+    import warnings
 
-    ext = template_ext_for(scheduler)
-    # B7: templates moved to hpc_agent/models/mapreduce/templates/ as part
-    # of the package reorg. Resolve via the hpc_agent package root so this
-    # forwarder keeps working until the rest of __init__.py moves over.
-    import hpc_agent as _hpc_agent_pkg
-
-    _hpc_agent_root = Path(_hpc_agent_pkg.__file__).resolve().parent
-    path = (
-        _hpc_agent_root
-        / "models"
-        / "mapreduce"
-        / "templates"
-        / "runtime"
-        / scheduler
-        / f"{template}{ext}"
+    warnings.warn(
+        "hpc_agent.get_template_path is deprecated; the runtime array scripts "
+        "are rendered from the scheduler profile. Use "
+        "hpc_agent.infra.backends.get_backend_class(scheduler).render_script("
+        'kind="cpu"|"gpu") instead.',
+        DeprecationWarning,
+        stacklevel=2,
     )
-    if not path.exists():
-        raise FileNotFoundError(f"Template not found: {path}")
+
+    from hpc_agent.infra.backends import get_backend_class, template_ext_for
+
+    backend_cls = get_backend_class(scheduler)
+    ext = template_ext_for(scheduler)
+    kind = template.replace("_array", "")  # "cpu_array" -> "cpu"
+    rendered = backend_cls.render_script(kind=kind)
+
+    cache_dir = Path(tempfile.gettempdir()) / "hpc_agent_templates" / scheduler
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{template}{ext}"
+    path.write_text(rendered, encoding="utf-8", newline="")
     return path

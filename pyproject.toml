@@ -75,9 +75,10 @@ hpc_agent = [
     "operations.json",
     "models/mapreduce/templates/scaffolds/*.py",
     "incorporation/build/scaffolds/*",
+    # The per-scheduler cpu/gpu array scripts are no longer shipped as
+    # files — they are rendered from the scheduler profile at deploy time
+    # (Phase 2 / Option C). Only the shared preambles ship statically.
     "models/mapreduce/templates/runtime/common/*.sh",
-    "models/mapreduce/templates/runtime/sge/*",
-    "models/mapreduce/templates/runtime/slurm/*",
     "_kernel/extension/worker_prompts/*.md",
     "py.typed",
 ]
