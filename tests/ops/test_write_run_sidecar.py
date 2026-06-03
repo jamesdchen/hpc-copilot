@@ -99,5 +99,21 @@ def test_v2_fields_round_trip_to_disk(tmp_path: Path) -> None:
     assert data["resources"] == {"cpus": 4, "mem": "16G", "walltime": "02:00:00"}
 
 
+def test_trial_tokens_persist_to_disk(tmp_path: Path) -> None:
+    """trial_tokens threaded through the primitive (from compute-run-id) land
+    on the sidecar verbatim, completing the CLI round-trip to prior_records."""
+    spec = _spec(campaign_id="tune_q1", trial_tokens=[10, 11, 12])
+    out = write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+    data = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert data["trial_tokens"] == [10, 11, 12]
+
+
+def test_trial_tokens_omitted_when_absent(tmp_path: Path) -> None:
+    """Ordinary submit (no tokens) leaves the key off the on-disk JSON."""
+    out = write_run_sidecar(experiment_dir=tmp_path, spec=_spec())
+    data = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert "trial_tokens" not in data
+
+
 # Import Path lazily for the runtime branches above (TYPE_CHECKING gate).
 from pathlib import Path  # noqa: E402

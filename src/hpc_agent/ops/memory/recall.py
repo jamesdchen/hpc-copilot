@@ -33,6 +33,7 @@ file. Malformed ``interview.json`` files are skipped silently.
 from __future__ import annotations
 
 import json
+import statistics
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -602,13 +603,15 @@ def _histogram(values: Iterable[Any]) -> dict[str, int]:
 
 
 def _pctile(values: Sequence[float], p: float) -> float:
-    """Linear-interpolation percentile. Returns 0 for empty input."""
+    """Linear-interpolation percentile via stdlib ``statistics.quantiles``.
+
+    The ``n=100`` / ``method="inclusive"`` cut points reproduce the old
+    hand-rolled ``(len-1)*p`` interpolation exactly. Guards the two inputs
+    ``statistics.quantiles`` rejects: empty (returns 0.0) and a single
+    sample (returns that value).
+    """
     if not values:
         return 0.0
-    s = sorted(values)
-    if len(s) == 1:
-        return float(s[0])
-    idx = (len(s) - 1) * p
-    lo = int(idx)
-    hi = min(lo + 1, len(s) - 1)
-    return float(s[lo] + (s[hi] - s[lo]) * (idx - lo))
+    if len(values) == 1:
+        return float(values[0])
+    return float(statistics.quantiles(values, n=100, method="inclusive")[round(p * 100) - 1])

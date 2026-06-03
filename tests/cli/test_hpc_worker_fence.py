@@ -12,8 +12,11 @@ parent session's permissions.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,7 +24,38 @@ import yaml
 
 _AGENT = Path(__file__).resolve().parents[2] / "src/slash_commands/agents/hpc-worker.md"
 
+
+def _find_bash() -> str | None:
+    """Locate a POSIX bash for running the hook.
+
+    On Windows a bare ``bash`` resolves to the WSL launcher stub
+    (``C:\\Windows\\System32\\bash.exe``), which exits 1 for *every* command
+    when no distro is installed — so the fence script never runs and all
+    cases fail uniformly. Prefer Git Bash (always present on the GitHub
+    windows runner) and return ``None`` if no real POSIX bash is found so the
+    test skips rather than exercising the stub.
+    """
+    if sys.platform != "win32":
+        return "bash"
+    candidates: list[Path] = []
+    git = shutil.which("git")
+    if git:
+        # ...\Git\cmd\git.exe -> ...\Git\bin\bash.exe
+        candidates.append(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        base = os.environ.get(env)
+        if base:
+            candidates.append(Path(base) / "Git" / "bin" / "bash.exe")
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return None
+
+
+_BASH = _find_bash()
+
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the hook shells jq")
+needs_bash = pytest.mark.skipif(_BASH is None, reason="no POSIX bash (Git Bash) found")
 
 
 def _hook_command() -> str:
@@ -34,15 +68,27 @@ def _hook_command() -> str:
 
 def _rc(cmd: str) -> int:
     payload = json.dumps({"tool_input": {"command": cmd}})
-    return subprocess.run(
-        ["bash", "-c", _hook_command()],
-        input=payload,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    ).returncode
+    # Run the hook from an LF-forced temp script via an explicit POSIX bash
+    # (Git Bash on Windows — see _find_bash). Forward-slash the path so Git
+    # Bash accepts it. mkstemp + explicit unlink so Windows can reopen the
+    # closed file for bash to read.
+    assert _BASH is not None  # guarded by @needs_bash
+    fd, path = tempfile.mkstemp(suffix=".sh")
+    try:
+        with os.fdopen(fd, "w", newline="\n") as f:
+            f.write(_hook_command())
+        return subprocess.run(
+            [_BASH, path.replace("\\", "/")],
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        ).returncode
+    finally:
+        os.unlink(path)
 
 
+@needs_bash
 @needs_jq
 @pytest.mark.parametrize(
     "cmd",
@@ -56,6 +102,7 @@ def test_allows_hpc_agent_and_git(cmd: str) -> None:
     assert _rc(cmd) == 0
 
 
+@needs_bash
 @needs_jq
 @pytest.mark.parametrize(
     "cmd",

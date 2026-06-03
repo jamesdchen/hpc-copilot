@@ -112,3 +112,35 @@ def test_compute_cmd_sha_position_sensitive(tasks: list[dict[str, Any]]) -> None
     rev = list(reversed(tasks))
     assume(rev != tasks)
     assert compute_cmd_sha(_FakeTasksModule(tasks)) != compute_cmd_sha(_FakeTasksModule(rev))
+
+
+# ---------------------------------------------------------------------------
+# Reserved bookkeeping keys are stripped before hashing (campaign seam)
+# ---------------------------------------------------------------------------
+
+
+def test_trial_token_excluded_from_cmd_sha() -> None:
+    """A reserved ``trial_token`` is bookkeeping, not a swept parameter, so it
+    must not change parameter identity / bust dedup. Two task lists that
+    differ ONLY in trial_token hash identically."""
+    base = _FakeTasksModule([{"lr": 0.1, "seed": 1}])
+    with_token = _FakeTasksModule([{"lr": 0.1, "seed": 1, "trial_token": 7}])
+    other_token = _FakeTasksModule([{"lr": 0.1, "seed": 1, "trial_token": 99}])
+    assert compute_cmd_sha(base) == compute_cmd_sha(with_token)
+    assert compute_cmd_sha(with_token) == compute_cmd_sha(other_token)
+
+
+def test_non_reserved_key_still_changes_cmd_sha() -> None:
+    """Control: a genuine swept-parameter difference DOES change the hash —
+    the strip is surgical to the reserved key, not a blanket ignore."""
+    a = _FakeTasksModule([{"lr": 0.1, "seed": 1}])
+    b = _FakeTasksModule([{"lr": 0.1, "seed": 2}])
+    assert compute_cmd_sha(a) != compute_cmd_sha(b)
+
+
+def test_compute_cmd_sha_does_not_mutate_resolve_dict() -> None:
+    """Stripping the reserved key hashes a copy; the caller's dict (which the
+    dispatcher still exports as HPC_KW_* for the executor) is untouched."""
+    task = {"lr": 0.1, "trial_token": 5}
+    compute_cmd_sha(_FakeTasksModule([task]))
+    assert task == {"lr": 0.1, "trial_token": 5}

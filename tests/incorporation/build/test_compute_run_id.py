@@ -35,11 +35,38 @@ def test_happy_path_returns_deterministic_run_id(tmp_path: Path) -> None:
 
     out = compute_run_id(tmp_path, run_name="myrun")
 
-    assert set(out.keys()) == {"run_id", "cmd_sha"}
+    assert set(out.keys()) == {"run_id", "cmd_sha", "trial_tokens"}
     assert len(out["cmd_sha"]) == 64
     assert all(c in "0123456789abcdef" for c in out["cmd_sha"])
     assert out["run_id"] == f"myrun-{out['cmd_sha'][:8]}"
     assert out["run_id"].startswith("myrun-")
+    # No task carries a trial_token → omitted (None), not a list of nulls.
+    assert out["trial_tokens"] is None
+
+
+_TOKEN_TASKS_PY = """\
+def total():
+    return 3
+
+
+def resolve(i):
+    return {"lr": 0.1, "trial_token": i + 10}
+"""
+
+
+def test_trial_tokens_surfaced_task_ordered_when_present(tmp_path: Path) -> None:
+    """A strategy returning a reserved ``trial_token`` per task gets it
+    surfaced task-ordered so a CLI caller can thread it into
+    write-run-sidecar. The token must NOT change cmd_sha (it's stripped)."""
+    _write_tasks_py(tmp_path, _TOKEN_TASKS_PY)
+
+    out = compute_run_id(tmp_path, run_name="tune")
+    assert out["trial_tokens"] == [10, 11, 12]
+
+    # Same params, different token values → identical cmd_sha (token stripped).
+    other = tmp_path / "other"
+    _write_tasks_py(other, _TOKEN_TASKS_PY.replace("i + 10", "i + 99"))
+    assert compute_run_id(other, run_name="tune")["cmd_sha"] == out["cmd_sha"]
 
 
 def test_determinism_same_tasks_same_output(tmp_path: Path) -> None:

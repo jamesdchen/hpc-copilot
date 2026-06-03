@@ -74,6 +74,7 @@ _V2_CONFIG = frozenset(
         "auto_retry",
         "aggregate_defaults",
         "results",
+        "trial_tokens",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

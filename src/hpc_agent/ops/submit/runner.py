@@ -162,6 +162,12 @@ def submit_and_record(
             cmd_sha,
             tasks_py_sha=current_tasks_py_sha,
             invalidate_on_code_change=invalidate_on_code_change,
+            # Campaign iterations deliberately re-run (a stochastic strategy
+            # may re-propose identical params), so a same-campaign sidecar is
+            # NOT a dedup target — without this a repeated point would
+            # silently recover the prior iteration instead of submitting.
+            # Empty campaign_id → None → unchanged non-campaign dedup.
+            campaign_id=campaign_id or None,
         )
         if sidecar_path is not None:
             existing_run_id = sidecar_path.stem

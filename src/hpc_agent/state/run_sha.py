@@ -16,7 +16,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-__all__ = ["compute_cmd_sha", "compute_tasks_py_sha"]
+__all__ = ["RESERVED_TASK_KEYS", "compute_cmd_sha", "compute_tasks_py_sha"]
+
+# Per-task keys that ``resolve(i)`` may return but that are EXCLUDED from
+# the cmd_sha hash. These carry strategy bookkeeping — an opaque
+# ``trial_token`` a closed-loop optimizer round-trips through ``resolve()``
+# to reconcile a result back to the proposal that produced it — rather than
+# a swept experiment parameter. Folding them into cmd_sha would change the
+# experiment's parameter identity and bust dedup (the #207 boundary: cmd_sha
+# is parameter identity, not bookkeeping), so they are stripped before
+# hashing. Dedup across deliberately-repeated campaign iterations is handled
+# separately by the campaign-iteration rejection in
+# :func:`hpc_agent.state.runs.find_run_by_cmd_sha`.
+RESERVED_TASK_KEYS: frozenset[str] = frozenset({"trial_token"})
 
 
 def compute_cmd_sha(tasks_module: Any) -> str:
@@ -67,7 +79,12 @@ def compute_cmd_sha(tasks_module: Any) -> str:
         kwargs = tasks_module.resolve(i)
         if not isinstance(kwargs, dict):
             raise TypeError(f"tasks.resolve({i}) must return a dict, got {type(kwargs).__name__}")
-        parts.append(json.dumps(kwargs, sort_keys=True, separators=(",", ":")))
+        # Strip reserved bookkeeping keys (e.g. ``trial_token``) so they do
+        # not change parameter identity / bust dedup. A copy is hashed; the
+        # caller's dict is left untouched (the dispatcher still exports the
+        # reserved keys as ``HPC_KW_*`` for the executor to read).
+        hashable = {k: v for k, v in kwargs.items() if k not in RESERVED_TASK_KEYS}
+        parts.append(json.dumps(hashable, sort_keys=True, separators=(",", ":")))
     joined = "\n".join(parts).encode()
     return hashlib.sha256(joined).hexdigest()
 

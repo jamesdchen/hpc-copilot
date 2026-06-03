@@ -81,6 +81,40 @@ def test_cmd_sha_dedup_short_circuits_when_sidecar_exists(tmp_path: Path) -> Non
     assert record.job_ids == ["12345"]
 
 
+def test_cmd_sha_dedup_skips_same_campaign_iteration(tmp_path: Path) -> None:
+    """A campaign-tagged submit must NOT dedup against a prior iteration of
+    the same campaign even with identical cmd_sha — the iteration runs fresh
+    (the stochastic-repeat footgun fix). Without campaign awareness this
+    would short-circuit and silently drop the new trial."""
+    cmd_sha = "e" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-iter0001",
+        cmd_sha=cmd_sha,
+        job_ids=["12345"],
+        campaign_id="tune",
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_WireSubmitSpec(
+            profile="cpu",
+            cluster="discovery",
+            ssh_target="me@cluster",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            run_id="20260102-000000-iter0002",
+            job_ids=["99999"],
+            total_tasks=4,
+            campaign_id="tune",
+        ),
+        cmd_sha=cmd_sha,
+    )
+
+    assert deduped is False
+    assert record.run_id == "20260102-000000-iter0002"
+
+
 def test_cmd_sha_dedup_no_op_when_no_match(tmp_path: Path) -> None:
     """Sidecar with DIFFERENT cmd_sha must not short-circuit."""
     _write_sidecar(tmp_path, "20260101-000000-other00", cmd_sha="b" * 64)

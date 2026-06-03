@@ -267,6 +267,19 @@
       "default": null,
       "title": "Results"
     },
+    "trial_tokens": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trial Tokens"
+    },
     "job_ids": {
       "anyOf": [
         {

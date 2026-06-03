@@ -112,6 +112,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "auto_retry",  # dict — per-category retry policy
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
+    "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -147,6 +148,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "auto_retry": None,
     "aggregate_defaults": None,
     "results": None,
+    "trial_tokens": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -210,6 +212,7 @@ def write_run_sidecar(
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
+    trial_tokens: list[Any] | None = None,
     job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
@@ -230,6 +233,14 @@ def write_run_sidecar(
     and ``metric_column`` (str). When present it lets the post-aggregate
     column gate verify each task's result file deterministically; when
     absent the gate is a clean no-op.
+
+    *trial_tokens* is an optional list of opaque per-task tokens (one per
+    task, ``resolve(i)``-order) that a closed-loop strategy round-trips to
+    reconcile a finished iteration's result back to the proposal that
+    produced it (e.g. an Optuna trial number, a PBT ``(member, generation)``
+    pair). The framework never interprets them — they are recorded verbatim
+    and re-surfaced by
+    :func:`hpc_agent.models.mapreduce.reduce.history.prior_records`.
 
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
@@ -274,6 +285,7 @@ def write_run_sidecar(
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
         "results": results,
+        "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
         "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():
@@ -424,6 +436,7 @@ def find_run_by_cmd_sha(
     skip_orphans: bool = False,
     tasks_py_sha: str | None = None,
     invalidate_on_code_change: bool = False,
+    campaign_id: str | None = None,
 ) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
@@ -474,6 +487,20 @@ def find_run_by_cmd_sha(
     at submit; see ``ops/submit_flow.py``) is NOT treated as drift — we
     cannot prove the code changed, so we fall back to the param-only
     dedup and neither warn nor invalidate.
+
+    *campaign_id* is the closed-loop campaign-iteration rejection lever.
+    When set, a matched sidecar that belongs to the SAME campaign is NOT a
+    dedup target: campaign iterations deliberately re-run — a stochastic
+    strategy (Optuna, PBT, random search) may propose identical params in
+    two different iterations, and deduping the later one against the earlier
+    would silently drop a trial the strategy meant to run (the cmd_sha
+    collision footgun documented in ``docs/workflows/campaign.md``). The
+    scan continues past same-campaign matches, so a non-campaign or
+    different-campaign run with the same params is still a valid dedup
+    target. This is orthogonal to the #207 code-drift lever above — a
+    campaign-iteration repeat and a code edit are decided independently.
+    A same-machine resume of the in-progress iteration is handled earlier
+    by the journal ``run_id`` path, not here.
     """
     if not cmd_sha:
         return None
@@ -485,6 +512,11 @@ def find_run_by_cmd_sha(
         if data.get("cmd_sha") != cmd_sha:
             continue
         if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
+            continue
+        # Campaign-iteration rejection: a same-campaign match is a prior
+        # iteration, not a replay target — keep scanning. Orthogonal to the
+        # code-drift logic below.
+        if campaign_id and data.get("campaign_id") == campaign_id:
             continue
         # Param identity matched. Now consider code identity only if the
         # caller opted in by supplying the current tasks_py_sha AND the

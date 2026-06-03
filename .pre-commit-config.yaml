@@ -31,6 +31,13 @@ repos:
         pass_filenames: false
         files: '^src/hpc_agent/(ops|meta)/.*/__init__\.py$'
 
+      - id: lint-schema-versions
+        name: cluster-side schema-version constants stay in sync
+        entry: python scripts/lint_schema_versions.py
+        language: system
+        pass_filenames: false
+        files: '^(src/hpc_agent/models/mapreduce/(dispatch|combiner)\.py|src/hpc_agent/state/runs\.py|scripts/lint_schema_versions\.py)$'
+
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter
         entry: python scripts/build_primitive_frontmatter.py --write

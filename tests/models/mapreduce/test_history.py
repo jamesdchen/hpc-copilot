@@ -12,6 +12,7 @@ import pytest
 from hpc_agent.models.mapreduce.reduce.history import (
     find_sidecars_by_campaign,
     prior,
+    prior_records,
     result_dirs_for_sidecar,
 )
 from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
@@ -220,3 +221,79 @@ def test_prior_does_not_import_tasks_py(tmp_path: Path) -> None:
     # Must not raise.
     history = prior(tmp_path, "A")
     assert history[0]["loss"] == pytest.approx(0.42)
+
+
+# ---------------------------------------------------------------------------
+# prior_records (rich per-iteration shape — the campaign seam)
+# ---------------------------------------------------------------------------
+
+
+def test_prior_records_carries_run_id_metrics_result_dirs_and_complete(
+    tmp_path: Path,
+) -> None:
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs("20260101-000000-iter0001"),
+        campaign_id="A",
+    )
+    _write_metrics(
+        tmp_path / "results" / "20260101-000000-iter0001" / "task_0",
+        {"val_loss": 0.25, "n_samples": 1},
+    )
+    records = prior_records(tmp_path, "A")
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["run_id"] == "20260101-000000-iter0001"
+    assert rec["campaign_id"] == "A"
+    assert rec["complete"] is True
+    assert rec["metrics"]["val_loss"] == pytest.approx(0.25)
+    # Artifact lineage: the per-task result dir is surfaced as a string path.
+    assert rec["result_dirs"] == [str(tmp_path / "results" / "20260101-000000-iter0001" / "task_0")]
+    # No token was recorded for this iteration.
+    assert rec["trial_tokens"] is None
+
+
+def test_prior_records_round_trips_trial_tokens(tmp_path: Path) -> None:
+    """An opaque trial_token written at submit re-surfaces verbatim."""
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs("20260101-000000-tok0001"),
+        campaign_id="A",
+        trial_tokens=[7],
+    )
+    _write_metrics(
+        tmp_path / "results" / "20260101-000000-tok0001" / "task_0",
+        {"val_loss": 0.1, "n_samples": 1},
+    )
+    [rec] = prior_records(tmp_path, "A")
+    assert rec["trial_tokens"] == [7]
+
+
+def test_prior_records_marks_in_flight_iteration_incomplete(tmp_path: Path) -> None:
+    """No result dir yet → complete=False, empty metrics, empty result_dirs."""
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs("20260101-000000-pending0"),
+        campaign_id="A",
+    )
+    [rec] = prior_records(tmp_path, "A")
+    assert rec["complete"] is False
+    assert rec["metrics"] == {}
+    assert rec["result_dirs"] == []
+
+
+def test_prior_records_oldest_first_index_matches_iteration_order(tmp_path: Path) -> None:
+    """Record i corresponds to iteration i — the index a 1-ask-per-iteration
+    optimizer reconciles against (record i == trial i)."""
+    for i, run_id in enumerate(("20260101-000000-iter0", "20260101-000001-iter1")):
+        write_run_sidecar(tmp_path, **_common_required_kwargs(run_id), campaign_id="A")
+        _write_metrics(
+            tmp_path / "results" / run_id / "task_0",
+            {"val_loss": float(i), "n_samples": 1},
+        )
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(("20260101-000000-iter0", "20260101-000001-iter1")):
+        os.utime(run_sidecar_path(tmp_path, run_id), (t0 + i, t0 + i))
+
+    records = prior_records(tmp_path, "A")
+    assert [r["metrics"]["val_loss"] for r in records] == [pytest.approx(0.0), pytest.approx(1.0)]

@@ -10,6 +10,7 @@ import pytest
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.runs import (
     SIDECAR_SCHEMA_VERSION,
+    find_run_by_cmd_sha,
     read_run_sidecar,
     run_sidecar_path,
     write_run_sidecar,
@@ -103,8 +104,55 @@ def test_v2_write_omits_none_keys_to_keep_sidecar_compact(tmp_path: Path) -> Non
         "runtime",
         "auto_retry",
         "aggregate_defaults",
+        "trial_tokens",
     ):
         assert omitted not in raw, f"{omitted!r} should be omitted when None"
+
+
+# ---------------------------------------------------------------------------
+# trial_tokens round-trip (campaign seam)
+# ---------------------------------------------------------------------------
+
+
+def test_trial_tokens_write_then_read_roundtrips(tmp_path: Path) -> None:
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs(),
+        campaign_id="tune_q1",
+        trial_tokens=[3, 7, 11],
+    )
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trial_tokens"] == [3, 7, 11]
+
+
+def test_trial_tokens_backfilled_none_when_absent(tmp_path: Path) -> None:
+    """A sidecar written without trial_tokens reads back with the key
+    present and None (the v2 backfill contract prior_records relies on)."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trial_tokens"] is None
+
+
+# ---------------------------------------------------------------------------
+# find_run_by_cmd_sha — campaign-iteration rejection
+# ---------------------------------------------------------------------------
+
+
+def test_find_run_by_cmd_sha_skips_same_campaign_match(tmp_path: Path) -> None:
+    """A campaign-tagged submit must NOT dedup against a prior iteration of
+    the SAME campaign even when the params (cmd_sha) are identical — a
+    stochastic strategy re-proposing the same point must still run."""
+    sha = "c" * 64
+    kw = _common_required_kwargs("20260101-000000-iter0001")
+    kw["cmd_sha"] = sha
+    write_run_sidecar(tmp_path, **kw, campaign_id="tune")
+
+    # Same campaign + same params → not a dedup target.
+    assert find_run_by_cmd_sha(tmp_path, sha, campaign_id="tune") is None
+    # No campaign filter → the prior run IS found (default behaviour intact).
+    assert find_run_by_cmd_sha(tmp_path, sha) is not None
+    # A different campaign with identical params is still a valid match.
+    assert find_run_by_cmd_sha(tmp_path, sha, campaign_id="other") is not None
 
 
 # ---------------------------------------------------------------------------

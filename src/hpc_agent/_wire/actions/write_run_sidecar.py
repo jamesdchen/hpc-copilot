@@ -70,4 +70,8 @@ class WriteRunSidecarInput(BaseModel):
     auto_retry: dict[str, Any] | None = None
     aggregate_defaults: dict[str, Any] | None = None
     results: dict[str, Any] | None = None
+    # Opaque per-task reconciliation tokens a closed-loop strategy round-trips
+    # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
+    # and re-surfaced by prior_records(); never interpreted by the framework.
+    trial_tokens: list[Any] | None = None
     job_ids: list[str] | None = None

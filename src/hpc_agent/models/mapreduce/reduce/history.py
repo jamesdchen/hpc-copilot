@@ -31,6 +31,7 @@ from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 __all__ = [
     "find_sidecars_by_campaign",
     "prior",
+    "prior_records",
     "result_dirs_for_sidecar",
 ]
 
@@ -166,3 +167,65 @@ def prior(
         dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
         history.append(reduce_metrics(dirs))
     return history
+
+
+def prior_records(
+    experiment_dir: Path,
+    campaign_id: str,
+) -> list[dict[str, Any]]:
+    """Rich per-iteration history for *campaign_id*, oldest-first.
+
+    The strategy-agnostic companion to :func:`prior`. Where ``prior``
+    returns only the reduced-metric dict per iteration (a deliberately
+    minimal shape kept stable for existing ``tasks.py`` callers), this
+    returns a record carrying everything a closed-loop strategy needs to
+    decide the next iteration — without the framework interpreting any of
+    it. Each record is::
+
+        {
+            "run_id": str,            # the iteration's run_id
+            "campaign_id": str | None,
+            "trial_tokens": list | None,  # opaque, round-tripped verbatim
+            "result_dirs": [str, ...],    # per-task output dirs (artifact lineage)
+            "metrics": {...},             # reduce_metrics(result_dirs) — same as prior()
+            "complete": bool,             # at least one result_dir has a metrics.json
+        }
+
+    The three additions over ``prior`` are the seam (see
+    ``docs/design/campaign-seam.md``):
+
+    * ``result_dirs`` — **artifact lineage**. PBT clones a checkpoint from
+      a survivor's dir; RL self-play reads the prior generation's replay
+      buffer; active learning extends the prior label set. Far more general
+      than a scalar objective.
+    * ``trial_tokens`` — the opaque reconciliation token(s) a strategy
+      round-tripped through ``resolve()`` (recorded on the sidecar by
+      :func:`hpc_agent.state.runs.write_run_sidecar`). ``None`` for
+      iterations submitted without one.
+    * ``complete`` — a filesystem-derived readiness flag (does any task
+      have a ``metrics.json`` yet). This is NOT the authoritative
+      lifecycle state — ``failed`` vs ``timeout`` vs ``abandoned`` live in
+      the journal and are reported by ``hpc-agent status``. ``prior_records``
+      stays a pure sidecar+filesystem read (no SSH, no journal) so it is
+      safe to call from ``tasks.py`` at module load.
+
+    The objective, if any, is just a key inside ``metrics`` — the framework
+    never privileges one. A 1-ask-per-iteration optimizer can reconcile by
+    oldest-first index (record ``i`` == trial ``i``); ``trial_tokens`` is
+    for the concurrent / out-of-order case.
+    """
+    sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
+    records: list[dict[str, Any]] = []
+    for sidecar in sidecars:
+        dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
+        records.append(
+            {
+                "run_id": sidecar.get("run_id", ""),
+                "campaign_id": sidecar.get("campaign_id"),
+                "trial_tokens": sidecar.get("trial_tokens"),
+                "result_dirs": [str(d) for d in dirs],
+                "metrics": reduce_metrics(dirs),
+                "complete": bool(dirs),
+            }
+        )
+    return records
