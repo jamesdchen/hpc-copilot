@@ -25,6 +25,19 @@ WS3 (running in parallel). Verbs that don't emit it yet are listed in
 downstream. As WS3 wires each verb, drop it from the xfail set; the
 test then runs as a hard assertion.
 
+**WS4 Q4: strict_xfail markers.** Verbs in the static xfail catalogues
+(``NEEDS_EXTRA_CLI_ARGS``, ``XFAIL_NEEDS_FIXTURE``,
+``XFAIL_NO_FAILURE_FEATURES``) are marked at parametrize time with
+``pytest.mark.xfail(strict=True, ...)``. ``strict=True`` semantics:
+when the underlying verb behaviour is fixed and the test now passes,
+pytest surfaces an ``XPASS(strict)`` failure — the maintainer is
+forced to drop the verb from the catalogue. Replaces the prior dynamic
+``pytest.xfail()`` calls inside test bodies, which silently let the
+catalogue drift out of sync as verbs improved. Runtime xfails for
+envelope-shape-dependent conditions (e.g. ``error_code == "internal"``
+when ``spec_invalid`` was expected) stay dynamic — those conditions
+aren't knowable at parametrize time.
+
 Marked with ``contract`` — run with ``pytest -m contract``.
 """
 
@@ -230,6 +243,57 @@ def _verb_targets() -> list[tuple[str, Path]]:
     return pairs
 
 
+def _make_params(test_id: str) -> list:
+    """Build ``pytest.param`` entries for *test_id* with strict-xfail
+    markers per the test's static xfail catalogues (WS4 Q4 refactor).
+
+    *test_id* selects which catalogues apply:
+
+    * ``"spec_invalid"`` — ``NEEDS_EXTRA_CLI_ARGS`` + ``XFAIL_NEEDS_FIXTURE``.
+    * ``"failure_features"`` — same plus ``XFAIL_NO_FAILURE_FEATURES``.
+    * ``"remediation"`` — same as ``"spec_invalid"``.
+
+    Each xfail marker carries ``strict=True``: if a verb's behaviour is
+    fixed and the test now passes, pytest surfaces ``XPASS(strict)`` and
+    the maintainer is forced to drop the verb from the catalogue.
+    Replaces the prior dynamic ``pytest.xfail()`` calls inside test
+    bodies, which silently let the catalogue drift as verbs improved.
+    """
+    params: list = []
+    for verb, schema_path in _verb_targets():
+        marks: list = []
+        if verb in NEEDS_EXTRA_CLI_ARGS:
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=(
+                        f"{verb}: CLI requires additional mandatory args "
+                        "beyond --spec; spec-validate path unreachable "
+                        "from this probe."
+                    ),
+                )
+            )
+        if verb in XFAIL_NEEDS_FIXTURE:
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=f"{verb}: needs a richer fixture to probe contract",
+                )
+            )
+        if test_id == "failure_features" and verb in XFAIL_NO_FAILURE_FEATURES:
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=(
+                        f"{verb}: failure_features not yet wired into "
+                        "spec_invalid envelope (WS3 punch list)"
+                    ),
+                )
+            )
+        params.append(pytest.param(verb, schema_path, marks=marks))
+    return params
+
+
 def test_spec_verb_inventory_matches_cli() -> None:
     """The hard-coded ``_SPEC_VERBS`` inventory matches the live CLI.
 
@@ -262,7 +326,7 @@ def test_spec_verb_inventory_matches_cli() -> None:
 
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("spec_invalid"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_primitive_emits_spec_invalid_on_bad_input(
@@ -275,22 +339,22 @@ def test_primitive_emits_spec_invalid_on_bad_input(
     that has any required field, and is the simplest reproducible
     known-bad input. Verbs that accept ``{}`` as legitimately empty
     are extended via ``EMPTY_SPEC_OVERRIDES``.
+
+    Static-catalogue xfails (``NEEDS_EXTRA_CLI_ARGS``,
+    ``XFAIL_NEEDS_FIXTURE``) are applied at parametrize time with
+    ``strict=True``; see :func:`_make_params`. The runtime ``internal``-
+    envelope xfail below stays dynamic because the condition isn't
+    knowable at parametrize time.
     """
-    if verb in NEEDS_EXTRA_CLI_ARGS:
-        pytest.xfail(
-            f"{verb}: CLI requires additional mandatory args beyond "
-            "--spec; spec-validate path unreachable from this probe."
-        )
-    if verb in XFAIL_NEEDS_FIXTURE:
-        pytest.xfail(f"{verb}: needs a richer fixture to probe spec_invalid path")
     spec = EMPTY_SPEC_OVERRIDES.get(verb, {})
     envelope = _run_verb_with_bad_spec(verb, spec, tmp_path)
     if envelope.get("error_code") == "internal":
         # ``internal`` envelopes are unhandled exceptions reaching the
         # generic CLI handler — they're a regression target (the spec
         # should have been validated *before* the runtime ever touched
-        # it), not a clean spec_invalid path. Surface as the xfail
-        # punch list rather than failing today.
+        # it), not a clean spec_invalid path. Stays dynamic — the
+        # condition is envelope-shape-dependent, not knowable at
+        # parametrize time.
         pytest.xfail(
             f"{verb}: bad spec produced an `internal` envelope, not "
             f"`spec_invalid`. Spec-validate is missing from this verb's "
@@ -307,7 +371,7 @@ def test_primitive_emits_spec_invalid_on_bad_input(
 
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("failure_features"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_primitive_emits_failure_features_on_spec_invalid(
@@ -318,18 +382,10 @@ def test_primitive_emits_failure_features_on_spec_invalid(
 
     WS3 (parallel workstream) is wiring ``failure_features`` into the
     ``ErrorEnvelope`` emitter — verbs in ``XFAIL_NO_FAILURE_FEATURES``
-    are the punch list. The xfail decorator means a verb that *does*
-    start emitting the field gets surfaced as ``XPASS`` and the
-    maintainer drops it from the set.
+    are the punch list. The ``strict=True`` marker means a verb that
+    starts emitting the field gets surfaced as ``XPASS(strict)`` and
+    the maintainer is forced to drop it from the catalogue (per WS4 Q4).
     """
-    if verb in NEEDS_EXTRA_CLI_ARGS:
-        pytest.xfail(f"{verb}: CLI requires additional mandatory args beyond --spec")
-    if verb in XFAIL_NEEDS_FIXTURE:
-        pytest.xfail(f"{verb}: needs a richer fixture to probe failure_features")
-    if verb in XFAIL_NO_FAILURE_FEATURES:
-        pytest.xfail(
-            f"{verb}: failure_features not yet wired into spec_invalid envelope (WS3 punch list)"
-        )
     spec = EMPTY_SPEC_OVERRIDES.get(verb, {})
     envelope = _run_verb_with_bad_spec(verb, spec, tmp_path)
     assert envelope.get("ok") is False
@@ -348,7 +404,7 @@ def test_primitive_emits_failure_features_on_spec_invalid(
 
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("remediation"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_remediation_names_schema_path_or_describe(
@@ -364,13 +420,10 @@ def test_remediation_names_schema_path_or_describe(
     that took 4-5 round-trips to debug, and a regression to it is a
     real bug.
     """
-    if verb in NEEDS_EXTRA_CLI_ARGS:
-        pytest.xfail(f"{verb}: CLI requires additional mandatory args beyond --spec")
-    if verb in XFAIL_NEEDS_FIXTURE:
-        pytest.xfail(f"{verb}: needs a richer fixture to probe remediation")
     spec = EMPTY_SPEC_OVERRIDES.get(verb, {})
     envelope = _run_verb_with_bad_spec(verb, spec, tmp_path)
     if envelope.get("error_code") != "spec_invalid":
+        # Envelope-shape-dependent xfail; stays dynamic.
         pytest.xfail(
             f"{verb}: empty spec did not produce spec_invalid "
             f"(error_code={envelope.get('error_code')!r}); remediation "
@@ -382,9 +435,10 @@ def test_remediation_names_schema_path_or_describe(
         f"schemas/{schema_stem}.input.json" not in remediation
         and f"hpc-agent describe {verb}" not in remediation
     ):
-        # The generic "rebuild via /submit" shape is the pre-50a4b61d
-        # regression target — flag it for the WS3 punch list instead of
-        # failing today, then ratchet down.
+        # Envelope-content-dependent xfail; stays dynamic. The generic
+        # "rebuild via /submit" shape is the pre-50a4b61d regression
+        # target — flag it for the WS3 punch list instead of failing
+        # today, then ratchet down.
         pytest.xfail(
             f"{verb}: remediation does not name the schema file or "
             f"`hpc-agent describe {verb}`; carries: {remediation!r}"

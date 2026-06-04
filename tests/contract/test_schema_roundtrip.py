@@ -24,6 +24,16 @@ WS3 (parallel) is wiring ``failure_features`` into the same
 are listed in ``XFAIL_NEEDS_FIXTURE`` — the xfail list IS the punch
 list for the schema-author seam.
 
+**WS4 Q4: strict_xfail markers.** Verbs in the static xfail catalogues
+(``NEEDS_EXTRA_CLI_ARGS``, ``XFAIL_NEEDS_FIXTURE``) are marked at
+parametrize time with ``pytest.mark.xfail(strict=True, ...)``. When the
+underlying verb behaviour is fixed and the test now passes, pytest
+surfaces ``XPASS(strict)`` and the maintainer is forced to drop the
+verb from the catalogue. Replaces the prior dynamic ``pytest.xfail()``
+calls inside test bodies, which silently let the catalogue drift out of
+sync as verbs improved. Runtime xfails for envelope-shape-dependent
+conditions stay dynamic.
+
 Marked with ``contract`` — run with ``pytest -m contract``.
 """
 
@@ -193,9 +203,47 @@ def _verb_targets() -> list[tuple[str, Path]]:
     return pairs
 
 
+def _make_params(test_id: str) -> list:
+    """Build ``pytest.param`` entries with strict-xfail markers for verbs
+    in the static catalogues (WS4 Q4 refactor).
+
+    *test_id* selects which catalogues apply:
+
+    * ``"bad_spec"`` — ``NEEDS_EXTRA_CLI_ARGS``.
+    * ``"remediation"`` — ``NEEDS_EXTRA_CLI_ARGS``.
+    * ``"known_good"`` — ``XFAIL_NEEDS_FIXTURE``.
+
+    Each xfail marker carries ``strict=True``: if a verb's behaviour is
+    fixed and the test now passes, pytest surfaces ``XPASS(strict)`` and
+    the maintainer is forced to drop the verb from the catalogue.
+    """
+    params: list = []
+    for verb, schema_path in _verb_targets():
+        marks: list = []
+        if test_id in ("bad_spec", "remediation") and verb in NEEDS_EXTRA_CLI_ARGS:
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=(f"{verb}: CLI requires additional mandatory args beyond --spec"),
+                )
+            )
+        if test_id == "known_good" and verb in XFAIL_NEEDS_FIXTURE:
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=(
+                        f"{verb}: no known-good fixture; schema-roundtrip "
+                        "not yet testable from this surface"
+                    ),
+                )
+            )
+        params.append(pytest.param(verb, schema_path, marks=marks))
+    return params
+
+
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("bad_spec"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_known_bad_spec_yields_spec_invalid(verb: str, schema_path: Path, tmp_path: Path) -> None:
@@ -204,12 +252,12 @@ def test_known_bad_spec_yields_spec_invalid(verb: str, schema_path: Path, tmp_pa
 
     Pure-optional schemas (every property has a default) legitimately
     accept ``{}`` — those are skipped via ``XFAIL_NEEDS_FIXTURE`` if
-    no other bad-input shape is enumerated.
+    no other bad-input shape is enumerated. ``NEEDS_EXTRA_CLI_ARGS``
+    xfails are applied at parametrize time with ``strict=True`` (WS4 Q4).
     """
-    if verb in NEEDS_EXTRA_CLI_ARGS:
-        pytest.xfail(f"{verb}: CLI requires additional mandatory args beyond --spec")
     envelope, _ = _run_verb(verb, {}, tmp_path)
     if envelope.get("error_code") == "internal":
+        # Envelope-shape-dependent xfail; stays dynamic.
         pytest.xfail(
             f"{verb}: bad spec produced `internal` instead of "
             f"`spec_invalid`. Spec-validate missing from entry path. "
@@ -218,7 +266,8 @@ def test_known_bad_spec_yields_spec_invalid(verb: str, schema_path: Path, tmp_pa
     if envelope.get("error_code") != "spec_invalid":
         # Either the verb takes ``{}`` legitimately (no required
         # fields), or its rejection path is elsewhere (CLI-level
-        # required arg, not a spec field). Treat as the punch list.
+        # required arg, not a spec field). Stays dynamic — the verdict
+        # depends on the runtime envelope.
         if envelope.get("ok"):
             pytest.xfail(
                 f"{verb}: ``{{}}`` is a legitimately empty spec for this "
@@ -234,7 +283,7 @@ def test_known_bad_spec_yields_spec_invalid(verb: str, schema_path: Path, tmp_pa
 
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("remediation"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_remediation_names_schema_file_and_failing_json_path(
@@ -250,8 +299,6 @@ def test_remediation_names_schema_file_and_failing_json_path(
 
     Generic "rebuild via /submit" remediation is the regression target.
     """
-    if verb in NEEDS_EXTRA_CLI_ARGS:
-        pytest.xfail(f"{verb}: CLI requires additional mandatory args beyond --spec")
     envelope, _ = _run_verb(verb, {}, tmp_path)
     if envelope.get("error_code") != "spec_invalid":
         pytest.xfail(
@@ -276,7 +323,7 @@ def test_remediation_names_schema_file_and_failing_json_path(
 
 @pytest.mark.parametrize(
     "verb,schema_path",
-    _verb_targets(),
+    _make_params("known_good"),
     ids=lambda p: p if isinstance(p, str) else p.stem,
 )
 def test_known_good_spec_passes_schema_validation(
@@ -293,25 +340,23 @@ def test_known_good_spec_passes_schema_validation(
 
     Verbs without either fixture surface in ``XFAIL_NEEDS_FIXTURE`` —
     the punch list of "schemas whose roundtrip we want but don't yet
-    have a passing-input fixture for."
+    have a passing-input fixture for." The marker is ``strict=True``
+    so a verb whose fixture gets added is auto-promoted from xfail to
+    hard assertion (WS4 Q4).
 
     Schema validation passing does NOT require the verb to succeed
     end-to-end (which usually needs SSH / cluster / journal state) —
     only that the envelope's ``error_code`` is not ``spec_invalid``.
     """
-    if verb in XFAIL_NEEDS_FIXTURE:
-        pytest.xfail(
-            f"{verb}: no known-good fixture; schema-roundtrip not yet "
-            "testable from this surface. Add either an inline entry to "
-            f"``KNOWN_GOOD_SPECS`` or a fixture file under "
-            f"``tests/contract/fixtures/{verb}/spec.json``."
-        )
     spec = KNOWN_GOOD_SPECS.get(verb)
     if spec is None:
         fixture_path = Path(__file__).parent / "fixtures" / verb / "spec.json"
         if fixture_path.is_file():
             spec = json.loads(fixture_path.read_text(encoding="utf-8"))
     if spec is None:
+        # Runtime xfail: no fixture available. Stays dynamic — a verb
+        # not in XFAIL_NEEDS_FIXTURE but lacking a fixture is a gap to
+        # surface, not a regression to fail.
         pytest.xfail(
             f"{verb}: no known-good fixture (and not on the WS3 xfail "
             "punch list). This is a gap — add one."
