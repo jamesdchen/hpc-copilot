@@ -49,9 +49,7 @@ def test_gpu_oom_without_discriminating_context_falls_back_to_catalog_fix():
 
 
 def test_walltime_first_attempt_doubles():
-    r = resolve(
-        _features(error_class="walltime", temporal_context={"phase": "first_attempt"})
-    )
+    r = resolve(_features(error_class="walltime", temporal_context={"phase": "first_attempt"}))
     assert r.action["action"] == "increase-walltime"
     assert r.action["factor"] == 2.0
 

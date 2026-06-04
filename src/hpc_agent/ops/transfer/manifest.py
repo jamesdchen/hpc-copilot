@@ -128,9 +128,7 @@ def build_manifest(root: Path, *, paths: Iterable[str] | None = None) -> Manifes
         full = root / rel
         if not full.is_file():
             raise FileNotFoundError(f"manifest path not found under {root}: {rel}")
-        entries.append(
-            FileEntry(path=rel_posix, size=full.stat().st_size, sha256=_sha256_of(full))
-        )
+        entries.append(FileEntry(path=rel_posix, size=full.stat().st_size, sha256=_sha256_of(full)))
     entries.sort(key=lambda e: e.path)
     return Manifest(entries=tuple(entries))
 

@@ -45,9 +45,7 @@ __all__ = ["Resolution", "resolve", "tally_decisions"]
 # error_class values the deterministic layer can resolve on its own (given
 # enough context). Everything else — and any of these once the context is
 # missing or the retry budget is spent — escalates to judgement.
-_DETERMINISTIC: frozenset[str] = frozenset(
-    {"gpu_oom", "system_oom", "walltime", "node_failure"}
-)
+_DETERMINISTIC: frozenset[str] = frozenset({"gpu_oom", "system_oom", "walltime", "node_failure"})
 
 # error_class values that are *inherently* a judgement call — the classifier
 # matched, but the right action is genuinely ambiguous and context cannot
@@ -177,8 +175,7 @@ def resolve(
     error_class = str(features.error_class) if features.error_class is not None else "unknown"
     resource_spec = features.resource_spec
     first_attempt = bool(
-        features.temporal_context is not None
-        and features.temporal_context.phase == "first_attempt"
+        features.temporal_context is not None and features.temporal_context.phase == "first_attempt"
     )
 
     # Inherently-ambiguous classes go straight to judgement.

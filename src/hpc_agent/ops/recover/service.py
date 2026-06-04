@@ -46,9 +46,7 @@ __all__ = [
 SERVICE_ENV_NAMESPACE = "HPC_SERVICE_"
 
 
-def inject_service_env(
-    env: dict[str, str], service_env: dict[str, Any] | None
-) -> dict[str, str]:
+def inject_service_env(env: dict[str, str], service_env: dict[str, Any] | None) -> dict[str, str]:
     """Thread an externally-provisioned service address into a task env.
 
     Each ``service_env`` entry ships as ``HPC_SERVICE_<KEY>`` (namespaced,
@@ -125,9 +123,7 @@ def service_failure_escalation(
     if liveness == "fail":
         reason = "service down (liveness=fail)"
         candidates = [
-            CandidateAction(
-                action="restart-service", source="policy", rationale="liveness failed"
-            )
+            CandidateAction(action="restart-service", source="policy", rationale="liveness failed")
         ]
     elif correctness == "fail":
         reason = "service up but not ready (silent rot: liveness=pass, correctness=fail)"
