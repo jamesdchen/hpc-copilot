@@ -326,7 +326,10 @@ def test_tar_fallback_preclean_failure_aborts_before_extract(tmp_path: Path) -> 
         )
     assert result.returncode == 5
     assert "clean blew up" in result.stderr
-    assert run_mock.call_count == 1  # only the pre-clean; no extract
+    # Filter the ssh -V version probe (see :func:`_is_ssh_version_probe`)
+    # so the assertion is cache-state-agnostic across xdist workers.
+    transfer_calls = [c for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
+    assert len(transfer_calls) == 1, f"unexpected transfer calls: {transfer_calls}"
     popen_mock.assert_not_called()
 
 
