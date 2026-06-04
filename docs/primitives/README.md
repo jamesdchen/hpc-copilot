@@ -127,7 +127,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <cluster>]` |
 | [dry-run-local](dry-run-local.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [status-preflight](status-preflight.md) | yes | _none_ | `hpc-agent status-preflight --experiment-dir <experiment_dir>` |
-| [submit-preflight](submit-preflight.md) | yes | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> --cluster <cluster> --profile <profile> [--campaign-id <campaign_id>] [--expected-cmd-sha <expected_cmd_sha>]` |
+| [submit-preflight](submit-preflight.md) | yes | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]` |
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |

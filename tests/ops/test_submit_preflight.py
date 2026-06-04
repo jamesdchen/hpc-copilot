@@ -1,23 +1,13 @@
-"""Tests for the ``submit-preflight`` composite primitive (WS5 #1 scaffold).
+"""Tests for the repurposed ``submit-preflight`` composite primitive (WS5 #1).
 
-The skeleton in :mod:`hpc_agent.ops.submit_preflight` orchestrates three
-sub-calls (``export-package`` / ``plan-throughput`` / ``validate-campaign``)
-via ``asyncio.gather``. These tests pin the *orchestration* contract:
+Pins the sequential install-commands → load-context → check-preflight
+orchestration: argv composition (including the optional ``--cluster``
+that drives check-preflight's cluster_ssh_echo branch), skip behavior,
+overall-derivation precedence, and the synthesised-ErrorEnvelope shape.
 
-* the right SubCall argv shape is built per ``skip``/``force_export``/
-  pass-through fields,
-* the composite's ``overall`` is derived correctly from sub-envelopes,
-* the ``skip`` list excludes the corresponding sub-call entirely (its
-  output slot stays ``None`` so consumers can re-run only the failing
-  pieces),
-* the ``sequential`` vs ``asyncio`` strategy selects the right code path
-  (order preserved sequentially; concurrent under asyncio).
-
-The asyncio subprocess plumbing itself (spawn / timeout / JSON parse) is
-mocked at :func:`_run_async` so these tests run synchronously and don't
-depend on a real ``hpc-agent`` binary being on PATH inside the venv.
-A small extra test exercises the synthesized-ErrorEnvelope path in
-:func:`_synth_error_subresult` directly.
+The ``subprocess.run`` plumbing is mocked at :func:`_run_subprocess` so
+these tests don't depend on a real ``hpc-agent`` binary being on PATH
+inside the venv.
 """
 
 from __future__ import annotations
@@ -31,13 +21,13 @@ from hpc_agent.ops import submit_preflight as sp
 
 
 def _ok_subresult(envelope_data: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A canned SubResult whose envelope is ``ok: true`` with optional data."""
+    """Canned SubResult with ``ok: true``."""
     env: dict[str, Any] = {"ok": True, "idempotent": True, "data": envelope_data or {}}
-    return {"envelope": env, "elapsed_sec": 0.1, "ok": True}
+    return {"envelope": env, "elapsed_sec": 0.05, "ok": True}
 
 
 def _err_subresult(error_code: str = "spec_invalid") -> dict[str, Any]:
-    """A canned SubResult whose envelope is ``ok: false`` with *error_code*."""
+    """Canned SubResult with ``ok: false`` carrying *error_code*."""
     env = {
         "ok": False,
         "error_code": error_code,
@@ -45,282 +35,171 @@ def _err_subresult(error_code: str = "spec_invalid") -> dict[str, Any]:
         "category": "user",
         "retry_safe": False,
     }
-    return {"envelope": env, "elapsed_sec": 0.1, "ok": False}
+    return {"envelope": env, "elapsed_sec": 0.05, "ok": False}
 
 
-def _patch_run_async(
+def _patch_run_subprocess(
     monkeypatch: pytest.MonkeyPatch,
     by_name: dict[str, dict[str, Any]],
     *,
     record_order: list[str] | None = None,
-    record_strategy: list[str] | None = None,
 ) -> None:
-    """Monkey-patch :func:`_run_async` to return canned SubResults by name.
+    """Patch :func:`_run_subprocess` to return canned SubResults by name."""
 
-    *by_name* maps SubCall.name → SubResult dict. If *record_order* is
-    provided, the patched function appends names in input order so tests
-    can verify the sub-calls dispatched matches what _build_subcalls
-    produced. *record_strategy* captures the fanout_strategy the
-    composite chose.
-    """
+    def fake(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+        if record_order is not None:
+            record_order.append(call.name)
+        return by_name.get(call.name, _ok_subresult())
 
-    async def fake_run_async(
-        calls: list[sp.SubCall],
-        *,
-        fanout_strategy: str,
-        timeout_sec: float,
-    ) -> list[dict[str, Any]]:
-        if record_strategy is not None:
-            record_strategy.append(fanout_strategy)
-        out: list[dict[str, Any]] = []
-        for c in calls:
-            if record_order is not None:
-                record_order.append(c.name)
-            out.append(by_name.get(c.name, _ok_subresult()))
-        return out
-
-    monkeypatch.setattr(sp, "_run_async", fake_run_async)
+    monkeypatch.setattr(sp, "_run_subprocess", fake)
 
 
 class TestBuildSubcalls:
-    """:func:`_build_subcalls` argv composition: per-flag + per-skip wiring."""
+    """argv composition + per-skip wiring + the optional --cluster branch."""
 
-    def test_all_three_built_with_required_fields_only(self) -> None:
+    def test_all_three_built_when_cluster_supplied(self) -> None:
+        calls = sp._build_subcalls(experiment_dir=Path("/exp"), cluster="hoffman2", skip=[])
+        # Order pin: install-commands → load-context → check-preflight.
+        assert [c.name for c in calls] == [
+            "install-commands",
+            "load-context",
+            "check-preflight",
+        ]
+        exp = str(Path("/exp"))
+        ic = next(c for c in calls if c.name == "install-commands")
+        assert ic.argv == ["hpc-agent", "install-commands"]
+        lc = next(c for c in calls if c.name == "load-context")
+        assert lc.argv == ["hpc-agent", "load-context", "--experiment-dir", exp]
+        cp = next(c for c in calls if c.name == "check-preflight")
+        assert cp.argv == ["hpc-agent", "preflight", "--cluster", "hoffman2"]
+
+    def test_cluster_none_omits_flag_on_check_preflight(self) -> None:
+        calls = sp._build_subcalls(experiment_dir=Path("/exp"), cluster=None, skip=[])
+        cp = next(c for c in calls if c.name == "check-preflight")
+        # Without --cluster, check-preflight runs the local-env checks only
+        # (no cluster_ssh_echo probe).
+        assert cp.argv == ["hpc-agent", "preflight"]
+        assert "--cluster" not in cp.argv
+
+    def test_skip_check_preflight_drops_only_that_subcall(self) -> None:
         calls = sp._build_subcalls(
             experiment_dir=Path("/exp"),
             cluster="hoffman2",
-            profile="sge",
-            campaign_id=None,
-            expected_cmd_sha=None,
-            force_export=False,
-            notebooks_dir="notebooks",
-            skip=[],
+            skip=["check-preflight"],
         )
-        names = [c.name for c in calls]
-        assert names == ["export-package", "plan-throughput", "validate-campaign"]
-        # Path.__str__ uses the platform-native separator (``/exp`` on POSIX,
-        # ``\exp`` on Windows). The composite normalises via ``str(Path)`` so
-        # pin against the same.
-        exp = str(Path("/exp"))
-        ep = next(c for c in calls if c.name == "export-package")
-        assert ep.argv == ["hpc-agent", "export-package", "--experiment-dir", exp]
-        pt = next(c for c in calls if c.name == "plan-throughput")
-        assert pt.argv == [
-            "hpc-agent",
-            "plan-throughput",
-            "--experiment-dir",
-            exp,
-            "--cluster",
-            "hoffman2",
-        ]
-        vc = next(c for c in calls if c.name == "validate-campaign")
-        assert vc.argv == [
-            "hpc-agent",
-            "validate-campaign",
-            "--experiment-dir",
-            exp,
-            "--cluster",
-            "hoffman2",
-            "--profile",
-            "sge",
-        ]
+        assert [c.name for c in calls] == ["install-commands", "load-context"]
 
-    def test_force_export_appends_flag(self) -> None:
+    def test_skip_all_yields_empty_list(self) -> None:
         calls = sp._build_subcalls(
             experiment_dir=Path("/exp"),
-            cluster="c",
-            profile="sge",
-            campaign_id=None,
-            expected_cmd_sha=None,
-            force_export=True,
-            notebooks_dir="notebooks",
-            skip=[],
+            cluster=None,
+            skip=["install-commands", "load-context", "check-preflight"],
         )
-        ep = next(c for c in calls if c.name == "export-package")
-        assert "--force" in ep.argv
-
-    def test_non_default_notebooks_dir_passed_through(self) -> None:
-        calls = sp._build_subcalls(
-            experiment_dir=Path("/exp"),
-            cluster="c",
-            profile="sge",
-            campaign_id=None,
-            expected_cmd_sha=None,
-            force_export=False,
-            notebooks_dir="custom_nb",
-            skip=[],
-        )
-        ep = next(c for c in calls if c.name == "export-package")
-        assert "--notebooks-dir" in ep.argv
-        assert ep.argv[ep.argv.index("--notebooks-dir") + 1] == "custom_nb"
-
-    def test_campaign_id_and_cmd_sha_appended_to_validate_campaign(self) -> None:
-        calls = sp._build_subcalls(
-            experiment_dir=Path("/exp"),
-            cluster="c",
-            profile="sge",
-            campaign_id="tune_2026_01",
-            expected_cmd_sha="abc123de",
-            force_export=False,
-            notebooks_dir="notebooks",
-            skip=[],
-        )
-        vc = next(c for c in calls if c.name == "validate-campaign")
-        assert "--campaign-id" in vc.argv
-        assert vc.argv[vc.argv.index("--campaign-id") + 1] == "tune_2026_01"
-        assert "--expected-cmd-sha" in vc.argv
-        assert vc.argv[vc.argv.index("--expected-cmd-sha") + 1] == "abc123de"
-
-    def test_skip_excludes_named_subcalls(self) -> None:
-        calls = sp._build_subcalls(
-            experiment_dir=Path("/exp"),
-            cluster="c",
-            profile="sge",
-            campaign_id=None,
-            expected_cmd_sha=None,
-            force_export=False,
-            notebooks_dir="notebooks",
-            skip=["validate-campaign", "plan-throughput"],
-        )
-        assert [c.name for c in calls] == ["export-package"]
+        assert calls == []
 
 
 class TestOverallDerivation:
-    """Composite ``overall`` derivation: fail > warn > pass precedence."""
+    """``overall`` is ``pass`` iff every non-skipped sub-call returned ``ok``."""
 
     def test_all_succeed_overall_pass(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        _patch_run_async(
+        _patch_run_subprocess(
             monkeypatch,
             {
-                "export-package": _ok_subresult(),
-                "plan-throughput": _ok_subresult(),
-                "validate-campaign": _ok_subresult({"overall": "pass"}),
+                "install-commands": _ok_subresult(),
+                "load-context": _ok_subresult({"in_flight": []}),
+                "check-preflight": _ok_subresult({"all_ok": True}),
             },
         )
-        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="c", profile="sge")
+        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
         assert result["overall"] == "pass"
-        assert result["fanout_strategy"] == "asyncio"
-        assert result["export_package"]["ok"] is True
-        assert result["validate_campaign"]["ok"] is True
+        assert result["install_commands"]["ok"] is True
+        assert result["load_context"]["ok"] is True
+        assert result["check_preflight"]["ok"] is True
 
-    def test_any_subcall_failure_overall_fail(
+    def test_install_fails_overall_fail(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        _patch_run_async(
+        _patch_run_subprocess(
             monkeypatch,
             {
-                "export-package": _ok_subresult(),
-                "plan-throughput": _err_subresult("cluster_timeout"),
-                "validate-campaign": _ok_subresult({"overall": "pass"}),
+                "install-commands": _err_subresult("config_invalid"),
+                "load-context": _ok_subresult(),
+                "check-preflight": _ok_subresult(),
             },
         )
-        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="c", profile="sge")
+        result = sp.submit_preflight(experiment_dir=tmp_path)
         assert result["overall"] == "fail"
-        # Parallel siblings' work is preserved (not collapsed to a single error).
-        assert result["export_package"]["ok"] is True
-        assert result["plan_throughput"]["ok"] is False
-        assert result["plan_throughput"]["envelope"]["error_code"] == "cluster_timeout"
+        assert result["install_commands"]["envelope"]["error_code"] == "config_invalid"
 
-    def test_validate_campaign_warn_propagates_when_no_failures(
+    def test_check_preflight_fails_overall_fail(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        _patch_run_async(
+        # The 2026-06-04 regression: cluster_ssh_echo failure surfaces here,
+        # not lost mid-submit when rsync blows up.
+        _patch_run_subprocess(
             monkeypatch,
             {
-                "export-package": _ok_subresult(),
-                "plan-throughput": _ok_subresult(),
-                "validate-campaign": _ok_subresult({"overall": "warn"}),
+                "install-commands": _ok_subresult(),
+                "load-context": _ok_subresult(),
+                "check-preflight": _err_subresult("ssh_unreachable"),
             },
         )
-        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="c", profile="sge")
-        assert result["overall"] == "warn"
-
-    def test_failure_dominates_validate_campaign_warn(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        # When BOTH conditions hold, fail wins over warn (precedence pin).
-        _patch_run_async(
-            monkeypatch,
-            {
-                "export-package": _err_subresult(),
-                "plan-throughput": _ok_subresult(),
-                "validate-campaign": _ok_subresult({"overall": "warn"}),
-            },
-        )
-        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="c", profile="sge")
+        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
         assert result["overall"] == "fail"
+        assert result["check_preflight"]["envelope"]["error_code"] == "ssh_unreachable"
+        # Sibling work preserved.
+        assert result["install_commands"]["ok"] is True
+        assert result["load_context"]["ok"] is True
+
+
+class TestExecutionOrder:
+    """Sequential — install-commands MUST run before load-context."""
+
+    def test_install_commands_runs_first(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        ordered: list[str] = []
+        _patch_run_subprocess(
+            monkeypatch,
+            {
+                "install-commands": _ok_subresult(),
+                "load-context": _ok_subresult(),
+                "check-preflight": _ok_subresult(),
+            },
+            record_order=ordered,
+        )
+        sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
+        assert ordered == ["install-commands", "load-context", "check-preflight"]
 
 
 class TestSkipBehavior:
     """``skip=[...]`` excludes the named sub-call from dispatch AND output."""
 
-    def test_skip_validate_campaign_yields_null_slot(
+    def test_skip_check_preflight_yields_null_slot(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         ordered: list[str] = []
-        _patch_run_async(
+        _patch_run_subprocess(
             monkeypatch,
             {
-                "export-package": _ok_subresult(),
-                "plan-throughput": _ok_subresult(),
+                "install-commands": _ok_subresult(),
+                "load-context": _ok_subresult(),
             },
             record_order=ordered,
         )
-        result = sp.submit_preflight(
-            experiment_dir=tmp_path,
-            cluster="c",
-            profile="sge",
-            skip=["validate-campaign"],
-        )
-        # Only the two non-skipped sub-calls dispatched.
-        assert set(ordered) == {"export-package", "plan-throughput"}
-        # Skipped slot is null (not an error SubResult) so a re-run targets
-        # only the missing piece.
-        assert result["validate_campaign"] is None
-        # The non-skipped pair populate.
-        assert result["export_package"] is not None
-        assert result["plan_throughput"] is not None
-        # No validate-campaign means no warn signal — overall stays pass.
+        result = sp.submit_preflight(experiment_dir=tmp_path, skip=["check-preflight"])
+        assert ordered == ["install-commands", "load-context"]
+        # Skipped slot is null — not a SubResult with ok: false.
+        assert result["check_preflight"] is None
+        assert result["install_commands"] is not None
+        assert result["load_context"] is not None
         assert result["overall"] == "pass"
 
 
-class TestFanoutStrategy:
-    """Selecting ``sequential`` vs ``asyncio`` reaches the right code path."""
-
-    def test_asyncio_is_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        seen: list[str] = []
-        _patch_run_async(monkeypatch, {}, record_strategy=seen)
-        sp.submit_preflight(experiment_dir=tmp_path, cluster="c", profile="sge")
-        assert seen == ["asyncio"]
-
-    def test_sequential_passed_through(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        seen: list[str] = []
-        _patch_run_async(monkeypatch, {}, record_strategy=seen)
-        sp.submit_preflight(
-            experiment_dir=tmp_path,
-            cluster="c",
-            profile="sge",
-            fanout_strategy="sequential",
-        )
-        assert seen == ["sequential"]
-
-    def test_invalid_strategy_rejected(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="unknown fanout_strategy"):
-            sp.submit_preflight(
-                experiment_dir=tmp_path,
-                cluster="c",
-                profile="sge",
-                fanout_strategy="threads",  # not in the schema's enum
-            )
-
-
 class TestSynthErrorSubresult:
-    """:func:`_synth_error_subresult` is the shape used for spawn/timeout/parse
-    failures, exercised here directly (the async paths are integration-level)."""
+    """:func:`_synth_error_subresult` shape for spawn / timeout / parse failures."""
 
     def test_shape_matches_subresult_contract(self) -> None:
         result = sp._synth_error_subresult(
@@ -332,9 +211,7 @@ class TestSynthErrorSubresult:
         assert result["ok"] is False
         assert result["elapsed_sec"] == 42.0
         env = result["envelope"]
-        # Conforms to ErrorEnvelope in envelope.json: required fields present.
         assert env["ok"] is False
         assert env["error_code"] == "cluster_timeout"
-        assert env["message"] == "probe timed out"
         assert env["category"] == "cluster"
         assert env["retry_safe"] is False

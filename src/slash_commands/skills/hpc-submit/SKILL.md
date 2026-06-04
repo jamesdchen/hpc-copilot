@@ -53,23 +53,25 @@ This means **one round-trip per workflow invocation** — the caller resolves ev
 
 ## Steps
 
-### 0. Ensure agent assets installed (idempotent)
-
-Step 9's handoff dispatches the rendered procedure to the named subagent `hpc-worker` discovered under `~/.claude/agents/hpc-worker.md`. If that file is missing — typically because `hpc-agent install-commands` hasn't run on this machine yet — the dispatch fails mid-resolution and the agent falls back to running cluster procedures by hand (a known cause of fabricated cluster commands). Run install-commands first so this never bites:
+### 0. Top-of-skill preflight (install + load + cluster-connectivity)
 
 ```bash
-hpc-agent install-commands
+hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]
 ```
 
-Idempotent: a no-op when assets are already installed (the same byte content lands at the same path). On a fresh machine it writes `~/.claude/{commands,skills,agents}/` and reports what was installed. A pre-existing 0-byte file at any of those three target paths is auto-cleared (see `result.cleared_collisions`); a non-empty file raises `FileExistsError` with a clear remediation — stop and surface that. Skipping this step is fine on a machine you know is already set up; running it twice costs ~50ms and is otherwise harmless.
+Composite verb that runs `install-commands` → `load-context` → (when `--cluster` is supplied) `check-preflight` in sequence. Replaces the prior Step 0 (`install-commands`) + Step 1 (`load-context`) pair this skill carried through 0.10.6, and folds the production-ssh-path check that the bare TCP probe missed (the 2026-06-04 demo class where TCP :22 was open but `rsync push` then failed mid-submit with `getsockname failed: Not a socket`).
 
-### 1. Load context
+The composite's `data` carries:
 
-```bash
-hpc-agent load-context --experiment-dir <experiment_dir>
-```
+- `data.install_commands.envelope` — same shape the standalone Step 0 produced; `data.cleared_collisions` lists any 0-byte sentinels the install-commands cleaned up at `~/.claude/{commands,skills,agents}/`.
+- `data.load_context.envelope` — same shape the standalone Step 1 produced; **branch on `data.load_context.envelope.data.next_step_hint` exactly as the prior prose described** (see Step 1b).
+- `data.check_preflight.envelope` — `null` when `--cluster` was omitted; the standard `{all_ok, checks}` shape when supplied, including the new `cluster_ssh_echo` functional probe. A non-green `cluster_ssh_echo` means the production submit path will fail; surface and stop before assembling the spec.
 
-If `data.next_step_hint == "monitor"`, there is a journal-recorded in-flight run for this profile. **Do NOT refuse from the journal alone** (#257) — `load-context` reports run state *from the journal*, which can lag the cluster: the scheduler may have completed, failed, killed, or purged the job after the last poll, yet the journal still records `in_flight` / `next_step_hint == "monitor"`. Trusting it blindly refuses a fresh submit with `already_in_flight` for a run that has actually finished or been purged — with no escape but a manual recovery prompt. Reconcile against live cluster state first (Step 1b). This is the **symmetric** recovery to `hpc-aggregate`'s Step 1b, which already reconciles before declaring "nothing to aggregate."
+On `overall: "fail"`, surface the failing sub-envelope's `error_code` + `remediation` (preserved under `data.<subcall>.envelope`) and stop — the parallel siblings' results are kept, so a re-run can target only the failing piece via `--skip`. On `overall: "pass"`, proceed to Step 1b when `data.load_context.envelope.data.next_step_hint == "monitor"` (otherwise jump to Step 2).
+
+If `--cluster` is not yet known at this point (caller's input is ambiguous), invoke the composite without it now and re-run `hpc-agent preflight --cluster <name>` after Step 2 — the local-env checks pass first, the SSH probe is the only thing deferred.
+
+Replaces the prose-discipline contract where the agent had to remember Step 0 (whose omission motivated the entire 0.10.2 release).
 
 #### 1b. Reconcile the in-flight run against the cluster
 

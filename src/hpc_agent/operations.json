@@ -698,7 +698,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent submit-preflight --experiment-dir <experiment_dir> --cluster <cluster> --profile <profile> [--campaign-id <campaign_id>] [--expected-cmd-sha <expected_cmd_sha>]",
+    "cli": "hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]",
     "idempotent": true,
     "input_schema": "submit_preflight.input.json",
     "name": "submit-preflight",
