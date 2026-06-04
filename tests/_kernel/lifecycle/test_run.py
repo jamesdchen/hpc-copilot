@@ -62,6 +62,26 @@ def test_run_workflow_surfaces_a_worker_crash(
         run_workflow(workflow="submit", experiment_dir=".", fields={})
 
 
+def test_run_workflow_crash_message_mentions_inline_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The malformed-report error surfaces HPC_AGENT_INVOKER=inline as a
+    fallback. The spawned worker holds its own credential (ANTHROPIC_API_KEY
+    for a `--bare` child), separate from the caller's interactive session;
+    when that key hits quota/billing limits, the worker dies before
+    producing a report — exactly this code path. Inline mode skips the
+    spawn and runs in the caller's session, so it's the natural recovery
+    for the quota class. Always-on hint (sentence of prose, no harm
+    when the failure is unrelated)."""
+    _use(monkeypatch, _StubInvoker("boom — no json here", exit_code=3))
+    with pytest.raises(errors.HpcError) as excinfo:
+        run_workflow(workflow="submit", experiment_dir=".", fields={})
+    msg = str(excinfo.value)
+    assert "HPC_AGENT_INVOKER=inline" in msg
+    assert "fallback" in msg.lower()
+    assert "workspace API-quota" in msg or "quota" in msg.lower()
+
+
 def test_run_workflow_blocks_when_worker_has_no_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -72,6 +72,25 @@ def run_workflow(
             suffix_parts.append(f"worker stderr: {stderr_tail}")
         if stdout_tail:
             suffix_parts.append(f"worker stdout: {stdout_tail}")
+        # Fallback hint: the spawned worker has its own credential
+        # (typically ANTHROPIC_API_KEY for a `--bare` child), separate
+        # from the caller's interactive Claude Code OAuth session. When
+        # that key hits a quota/billing limit, rotates, or 401/403s, the
+        # worker dies before emitting a report — exactly the
+        # malformed-report path that lands here. Inline mode skips the
+        # spawn entirely and runs the procedure in the caller's session
+        # (which has its own creds), so it's the natural recovery for
+        # the quota class. Always surfaced — the operator can ignore it
+        # when the failure is for a different reason; the cost of an
+        # unhelpful hint is a sentence of prose.
+        suffix_parts.append(
+            "Fallback: if this looks like a workspace API-quota / auth issue "
+            "(the spawned worker has its own credential, separate from your "
+            "interactive Claude Code session), set HPC_AGENT_INVOKER=inline "
+            "and re-run — inline mode runs the procedure in your active "
+            "session instead of spawning a new --bare subprocess. Skip this "
+            "fallback if the worker is failing for a different reason."
+        )
         suffix = ("\n" + "\n".join(suffix_parts)) if suffix_parts else ""
         raise errors.HpcError(
             f"the {workflow!r} worker did not return a valid report "
