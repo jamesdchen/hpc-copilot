@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 
 
 class VerifyAggregationCompleteResult(BaseModel):
@@ -20,7 +20,7 @@ class VerifyAggregationCompleteResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="verify-aggregation-complete output")
 
     ok: bool
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     all_waves_combined: bool
     missing_waves: list[int]
     all_tasks_present: bool

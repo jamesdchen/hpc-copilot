@@ -32,6 +32,7 @@
       "description": "One per-spec submit-flow result inside a batch envelope.\n\nMirrors submit_flow.output.json (same fields). Kept as a separate\nmodel so the batch wrapper schema doesn't reference\n``submit_flow.output.json#`` cross-file — single self-contained file.",
       "properties": {
         "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
           "title": "Run Id",
           "type": "string"
         },

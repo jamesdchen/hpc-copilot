@@ -6,13 +6,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 
 
 class _InFlightRun(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     profile: str
     cluster: str
     job_ids: list[str]

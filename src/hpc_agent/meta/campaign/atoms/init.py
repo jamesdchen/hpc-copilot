@@ -14,10 +14,11 @@ from Python rather than encode arbitrary JSON on the command line.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
                 "--direction",
                 type=str,
                 default=None,
-                choices=("minimize", "maximize"),
+                choices=get_args(OptimizationDirection),
             ),
             CliArg("--plateau-window", type=int, default=None),
             CliArg("--plateau-tolerance", type=float, default=None),
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
                 "--plateau-mode",
                 type=str,
                 default=None,
-                choices=("prior_window", "all_time_best"),
+                choices=get_args(PlateauMode),
                 help=(
                     "Plateau baseline (default ``all_time_best``). Controls whether the "
                     "recent window is compared to the all-time prior best or to the "

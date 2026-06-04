@@ -53,8 +53,10 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import get_args
 
 from hpc_agent._kernel.lifecycle.lifecycle import TaskStatus
+from hpc_agent._wire._shared import Scheduler
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.models.mapreduce.reduce.rollup import (
     _grid_point_key,
@@ -924,9 +926,7 @@ def _main() -> int:
         help="Comma-separated scheduler job IDs (optional)",
     )
     parser.add_argument("--job-name", default="", help="Job name for error-log lookup")
-    parser.add_argument(
-        "--scheduler", default=None, choices=[None, "sge", "slurm", "pbspro", "torque"]
-    )
+    parser.add_argument("--scheduler", default=None, choices=[None, *get_args(Scheduler)])
     parser.add_argument("--file-glob", default="*", help="Glob for per-task result files")
     parser.add_argument("--log-dir", default="", help="SLURM log directory")
     parser.add_argument("--scratch-dir", default="", help="SGE scratch log directory")

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 
 from .submit_flow import SubmitFlowSpec
 
@@ -54,7 +54,7 @@ class _SubmitFlowResultEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     deduped: bool

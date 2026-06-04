@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._wire._shared import (
     CampaignId,
-    RunIdLoose,
     RunIdStrict,
     Runtime,
     SshTarget,
@@ -48,7 +47,7 @@ class SubmitResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="submit output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     deduped: bool

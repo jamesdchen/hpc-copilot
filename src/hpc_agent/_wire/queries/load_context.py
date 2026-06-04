@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 from hpc_agent._wire.spawn_contract import SpawnRequest
 
 
@@ -23,7 +23,7 @@ class _LatestRun(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     is_orphan: bool
 
 
@@ -32,7 +32,7 @@ class _InFlightRow(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     campaign_id: str | None = None
     cluster: str | None = None
     stage: str | None = None

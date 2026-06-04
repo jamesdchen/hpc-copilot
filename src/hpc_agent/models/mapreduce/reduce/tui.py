@@ -57,7 +57,7 @@ else:
         tty = None
 
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -531,6 +531,10 @@ def run_tui(
 
 
 def _main(argv: list[str] | None = None) -> int:
+    # Deferred import to keep this module's top level package-import-free
+    # (see the import-contract note above); _wire._shared is pydantic-only.
+    from hpc_agent._wire._shared import Scheduler
+
     parser = argparse.ArgumentParser(
         description="Live terminal UI for /status. Requires rich (pip install hpc-agent[tui]).",
     )
@@ -541,9 +545,7 @@ def _main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--job-ids", default="", help="Comma-separated scheduler job IDs")
     parser.add_argument("--job-name", default="")
-    parser.add_argument(
-        "--scheduler", default=None, choices=[None, "sge", "slurm", "pbspro", "torque"]
-    )
+    parser.add_argument("--scheduler", default=None, choices=[None, *get_args(Scheduler)])
     parser.add_argument("--poll-interval", type=int, default=30)
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--scratch-dir", default="")

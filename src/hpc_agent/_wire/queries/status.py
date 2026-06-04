@@ -10,7 +10,7 @@ from hpc_agent._wire._shared import (
     CombinedWaves,
     FailedWaves,
     LifecycleStateObservableWithTimeout,
-    RunIdLoose,
+    RunIdStrict,
 )
 
 
@@ -19,7 +19,7 @@ class StatusResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="status output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     lifecycle_state: LifecycleStateObservableWithTimeout
     last_status: dict[str, Any] = Field(
         description="Snapshot from the on-cluster status reporter; see hpc_agent.models.mapreduce.reduce.status.",

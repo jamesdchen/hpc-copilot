@@ -14,7 +14,6 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
-    RunIdLoose,  # noqa: TC001 — Pydantic resolves the annotation at runtime
     RunIdStrict,  # noqa: TC001 — Pydantic resolves the annotation at runtime
 )
 
@@ -56,7 +55,7 @@ class UpdateRunConstraintsSpec(BaseModel):
 class UpdateRunConstraintsResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     job_ids_updated: list[str] = Field(default_factory=list)
     job_ids_failed: list[str] = Field(default_factory=list)
     new_features: list[str] = Field(default_factory=list)

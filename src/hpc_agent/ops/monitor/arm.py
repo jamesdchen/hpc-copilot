@@ -26,10 +26,11 @@ primitive, and (when ``arm == "cron"``) pass ``cron_create_args`` to
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire._shared import LifecycleStateTerminal
 from hpc_agent._wire.queries.decide_monitor_arm import DecideMonitorArmSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
@@ -48,7 +49,9 @@ _DELAY_RULES: tuple[tuple[str, int], ...] = (
     ("running_fallback", 90),
 )
 
-_TERMINAL_STATES: frozenset[str] = frozenset({"complete", "failed", "abandoned", "timeout"})
+# Derived from the LifecycleStateTerminal Literal (the SoT in _wire/_shared.py)
+# so the terminal-state set stays in lock-step instead of being re-hardcoded.
+_TERMINAL_STATES: frozenset[str] = frozenset(get_args(LifecycleStateTerminal))
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
+
 
 class _CampaignBudget(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -27,10 +29,10 @@ class _StopCriteria(BaseModel):
     max_iters: int | None = Field(default=None, ge=0)
     metric: str | None = None
     target: float | None = None
-    direction: Literal["minimize", "maximize"] | None = None
+    direction: OptimizationDirection | None = None
     plateau_window: int | None = Field(default=None, ge=1)
     plateau_tolerance: float | None = Field(default=None, ge=0)
-    plateau_mode: Literal["prior_window", "all_time_best"] | None = Field(
+    plateau_mode: PlateauMode | None = Field(
         default=None,
         description=(
             "Plateau baseline. ``all_time_best`` (default): fires when the "

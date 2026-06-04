@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose  # noqa: TC001
+from hpc_agent._wire._shared import RunIdStrict  # noqa: TC001
 from hpc_agent._wire.workflows.validate_campaign import (
     ValidatorFinding,  # noqa: TC001 — Pydantic resolves the annotation at runtime
 )
@@ -63,7 +63,7 @@ class ValidateStochasticMarkerResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     findings: list[ValidatorFinding] = Field(default_factory=list)
-    matched_prior_run_ids: list[RunIdLoose] = Field(
+    matched_prior_run_ids: list[RunIdStrict] = Field(
         default_factory=list,
         description=(
             "Run IDs of prior iterations that share the about-to-submit "

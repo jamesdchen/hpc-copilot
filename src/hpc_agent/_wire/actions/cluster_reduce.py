@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 
 
 class ClusterReduceResult(BaseModel):
@@ -20,7 +20,7 @@ class ClusterReduceResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="cluster-reduce output")
 
     ok: bool
-    run_id: RunIdLoose = Field(
+    run_id: RunIdStrict = Field(
         description="Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>. Loose validation (bare ``str``); the strict-pattern check belongs on input specs, not on outputs that may surface legacy or migrated sidecars.",
     )
     output_path_remote: str = Field(

@@ -14,9 +14,10 @@ with reason ``"no_criteria"``.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, get_args
 
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
@@ -58,7 +59,7 @@ def _extract_metric(history: list[dict[str, Any]], metric: str) -> list[float]:
                 "--direction",
                 type=str,
                 default=None,
-                choices=("minimize", "maximize"),
+                choices=get_args(OptimizationDirection),
             ),
             CliArg("--plateau-window", type=int, default=None),
             CliArg("--plateau-tolerance", type=float, default=None),
@@ -66,7 +67,7 @@ def _extract_metric(history: list[dict[str, Any]], metric: str) -> list[float]:
                 "--plateau-mode",
                 type=str,
                 default=None,
-                choices=("prior_window", "all_time_best"),
+                choices=get_args(PlateauMode),
                 help=(
                     "Plateau baseline. ``all_time_best`` (default): fires when the "
                     "recent ``--plateau-window`` iters didn't beat the all-time prior "
@@ -86,10 +87,10 @@ def campaign_converged(
     max_iters: int | None = None,
     metric: str | None = None,
     target: float | None = None,
-    direction: Literal["minimize", "maximize"] | None = None,
+    direction: OptimizationDirection | None = None,
     plateau_window: int | None = None,
     plateau_tolerance: float | None = None,
-    plateau_mode: Literal["prior_window", "all_time_best"] | None = None,
+    plateau_mode: PlateauMode | None = None,
 ) -> dict[str, Any]:
     """Apply stop criteria to the campaign's reduced-metric history.
 
@@ -135,14 +136,14 @@ def campaign_converged(
         metric = manifest_stop.get("metric")
     if target is None:
         target = manifest_stop.get("target")
-    resolved_direction: Literal["minimize", "maximize"] = (
+    resolved_direction: OptimizationDirection = (
         direction if direction is not None else (manifest_stop.get("direction") or "minimize")
     )
     if plateau_window is None:
         plateau_window = manifest_stop.get("plateau_window")
     if plateau_tolerance is None:
         plateau_tolerance = float(manifest_stop.get("plateau_tolerance") or 0.0)
-    resolved_mode: Literal["prior_window", "all_time_best"] = (
+    resolved_mode: PlateauMode = (
         plateau_mode
         if plateau_mode is not None
         else (manifest_stop.get("plateau_mode") or "all_time_best")

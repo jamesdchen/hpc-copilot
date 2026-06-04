@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from hpc_agent._wire._shared import (
     BackendName,
     CampaignId,
-    RunIdLoose,
     RunIdStrict,
     Runtime,
     SshTarget,
@@ -283,7 +282,7 @@ class SubmitFlowResult(BaseModel):
 
     # Output uses the loose run_id form (any string) so legacy
     # sidecars validate.
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     job_ids: list[str] = Field(
         default_factory=list,
         description=(

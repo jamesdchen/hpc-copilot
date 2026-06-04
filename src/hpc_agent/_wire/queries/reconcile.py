@@ -10,7 +10,7 @@ from hpc_agent._wire._shared import (
     CombinedWaves,
     FailedWaves,
     LifecycleStateObservableWithTimeout,
-    RunIdLoose,
+    RunIdStrict,
 )
 
 
@@ -19,7 +19,7 @@ class ReconcileResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="reconcile output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     lifecycle_state: LifecycleStateObservableWithTimeout = Field(
         description="Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler.",
     )

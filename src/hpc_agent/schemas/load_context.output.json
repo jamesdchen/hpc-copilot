@@ -203,6 +203,7 @@
       "description": "One journal record still in flight.",
       "properties": {
         "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
           "title": "Run Id",
           "type": "string"
         },
@@ -266,6 +267,7 @@
       "description": "Newest run sidecar projected to identity + v2 config snapshot.",
       "properties": {
         "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
           "title": "Run Id",
           "type": "string"
         },

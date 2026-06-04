@@ -21,6 +21,7 @@
     },
     "run_id": {
       "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>. Loose validation (bare ``str``); the strict-pattern check belongs on input specs, not on outputs that may surface legacy or migrated sidecars.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
       "title": "Run Id",
       "type": "string"
     },

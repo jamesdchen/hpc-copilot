@@ -21,13 +21,13 @@ from pydantic import Field, StringConstraints
 
 # ── identifiers ──────────────────────────────────────────────────────────────
 
-# Strict run-identifier shape used on INPUT schemas. Filesystem-safe:
+# Strict run-identifier shape — used on every run_id field (input AND
+# output). Output run_ids are path-validated against this same pattern, so
+# strict output validation catches a malformed-id bug instead of emitting it.
+# Filesystem-safe:
 # alphanumerics, dot, underscore, hyphen.
 RunIdStrict = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$")]
 
-# Loose run-identifier used on OUTPUT schemas — any string. Output schemas
-# use this so legacy sidecars validate.
-RunIdLoose = str
 
 # SSH target: ``user@host`` (or OpenSSH alias resolving to the same).
 SshTarget = Annotated[str, StringConstraints(pattern=r"^[^@]+@[^@]+$")]
@@ -146,6 +146,20 @@ FailureCategoryResubmittable = Literal[
     "python_traceback",
     "preempted",
 ]
+
+# ── campaign optimization ─────────────────────────────────────────────────────
+
+# Optimization direction for campaign convergence / target checks. Shared by
+# the CampaignManifest wire model and the campaign atoms (campaign-advance,
+# campaign-converged) so the vocabulary is single-sourced instead of restated
+# as inline Literals + argparse choices in each.
+OptimizationDirection = Literal["minimize", "maximize"]
+
+# Plateau-detection baseline for campaign convergence. 'all_time_best' fires
+# when the recent window fails to beat the all-time prior best ('no new record
+# in N iters'); 'prior_window' fires when it fails to beat the prior window of
+# equal size ('improvements have stalled').
+PlateauMode = Literal["prior_window", "all_time_best"]
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from hpc_agent._wire._shared import CombinedWaves, FailedWaves, RunIdLoose, RunIdStrict
+from hpc_agent._wire._shared import CombinedWaves, FailedWaves, RunIdStrict
 
 
 class AggregateFlowSpec(BaseModel):
@@ -124,7 +124,7 @@ class AggregateFlowResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="aggregate-flow output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     combined_waves: CombinedWaves
     failed_waves: FailedWaves
     waves_combined_this_call: list[int] = Field(

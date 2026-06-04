@@ -12,9 +12,10 @@ manifest yet — see campaign/ discussion).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, get_args
 
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
                 "--direction",
                 type=str,
                 default=None,
-                choices=("minimize", "maximize"),
+                choices=get_args(OptimizationDirection),
             ),
             CliArg("--plateau-window", type=int, default=None),
             CliArg("--plateau-tolerance", type=float, default=None),
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
                 "--plateau-mode",
                 type=str,
                 default=None,
-                choices=("prior_window", "all_time_best"),
+                choices=get_args(PlateauMode),
                 help="See ``campaign-converged --help``.",
             ),
             CliArg("--max-jobs", type=int, default=None),
@@ -66,10 +67,10 @@ def campaign_advance(
     max_iters: int | None = None,
     metric: str | None = None,
     target: float | None = None,
-    direction: Literal["minimize", "maximize"] | None = None,
+    direction: OptimizationDirection | None = None,
     plateau_window: int | None = None,
     plateau_tolerance: float | None = None,
-    plateau_mode: Literal["prior_window", "all_time_best"] | None = None,
+    plateau_mode: PlateauMode | None = None,
     max_jobs: int | None = None,
     max_tasks: int | None = None,
     max_walltime_sec: int | None = None,

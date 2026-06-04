@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdLoose
+from hpc_agent._wire._shared import RunIdStrict
 
 
 class CombineWaveResult(BaseModel):
@@ -17,7 +17,7 @@ class CombineWaveResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="aggregate (combine-wave) output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     wave: int = Field(ge=0)
     combined: bool = Field(
         description=(

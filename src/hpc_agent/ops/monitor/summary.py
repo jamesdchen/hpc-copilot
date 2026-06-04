@@ -17,18 +17,19 @@ from anywhere (slash command, external orchestrator, debug shell).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire._shared import LifecycleStateTerminal
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-_TERMINAL_LIFECYCLE_STATES: frozenset[str] = frozenset(
-    {"complete", "failed", "abandoned", "timeout"}
-)
+# Derived from the LifecycleStateTerminal Literal (the SoT in _wire/_shared.py)
+# so the terminal-state set stays in lock-step instead of being re-hardcoded.
+_TERMINAL_LIFECYCLE_STATES: frozenset[str] = frozenset(get_args(LifecycleStateTerminal))
 
 
 def _read_last_tick(jsonl_path: Path) -> dict[str, Any] | None:

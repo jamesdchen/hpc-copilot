@@ -10,7 +10,6 @@ from hpc_agent._wire._shared import (
     CombinedWaves,
     FailedWaves,
     LifecycleStateTerminal,
-    RunIdLoose,
     RunIdStrict,
 )
 
@@ -88,7 +87,7 @@ class MonitorFlowResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="monitor-flow output data")
 
-    run_id: RunIdLoose
+    run_id: RunIdStrict
     lifecycle_state: LifecycleStateTerminal = Field(
         description=(
             "Terminal-or-budget state. 'complete' = every task "

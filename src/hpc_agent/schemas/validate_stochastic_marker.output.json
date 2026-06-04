@@ -15,6 +15,7 @@
     "matched_prior_run_ids": {
       "description": "Run IDs of prior iterations that share the about-to-submit run's cmd_sha. Empty list when no collision (the typical pass case). Populated as evidence when a collision fires.",
       "items": {
+        "pattern": "^[A-Za-z0-9._\\-]+$",
         "type": "string"
       },
       "title": "Matched Prior Run Ids",
