@@ -16,24 +16,28 @@ Environment variables consulted here
     Opt out of multiplexing entirely (always wins).
 ``HPC_SSH_PERSIST_INTERVAL``
     Override the ControlPersist window — see :func:`_ssh_multiplex_opts`.
-``HPC_SSH_NAMED_PIPE=1`` *(opt-in, Windows-only)*
-    Enable connection multiplexing on native Windows OpenSSH via a
-    named-pipe ``ControlPath`` (``\\\\.\\pipe\\openssh-hpc-cm-%C``).
-    Validated against OpenSSH ≥ 8.x on Windows; without it the Windows
-    branch keeps emitting ``ControlMaster=no`` / ``ControlPath=none``
-    (the legacy default that avoids the Unix-socket
-    ``getsockname failed: Not a socket`` failure). ``HPC_NO_SSH_MULTIPLEX=1``
-    still short-circuits ahead of this opt-in. The framework is expected to
-    flip this on by default once live-tested across the supported clusters;
-    until then it stays opt-in so demos can adopt it before the rollout.
+``HPC_SSH_NAMED_PIPE=0`` *(opt-out, Windows-only)*
+    Connection multiplexing on native Windows OpenSSH — via a named-pipe
+    ``ControlPath`` (``\\\\.\\pipe\\openssh-hpc-cm-%C``) — is now the
+    **default** on Windows (it was an ``=1`` opt-in through 0.10.x). Set
+    ``HPC_SSH_NAMED_PIPE=0`` to opt back out to the legacy
+    ``ControlMaster=no`` / ``ControlPath=none`` override. Named-pipe
+    ``ControlPath`` requires local OpenSSH ≥ 8.x; a one-time probe at the
+    first :func:`_ssh_multiplex_opts` call warns and falls back to the
+    legacy override when the local binary reports an older version.
+    ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits ahead of all of this.
 """
 
 from __future__ import annotations
 
+import functools
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
+from pathlib import Path
 
 __all__ = [
     "_resolve_ssh_persist_interval",
@@ -42,7 +46,9 @@ __all__ = [
     "_ssh_add_binary",
     "_ssh_binary",
     "_ssh_config_override_opts",
+    "_ssh_config_forces_no_multiplex",
     "_ssh_multiplex_opts",
+    "_windows_openssh_named_pipe_supported",
     "ssh_argv",
     "ssh_env",
 ]
@@ -121,17 +127,23 @@ def _rsync_rsh_env() -> dict[str, str]:
     resolution is unchanged. Respects a caller-set ``RSYNC_RSH`` by
     leaving it alone.
 
-    On Windows the ``RSYNC_RSH`` command also carries the
-    :func:`_ssh_multiplex_opts` override (``-o ControlMaster=no -o
+    On Windows the ``RSYNC_RSH`` command also carries the transfer-sized
+    :func:`_ssh_config_override_opts` override (``-o ControlMaster=no -o
     ControlPath=none``) so rsync's own ssh can't pick up the user's
     ``~/.ssh/config`` multiplexing — which native Windows OpenSSH cannot
-    honour — any more than the bare ``ssh_run`` call site can.
+    honour — any more than the bare ``scp`` call site can. rsync is a
+    one-shot transfer like scp, so it follows the *transfer* override and is
+    deliberately NOT swept up by the named-pipe multiplex default that
+    :func:`_ssh_multiplex_opts` applies to the long-lived ``ssh`` command
+    channel — a one-shot transfer gains nothing from being a multiplex
+    client. (Both helpers return the same override on Windows today; routing
+    rsync through the transfer one keeps it that way after the flip.)
     """
     if os.environ.get("RSYNC_RSH"):
         return {}
     ssh = _ssh_binary()
     if sys.platform == "win32":
-        return {"RSYNC_RSH": " ".join([ssh, *_ssh_multiplex_opts()])}
+        return {"RSYNC_RSH": " ".join([ssh, *_ssh_config_override_opts()])}
     if ssh == "ssh":
         return {}
     return {"RSYNC_RSH": ssh}
@@ -148,6 +160,175 @@ _DEFAULT_SSH_PERSIST_INTERVAL = "10m"
 _DISALLOWED_PERSIST_CHARS = " \t\n\r;|&`$<>\"'\\*?!()=/"
 
 
+# Minimum local OpenSSH major version that supports a named-pipe
+# ``ControlPath`` on Windows. %C substitution inside the ``\\.\pipe\...``
+# namespace works from OpenSSH 8.x onward; older binaries abort the moment
+# ControlMaster is in effect, so we fall back to the legacy override there.
+_MIN_NAMED_PIPE_OPENSSH_MAJOR = 8
+
+
+def _local_openssh_major() -> int | None:
+    """Major version of the local ``ssh`` binary, or ``None`` if undeterminable.
+
+    Parses ``ssh -V`` (which prints to stderr on every OpenSSH build —
+    ``OpenSSH_8.9p1 ...`` on POSIX, ``OpenSSH_for_Windows_8.6p1 ...`` on
+    native Windows). Returns the integer major version, or ``None`` when the
+    probe can't run or its output doesn't parse — the caller treats ``None``
+    as "don't demote the default on a probe hiccup".
+    """
+    try:
+        proc = subprocess.run(
+            [_ssh_binary(), "-V"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    blob = f"{proc.stderr or ''}{proc.stdout or ''}"
+    match = re.search(r"OpenSSH(?:_for_Windows)?_(\d+)\.\d+", blob)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+@functools.cache
+def _windows_openssh_named_pipe_supported() -> bool:
+    """Whether the local Windows OpenSSH can use a named-pipe ``ControlPath``.
+
+    Named-pipe ``ControlPath`` needs OpenSSH ≥ 8.x. Returns ``True`` when the
+    probed major is ≥ 8 *or* the version can't be determined (we don't retreat
+    from the new default on a probe hiccup, and OpenSSH < 8 is rare on the
+    Windows 10/11 builds that ship the native binary). Returns ``False`` —
+    with a one-time stderr warning — only on a positively-detected < 8.x
+    binary, where :func:`_ssh_multiplex_opts` falls back to the legacy
+    ``ControlMaster=no`` / ``ControlPath=none`` override.
+
+    Cached: the local binary does not change mid-process, and this keeps the
+    warning to a single emission.
+    """
+    major = _local_openssh_major()
+    if major is not None and major < _MIN_NAMED_PIPE_OPENSSH_MAJOR:
+        print(
+            f"hpc-agent: local OpenSSH {major}.x is older than 8.x, which does "
+            "not support a named-pipe ControlPath; falling back to "
+            "unmultiplexed SSH on Windows (each call pays a fresh handshake). "
+            "Upgrade Windows OpenSSH to ≥ 8.x to enable connection "
+            "multiplexing, or set HPC_NO_SSH_MULTIPLEX=1 to silence this.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+# ControlMaster values that ENABLE multiplexing (a client/master is set up).
+# ``no`` and ``false`` disable it; everything here makes ssh open or reuse a
+# master at the configured ControlPath.
+_ENABLING_CONTROLMASTER_VALUES = frozenset({"auto", "yes", "ask", "autoask", "true"})
+
+
+def _read_ssh_config_text() -> str | None:
+    """Return the contents of ``~/.ssh/config``, or ``None`` if unreadable/absent.
+
+    A thin seam so the config probe (:func:`_ssh_config_forces_no_multiplex`)
+    can be unit-tested without touching the real home directory. ``Path.home()``
+    resolves ``%USERPROFILE%`` on Windows, so this finds the same file
+    ``ssh.exe`` reads.
+    """
+    try:
+        path = Path.home() / ".ssh" / "config"
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _ssh_config_declares_unix_socket_global_master(text: str) -> bool:
+    """True when an ``ssh_config`` *text* has a global (``Host *``) stanza that
+    enables ``ControlMaster`` with a non-named-pipe (Unix-socket) ``ControlPath``.
+
+    This is the configuration that breaks native Windows OpenSSH: a
+    ``Host *`` ``ControlMaster auto`` with a ``ControlPath`` like
+    ``~/.ssh/cm-%r@%h:%p`` makes every ``ssh.exe`` try to ``getsockname`` a
+    Unix socket and abort with ``getsockname failed: Not a socket`` — and a
+    command-line ``-o ControlPath=none`` does not reliably override it on
+    Windows (field finding on #243). Keywords are case-insensitive; a
+    ``ControlPath`` of ``none`` or a ``\\\\.\\pipe\\...`` named pipe is fine.
+    """
+    in_global = False
+    cm_enabled = False
+    bad_path = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # ssh_config separates keyword from value with whitespace and/or a
+        # single ``=`` — accept both shapes.
+        match = re.match(r"(\S+?)\s*(?:=|\s)\s*(.*)$", line)
+        if match is None:
+            continue
+        key = match.group(1).lower()
+        value = match.group(2).strip()
+        if key in ("host", "match"):
+            # A new block begins. Settle the verdict on the block we just left
+            # before re-evaluating which kind of block we're entering.
+            if in_global and cm_enabled and bad_path:
+                return True
+            in_global = key == "host" and "*" in value.split()
+            cm_enabled = False
+            bad_path = False
+            continue
+        if not in_global:
+            continue
+        if key == "controlmaster":
+            cm_enabled = value.lower() in _ENABLING_CONTROLMASTER_VALUES
+        elif key == "controlpath":
+            v = value.strip().strip('"').strip("'")
+            if v.lower() != "none" and not v.lower().startswith(r"\\.\pipe"):
+                bad_path = True
+    return in_global and cm_enabled and bad_path
+
+
+@functools.cache
+def _ssh_config_forces_no_multiplex() -> bool:
+    """True (Windows only) when ``~/.ssh/config`` has a Unix-socket global
+    ``ControlMaster`` stanza that would break native Windows OpenSSH; warns once.
+
+    When this fires the framework forces ``HPC_NO_SSH_MULTIPLEX`` semantics
+    (emit no multiplex flags at all) — the only thing observed to clear the
+    ``getsockname failed: Not a socket`` failure for users with a problematic
+    ``Host *`` ``ControlMaster auto`` + Unix-socket ``ControlPath`` (#243),
+    because the per-command ``-o`` override does not reliably win against the
+    config on Windows. The one-time warning points the user at the fix
+    (rewrite to a ``\\\\.\\pipe\\...`` named pipe, or scope by host).
+
+    POSIX returns ``False`` immediately (a Unix-socket ``ControlPath`` is
+    exactly what works there). Cached: the config file isn't expected to change
+    mid-process, and this keeps both the file read and the warning to once.
+    """
+    if sys.platform != "win32":
+        return False
+    text = _read_ssh_config_text()
+    if text is None:
+        return False
+    if not _ssh_config_declares_unix_socket_global_master(text):
+        return False
+    print(
+        "hpc-agent: detected a Unix-socket ControlMaster in ~/.ssh/config "
+        "(a `Host *` stanza with a non-named-pipe ControlPath) — native "
+        "Windows OpenSSH would fail it with `getsockname failed: Not a "
+        "socket`, and a command-line override does not reliably win, so SSH "
+        "connection multiplexing is DISABLED for this session. To keep the "
+        r"speedup, rewrite that ControlPath to a named pipe (\\.\pipe\...) "
+        "or scope the ControlMaster stanza by host instead of `Host *`.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _ssh_config_override_opts() -> list[str]:
     """SSH ``-o`` options that neutralise a user's ssh-config multiplexing on
     Windows; ``[]`` on POSIX.
@@ -160,13 +341,13 @@ def _ssh_config_override_opts() -> list[str]:
     config file. On POSIX nothing is needed. ``HPC_NO_SSH_MULTIPLEX=1`` disables
     it everywhere. This is the transfer-sized subset of :func:`_ssh_multiplex_opts`.
 
-    The ``HPC_SSH_NAMED_PIPE=1`` opt-in (which makes
-    :func:`_ssh_multiplex_opts` emit a named-pipe ``ControlPath`` on Windows)
-    is *deliberately* not honoured here: one-shot transfers gain nothing from
+    The named-pipe ``ControlPath`` that :func:`_ssh_multiplex_opts` now emits
+    by default on Windows (opt out with ``HPC_SSH_NAMED_PIPE=0``) is
+    *deliberately* not mirrored here: one-shot transfers gain nothing from
     being a multiplex client, so we keep the override and skip the master-setup
     overhead even when long-lived ssh sessions are multiplexed.
     """
-    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
+    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1" or _ssh_config_forces_no_multiplex():
         return []
     if sys.platform == "win32":
         return ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
@@ -193,9 +374,19 @@ def _ssh_multiplex_opts() -> list[str]:
         explicit ``ControlMaster=no`` / ``ControlPath=none`` override.
         Returning ``[]`` would only drop our own flags, leaving a user's
         ``~/.ssh/config`` ``ControlMaster`` (often a ``Host *`` stanza)
-        to bite; a command-line ``-o`` beats the config file.
-        ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits to ``[]`` first —
-        it wins over the ``HPC_SSH_NAMED_PIPE`` opt-in below as well.
+        to bite; a command-line ``-o`` beats the config file *most* of the
+        time. ``HPC_NO_SSH_MULTIPLEX=1`` short-circuits to ``[]`` first and
+        wins over the named-pipe default below.
+
+        The same ``[]`` is forced *implicitly* by
+        :func:`_ssh_config_forces_no_multiplex`: on Windows a ``~/.ssh/config``
+        with a global (``Host *``) ``ControlMaster`` whose ``ControlPath`` is a
+        Unix socket (not a ``\\\\.\\pipe\\...`` named pipe) makes ``ssh.exe``
+        abort with ``getsockname failed: Not a socket`` — and the per-command
+        ``-o ControlPath=none`` override does NOT reliably win against it on
+        Windows (field finding, #243). Emitting no multiplex flags is the only
+        behaviour observed to clear it, so the probe warns once and disables
+        multiplexing for the session.
     ``HPC_SSH_PERSIST_INTERVAL``
         Override the ControlPersist window. The value is passed verbatim
         to OpenSSH, so any shape ``ssh_config(5)`` accepts works:
@@ -214,52 +405,62 @@ def _ssh_multiplex_opts() -> list[str]:
         When the value is ``no``, no ``ControlPersist`` option is emitted —
         OpenSSH's default behaviour applies (master exits with the last
         client session).
-    ``HPC_SSH_NAMED_PIPE=1`` *(opt-in, Windows-only)*
-        Enable multiplexing on native Windows OpenSSH via a named-pipe
+    ``HPC_SSH_NAMED_PIPE=0`` *(opt-out, Windows-only)*
+        Connection multiplexing on native Windows OpenSSH via a named-pipe
         ``ControlPath`` of the form ``\\\\.\\pipe\\openssh-hpc-cm-%C``
         (OpenSSH computes the ``%C`` token — connection-tuple hash — at
-        runtime; ``%C`` substitution does work inside the named-pipe path
-        on Windows OpenSSH ≥ 8.x, which is what makes this opt-in viable).
-        Without the opt-in, the Windows branch keeps emitting the legacy
-        ``ControlMaster=no`` / ``ControlPath=none`` override and pays a
-        fresh handshake per call — ~1-2 seconds each, hundreds of seconds
-        per submit/monitor/aggregate cycle. The opt-in is validated against
-        OpenSSH ≥ 8.x on Windows (the version that introduced named-pipe
-        ``ControlPath`` support); the framework will likely flip the
-        default after live-cluster validation. The ``HPC_NO_SSH_MULTIPLEX=1``
-        short-circuit above still wins. ``ControlPersist`` is honoured
-        exactly as on POSIX. Note this only affects :func:`_ssh_multiplex_opts`:
-        the transfer-sized :func:`_ssh_config_override_opts` (used by ``scp``
-        and the tar-fallback push) stays as ``ControlMaster=no`` /
-        ``ControlPath=none`` even with the opt-in on — one-shot transfers
-        don't benefit from being a multiplex client.
+        runtime; ``%C`` substitution works inside the named-pipe path on
+        Windows OpenSSH ≥ 8.x) is now the **default** on Windows — it was an
+        ``=1`` opt-in through 0.10.x. Without it the Windows branch pays a
+        fresh handshake per call (~1-2 seconds each, hundreds of seconds per
+        submit/monitor/aggregate cycle). Set ``HPC_SSH_NAMED_PIPE=0`` to opt
+        back out to the legacy ``ControlMaster=no`` / ``ControlPath=none``
+        override. A one-time probe (:func:`_windows_openssh_named_pipe_supported`)
+        warns and falls back to that legacy override when the local OpenSSH is
+        older than 8.x (named-pipe ``ControlPath`` support landed in 8.x). The
+        ``HPC_NO_SSH_MULTIPLEX=1`` short-circuit above still wins.
+        ``ControlPersist`` is honoured exactly as on POSIX. Note this only
+        affects :func:`_ssh_multiplex_opts` (the long-lived ``ssh`` command
+        channel): the transfer-sized :func:`_ssh_config_override_opts` (used
+        by ``scp`` and the tar-fallback push) stays ``ControlMaster=no`` /
+        ``ControlPath=none`` regardless — one-shot transfers don't benefit
+        from being a multiplex client.
     """
-    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
+    # HPC_NO_SSH_MULTIPLEX=1 is the explicit kill switch; the ssh-config probe
+    # is the *implicit* one — a Windows ~/.ssh/config whose Unix-socket
+    # ControlMaster would break native OpenSSH forces the same no-flags
+    # behaviour (the only thing that reliably clears the getsockname failure;
+    # #243), after warning the user once how to fix it.
+    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1" or _ssh_config_forces_no_multiplex():
         return []
     if sys.platform == "win32":
-        if os.environ.get("HPC_SSH_NAMED_PIPE") == "1":
-            # Opt-in: native Windows OpenSSH ≥ 8.x supports a named-pipe
-            # ControlPath. The ``\\.\pipe\<name>`` namespace is the Windows
-            # equivalent of a Unix domain socket; %C is substituted by ssh
-            # at runtime (verified working on Windows OpenSSH ≥ 8.x), so
-            # different hosts/users/ports get isolated masters automatically.
-            opts = [
-                "-o",
-                "ControlMaster=auto",
-                "-o",
-                r"ControlPath=\\.\pipe\openssh-hpc-cm-%C",
-            ]
-            persist = _resolve_ssh_persist_interval()
-            if persist is not None:
-                opts += ["-o", f"ControlPersist={persist}"]
-            return opts
-        # Legacy Windows default: native Windows OpenSSH can't use a
-        # ControlPath Unix socket (getsockname failed: Not a socket), so
-        # instead of POSIX multiplexing emit the explicit
-        # ControlMaster=no/ControlPath=none override (see
-        # _ssh_config_override_opts) — returning [] would only omit OUR
-        # flags and let a user's ~/.ssh/config ControlMaster bite.
-        return _ssh_config_override_opts()
+        # Named-pipe multiplexing is the default on Windows; opt out with
+        # HPC_SSH_NAMED_PIPE=0, or when the local OpenSSH is too old to honour
+        # a named-pipe ControlPath (the probe warns once and demotes us).
+        if (
+            os.environ.get("HPC_SSH_NAMED_PIPE") == "0"
+            or not _windows_openssh_named_pipe_supported()
+        ):
+            # Legacy fallback: native Windows OpenSSH can't use a ControlPath
+            # Unix socket (getsockname failed: Not a socket), so emit the
+            # explicit ControlMaster=no/ControlPath=none override (see
+            # _ssh_config_override_opts) — returning [] would only omit OUR
+            # flags and let a user's ~/.ssh/config ControlMaster bite.
+            return _ssh_config_override_opts()
+        # Default: the ``\\.\pipe\<name>`` namespace is the Windows equivalent
+        # of a Unix domain socket; %C is substituted by ssh at runtime
+        # (verified working on Windows OpenSSH ≥ 8.x), so different
+        # hosts/users/ports get isolated masters automatically.
+        opts = [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            r"ControlPath=\\.\pipe\openssh-hpc-cm-%C",
+        ]
+        persist = _resolve_ssh_persist_interval()
+        if persist is not None:
+            opts += ["-o", f"ControlPersist={persist}"]
+        return opts
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     opts = [
         "-o",

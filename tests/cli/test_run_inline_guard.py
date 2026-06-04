@@ -103,7 +103,9 @@ def test_default_still_spawns(tmp_path, monkeypatch, capsys):
     from hpc_agent.cli import spawn
 
     report = types.SimpleNamespace(model_dump=lambda: {"result": "ok"})
-    monkeypatch.setattr("hpc_agent._kernel.lifecycle.run.run_workflow", lambda **_: (report, 0))
+    monkeypatch.setattr(
+        "hpc_agent._kernel.lifecycle.run.run_workflow", lambda **_: (report, 0, None)
+    )
     rc = spawn.cmd_run(_args(tmp_path, inline=False))
     env = _envelope(capsys)
     assert rc == 0

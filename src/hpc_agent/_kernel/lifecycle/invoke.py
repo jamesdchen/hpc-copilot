@@ -25,6 +25,7 @@ credentials file on a supported OS → ``claude-cli-oauth``; else
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -195,11 +196,19 @@ class InvocationResult:
     worker's last words in their error message. Optional for
     backward-compat with test fixtures that construct
     ``InvocationResult(exit_code=..., output=...)`` directly.
+
+    ``cache_stats`` is the worker's prompt-cache token accounting (#244) —
+    ``{"input_tokens", "output_tokens", "cache_creation_input_tokens",
+    "cache_read_input_tokens"}`` (whichever the transport reported) — populated
+    only when the caller asked for it (``report_cache_stats=True``) and the
+    invoker's transport surfaces billing usage. ``None`` otherwise: not
+    requested, or the transport doesn't expose it.
     """
 
     exit_code: int
     output: str
     stderr: str = ""
+    cache_stats: dict[str, int] | None = None
 
 
 class WorkerInvoker(Protocol):
@@ -212,7 +221,9 @@ class WorkerInvoker(Protocol):
 
     name: str
 
-    def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult: ...
+    def invoke(
+        self, prompt: RenderedPrompt, *, cwd: Path, report_cache_stats: bool = False
+    ) -> InvocationResult: ...
 
     def missing_credential_remediation(self) -> str | None:
         """Remediation text if the worker would spawn without a usable credential.
@@ -224,6 +235,31 @@ class WorkerInvoker(Protocol):
         ...
 
 
+_CACHE_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _extract_cache_stats(envelope: dict[str, object]) -> dict[str, int] | None:
+    """Pull the prompt-cache token counts out of a ``--output-format json`` envelope.
+
+    Claude Code's JSON result envelope carries a ``usage`` block with the
+    Anthropic billing token counts — including ``cache_read_input_tokens`` and
+    ``cache_creation_input_tokens``, the two fields that reveal whether the
+    cacheable worker-prompt prefix actually hit cache (#244). Returns the
+    integer-valued subset of :data:`_CACHE_USAGE_KEYS`, or ``None`` when no
+    usage block is present.
+    """
+    usage = envelope.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    stats = {k: int(usage[k]) for k in _CACHE_USAGE_KEYS if isinstance(usage.get(k), int)}
+    return stats or None
+
+
 def _run_claude_worker(
     *,
     executable: str,
@@ -231,6 +267,7 @@ def _run_claude_worker(
     prompt: RenderedPrompt,
     cwd: str,
     env: dict[str, str] | None = None,
+    report_cache_stats: bool = False,
 ) -> InvocationResult:
     """Spawn ``claude -p`` with the worker prompt kept OFF the command line.
 
@@ -248,7 +285,15 @@ def _run_claude_worker(
     still an *appended system prompt* (byte-identical across runs, so Claude
     Code caches it) and the suffix is still the user message — only the
     transport moves off argv, so prompt caching is unaffected.
+
+    When *report_cache_stats* is set, the child is run with
+    ``--output-format json`` so Claude Code wraps its reply in a result
+    envelope carrying a ``usage`` block; we lift the worker's report text back
+    out of ``result`` (so the report contract is unchanged for the caller) and
+    surface the cache token counts on :attr:`InvocationResult.cache_stats`.
+    Off by default — the plain text transport is untouched.
     """
+    output_format_args = ["--output-format", "json"] if report_cache_stats else []
     with tempfile.TemporaryDirectory(prefix="hpc-agent-worker-prompt-") as prompt_dir:
         system_prompt_file = Path(prompt_dir) / "append_system_prompt.txt"
         system_prompt_file.write_text(prompt.cacheable_prefix, encoding="utf-8")
@@ -257,6 +302,7 @@ def _run_claude_worker(
                 executable,
                 "-p",
                 *mode_args,
+                *output_format_args,
                 "--append-system-prompt-file",
                 str(system_prompt_file),
             ],
@@ -271,10 +317,27 @@ def _run_claude_worker(
             errors="replace",
             check=False,
         )
+    output = proc.stdout
+    cache_stats: dict[str, int] | None = None
+    if report_cache_stats:
+        # Unwrap the JSON result envelope: the worker's report is the inner
+        # ``result`` text, and ``usage`` carries the cache token counts. A
+        # malformed/non-JSON stdout (a crash before the envelope) leaves the
+        # raw stdout as the output so the caller's report-parse still surfaces
+        # the worker's last words; cache_stats just stays None.
+        try:
+            envelope = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            envelope = None
+        if isinstance(envelope, dict):
+            cache_stats = _extract_cache_stats(envelope)
+            if isinstance(envelope.get("result"), str):
+                output = envelope["result"]
     return InvocationResult(
         exit_code=proc.returncode,
-        output=proc.stdout,
+        output=output,
         stderr=getattr(proc, "stderr", None) or "",
+        cache_stats=cache_stats,
     )
 
 
@@ -294,7 +357,9 @@ class ClaudeCliInvoker:
     def __init__(self, *, executable: str = "claude") -> None:
         self._executable = executable
 
-    def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
+    def invoke(
+        self, prompt: RenderedPrompt, *, cwd: Path, report_cache_stats: bool = False
+    ) -> InvocationResult:
         return _run_claude_worker(
             executable=self._executable,
             mode_args=[
@@ -326,6 +391,7 @@ class ClaudeCliInvoker:
             ],
             prompt=prompt,
             cwd=str(cwd),
+            report_cache_stats=report_cache_stats,
         )
 
     def missing_credential_remediation(self) -> str | None:
@@ -362,7 +428,9 @@ class ClaudeCliOAuthInvoker:
     def __init__(self, *, executable: str = "claude") -> None:
         self._executable = executable
 
-    def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
+    def invoke(
+        self, prompt: RenderedPrompt, *, cwd: Path, report_cache_stats: bool = False
+    ) -> InvocationResult:
         # ``cwd`` (the experiment dir) is deliberately NOT the child's working
         # directory: a non-``--bare`` ``claude`` loads project ``.claude/`` from
         # its cwd, which would pollute the worker's context and corrupt the
@@ -405,6 +473,7 @@ class ClaudeCliOAuthInvoker:
                 prompt=prompt,
                 cwd=clean_cwd,
                 env={**os.environ, "CLAUDE_CONFIG_DIR": config_dir},
+                report_cache_stats=report_cache_stats,
             )
 
     def missing_credential_remediation(self) -> str | None:

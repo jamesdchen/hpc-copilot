@@ -13,11 +13,15 @@ import rsync_push``).
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -462,12 +466,161 @@ def rsync_push(
     return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}")
 
 
+# Remote path (relative to ``remote_path``) of the content-hash cache the
+# deploy step keys on to skip re-shipping unchanged files (#242). It maps
+# each deployed file's remote-relative path to the sha256 of the bytes last
+# placed there, alongside the package version that produced them.
+_DEPLOY_MANIFEST_REL: Final[str] = ".hpc/.deploy_state.json"
+
+# Max concurrent scp's fired by :func:`deploy_runtime` (#245). All copies
+# reuse the one ssh ControlMaster, so concurrency overlaps the per-copy
+# subprocess fork/exec + transfer latency without fanning out fresh
+# handshakes against the cluster.
+_DEPLOY_PARALLELISM: Final[int] = 4
+
+
+def _sha256_bytes(data: bytes) -> str:
+    """Hex sha256 of *data* — the content identity used by the deploy cache."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _pkg_version() -> str:
+    """Installed ``hpc-agent`` version, or a stable placeholder when absent.
+
+    Keys the deploy cache (#242) so a ``pip install -U`` invalidates the
+    whole manifest even when individual file bytes look unchanged. The
+    placeholder is process-stable, so a source checkout that is not
+    pip-installed still produces a consistent (always-self-consistent) key.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    for dist in ("hpc-agent", "hpc_agent"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0+unknown"
+
+
+@dataclass(frozen=True)
+class _DeployItem:
+    """One file the runtime deploy ships, with its content identity.
+
+    Exactly one of *src_path* (a verbatim package file, scp'd directly so
+    error/backoff labels name the real path) or *content* (text rendered at
+    deploy time, e.g. a per-scheduler array script) is set. *sha* is the
+    sha256 of the bytes that land on the cluster — file bytes for *src_path*,
+    UTF-8 of *content* for *content* — and is what the deploy cache compares.
+    """
+
+    dst_rel: str
+    sha: str
+    src_path: Path | None
+    content: str | None
+
+
+def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
+    """Enumerate every file :func:`deploy_runtime` ships, hashed for caching.
+
+    The single source of truth for *what* the deploy places and the content
+    sha of each piece, shared by :func:`deploy_runtime` and
+    :func:`_local_deploy_manifest` so the cache key the deploy writes is the
+    same key it later compares against. Order is deterministic but no longer
+    load-bearing — copies are fired concurrently (#245).
+    """
+    from hpc_agent.infra.backends import get_backend_class, template_ext_for
+
+    pkg_dir = Path(__file__).parent.parent
+    items: list[_DeployItem] = []
+
+    def add_file(src: Path, dst_rel: str) -> None:
+        items.append(_DeployItem(dst_rel, _sha256_bytes(src.read_bytes()), src, None))
+
+    def add_text(content: str, dst_rel: str) -> None:
+        items.append(_DeployItem(dst_rel, _sha256_bytes(content.encode("utf-8")), None, content))
+
+    # Importable stubs (used inside cluster jobs by user code):
+    #   - ``from hpc_agent.models.mapreduce.metrics_io import write_metrics``
+    #     in user executor scripts (executor_template.py).
+    #   - ``from hpc_agent.executor_cli import flag, generic_args, gpu_args``
+    #     in user .hpc/tasks.py. Both modules are stdlib-only (AST-scanned)
+    #     so they ship without dragging in the rest of the package.
+    add_file(
+        pkg_dir / "models" / "mapreduce" / "metrics_io.py",
+        "hpc_agent/models/mapreduce/metrics_io.py",
+    )
+    add_file(pkg_dir / "executor_cli.py", "hpc_agent/executor_cli.py")
+
+    # Framework executor inside .hpc/.
+    add_file(pkg_dir / "models" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+
+    # Per-scheduler cpu/gpu array scripts, RENDERED from the profile rather
+    # than shipped verbatim. Remote paths are preserved exactly
+    # (``.hpc/templates/cpu_array.{sh,slurm}`` etc.) so downstream submit code
+    # keeps resolving them. Deploy only the cluster's own family when
+    # *scheduler* is known; fall back to sge+slurm otherwise. A single-family
+    # deploy is what keeps pbspro/torque (shared ``.pbs`` ext) from colliding.
+    schedulers = (scheduler,) if scheduler else ("sge", "slurm")
+    for sched in schedulers:
+        backend_cls = get_backend_class(sched)
+        ext = template_ext_for(sched).lstrip(".")
+        for basename, kind in (("cpu_array", "cpu"), ("gpu_array", "gpu")):
+            add_text(backend_cls.render_script(kind=kind), f".hpc/templates/{basename}.{ext}")
+
+    # Shared preambles sourced by the templates above.
+    for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
+        add_file(
+            pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
+            f".hpc/templates/common/{common_name}",
+        )
+
+    # Combiner inside .hpc/.
+    add_file(pkg_dir / "models" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
+    return items
+
+
+def _local_deploy_manifest(*, scheduler: str | None) -> dict[str, Any]:
+    """The deploy-cache manifest the CURRENT local sources would produce.
+
+    ``{"pkg_version": <version>, "files": {dst_rel: sha256, ...}}`` — exactly
+    what :func:`deploy_runtime` writes to :data:`_DEPLOY_MANIFEST_REL` after a
+    deploy. Comparing it against the manifest read back from the cluster is
+    how the cache decides which files (if any) actually need re-shipping.
+    """
+    items = _build_deploy_items(scheduler=scheduler)
+    return {
+        "pkg_version": _pkg_version(),
+        "files": {it.dst_rel: it.sha for it in items},
+    }
+
+
+def _parse_remote_manifest(stdout: str) -> dict[str, Any] | None:
+    """Parse the cluster-side deploy manifest, or ``None`` on any problem.
+
+    A missing file (``cat`` printed nothing), truncated/corrupt JSON, or a
+    shape that isn't ``{"files": {...}}`` all collapse to ``None`` — which
+    :func:`deploy_runtime` treats as a full cache miss (re-deploy everything),
+    the safe fallback the issue's risk note calls for (mitigation b).
+    """
+    raw = (stdout or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("files"), dict):
+        return data
+    return None
+
+
 def deploy_runtime(
     *,
     ssh_target: str,
     remote_path: str,
     scheduler: str | None = None,
-) -> subprocess.CompletedProcess[str]:
+    use_cache: bool | None = None,
+) -> None:
     """Deploy framework runtime files to the cluster.
 
     Two payloads:
@@ -484,17 +637,32 @@ def deploy_runtime(
        ``runs/<id>.json`` come over via :func:`rsync_push`; the framework
        files are placed here by scp.
 
-    Each underlying ssh/scp invocation is bounded by
-    :data:`SSH_TIMEOUT_SEC`; if any exceeds it, :class:`TimeoutError` is
-    raised that names the target and the basename of the file being copied.
+    The scp copies are independent and all target the same host, so they are
+    fired **concurrently** (up to :data:`_DEPLOY_PARALLELISM`, #245); under
+    ControlMaster multiplexing every copy reuses the one ssh master, so
+    concurrency overlaps the per-copy latency without fresh handshakes. Each
+    underlying ssh/scp invocation is bounded by :data:`SSH_TIMEOUT_SEC`; if
+    any exceeds it, :class:`TimeoutError` is raised naming the file, and the
+    first failed copy's exception propagates out of the pool.
+
+    A **content-hash cache** (#242) skips files already present unchanged: the
+    cluster-side manifest at :data:`_DEPLOY_MANIFEST_REL` records each file's
+    sha256 and the producing package version; a file is re-shipped only when
+    its sha differs OR the package version moved. ``use_cache=False`` (or
+    ``HPC_NO_DEPLOY_CACHE=1``) forces a full deploy and skips the manifest
+    entirely; any unreadable/corrupt manifest also falls back to a full
+    deploy.
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     The default rsync excludes preserve cluster-side framework files
     inside ``.hpc/``, but deploy_runtime is still safe to re-run after
     every push (it overwrites with the package-versioned bytes).
     """
+    if use_cache is None:
+        use_cache = os.environ.get("HPC_NO_DEPLOY_CACHE") != "1"
+
     remote_path_q = shlex.quote(remote_path)
-    pkg_dir = Path(__file__).parent.parent
+    manifest_q = shlex.quote(f"{remote_path}/{_DEPLOY_MANIFEST_REL}")
 
     # The deployed ``hpc_agent/`` is a PEP 420 namespace package — NO
     # ``__init__.py`` anywhere in the tree. ``hpc_preamble.sh`` prepends
@@ -508,7 +676,7 @@ def deploy_runtime(
     #
     # ``rm -f`` clears stale ``__init__.py`` files left by pre-fix deploys
     # (rsync's ``--delete`` excludes ``hpc_agent/`` so they would persist).
-    ssh_run(
+    mkdir_cmd = (
         f"mkdir -p {remote_path_q}/hpc_agent/models/mapreduce"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
@@ -524,9 +692,37 @@ def deploy_runtime(
         # ``.py`` removal above doesn't touch ``.pyc`` / ``__pycache__``.
         f" && find {remote_path_q}/hpc_agent -name '*.pyc' -delete"
         f" && find {remote_path_q}/hpc_agent -depth -type d -name __pycache__"
-        f" -exec rm -rf {{}} +",
-        ssh_target=ssh_target,
+        f" -exec rm -rf {{}} +"
     )
+    # Fold the cache-manifest read into the prelude ssh so it costs no extra
+    # round-trip: the mkdir/rm/find chain prints nothing to stdout, so the
+    # trailing ``cat`` (absent file -> empty, never an error) leaves the
+    # manifest JSON as the call's entire stdout. ``;`` not ``&&`` so a manifest
+    # read is independent of the prep chain.
+    if use_cache:
+        mkdir_cmd += f" ; cat {manifest_q} 2>/dev/null || true"
+    prelude = ssh_run(mkdir_cmd, ssh_target=ssh_target)
+
+    remote_manifest = _parse_remote_manifest(getattr(prelude, "stdout", "")) if use_cache else None
+
+    items = _build_deploy_items(scheduler=scheduler)
+    new_manifest = {
+        "pkg_version": _pkg_version(),
+        "files": {it.dst_rel: it.sha for it in items},
+    }
+
+    # Skip a file only when its content sha matches AND the recorded package
+    # version matches — a version bump re-ships everything (issue mitigation a),
+    # since the framework artifacts are package-versioned.
+    if (
+        use_cache
+        and remote_manifest is not None
+        and remote_manifest.get("pkg_version") == new_manifest["pkg_version"]
+    ):
+        cached_files = remote_manifest.get("files", {})
+        to_deploy = [it for it in items if cached_files.get(it.dst_rel) != it.sha]
+    else:
+        to_deploy = list(items)
 
     def _scp(src: Path, dst_rel: str) -> subprocess.CompletedProcess[str]:
         dst = f"{ssh_target}:{shlex.quote(remote_path)}/{dst_rel}"
@@ -560,14 +756,15 @@ def deploy_runtime(
     def _scp_text(content: str, dst_rel: str) -> subprocess.CompletedProcess[str]:
         """Transfer in-memory *content* to ``{remote_path}/{dst_rel}``.
 
-        Phase 2 helper for payloads that are RENDERED at deploy time
-        (the cpu/gpu array job scripts) rather than read verbatim from a
-        shipped file. Writes *content* to a short-lived local temp file
+        Helper for payloads that are RENDERED at deploy time (the cpu/gpu
+        array job scripts, the cache manifest) rather than read verbatim from
+        a shipped file. Writes *content* to a short-lived local temp file
         named like the remote destination (so any error message / backoff
         label names the right artifact) and reuses :func:`_scp` so the
         timeout, BatchMode, and retry behaviour are identical to the
-        static-file path. UTF-8, newline-preserving — ``render_script``
-        returns text byte-identical to the old static template file.
+        static-file path. UTF-8, newline-preserving. Its own
+        ``TemporaryDirectory`` is created inside the worker thread, so
+        concurrent calls never share a temp path.
         """
         dst_name = Path(dst_rel).name
         with tempfile.TemporaryDirectory() as tmp:
@@ -575,75 +772,29 @@ def deploy_runtime(
             tmp_path.write_text(content, encoding="utf-8", newline="")
             return _scp(tmp_path, dst_rel)
 
-    # Importable stubs (used inside cluster jobs by user code).
-    #
-    # Cluster-side imports we have to support:
-    #   - ``from hpc_agent.models.mapreduce.metrics_io import write_metrics``
-    #     in user executor scripts (executor_template.py).
-    #   - ``from hpc_agent.executor_cli import flag, generic_args, gpu_args``
-    #     in user .hpc/tasks.py (tasks_example.py). The dispatcher loads
-    #     tasks.py at task time via importlib; the top-level import has
-    #     to resolve or every task ImportErrors before total()/resolve()
-    #     are called.
-    #
-    # Both modules are stdlib-only (verified via AST scan) so they ship
-    # safely without dragging in the rest of the package.
-    _scp(
-        pkg_dir / "models" / "mapreduce" / "metrics_io.py",
-        "hpc_agent/models/mapreduce/metrics_io.py",
-    )
-    _scp(pkg_dir / "executor_cli.py", "hpc_agent/executor_cli.py")
+    def _deploy_one(item: _DeployItem) -> None:
+        if item.src_path is not None:
+            _scp(item.src_path, item.dst_rel)
+        else:
+            _scp_text(item.content or "", item.dst_rel)
 
-    # Framework executor + combiner inside .hpc/.
-    _scp(pkg_dir / "models" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+    # Fire the (cache-filtered) copies concurrently. All reuse the one ssh
+    # master, so this overlaps fork/exec + transfer latency rather than
+    # opening fresh handshakes. The first failed copy's exception is
+    # re-raised here (via ``Future.result``), exactly as the old serial path
+    # surfaced the first ``_with_ssh_backoff`` raise.
+    if to_deploy:
+        with ThreadPoolExecutor(max_workers=min(_DEPLOY_PARALLELISM, len(to_deploy))) as pool:
+            futures = [pool.submit(_deploy_one, item) for item in to_deploy]
+            for future in as_completed(futures):
+                future.result()
 
-    # Job templates inside .hpc/templates/.
-    #
-    # Phase 2 (Option C): the per-scheduler cpu/gpu array scripts are no
-    # longer static files on disk that we scp verbatim. They are RENDERED
-    # from the profile by the backend's ``render_script`` and the rendered
-    # text is transferred. The remote destination paths/filenames are
-    # preserved exactly (``.hpc/templates/cpu_array.{sh,slurm}`` etc.) so
-    # downstream submit code (incorporation/build/submit_spec.py's
-    # _TEMPLATE_BY_SCHED) keeps resolving them.
-    #
-    # ``template_ext`` (the backend class attribute, ".sh" for SGE,
-    # ".slurm" for SLURM) still owns the on-remote filename extension;
-    # ``kind`` ("cpu"/"gpu") selects the cpu_array vs gpu_array variant —
-    # the same cpu_array/gpu_array distinction the old static loop made.
-    from hpc_agent.infra.backends import get_backend_class, template_ext_for
-
-    # cpu_array/gpu_array remote basenames <- render_script(kind=...).
-    _KIND_FOR_BASENAME = {"cpu_array": "cpu", "gpu_array": "gpu"}
-
-    # Deploy only the cluster's own family's scripts when *scheduler* is
-    # known (the submit path passes it). Falls back to sge+slurm when it
-    # isn't — preserving legacy callers — but a single-family deploy is
-    # what makes pbspro/torque (which share the ``.pbs`` ext) safe: only
-    # one PBS fork's scripts ever land on a given cluster.
-    schedulers = (scheduler,) if scheduler else ("sge", "slurm")
-    for sched in schedulers:
-        backend_cls = get_backend_class(sched)
-        ext = template_ext_for(sched).lstrip(".")
-        for basename, kind in _KIND_FOR_BASENAME.items():
-            rendered = backend_cls.render_script(kind=kind)
-            _scp_text(rendered, f".hpc/templates/{basename}.{ext}")
-
-    # Shared preambles sourced by the templates above. Source layout is
-    # ``templates/runtime/common/<name>.sh`` (per the templates split);
-    # deploy destination is ``.hpc/templates/common/<name>.sh`` to match
-    # the ``source "$REPO_DIR/.hpc/templates/common/<name>.sh"`` line in
-    # each per-template body and the ``mkdir -p .hpc/templates/common``
-    # above.
-    for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
-        _scp(
-            pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
-            f".hpc/templates/common/{common_name}",
-        )
-
-    # Combiner is the last scp; return its CompletedProcess so callers
-    # can inspect the trailing returncode.
-    return _scp(pkg_dir / "models" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
+    # Record the new manifest only when it actually changed (a full cache hit
+    # leaves it identical, so we skip the write and its round-trip). Written
+    # last, after every copy succeeded — a failed copy raises above, so a
+    # stale manifest never claims a file landed that didn't.
+    if use_cache and remote_manifest != new_manifest:
+        _scp_text(json.dumps(new_manifest, indent=2, sort_keys=True), _DEPLOY_MANIFEST_REL)
 
 
 def run_combiner(

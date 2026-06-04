@@ -107,6 +107,103 @@ def test_claude_cli_invoker_builds_the_right_call(
     assert seen["cwd"] == str(tmp_path)
 
 
+def test_report_cache_stats_off_by_default_keeps_plain_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Without report_cache_stats the call carries NO --output-format json and
+    # surfaces no cache_stats — the existing text transport is untouched.
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"), cwd=tmp_path
+    )
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--output-format" not in argv
+    assert result.output == "worker output"
+    assert result.cache_stats is None
+
+
+def _json_envelope_run(seen: dict[str, object], envelope: str):
+    """A fake subprocess.run that records argv and returns *envelope* as stdout."""
+
+    class _Proc:
+        returncode = 0
+        stdout = envelope
+        stderr = ""
+
+    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
+        seen["argv"] = argv
+        return _Proc()
+
+    return _fake_run
+
+
+def test_report_cache_stats_unwraps_envelope_and_surfaces_usage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # With report_cache_stats the worker runs with --output-format json; we
+    # lift the report text out of `result` and the cache token counts out of
+    # `usage`.
+    import json
+
+    seen: dict[str, object] = {}
+    envelope = json.dumps(
+        {
+            "type": "result",
+            "result": '{"result": {"run_id": "r1"}, "decisions": [], "anomalies": ""}',
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 34,
+                "cache_creation_input_tokens": 4096,
+                "cache_read_input_tokens": 4000,
+            },
+        }
+    )
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _json_envelope_run(seen, envelope))
+
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"),
+        cwd=tmp_path,
+        report_cache_stats=True,
+    )
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--output-format" in argv and "json" in argv
+    # The worker report text is the unwrapped inner `result`, not the envelope.
+    assert result.output == '{"result": {"run_id": "r1"}, "decisions": [], "anomalies": ""}'
+    assert result.cache_stats == {
+        "input_tokens": 12,
+        "output_tokens": 34,
+        "cache_creation_input_tokens": 4096,
+        "cache_read_input_tokens": 4000,
+    }
+
+
+def test_report_cache_stats_tolerates_a_non_json_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A worker that dies before emitting the JSON envelope leaves raw stdout as
+    # the output (so the report-parse still surfaces its last words) and
+    # cache_stats None — no crash on the unwrap.
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        invoke_mod.subprocess, "run", _json_envelope_run(seen, "Not logged in. Goodbye.")
+    )
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"),
+        cwd=tmp_path,
+        report_cache_stats=True,
+    )
+    assert result.output == "Not logged in. Goodbye."
+    assert result.cache_stats is None
+
+
+def test_extract_cache_stats_returns_none_without_usage() -> None:
+    assert invoke_mod._extract_cache_stats({"result": "x"}) is None
+
+
 def test_invoker_keeps_large_prompt_off_the_command_line(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -29,12 +29,18 @@ from hpc_agent._kernel.lifecycle.invoke import get_invoker
 
 
 def run_workflow(
-    *, workflow: str, experiment_dir: str, fields: dict[str, Any]
-) -> tuple[WorkerReport, int]:
+    *,
+    workflow: str,
+    experiment_dir: str,
+    fields: dict[str, Any],
+    report_cache_stats: bool = False,
+) -> tuple[WorkerReport, int, dict[str, int] | None]:
     """Run *workflow* end to end in a fresh-context worker.
 
-    Returns the parsed :class:`WorkerReport` and the worker's exit code.
-    Raises :class:`SpawnContractError` when the *request* is invalid (a
+    Returns the parsed :class:`WorkerReport`, the worker's exit code, and the
+    worker's prompt-cache token counts (``None`` unless *report_cache_stats*
+    was requested and the invoker's transport surfaces billing usage — see
+    #244). Raises :class:`SpawnContractError` when the *request* is invalid (a
     user/spec error) and :class:`hpc_agent.errors.HpcError` when the
     *worker* fails to return a valid report (an internal failure — not
     the caller's fault).
@@ -50,7 +56,13 @@ def run_workflow(
     remediation = invoker.missing_credential_remediation()
     if remediation is not None:
         raise SpawnContractError(remediation)
-    invocation = invoker.invoke(prompt, cwd=Path(experiment_dir))
+    # Only forward the cache-stats request when set, so invokers/test doubles
+    # written against the original ``invoke(prompt, *, cwd)`` signature keep
+    # working on the default (no-stats) path.
+    if report_cache_stats:
+        invocation = invoker.invoke(prompt, cwd=Path(experiment_dir), report_cache_stats=True)
+    else:
+        invocation = invoker.invoke(prompt, cwd=Path(experiment_dir))
     try:
         report = parse_worker_report(invocation.output, workflow=workflow)
     except SpawnContractError as exc:
@@ -96,4 +108,4 @@ def run_workflow(
             f"the {workflow!r} worker did not return a valid report "
             f"(exit {invocation.exit_code}): {exc}{suffix}"
         ) from exc
-    return report, invocation.exit_code
+    return report, invocation.exit_code, invocation.cache_stats

@@ -183,10 +183,13 @@ class TestDeployRuntime:
     raised FileNotFoundError on the scp call.)
     """
 
-    def test_ssh_mkdir_then_scps_in_order(self):
+    def test_ssh_mkdir_then_scps_all_files(self):
         # The mkdir runs through ssh_run (capture=True) → the close-pipes
         # capture seam (#209); the file pushes are scp via subprocess.run.
-        # Patch both so we can assert the mkdir command and the scp order.
+        # Patch both so we can assert the mkdir command and the scp set. The
+        # capture seam returns empty stdout, so the deploy cache (#242) sees
+        # no remote manifest → a full deploy. The copies now fire concurrently
+        # (#245), so this asserts the SET of destinations, not their order.
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
             patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
@@ -205,6 +208,9 @@ class TestDeployRuntime:
         assert "mkdir -p" in mkdir_argv[-1]
         assert ".hpc/templates" in mkdir_argv[-1]
         assert ".hpc/templates/common" in mkdir_argv[-1]
+        # The deploy cache folds its manifest read into the same prelude ssh
+        # (no extra round-trip): a trailing ``cat`` of the manifest path.
+        assert ".hpc/.deploy_state.json" in mkdir_argv[-1]
         # Deployed hpc_agent/ must be a PEP 420 namespace package so it never
         # shadows a pip-installed hpc_agent on the cluster: no __init__.py is
         # created, and stale ones from old deploys are removed.
@@ -212,9 +218,15 @@ class TestDeployRuntime:
         assert "rm -f" in mkdir_argv[-1]
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
-        # Ten scp pushes via subprocess.run, in order.
-        argvs = [c[0][0] for c in mock_run.call_args_list]
-        assert len(argvs) == 10, [a[:3] for a in argvs]
+        # Ten file pushes + one cache-manifest write = 11 scp's via
+        # subprocess.run. Concurrency makes order non-deterministic, so work
+        # off the set of destinations. On Windows, _ssh_multiplex_opts runs a
+        # one-time `ssh -V` version probe (#243) that also goes through
+        # subprocess.run — filter to the scp calls (every scp carries
+        # ``-o BatchMode=yes``; the probe does not) so the count is stable
+        # across platforms.
+        argvs = [c[0][0] for c in mock_run.call_args_list if "BatchMode=yes" in c[0][0]]
+        assert len(argvs) == 11, [a[:3] for a in argvs]
 
         # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
         # missing key fails fast instead of blocking on a password prompt.
@@ -229,34 +241,24 @@ class TestDeployRuntime:
         # rather than a fixed [3]/[4] because Windows injects extra options
         # (``-o ControlMaster=no -o ControlPath=none``, per #154/#158) ahead
         # of src, shifting positional indices. Tail indexing is platform-agnostic.
-        # Importable stub into hpc_agent/models/mapreduce/
-        assert argvs[0][-2].endswith("metrics_io.py")
-        assert argvs[0][-1].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
+        dsts = {argv[-1] for argv in argvs}
 
-        # executor_cli stub into hpc_agent/ (so tasks.py top-level
-        # ``from hpc_agent.executor_cli import ...`` resolves on cluster).
-        assert argvs[1][-2].endswith("executor_cli.py")
-        assert argvs[1][-1].endswith(":/p/hpc_agent/executor_cli.py")
-
-        # Framework executor into .hpc/
-        assert argvs[2][-2].endswith("dispatch.py")
-        assert argvs[2][-1].endswith(":/p/.hpc/_hpc_dispatch.py")
-
+        # Importable stubs into hpc_agent/ (so cluster-side user imports resolve).
+        assert any(d.endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py") for d in dsts)
+        assert any(d.endswith(":/p/hpc_agent/executor_cli.py") for d in dsts)
+        # Framework executor + combiner into .hpc/
+        assert any(d.endswith(":/p/.hpc/_hpc_dispatch.py") for d in dsts)
+        assert any(d.endswith(":/p/.hpc/_hpc_combiner.py") for d in dsts)
         # Four templates into .hpc/templates/
-        template_dsts = {argv[-1] for argv in argvs[3:7]}
-        assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
-        assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
-        assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
-        assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
-
+        assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in dsts)
+        assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in dsts)
+        assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in dsts)
+        assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in dsts)
         # Two shared preambles into .hpc/templates/common/
-        common_dsts = {argv[-1] for argv in argvs[7:9]}
-        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
-        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
-
-        # Combiner is last
-        assert argvs[9][-2].endswith("combiner.py")
-        assert argvs[9][-1].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in dsts)
+        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in dsts)
+        # Cache manifest write (#242).
+        assert any(d.endswith(":/p/.hpc/.deploy_state.json") for d in dsts)
 
 
 # ---------------------------------------------------------------------------
@@ -539,9 +541,14 @@ class TestDeployRuntimeTimeout:
             mock_run.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
         # The ssh mkdir (capture seam) and every scp (subprocess.run) must
-        # carry the SSH timeout so a stuck cluster cannot block submit.
+        # carry the SSH timeout so a stuck cluster cannot block submit. Filter
+        # to the scp calls (``-o BatchMode=yes``): on Windows the one-time
+        # `ssh -V` version probe (#243) also goes through subprocess.run but
+        # carries its own short probe timeout, not the SSH transfer timeout.
         assert mock_ssh.call_args.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
-        for call in mock_run.call_args_list:
+        scp_calls = [c for c in mock_run.call_args_list if "BatchMode=yes" in c[0][0]]
+        assert scp_calls, "expected at least one scp call"
+        for call in scp_calls:
             assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
 

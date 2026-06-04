@@ -152,7 +152,7 @@ def _run_agent_step(spawn_request: dict[str, Any], experiment_dir: Path) -> int:
     """
     from hpc_agent._kernel.lifecycle.run import run_workflow
 
-    report, exit_code = run_workflow(
+    report, exit_code, _cache_stats = run_workflow(
         workflow=spawn_request["workflow"],
         experiment_dir=str(experiment_dir),
         fields=spawn_request.get("fields", {}),

@@ -28,6 +28,7 @@ The slash `/submit-hpc` is the human-interview wrapper around this skill; an ext
 | `homogeneous_axes` | Caller, or invoke `hpc-build-executor` (axes-init companion) if no `.hpc/axes.yaml` |
 | `frozen_configs` | Caller, or detect from `configs/*.yaml` |
 | `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented) |
+| `on_task_generator_mismatch` | Caller (default `fail`; `refresh` / `prefer-caller` are explicit opt-ins — see Step 3) |
 | `walltime_sec` | Caller, or auto-resolve from runtime priors (p95 × safety_mult) |
 | `gpu_type` | Caller, or first GPU in `clusters.<cluster>.gpu_types` |
 | `no_canary` | Caller (default `false`) |
@@ -79,9 +80,21 @@ If `data.next_step_hint == "monitor"`, return `spec_invalid: already_in_flight` 
 
 ### 3. Resolve entry point
 
-Check for `@register_run` on disk and for `interview.json`. If either, the entry_point is resolved — continue.
+Check for `@register_run` on disk and for `interview.json`. If either, the entry_point is resolved.
 
-Otherwise, invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generator, experiment_dir}`. The sub-skill itself follows the same contract — if it can't resolve (e.g., multiple entry-point candidates), it returns its own ambiguities. Propagate them into this skill's list:
+**Before short-circuiting on a cached `interview.json`, reconcile its `task_generator` against the caller-supplied one.** A stale `interview.json` left in `experiment_dir` from earlier dev work encodes its *own* `task_generator` (e.g. 8 seeds). If the caller passed a *different* `task_generator` this invocation (e.g. 100 seeds), the cached one would silently win and `build-submit-spec` would compute the wrong `total` — an 8-task submission for a 100-task request, with no warning. That violates this skill's own "caller-supplied fields are always authoritative" contract. Guard it:
+
+1. **Caller did NOT supply a `task_generator` this invocation** → the cached interview is authoritative; continue.
+2. **Both exist** → compare by canonical content (sort keys, then compare — or sha256 of the canonicalized JSON):
+   - **Equal** → short-circuit as before; continue.
+   - **Different** → do NOT silently use the cached one. Branch on `on_task_generator_mismatch`:
+     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (`cached` from `interview.json`, `caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh` or `=prefer-caller`, or clear `.hpc/` to start fresh.
+     - `refresh` → rewrite `interview.json` (and regenerate `.hpc/tasks.py`) from the caller's `task_generator` via `hpc-wrap-entry-point`, then continue with the caller's.
+     - `prefer-caller` → use the caller's `task_generator` for this submission without rewriting the interview (the previous unconditional behavior, now an explicit opt-in).
+
+   The silent "cached wins" behavior is removed — a divergent count must be surfaced, not dropped on the floor.
+
+Otherwise (no `@register_run` and no `interview.json`), invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generator, experiment_dir}`. The sub-skill itself follows the same contract — if it can't resolve (e.g., multiple entry-point candidates), it returns its own ambiguities. Propagate them into this skill's list:
 
 ```json
 {"field": "entry_point", "candidates": ["train.py", "main.py"], "depends_on": [], "safe_default": "<first match>"}
@@ -214,5 +227,5 @@ The worker may surface its own mid-flight needs_resolution — e.g., `co_tenant_
 - **One round-trip per call** (when ambiguities have no dependencies among each other). At most 2-3 round-trips if dependencies cascade (e.g., entry_point must be resolved before data_axis dialog can be asked). The depth is bounded by the dependency DAG, not by the number of ambiguities.
 - **The worker is the experiment-agnostic execution layer.** Decisions about *this experiment* (executor, axis, walltime) live in this skill. Decisions about *workflow plumbing* (is there an in-flight run? is the spec cached?) live in the worker. The seam is clean.
 - **Idempotent on `cmd_sha`.** Re-invoking with the same resolved fields produces the same `cmd_sha`; the submit-flow primitive dedupes against the journal.
-- **Caller-supplied fields are always authoritative.** This skill's auto-resolution never overrides a value the caller passed in. The slash uses this to pass user-confirmed values; MARs's experiment-runner uses this to pass pre-resolved values.
+- **Caller-supplied fields are always authoritative.** This skill's auto-resolution never overrides a value the caller passed in. The slash uses this to pass user-confirmed values; MARs's experiment-runner uses this to pass pre-resolved values. **This includes `task_generator` vs. a cached `interview.json`** (Step 3): a divergent cached generator must surface as `spec_invalid: task_generator_mismatch` (default), never silently shrink a 100-task request to a stale 8-task submission.
 - **No `[Y/n]` in this skill body.** Every choice point either resolves from caller-supplied input, autonomously, or via a sub-skill (which is also `[Y/n]`-free). The dialog prose lives in the `/submit-hpc` slash wrapper.
