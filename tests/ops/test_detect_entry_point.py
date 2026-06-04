@@ -1,0 +1,236 @@
+"""Tests for the ``detect-entry-point`` composite primitive (WS5 #4).
+
+Pins the entry-point discovery scan that collapses the six raw-shell
+probes ``hpc-wrap-entry-point`` SKILL.md duplicated across Step 0
+(greenfield) and Step 1 (mature repo). Each test builds a tmp
+experiment dir with fixture entry-point files and asserts the
+``kind`` / ``candidates`` / ``argv_kind`` / ``decoration_found`` the
+verb reports, one case per probe + per argv style the classifier can
+emit.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from hpc_agent.ops import detect_entry_point as dep
+
+
+def _argv_kind_for(candidates: list[dict[str, str]], path: str) -> str | None:
+    """Return the ``argv_kind`` of the candidate whose ``path`` == *path*."""
+    return next((c["argv_kind"] for c in candidates if c["path"] == path), None)
+
+
+class TestGreenfield:
+    """An empty repo (no entry point, no decoration) is ``greenfield``."""
+
+    def test_empty_dir_is_greenfield(self, tmp_path: Path) -> None:
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["kind"] == "greenfield"
+        assert result["candidates"] == []
+        assert result["decoration_found"] == []
+
+    def test_str_and_path_experiment_dir_agree(self, tmp_path: Path) -> None:
+        # The CLI passes a str; in-process callers pass a Path. Both coerce.
+        from_path = dep.detect_entry_point(experiment_dir=tmp_path)
+        from_str = dep.detect_entry_point(experiment_dir=str(tmp_path))
+        assert from_path == from_str
+
+
+class TestArgvClassification:
+    """Each Python candidate's CLI surface classifies to the right argv_kind."""
+
+    def test_argparse(self, tmp_path: Path) -> None:
+        (tmp_path / "train.py").write_text(
+            "import argparse\n"
+            "def main():\n"
+            "    p = argparse.ArgumentParser()\n"
+            "    p.add_argument('--seed', type=int)\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["kind"] == "detected"
+        assert _argv_kind_for(result["candidates"], "train.py") == "argparse"
+
+    def test_click(self, tmp_path: Path) -> None:
+        (tmp_path / "main.py").write_text(
+            "import click\n"
+            "@click.command()\n"
+            "@click.option('--seed', type=int)\n"
+            "def run(seed):\n"
+            "    ...\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "main.py") == "click"
+
+    def test_typer(self, tmp_path: Path) -> None:
+        (tmp_path / "run.py").write_text(
+            "import typer\napp = typer.Typer()\n@app.command()\ndef run(seed: int):\n    ...\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "run.py") == "typer"
+
+    def test_hydra(self, tmp_path: Path) -> None:
+        # A hydra entry point also imports argparse in some repos; the
+        # @hydra.main decorator must win (it rewrites the signature).
+        (tmp_path / "train.py").write_text(
+            "import argparse\n"
+            "import hydra\n"
+            '@hydra.main(config_path="conf")\n'
+            "def main(cfg):\n"
+            "    ...\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "train.py") == "hydra"
+
+    def test_fire(self, tmp_path: Path) -> None:
+        (tmp_path / "main.py").write_text(
+            "import fire\n"
+            "def run(seed=0):\n"
+            "    ...\n"
+            'if __name__ == "__main__":\n'
+            "    fire.Fire(run)\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "main.py") == "fire"
+
+    def test_bare_main_block(self, tmp_path: Path) -> None:
+        # No CLI library, just a bare __main__ block → "__main__".
+        (tmp_path / "experiment.py").write_text(
+            "def main():\n    print('hi')\nif __name__ == \"__main__\":\n    main()\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "experiment.py") == "__main__"
+
+
+class TestPackageMain:
+    """``find ... -name __main__.py`` — package modules are ``python -m`` targets."""
+
+    def test_package_main_detected(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__main__.py").write_text("print('run me with python -m mypkg')\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "mypkg/__main__.py") == "__main__"
+
+    def test_package_main_with_argparse(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__main__.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "mypkg/__main__.py") == "argparse"
+
+    def test_dotfile_dir_main_excluded(self, tmp_path: Path) -> None:
+        # -not -path '*/.*' — a __main__.py under a dotfile dir (.venv) is
+        # skipped, exactly as the shell ``find`` probe would skip it.
+        venv = tmp_path / ".venv" / "lib"
+        venv.mkdir(parents=True)
+        (venv / "__main__.py").write_text("...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["candidates"] == []
+        assert result["kind"] == "greenfield"
+
+    def test_too_deep_main_excluded(self, tmp_path: Path) -> None:
+        # -maxdepth 4 — a/b/c/d/__main__.py (5 parts) is past the cap.
+        deep = tmp_path / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        (deep / "__main__.py").write_text("...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["candidates"] == []
+
+
+class TestSrcCandidates:
+    """The second ``ls src/main.py src/train.py src/run.py`` probe."""
+
+    def test_src_train_detected(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "train.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "src/train.py") == "argparse"
+
+
+class TestConsoleScripts:
+    """``grep -A1 '[project.scripts]' pyproject.toml`` → console_script candidates."""
+
+    def test_project_scripts_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "demo"\n'
+            "[project.scripts]\n"
+            'mytool = "demo.cli:main"\n'
+            'othercmd = "demo.other:run"\n'
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        names = {c["path"] for c in result["candidates"]}
+        assert {"mytool", "othercmd"} <= names
+        assert _argv_kind_for(result["candidates"], "mytool") == "console_script"
+        assert result["kind"] == "detected"
+
+    def test_pyproject_without_scripts_table(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "demo"\n')
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["candidates"] == []
+        assert result["kind"] == "greenfield"
+
+
+class TestShellCandidates:
+    """``ls run.sh launch.sh ./simulator`` → shell / binary entry points."""
+
+    def test_run_sh_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "run.sh").write_text("#!/bin/sh\necho hi\n")
+        (tmp_path / "simulator").write_text("binary-ish\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert _argv_kind_for(result["candidates"], "run.sh") == "shell"
+        assert _argv_kind_for(result["candidates"], "simulator") == "shell"
+        assert result["kind"] == "detected"
+
+
+class TestDecoration:
+    """``grep -rln '@register_run' notebooks/ src/ *.py`` → decoration_found."""
+
+    def test_root_py_decoration(self, tmp_path: Path) -> None:
+        (tmp_path / "train.py").write_text(
+            "from hpc_agent import register_run\n@register_run\ndef run(seed: int):\n    ...\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert "train.py" in result["decoration_found"]
+        # A @register_run on disk is itself a non-greenfield signal.
+        assert result["kind"] == "detected"
+
+    def test_src_decoration(self, tmp_path: Path) -> None:
+        src = tmp_path / "src" / "pkg"
+        src.mkdir(parents=True)
+        (src / "model.py").write_text("@register_run\ndef run():\n    ...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert "src/pkg/model.py" in result["decoration_found"]
+
+    def test_decoration_only_is_not_greenfield(self, tmp_path: Path) -> None:
+        # No conventional entry-point file, but a decorated helper exists:
+        # the repo is already (partially) onboarded → detected, not greenfield.
+        helper = tmp_path / "src"
+        helper.mkdir()
+        (helper / "helpers.py").write_text("@register_run\ndef go():\n    ...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["candidates"] == []
+        assert result["decoration_found"] == ["src/helpers.py"]
+        assert result["kind"] == "detected"
+
+    def test_no_decoration_when_absent(self, tmp_path: Path) -> None:
+        (tmp_path / "train.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["decoration_found"] == []
+
+
+class TestMultipleCandidates:
+    """Multiple entry points all surface (the skill refuses on the tie itself)."""
+
+    def test_two_python_candidates_both_listed(self, tmp_path: Path) -> None:
+        (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        (tmp_path / "train.py").write_text("import click\n@click.command()\ndef r():\n    ...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        paths = {c["path"] for c in result["candidates"]}
+        assert {"main.py", "train.py"} <= paths
+        assert _argv_kind_for(result["candidates"], "main.py") == "argparse"
+        assert _argv_kind_for(result["candidates"], "train.py") == "click"

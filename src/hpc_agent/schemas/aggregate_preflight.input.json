@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_preflight.input.json",
+  "title": "AggregatePreflightSpec",
+  "description": "Input spec for the ``aggregate-preflight`` composite primitive (WS5 #3b).\n\nCollapses the top-of-aggregate boilerplate — ``install-commands`` +\n``load-context`` + (optional) ``reconcile`` — into one CLI call. Third\nand final member of the ``<skill>-preflight`` family.\n\nThe reconcile branch is the structural twist that distinguishes\naggregate from submit/status: it fires only when ``load-context``'s\noutput reports ``next_step_hint == \"monitor\"`` AND the caller supplied\n``reconcile_scheduler`` — mirroring ``hpc-aggregate`` Step 1b, which\nreconciles a journal-only in-flight run against the cluster before\nrefusing with \"nothing to aggregate\". Unlike submit's statically-known\n``check-preflight`` argv, the reconcile sub-call is assembled from\nload-context's envelope after it runs.",
+  "type": "object",
+  "required": [
+    "experiment_dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory."
+    },
+    "reconcile_scheduler": {
+      "anyOf": [
+        {
+          "enum": [
+            "sge",
+            "slurm",
+            "pbspro",
+            "torque"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reconcile Scheduler",
+      "description": "Scheduler family of the in-flight run. When supplied AND load-context reports next_step_hint == 'monitor', the reconcile sub-call runs `hpc-agent reconcile` against the cluster for the first in-flight run_id (Step 1b) before aggregation trusts the journal. reconcile needs the scheduler family to query alive job IDs. Omit (null) to skip the reconcile branch entirely."
+    },
+    "skip": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "install-commands",
+          "load-context",
+          "reconcile"
+        ]
+      },
+      "default": [],
+      "title": "Skip",
+      "description": "Sub-calls to skip. Useful in tests where a previous call established freshness; production callers should pass an empty list. Skipping ``load-context`` also suppresses ``reconcile`` (its trigger condition is read from load-context's output)."
+    },
+    "timeout_sec": {
+      "minimum": 1,
+      "default": 60,
+      "type": "integer",
+      "title": "Timeout Sec",
+      "description": "Per-sub-call subprocess timeout. install-commands is a local filesystem op (<1s typical); load-context touches journal + clusters.yaml (single-digit seconds); reconcile adds a cluster SSH round-trip (a few seconds on the slow path)."
+    }
+  }
+}

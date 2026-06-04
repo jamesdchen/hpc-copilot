@@ -49,48 +49,41 @@ Caller may pre-resolve to skip detection:
 
 ### 0. Detect or scaffold an entry point (greenfield branch)
 
-Probe whether the repo already has an entry-point file:
+Run the entry-point detection verb once — it collapses the entry-point probes (conventional `main.py`/`train.py`/`run.py`/`experiment.py` at the root and under `src/`, package `__main__.py` `python -m` targets, `[project.scripts]` console scripts, `run.sh`/`launch.sh`/binary entry points, and `@register_run` decoration on disk) into one deterministic scan:
 
 ```bash
-ls main.py train.py run.py experiment.py 2>/dev/null
-ls src/main.py src/train.py src/run.py 2>/dev/null
-find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
-test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
-ls run.sh launch.sh ./simulator 2>/dev/null
-grep -rln '@register_run' notebooks/ src/ *.py 2>/dev/null | head
+hpc-agent detect-entry-point --experiment-dir <experiment_dir>
 ```
 
-**If anything matches** — at least one file is a plausible entry point or a `@register_run` is already on disk — skip to Step 1.
+Branch on `data.kind`:
 
-**If nothing matches** — this is a greenfield repo. Use the caller-supplied `shape` (or default to `script`) and scaffold:
+**`detected`** — at least one entry-point candidate exists (`data.candidates` is non-empty) or a `@register_run` is already on disk (`data.decoration_found` is non-empty). Skip to Step 1, reusing this same `data` block (no need to re-scan).
+
+**`greenfield`** — no candidate of any kind and no decoration. This is a greenfield repo. Use the caller-supplied `shape` (or default to `script`) and scaffold:
 
 ```bash
 hpc-agent build-template --repo-dir . --shape script    # or --shape notebook
 ```
 
-The primitive injects the chosen seed file (`train.py` at repo root or `notebooks/experiment.ipynb`) alongside the framework-owned `.hpc/` assets. Then proceed through Step 1 onwards against the freshly scaffolded file.
+The primitive injects the chosen seed file (`train.py` at repo root or `notebooks/experiment.ipynb`) alongside the framework-owned `.hpc/` assets. Then re-run `detect-entry-point --experiment-dir <experiment_dir>` against the freshly scaffolded file and proceed through Step 1 onwards.
 
 ### 1. Detect the entry point
 
-Walk the repo to identify candidates (the probe order below is by likelihood, used only for stable diagnostic output — not as a tie-break, since ties refuse):
+Use the `data` block from the Step 0 `detect-entry-point` call (re-run it if you scaffolded a greenfield seed in Step 0):
 
 ```bash
-ls main.py train.py run.py experiment.py 2>/dev/null
-ls src/main.py src/train.py src/run.py 2>/dev/null
-find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
-test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
-ls run.sh launch.sh ./simulator 2>/dev/null
+hpc-agent detect-entry-point --experiment-dir <experiment_dir>
 ```
 
-For each candidate Python file, inspect the CLI surface — `argparse.ArgumentParser`, `@click.command` / `@click.group`, `@app.command` (typer), `fire.Fire(...)`, `@hydra.main`, or a bare `if __name__ == "__main__":` block calling something with `sys.argv`. For a package with `__main__.py`, the invocation is `python3 -m <pkg>`. For a `console_scripts` entry, the registered command name.
+`data.candidates` lists every entry-point candidate in by-likelihood probe order (used only for stable diagnostic output — not as a tie-break, since ties refuse). Each candidate carries its classified `argv_kind` — the CLI surface read off the file's imports + decorators: `argparse` (`argparse.ArgumentParser` / `import argparse`), `click` (`@click.command` / `@click.group`), `typer` (`@app.command`), `fire` (`fire.Fire(...)`), `hydra` (`@hydra.main`), or `__main__` for a bare `if __name__ == "__main__":` block or a package `__main__.py` (invoked as `python3 -m <pkg>`). A `[project.scripts]` console script is `console_script` (its `path` is the registered command name); a `run.sh`/`launch.sh`/binary is `shell`.
 
 **Autonomous resolution**:
 
 - If the caller supplied `entry_point.path`, use it (overrides detection).
-- Else if exactly one candidate matched across all probes, use it.
-- Else (multiple Python entry points, no caller pick) **return `spec_invalid` with `error_code: ambiguous_entry_point`** listing the candidates. The skill does not silently pick across `main.py` / `train.py` / `run.py` when more than one exists — the wrong choice is non-recoverable without the user noticing.
+- Else if exactly one candidate matched (`len(data.candidates) == 1`), use it.
+- Else (multiple entry points, no caller pick) **return `spec_invalid` with `error_code: ambiguous_entry_point`** listing the candidates. The skill does not silently pick across `main.py` / `train.py` / `run.py` when more than one exists — the wrong choice is non-recoverable without the user noticing.
 
-Record the picked entry point — the path (or `-m` invocation), and which CLI library it uses.
+Record the picked entry point — the path (or `-m` invocation), and which CLI library it uses (the candidate's `argv_kind`).
 
 ### 2. Decide the pathway: direct decoration (default) vs. wrapper materialization (fallback)
 

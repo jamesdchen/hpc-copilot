@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/check_task_generator_mismatch.input.json",
+  "title": "CheckTaskGeneratorMismatchSpec",
+  "description": "Input spec for the ``check-task-generator-mismatch`` validate verb (WS5 #9).\n\nCanonical-JSON compare between a caller-supplied ``task_generator`` and\nthe cached/derived one (the ``interview.json`` generator left in\n``experiment_dir`` from earlier dev work). The comparison is by canonical\ncontent — both shapes are normalized with key-sorted, whitespace-free\nJSON — so two generators that differ only in key order compare equal.\n\nEach generator is accepted as a JSON object string on the CLI (parsed\nbefore canonicalization); the in-process Python entry point also accepts\nan already-parsed object. ``cached_task_generator`` is optional: omit it\nwhen no cached generator exists, and the match is vacuously true (the\ncaller's generator is authoritative with nothing to diverge from).",
+  "type": "object",
+  "required": [
+    "caller_task_generator"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "caller_task_generator": {
+      "type": "object",
+      "title": "Caller Task Generator",
+      "description": "Caller-supplied task_generator (this invocation's authoritative shape). On the CLI, a JSON object string."
+    },
+    "cached_task_generator": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cached Task Generator",
+      "description": "Cached/derived task_generator (e.g. from interview.json), or null when none exists. When null the match is vacuously true."
+    }
+  }
+}

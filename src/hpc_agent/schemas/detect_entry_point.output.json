@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/detect_entry_point.output.json",
+  "title": "DetectEntryPointReport",
+  "description": "Output ``data`` block for ``detect-entry-point`` (WS5 #4).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). ``kind`` is ``greenfield`` when the scan found NO\nentry-point candidate of any kind AND no ``@register_run`` on disk —\notherwise ``detected``. ``candidates`` carries one entry per discovered\nentry point with its classified argv style; ``decoration_found`` lists\nthe files already carrying ``@register_run`` decoration. This is exactly\nwhat ``hpc-wrap-entry-point`` SKILL.md branches on in Step 0 (scaffold\nvs. onboard) and Step 1 (pick the entry point + its CLI surface).",
+  "type": "object",
+  "required": [
+    "kind",
+    "candidates",
+    "decoration_found"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "greenfield",
+        "detected"
+      ],
+      "type": "string",
+      "title": "Kind",
+      "description": "``greenfield`` iff no entry-point candidate of any kind exists and no ``@register_run`` is on disk; else ``detected``. Step 0 scaffolds via ``build-template`` on ``greenfield`` and onboards the existing entry point on ``detected``."
+    },
+    "candidates": {
+      "type": "array",
+      "title": "Candidates",
+      "description": "One entry per discovered entry-point candidate, in by-likelihood probe order. Python files carry their classified ``argv_kind`` (argparse / click / typer / hydra / fire / __main__); console scripts and shell/binary entry points carry ``console_script`` / ``shell``.",
+      "items": {
+        "$ref": "#/$defs/Candidate"
+      }
+    },
+    "decoration_found": {
+      "type": "array",
+      "title": "Decoration Found",
+      "description": "Relative paths of files containing a ``@register_run`` decoration (the ``grep -rln '@register_run' notebooks/ src/ *.py`` probe). A non-empty list means the repo is already (partially) onboarded.",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "Candidate": {
+      "additionalProperties": false,
+      "title": "Candidate",
+      "type": "object",
+      "description": "One entry-point candidate: its path (relative to the experiment dir, or the registered command name for a console script) plus the classified argv style.",
+      "required": [
+        "path",
+        "argv_kind"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "title": "Path",
+          "description": "Path relative to the experiment dir (e.g. ``train.py``, ``src/main.py``, ``mypkg/__main__.py``), or — for a ``[project.scripts]`` console script — the registered command name."
+        },
+        "argv_kind": {
+          "enum": [
+            "argparse",
+            "click",
+            "typer",
+            "hydra",
+            "fire",
+            "__main__",
+            "console_script",
+            "shell"
+          ],
+          "type": "string",
+          "title": "Argv Kind",
+          "description": "The candidate's CLI surface. Python files: ``argparse`` / ``click`` / ``typer`` / ``hydra`` / ``fire`` (by import + decorator), or ``__main__`` for a bare ``if __name__`` block or a package ``__main__.py`` with no recognized library. ``console_script`` for a ``[project.scripts]`` entry; ``shell`` for a non-Python ``run.sh`` / ``launch.sh`` / binary."
+        }
+      }
+    }
+  }
+}

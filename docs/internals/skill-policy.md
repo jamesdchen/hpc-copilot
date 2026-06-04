@@ -163,6 +163,51 @@ If the answer to (3) is "yes, for *only* the human consumer" — that's rare; us
 - It does not say a skill cannot consult prior state or invoke other primitives. It can do anything mechanical. The constraint is just no synchronous prompting.
 - It does not say a primitive cannot be backed by a skill. Most are. The skill is the *agent adapter* for the primitive — the primitive remains the harness-agnostic source of truth.
 
+## The sub-skill return seam (and the autofetch hook)
+
+A composed sub-skill (`hpc-classify-axis`, `hpc-build-executor`,
+`hpc-wrap-entry-point`, `hpc-status`, `hpc-aggregate`) returns to its
+parent via a **file**, not a chat message: it writes its envelope to
+`<experiment_dir>/.hpc/_returns/<skill>.json` (`emit-skill-return`), and
+the parent reads it back (`fetch-skill-return`). This avoids the
+end-of-turn signal that the Skill-tool chat-message return fires, which
+stalls the parent mid-procedure. The set of skills that emit a return is
+the single list `_KNOWN_SKILLS` in
+[`hpc_agent/cli/skill_returns.py`](../../src/hpc_agent/cli/skill_returns.py).
+
+There are two seams where the parent's *prose discipline* still matters:
+remembering to `Skill(<sub>)`, and remembering the follow-up
+`fetch-skill-return`. The second seam is removed by a harness hook:
+
+- **`skill-return autofetch` — a `PostToolUse` hook.**
+  [`hpc_agent/_kernel/hooks/skill_return_autofetch.py`](../../src/hpc_agent/_kernel/hooks/skill_return_autofetch.py)
+  runs after every tool call. When the just-completed tool is `Skill` and
+  the sub-skill is in `_KNOWN_SKILLS`, it reads
+  `<cwd>/.hpc/_returns/<skill>.json` and injects the envelope as
+  `additionalContext`, so the return value lands in the agent's next
+  observation whether or not the parent remembered to fetch it. It is
+  **additive and fail-open**: it never deletes the file (the manual
+  `fetch-skill-return` prose keeps working), and any non-`Skill` tool,
+  unknown skill, missing/malformed file, or malformed payload is a clean
+  no-op — it can never block a tool call or crash the harness.
+
+  *Harness-mediated, not a `@primitive`.* The agent never invokes it; the
+  harness does. `experiment_dir` is taken from the payload's `cwd` (the
+  directory skills operate from).
+
+**Install / disable.** `hpc-agent install-commands` (and `setup`) merge
+the hook into `~/.claude/settings.json`'s `hooks.PostToolUse` array —
+**additively and idempotently** (a re-run does not duplicate it, matched
+by the module path so a moved venv is still recognised; an existing
+unparseable `settings.json` is left untouched and reported as
+`skipped-unparseable`). The merge is
+[`hpc_agent.agent_assets._merge_skill_return_hook`](../../src/hpc_agent/agent_assets.py);
+its result is surfaced under the install envelope's
+`data.settings_hook`. To **disable** the hook, delete the entry whose
+`hooks[].command` contains `hpc_agent._kernel.hooks.skill_return_autofetch`
+from `~/.claude/settings.json`'s `hooks.PostToolUse` array (a re-run of
+`install-commands` will re-add it).
+
 ## See also
 
 - [`adding-a-primitive.md`](adding-a-primitive.md) — the wire-surface recipe; complementary to this doc.

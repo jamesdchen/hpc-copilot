@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/resolve_resources.input.json",
+  "title": "ResolveResourcesSpec",
+  "description": "Input spec for the ``resolve-resources`` composite primitive (WS5 #5).\n\nCollapses ``hpc-submit`` SKILL.md Step 6's silent multi-step resource\nresolution — runtime-prior walltime + cluster gpu default + partition —\ninto one CLI call. Each of ``walltime_sec`` / ``gpu_type`` / ``partition``\nresolves from a caller override first, then an auto-resolution rule.\n\nThe ``walltime_sec`` auto-path probes the OPTIONAL ``read-runtime-prior``\nverb (p95 × safety_mult). That verb is plugin-only: on a core install it\nis not registered, and the first submit has no prior. A missing/erroring\nverb, or one reporting ``needs_canary``, is cold-start — ``walltime_sec``\nstays null (the caller falls back to the cluster cold-start walltime),\nNOT an error. Partition resolution delegates to the existing\n``recommend-partition`` primitive; partition logic is not reimplemented.",
+  "type": "object",
+  "required": [
+    "cluster"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string",
+      "description": "Cluster name. Keys the gpu_type default (clusters.<cluster>.gpu_types[0]) and the read-runtime-prior lookup."
+    },
+    "experiment_dir": {
+      "default": ".",
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Experiment directory (default cwd). Forwarded to the read-runtime-prior probe and to recommend-partition."
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile",
+      "description": "Run profile (run_name) — the read-runtime-prior lookup key. When null, the walltime probe is skipped and walltime resolves cold-start (``cold_start_no_profile``)."
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cmd Sha",
+      "description": "Optional cmd_sha to filter the runtime prior to this exact code version. Omit to use the profile-wide prior."
+    },
+    "walltime_sec": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Walltime Sec",
+      "description": "Caller override for walltime_sec (seconds). When supplied, the read-runtime-prior probe is skipped entirely and provenance is ``caller``."
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Type",
+      "description": "Caller override for gpu_type. When supplied, the clusters.<cluster>.gpu_types[0] default is skipped and provenance is ``caller``."
+    },
+    "safety_mult": {
+      "default": 1.3,
+      "exclusiveMinimum": 0,
+      "type": "number",
+      "title": "Safety Mult",
+      "description": "Multiplier applied to the runtime-prior p95 to size walltime (default 1.30 = 30% headroom over historical p95). Only used on the auto-resolve path."
+    },
+    "partition": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Partition",
+      "description": "Caller override for partition. When supplied, recommend-partition is skipped and provenance is ``caller``."
+    },
+    "user_preferred_partition": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Preferred Partition",
+      "description": "Soft partition preference forwarded to recommend-partition (honoured verbatim when it names a declared partition). Distinct from ``partition``, which is a hard override that skips recommend-partition."
+    }
+  }
+}

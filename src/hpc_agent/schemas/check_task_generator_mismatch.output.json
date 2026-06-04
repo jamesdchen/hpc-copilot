@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/check_task_generator_mismatch.output.json",
+  "title": "CheckTaskGeneratorMismatchReport",
+  "description": "Output ``data`` block for ``check-task-generator-mismatch`` (WS5 #9).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). ``match`` is the short-circuit signal most callers read\nfirst: true means the cached interview is authoritative and Step 3\ncontinues; false is the seam where ``hpc-submit`` branches on\n``on_task_generator_mismatch``. On a mismatch both canonical forms + their\nsha256 are returned so the caller can surface BOTH shapes in a\n``task_generator_mismatch`` envelope.",
+  "type": "object",
+  "required": [
+    "match",
+    "reason",
+    "caller",
+    "cached"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "match": {
+      "type": "boolean",
+      "title": "Match",
+      "description": "True when the two generators' canonical JSON is byte-identical, OR when no cached generator was supplied (vacuous match)."
+    },
+    "reason": {
+      "enum": [
+        "identical",
+        "divergent",
+        "no_cached_generator"
+      ],
+      "type": "string",
+      "title": "Reason",
+      "description": "``identical`` (canonical forms equal), ``divergent`` (canonical forms differ), or ``no_cached_generator`` (no cached generator to compare; vacuous match)."
+    },
+    "caller": {
+      "$ref": "#/$defs/GeneratorDigest",
+      "title": "Caller",
+      "description": "The caller-supplied generator's canonical JSON + sha256."
+    },
+    "cached": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GeneratorDigest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cached",
+      "description": "The cached generator's canonical JSON + sha256, or null when none was supplied."
+    }
+  },
+  "$defs": {
+    "GeneratorDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "GeneratorDigest",
+      "description": "One generator's canonical form + content hash.",
+      "required": [
+        "canonical",
+        "sha256"
+      ],
+      "properties": {
+        "canonical": {
+          "type": "string",
+          "title": "Canonical",
+          "description": "Key-sorted, whitespace-free canonical JSON of the generator."
+        },
+        "sha256": {
+          "type": "string",
+          "title": "Sha256",
+          "description": "SHA-256 hex digest of the canonical JSON — cheap downstream equality / logging key."
+        }
+      }
+    }
+  }
+}

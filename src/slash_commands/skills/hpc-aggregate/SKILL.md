@@ -33,42 +33,38 @@ Same as `hpc-submit`: walk every step, accumulate ambiguities, return all in one
 
 ## Steps
 
-### 0. Ensure agent assets installed (idempotent)
-
-The handoff at the end of this skill dispatches the rendered procedure to the named subagent `hpc-worker` discovered under `~/.claude/agents/hpc-worker.md`. If that file is missing — typically because `hpc-agent install-commands` hasn't run on this machine yet — the dispatch fails. Run install-commands first so this never bites:
+### 0. Top-of-skill preflight (install + load + optional reconcile)
 
 ```bash
-hpc-agent install-commands
+hpc-agent aggregate-preflight --experiment-dir <experiment_dir> [--reconcile-scheduler <sge|slurm|pbspro|torque>]
 ```
 
-Idempotent: a no-op when assets are already installed. A pre-existing 0-byte file at `~/.claude/{commands,skills,agents}` is auto-cleared (see `result.cleared_collisions`); a non-empty file raises `FileExistsError` with a clear remediation — stop and surface that. Costs ~50ms when re-run.
+Composite verb that runs `install-commands` → `load-context` → (conditionally) `reconcile` as one deterministic state machine — replaces the prior Step 0 (`install-commands`) + Step 1 (`load-context`) + Step 1b (`reconcile`) sequence this skill carried through 0.10.6. Sequential by design: install must succeed before `load-context` can resolve framework paths. The composite's `data` carries each sub-envelope verbatim under `data.install_commands.envelope`, `data.load_context.envelope`, and `data.reconcile.envelope` — same shapes the steps had individually, so downstream branching on `data.load_context.envelope.data.in_flight` / `next_step_hint` is unchanged. Skipped or not-applicable (`null`) slots are visible per-call so a re-run can target only the failing piece.
 
-### 1. Load context
+The install-commands sub-call exists because the handoff at the end of this skill dispatches the rendered procedure to the named subagent `hpc-worker` under `~/.claude/agents/hpc-worker.md`; if install-commands never ran, that file is missing and the dispatch fails. Idempotent: a no-op when assets are installed (~50ms). A pre-existing 0-byte sentinel at `~/.claude/{commands,skills,agents}` is auto-cleared (reported under `data.install_commands.envelope.data.cleared_collisions`); a non-empty collision raises `FileExistsError` with a clear remediation — surface that and stop.
 
-```bash
-hpc-agent load-context --experiment-dir <experiment_dir>
-```
+On `overall: "fail"`, surface the failing sub-envelope's `error_code` + `remediation` (preserved under `data.<subcall>.envelope`) and stop. On `overall: "pass"`, proceed to Step 2.
 
-### 1b. Reconcile a journal-only "in-flight" run against the cluster
+#### When to supply `--reconcile-scheduler`
 
-`load-context` reports run state **from the journal**, which can lag the cluster: the scheduler may have completed, failed, killed, or purged the job after the last poll, yet the journal still records `in_flight` / `next_step_hint == "monitor"`. Trusting it blindly makes aggregation refuse with "nothing to aggregate yet" on a run that has actually finished — with no escape. This is the **symmetric** recovery to `hpc-submit`'s `already_in_flight` step, which already reconciles against the cluster.
+`load-context` reports run state **from the journal**, which can lag the cluster: the scheduler may have completed, failed, killed, or purged the job after the last poll, yet the journal still records `in_flight` / `next_step_hint == "monitor"`. Trusting it blindly makes aggregation refuse with "nothing to aggregate yet" on a run that has actually finished — with no escape. This is the **symmetric** recovery to `hpc-submit`'s `already_in_flight` step.
 
-So when `load-context.data` shows **no terminal run for the target profile but a non-empty `data.in_flight`** (the journal still says `monitor`), do NOT conclude anything from the journal alone. Reconcile against live cluster state first (derive `--scheduler` from the run's cluster in `load-context.data` / the run sidecar):
+So the reconcile sub-call fires only when **the journal's `next_step_hint == "monitor"` AND you supplied `--reconcile-scheduler`**. Supply it when you can resolve the scheduler up front — a single configured cluster in `clusters.yaml`, or a caller-pinned cluster — so the in-flight run is reconciled against live cluster state inside this one verb. The composite targets the first `data.in_flight` run_id; a single reconcile also settles its paired `-canary` sibling (#258), so one call clears both journal entries.
+
+When you **cannot** resolve the scheduler ahead of time (the in-flight run's cluster is only knowable from `data.load_context` after the call), omit `--reconcile-scheduler`. The composite then returns with `data.reconcile == null` and `data.load_context.envelope.data.next_step_hint == "monitor"`; derive `--scheduler` from the run's cluster in `data.load_context` and issue the reconcile as a follow-up:
 
 ```bash
 hpc-agent reconcile --run-id <in_flight_run_id> --scheduler <sge|slurm|pbspro|torque> --experiment-dir <experiment_dir>
 ```
 
-`reconcile` polls the cluster once and updates the journal. Branch on `data.lifecycle_state`:
+Either path produces a reconcile envelope. Branch on `data.lifecycle_state` (under `data.reconcile.envelope.data` when folded into the composite, or the standalone reconcile envelope when run as a follow-up):
 
 - **terminal** (`completed` / `failed` / `timeout` / …) — the cluster confirms the run finished; the journal is now marked terminal. Treat this run as the terminal `run_id` and continue to Step 2/3.
 - **`abandoned`** — recorded `job_ids` exist but none are alive on the scheduler (scratch wiped, job manually cancelled, scheduler retention purged the record). Return `spec_invalid: run_abandoned` naming the `run_id`, with remediation: re-submit the run, or — if the cluster `_combiner/` partials still exist — aggregate them explicitly via `mode: "combiner-only"`. Do NOT silently report "nothing to aggregate".
 - **still in-flight** (the cluster confirms work genuinely running) — now *confirmed against the cluster*, return `spec_invalid: nothing_to_aggregate` naming the running job and pointing the caller at `/monitor-hpc` to drive it to terminal.
 - **`unable_to_verify`** (#258) — the cluster alive-check itself failed (SSH / auth / network), so the run's true state is unknown. Do NOT conclude `abandoned` or `nothing_to_aggregate`; surface the SSH error from `data.last_status` and have the operator fix connectivity/auth and re-run. Distinct from "still in-flight" — there the cluster answered; here it didn't.
 
-A single `reconcile` also settles the run's paired `-canary` sibling (#258), so one call clears both journal entries.
-
-Skip this step when `load-context` already shows a terminal run for the profile (the normal post-monitor path) — there's nothing to reconcile.
+When `load-context` already shows a terminal run for the profile (the normal post-monitor path), `next_step_hint` is not `monitor`, the reconcile branch never fires, and there's nothing to reconcile — proceed straight to Step 2.
 
 ### 2. Resolve profile + run_id + stage
 
@@ -78,7 +74,7 @@ Skip this step when `load-context` already shows a terminal run for the profile 
   ```json
   {"field": "profile", "candidates": [<profile list>], "depends_on": [], "safe_default": "<most recent>"}
   ```
-- Else zero terminal runs → **first run Step 1b** (reconcile the journal-only in-flight run against the cluster). Only return `spec_invalid: nothing_to_aggregate` once reconcile has *confirmed against the cluster* that there is nothing terminal to aggregate and nothing `abandoned` to surface — never from the journal's `next_step_hint` alone.
+- Else zero terminal runs → **first run the Step 0 reconcile branch** (reconcile the journal-only in-flight run against the cluster — folded into `aggregate-preflight` via `--reconcile-scheduler`, or the standalone `hpc-agent reconcile` follow-up). Only return `spec_invalid: nothing_to_aggregate` once reconcile has *confirmed against the cluster* that there is nothing terminal to aggregate and nothing `abandoned` to surface — never from the journal's `next_step_hint` alone.
 
 For the chosen profile, pick the latest terminal `run_id` unless caller pinned one. `stage` defaults to the run's final stage.
 
@@ -141,7 +137,7 @@ The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/
 ## Notes
 
 - **Refuse partial by default.** Aggregating on incomplete waves silently produces wrong final metrics. The caller has to explicitly resolve `allow_partial: true` after understanding what's missing.
-- **Reconcile before declaring "nothing to aggregate."** The journal can lag the cluster; an `in_flight` / `next_step_hint == "monitor"` run may have actually terminated, failed, or been purged. Step 1b reconciles against live cluster state before the skill refuses — the symmetric recovery to `hpc-submit`'s `already_in_flight`. An `abandoned` run surfaces as `spec_invalid: run_abandoned` (with a re-submit / combiner-only remediation), never as an indefinite "still in-flight."
+- **Reconcile before declaring "nothing to aggregate."** The journal can lag the cluster; an `in_flight` / `next_step_hint == "monitor"` run may have actually terminated, failed, or been purged. The Step 0 reconcile branch (folded into `aggregate-preflight`, or a standalone `reconcile` follow-up) reconciles against live cluster state before the skill refuses — the symmetric recovery to `hpc-submit`'s `already_in_flight`. An `abandoned` run surfaces as `spec_invalid: run_abandoned` (with a re-submit / combiner-only remediation), never as an indefinite "still in-flight."
 - **Integrity violations are not auto-fixable.** A missing sidecar means the per-task metrics never landed — bug needs to be found. Returns `spec_invalid`, not `needs_resolution`.
 - **Idempotent.** Re-aggregating the same `(run_id, profile, stage)` produces byte-identical output.
 - **MARs pattern**: invoke after `hpc-status` returns `complete`. The skill auto-discovers the latest terminal run and aggregates; experiment-runner reads `results/metrics.json`.

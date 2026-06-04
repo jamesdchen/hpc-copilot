@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/detect_entry_point.input.json",
+  "title": "DetectEntryPointSpec",
+  "description": "Input spec for the ``detect-entry-point`` composite primitive (WS5 #4).\n\nCollapses the six raw-shell probe block (``ls`` / ``find`` / ``grep`` /\n``head`` over candidate files) that ``hpc-wrap-entry-point`` SKILL.md\nduplicated verbatim across Step 0 (the greenfield branch) and Step 1\n(the mature-repo branch) into one deterministic CLI call. The verb\nscans the experiment directory for Python entry-point candidates\n(conventional ``main.py`` / ``train.py`` / ``run.py`` / ``experiment.py``\nat the root and under ``src/``, package ``__main__.py`` modules, declared\n``[project.scripts]`` console scripts, and non-Python ``run.sh`` /\n``launch.sh`` / binary entry points), classifies each Python candidate's\nargv style, and locates files already carrying ``@register_run``.",
+  "type": "object",
+  "required": [
+    "experiment_dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment / repo directory to scan."
+    }
+  }
+}

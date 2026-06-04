@@ -37,23 +37,25 @@ This skill also covers axis-init — the companion step that writes `.hpc/axes.y
 
 5. **After scaffold succeeds**, use the Read tool to load `data.path`, then customize: fill in `compute(args)` with the experiment's actual computation. **Do not** add an argparse parser here — under the new contract the per-executor CLI flag list lives in `.hpc/tasks.py` `FLAGS["<importable_module_path>"]`, not in the executor file. The dispatcher in `.hpc/cli.py` parses argv at runtime and calls `compute(args)`.
 
-6. **Smoke-test** by importing the new module and calling `compute()` with a minimal Namespace:
+6. **Smoke-test** the scaffolded executor via the [smoke-test-executor](../../../../docs/primitives/smoke-test-executor.md) verb — NOT an inline `python -c` (the execution-style header above forbids arbitrary `python -c`; this verb is the deterministic, classifier-permitted form of that exact import-and-`compute` recipe):
 
    ```bash
-   python -c "import argparse, importlib.util, sys; \
-              spec = importlib.util.spec_from_file_location('m', '<data.path>'); \
-              m = importlib.util.module_from_spec(spec); sys.modules['m'] = m; \
-              spec.loader.exec_module(m); \
-              m.compute(argparse.Namespace(output_file='/tmp/smoke.csv'))"
+   hpc-agent smoke-test-executor --module-path <data.path> [--output-file /tmp/smoke.csv]
    ```
 
-   Non-zero exit means fix-then-retry. (`--help` is not a useful smoke test for the new template — there's no `__main__` block; the dispatcher is the entry point.)
+   The verb imports the module from the file path and calls `compute(Namespace(output_file=...))` in a subprocess, returning `data.{exit_code, stdout_tail, stderr_tail, timed_out}`. Branch on `data.exit_code`: `0` = clean, proceed; non-zero = fix-then-retry (the traceback tail is in `data.stderr_tail`); `null` with `data.timed_out: true` = the module spun past the timeout. (`--help` is not a useful smoke test for the new template — there's no `__main__` block; `compute` is the entry point, which is why the verb calls it rather than importing alone.)
 
 ## Steps (axes-init — companion)
 
 The framework needs to know which parallel dimension to promote to the SLURM/SGE task array. The signal is **per-axis runtime homogeneity**: tasks within a task array share walltime + memory reservation, so heterogeneity within the array forces over-provisioning to the worst-case task. The most homogeneous axis is the right one.
 
-1. **Inspect the experiment for parallel axes.** Read `tasks.py` and any companion files (`CLAUDE.md`, README, executor scripts) to identify each parallel dimension the experimenter has expressed. Common shapes: a `resolve(task_id)` function returning kwargs derived from `task_id` via cartesian product over named lists; a grid-search dict the executor reads; an explicit per-axis loop in driver code.
+1. **Inspect the experiment for parallel axes** in one call via the [inspect-parallel-axes](../../../../docs/primitives/inspect-parallel-axes.md) verb — instead of manually `Read`-ing `tasks.py` and `.hpc/axes.yaml` separately:
+
+   ```bash
+   hpc-agent inspect-parallel-axes --experiment-dir <output_dir's experiment root>
+   ```
+
+   It returns `data.tasks_py_body` (the raw `.hpc/tasks.py` text — never executed) plus the parsed `data.{axes, homogeneous_axes, executors, axes_yaml_present}`. Identify each parallel dimension from `data.tasks_py_body`. Common shapes: a `resolve(task_id)` function returning kwargs derived from `task_id` via cartesian product over named lists; a grid-search dict the executor reads; an explicit per-axis loop in driver code. `data.axes_yaml_present: true` means axes-init already ran (Step 3 will refuse-without-force). If you still need to consult a companion file the verb doesn't surface (`CLAUDE.md`, README, the executor script itself), `Read` that one file directly.
 
 2. **Resolve `homogeneous_axes`.** If the caller supplied `homogeneous_axes` in the spec (the slash path, after `/hpc-axes-init` ran its propose-then-confirm dialog with the user), use it as-is — skip the heuristic. Otherwise classify each axis autonomously using the experiment's semantics. Heuristics that often hold:
    - Replicates / seeds / folds / cross-validation windows / time-series backtest windows → typically **homogeneous** (same compute on slightly different data).

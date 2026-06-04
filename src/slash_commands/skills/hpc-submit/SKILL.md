@@ -104,10 +104,14 @@ Check for `@register_run` on disk and for `interview.json`. If either, the entry
 **Before short-circuiting on a cached `interview.json`, reconcile its `task_generator` against the caller-supplied one.** A stale `interview.json` left in `experiment_dir` from earlier dev work encodes its *own* `task_generator` (e.g. 8 seeds). If the caller passed a *different* `task_generator` this invocation (e.g. 100 seeds), the cached one would silently win and `build-submit-spec` would compute the wrong `total` — an 8-task submission for a 100-task request, with no warning. That violates this skill's own "caller-supplied fields are always authoritative" contract. Guard it:
 
 1. **Caller did NOT supply a `task_generator` this invocation** → the cached interview is authoritative; continue.
-2. **Both exist** → compare by canonical content (sort keys, then compare — or sha256 of the canonicalized JSON):
-   - **Equal** → short-circuit as before; continue.
-   - **Different** → do NOT silently use the cached one. Branch on `on_task_generator_mismatch`:
-     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (`cached` from `interview.json`, `caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh` or `=prefer-caller`, or clear `.hpc/` to start fresh.
+2. **Both exist** → compare by canonical content with one verb:
+   ```bash
+   hpc-agent check-task-generator-mismatch --caller-task-generator '<caller JSON>' --cached-task-generator '<interview.json task_generator JSON>'
+   ```
+   The verb canonicalizes both (key-sorted, whitespace-free) and returns `data.match` plus both shapes' `canonical` + `sha256`. When the caller has no cached generator to compare against, omit `--cached-task-generator` (the verb returns `match: true`, `reason: no_cached_generator`).
+   - **`data.match: true`** (`reason: identical`) → short-circuit as before; continue.
+   - **`data.match: false`** (`reason: divergent`) → do NOT silently use the cached one. Branch on `on_task_generator_mismatch`:
+     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (the verb's `data.cached` from `interview.json`, `data.caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh` or `=prefer-caller`, or clear `.hpc/` to start fresh.
      - `refresh` → rewrite `interview.json` (and regenerate `.hpc/tasks.py`) from the caller's `task_generator` via `hpc-wrap-entry-point`, then continue with the caller's.
      - `prefer-caller` → use the caller's `task_generator` for this submission without rewriting the interview (the previous unconditional behavior, now an explicit opt-in).
 
@@ -156,18 +160,19 @@ Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, 
 
 ### 6. Resolve walltime, gpu_type, partition
 
-Auto-resolve `walltime_sec` from runtime priors **when available**. `read-runtime-prior` is an **optional-plugin-only** verb — on a core install (e.g. plain PyPI `hpc-agent`) it does not exist, and on the very first submit there is no prior anyway. So treat a missing/erroring `read-runtime-prior` as **cold-start**, NOT as a problem to surface:
+One verb resolves all three resources — `walltime_sec`, `gpu_type`, and `partition` — each from a caller override first, then an auto-resolution rule:
 
 ```bash
-# Optional: only an installed plugin registers this verb. Missing verb (argparse
-# "invalid choice", exit 2) or no prior yet → cold-start; do NOT report it.
-hpc-agent read-runtime-prior --experiment-dir <dir> --profile <run_name> --cluster <cluster> --cmd-sha <sha> 2>/dev/null || true
+hpc-agent resolve-resources --cluster <cluster> --experiment-dir <experiment_dir> [--profile <run_name>] [--cmd-sha <sha>] [--walltime-sec <caller_override>] [--gpu-type <caller_override>] [--partition <caller_override>] [--user-preferred-partition <pref>]
 ```
 
-- **Prior found** (verb present AND ≥1 sample): `walltime_sec = prior.p95_sec * 1.30` (default safety_mult).
-- **Cold-start** (verb absent, or present with no prior): fall back to the cluster cold-start walltime, which **always resolves** — `clusters.<cluster>.default_walltime_sec` when the operator set it, otherwise a conservative built-in default (4h) clamped to `max_walltime_sec`. The `get_default_walltime_sec` resolver (`hpc_agent.infra.clusters`) guarantees a value, so a core install never stalls on the optional verb.
+`data` carries the resolved `{walltime_sec, gpu_type, partition}` plus a `provenance` map recording how each was resolved:
 
-`gpu_type` from caller or `clusters.<cluster>.gpu_types[0]`. `partition` from `recommend-partition` primitive.
+- **`walltime_sec`** — caller (`--walltime-sec`), else the optional `read-runtime-prior` verb's `p95 × 1.30` (default safety_mult). `read-runtime-prior` is an **optional-plugin-only** verb — on a core install (e.g. plain PyPI `hpc-agent`) it does not exist, and on the very first submit there is no prior anyway. `resolve-resources` treats a missing/erroring verb (and a verb that reports `needs_canary`) as **cold-start**: `data.walltime_sec` comes back `null` with `provenance.walltime_sec` one of `cold_start_no_profile` / `cold_start_no_samples` / `cold_start_prior_verb_unavailable`. A missing prior is **never** an error.
+- **`gpu_type`** — caller (`--gpu-type`), else `clusters.<cluster>.gpu_types[0]` (`provenance` `cluster_default`), or `null` when the cluster declares none.
+- **`partition`** — caller (`--partition`), else the `recommend-partition` primitive (reused, not reimplemented), carried under `provenance.partition` as `recommend_partition:<rationale>`. `null` (`no_partitions_supplied`) when no partition config is available.
+
+**On cold-start `walltime_sec: null`, fall back to the cluster cold-start walltime**, which **always resolves** — `clusters.<cluster>.default_walltime_sec` when the operator set it, otherwise a conservative built-in default (4h) clamped to `max_walltime_sec`. The `get_default_walltime_sec` resolver (`hpc_agent.infra.clusters`) guarantees a value, so a core install never stalls on the optional verb.
 
 These never go into the ambiguities list and the missing optional verb is never an ambiguity — they always auto-resolve to a conservative default.
 

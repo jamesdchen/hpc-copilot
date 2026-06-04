@@ -2,8 +2,8 @@
 
 Collapses the top of ``hpc-status`` — Step 0 (``install-commands``) and
 Step 1 (``load-context``) — into one CLI call. The simplest of the
-``<skill>-preflight`` family (no ``reconcile`` branch like submit /
-aggregate have) and a clean prototype for the pattern.
+``<skill>-preflight`` family (no ``reconcile`` branch like
+``aggregate-preflight`` has) and a clean prototype for the pattern.
 
 Sequential by design: ``install-commands`` must succeed before
 ``load-context`` — install lays down the bundled SKILL.md / agent

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/smoke_test_executor.output.json",
+  "title": "SmokeTestExecutorReport",
+  "description": "Output ``data`` block for ``smoke-test-executor`` (WS5 #2).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see envelope.json). The composite itself returns ``ok: true`` at the outer envelope even when the probed executor fails — a failing executor is a normal, expected outcome the skill branches on, not a CLI error. The signal is ``exit_code``: ``0`` = clean import + compute(); non-zero = fix-then-retry; ``null`` = the probe timed out (``timed_out: true``).",
+  "type": "object",
+  "required": [
+    "exit_code",
+    "stdout_tail",
+    "stderr_tail",
+    "timed_out",
+    "elapsed_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Exit Code",
+      "description": "Return code of the child probe. ``0`` = the module imported and compute() ran clean. Non-zero = fix-then-retry (the traceback's final frames are in ``stderr_tail``). ``null`` only when the probe timed out before exiting."
+    },
+    "stdout_tail": {
+      "type": "string",
+      "title": "Stdout Tail",
+      "description": "Last ~2000 characters the child wrote to stdout."
+    },
+    "stderr_tail": {
+      "type": "string",
+      "title": "Stderr Tail",
+      "description": "Last ~2000 characters the child wrote to stderr. On a non-zero exit this carries the executor's traceback tail; on a timeout it carries a ``timed out after <N>s`` marker."
+    },
+    "timed_out": {
+      "type": "boolean",
+      "title": "Timed Out",
+      "description": "True iff the probe exceeded ``timeout_sec`` and was killed. When true, ``exit_code`` is ``null``."
+    },
+    "elapsed_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Sec"
+    }
+  }
+}

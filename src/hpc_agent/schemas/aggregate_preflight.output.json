@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_preflight.output.json",
+  "title": "AggregatePreflightReport",
+  "description": "Output ``data`` block for ``aggregate-preflight`` (WS5 #3b).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries one ``SubResult`` per fanned-out sub-call plus\nthe overall verdict derived from them. Skipped or not-applicable\nsub-calls appear as ``null`` so consumers can still introspect shape\nuniformly. The ``reconcile`` slot is ``null`` whenever the reconcile\nbranch did not fire (no ``reconcile_scheduler``, journal hint not\n``monitor``, no in-flight run, or skipped).",
+  "type": "object",
+  "required": [
+    "overall",
+    "elapsed_total_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "overall": {
+      "enum": [
+        "pass",
+        "fail"
+      ],
+      "type": "string",
+      "title": "Overall",
+      "description": "``fail`` if any sub-call that actually ran returned ``ok: false``; else ``pass``. A reconcile branch that never fired does not affect the verdict (it is ``null``, not a failure)."
+    },
+    "elapsed_total_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Total Sec"
+    },
+    "install_commands": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Install Commands"
+    },
+    "load_context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Load Context"
+    },
+    "reconcile": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reconcile"
+    }
+  },
+  "$defs": {
+    "SubResult": {
+      "additionalProperties": false,
+      "description": "One sub-call's outcome — verbatim envelope + elapsed wall-clock + ``ok`` mirror. Skipped / not-applicable sub-calls show as ``null`` at the parent (not a SubResult with ``ok: false``) so a re-run can target only the missing piece.",
+      "properties": {
+        "envelope": {
+          "additionalProperties": true,
+          "title": "Envelope",
+          "type": "object"
+        },
+        "elapsed_sec": {
+          "minimum": 0,
+          "type": "number",
+          "title": "Elapsed Sec"
+        },
+        "ok": {
+          "type": "boolean",
+          "title": "Ok"
+        }
+      },
+      "required": [
+        "envelope",
+        "elapsed_sec",
+        "ok"
+      ],
+      "title": "SubResult",
+      "type": "object"
+    }
+  }
+}

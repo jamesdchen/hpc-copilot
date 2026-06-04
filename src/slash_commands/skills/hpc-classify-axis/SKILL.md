@@ -38,15 +38,26 @@ They are orthogonal and live in the same file under different keys. This skill *
 
 ## Steps
 
-### 1. Identify the run
+### 1–3. Preflight: discover the run, cache-check, pre-fill from memory
 
-Discover the `@register_run` functions over `notebooks/`:
+These three steps are collapsed into one composite verb — [classify-axis-preflight](../../../../docs/primitives/classify-axis-preflight.md). It runs `discover-runs` → cache-check (`axes.yaml` reuse) → (conditionally) `recall` in one CLI call and returns each sub-call's verbatim envelope under `data`, so the branching below reads exactly the same shapes the three separate calls used to return.
 
 ```bash
-hpc-agent discover-runs --experiment-dir .
+hpc-agent classify-axis-preflight \
+  --experiment-dir . \
+  [--run-name <name-if-caller-supplied>] \
+  [--run-signature-sha <sha-once-known>] \
+  [--root <experiments-root>] [--task-kind <kind>] \
+  [--data-axis-supplied]
 ```
 
-The envelope's `data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`. Resolve to a single run:
+Pass `--data-axis-supplied` when the caller already supplied `data_axis` (the slash path) — it skips the `recall` sub-call, the classification being already resolved. When you don't yet have the run's `run_signature_sha` (you only learn it from the discover sub-call), invoke once without it: the cache-check reports a miss, `recall` still runs, and Step 5 records the freshly-classified axis. A second pass with `--run-name`/`--run-signature-sha` filled in is only needed when you want the early-return cache reuse.
+
+Branch on the returned `data`:
+
+#### 1. Identify the run — `data.discover_runs`
+
+`data.discover_runs.envelope.data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`. Resolve to a single run:
 
 - If the caller supplied `run_name`, scope to it.
 - Else if exactly one run exists, use it.
@@ -54,21 +65,13 @@ The envelope's `data.runs` is a list of `{path, name, gpu, run_signature_sha, fl
 
 Record `name` and `run_signature_sha`.
 
-### 2. Cache check — reuse a still-valid classification
+#### 2. Cache check — reuse a still-valid classification — `data.cache_check`
 
-Read `<experiment>/.hpc/axes.yaml`. If `executors.<name>` exists **and** its `run_signature_sha` equals the run's current `run_signature_sha`, the stored `DataAxis` is still valid — **reuse it, return early**, and report which classification was reused. A mismatch (or no entry) means the signature changed or the run was never classified → continue.
+`data.cache_check.envelope.data.hit` is `true` when `executors.<name>` existed **and** its stored `run_signature_sha` equals the run's current one — the stored `DataAxis` is still valid. On a hit, **reuse `data.cache_check.envelope.data.stored`, return early**, and report which classification was reused. A miss (`hit: false`) means the signature changed or the run was never classified → continue. (A `cache_check.ok: false` carrying `config_invalid` is a corrupt `axes.yaml` — surface it.)
 
-### 3. Pre-fill from memory (recall)
+#### 3. Pre-fill from memory (recall) — `data.recall`
 
-**Skip this step if the caller already supplied `data_axis`** (the slash path; the classification is already resolved). Jump to Step 5.
-
-Otherwise, before classifying cold, query prior classifications:
-
-```bash
-hpc-agent recall --root <experiments-root> --task-kind <kind>
-```
-
-Each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}}`, and the rollup carries a `data_axis_kinds` histogram. If a prior *similar* experiment classified an analogous series — same loop shape, same parameter names — adopt its classification (set `classified_by: "recall"`) and jump to Step 5. If no clean match, continue to Step 4.
+`data.recall` is `null` when the preflight skipped it (cache hit, or `--data-axis-supplied`). When present, `data.recall.envelope` is the `recall` envelope: each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}}`, and the rollup carries a `data_axis_kinds` histogram. If a prior *similar* experiment classified an analogous series — same loop shape, same parameter names — adopt its classification (set `classified_by: "recall"`) and jump to Step 5. If no clean match, continue to Step 4.
 
 ### 4. Skip if caller supplied `data_axis`; otherwise classify
 

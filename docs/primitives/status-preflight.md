@@ -13,7 +13,7 @@ backed_by:
 
 Composite preflight primitive: runs `install-commands` then `load-context`
 as one CLI call. The simplest of the `<skill>-preflight` family — no
-`reconcile` branch like submit / aggregate have — and the clean prototype
+`reconcile` branch like `aggregate-preflight` has — and the clean prototype
 for the pattern.
 
 ## Inputs / outputs

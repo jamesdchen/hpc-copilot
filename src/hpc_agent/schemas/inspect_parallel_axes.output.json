@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/inspect_parallel_axes.output.json",
+  "title": "InspectParallelAxesReport",
+  "description": "Output ``data`` block for ``inspect-parallel-axes`` (WS5 #7).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see envelope.json). Carries the two signals the build-executor / axes-init companion branches on: the parsed ``.hpc/axes.yaml`` (so it knows whether axes-init already ran and what it recorded) and the raw ``.hpc/tasks.py`` body (so the agent can identify each parallel dimension from the grid / ``resolve`` shape).",
+  "type": "object",
+  "required": [
+    "experiment_dir",
+    "axes_yaml_path",
+    "axes_yaml_present",
+    "axes",
+    "homogeneous_axes",
+    "executors",
+    "tasks_py_path",
+    "tasks_py_present",
+    "tasks_py_body"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "type": "string",
+      "title": "Experiment Dir"
+    },
+    "axes_yaml_path": {
+      "type": "string",
+      "title": "Axes Yaml Path",
+      "description": "Absolute path to ``<experiment_dir>/.hpc/axes.yaml`` (whether or not it exists)."
+    },
+    "axes_yaml_present": {
+      "type": "boolean",
+      "title": "Axes Yaml Present",
+      "description": "Whether ``axes.yaml`` exists on disk. When true, axes-init would refuse-without-force; the companion passes ``--force`` only when intentionally re-initializing."
+    },
+    "axes_yaml_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Axes Yaml Error",
+      "description": "Non-null when ``axes.yaml`` exists but failed to parse / validate (corruption surfaced as a string rather than raised, so the ``tasks.py`` half is still returned)."
+    },
+    "axes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "title": "Axes",
+      "description": "The ordered ``axes`` list from ``axes.yaml`` (each ``{name, size}``), or ``[]`` when absent / unrecorded."
+    },
+    "homogeneous_axes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Homogeneous Axes",
+      "description": "The ``homogeneous_axes`` hint from ``axes.yaml``, or ``[]`` when absent."
+    },
+    "executors": {
+      "type": "object",
+      "title": "Executors",
+      "description": "The v2 ``executors`` block (classified-DataAxis records per ``@register_run`` function), or ``{}`` when absent."
+    },
+    "tasks_py_path": {
+      "type": "string",
+      "title": "Tasks Py Path",
+      "description": "Absolute path to ``<experiment_dir>/.hpc/tasks.py`` (whether or not it exists)."
+    },
+    "tasks_py_present": {
+      "type": "boolean",
+      "title": "Tasks Py Present"
+    },
+    "tasks_py_body": {
+      "type": "string",
+      "title": "Tasks Py Body",
+      "description": "The raw ``tasks.py`` text (tail-capped to ~8000 chars), for the agent to identify each parallel dimension from the FLAGS / grid / ``resolve`` shape. Empty string when ``tasks.py`` is absent. Returned as text — never imported / executed (pure query)."
+    }
+  }
+}

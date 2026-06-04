@@ -1,0 +1,321 @@
+"""``aggregate-preflight``: composite primitive — top-of-aggregate boilerplate.
+
+WS5 #3b. Third and final member of the ``<skill>-preflight`` family
+(after :mod:`submit_preflight` and :mod:`status_preflight`): collapses
+the ``install-commands`` + ``load-context`` + (optional) ``reconcile``
+calls at the top of every ``hpc-aggregate`` invocation into ONE CLI
+call so the agent's role shrinks to one tool call.
+
+The reconcile branch is the structural twist that distinguishes
+aggregate from its two siblings. ``hpc-aggregate`` Step 1b reconciles a
+journal-only ``in_flight`` run against the cluster before refusing with
+"nothing to aggregate" — the journal lags the cluster, so a run the
+journal still marks ``monitor`` may have actually terminated, failed, or
+been purged. Unlike submit's ``check-preflight`` (whose argv is known
+statically from ``--cluster``), reconcile fires only when ``load-context``'s
+*output* reports ``next_step_hint == "monitor"`` AND the caller supplied
+``--reconcile-scheduler``. So the reconcile sub-call is built *after*
+load-context runs, from its envelope, not pre-composed up front.
+
+Internal composition: sequential ``subprocess.run`` over the existing
+``hpc-agent`` verbs. ``install-commands`` must succeed before
+``load-context`` can resolve framework paths reliably; ``reconcile`` is
+then run last (and only conditionally) because it's the SSH-touching
+call — we want the cheap local checks to fail-fast first.
+
+I/O contracts:
+
+* Input: see ``hpc_agent/schemas/aggregate_preflight.input.json``.
+* Output: a ``dict`` matching ``schemas/aggregate_preflight.output.json``.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
+
+__all__ = [
+    "SubCall",
+    "aggregate_preflight",
+]
+
+# Scheduler families ``reconcile --scheduler`` accepts. Kept in sync with
+# the ``reconcile`` primitive's CliArg choices (ops/monitor/reconcile.py).
+_SCHEDULERS: tuple[str, ...] = ("sge", "slurm", "pbspro", "torque")
+
+
+@dataclass(frozen=True)
+class SubCall:
+    """One sub-call within aggregate-preflight (name + full argv)."""
+
+    name: str
+    argv: list[str]
+
+
+def _build_subcalls(*, experiment_dir: Path, skip: list[str]) -> list[SubCall]:
+    """Construct the always-run base sub-steps per *skip*.
+
+    Order is install-commands → load-context. install must succeed
+    first; ``load-context`` may resolve framework paths that depend on
+    the assets install lays down. The conditional ``reconcile`` sub-call
+    is NOT built here — it depends on load-context's runtime output and
+    is assembled by :func:`_maybe_build_reconcile` after load-context runs.
+    """
+    exp_str = str(experiment_dir)
+    calls: list[SubCall] = []
+
+    if "install-commands" not in skip:
+        calls.append(SubCall(name="install-commands", argv=["hpc-agent", "install-commands"]))
+
+    if "load-context" not in skip:
+        calls.append(
+            SubCall(
+                name="load-context",
+                argv=["hpc-agent", "load-context", "--experiment-dir", exp_str],
+            )
+        )
+
+    return calls
+
+
+def _maybe_build_reconcile(
+    *,
+    load_context_result: dict[str, Any] | None,
+    experiment_dir: Path,
+    reconcile_scheduler: str | None,
+    skip: list[str],
+) -> SubCall | None:
+    """Decide the conditional reconcile sub-call from load-context's output.
+
+    Mirrors ``hpc-aggregate`` SKILL.md Step 1b: reconcile a journal-only
+    ``in_flight`` run against the cluster before the skill can trust the
+    journal. Fires only when ALL hold:
+
+    * ``reconcile`` not in *skip*,
+    * the caller supplied ``--reconcile-scheduler`` (reconcile needs the
+      scheduler family to query alive job IDs; without it we cannot run),
+    * load-context ran and returned ``ok`` with
+      ``envelope.data.next_step_hint == "monitor"`` (the journal still
+      says a run is in flight),
+    * that ``envelope.data.in_flight`` carries at least one ``run_id`` to
+      target.
+
+    Returns the SubCall, or ``None`` when reconcile is not applicable.
+    The run_id is the first in-flight row's; one ``reconcile`` call also
+    settles that run's paired ``-canary`` sibling (#258), so a single
+    sub-call clears both journal entries.
+    """
+    if "reconcile" in skip or reconcile_scheduler is None:
+        return None
+    if load_context_result is None or not load_context_result.get("ok"):
+        return None
+    data = (load_context_result.get("envelope") or {}).get("data") or {}
+    if data.get("next_step_hint") != "monitor":
+        return None
+    in_flight = data.get("in_flight") or []
+    run_id = next(
+        (row.get("run_id") for row in in_flight if isinstance(row, dict) and row.get("run_id")),
+        None,
+    )
+    if run_id is None:
+        return None
+    return SubCall(
+        name="reconcile",
+        argv=[
+            "hpc-agent",
+            "reconcile",
+            "--run-id",
+            run_id,
+            "--scheduler",
+            reconcile_scheduler,
+            "--experiment-dir",
+            str(experiment_dir),
+        ],
+    )
+
+
+def _synth_error_subresult(
+    *, error_code: str, message: str, category: str, elapsed_sec: float
+) -> dict[str, Any]:
+    """Build a SubResult whose envelope is a synthesised ErrorEnvelope.
+
+    Used when the sub-call could not emit its own JSON (spawn failure,
+    timeout, non-JSON stdout). Matches ErrorEnvelope in envelope.json.
+    """
+    return {
+        "envelope": {
+            "ok": False,
+            "error_code": error_code,
+            "message": message,
+            "category": category,
+            "retry_safe": False,
+        },
+        "elapsed_sec": elapsed_sec,
+        "ok": False,
+    }
+
+
+def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
+    """Run *call.argv* synchronously; return its SubResult dict.
+
+    Captures stdout + stderr; parses stdout as a JSON envelope. Spawn
+    failure, timeout, and non-JSON stdout all synthesise a uniform
+    ErrorEnvelope so the outer composite can branch consistently.
+    """
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            call.argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        return _synth_error_subresult(
+            error_code="cluster_timeout",
+            message=f"{call.name} exceeded {timeout_sec}s timeout",
+            category="cluster",
+            elapsed_sec=time.monotonic() - started,
+        )
+    except OSError as exc:
+        return _synth_error_subresult(
+            error_code="internal",
+            message=f"failed to spawn {call.name}: {exc}",
+            category="internal",
+            elapsed_sec=time.monotonic() - started,
+        )
+
+    elapsed_sec = time.monotonic() - started
+
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        stderr_tail = (proc.stderr or "")[-400:]
+        return {
+            "envelope": {
+                "ok": False,
+                "error_code": "internal",
+                "message": (
+                    f"{call.name} did not emit a JSON envelope on stdout; "
+                    f"stderr tail: {stderr_tail}"
+                ),
+                "category": "internal",
+                "retry_safe": False,
+            },
+            "elapsed_sec": elapsed_sec,
+            "ok": False,
+        }
+
+    return {
+        "envelope": envelope,
+        "elapsed_sec": elapsed_sec,
+        "ok": bool(envelope.get("ok", False)),
+    }
+
+
+@primitive(
+    name="aggregate-preflight",
+    verb="validate",
+    side_effects=[],
+    idempotent=True,
+    cli=CliShape(
+        help=(
+            "Composite preflight at the top of aggregate: install-commands + "
+            "load-context + (when the journal says 'monitor' and "
+            "--reconcile-scheduler is supplied) reconcile."
+        ),
+        verb="aggregate-preflight",
+        args=(
+            CliArg(
+                "--experiment-dir",
+                type=str,
+                required=True,
+                help="Absolute path to the experiment directory.",
+            ),
+            CliArg(
+                "--reconcile-scheduler",
+                type=str,
+                default=None,
+                choices=_SCHEDULERS,
+                help=(
+                    "Scheduler family of the in-flight run. When supplied AND "
+                    "load-context reports next_step_hint == 'monitor', reconcile "
+                    "the journal-only in-flight run against the cluster (Step 1b) "
+                    "before aggregation trusts the journal. Omit to skip reconcile."
+                ),
+            ),
+        ),
+        # reconcile is the SSH-touching sub-call when it fires; declare
+        # requires_ssh so the capabilities catalog marks this verb as
+        # cluster-touching (matches submit-preflight's check-preflight).
+        requires_ssh=True,
+    ),
+    agent_facing=True,
+)
+def aggregate_preflight(
+    *,
+    experiment_dir: str | Path,
+    reconcile_scheduler: str | None = None,
+    skip: list[str] | None = None,
+    timeout_sec: float = 60.0,
+) -> dict[str, Any]:
+    """Run install-commands → load-context → (conditional) reconcile.
+
+    Returns a dict matching ``schemas/aggregate_preflight.output.json``;
+    the CLI dispatcher wraps it in a SuccessEnvelope. *experiment_dir*
+    accepts both ``str`` (the CLI path) and ``Path`` (the in-process
+    path) and is coerced internally.
+
+    The reconcile sub-call is built from load-context's envelope *after*
+    it runs (see :func:`_maybe_build_reconcile`) — it fires only when the
+    journal reports ``next_step_hint == "monitor"`` and the caller
+    supplied ``reconcile_scheduler``. When it doesn't fire, the
+    ``reconcile`` slot stays ``null``.
+
+    The composite never raises on a sub-call failure — failures surface
+    inside ``SubResult.envelope`` so the cheaper sub-calls' work is
+    preserved even when reconcile blows up.
+    """
+    experiment_dir_path = (
+        experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
+    )
+    skip_list = list(skip or [])
+    base_calls = _build_subcalls(experiment_dir=experiment_dir_path, skip=skip_list)
+
+    started = time.monotonic()
+    by_name: dict[str, dict[str, Any]] = {}
+    sub_results: list[dict[str, Any]] = []
+    for c in base_calls:
+        r = _run_subprocess(c, timeout_sec=timeout_sec)
+        by_name[c.name] = r
+        sub_results.append(r)
+
+    reconcile_call = _maybe_build_reconcile(
+        load_context_result=by_name.get("load-context"),
+        experiment_dir=experiment_dir_path,
+        reconcile_scheduler=reconcile_scheduler,
+        skip=skip_list,
+    )
+    if reconcile_call is not None:
+        r = _run_subprocess(reconcile_call, timeout_sec=timeout_sec)
+        by_name[reconcile_call.name] = r
+        sub_results.append(r)
+
+    elapsed_total_sec = time.monotonic() - started
+    overall = "fail" if any(not r["ok"] for r in sub_results) else "pass"
+
+    return {
+        "overall": overall,
+        "elapsed_total_sec": elapsed_total_sec,
+        "install_commands": by_name.get("install-commands"),
+        "load_context": by_name.get("load-context"),
+        "reconcile": by_name.get("reconcile"),
+    }

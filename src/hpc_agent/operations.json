@@ -311,6 +311,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent detect-entry-point --experiment-dir <experiment_dir>",
+    "idempotent": true,
+    "input_schema": "detect_entry_point.input.json",
+    "name": "detect-entry-point",
+    "output_schema": "detect_entry_point.output.json",
+    "python": "hpc_agent.ops.detect_entry_point.detect_entry_point",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]",
     "idempotent": true,
     "input_schema": null,
@@ -376,6 +387,17 @@
     "name": "find-prior-run",
     "output_schema": "find_prior_run.output.json",
     "python": "hpc_agent.cli.setup_actions.find_prior_run",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent inspect-parallel-axes [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "inspect_parallel_axes.input.json",
+    "name": "inspect-parallel-axes",
+    "output_schema": "inspect_parallel_axes.output.json",
+    "python": "hpc_agent.ops.inspect_parallel_axes.inspect_parallel_axes",
     "side_effects": [],
     "verb": "query"
   },
@@ -491,6 +513,17 @@
     "name": "recoveries-show",
     "output_schema": null,
     "python": "hpc_agent.recovery.cli.recoveries_show",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]",
+    "idempotent": true,
+    "input_schema": "resolve_resources.input.json",
+    "name": "resolve-resources",
+    "output_schema": "resolve_resources.output.json",
+    "python": "hpc_agent.ops.resolve_resources.resolve_resources",
     "side_effects": [],
     "verb": "query"
   },
@@ -698,12 +731,45 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent aggregate-preflight --experiment-dir <experiment_dir> [--reconcile-scheduler <reconcile_scheduler>]",
+    "idempotent": true,
+    "input_schema": "aggregate_preflight.input.json",
+    "name": "aggregate-preflight",
+    "output_schema": "aggregate_preflight.output.json",
+    "python": "hpc_agent.ops.aggregate_preflight.aggregate_preflight",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent preflight [--cluster <cluster>]",
     "idempotent": true,
     "input_schema": null,
     "name": "check-preflight",
     "output_schema": "preflight.output.json",
     "python": "hpc_agent.ops.preflight.check.check_preflight",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent check-task-generator-mismatch --caller-task-generator <caller_task_generator> [--cached-task-generator <cached_task_generator>]",
+    "idempotent": true,
+    "input_schema": "check_task_generator_mismatch.input.json",
+    "name": "check-task-generator-mismatch",
+    "output_schema": "check_task_generator_mismatch.output.json",
+    "python": "hpc_agent.ops.check_task_generator_mismatch.check_task_generator_mismatch",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent classify-axis-preflight --experiment-dir <experiment_dir> [--run-name <run_name>] [--run-signature-sha <run_signature_sha>] [--root <root>] [--task-kind <task_kind>] [--data-axis-supplied]",
+    "idempotent": true,
+    "input_schema": "classify_axis_preflight.input.json",
+    "name": "classify-axis-preflight",
+    "output_schema": "classify_axis_preflight.output.json",
+    "python": "hpc_agent.ops.classify_axis_preflight.classify_axis_preflight",
     "side_effects": [],
     "verb": "validate"
   },
@@ -716,6 +782,20 @@
     "output_schema": "dry_run_local.output.json",
     "python": "hpc_agent.ops.validate.dry_run_local.dry_run_local",
     "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent smoke-test-executor --module-path <module_path> [--output-file <output_file>]",
+    "idempotent": true,
+    "input_schema": "smoke_test_executor.input.json",
+    "name": "smoke-test-executor",
+    "output_schema": "smoke_test_executor.output.json",
+    "python": "hpc_agent.ops.smoke_test_executor.smoke_test_executor",
+    "side_effects": [
+      "filesystem",
+      "runs"
+    ],
     "verb": "validate"
   },
   {

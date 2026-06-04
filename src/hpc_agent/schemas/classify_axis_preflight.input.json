@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/classify_axis_preflight.input.json",
+  "title": "ClassifyAxisPreflightSpec",
+  "description": "Input spec for the ``classify-axis-preflight`` composite primitive (WS5 #6).\n\nCollapses the top of ``hpc-classify-axis`` — Step 1 (``discover-runs``),\nStep 2 (cache-check: reuse a still-valid classification from\n``.hpc/axes.yaml``) and Step 3 (``recall``: pre-fill from prior\ncampaigns) — into ONE CLI call. Mirror of ``status-preflight`` /\n``submit-preflight``: a sequence of sub-calls each returning a\n``SubResult`` plus the overall verdict.\n\nThe ``recall`` sub-call is conditional: it runs only when neither the\ncaller supplied ``data_axis`` (``data_axis_supplied``) NOR the\ncache-check found a still-valid classification — either makes\npre-filling from memory moot.",
+  "type": "object",
+  "required": [
+    "experiment_dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory."
+    },
+    "run_name": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Name",
+      "description": "Name of the @register_run function to cache-check against executors.<run> in axes.yaml. When omitted, the cache-check reports a miss (the skill resolves the single run from discover-runs' output before reusing)."
+    },
+    "run_signature_sha": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Signature Sha",
+      "description": "The run's current run_signature_sha. A cache hit requires the stored executors.<run> entry's run_signature_sha to equal this; a mismatch (signature drift) or a null here is reported as a miss."
+    },
+    "root": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Root",
+      "description": "Experiments root passed to recall --root. When omitted, recall falls back to ~/.hpc-agent/config.json:experiment_roots."
+    },
+    "task_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Kind",
+      "description": "Passed to recall --task-kind to scope prior campaigns to the same intent.task_kind."
+    },
+    "data_axis_supplied": {
+      "type": "boolean",
+      "default": false,
+      "title": "Data Axis Supplied",
+      "description": "Set when the caller already resolved data_axis (the slash / interview path). Skips the recall sub-call — the classification is already decided, so pre-filling from memory is moot."
+    },
+    "timeout_sec": {
+      "minimum": 1,
+      "default": 60,
+      "type": "integer",
+      "title": "Timeout Sec",
+      "description": "Per-subprocess-sub-call timeout. discover-runs walks notebooks/ (single-digit seconds); recall walks interview.json under --root (filesystem-bound). The cache-check is an in-process axes.yaml read and is not subject to this timeout."
+    }
+  }
+}

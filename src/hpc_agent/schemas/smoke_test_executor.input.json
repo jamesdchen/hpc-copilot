@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/smoke_test_executor.input.json",
+  "title": "SmokeTestExecutorSpec",
+  "description": "Input spec for the ``smoke-test-executor`` composite primitive (WS5 #2).\n\nCollapses ``hpc-build-executor``'s inline ``python -c \"import argparse, importlib.util, sys; ... m.compute(...)\"`` smoke test — the one the skill's own execution-style header forbids (the permission classifier hard-blocks arbitrary ``python -c`` patterns) — into one deterministic CLI verb.\n\nThe probe imports the scaffolded executor module from a file path and calls its ``compute(args)`` entry point with a minimal ``argparse.Namespace(output_file=...)``, exactly as the new-contract dispatcher would at runtime, inside a child process so a crashing / exiting module can't take down the CLI.",
+  "type": "object",
+  "required": [
+    "module_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "module_path": {
+      "minLength": 1,
+      "title": "Module Path",
+      "type": "string",
+      "description": "Absolute path to the executor .py file to import and probe. Typically the ``data.path`` returned by the ``build-executor`` primitive."
+    },
+    "output_file": {
+      "minLength": 1,
+      "default": "/tmp/smoke.csv",
+      "title": "Output File",
+      "type": "string",
+      "description": "Path passed to compute() as Namespace.output_file. Defaults to a throwaway under /tmp; the smoke test only checks the module imports and compute() runs clean, not the artifact it writes."
+    },
+    "timeout_sec": {
+      "minimum": 1,
+      "default": 60,
+      "type": "integer",
+      "title": "Timeout Sec",
+      "description": "Subprocess timeout for the probe. A module that spins (or blocks on input) is killed at this bound; the result then carries ``timed_out: true`` and ``exit_code: null`` rather than hanging the CLI."
+    }
+  }
+}

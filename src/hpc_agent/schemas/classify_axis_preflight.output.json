@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/classify_axis_preflight.output.json",
+  "title": "ClassifyAxisPreflightReport",
+  "description": "Output ``data`` block for ``classify-axis-preflight`` (WS5 #6).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries one ``SubResult`` per sub-call plus the overall\nverdict derived from them. The ``recall`` sub-call appears as ``null``\nwhen it was skipped (caller supplied data_axis, or the cache-check hit)\nso consumers can still introspect shape uniformly.",
+  "type": "object",
+  "required": [
+    "overall",
+    "elapsed_total_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "overall": {
+      "enum": [
+        "pass",
+        "fail"
+      ],
+      "type": "string",
+      "title": "Overall",
+      "description": "``fail`` if any sub-call that ran returned ``ok: false``; else ``pass``. The skipped recall slot does not count (it is ``null``, not a failure). Mirror of status-preflight's simpler binary verdict."
+    },
+    "elapsed_total_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Total Sec"
+    },
+    "discover_runs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Discover Runs"
+    },
+    "cache_check": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cache Check"
+    },
+    "recall": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recall"
+    }
+  },
+  "$defs": {
+    "SubResult": {
+      "additionalProperties": false,
+      "description": "One sub-call's outcome — verbatim envelope + elapsed wall-clock + ``ok`` mirror. A skipped sub-call (recall when the cache hit or the caller supplied data_axis) shows as ``null`` at the parent (not a SubResult with ``ok: false``) so a re-run can target only the missing piece. The cache-check sub-call's envelope carries ``data.hit`` (bool) plus the stored / current run_signature_sha that the hit decision compared.",
+      "properties": {
+        "envelope": {
+          "additionalProperties": true,
+          "title": "Envelope",
+          "type": "object"
+        },
+        "elapsed_sec": {
+          "minimum": 0,
+          "type": "number",
+          "title": "Elapsed Sec"
+        },
+        "ok": {
+          "type": "boolean",
+          "title": "Ok"
+        }
+      },
+      "required": [
+        "envelope",
+        "elapsed_sec",
+        "ok"
+      ],
+      "title": "SubResult",
+      "type": "object"
+    }
+  }
+}

@@ -19,17 +19,146 @@ same name (last writer wins by path).
 
 from __future__ import annotations
 
+import json
 import shutil
+import sys
 from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
 
 __all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
 
+# The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope after
+# a composed ``Skill(<sub>)`` returns (see
+# :mod:`hpc_agent._kernel.hooks.skill_return_autofetch`). install-commands merges
+# this entry into ``~/.claude/settings.json``'s ``hooks.PostToolUse`` array,
+# additively and idempotently. ``matcher: "Skill"`` scopes it to the Skill tool;
+# the command pipes the PostToolUse payload on stdin into the module's ``main``.
+_HOOK_COMMAND = f"{sys.executable} -m hpc_agent._kernel.hooks.skill_return_autofetch"
+_SKILL_RETURN_HOOK_ENTRY: dict[str, Any] = {
+    "matcher": "Skill",
+    "hooks": [
+        {
+            "type": "command",
+            "command": _HOOK_COMMAND,
+        }
+    ],
+}
+
 
 def DEFAULT_CLAUDE_DIR() -> Path:
     """Return ``~/.claude`` (does not create the directory)."""
     return Path.home() / ".claude"
+
+
+def _hook_entry_present(post_tool_use: list[Any]) -> bool:
+    """Return whether the autofetch hook is already wired into *post_tool_use*.
+
+    Idempotency key: any PostToolUse entry whose ``hooks`` list contains a
+    ``command`` hook that invokes
+    ``hpc_agent._kernel.hooks.skill_return_autofetch``. We match on the module
+    path rather than the full command string so a re-run from a different
+    ``sys.executable`` (e.g. a moved venv) still recognises the existing entry
+    instead of appending a duplicate.
+    """
+    needle = "hpc_agent._kernel.hooks.skill_return_autofetch"
+    for entry in post_tool_use:
+        if not isinstance(entry, dict):
+            continue
+        hooks = entry.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+        for hook in hooks:
+            if (
+                isinstance(hook, dict)
+                and hook.get("type") == "command"
+                and isinstance(hook.get("command"), str)
+                and needle in hook["command"]
+            ):
+                return True
+    return False
+
+
+def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
+    """Additively, idempotently wire the autofetch hook into ``settings.json``.
+
+    Reads ``<claude_dir>/settings.json`` (creating an empty ``{}`` model when it
+    is absent or unreadable), appends :data:`_SKILL_RETURN_HOOK_ENTRY` to
+    ``hooks.PostToolUse`` unless an equivalent entry is already present, and
+    writes the merged settings back (pretty-printed, trailing newline). Every
+    other key and every other PostToolUse entry is preserved verbatim — the
+    merge only ever *adds* our one entry.
+
+    Returns a small report ``{settings_path, action, wrote}`` where ``action``
+    is one of ``"added"`` (appended), ``"already-present"`` (idempotent
+    no-op), ``"skipped-unparseable"`` (existing settings.json is not a JSON
+    object — we refuse to clobber it), or ``"dry-run-would-add"``.
+
+    Safety: if ``settings.json`` exists but does not parse as a JSON **object**,
+    we do **not** overwrite it — the install reports ``skipped-unparseable`` so
+    a human can resolve it rather than risking the loss of hand-written config.
+    """
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict[str, Any]
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            # Present but unreadable / not JSON. A settings.json is precious
+            # user config; refuse to clobber it rather than guess.
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "wrote": False,
+            }
+        if not isinstance(loaded, dict):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "wrote": False,
+            }
+        settings = loaded
+    else:
+        settings = {}
+
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        # Absent or wrong-typed ``hooks`` → start a fresh mapping. (A non-dict
+        # ``hooks`` would itself be malformed Claude config; replacing it is the
+        # only way to wire our entry, and we only do so when adding.)
+        hooks = {}
+    post_tool_use = hooks.get("PostToolUse")
+    if not isinstance(post_tool_use, list):
+        post_tool_use = []
+
+    if _hook_entry_present(post_tool_use):
+        return {
+            "settings_path": str(settings_path),
+            "action": "already-present",
+            "wrote": False,
+        }
+
+    if dry_run:
+        return {
+            "settings_path": str(settings_path),
+            "action": "dry-run-would-add",
+            "wrote": False,
+        }
+
+    post_tool_use = [*post_tool_use, _SKILL_RETURN_HOOK_ENTRY]
+    hooks["PostToolUse"] = post_tool_use
+    settings["hooks"] = hooks
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
+    return {
+        "settings_path": str(settings_path),
+        "action": "added",
+        "wrote": True,
+    }
 
 
 def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> str | None:
@@ -167,6 +296,7 @@ def install_agent_assets(
             "skills_installed": ["hpc-submit", ...],
             "agents_installed": ["hpc-worker", ...],
             "cleared_collisions": ["/.../.claude/agents", ...],
+            "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "wrote": <bool>,
         }
 
@@ -174,6 +304,12 @@ def install_agent_assets(
     ``<claude>/commands``/``skills``/``agents`` that were silently
     removed before mkdir — see :func:`_resolve_dir_collision`. Non-empty
     collisions still raise :class:`FileExistsError`.
+
+    ``settings_hook`` reports the additive, idempotent merge of the
+    skill-return autofetch ``PostToolUse`` hook into
+    ``<claude>/settings.json`` — see :func:`_merge_skill_return_hook`. Its
+    ``action`` is ``"added"`` / ``"already-present"`` /
+    ``"skipped-unparseable"`` / ``"dry-run-would-add"``.
     """
     target = (claude_dir or DEFAULT_CLAUDE_DIR()).expanduser()
 
@@ -204,11 +340,16 @@ def install_agent_assets(
         agents.update(plugin_agents)
         cleared.extend(plugin_cleared)
 
+    # Wire the skill-return autofetch PostToolUse hook into settings.json —
+    # additive + idempotent, never clobbering existing hooks/keys.
+    settings_hook = _merge_skill_return_hook(target, dry_run=dry_run)
+
     return {
         "claude_dir": str(target),
         "commands_installed": sorted(commands),
         "skills_installed": sorted(skills),
         "agents_installed": sorted(agents),
         "cleared_collisions": cleared,
+        "settings_hook": settings_hook,
         "wrote": not dry_run,
     }

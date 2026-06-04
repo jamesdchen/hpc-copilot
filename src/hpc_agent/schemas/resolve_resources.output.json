@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/resolve_resources.output.json",
+  "title": "ResolveResourcesReport",
+  "description": "Output ``data`` block for ``resolve-resources`` (WS5 #5).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries the three resolved fields plus a ``provenance``\nmap recording HOW each was resolved, so a caller can audit which values\nwere caller-supplied vs. auto-resolved vs. cold-start. ``walltime_sec``\nand ``partition`` are nullable: a cold-start (no runtime prior) leaves\nwalltime null (the caller falls back to the cluster cold-start walltime),\nand an absent partition config leaves partition null.",
+  "type": "object",
+  "required": [
+    "walltime_sec",
+    "gpu_type",
+    "partition",
+    "provenance",
+    "elapsed_total_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "walltime_sec": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Walltime Sec",
+      "description": "Resolved walltime (seconds), or ``null`` on cold-start (no runtime prior — the caller falls back to clusters.<cluster>.default_walltime_sec via get_default_walltime_sec)."
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Gpu Type",
+      "description": "Resolved gpu_type, or ``null`` when the cluster declares no gpu_types and the caller supplied none."
+    },
+    "partition": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Partition",
+      "description": "Resolved partition, or ``null`` when no partition config was available (``no_partitions_supplied``) or recommend-partition found no safe partition."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Provenance",
+      "description": "Per-field resolution provenance, so the caller can audit each value's source.",
+      "required": [
+        "walltime_sec",
+        "gpu_type",
+        "partition"
+      ],
+      "properties": {
+        "walltime_sec": {
+          "enum": [
+            "caller",
+            "prior_p95",
+            "cold_start_no_profile",
+            "cold_start_no_samples",
+            "cold_start_prior_verb_unavailable"
+          ],
+          "type": "string",
+          "title": "Walltime Provenance",
+          "description": "``caller`` (override), ``prior_p95`` (read-runtime-prior p95 × safety_mult), or a ``cold_start_*`` reason (no profile key, verb present but no samples, or verb absent/erroring)."
+        },
+        "gpu_type": {
+          "enum": [
+            "caller",
+            "cluster_default",
+            "cluster_declares_none"
+          ],
+          "type": "string",
+          "title": "Gpu Type Provenance",
+          "description": "``caller`` (override), ``cluster_default`` (clusters.<cluster>.gpu_types[0]), or ``cluster_declares_none``."
+        },
+        "partition": {
+          "type": "string",
+          "title": "Partition Provenance",
+          "description": "``caller`` (override), ``no_partitions_supplied`` (no partition config), or ``recommend_partition:<rationale>`` (delegated to recommend-partition, carrying its rationale e.g. ``debug_short_walltime``)."
+        }
+      }
+    },
+    "elapsed_total_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Total Sec"
+    }
+  }
+}

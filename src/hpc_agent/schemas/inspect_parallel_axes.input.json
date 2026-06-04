@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/inspect_parallel_axes.input.json",
+  "title": "InspectParallelAxesSpec",
+  "description": "Input spec for the ``inspect-parallel-axes`` composite primitive (WS5 #7).\n\nCollapses the multi-``Read`` the ``hpc-build-executor`` / axes-init companion performs once per executor build — reading ``.hpc/tasks.py`` (to identify each parallel dimension) and ``.hpc/axes.yaml`` (to see what's already recorded) — into one pure-query CLI call. Reads files, executes nothing.",
+  "type": "object",
+  "required": [
+    "experiment_dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory (the one containing ``.hpc/``). Defaults to the current working directory when omitted on the CLI."
+    }
+  }
+}
