@@ -7,6 +7,22 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.5 — 2026-06-04
+
+Skill-prose fixes for two empirical demo-loop friction points.
+
+### Fixed — `hpc-submit` / `hpc-status` / `hpc-aggregate` auto-retry inline on spawn failure
+
+Previously the skills banned BOTH preemptive `--inline` AND auto-retry inline on a real spawn failure, treating every inline-mode entry as a user opt-in. But 0.10.3's spawn-worker error now explicitly hints `Fallback: …HPC_AGENT_INVOKER=inline…` in the malformed-report remediation when the worker dies before emitting a report — typically because the workspace API key is over quota, separate from the caller's interactive Claude Code OAuth session. The skill should respond to that framework hint by automatically setting the env var and retrying, not pausing to ask. The `--inline` *flag* refusal (#155 guard) still applies; the env var bypasses it because it is the documented operator-opt-in form, and the framework's own hint is the signal that inline is the correct recovery path.
+
+### Fixed — `hpc-submit` / `hpc-status` / `hpc-aggregate` skills: no narration at sub-skill boundaries
+
+Empirical demo: every time a composed sub-skill (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`, etc.) returned control, the parent agent emitted a human-readable summary ("Entry point onboarded. Now resolving data axis…"). That summary fires an end-of-turn signal to the harness, yielding control back to the user mid-procedure. SKILL prose now says: immediately chain to the next tool call without emitting prose at sub-skill returns. The user sees only the final envelope.
+
+### Fixed — `hpc-submit` already_in_flight remediation names `reconcile`
+
+When `load-context` says `next_step_hint == "monitor"`, the skill's `spec_invalid: already_in_flight` envelope used to give no path forward when the cluster state had been cleaned but the journal still said in_flight (empirical: post-cleanup of `$SCRATCH/run-bdae0357`, the journal still tracked `run-bdae0357-canary` as in-flight; the agent's offered options — `/monitor-hpc`, `--no-canary`, "force" — all missed the actual fix). Remediation now names three concrete recovery paths in order of safety: (a) `/monitor-hpc` for the normal case; (b) `hpc-agent reconcile --run-id <id> --scheduler <sched>` when the cluster state is gone (reconcile polls, sees the dir is missing, marks the journal `abandoned`, unblocks the next submit); (c) `--no-canary` only when the prior canary specifically is the in-flight one and was independently confirmed.
+
 ## 0.10.4 — 2026-06-04
 
 One-line follow-up to 0.10.3's `register_run` auto-gen.
