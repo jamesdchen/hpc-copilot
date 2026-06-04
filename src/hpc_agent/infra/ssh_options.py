@@ -26,6 +26,11 @@ Environment variables consulted here
     first :func:`_ssh_multiplex_opts` call warns and falls back to the
     legacy override when the local binary reports an older version.
     ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits ahead of all of this.
+``HPC_SSH_CIPHER`` / ``HPC_SSH_MAC`` / ``HPC_SSH_COMPRESSION``
+    Cipher / MAC / compression tuning spliced into every ssh-family call —
+    see :func:`_ssh_crypto_opts`. Defaults favour AES-NI-accelerated GCM
+    ciphers + ETM MACs and pin ``Compression=no``; set any to ``default``
+    to drop that override.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 __all__ = [
+    "_local_openssh_supports_gcm",
     "_resolve_ssh_persist_interval",
     "_rsync_rsh_env",
     "_scp_binary",
@@ -47,6 +53,7 @@ __all__ = [
     "_ssh_binary",
     "_ssh_config_override_opts",
     "_ssh_config_forces_no_multiplex",
+    "_ssh_crypto_opts",
     "_ssh_multiplex_opts",
     "_windows_openssh_named_pipe_supported",
     "ssh_argv",
@@ -142,11 +149,17 @@ def _rsync_rsh_env() -> dict[str, str]:
     if os.environ.get("RSYNC_RSH"):
         return {}
     ssh = _ssh_binary()
+    # Crypto tuning (#256) rides rsync's own ssh too. On Windows the transfer
+    # override is appended as before. Only emit RSYNC_RSH when we actually have
+    # something to override: a bare ``ssh`` with no extra opts is exactly
+    # rsync's default, so leave the env unset to preserve PATH resolution and
+    # the pre-tuning no-op POSIX path.
+    parts = [ssh, *_ssh_crypto_opts()]
     if sys.platform == "win32":
-        return {"RSYNC_RSH": " ".join([ssh, *_ssh_config_override_opts()])}
-    if ssh == "ssh":
+        parts += _ssh_config_override_opts()
+    if parts == ["ssh"]:
         return {}
-    return {"RSYNC_RSH": ssh}
+    return {"RSYNC_RSH": " ".join(parts)}
 
 
 # Default ControlPersist window. Tunable via ``HPC_SSH_PERSIST_INTERVAL``;
@@ -502,6 +515,90 @@ def _resolve_ssh_persist_interval() -> str | None:
     return raw
 
 
+# --- Cipher / MAC / compression tuning (#256) --------------------------------
+#
+# OpenSSH's portable defaults favour broad compatibility: the
+# chacha20-poly1305 cipher and a conservative MAC. On the modern x86 CPUs that
+# reach HPC clusters over fast campus/VPN links, AES-NI makes the aes*-gcm
+# ciphers noticeably faster, and the umac-128 / ETM MACs shave the integrity
+# step too. We pin those by default and turn compression off (already OpenSSH's
+# default, but an explicit ``-o`` beats a user's ``Compression yes`` ssh-config
+# on a fast link, where compression only adds CPU). All three are env-tunable;
+# set the env var to ``default`` to drop that one override and let ssh_config /
+# the built-in default stand.
+_DEFAULT_SSH_CIPHERS = "aes128-gcm@openssh.com,aes256-gcm@openssh.com"
+_DEFAULT_SSH_MACS = "umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
+_DEFAULT_SSH_COMPRESSION = "no"
+
+# AES-GCM ciphers and ETM MACs have been universal since OpenSSH 6.2 (2013); a
+# positively-detected older LOCAL binary may reject them with "no matching
+# cipher", so we drop the cipher/MAC overrides there (the same ``ssh -V`` probe
+# seam #243 added). 6.0/6.1 slip through this coarse major check but are
+# vanishingly rare in 2026 — and the env override is the escape hatch.
+_MIN_GCM_OPENSSH_MAJOR = 6
+
+
+@functools.cache
+def _local_openssh_supports_gcm() -> bool:
+    """Whether the local ssh is new enough for aes-gcm / ETM MAC overrides.
+
+    ``True`` unless :func:`_local_openssh_major` *positively* reports a major
+    older than :data:`_MIN_GCM_OPENSSH_MAJOR`; an undeterminable version returns
+    ``True`` (don't demote on a probe hiccup — the binary is almost certainly
+    modern). Cached: the local binary doesn't change mid-process and ``ssh -V``
+    is a subprocess we must not pay on every ssh call.
+    """
+    major = _local_openssh_major()
+    return not (major is not None and major < _MIN_GCM_OPENSSH_MAJOR)
+
+
+def _ssh_crypto_opts() -> list[str]:
+    """SSH ``-o`` options pinning a faster cipher/MAC and disabling compression.
+
+    The list spliced into every ssh-family invocation that opens a connection:
+    :func:`ssh_argv` for the ``ssh`` command channel and one-shot ``scp``, and
+    :func:`_rsync_rsh_env` for rsync's own ssh. Each knob is independently
+    tunable via an env var; the value is passed verbatim to OpenSSH, and the
+    literal ``default`` drops that override entirely:
+
+    ``HPC_SSH_CIPHER``
+        OpenSSH ``Ciphers`` list. Default :data:`_DEFAULT_SSH_CIPHERS`.
+    ``HPC_SSH_MAC``
+        OpenSSH ``MACs`` list. Default :data:`_DEFAULT_SSH_MACS`.
+    ``HPC_SSH_COMPRESSION``
+        ``no`` (default) / ``yes`` — OpenSSH ``Compression``.
+
+    On a positively-detected local OpenSSH older than
+    :data:`_MIN_GCM_OPENSSH_MAJOR` (:func:`_local_openssh_supports_gcm`) the
+    *default* cipher+MAC overrides are dropped — the binary may not know
+    aes-gcm / ETM — while compression (universally supported) is still pinned.
+    An explicit env value is the operator's call and is honoured regardless of
+    the probe. Not cached (env is read live so tests / a mid-session export
+    take effect); the costly version probe behind it is.
+
+    Cluster-side compatibility: the server's sshd must also offer the cipher.
+    AES-GCM has been universal cluster-side since OpenSSH 6.2; an ancient
+    cluster that rejects it surfaces as "no matching cipher" — set
+    ``HPC_SSH_CIPHER=default`` (and/or ``HPC_SSH_MAC=default``) to fall back.
+    """
+    cipher = os.environ.get("HPC_SSH_CIPHER") or _DEFAULT_SSH_CIPHERS
+    mac = os.environ.get("HPC_SSH_MAC") or _DEFAULT_SSH_MACS
+    compression = os.environ.get("HPC_SSH_COMPRESSION") or _DEFAULT_SSH_COMPRESSION
+
+    # Drop the aes-gcm / ETM defaults on an old local binary, but honour an
+    # explicit env override there (the user pinned it deliberately).
+    gcm_ok = _local_openssh_supports_gcm()
+
+    opts: list[str] = []
+    if cipher.lower() != "default" and (gcm_ok or os.environ.get("HPC_SSH_CIPHER")):
+        opts += ["-o", f"Ciphers={cipher}"]
+    if mac.lower() != "default" and (gcm_ok or os.environ.get("HPC_SSH_MAC")):
+        opts += ["-o", f"MACs={mac}"]
+    if compression.lower() != "default":
+        opts += ["-o", f"Compression={compression}"]
+    return opts
+
+
 def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
     """Leading argv (resolved binary + platform-correct options) for an
     ssh-family command of *kind* — the single seam for ssh invocation.
@@ -528,9 +625,23 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
     rsync is env-based, not argv-based — see :func:`ssh_env`.
     """
     if kind == "ssh":
-        return [_ssh_binary(), "-o", "BatchMode=yes", *_ssh_multiplex_opts(), *extra_opts]
+        return [
+            _ssh_binary(),
+            "-o",
+            "BatchMode=yes",
+            *_ssh_crypto_opts(),
+            *_ssh_multiplex_opts(),
+            *extra_opts,
+        ]
     if kind == "scp":
-        return [_scp_binary(), "-o", "BatchMode=yes", *_ssh_config_override_opts(), *extra_opts]
+        return [
+            _scp_binary(),
+            "-o",
+            "BatchMode=yes",
+            *_ssh_crypto_opts(),
+            *_ssh_config_override_opts(),
+            *extra_opts,
+        ]
     if kind == "ssh-add":
         return [_ssh_add_binary(), *extra_opts]
     raise ValueError(f"unknown ssh-family kind {kind!r}; expected 'ssh', 'scp', or 'ssh-add'")

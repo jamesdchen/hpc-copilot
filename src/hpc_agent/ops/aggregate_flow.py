@@ -46,6 +46,7 @@ the same run_id is safe and cheap.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,6 +257,158 @@ def _combine_missing(
                 failures.append((wave, (stderr or "").strip()[-500:]))
                 break
     return combined_now, failures
+
+
+def _combiner_only_reduce(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    combiner_local: Path,
+) -> tuple[dict[str, Any], list[int]]:
+    """Pull the cluster ``_combiner/`` partials and reduce them locally.
+
+    The default aggregation path. Returns ``(aggregated_metrics,
+    incomplete_waves)``.
+
+    Incremental rsync: rather than walking the entire cluster-side
+    ``_combiner/`` tree on every call (slow for runs with 1000+ waves even when
+    nothing changed), narrow the pull to the waves not already present locally.
+    State source is ``record.combined_waves``; the diff against locally-present
+    ``wave_<N>.json`` files is the set still to fetch. When the diff equals the
+    full set (first call) or ``combined_waves`` is empty, an unfiltered pull is
+    emitted so behaviour matches the original.
+    """
+    include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
+    pull = rsync_pull(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        remote_subdir="_combiner",
+        local_dir=str(combiner_local),
+        include=include_patterns,
+    )
+    if pull.returncode != 0:
+        # No partials at all is a terminal pull failure; partials present
+        # but rsync hiccupped is recoverable on retry — surface either way.
+        stderr_tail = (pull.stderr or "").strip()
+        # Diagnose the most common failure shape: the cluster-side
+        # ``_combiner/`` directory doesn't exist at all. That means the
+        # cluster combiner step never ran (usually: the reporter died on
+        # a missing module / env issue), not that rsync had a transient
+        # hiccup. Surface the three concrete recovery paths so the
+        # caller doesn't waste a retry-loop on a precondition failure.
+        # Match both rsync's wording and OpenSSH scp's — different
+        # transports surface the same condition with slightly different
+        # phrasing depending on the platform.
+        no_such = "No such file or directory" in stderr_tail or "does not exist" in stderr_tail
+        if no_such:
+            has_agg_cmd = False
+            try:
+                sidecar = read_run_sidecar(experiment_dir, run_id)
+                has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                pass
+            cluster_reduce_hint = (
+                f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
+                f"sidecar's aggregate_cmd directly, no combiner needed."
+                if has_agg_cmd
+                else (
+                    f"`hpc-agent cluster-reduce --run-id {run_id}` is NOT available "
+                    f"here because the run sidecar has no aggregate_defaults.aggregate_cmd. "
+                    f"Configure one at submit time (write_run_sidecar's aggregate_defaults arg) "
+                    f"to enable this path on future runs."
+                )
+            )
+            raise errors.RemoteCommandFailed(
+                f"the cluster-side _combiner/ for run_id {run_id!r} does not "
+                f"exist at {record.remote_path}/{run_id}/_combiner/ — the "
+                f"combiner step never ran. Usually this means the cluster-side "
+                f"reporter died (check per-task stderr under "
+                f"{record.remote_path}/{run_id}/logs/). Three recovery paths: "
+                f"(1) fix the cluster env (likely a missing Python module) and "
+                f"resubmit — addresses the root cause. "
+                f"(2) {cluster_reduce_hint} "
+                f"(3) scp the raw per-task results locally and reduce on the laptop. "
+                f"rsync_pull stderr: {stderr_tail[:300]}"
+            )
+        raise errors.RemoteCommandFailed(
+            f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
+        )
+
+    # Reduce locally.
+    aggregated = reduce_partials(combiner_local)
+    # Waves where the combiner couldn't read every task's metrics.json
+    # contribute a partial grid_points set; reduce_partials means over
+    # only the readable subset. Surface those waves so the caller does
+    # not treat the aggregate as computed over the full task set.
+    incomplete_waves = sorted(collect_wave_errors(combiner_local))
+    return aggregated, incomplete_waves
+
+
+def _cluster_final_reduce(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    out: Path,
+) -> tuple[dict[str, Any], list[int]]:
+    """Run the cross-wave reduce ON THE CLUSTER, pull only the aggregate (#254).
+
+    Opt-in via ``HPC_CLUSTER_FINAL_REDUCE=1``. Invokes the combiner's ``--final``
+    mode (:func:`hpc_agent.infra.transport.run_final_reduce`) so the cluster
+    writes a single ``_aggregated/<run_id>/metrics_aggregate.json``, then pulls
+    just that KB-scale file instead of every ``_combiner/wave_*.json``. The
+    combiner is stdlib-only, so the run's env activation is threaded through (a
+    too-old login-node python3 would still fail) and the aggregate's
+    ``aggregated_metrics`` is byte-for-byte what the local reduce produces.
+    Returns ``(aggregated_metrics, incomplete_waves)``.
+    """
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.infra.transport import run_final_reduce
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        sidecar = {}
+    remote_activation = remote_activation_for_sidecar(sidecar)
+
+    proc = run_final_reduce(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        run_id=run_id,
+        force=True,  # idempotent: aggregate_flow may be re-run; always refresh
+        remote_activation=remote_activation,
+    )
+    if proc.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"cluster final-reduce for run_id {run_id!r} failed "
+            f"(exit {proc.returncode}): {(proc.stderr or '').strip()[:300]}"
+        )
+
+    agg_local = out / "_aggregated" / run_id
+    pull = rsync_pull(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        remote_subdir=f"_aggregated/{run_id}",
+        local_dir=str(agg_local),
+        include=["metrics_aggregate.json"],
+    )
+    if pull.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"pull of metrics_aggregate.json for run_id {run_id!r} failed "
+            f"(exit {pull.returncode}): {(pull.stderr or '').strip()[:300]}"
+        )
+    try:
+        data = json.loads((agg_local / "metrics_aggregate.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        raise errors.RemoteCommandFailed(
+            f"cluster final-reduce produced no readable metrics_aggregate.json "
+            f"for run_id {run_id!r}: {exc}"
+        ) from exc
+
+    aggregated = data.get("aggregated_metrics") or {}
+    incomplete = (data.get("provenance") or {}).get("incomplete_waves") or []
+    return aggregated, [int(w) for w in incomplete]
 
 
 def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
@@ -556,85 +709,22 @@ def aggregate_flow(
             if record is None:  # pragma: no cover — defensive
                 raise errors.JournalCorrupt(f"record vanished for {run_id!r}")
 
-    # Pull the combined partials.
-    #
-    # Incremental rsync: rather than walking the entire cluster-side
-    # ``_combiner/`` tree on every call (which is slow for runs with
-    # 1000+ waves even when nothing has changed), narrow the pull to the
-    # waves that aren't already present locally. State source is
-    # ``record.combined_waves`` (the authoritative set of waves the
-    # cluster has produced ``wave_<N>.json`` for, just updated above by
-    # ``_combine_missing``). The diff against locally-present
-    # ``wave_<N>.json`` files is the set we still need to fetch.
-    #
-    # Fallback: when the diff equals the full set (first call) or
-    # ``combined_waves`` is empty (no wave_map, falling back to whatever
-    # is on the cluster — see the comment on ``wave_map_keys`` above),
-    # we emit an unfiltered pull so behavior matches the original.
+    # Obtain the aggregated metrics + the incomplete-wave set. By default this
+    # pulls the cluster ``_combiner/`` partials and reduces them locally; with
+    # ``HPC_CLUSTER_FINAL_REDUCE=1`` (#254) the cross-wave reduce runs ON THE
+    # CLUSTER and only the single KB ``metrics_aggregate.json`` is pulled —
+    # one RTT, not hundreds of wave_*.json transfers. Both paths yield the same
+    # ``(aggregated_metrics, incomplete_waves)``, so the rest of the flow is
+    # identical; the local path stays the default (opt-in, debug-reachable).
     combiner_local = out / "_combiner"
-    include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
-    pull = rsync_pull(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        remote_subdir="_combiner",
-        local_dir=str(combiner_local),
-        include=include_patterns,
-    )
-    if pull.returncode != 0:
-        # No partials at all is a terminal pull failure; partials present
-        # but rsync hiccupped is recoverable on retry — surface either way.
-        stderr_tail = (pull.stderr or "").strip()
-        # Diagnose the most common failure shape: the cluster-side
-        # ``_combiner/`` directory doesn't exist at all. That means the
-        # cluster combiner step never ran (usually: the reporter died on
-        # a missing module / env issue), not that rsync had a transient
-        # hiccup. Surface the three concrete recovery paths so the
-        # caller doesn't waste a retry-loop on a precondition failure.
-        # Match both rsync's wording and OpenSSH scp's — different
-        # transports surface the same condition with slightly different
-        # phrasing depending on the platform.
-        no_such = "No such file or directory" in stderr_tail or "does not exist" in stderr_tail
-        if no_such:
-            has_agg_cmd = False
-            try:
-                sidecar = read_run_sidecar(experiment_dir, run_id)
-                has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
-                pass
-            cluster_reduce_hint = (
-                f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
-                f"sidecar's aggregate_cmd directly, no combiner needed."
-                if has_agg_cmd
-                else (
-                    f"`hpc-agent cluster-reduce --run-id {run_id}` is NOT available "
-                    f"here because the run sidecar has no aggregate_defaults.aggregate_cmd. "
-                    f"Configure one at submit time (write_run_sidecar's aggregate_defaults arg) "
-                    f"to enable this path on future runs."
-                )
-            )
-            raise errors.RemoteCommandFailed(
-                f"the cluster-side _combiner/ for run_id {run_id!r} does not "
-                f"exist at {record.remote_path}/{run_id}/_combiner/ — the "
-                f"combiner step never ran. Usually this means the cluster-side "
-                f"reporter died (check per-task stderr under "
-                f"{record.remote_path}/{run_id}/logs/). Three recovery paths: "
-                f"(1) fix the cluster env (likely a missing Python module) and "
-                f"resubmit — addresses the root cause. "
-                f"(2) {cluster_reduce_hint} "
-                f"(3) scp the raw per-task results locally and reduce on the laptop. "
-                f"rsync_pull stderr: {stderr_tail[:300]}"
-            )
-        raise errors.RemoteCommandFailed(
-            f"rsync_pull of _combiner failed (exit {pull.returncode}): {stderr_tail[:300]}"
+    if os.environ.get("HPC_CLUSTER_FINAL_REDUCE") == "1":
+        aggregated, incomplete_waves = _cluster_final_reduce(
+            experiment_dir, run_id, record=record, out=out
         )
-
-    # Reduce locally.
-    aggregated = reduce_partials(combiner_local)
-    # Waves where the combiner couldn't read every task's metrics.json
-    # contribute a partial grid_points set; reduce_partials means over
-    # only the readable subset. Surface those waves so the caller does
-    # not treat the aggregate as computed over the full task set.
-    incomplete_waves = sorted(collect_wave_errors(combiner_local))
+    else:
+        aggregated, incomplete_waves = _combiner_only_reduce(
+            experiment_dir, run_id, record=record, combiner_local=combiner_local
+        )
 
     # Ingest runtime samples (timing + axis_bindings) from the pulled
     # ``wave_*.runtime.json`` files into <experiment>/.hpc/runtimes/.

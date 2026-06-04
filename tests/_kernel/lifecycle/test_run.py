@@ -212,7 +212,7 @@ def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cmd_run_inline_flag_renders_without_spawning(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     import argparse
     import json
@@ -228,6 +228,10 @@ def test_cmd_run_inline_flag_renders_without_spawning(
         "hpc_agent._kernel.lifecycle.invoke.worker_credentials_available", lambda: False
     )
     _no_spawn(monkeypatch)
+    # Persist large inline prompts under a redirected journal home (#262B), not
+    # the real ~/.claude/hpc, so the test leaves no trace.
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path))
+    monkeypatch.delenv("HPC_INLINE_PROMPT_PATH_THRESHOLD", raising=False)
     rc = cmd_run(
         argparse.Namespace(
             workflow="submit", experiment_dir=Path("/exp"), fields_json="{}", inline=True
@@ -239,10 +243,46 @@ def test_cmd_run_inline_flag_renders_without_spawning(
     assert env["data"]["mode"] == "inline"
     assert env["data"]["workflow"] == "submit"
     assert env["data"]["experiment_dir"] == str(Path("/exp"))
-    # The rendered prompt is the canonical procedure the worker would have run.
-    assert "submit" in env["data"]["prompt"]
-    assert env["data"]["prompt"].strip()
     assert "instructions" in env["data"]
+    # The submit procedure is multi-KB → path-forwarded by reference (#262B):
+    # the prompt is on disk, NOT embedded in the orchestrator's envelope.
+    assert "prompt" not in env["data"]
+    assert env["data"]["prompt_size_bytes"] > 0
+    prompt_path = Path(env["data"]["prompt_path"])
+    assert prompt_path.is_file()
+    body = prompt_path.read_text(encoding="utf-8")
+    assert "submit" in body and body.strip()
+    # The subagent is told to Read the path as its first action.
+    assert str(prompt_path) in env["data"]["subagent"]["task"]
+
+
+def test_cmd_run_inline_small_prompt_stays_embedded(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+    import json
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
+    monkeypatch.setattr(
+        "hpc_agent._kernel.lifecycle.invoke.worker_credentials_available", lambda: False
+    )
+    _no_spawn(monkeypatch)
+    # A threshold above any rendered prompt forces the embedded-inline path.
+    monkeypatch.setenv("HPC_INLINE_PROMPT_PATH_THRESHOLD", str(10**9))
+    rc = cmd_run(
+        argparse.Namespace(
+            workflow="submit", experiment_dir=Path("/exp"), fields_json="{}", inline=True
+        )
+    )
+    assert rc == 0
+    env = json.loads(capsys.readouterr().out.strip())
+    assert env["data"]["mode"] == "inline"
+    # Small (forced) → embedded prompt, no path forwarding.
+    assert "prompt_path" not in env["data"]
+    assert "submit" in env["data"]["prompt"]
+    assert env["data"]["subagent"]["task"] == env["data"]["prompt"]
 
 
 def test_cmd_run_inline_via_env(

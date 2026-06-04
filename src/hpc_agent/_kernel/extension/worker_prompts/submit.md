@@ -32,6 +32,8 @@ When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (
 
 If a value you need later is absent here, derive it from the run sidecar on disk — never from memory.
 
+**Step 0 — cluster-SSH preflight, before any heavy local prep (#265).** This procedure ends in cluster SSH (rsync push, scp deploy, qsub). If you are running INLINE inside a *sandboxed* session, that SSH is structurally blocked — and you would only discover it AFTER all the local prep (interview, classify, build-submit-spec) is done, returning a misleading near-success. Fail fast instead: as your first cluster-touching action — right after `load-context` resolves the cluster, before any interview/classify/build — run `hpc-agent check-preflight --cluster <cluster>`. If it is blocked in a way consistent with a sandboxed network (the probe cannot leave the sandbox, as opposed to a genuine cluster-down), STOP and return `spec_invalid: sandbox_blocks_cluster_ssh` immediately — `ok: false`, no local prep wasted — with remediation: *"this workflow needs un-sandboxed cluster SSH; re-run as the default `--bare` spawn (set `ANTHROPIC_API_KEY` so it can authenticate) instead of inline, or disable the session sandbox."* Do **NOT** report `ok: true` with a buried "SSH was blocked" note — that reads as success when nothing was actually submitted (the #265 failure).
+
 Read cluster definitions with the [clusters-describe](../../docs/primitives/clusters-describe.md) primitive — never resolve and parse `clusters.yaml` by hand:
 
 ```bash

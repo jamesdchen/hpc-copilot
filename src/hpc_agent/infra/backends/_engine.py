@@ -98,6 +98,45 @@ class ProfileBackend(HPCBackend):
         # sge
         return ["-hold_jid", ",".join(job_ids)]
 
+    @property
+    def supports_afterok(self) -> bool:
+        """Whether this scheduler expresses an afterok (success-only) dependency (#250).
+
+        SLURM and the PBS family do; SGE's ``-hold_jid`` only waits for the job to
+        *end* (any exit), so it cannot gate on success and is treated as
+        unsupported (the caller falls back to the un-gated co-submission).
+        """
+        return self.profile.family in ("slurm", "pbspro", "torque")
+
+    def _build_afterok_dependency_flag(self, job_ids: list[str]) -> list[str]:
+        """Scheduler flags making this job depend on *job_ids* SUCCEEDING (#250).
+
+        Distinct from :meth:`_build_dependency_flag` (afterany, which only waits
+        for the dependency to *terminate*): afterok additionally DROPS the
+        dependent job when the dependency fails, so a canary failure means the
+        main array never runs — enforced by the scheduler, no orchestrator
+        round-trip.
+
+        * SLURM: ``--dependency afterok:<id> --kill-on-invalid-dep=yes`` — the
+          second flag removes the held main job when the canary fails (else it
+          would sit queued forever waiting on a dependency that can't satisfy).
+        * PBS Pro / TORQUE: ``-W depend=afterok:<id>`` — the scheduler drops the
+          dependent job on a non-zero dependency exit.
+        * SGE / unknown: ``[]`` — no native afterok (see :attr:`supports_afterok`);
+          the caller must not rely on a gate it didn't get.
+        """
+        if not job_ids:
+            return []
+        if self.profile.family == "slurm":
+            return [
+                "--dependency",
+                f"afterok:{':'.join(job_ids)}",
+                "--kill-on-invalid-dep=yes",
+            ]
+        if self.profile.family in ("pbspro", "torque"):
+            return ["-W", f"depend=afterok:{':'.join(job_ids)}"]
+        return []
+
     def resource_flags(self, resources: object) -> list[str]:
         """Translate a resources object into scheduler command-line flags.
 

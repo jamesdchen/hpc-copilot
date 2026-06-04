@@ -257,39 +257,30 @@ def _emit_describe(name: str) -> int:
             retry_safe=False,
         )
 
-    from importlib.resources import files
+    # #261: describe output is framework-stable (changes only with the package
+    # version), so memoize the resolved data payload by (pkg_version, name). A
+    # hit skips the registry load + procedure/skill resolution entirely. Only
+    # successful describes are cached; a not-found name re-runs the live path.
+    from hpc_agent.state import describe_cache
 
-    from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
-
-    if name in WORKFLOW_PROCEDURES:
-        from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
-
-        _ok({"kind": "procedure", "name": name, "content": _procedure_body(name)})
+    cached = describe_cache.load(name)
+    if cached is not None:
+        _ok(cached)
         return EXIT_OK
 
-    skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
-    if skill_md.is_file():
-        body = skill_md.read_text(encoding="utf-8")
-        if body.startswith("---"):
-            close = body.find("\n---", 3)
-            if close != -1:
-                body = body[close + 4 :]
-        _ok({"kind": "skill", "name": name, "content": body.strip()})
-        return EXIT_OK
+    try:
+        data = describe(name=name)
+    except ValueError:
+        return _err(
+            error_code="spec_invalid",
+            message=f"no skill or primitive named {name!r}",
+            category="user",
+            retry_safe=False,
+        )
 
-    from hpc_agent._kernel.registry.operations import operations_catalog
-
-    for entry in operations_catalog():
-        if entry.get("name") == name:
-            _ok({"kind": "primitive", "name": name, "content": entry})
-            return EXIT_OK
-
-    return _err(
-        error_code="spec_invalid",
-        message=f"no skill or primitive named {name!r}",
-        category="user",
-        retry_safe=False,
-    )
+    describe_cache.store(name, data)
+    _ok(data)
+    return EXIT_OK
 
 
 @primitive(

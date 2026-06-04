@@ -25,6 +25,7 @@ journal arbiter since the framework began.
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -181,6 +182,100 @@ def _preflight_runtime_check(
             f"Activation command attempted: `{cmd}` (exit {probe.returncode}; "
             f"stderr: {(probe.stderr or '').strip()[:200]})."
         )
+
+
+def _canary_skip_threshold(spec: SubmitFlowSpec) -> int:
+    """Effective tiny-batch canary-skip threshold (#263): env over spec field."""
+    raw = os.environ.get("HPC_CANARY_SKIP_THRESHOLD")
+    if raw:
+        try:
+            val = int(raw)
+        except ValueError:
+            val = -1
+        if val >= 0:
+            return val
+    return int(getattr(spec, "canary_skip_threshold", 4))
+
+
+def _should_run_canary(spec: SubmitFlowSpec) -> bool:
+    """Decide whether to fire a canary for *spec* (#263 + #249).
+
+    Order:
+
+    * ``canary=false`` → no canary (the caller's explicit opt-out).
+    * ``canary_only=true`` → ALWAYS canary — the two-phase gate is an explicit
+      request to validate before main; neither optimization applies.
+    * ``force_canary=true`` → ALWAYS canary (override both skips).
+    * ``total_tasks <= threshold`` (#263) → skip: for a tiny batch the main
+      array's own first tasks catch a broken executor as fast as a canary would.
+    * same ``cmd_sha`` validated within TTL (#249) → skip: a canary for this
+      exact ``cmd_sha`` already proved the runtime boots; re-running it gets
+      nothing new.
+
+    Otherwise → canary.
+    """
+    if not spec.canary:
+        return False
+    if spec.canary_only or getattr(spec, "force_canary", False):
+        return True
+    # #263: tiny-batch auto-skip.
+    if spec.total_tasks <= _canary_skip_threshold(spec):
+        return False
+    # #249: skip when this cmd_sha was canary-validated within the TTL.
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.state import canary_cache
+
+    cmd_sha = (spec.job_env or {}).get("HPC_CMD_SHA") or ""
+    if cmd_sha and not canary_cache.cache_disabled():
+        key = canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=_pkg_version or "")
+        if canary_cache.is_canary_validated_fresh(key):
+            return False
+    return True
+
+
+def _run_uv_preflight_for_batch(
+    *,
+    ssh_target: str,
+    job_envs: list[dict[str, str]],
+    skip_preflight: bool,
+) -> None:
+    """Cluster-side ``uv`` preflight for the first uv-runtime spec, TTL-cached (#255).
+
+    A batch's specs share ``(ssh_target, remote_path)`` ⇒ same cluster, so one
+    probe on the first ``runtime=uv`` spec's activation fields covers the
+    batch. A *successful* probe is cached per
+    ``(host, env-activation, framework-version)`` for a TTL (default 15min): a
+    re-submit of the same target within the window skips the SSH round-trip.
+
+    The env-activation (``MODULES`` + ``CONDA_SOURCE`` + ``CONDA_ENV``) and the
+    framework version are folded into the cache key, so a conda-env edit or a
+    ``pip install -U`` misses and re-probes. ``skip_preflight`` and
+    ``HPC_NO_PREFLIGHT_CACHE=1`` both bypass the cache. Only successes are
+    recorded — a failure surfaces as :class:`errors.SpecInvalid` from
+    :func:`_preflight_runtime_check` and is never cached.
+    """
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.state import preflight_cache
+
+    for job_env in job_envs:
+        if (job_env or {}).get("HPC_RUNTIME") != "uv":
+            continue
+        activation = "|".join(
+            (
+                (job_env.get("MODULES") or "").strip(),
+                (job_env.get("CONDA_SOURCE") or "").strip(),
+                (job_env.get("CONDA_ENV") or "").strip(),
+            )
+        )
+        cache_key = preflight_cache.preflight_cache_key(
+            host=ssh_target, activation=activation, version=_pkg_version or ""
+        )
+        if not skip_preflight and preflight_cache.is_preflight_fresh(cache_key):
+            return  # validated within TTL — skip the cluster round-trip (#255)
+        _preflight_runtime_check(ssh_target, job_env=dict(job_env), skip=skip_preflight)
+        if not skip_preflight:
+            preflight_cache.record_preflight(cache_key, checks=["uv_present"])
+        return
 
 
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster
@@ -560,6 +655,7 @@ def _make_single_array_submission(
     job_env: dict[str, str],
     cwd: Path,
     resources: object = None,
+    extra_flags: list[str] | None = None,
 ) -> list[str]:
     """Submit one array of size ``total_tasks`` and return the job IDs.
 
@@ -570,11 +666,13 @@ def _make_single_array_submission(
 
     *resources* (a ``SubmitResources`` or ``None``) is translated by the
     backend into scheduler resource flags; ``None``/empty emits none, so
-    the template directives apply unchanged.
+    the template directives apply unchanged. *extra_flags* (e.g. an afterok
+    scheduler-dependency, #250) are appended after the resource flags.
     """
     backend._setup_log_dir()  # type: ignore[attr-defined]
+    flags = backend.resource_flags(resources) + list(extra_flags or [])
     cmd = backend._build_command(  # type: ignore[attr-defined]
-        f"1-{total_tasks}", job_name, job_env, extra_flags=backend.resource_flags(resources)
+        f"1-{total_tasks}", job_name, job_env, extra_flags=flags
     )
     result = backend._execute_command(cmd, job_env, cwd)  # type: ignore[attr-defined]
     if result.returncode != 0:
@@ -762,7 +860,10 @@ def _submit_one_spec(
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     canary_done = False
-    if spec.canary:
+    # #263/#249: a tiny batch (total_tasks <= threshold) or a cmd_sha already
+    # canary-validated within the TTL skips the canary and goes straight to
+    # main; canary_only / force_canary always canary. See _should_run_canary.
+    if _should_run_canary(spec):
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
         if existing_canary is not None:
@@ -823,6 +924,19 @@ def _submit_one_spec(
             main_launched=False,
         )
 
+    # #250: gate the main array on the canary SUCCEEDING via a scheduler-level
+    # afterok dependency, so it co-submits now (no orchestrator wait+verify
+    # round-trip) yet the scheduler drops main if the canary fails. Only when
+    # the canary actually fired this call (canary_job_ids), the spec opted in,
+    # and the scheduler supports afterok (SGE has none → left un-gated, as today).
+    afterok_flags: list[str] = []
+    if (
+        spec.enable_afterok_dependency and canary_job_ids and backend_obj.supports_afterok  # type: ignore[attr-defined]
+    ):
+        afterok_flags = backend_obj._build_afterok_dependency_flag(  # type: ignore[attr-defined]
+            list(canary_job_ids)
+        )
+
     job_ids = _make_single_array_submission(
         backend_obj,
         job_name=spec.job_name,
@@ -830,6 +944,7 @@ def _submit_one_spec(
         job_env=job_env_full,
         cwd=experiment_dir,
         resources=spec.resources,
+        extra_flags=afterok_flags,
     )
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
@@ -1092,15 +1207,13 @@ def _submit_flow_batch_locked(
     # verify ``uv`` is actually on PATH after the cluster env is activated
     # — before the canary qsub. All specs in a batch share
     # ``(ssh_target, remote_path)`` ⇒ same cluster, so a single probe
-    # using the first uv-runtime spec's activation fields is enough.
-    for i in fresh_indices:
-        if (specs[i].job_env or {}).get("HPC_RUNTIME") == "uv":
-            _preflight_runtime_check(
-                ssh_target,
-                job_env=dict(specs[i].job_env or {}),
-                skip=skip_preflight,
-            )
-            break
+    # using the first uv-runtime spec's activation fields is enough. The TTL
+    # cache (#255) lets a re-submit within the window skip the SSH round-trip.
+    _run_uv_preflight_for_batch(
+        ssh_target=ssh_target,
+        job_envs=[dict(specs[i].job_env or {}) for i in fresh_indices],
+        skip_preflight=skip_preflight,
+    )
     # #185: Phase 2 of submit.md's two-phase canary gate re-invokes
     # submit-flow with the same target right after Phase 1 deployed —
     # the rsync+deploy is a no-op in normal use, but still pays the SSH

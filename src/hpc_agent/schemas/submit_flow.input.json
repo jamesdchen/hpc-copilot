@@ -158,6 +158,25 @@
       "title": "Canary Only",
       "type": "boolean"
     },
+    "canary_skip_threshold": {
+      "default": 4,
+      "description": "Auto-skip the canary when total_tasks <= this threshold (#263): for a tiny batch the main array's own first tasks catch a broken executor as fast as a canary would, so the canary is pure friction. Default 4. Set 0 to always canary. Env HPC_CANARY_SKIP_THRESHOLD overrides per-invocation. Ignored when canary_only=true (an explicit two-phase gate) or force_canary=true.",
+      "minimum": 0,
+      "title": "Canary Skip Threshold",
+      "type": "integer"
+    },
+    "force_canary": {
+      "default": false,
+      "description": "Always submit a canary, overriding both the total_tasks<=threshold auto-skip (#263) and the cached-cmd_sha skip (#249). For the rare small-but-expensive batch where the extra safety is worth it.",
+      "title": "Force Canary",
+      "type": "boolean"
+    },
+    "enable_afterok_dependency": {
+      "default": false,
+      "description": "Gate the main array on the canary SUCCEEDING via a scheduler-level afterok dependency (#250) instead of the canary running independently of main. When the canary fires AND the scheduler supports afterok (SLURM / PBS; SGE has no native afterok and is left un-gated), the main array is submitted immediately holding on afterok:<canary_job_id> — the scheduler drops main if the canary fails — so there is no orchestrator wait+verify+resubmit round-trip. Opt-in (default off).",
+      "title": "Enable Afterok Dependency",
+      "type": "boolean"
+    },
     "campaign_id": {
       "anyOf": [
         {

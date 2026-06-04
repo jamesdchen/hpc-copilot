@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from typing import Any
 
 from hpc_agent.cli._helpers import (
     EXIT_OK,
@@ -64,6 +65,53 @@ def _inline_via_env() -> bool:
     never refused by the worker-available guard in :func:`cmd_run` (#155).
     """
     return os.environ.get(_INVOKER_ENV, "").strip().lower() == _INLINE_INVOKER
+
+
+_INLINE_PROMPT_PATH_THRESHOLD_DEFAULT = 4096
+
+
+def _inline_prompt_path_threshold() -> int:
+    """Byte threshold above which a large inline prompt is forwarded by path (#262B)."""
+    raw = os.environ.get("HPC_INLINE_PROMPT_PATH_THRESHOLD")
+    if raw:
+        try:
+            val = int(raw)
+        except ValueError:
+            return _INLINE_PROMPT_PATH_THRESHOLD_DEFAULT
+        if val >= 0:
+            return val
+    return _INLINE_PROMPT_PATH_THRESHOLD_DEFAULT
+
+
+def _maybe_persist_inline_prompt(*, workflow: str, prompt: str) -> tuple[str | None, int]:
+    """Persist a large inline prompt to disk; return ``(abs_path | None, size_bytes)`` (#262B).
+
+    When the rendered procedure exceeds :func:`_inline_prompt_path_threshold`
+    (default 4096 bytes), it is written under the journal home's ``_inline/``
+    dir and its absolute path returned, so the orchestrator forwards the prompt
+    BY REFERENCE — the subagent ``Read``s the file, keeping the multi-KB
+    procedure out of the orchestrator's own context (the failure #262 hit, where
+    the agent shelled out to recover an over-large prompt). The journal home
+    (not ``experiment_dir/.hpc``) is the write target: it is always present /
+    writable, redirectable via ``HPC_JOURNAL_DIR``, and never pollutes the
+    experiment working tree. Returns ``(None, size)`` for a small prompt OR any
+    write failure — a graceful fall back to the embedded inline ``prompt``.
+    """
+    size = len(prompt.encode("utf-8"))
+    if size <= _inline_prompt_path_threshold():
+        return None, size
+    try:
+        import uuid
+
+        from hpc_agent.state.run_record import _current_homedir
+
+        inline_dir = _current_homedir() / "_inline"
+        inline_dir.mkdir(parents=True, exist_ok=True)
+        path = inline_dir / f"{workflow}-{uuid.uuid4().hex[:8]}.prompt.md"
+        path.write_text(prompt, encoding="utf-8")
+        return str(path.resolve()), size
+    except OSError:
+        return None, size
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -174,65 +222,76 @@ def cmd_run(args: argparse.Namespace) -> int:
         # No `claude -p` worker is spawned: hand the rendered procedure back for
         # the calling agent to run in-session — delegating to one subagent when it
         # has that capability, else in its own context — and produce the report.
-        _ok(
-            {
-                "mode": "inline",
-                "workflow": args.workflow,
-                "experiment_dir": str(args.experiment_dir),
-                "prompt": prompt,
-                # Structured routing hint so a harness can dispatch without
-                # parsing the prose: the named subagent carries the model pin
-                # (model: haiku) in its own definition, so the harness enforces
-                # it regardless of the caller's model. `hpc-agent
-                # install-commands` ships it to ~/.claude/agents/hpc-worker.md.
-                "subagent": {
-                    "preferred_name": _WORKER_SUBAGENT,
-                    "model": _WORKER_MODEL,
-                    "task": prompt,
-                },
-                "instructions": (
-                    "Inline mode: no `claude -p` worker was spawned. Produce the "
-                    "worker report the procedure in `prompt` asks for — a single "
-                    'JSON object {"result": ..., "decisions": [...], '
-                    '"anomalies": "..."}. How you run it depends on your '
-                    "capability, in this order:\n"
-                    f"- If a named subagent `{_WORKER_SUBAGENT}` is available "
-                    "(Claude Code installs it from this package via `hpc-agent "
-                    "install-commands`), dispatch exactly ONE subagent of that "
-                    "type with `prompt` as its entire task and return the JSON "
-                    f"object it produces. `{_WORKER_SUBAGENT}` is pinned to a "
-                    "small, cheap model in its own definition — the harness "
-                    "enforces that pin, so do not override its model. This keeps "
-                    "the procedure's verbose execution (rsync, qsub, scheduler "
-                    "dumps) out of your context, recovering the isolation the "
-                    "default worker spawn would have given.\n"
-                    "- Else if you have a generic subagent-spawning tool (Claude "
-                    "Code's `Agent` tool — formerly `Task` — or your harness's "
-                    "equivalent), dispatch ONE subagent with `prompt` as its "
-                    f"task; pin it to `{_WORKER_MODEL}` if your tool lets you "
-                    "choose a model (the procedure is a deterministic sequence, "
-                    "not open-ended reasoning).\n"
-                    "- Else run the procedure yourself in this session (you have "
-                    "full tools and credentials).\n"
-                    "The subagent (when used) is the leaf: it runs every step "
-                    "itself and spawns nothing further. Either path stays in this "
-                    "session — do NOT start a fresh `claude -p`/CLI worker or "
-                    "re-invoke `hpc-agent run`; inline deliberately skips that "
-                    "spawn.\n"
-                    "Isolation ceiling: a subagent recovers *context* isolation "
-                    "(the procedure's transcript stays out of your context) but "
-                    "NOT *environment* isolation — it shares this session's "
-                    "sandbox posture and auto-loads project CLAUDE.md, unlike the "
-                    "default `--bare` `claude -p` spawn, which forces the sandbox "
-                    "off and strips CLAUDE.md for a reproducible-minimum context. "
-                    "If you need that stronger isolation (e.g. a sandboxed session "
-                    "would block the cluster SSH, or project memory must not color "
-                    "the run), the default spawn — drop `HPC_AGENT_INVOKER=inline` "
-                    "— is the right tool, not inline."
-                ),
-            },
-            idempotent=False,
+        # A large procedure is persisted to disk and forwarded BY REFERENCE
+        # (data.prompt_path) so the orchestrator never holds the multi-KB prompt
+        # in its own context (#262B); a small one (or a write failure) keeps the
+        # embedded data.prompt.
+        prompt_path, prompt_size = _maybe_persist_inline_prompt(
+            workflow=args.workflow, prompt=prompt
         )
+        inline_data: dict[str, Any] = {
+            "mode": "inline",
+            "workflow": args.workflow,
+            "experiment_dir": str(args.experiment_dir),
+            "prompt_size_bytes": prompt_size,
+            # Structured routing hint so a harness can dispatch without parsing
+            # the prose: the named subagent carries the model pin in its own
+            # definition, so the harness enforces it regardless of the caller's
+            # model. `hpc-agent install-commands` ships it to
+            # ~/.claude/agents/hpc-worker.md.
+            "subagent": {
+                "preferred_name": _WORKER_SUBAGENT,
+                "model": _WORKER_MODEL,
+            },
+            "instructions": (
+                "Inline mode: no `claude -p` worker was spawned. Produce the "
+                "worker report the procedure asks for — a single JSON object "
+                '{"result": ..., "decisions": [...], "anomalies": "..."}. The '
+                "procedure is delivered as EITHER `data.prompt` (embedded inline, "
+                "small) OR `data.prompt_path` (an absolute path to the procedure "
+                "on disk, used when it is large) — exactly one is present. How you "
+                "run it, in order:\n"
+                f"- If a named subagent `{_WORKER_SUBAGENT}` is available (Claude "
+                "Code installs it via `hpc-agent install-commands`), dispatch "
+                "exactly ONE subagent of that type with the procedure as its "
+                "entire task. When `prompt_path` is present, pass that PATH to the "
+                "subagent and have it `Read` the file as its FIRST action — do NOT "
+                "read the file into THIS context (that defeats the point). "
+                f"`{_WORKER_SUBAGENT}` is model-pinned in its own definition; do "
+                "not override it. This keeps the verbose execution (rsync, qsub, "
+                "scheduler dumps) out of your context.\n"
+                "- Else if you have a generic subagent-spawning tool (Claude "
+                "Code's `Agent` tool), dispatch ONE subagent with the procedure "
+                f"as its task; pin it to `{_WORKER_MODEL}` if you can.\n"
+                "- Else run the procedure yourself in this session.\n"
+                "NEVER shell out to extract the procedure (no `python -c` / "
+                "`bash -c` / `jq` / `powershell -Command` / `pwsh -Command` / "
+                "`cmd /c` / any shell-via-flag that takes a code string), and "
+                "NEVER read harness-internal `.claude/projects/.../tool-results/` "
+                "files — when `prompt_path` is set, the `Read` tool on that path "
+                "is the ONLY recovery you need (#262).\n"
+                "The subagent (when used) is the leaf: it runs every step itself "
+                "and spawns nothing further. Either path stays in this session — "
+                "do NOT start a fresh `claude -p`/CLI worker or re-invoke "
+                "`hpc-agent run`.\n"
+                "Isolation ceiling: a subagent recovers *context* isolation but "
+                "NOT *environment* isolation — it shares this session's sandbox "
+                "posture and auto-loads project CLAUDE.md, unlike the default "
+                "`--bare` `claude -p` spawn. If a sandboxed session would block "
+                "the cluster SSH, the default spawn — drop "
+                "`HPC_AGENT_INVOKER=inline` — is the right tool, not inline."
+            ),
+        }
+        if prompt_path is not None:
+            inline_data["prompt_path"] = prompt_path
+            inline_data["subagent"]["task"] = (
+                f"Read the file at {prompt_path} via the Read tool as your FIRST "
+                "action — it is your entire task — then run every step it contains."
+            )
+        else:
+            inline_data["prompt"] = prompt
+            inline_data["subagent"]["task"] = prompt
+        _ok(inline_data, idempotent=False)
         return EXIT_OK
     # Prompt-cache accounting is collected on EVERY spawn by default (#244) so
     # a silent cache miss surfaces continuously, not only under an opt-in flag.

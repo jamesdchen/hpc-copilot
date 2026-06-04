@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from hpc_agent._wire._shared import (
     CombinedWaves,
     FailedWaves,
-    LifecycleStateObservableWithTimeout,
+    LifecycleStateReconcile,
     RunIdStrict,
 )
 
@@ -20,8 +20,8 @@ class ReconcileResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="reconcile output data")
 
     run_id: RunIdStrict
-    lifecycle_state: LifecycleStateObservableWithTimeout = Field(
-        description="Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler.",
+    lifecycle_state: LifecycleStateReconcile = Field(
+        description="Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler; 'unable_to_verify' when the cluster alive-check could not run (#258).",
     )
     combined_waves: CombinedWaves
     failed_waves: FailedWaves

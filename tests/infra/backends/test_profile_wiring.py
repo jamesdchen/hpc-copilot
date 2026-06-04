@@ -179,22 +179,18 @@ def test_deploy_runtime_scheduler_deploys_only_that_family():
 
     dests: list[str] = []
 
-    def _run(*args, **kwargs):
-        argv = args[0] if args else kwargs.get("args")
-        if isinstance(argv, (list, tuple)) and argv and "scp" in str(argv[0]):
-            dests.append(str(argv[-1]))  # remote dst is the last argv token
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    def _capture(*, ssh_target, remote_path, items):
+        dests.extend(it.dst_rel for it in items)
 
-    # deploy_runtime does the mkdir/clean via ``ssh_run`` (which since #209
-    # captures over ``subprocess.Popen`` on POSIX, not ``subprocess.run``) and
-    # pushes each file via a direct ``subprocess.run`` scp — no-op the former,
-    # capture scp destinations through the latter.
+    # deploy_runtime does the mkdir/clean via ``ssh_run`` (no-op'd here) then
+    # ships the cache-filtered files in ONE batched transfer (#252) — capture
+    # the staged dst_rels through the ``_deploy_transfer`` seam.
     with (
         patch(
             "hpc_agent.infra.transport.ssh_run",
             return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
         ),
-        patch("hpc_agent.infra.transport.subprocess.run", side_effect=_run),
+        patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture),
     ):
         transport.deploy_runtime(ssh_target="u@h", remote_path="/p", scheduler="pbspro")
 

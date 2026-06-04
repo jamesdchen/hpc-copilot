@@ -65,6 +65,19 @@ LifecycleStateObservableWithTimeout = Literal[
     "timeout",
 ]
 
+# Reconcile's envelope can additionally report 'unable_to_verify' (#258): the
+# cluster alive-check failed (SSH/auth/network), so the run's true state is
+# unknown — distinct from a confirmed 'in_flight'. Reconcile-specific so the
+# observable literal above stays clean for status.
+LifecycleStateReconcile = Literal[
+    "in_flight",
+    "complete",
+    "failed",
+    "abandoned",
+    "timeout",
+    "unable_to_verify",
+]
+
 # ── infra ────────────────────────────────────────────────────────────────────
 
 # Scheduler driver. 'sge' covers Sun/Univa/Open Grid Engine variants;

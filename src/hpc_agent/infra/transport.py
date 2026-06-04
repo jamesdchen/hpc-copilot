@@ -20,7 +20,6 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -45,6 +44,7 @@ __all__ = [
     "rsync_push",
     "run_combiner",
     "run_combiner_checked",
+    "run_final_reduce",
 ]
 
 
@@ -472,12 +472,6 @@ def rsync_push(
 # placed there, alongside the package version that produced them.
 _DEPLOY_MANIFEST_REL: Final[str] = ".hpc/.deploy_state.json"
 
-# Max concurrent scp's fired by :func:`deploy_runtime` (#245). All copies
-# reuse the one ssh ControlMaster, so concurrency overlaps the per-copy
-# subprocess fork/exec + transfer latency without fanning out fresh
-# handshakes against the cluster.
-_DEPLOY_PARALLELISM: Final[int] = 4
-
 
 def _sha256_bytes(data: bytes) -> str:
     """Hex sha256 of *data* — the content identity used by the deploy cache."""
@@ -614,6 +608,82 @@ def _parse_remote_manifest(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
+    """rsync the staged deploy tree to the cluster — one invocation, delta only.
+
+    ``-az --inplace`` ships only the changed bytes of changed files. The cache
+    already filtered to changed *files*; rsync's delta narrows it further to
+    changed *bytes*. NO ``--delete``: deploy merges its subset into the cluster
+    tree and must never remove the user's run output or sibling framework
+    files. rsync invokes its own ssh, so :func:`ssh_env` pins the binary +
+    crypto/multiplex opts, mirroring :func:`rsync_push`.
+    """
+    src = str(staging).rstrip("/\\") + "/"
+    dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
+    rsync_env = {**os.environ, **ssh_env()}
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["rsync", "-az", "--inplace", src, dst],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=SSH_TIMEOUT_SEC,
+                env=rsync_env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync deploy to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s"
+            ) from exc
+
+    result = _with_ssh_backoff(_run, label=f"rsync deploy {ssh_target}")
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"rsync deploy to {ssh_target} failed (exit {result.returncode}): "
+            f"{(result.stderr or '').strip()[:300]}"
+        )
+
+
+def _deploy_transfer(*, ssh_target: str, remote_path: str, items: list[_DeployItem]) -> None:
+    """Ship *items* to ``{remote_path}`` in a single batched transfer (#252).
+
+    Stages each item at ``staging/<dst_rel>`` (a verbatim package file is
+    copied, rendered ``content`` is written), then transfers the whole staging
+    tree in ONE invocation: an ``rsync -az --inplace`` delta where rsync is on
+    PATH, else a single ``tar c | ssh tar x`` stream (``delete=False`` — merge,
+    never remove). Same transport detection :func:`rsync_push` uses.
+    *remote_path* is validated up front so it can flow verbatim into the rsync
+    target / remote shell, matching the rest of the module.
+    """
+    validate_remote_path(remote_path.rstrip("/"))
+    with tempfile.TemporaryDirectory() as tmp:
+        staging = Path(tmp)
+        for it in items:
+            dst = staging / it.dst_rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if it.src_path is not None:
+                shutil.copyfile(it.src_path, dst)
+            else:
+                dst.write_text(it.content or "", encoding="utf-8", newline="")
+        if _have_rsync():
+            _rsync_deploy(ssh_target=ssh_target, remote_path=remote_path, staging=staging)
+            return
+        result = _tar_ssh_push(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            local_path=staging,
+            exclude=[],
+            delete=False,
+            timeout=SSH_TIMEOUT_SEC,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"tar/ssh deploy to {ssh_target} failed (exit {result.returncode}): "
+                f"{(result.stderr or '').strip()[:300]}"
+            )
+
+
 def deploy_runtime(
     *,
     ssh_target: str,
@@ -637,13 +707,16 @@ def deploy_runtime(
        ``runs/<id>.json`` come over via :func:`rsync_push`; the framework
        files are placed here by scp.
 
-    The scp copies are independent and all target the same host, so they are
-    fired **concurrently** (up to :data:`_DEPLOY_PARALLELISM`, #245); under
-    ControlMaster multiplexing every copy reuses the one ssh master, so
-    concurrency overlaps the per-copy latency without fresh handshakes. Each
-    underlying ssh/scp invocation is bounded by :data:`SSH_TIMEOUT_SEC`; if
-    any exceeds it, :class:`TimeoutError` is raised naming the file, and the
-    first failed copy's exception propagates out of the pool.
+    The (cache-filtered) files ship in a **single batched transfer** (#252):
+    an ``rsync -az --inplace`` delta where rsync is on PATH — so only the
+    *changed bytes* of changed files cross the wire, which matters for the
+    framework artifacts that grow over time (combiner.py, dispatch.py, the
+    templates) — falling back to one ``tar c | ssh tar x`` stream on hosts
+    without rsync (native Windows). This is the same transport detection
+    :func:`rsync_push` uses, and replaces the prior N-scp fan-out (#245): a
+    re-deploy is now at most one prelude ssh + one transfer. The transfer is
+    bounded by :data:`SSH_TIMEOUT_SEC`; a timeout raises :class:`TimeoutError`
+    and a non-zero transfer raises :class:`RuntimeError`.
 
     A **content-hash cache** (#242) skips files already present unchanged: the
     cluster-side manifest at :data:`_DEPLOY_MANIFEST_REL` records each file's
@@ -724,77 +797,26 @@ def deploy_runtime(
     else:
         to_deploy = list(items)
 
-    def _scp(src: Path, dst_rel: str) -> subprocess.CompletedProcess[str]:
-        dst = f"{ssh_target}:{shlex.quote(remote_path)}/{dst_rel}"
-
-        def _run() -> subprocess.CompletedProcess[str]:
-            try:
-                return subprocess.run(
-                    # ssh_argv("scp") = [<scp>, -o BatchMode=yes, *override];
-                    # BatchMode fails fast on a missing key instead of hanging
-                    # on a prompt — matches _scp_pull and ssh_run.
-                    [*ssh_argv("scp"), str(src), dst],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    timeout=SSH_TIMEOUT_SEC,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise TimeoutError(
-                    f"scp to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
-                ) from exc
-            except FileNotFoundError as exc:
-                # scp binary missing on the local host. Surface as
-                # FileNotFoundError so callers can distinguish "no scp on
-                # PATH" from a remote authentication failure.
-                raise FileNotFoundError(
-                    f"scp binary not found while copying {src.name}: {exc}"
-                ) from exc
-
-        return _with_ssh_backoff(_run, label=f"scp {src.name}")
-
-    def _scp_text(content: str, dst_rel: str) -> subprocess.CompletedProcess[str]:
-        """Transfer in-memory *content* to ``{remote_path}/{dst_rel}``.
-
-        Helper for payloads that are RENDERED at deploy time (the cpu/gpu
-        array job scripts, the cache manifest) rather than read verbatim from
-        a shipped file. Writes *content* to a short-lived local temp file
-        named like the remote destination (so any error message / backoff
-        label names the right artifact) and reuses :func:`_scp` so the
-        timeout, BatchMode, and retry behaviour are identical to the
-        static-file path. UTF-8, newline-preserving. Its own
-        ``TemporaryDirectory`` is created inside the worker thread, so
-        concurrent calls never share a temp path.
-        """
-        dst_name = Path(dst_rel).name
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp) / dst_name
-            tmp_path.write_text(content, encoding="utf-8", newline="")
-            return _scp(tmp_path, dst_rel)
-
-    def _deploy_one(item: _DeployItem) -> None:
-        if item.src_path is not None:
-            _scp(item.src_path, item.dst_rel)
-        else:
-            _scp_text(item.content or "", item.dst_rel)
-
-    # Fire the (cache-filtered) copies concurrently. All reuse the one ssh
-    # master, so this overlaps fork/exec + transfer latency rather than
-    # opening fresh handshakes. The first failed copy's exception is
-    # re-raised here (via ``Future.result``), exactly as the old serial path
-    # surfaced the first ``_with_ssh_backoff`` raise.
-    if to_deploy:
-        with ThreadPoolExecutor(max_workers=min(_DEPLOY_PARALLELISM, len(to_deploy))) as pool:
-            futures = [pool.submit(_deploy_one, item) for item in to_deploy]
-            for future in as_completed(futures):
-                future.result()
-
     # Record the new manifest only when it actually changed (a full cache hit
-    # leaves it identical, so we skip the write and its round-trip). Written
-    # last, after every copy succeeded — a failed copy raises above, so a
-    # stale manifest never claims a file landed that didn't.
-    if use_cache and remote_manifest != new_manifest:
-        _scp_text(json.dumps(new_manifest, indent=2, sort_keys=True), _DEPLOY_MANIFEST_REL)
+    # leaves it identical, so we skip the write — and the whole transfer — and
+    # its round-trip). The manifest rides the SAME batched transfer as the
+    # files it describes, written last in the staging tree; a failed transfer
+    # raises before anything is recorded, so a stale manifest never claims a
+    # file landed that didn't.
+    manifest_changed = use_cache and remote_manifest != new_manifest
+    transfer_items = list(to_deploy)
+    if manifest_changed:
+        manifest_json = json.dumps(new_manifest, indent=2, sort_keys=True)
+        transfer_items.append(
+            _DeployItem(
+                dst_rel=_DEPLOY_MANIFEST_REL,
+                sha=_sha256_bytes(manifest_json.encode("utf-8")),
+                src_path=None,
+                content=manifest_json,
+            )
+        )
+    if transfer_items:
+        _deploy_transfer(ssh_target=ssh_target, remote_path=remote_path, items=transfer_items)
 
 
 def run_combiner(
@@ -884,6 +906,37 @@ def run_combiner_checked(
         result.stdout or "",
         result.stderr or "",
     )
+
+
+def run_final_reduce(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    run_id: str,
+    force: bool = False,
+    timeout: float | None = _DEFAULT,
+    remote_activation: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Run the cluster-side FINAL cross-wave reduce on the login node (#254).
+
+    Invokes ``.hpc/_hpc_combiner.py --final --run-id <id>`` over SSH. The
+    combiner merges every ``_combiner/wave_*.json`` into a single
+    ``_aggregated/<run_id>/metrics_aggregate.json`` on the cluster, so the
+    caller pulls one kilobyte-scale file instead of hundreds of wave partials.
+    Mirrors :func:`run_combiner` (same activation + timeout contract); pass
+    ``force=True`` to overwrite an existing aggregate.
+    """
+    force_flag = " --force" if force else ""
+    run_id_q = shlex.quote(run_id)
+    cmd = (
+        f"cd {shlex.quote(remote_path)} && "
+        f"{remote_activation}"
+        f"HPC_RUN_ID={run_id_q} "
+        f"python3 .hpc/_hpc_combiner.py --final --run-id {run_id_q}{force_flag}"
+    )
+    if timeout is _DEFAULT:
+        return ssh_run(cmd, ssh_target=ssh_target)
+    return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
 
 
 def rsync_pull(

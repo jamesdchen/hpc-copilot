@@ -2,9 +2,10 @@
 
 ``deploy_runtime`` records a manifest (``.hpc/.deploy_state.json``) of each
 shipped file's sha256 + the producing package version, and on a re-deploy
-skips any file whose sha and package version both still match. These tests
-patch the ssh prelude (which carries the manifest read) and the scp
-subprocess so we can assert *which* files cross the wire on the second run.
+skips any file whose sha and package version both still match. Since #252 the
+surviving files ship in ONE batched transfer (rsync delta / tar fallback), so
+these tests patch the ssh prelude (which carries the manifest read) and the
+``_deploy_transfer`` seam to assert *which* dst_rels cross the wire.
 """
 
 from __future__ import annotations
@@ -25,62 +26,66 @@ def _no_backoff(monkeypatch):
     monkeypatch.delenv("HPC_NO_DEPLOY_CACHE", raising=False)
 
 
-def _scp_dsts(mock_run) -> list[str]:
-    """Remote destinations (last argv token) of every scp subprocess call."""
-    return [c[0][0][-1] for c in mock_run.call_args_list]
-
-
-def _run_deploy(*, manifest_stdout: str):
+def _run_deploy(*, manifest_stdout: str, use_cache: bool | None = None):
     """Run deploy_runtime with the ssh prelude returning *manifest_stdout*.
 
-    Returns the list of scp destinations issued during the deploy.
+    Returns ``(dst_rels, prelude_cmd)`` — the list of dst_rels handed to the
+    single batched transfer (empty when nothing shipped), and the prelude
+    ssh command string.
     """
+    captured: dict[str, list[str]] = {"dst_rels": []}
+
+    def _capture(*, ssh_target, remote_path, items):
+        captured["dst_rels"] = [it.dst_rel for it in items]
+
     with (
         patch(
             "hpc_agent.infra.transport.ssh_run",
             return_value=SimpleNamespace(returncode=0, stdout=manifest_stdout, stderr=""),
-        ),
-        patch("hpc_agent.infra.transport.subprocess.run") as mock_run,
+        ) as mock_ssh,
+        patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture),
     ):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
-        transport.deploy_runtime(ssh_target="u@c", remote_path="/p", scheduler="sge")
-    return _scp_dsts(mock_run)
+        transport.deploy_runtime(
+            ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=use_cache
+        )
+    return captured["dst_rels"], mock_ssh.call_args[0][0]
 
 
-def test_full_cache_hit_issues_zero_scps():
+_MANIFEST_REL = transport._DEPLOY_MANIFEST_REL
+
+
+def test_full_cache_hit_ships_nothing():
     # The cluster already holds exactly what we'd deploy: the remote manifest
     # matches the locally-computed one. No file — not even the manifest — is
-    # re-shipped.
+    # re-shipped, so no transfer fires.
     manifest = transport._local_deploy_manifest(scheduler="sge")
-    dsts = _run_deploy(manifest_stdout=json.dumps(manifest))
-    assert dsts == [], dsts
+    dst_rels, _ = _run_deploy(manifest_stdout=json.dumps(manifest))
+    assert dst_rels == [], dst_rels
 
 
 def test_absent_manifest_deploys_everything_then_writes_manifest():
     # First-ever deploy: cat printed nothing → no remote manifest → every file
-    # ships, and the run records the manifest for next time.
+    # ships in the one transfer, and the manifest rides along to record it.
     manifest = transport._local_deploy_manifest(scheduler="sge")
-    dsts = _run_deploy(manifest_stdout="")
-    # One scp per enumerated file, plus the manifest write.
-    assert len(dsts) == len(manifest["files"]) + 1
-    assert any(d.endswith("/.hpc/.deploy_state.json") for d in dsts)
+    dst_rels, _ = _run_deploy(manifest_stdout="")
+    assert _MANIFEST_REL in dst_rels
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert sorted(file_rels) == sorted(manifest["files"])
 
 
 def test_touching_one_file_redeploys_only_that_file():
     # Remote manifest matches except one entry whose sha is stale → exactly
-    # that file re-ships (plus the manifest rewrite to refresh its sha).
+    # that file ships (plus the manifest rewrite to refresh its sha).
     manifest = transport._local_deploy_manifest(scheduler="sge")
     target_rel = ".hpc/_hpc_dispatch.py"
     assert target_rel in manifest["files"]
     stale = json.loads(json.dumps(manifest))
     stale["files"][target_rel] = "0" * 64  # a sha that can't match real bytes
 
-    dsts = _run_deploy(manifest_stdout=json.dumps(stale))
-    file_dsts = [d for d in dsts if not d.endswith("/.hpc/.deploy_state.json")]
-    assert len(file_dsts) == 1, file_dsts
-    assert file_dsts[0].endswith("/.hpc/_hpc_dispatch.py")
-    # The manifest is rewritten so the refreshed sha persists.
-    assert any(d.endswith("/.hpc/.deploy_state.json") for d in dsts)
+    dst_rels, _ = _run_deploy(manifest_stdout=json.dumps(stale))
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert file_rels == [target_rel], file_rels
+    assert _MANIFEST_REL in dst_rels
 
 
 def test_pkg_version_mismatch_redeploys_everything():
@@ -89,56 +94,36 @@ def test_pkg_version_mismatch_redeploys_everything():
     manifest = transport._local_deploy_manifest(scheduler="sge")
     old = json.loads(json.dumps(manifest))
     old["pkg_version"] = "0.0.0-ancient"
-    dsts = _run_deploy(manifest_stdout=json.dumps(old))
-    file_dsts = [d for d in dsts if not d.endswith("/.hpc/.deploy_state.json")]
-    assert len(file_dsts) == len(manifest["files"])
+    dst_rels, _ = _run_deploy(manifest_stdout=json.dumps(old))
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert sorted(file_rels) == sorted(manifest["files"])
 
 
 def test_corrupt_manifest_falls_back_to_full_deploy():
     # Unparseable manifest → safe fallback: deploy everything (mitigation b).
-    dsts = _run_deploy(manifest_stdout="{ this is not valid json")
+    dst_rels, _ = _run_deploy(manifest_stdout="{ this is not valid json")
     manifest = transport._local_deploy_manifest(scheduler="sge")
-    file_dsts = [d for d in dsts if not d.endswith("/.hpc/.deploy_state.json")]
-    assert len(file_dsts) == len(manifest["files"])
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert sorted(file_rels) == sorted(manifest["files"])
 
 
 def test_no_deploy_cache_env_skips_manifest_entirely(monkeypatch):
-    # HPC_NO_DEPLOY_CACHE=1 forces a full deploy and writes no manifest, even
+    # HPC_NO_DEPLOY_CACHE=1 forces a full deploy and ships no manifest, even
     # when the cluster manifest would have produced a full hit.
     monkeypatch.setenv("HPC_NO_DEPLOY_CACHE", "1")
     manifest = transport._local_deploy_manifest(scheduler="sge")
-    with (
-        patch(
-            "hpc_agent.infra.transport.ssh_run",
-            return_value=SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr=""),
-        ) as mock_ssh,
-        patch("hpc_agent.infra.transport.subprocess.run") as mock_run,
-    ):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
-        transport.deploy_runtime(ssh_target="u@c", remote_path="/p", scheduler="sge")
-    dsts = _scp_dsts(mock_run)
-    # Full deploy, no manifest write.
-    assert len(dsts) == len(manifest["files"])
-    assert not any(d.endswith("/.hpc/.deploy_state.json") for d in dsts)
+    dst_rels, prelude_cmd = _run_deploy(manifest_stdout=json.dumps(manifest))
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert sorted(file_rels) == sorted(manifest["files"])
+    assert _MANIFEST_REL not in dst_rels
     # And the prelude ssh did NOT append a manifest `cat` (cache disabled).
-    prelude_cmd = mock_ssh.call_args[0][0]
     assert ".hpc/.deploy_state.json" not in prelude_cmd
 
 
 def test_use_cache_false_param_overrides_default():
     # The explicit param wins like the env var: a full deploy, no manifest.
     manifest = transport._local_deploy_manifest(scheduler="sge")
-    with (
-        patch(
-            "hpc_agent.infra.transport.ssh_run",
-            return_value=SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr=""),
-        ),
-        patch("hpc_agent.infra.transport.subprocess.run") as mock_run,
-    ):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
-        transport.deploy_runtime(
-            ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=False
-        )
-    dsts = _scp_dsts(mock_run)
-    assert len(dsts) == len(manifest["files"])
-    assert not any(d.endswith("/.hpc/.deploy_state.json") for d in dsts)
+    dst_rels, _ = _run_deploy(manifest_stdout=json.dumps(manifest), use_cache=False)
+    file_rels = [d for d in dst_rels if d != _MANIFEST_REL]
+    assert sorted(file_rels) == sorted(manifest["files"])
+    assert _MANIFEST_REL not in dst_rels

@@ -8,7 +8,7 @@ Standing adjustments to the procedure below:
 - A reference to another workflow (submit/status/aggregate/campaign) is a boundary, not your job — stop, record in `decisions`/`anomalies`.
 - Helper skills needing interactive confirmation can't run headless. No interactive user, ever — surface everything in the returned JSON.
 - Escalate over improvise. If you hit an ambiguous choice, missing input, or unfixable error — record what blocked you in `decisions`/`anomalies` and stop. Do not guess, retry blindly, or spawn further subagents.
-- Work tersely and in parallel. Multiple reads / `describe` / greps with no data dependency → one parallel tool batch, not serial.
+- Work tersely and in parallel — 'parallel' means parallel TOOL CALLS: multiple reads / `describe` / greps with no data dependency → multiple tool-call blocks in ONE message (the harness runs them concurrently), NOT shell-level concurrency in one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`).
 
 === BEGIN submit PROCEDURE ===
 Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow atom** (full pre-flight + rsync + deploy + qsub + record pipeline in one CLI call). For just the journal-write half (when the agent has already qsubbed), use the [submit-spec](../../docs/primitives/submit-spec.md) primitive directly. Both are idempotent on `run_id`: a replay returns `data.deduped: true` and emits no cluster-side side effects.
@@ -44,6 +44,8 @@ When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (
 - `data.next_step_hint` — `submit` / `monitor` / `aggregate`.
 
 If a value you need later is absent here, derive it from the run sidecar on disk — never from memory.
+
+**Step 0 — cluster-SSH preflight, before any heavy local prep (#265).** This procedure ends in cluster SSH (rsync push, scp deploy, qsub). If you are running INLINE inside a *sandboxed* session, that SSH is structurally blocked — and you would only discover it AFTER all the local prep (interview, classify, build-submit-spec) is done, returning a misleading near-success. Fail fast instead: as your first cluster-touching action — right after `load-context` resolves the cluster, before any interview/classify/build — run `hpc-agent check-preflight --cluster <cluster>`. If it is blocked in a way consistent with a sandboxed network (the probe cannot leave the sandbox, as opposed to a genuine cluster-down), STOP and return `spec_invalid: sandbox_blocks_cluster_ssh` immediately — `ok: false`, no local prep wasted — with remediation: *"this workflow needs un-sandboxed cluster SSH; re-run as the default `--bare` spawn (set `ANTHROPIC_API_KEY` so it can authenticate) instead of inline, or disable the session sandbox."* Do **NOT** report `ok: true` with a buried "SSH was blocked" note — that reads as success when nothing was actually submitted (the #265 failure).
 
 Read cluster definitions with the [clusters-describe](../../docs/primitives/clusters-describe.md) primitive — never resolve and parse `clusters.yaml` by hand:
 

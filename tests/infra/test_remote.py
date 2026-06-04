@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from hpc_agent.infra import remote, transport
-from hpc_agent.infra.ssh_options import _scp_binary, _ssh_binary
+from hpc_agent.infra.ssh_options import _ssh_binary
 
 
 @pytest.fixture(autouse=True)
@@ -175,27 +175,30 @@ class TestRsyncPull:
 
 
 class TestDeployRuntime:
-    """Verify call order: 1 ssh (mkdir), then 1 scp per source file.
+    """Verify call order: 1 ssh (mkdir prelude), then 1 batched transfer (#252).
 
-    The current code scp's metrics_io.py, then combiner.py in that order.
-    (The earlier orphan ``context.py`` push was removed in regfix because
-    the source module never existed on disk; deploy_runtime would have
-    raised FileNotFoundError on the scp call.)
+    Since #252 the surviving files ship in ONE rsync delta (or tar fallback)
+    rather than per-file scp; we patch the ``_deploy_transfer`` seam to assert
+    the full SET of dst_rels handed to that single transfer.
     """
 
-    def test_ssh_mkdir_then_scps_all_files(self):
+    def test_ssh_mkdir_then_transfers_all_files(self):
         # The mkdir runs through ssh_run (capture=True) → the close-pipes
-        # capture seam (#209); the file pushes are scp via subprocess.run.
-        # Patch both so we can assert the mkdir command and the scp set. The
-        # capture seam returns empty stdout, so the deploy cache (#242) sees
-        # no remote manifest → a full deploy. The copies now fire concurrently
-        # (#245), so this asserts the SET of destinations, not their order.
+        # capture seam (#209); the files then ship in one batched transfer.
+        # The capture seam returns empty stdout, so the deploy cache (#242)
+        # sees no remote manifest → a full deploy.
+        captured: dict[str, object] = {}
+
+        def _capture(*, ssh_target, remote_path, items):
+            captured["ssh_target"] = ssh_target
+            captured["remote_path"] = remote_path
+            captured["dst_rels"] = [it.dst_rel for it in items]
+
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
-            patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
+            patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture),
         ):
             mock_ssh.return_value = _cp()
-            mock_run.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
 
         # ssh mkdir: exactly one capture-seam call, and it is the mkdir. The
@@ -218,47 +221,29 @@ class TestDeployRuntime:
         assert "rm -f" in mkdir_argv[-1]
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
-        # Ten file pushes + one cache-manifest write = 11 scp's via
-        # subprocess.run. Concurrency makes order non-deterministic, so work
-        # off the set of destinations. On Windows, _ssh_multiplex_opts runs a
-        # one-time `ssh -V` version probe (#243) that also goes through
-        # subprocess.run — filter to the scp calls (every scp carries
-        # ``-o BatchMode=yes``; the probe does not) so the count is stable
-        # across platforms.
-        argvs = [c[0][0] for c in mock_run.call_args_list if "BatchMode=yes" in c[0][0]]
-        assert len(argvs) == 11, [a[:3] for a in argvs]
-
-        # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
-        # missing key fails fast instead of blocking on a password prompt.
-        # Layout per call: [scp, "-o", "BatchMode=yes", src, dst]. scp[0]
-        # resolves through _scp_binary() (bare "scp" on Linux/macOS; the
-        # native OpenSSH abs path on Windows, per #145).
-        assert all(argv[:3] == [_scp_binary(), "-o", "BatchMode=yes"] for argv in argvs), [
-            argv[:3] for argv in argvs
-        ]
-
-        # src/dst are the final two argv elements. We index from the end
-        # rather than a fixed [3]/[4] because Windows injects extra options
-        # (``-o ControlMaster=no -o ControlPath=none``, per #154/#158) ahead
-        # of src, shifting positional indices. Tail indexing is platform-agnostic.
-        dsts = {argv[-1] for argv in argvs}
-
+        # One batched transfer to the project root carrying every file plus the
+        # cache-manifest write. Ten files (no scheduler arg → sge + slurm
+        # templates) + manifest = 11 dst_rels.
+        assert captured["ssh_target"] == "u@c"
+        assert captured["remote_path"] == "/p"
+        rels = set(captured["dst_rels"])
         # Importable stubs into hpc_agent/ (so cluster-side user imports resolve).
-        assert any(d.endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py") for d in dsts)
-        assert any(d.endswith(":/p/hpc_agent/executor_cli.py") for d in dsts)
+        assert "hpc_agent/models/mapreduce/metrics_io.py" in rels
+        assert "hpc_agent/executor_cli.py" in rels
         # Framework executor + combiner into .hpc/
-        assert any(d.endswith(":/p/.hpc/_hpc_dispatch.py") for d in dsts)
-        assert any(d.endswith(":/p/.hpc/_hpc_combiner.py") for d in dsts)
+        assert ".hpc/_hpc_dispatch.py" in rels
+        assert ".hpc/_hpc_combiner.py" in rels
         # Four templates into .hpc/templates/
-        assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in dsts)
-        assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in dsts)
-        assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in dsts)
-        assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in dsts)
+        assert ".hpc/templates/cpu_array.sh" in rels
+        assert ".hpc/templates/gpu_array.sh" in rels
+        assert ".hpc/templates/cpu_array.slurm" in rels
+        assert ".hpc/templates/gpu_array.slurm" in rels
         # Two shared preambles into .hpc/templates/common/
-        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in dsts)
-        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in dsts)
-        # Cache manifest write (#242).
-        assert any(d.endswith(":/p/.hpc/.deploy_state.json") for d in dsts)
+        assert ".hpc/templates/common/hpc_preamble.sh" in rels
+        assert ".hpc/templates/common/gpu_preamble.sh" in rels
+        # Cache manifest write (#242), riding the same transfer.
+        assert ".hpc/.deploy_state.json" in rels
+        assert len(rels) == 11, sorted(rels)
 
 
 # ---------------------------------------------------------------------------
@@ -528,27 +513,28 @@ class TestRsyncPullTimeout:
 
 
 class TestDeployRuntimeTimeout:
-    """deploy_runtime emits one ssh + three scp calls, each of which
-    must carry the SSH timeout so a stuck cluster cannot block submit.
+    """deploy_runtime emits one ssh prelude + one batched transfer (#252), each
+    of which must carry the SSH timeout so a stuck cluster cannot block submit.
     """
 
     def test_each_subprocess_call_has_ssh_timeout(self):
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
+            patch("hpc_agent.infra.transport._have_rsync", return_value=True),
             patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
         ):
             mock_ssh.return_value = _cp()
             mock_run.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
-        # The ssh mkdir (capture seam) and every scp (subprocess.run) must
-        # carry the SSH timeout so a stuck cluster cannot block submit. Filter
-        # to the scp calls (``-o BatchMode=yes``): on Windows the one-time
-        # `ssh -V` version probe (#243) also goes through subprocess.run but
-        # carries its own short probe timeout, not the SSH transfer timeout.
+        # The ssh mkdir (capture seam) and the single rsync transfer
+        # (subprocess.run) must both carry the SSH timeout. Filter to the rsync
+        # call (argv[0] == "rsync"): on Windows the one-time `ssh -V` version
+        # probe (#243) also goes through subprocess.run but carries its own
+        # short probe timeout, not the SSH transfer timeout.
         assert mock_ssh.call_args.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
-        scp_calls = [c for c in mock_run.call_args_list if "BatchMode=yes" in c[0][0]]
-        assert scp_calls, "expected at least one scp call"
-        for call in scp_calls:
+        rsync_calls = [c for c in mock_run.call_args_list if c[0][0] and c[0][0][0] == "rsync"]
+        assert rsync_calls, "expected one rsync transfer call"
+        for call in rsync_calls:
             assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
 

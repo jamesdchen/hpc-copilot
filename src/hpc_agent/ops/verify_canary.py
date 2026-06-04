@@ -427,6 +427,18 @@ def verify_canary(
         except (errors.RemoteCommandFailed, OSError):
             metrics_fingerprint = None
 
+    # #249: record this cmd_sha as canary-validated so a re-submit of the SAME
+    # cmd_sha within HPC_CANARY_TTL_SEC skips the redundant canary. Best-effort,
+    # success-only — a failed canary never reaches here, so it is never cached.
+    _cmd_sha = str(_canary_sidecar.get("cmd_sha") or "")
+    if _cmd_sha:
+        from hpc_agent import __version__ as _pkg_version
+        from hpc_agent.state import canary_cache
+
+        canary_cache.record_canary_validated(
+            canary_cache.canary_cache_key(cmd_sha=_cmd_sha, version=_pkg_version or "")
+        )
+
     return {
         "ok": True,
         "failure_kind": None,

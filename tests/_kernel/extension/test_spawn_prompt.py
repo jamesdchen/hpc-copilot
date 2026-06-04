@@ -90,7 +90,10 @@ def test_render_frames_the_bare_procedure_for_headless_use() -> None:
     # references are fetchable per-branch, not "ignore them".
     assert "hpc-agent describe" in prompt
     # a hand-off to another workflow is a boundary, not fetch-and-follow.
-    assert "Never run another workflow inside this one." in prompt
+    # (The trimmed scaffold, dbad096, phrases this as "a boundary, not your
+    # job"; the prior verbose form said "Never run another workflow inside
+    # this one." — both express the same contract.)
+    assert "is a boundary, not your job" in prompt
 
 
 def test_render_prefix_is_stable_across_invocations() -> None:

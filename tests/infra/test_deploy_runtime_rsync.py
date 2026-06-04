@@ -1,0 +1,95 @@
+"""deploy_runtime ships its files in ONE batched transfer (#252).
+
+The prior N-scp fan-out (#245) is replaced by a single ``rsync -az --inplace``
+delta where rsync is on PATH, with a single ``tar c | ssh tar x`` stream as
+the fallback (native Windows). These tests assert exactly one transfer
+invocation and that a failed transfer surfaces.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from hpc_agent.infra import transport
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff(monkeypatch):
+    monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
+
+
+def _prelude_ok():
+    # The mkdir/rm/cat prelude ssh: empty stdout → no remote manifest → full deploy.
+    return patch(
+        "hpc_agent.infra.transport.ssh_run",
+        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+
+def test_deploy_issues_a_single_rsync_invocation():
+    n_files = len(transport._build_deploy_items(scheduler="sge"))
+    assert n_files == 8  # 2 stubs + dispatch + combiner + 2 templates + 2 preambles
+
+    calls: list[list[str]] = []
+
+    def _fake_run(argv, *_a, **_kw):
+        calls.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        _prelude_ok(),
+        patch("hpc_agent.infra.transport._have_rsync", return_value=True),
+        patch("hpc_agent.infra.transport.subprocess.run", side_effect=_fake_run),
+    ):
+        transport.deploy_runtime(
+            ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=False
+        )
+
+    rsync_calls = [c for c in calls if c and c[0] == "rsync"]
+    assert len(rsync_calls) == 1, f"expected ONE rsync, got {len(rsync_calls)}: {calls}"
+    # Delta + archive flags, no --delete (deploy merges, never removes).
+    rsync = rsync_calls[0]
+    assert "-az" in rsync and "--inplace" in rsync
+    assert "--delete" not in rsync
+    assert rsync[-1] == "u@c:/p/"
+
+
+def test_deploy_falls_back_to_tar_when_rsync_absent():
+    captured: dict[str, object] = {}
+
+    def _capture_tar(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        _prelude_ok(),
+        patch("hpc_agent.infra.transport._have_rsync", return_value=False),
+        patch("hpc_agent.infra.transport._tar_ssh_push", side_effect=_capture_tar) as tar,
+    ):
+        transport.deploy_runtime(
+            ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=False
+        )
+
+    assert tar.call_count == 1
+    # The fallback merges (never removes) the staged subset.
+    assert captured["delete"] is False
+    assert captured["ssh_target"] == "u@c"
+    assert captured["remote_path"] == "/p"
+
+
+def test_rsync_nonzero_exit_raises():
+    with (
+        _prelude_ok(),
+        patch("hpc_agent.infra.transport._have_rsync", return_value=True),
+        patch(
+            "hpc_agent.infra.transport.subprocess.run",
+            return_value=SimpleNamespace(returncode=23, stdout="", stderr="rsync boom"),
+        ),
+        pytest.raises(RuntimeError, match="rsync deploy"),
+    ):
+        transport.deploy_runtime(
+            ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=False
+        )

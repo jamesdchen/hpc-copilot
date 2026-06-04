@@ -1,0 +1,131 @@
+"""Canary auto-skip: tiny-batch threshold (#263) + cached-cmd_sha TTL (#249)."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+from hpc_agent.ops import submit_flow as sf
+from hpc_agent.state import canary_cache
+
+
+@pytest.fixture(autouse=True)
+def _clean(tmp_path, monkeypatch):
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path))
+    for var in ("HPC_CANARY_SKIP_THRESHOLD", "HPC_NO_CANARY_SKIP", "HPC_CANARY_TTL_SEC"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _spec(**over):
+    base = dict(
+        profile="p",
+        cluster="c",
+        ssh_target="u@h",
+        remote_path="/r",
+        job_name="j",
+        run_id="run-1",
+        total_tasks=100,
+        backend="sge",
+        script=".hpc/templates/cpu_array.sh",
+        job_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_CMD_SHA": "sha-abc"},
+        canary=True,
+    )
+    base.update(over)
+    return SubmitFlowSpec(**base)
+
+
+# --- #263 tiny-batch threshold ----------------------------------------------
+
+
+def test_canary_false_never_runs():
+    assert sf._should_run_canary(_spec(canary=False, total_tasks=1000)) is False
+
+
+def test_large_batch_runs_canary():
+    assert sf._should_run_canary(_spec(total_tasks=100)) is True
+
+
+def test_tiny_batch_skips_canary_default_threshold():
+    # total_tasks <= 4 (default) → skip.
+    assert sf._should_run_canary(_spec(total_tasks=4)) is False
+    assert sf._should_run_canary(_spec(total_tasks=5)) is True
+
+
+def test_threshold_spec_field():
+    assert sf._should_run_canary(_spec(total_tasks=8, canary_skip_threshold=8)) is False
+    assert sf._should_run_canary(_spec(total_tasks=9, canary_skip_threshold=8)) is True
+
+
+def test_threshold_env_overrides_spec(monkeypatch):
+    monkeypatch.setenv("HPC_CANARY_SKIP_THRESHOLD", "0")
+    # env 0 → never auto-skip even on a 1-task batch.
+    assert sf._should_run_canary(_spec(total_tasks=1, canary_skip_threshold=4)) is True
+
+
+def test_force_canary_overrides_tiny_batch():
+    assert sf._should_run_canary(_spec(total_tasks=1, force_canary=True)) is True
+
+
+def test_canary_only_always_runs_even_tiny():
+    # The explicit two-phase gate is never auto-skipped.
+    assert sf._should_run_canary(_spec(total_tasks=1, canary_only=True)) is True
+
+
+# --- #249 cached cmd_sha TTL ------------------------------------------------
+
+
+def test_cached_cmd_sha_skips_canary(monkeypatch):
+    from hpc_agent import __version__ as ver
+
+    key = canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+    canary_cache.record_canary_validated(key)
+    # total_tasks large (no #263 skip), but cmd_sha is fresh → #249 skip.
+    assert sf._should_run_canary(_spec(total_tasks=100)) is False
+
+
+def test_uncached_cmd_sha_runs_canary():
+    assert sf._should_run_canary(_spec(total_tasks=100)) is True
+
+
+def test_no_canary_skip_env_disables_249(monkeypatch):
+    from hpc_agent import __version__ as ver
+
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+    )
+    monkeypatch.setenv("HPC_NO_CANARY_SKIP", "1")
+    assert sf._should_run_canary(_spec(total_tasks=100)) is True
+
+
+def test_force_canary_overrides_cached_cmd_sha():
+    from hpc_agent import __version__ as ver
+
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+    )
+    assert sf._should_run_canary(_spec(total_tasks=100, force_canary=True)) is True
+
+
+# --- canary_cache freshness semantics ---------------------------------------
+
+
+def test_cache_ttl_expiry():
+    key = canary_cache.canary_cache_key(cmd_sha="x", version="1")
+    canary_cache.record_canary_validated(key)
+    now = datetime.now(timezone.utc)
+    assert canary_cache.is_canary_validated_fresh(key, now=now + timedelta(hours=1)) is True
+    future = now + timedelta(seconds=canary_cache.DEFAULT_TTL_SEC + 1)
+    assert canary_cache.is_canary_validated_fresh(key, now=future) is False
+
+
+def test_cache_version_keying():
+    canary_cache.record_canary_validated(canary_cache.canary_cache_key(cmd_sha="x", version="1"))
+    # A different framework version is a different key → miss.
+    assert (
+        canary_cache.is_canary_validated_fresh(
+            canary_cache.canary_cache_key(cmd_sha="x", version="2")
+        )
+        is False
+    )

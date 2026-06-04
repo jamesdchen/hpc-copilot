@@ -8,7 +8,7 @@ Standing adjustments to the procedure below:
 - A reference to another workflow (submit/status/aggregate/campaign) is a boundary, not your job — stop, record in `decisions`/`anomalies`.
 - Helper skills needing interactive confirmation can't run headless. No interactive user, ever — surface everything in the returned JSON.
 - Escalate over improvise. If you hit an ambiguous choice, missing input, or unfixable error — record what blocked you in `decisions`/`anomalies` and stop. Do not guess, retry blindly, or spawn further subagents.
-- Work tersely and in parallel. Multiple reads / `describe` / greps with no data dependency → one parallel tool batch, not serial.
+- Work tersely and in parallel — 'parallel' means parallel TOOL CALLS: multiple reads / `describe` / greps with no data dependency → multiple tool-call blocks in ONE message (the harness runs them concurrently), NOT shell-level concurrency in one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`).
 
 === BEGIN aggregate PROCEDURE ===
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.

@@ -82,14 +82,41 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
 
 
 def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
-    """Project ``RunRecord`` into the ``reconcile.output.json`` envelope shape."""
+    """Project ``RunRecord`` into the ``reconcile.output.json`` envelope shape.
+
+    The envelope ``lifecycle_state`` is the journal status, EXCEPT when the
+    cluster alive-check could not run (SSH/auth/network failure): the journal
+    status is left untouched (we couldn't verify it), but the envelope surfaces
+    ``unable_to_verify`` (#258) so callers can distinguish "cluster says it's
+    still running" from "we couldn't ask" — different remediations. The marker
+    lives in ``last_status.verify_state`` (set by :func:`_reconcile_one`).
+    """
+    last_status = record.last_status or {}
+    state = record.status
+    if last_status.get("verify_state") == "unable_to_verify":
+        state = "unable_to_verify"
     return {
         "run_id": record.run_id,
-        "lifecycle_state": record.status,
+        "lifecycle_state": state,
         "combined_waves": record.combined_waves,
         "failed_waves": record.failed_waves,
         "last_status": record.last_status,
     }
+
+
+def _sibling_run_ids(run_id: str) -> list[str]:
+    """Paired journal entries that share this submit's ``cmd_sha`` (#258).
+
+    Every ``submit-flow`` writes TWO entries — the main run and its
+    ``<run_id>-canary`` sibling — submitted together with one outcome. Reconcile
+    must settle both in one call, or the next ``/submit-hpc`` is blocked by the
+    untouched canary entry. The pairing is the ``-canary`` suffix; given either
+    half, return the other.
+    """
+    suffix = "-canary"
+    if run_id.endswith(suffix):
+        return [run_id[: -len(suffix)]]
+    return [f"{run_id}{suffix}"]
 
 
 @primitive(
@@ -133,7 +160,58 @@ def reconcile(
     scheduler: str,
     file_glob: str = "*",
 ) -> RunRecord:
-    """Self-healing resume step.
+    """Self-healing resume step — reconciles *run_id* AND its paired sibling.
+
+    Re-derives ground truth from the cluster for *run_id* (see
+    :func:`_reconcile_one`), then CASCADES to its ``-canary`` / parent sibling
+    (#258) so one ``reconcile`` call settles both paired journal entries — a
+    bare main-run reconcile used to leave the canary entry ``in_flight`` and
+    block the next submit. Only non-terminal siblings are re-checked; the
+    outcomes are recorded under the returned record's
+    ``last_status.reconciled_siblings`` for visibility.
+
+    Returns the requested run's reconciled record. Its envelope
+    ``lifecycle_state`` becomes ``unable_to_verify`` when the cluster
+    alive-check could not run (#258).
+    """
+    from hpc_agent.state.run_record import TERMINAL_STATUSES
+
+    primary, _primary_alive_failed = _reconcile_one(
+        experiment_dir, run_id, scheduler=scheduler, file_glob=file_glob
+    )
+
+    sibling_outcomes: list[dict[str, Any]] = []
+    for sib_id in _sibling_run_ids(run_id):
+        sib = load_run(experiment_dir, sib_id)
+        if sib is None:
+            continue  # no paired entry — nothing to cascade to
+        if sib.status in TERMINAL_STATUSES:
+            # Already settled; report it but don't pay another SSH round-trip.
+            sibling_outcomes.append(
+                {"run_id": sib_id, "lifecycle_state": sib.status, "reconciled": False}
+            )
+            continue
+        sib_rec, _ = _reconcile_one(
+            experiment_dir, sib_id, scheduler=scheduler, file_glob=file_glob
+        )
+        sibling_outcomes.append(
+            {"run_id": sib_id, "lifecycle_state": sib_rec.status, "reconciled": True}
+        )
+
+    if sibling_outcomes:
+        merged = {**(primary.last_status or {}), "reconciled_siblings": sibling_outcomes}
+        primary = update_run_status(experiment_dir, run_id, last_status=merged)
+    return primary
+
+
+def _reconcile_one(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    scheduler: str,
+    file_glob: str = "*",
+) -> tuple[RunRecord, bool]:
+    """Reconcile a single run against the cluster; return ``(record, alive_check_failed)``.
 
     Re-derives ground truth from the cluster:
       A. Fresh status report -> ``last_status``.
@@ -143,7 +221,10 @@ def reconcile(
          flip ``status`` to ``"abandoned"``.
 
     All three SSH calls run concurrently. Writes the reconciled record
-    back atomically and returns it.
+    back atomically. When the alive-check itself failed (SSH/auth/network),
+    the run is NOT marked abandoned and ``last_status.verify_state`` is set to
+    ``unable_to_verify`` (#258) so the envelope can surface that distinctly;
+    the bool return mirrors it.
     """
     record = load_run(experiment_dir, run_id)
     if record is None:
@@ -206,6 +287,12 @@ def reconcile(
     if warnings:
         summary["warnings"] = warnings
 
+    # #258: when the alive-check couldn't run, the run's true state is unknown.
+    # Mark the snapshot so the envelope can surface ``unable_to_verify`` instead
+    # of masquerading the stale journal status as a confirmed reading.
+    if alive_check_failed:
+        summary["verify_state"] = "unable_to_verify"
+
     fields: dict[str, Any] = {
         "last_status": summary,
         "combined_waves": combined,
@@ -218,7 +305,7 @@ def reconcile(
     # nothing — never on SSH failure of the alive check itself.
     if record.job_ids and not alive and not alive_check_failed:
         updated = mark_run(experiment_dir, run_id, status="abandoned")
-    return updated
+    return updated, alive_check_failed
 
 
 @primitive(

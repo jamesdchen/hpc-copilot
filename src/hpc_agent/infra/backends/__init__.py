@@ -258,6 +258,23 @@ class HPCBackend(abc.ABC):
         """
         return []
 
+    @property
+    def supports_afterok(self) -> bool:
+        """Whether this backend expresses an afterok (success-only) dependency (#250).
+
+        Default ``False`` (no dependency support); the profile-driven engine
+        overrides for SLURM / PBS families.
+        """
+        return False
+
+    def _build_afterok_dependency_flag(self, job_ids: list[str]) -> list[str]:
+        """Scheduler flags making this job depend on *job_ids* SUCCEEDING (#250).
+
+        Default ``[]`` (unsupported); override per scheduler. See
+        :meth:`ProfileBackend._build_afterok_dependency_flag`.
+        """
+        return []
+
     def submit_plan(
         self,
         plan: SubmissionPlan,

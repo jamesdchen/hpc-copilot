@@ -180,14 +180,141 @@ def _parse_args(argv):
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite an existing _combiner/wave_N.json output.",
+        help="Overwrite an existing output (wave_N.json, or the final aggregate).",
+    )
+    parser.add_argument(
+        "--final",
+        action="store_true",
+        help=(
+            "Cross-wave FINAL reduce (#254): merge every _combiner/wave_*.json "
+            "into a single _aggregated/<run_id>/metrics_aggregate.json so the "
+            "local side pulls ONE file, not hundreds. Ignores --wave."
+        ),
     )
     return parser.parse_args(argv)
+
+
+def _wave_partial_files(out_dir):
+    """``[(wave_num, path), ...]`` for ``_combiner/wave_<N>.json``, sorted by wave.
+
+    Excludes the optional ``wave_<N>.runtime.json`` sidecars (the ``\\.json``
+    anchor only matches the bare partial) so the final reduce sees exactly the
+    per-wave aggregates the per-wave combiner wrote.
+    """
+    files = []
+    if not os.path.isdir(out_dir):
+        return files
+    for name in os.listdir(out_dir):
+        m = re.fullmatch(r"wave_(\d+)\.json", name)
+        if m:
+            files.append((int(m.group(1)), os.path.join(out_dir, name)))
+    files.sort(key=lambda x: x[0])
+    return files
+
+
+def _final_reduce(*, run_id, force):
+    """Cross-wave final reduce on the cluster (#254).
+
+    Reads every ``_combiner/wave_<N>.json`` partial, merges their ``grid_points``
+    across waves with the SAME weighted-mean (keyed on ``n_samples``) the local
+    ``reduce_partials`` uses — so ``aggregated_metrics`` is byte-for-byte what
+    the old pull-all-waves-then-reduce-locally path produced — and writes a
+    single ``_aggregated/<run_id>/metrics_aggregate.json`` with a provenance
+    footer (per-wave error counts, incomplete waves) and a manifest pointing
+    back at the raw wave files (which stay on the cluster for drill-down).
+
+    Runs in the remote project root (``run_combiner`` cd's there), so the
+    ``_combiner`` / ``_aggregated`` paths are relative, exactly like the
+    per-wave combiner's output. Stdlib-only — reuses this module's
+    :func:`_weighted_mean`.
+    """
+    out_dir = "_combiner"
+    agg_dir = os.path.join("_aggregated", run_id)
+    agg_path = os.path.join(agg_dir, "metrics_aggregate.json")
+    if os.path.exists(agg_path) and not force:
+        print(
+            f"[combiner] ERROR: final aggregate already exists: {agg_path} (use --force)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    wave_files = _wave_partial_files(out_dir)
+    if not wave_files:
+        print(
+            f"[combiner] ERROR: no {out_dir}/wave_*.json partials to reduce",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    partials = {}  # grid_key -> list[metric dicts] across waves
+    waves_reduced = []
+    errors_per_wave = {}
+    incomplete_waves = []
+    for wave_num, path in wave_files:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            errors_per_wave[str(wave_num)] = [f"unreadable: {exc}"]
+            incomplete_waves.append(wave_num)
+            continue
+        waves_reduced.append(wave_num)
+        wave_errors = data.get("errors") or []
+        if wave_errors:
+            errors_per_wave[str(wave_num)] = list(wave_errors)
+            incomplete_waves.append(wave_num)
+        for grid_key, metrics in (data.get("grid_points") or {}).items():
+            partials.setdefault(grid_key, []).append(metrics)
+
+    aggregated = {gk: _weighted_mean(partials[gk]) for gk in sorted(partials)}
+
+    payload = {
+        "run_id": run_id,
+        "aggregated_metrics": aggregated,
+        "waves": sorted(waves_reduced),
+        "provenance": {
+            "wave_count": len(waves_reduced),
+            "incomplete_waves": sorted(set(incomplete_waves)),
+            "errors_per_wave": errors_per_wave,
+        },
+        "manifest": {
+            "wave_files": [f"{out_dir}/wave_{w}.json" for w, _ in wave_files],
+        },
+    }
+
+    os.makedirs(agg_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="metrics_aggregate_", suffix=".json.tmp", dir=agg_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(f.fileno())
+        os.replace(tmp, agg_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    print(f"[combiner] wrote {agg_path} (waves={len(waves_reduced)} grid_points={len(aggregated)})")
 
 
 def main(max_workers=None, argv=None):
     here = Path(__file__).resolve().parent  # cluster-side .hpc/
     args = _parse_args(argv if argv is not None else [])
+
+    # --- Final cross-wave reduce (#254) short-circuits the per-wave path ---
+    # It needs only run_id + the _combiner/wave_*.json partials, not a --wave
+    # or the sidecar/tasks.py, so branch before any of that is required.
+    if args.final:
+        run_id = args.run_id or os.environ.get("HPC_RUN_ID")
+        if not run_id:
+            print(
+                "[combiner] ERROR: --final requires --run-id or HPC_RUN_ID",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        _final_reduce(run_id=run_id, force=args.force)
+        return
 
     # --- Resolve wave: CLI first, env var fallback ---
     if args.wave is not None:

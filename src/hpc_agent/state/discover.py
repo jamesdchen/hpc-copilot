@@ -127,10 +127,21 @@ def discover_runs(experiment_dir: Path | str) -> list[RunInfo]:
     shells ``python .hpc/scaffold.py discover`` (arbitrary Python) to find the
     decorated function. Mirrors :func:`discover_executors` for the executor
     contract. Pure local AST walk over ``.py`` / ``.ipynb``; no SSH.
+
+    Result is cached by a fingerprint of the tree's ``.py`` / ``.ipynb`` files
+    (#264): a re-scan of an unchanged tree returns the cached runs without
+    re-parsing every source file. Opportunistic — any cache problem falls back
+    to the live scan; ``HPC_NO_DISCOVER_CACHE=1`` disables it.
     """
     from hpc_agent.experiment_kit.discover import discover_runs as _impl
+    from hpc_agent.state import discover_cache
 
-    return _impl(experiment_dir)
+    cached = discover_cache.load(experiment_dir)
+    if cached is not None:
+        return cached
+    infos = _impl(experiment_dir)
+    discover_cache.store(experiment_dir, infos)
+    return infos
 
 
 # Module names that signal a CLI framework. Matched against any ``import X``
