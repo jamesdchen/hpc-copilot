@@ -162,3 +162,93 @@ def test_ssh_add_binary_prefers_native_openssh_on_windows(monkeypatch):
     monkeypatch.setattr(ssh_options.sys, "platform", "win32")
     monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: True)
     assert ssh_options._ssh_add_binary() == ssh_options._WIN_OPENSSH_SSH_ADD
+
+
+# ---------------------------------------------------------------------------
+# HPC_SSH_NAMED_PIPE opt-in: named-pipe ControlPath on Windows OpenSSH ≥ 8.x
+# ---------------------------------------------------------------------------
+
+
+class TestSshNamedPipeOptIn:
+    """Pin the ``HPC_SSH_NAMED_PIPE=1`` opt-in contract.
+
+    OpenSSH ≥ 8.x on native Windows accepts a ``\\\\.\\pipe\\<name>``
+    ControlPath (named-pipe transport, the Win32 equivalent of a Unix
+    domain socket). With the env opt-in set, :func:`_ssh_multiplex_opts`
+    must emit real ``ControlMaster=auto`` + named-pipe ``ControlPath``;
+    without it, the legacy ``ControlMaster=no``/``ControlPath=none``
+    shape is preserved; and ``HPC_NO_SSH_MULTIPLEX=1`` still wins.
+    """
+
+    def test_named_pipe_opt_in_enables_multiplex_on_windows(self, monkeypatch):
+        # Opt-in set, multiplex not disabled → real multiplexing on Windows
+        # via a named-pipe ControlPath.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.setenv("HPC_SSH_NAMED_PIPE", "1")
+        opts = ssh_options._ssh_multiplex_opts()
+        assert "ControlMaster=auto" in opts
+        paths = _control_path_values(opts)
+        assert len(paths) == 1
+        # The Windows named-pipe namespace literally starts with ``\\.\pipe\``.
+        assert paths[0].startswith(r"\\.\pipe" + "\\")
+        # Be precise: full documented path with the %C token that OpenSSH
+        # substitutes (connection-tuple hash) at runtime.
+        assert paths[0] == r"\\.\pipe\openssh-hpc-cm-%C"
+
+    def test_named_pipe_opt_in_yields_to_no_multiplex(self, monkeypatch):
+        # Both env vars set: the disable short-circuit wins. Returning [] is
+        # the documented behaviour — HPC_NO_SSH_MULTIPLEX=1 is the master switch.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.setenv("HPC_SSH_NAMED_PIPE", "1")
+        monkeypatch.setenv("HPC_NO_SSH_MULTIPLEX", "1")
+        assert ssh_options._ssh_multiplex_opts() == []
+
+    def test_named_pipe_opt_in_unset_preserves_legacy_windows_shape(self, monkeypatch):
+        # Regression guard: with the opt-in OFF, the legacy
+        # ControlMaster=no / ControlPath=none override must still ship on win32,
+        # so a user's ~/.ssh/config ControlMaster can't drive ssh.exe into the
+        # getsockname-failure path.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.delenv("HPC_SSH_NAMED_PIPE", raising=False)
+        assert ssh_options._ssh_multiplex_opts() == [
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+        ]
+
+    def test_named_pipe_opt_in_is_windows_only(self, monkeypatch):
+        # On POSIX the opt-in is a no-op: the Unix-socket ControlPath under
+        # XDG_RUNTIME_DIR / tempfile.gettempdir() is what works there.
+        monkeypatch.setattr(ssh_options.sys, "platform", "linux")
+        monkeypatch.setenv("HPC_SSH_NAMED_PIPE", "1")
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        opts = ssh_options._ssh_multiplex_opts()
+        assert "ControlMaster=auto" in opts
+        paths = _control_path_values(opts)
+        assert len(paths) == 1
+        # Must be the POSIX Unix-socket shape, never the named-pipe shape.
+        assert not paths[0].startswith(r"\\.\pipe")
+        assert paths[0].startswith(f"{tempfile.gettempdir()}/hpc-cm-")
+
+    def test_named_pipe_opt_in_does_not_affect_transfer_override(self, monkeypatch):
+        # The transfer-sized helper (used by scp / tar-fallback push) is
+        # deliberately NOT toggled by HPC_SSH_NAMED_PIPE: one-shot transfers
+        # don't benefit from being a multiplex client.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.setenv("HPC_SSH_NAMED_PIPE", "1")
+        assert ssh_options._ssh_config_override_opts() == [
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+        ]
+
+    def test_named_pipe_opt_in_honours_persist_interval(self, monkeypatch):
+        # The opt-in path must still respect HPC_SSH_PERSIST_INTERVAL exactly
+        # like the POSIX branch — same _resolve_ssh_persist_interval() helper.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.setenv("HPC_SSH_NAMED_PIPE", "1")
+        monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "30m")
+        opts = ssh_options._ssh_multiplex_opts()
+        assert "ControlPersist=30m" in opts
