@@ -159,6 +159,24 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     modules = spec.modules or ""
     conda_source = spec.conda_source or ""
     conda_env = spec.conda_env or ""
+    # At least ONE env-activation mechanism must be declared. The preamble
+    # has no defaults — when all three are empty it skips `module load`,
+    # `source $CONDA_SOURCE`, and `conda activate $CONDA_ENV` entirely, and
+    # the job runs with whatever python the SSH login shell happened to
+    # inherit. That's the empirical failure when clusters.yaml hasn't been
+    # onboarded: the cluster runs the wrong (or no) python, the canary
+    # crashes, and the bad sidecar poisons later submit dedup. Refuse at
+    # the boundary instead of letting it through to qsub.
+    if not (modules or conda_source or conda_env):
+        raise errors.SpecInvalid(
+            "submission has no env-activation declared: modules, conda_source, "
+            "and conda_env are all empty. The cluster-side preamble would skip "
+            "every env-setup step and run whatever python the SSH login shell "
+            "happens to inherit, which usually fails. Populate at least one of "
+            "these in clusters.yaml (commonly `conda_source` + `conda_envs`, "
+            "or `modules`) and re-run `hpc-agent setup --cluster <name>` to "
+            "regenerate the resolved spec."
+        )
     runtime = spec.runtime
     campaign_id = spec.campaign_id or ""
     canary = bool(spec.canary) if spec.canary is not None else True
@@ -179,6 +197,26 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
+
+    # ``remote_path`` becomes ``REPO_DIR`` in the cluster job env; the
+    # preamble's ``cd "$REPO_DIR"`` requires an absolute path or it runs
+    # from an unpredictable SSH login directory and almost certainly
+    # fails. Empirical failure: a half-resolved cluster config produced
+    # ``REPO_DIR=monte_carlo_pi-bc3eb1b5``, the canary crashed cluster-
+    # side, and the bad sidecar poisoned later submit dedup. Reject the
+    # relative path at the submission boundary so it never reaches qsub.
+    # (``validate_remote_path`` itself stays permissive — it's also
+    # called from raw ``rsync_push`` / ``rsync_pull``, which work fine
+    # with relative paths anchored at the SSH login dir.)
+    if not remote_path.startswith("/"):
+        raise errors.SpecInvalid(
+            f"remote_path must be an absolute Unix path (start with '/'): "
+            f"{remote_path!r}. A relative remote_path becomes REPO_DIR in the "
+            'cluster job env and the preamble\'s `cd "$REPO_DIR"` runs from '
+            "an unpredictable SSH login dir. This usually signals that "
+            "clusters.yaml hasn't been onboarded yet — run `hpc-agent setup "
+            "--cluster <name>` and resubmit."
+        )
 
     # #184: refuse remote_path == cluster scratch root (or shallower). The
     # cluster's scratch is the *parent* dir under which each experiment lives;

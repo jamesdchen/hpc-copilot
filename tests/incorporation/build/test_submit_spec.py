@@ -20,7 +20,46 @@ def _required() -> dict:
         cmd_sha="a" * 64,
         total_tasks=42,
         backend="sge",
+        # At least one env-activation field must be non-empty (see
+        # test_rejects_all_empty_env_activation). Realistic minimal value.
+        conda_env="ml-py311",
     )
+
+
+def test_rejects_relative_remote_path() -> None:
+    """A relative remote_path becomes REPO_DIR in the qsub env and the
+    preamble's `cd "$REPO_DIR"` then runs from an unpredictable SSH login
+    dir. Reject at the boundary so a half-resolved cluster config can't
+    fire a broken canary and poison submit dedup."""
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(**{**_required(), "remote_path": "monte_carlo_pi-bc3eb1b5"})
+        )
+    msg = str(excinfo.value)
+    assert "absolute" in msg
+    assert "monte_carlo_pi-bc3eb1b5" in msg
+
+
+def test_rejects_all_empty_env_activation() -> None:
+    """If modules / conda_source / conda_env are all empty, the cluster-side
+    preamble skips every env-setup step and runs whatever python the SSH
+    login inherits — frequently fatal. Reject at the boundary."""
+    intent = _required()
+    intent.pop("conda_env")
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    msg = str(excinfo.value)
+    assert "env-activation" in msg
+    assert "modules" in msg and "conda_source" in msg and "conda_env" in msg
+
+
+def test_accepts_modules_alone_as_env_activation() -> None:
+    """`modules` alone is a valid env-activation (pure module-based clusters)."""
+    intent = _required()
+    intent.pop("conda_env")
+    intent["modules"] = "anaconda3/2024.06"
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert spec["job_env"]["MODULES"] == "anaconda3/2024.06"
 
 
 def test_returns_minimal_valid_spec_with_synthesized_job_env() -> None:
@@ -100,10 +139,12 @@ def test_extra_env_wins_over_framework_default_on_collision() -> None:
 def test_modules_and_conda_threaded_through() -> None:
     spec = build_submit_spec(
         spec=BuildSubmitSpecInput(
-            **_required(),
-            modules="cuda/12.3 anaconda3/2024.02",
-            conda_source="/u/local/apps/conda/etc/profile.d/conda.sh",
-            conda_env="ml-py311",
+            **{
+                **_required(),
+                "modules": "cuda/12.3 anaconda3/2024.02",
+                "conda_source": "/u/local/apps/conda/etc/profile.d/conda.sh",
+                "conda_env": "ml-py311",
+            }
         )
     )
     assert spec["job_env"]["MODULES"] == "cuda/12.3 anaconda3/2024.02"
@@ -182,15 +223,17 @@ def test_assembled_spec_passes_submit_flow_input_schema() -> None:
     job_env dict drifted from the schema."""
     spec = build_submit_spec(
         spec=BuildSubmitSpecInput(
-            **_required(),
-            is_gpu=True,
-            modules="cuda/12.3",
-            conda_source="/path/conda.sh",
-            conda_env="ml",
-            runtime="uv",
-            campaign_id="c1",
-            canary=False,
-            partial_ok=True,
+            **{
+                **_required(),
+                "is_gpu": True,
+                "modules": "cuda/12.3",
+                "conda_source": "/path/conda.sh",
+                "conda_env": "ml",
+                "runtime": "uv",
+                "campaign_id": "c1",
+                "canary": False,
+                "partial_ok": True,
+            }
         )
     )
     for k in (
