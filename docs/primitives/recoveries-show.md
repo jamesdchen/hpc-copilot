@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent recoveries show --kind <kind>
+  cli: hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]
   python: hpc_agent.recovery.cli.recoveries_show
 ---
 # recoveries-show

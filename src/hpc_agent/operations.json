@@ -452,7 +452,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent recoveries show --kind <kind>",
+    "cli": "hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]",
     "idempotent": true,
     "input_schema": null,
     "name": "recoveries-show",

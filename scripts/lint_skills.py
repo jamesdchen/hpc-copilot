@@ -73,12 +73,15 @@ class Rule:
 RULES: list[Rule] = [
     Rule(
         id="prose-decide",
-        severity="warn",
+        severity="error",
         description=(
             "Free-form decision prose inside a Step "
             "(e.g. 'decide what to do', 'consider whether', 'if this "
             "looks wrong, try', 'you may also'). The gold-standard "
-            "ending is a primitive call or a finite enumerated choice."
+            "ending is a primitive call or a finite enumerated choice. "
+            "Promoted from 'warn' to 'error' 2026-06-04 — the count was "
+            "zero across every skill and the rule fires deterministically; "
+            "any new violation is a real regression."
         ),
         check_function="check_prose_decide",
     ),
@@ -108,12 +111,14 @@ RULES: list[Rule] = [
     ),
     Rule(
         id="trailing-narration-example",
-        severity="warn",
+        severity="error",
         description=(
             "Example of trailing chat-message narration at sub-skill "
             "boundary (e.g. `Returning <X> to <parent>: { ... }`). "
             "Such examples teach the agent the wrong shape; the "
-            "tool-call return IS the envelope."
+            "tool-call return IS the envelope. Promoted from 'warn' to "
+            "'error' 2026-06-04 — zero violations across every skill; "
+            "any new occurrence is a real regression."
         ),
         check_function="check_trailing_narration_example",
     ),
@@ -424,9 +429,24 @@ def check_step_ends_in_action(path: Path, lines: list[str]) -> list[tuple[int, s
     are intentionally excluded — they are bookkeeping headings.
     """
     violations: list[tuple[int, str]] = []
+    # Bookkeeping step titles whose body is intentionally narrative (the
+    # action is implied by branch bullets that enumerate a finite outcome
+    # set — terminal/abandoned/in-flight, caller-supplied/auto-resolve/
+    # ambiguity, etc.). Expanded 2026-06-04 after the WS4 audit's
+    # `step-without-action-ending` rule over-fired on 29 such headings
+    # whose semantics were finite-enumerated despite missing a literal
+    # `hpc-agent <verb>` line. WS4 design question 3 verdict: refine the
+    # rule rather than accept the noise.
     bookkeeping = re.compile(
-        r"^(?:Return ambiguities if any|Return envelope|Propagate worker ambiguities|"
-        r"Hand off|Build the fields json|Ensure agent assets installed)",
+        r"^(?:Return ambiguities if any|Return envelope|Return the .+|"
+        r"Propagate worker ambiguities|Hand off|Build the fields json|"
+        r"Ensure agent assets installed|"
+        r"Resolve\s+(?:cluster|run_id|run|data axis|homogeneous axes|"
+        r"walltime|gpu_type|partition|task_generator|entry point|"
+        r"frozen_configs|ambiguities if any)|"
+        r"Pre-fill from memory|Cache check|Detect or scaffold|"
+        r"Identify the run|Cover non-axis|Skip if caller supplied|"
+        r"Try the cheap match|Branch on)",
         re.IGNORECASE,
     )
     for step in _split_into_steps(lines):
