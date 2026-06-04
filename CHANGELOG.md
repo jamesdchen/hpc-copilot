@@ -7,6 +7,10 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.1 — 2026-06-04
+
+Patch release with four agent-UX fixes surfaced during live Hoffman2 demos against 0.10.0: scanner gap on the SKILL.md-documented `register_run` import form, `items_x_seeds` requiring agents to discover `items: [{}]` as the no-frozen-config shape, `install-commands` raising on a stale 0-byte file at `~/.claude/{commands,skills,agents}`, and the inline `hpc-worker` PreToolUse hook shelling `jq` (absent on native Windows, which let the orchestrator agent fall back to inventing cluster commands). No wire-surface breaks; previous spellings keep working.
+
 ### Fixed — `discover_runs` scanner accepts `from hpc_agent import register_run`
 
 `hpc_agent/__init__.py` lazily re-exports `register_run` and SKILL.md documents that as the canonical import form, but the `discover_runs` AST scanner only matched `from hpc_agent.experiment_kit import register_run` and `from hpc_agent import template`. An executor written against the documented spelling went undiscovered, and the agent then chased the wrong workaround (rewriting the import or pivoting to `shell_command`). The scanner now also binds `register_run` from the top-level `hpc_agent` ImportFrom node.
