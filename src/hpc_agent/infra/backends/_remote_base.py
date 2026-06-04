@@ -57,9 +57,21 @@ class RemoteHPCBackend:
         the job script is referenced by relative path in the local
         backend's ``_build_command``, so we need to land in the right
         directory before invoking qsub/sbatch.
+
+        The cd+submit is wrapped in ``bash -lic`` so the remote shell sources
+        the cluster's login+interactive profile sequence (``/etc/profile``,
+        ``/etc/profile.d/*.sh``, ``~/.bash_profile``, ``~/.bashrc``). Many
+        clusters (Hoffman2/UGE, CARC, etc.) install ``qsub`` / ``sbatch`` /
+        the modules system onto ``PATH`` only via that init — the bare ssh
+        command channel is non-login non-interactive and would fail with
+        ``bash: qsub: command not found``. ``-l`` covers profile; ``-i``
+        covers ``~/.bashrc``; both are needed in practice (Hoffman2 sources
+        the UGE PATH from a profile.d entry that some bash builds only run
+        in interactive mode).
         """
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
-        remote_cmd = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+        inner = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+        remote_cmd = f"bash -lic {shlex.quote(inner)}"
         return self.ssh_run(remote_cmd)
 
     def _setup_log_dir(self) -> None:

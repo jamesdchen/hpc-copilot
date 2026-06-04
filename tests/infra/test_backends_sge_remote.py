@@ -8,6 +8,7 @@ SGE ``qsub`` response into a job ID.
 
 from __future__ import annotations
 
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -286,8 +287,15 @@ class TestErrors:
 
         qsub_calls = [c for c in recorder.calls if "qsub" in c]
         assert len(qsub_calls) == 1
-        assert "cd '/remote/path with space'" in qsub_calls[0]
-        assert "'/remote/path with space/job.sh'" in qsub_calls[0]
+        # The submit command is wrapped in `bash -lic '<inner>'` so the cluster's
+        # profile sequence sources qsub onto PATH (Hoffman2 regression: bare ssh
+        # is non-login non-interactive). Decode the wrap before asserting on
+        # the inner's quoted path.
+        wrap_parts = shlex.split(qsub_calls[0])
+        assert wrap_parts[:2] == ["bash", "-lic"]
+        inner = wrap_parts[2]
+        assert "cd '/remote/path with space'" in inner
+        assert "'/remote/path with space/job.sh'" in inner
 
     def test_unparseable_stdout_raises(self, tmp_path):
         def responder(cmd):
