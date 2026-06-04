@@ -20,6 +20,7 @@ from hpc_agent.cli._dispatch import CliShape, _leaf_verb, dispatch_primitive
 _GROUP_HELP: dict[str, str] = {
     "campaign": "Closed-loop campaign read-only commands (status, list, init, ...).",
     "clusters": "Introspect available cluster definitions.",
+    "recoveries": "Browse the typed recovery registry (list known kinds, show a menu).",
 }
 
 

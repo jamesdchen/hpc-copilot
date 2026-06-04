@@ -281,6 +281,7 @@ _PRIMITIVE_PACKAGES: tuple[str, ...] = (
     "hpc_agent.incorporation",
     "hpc_agent.state",
     "hpc_agent.cli",
+    "hpc_agent.recovery",
     "hpc_agent._kernel.extension",
 )
 

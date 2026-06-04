@@ -27,6 +27,9 @@ __all__ = [
     "ClusterPartiallyDegraded",
     "SchemaIncompat",
     "Preempted",
+    "AlreadyInFlight",
+    "SubmissionIncomplete",
+    "SpawnWorkerDied",
 ]
 
 
@@ -278,3 +281,139 @@ class SchemaIncompat(HpcError):
         "or migrate the file. The supported version set is declared in "
         "``hpc_agent/_kernel/extension/version.py:_MANIFEST``."
     )
+
+
+# ── Recovery-registry-backed exceptions ────────────────────────────────────
+#
+# Three exception classes whose ``remediation`` is sourced from
+# :mod:`hpc_agent.recovery.registry` rather than hand-rolled here. New
+# remediation menus land in the registry; this layer reads. The error_code
+# stays a coarse envelope category (``spec_invalid`` / ``internal``); the
+# fine-grained kind ("already_in_flight" etc.) is the registry key.
+#
+# Per-instance ``remediation=`` overrides still work — the registry value
+# is the default, not a clamp.
+
+
+def _registry_remediation(kind: str) -> str:
+    """Lazily render a recovery menu by ``kind``.
+
+    Imported at call time to avoid a top-level import cycle between
+    ``hpc_agent.errors`` and ``hpc_agent.recovery.registry`` (the latter
+    has no reverse dep today, but the cycle would land the first time
+    the registry catches an :class:`HpcError` to surface).
+    """
+    from hpc_agent.recovery.registry import remediation_for
+
+    return remediation_for(kind)
+
+
+class AlreadyInFlight(HpcError):
+    """A prior run for this cmd_sha is recorded as in_flight in the journal
+    AND reconcile confirms the cluster agrees it is still running.
+
+    Distinct from a stale journal entry (which reconcile clears to
+    ``abandoned`` — the submit proceeds) and from a network-unreachable
+    cluster (``unable_to_verify`` — the submit refuses without claiming
+    abandoned). See ``hpc-submit/SKILL.md`` Step 1b for the full branch.
+    """
+
+    error_code = "spec_invalid"
+    retry_safe = False
+    category = "user"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        remediation: str | None = None,
+        run_id: str | None = None,
+        scheduler: str | None = None,
+        experiment_dir: str | None = None,
+    ) -> None:
+        if remediation is None:
+            placeholders = {
+                k: v
+                for k, v in {
+                    "run_id": run_id,
+                    "scheduler": scheduler,
+                    "experiment_dir": experiment_dir,
+                }.items()
+                if v is not None
+            }
+            from hpc_agent.recovery.registry import remediation_for
+
+            remediation = remediation_for("already_in_flight", placeholders=placeholders)
+        super().__init__(message, remediation=remediation)
+
+
+class SubmissionIncomplete(HpcError):
+    """The qsub/sbatch call structurally succeeded but cluster-side init
+    crashed before the sidecar got fully populated — the run record has
+    no ``job_ids``, so scheduler state cannot be polled.
+
+    Distinct from ``abandoned`` (job_ids existed but no longer live) and
+    from a network-unreachable cluster. The open ``verify-canary`` gap
+    (SESSION_HANDOFF.md "Still open") — today the verifier silently
+    classifies this as "abandoned"; this exception is the typed channel
+    that makes the distinction observable.
+    """
+
+    error_code = "spec_invalid"
+    retry_safe = False
+    category = "user"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        remediation: str | None = None,
+        run_id: str | None = None,
+        experiment_dir: str | None = None,
+        ssh_target: str | None = None,
+        remote_path: str | None = None,
+    ) -> None:
+        if remediation is None:
+            placeholders = {
+                k: v
+                for k, v in {
+                    "run_id": run_id,
+                    "experiment_dir": experiment_dir,
+                    "ssh_target": ssh_target,
+                    "remote_path": remote_path,
+                }.items()
+                if v is not None
+            }
+            remediation = _registry_remediation_with_placeholders(
+                "submission_incomplete", placeholders
+            )
+        super().__init__(message, remediation=remediation)
+
+
+class SpawnWorkerDied(HpcError):
+    """The spawned ``claude -p --bare`` worker exited 1 before emitting a
+    valid report.
+
+    Typically a credential or quota failure the worker hit but the parent
+    session does not (e.g. workspace API key over quota while the
+    operator's OAuth session is fine — see commit ``29fbac9f``).
+    """
+
+    error_code = "internal"
+    retry_safe = True
+    category = "internal"
+
+    def __init__(self, message: str, *, remediation: str | None = None) -> None:
+        if remediation is None:
+            remediation = _registry_remediation("spawn_worker_died")
+        super().__init__(message, remediation=remediation)
+
+
+def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:
+    """Helper sibling of :func:`_registry_remediation` for the
+    placeholder-substitution path. Kept separate so the no-placeholders
+    call (the common case) doesn't pay the dict-construction cost.
+    """
+    from hpc_agent.recovery.registry import remediation_for
+
+    return remediation_for(kind, placeholders=placeholders)

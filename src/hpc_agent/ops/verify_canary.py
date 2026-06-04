@@ -56,7 +56,7 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
     side_effects=[
         SideEffect("ssh", "<cluster> (poll status + tail stderr)"),
     ],
-    error_codes=[errors.SpecInvalid, errors.SshUnreachable],
+    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.SubmissionIncomplete],
     idempotent=True,
     idempotency_key="canary_run_id",
     cli=CliShape(
@@ -184,6 +184,26 @@ def verify_canary(
     record = load_run(experiment_dir, canary_run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for canary run_id={canary_run_id!r}")
+    if not record.job_ids:
+        # The qsub call structurally succeeded (a sidecar exists) but
+        # cluster-side init crashed before ``job_ids`` got populated, so
+        # we cannot poll scheduler state at all. Without this guard the
+        # poll loop silently classifies the canary as "abandoned" (see
+        # `SESSION_HANDOFF.md` "Still open" — verify-canary fallthrough),
+        # masking a structural submission failure as a recoverable one.
+        # The registry-backed remediation routes the operator at the
+        # sidecar + cluster-side logs to find the real failure.
+        raise errors.SubmissionIncomplete(
+            f"canary run_id={canary_run_id!r} has no job_ids in its run record — "
+            "the qsub/sbatch call structurally succeeded but cluster-side init "
+            "crashed before the sidecar was fully populated; scheduler state "
+            "cannot be polled. Inspect the run sidecar and cluster-side logs "
+            "to find the precise failure.",
+            run_id=canary_run_id,
+            experiment_dir=str(experiment_dir),
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+        )
     if int(record.total_tasks) <= 0:
         # A 0-task canary can never satisfy `complete >= total_tasks > 0`,
         # so the poll loop would always exit via timeout. Reject up-front

@@ -6,12 +6,14 @@ side_effects:
 idempotent: true
 idempotency_key: canary_run_id
 error_codes:
-- code: spec_invalid
+- &id001
+  code: spec_invalid
   category: user
   retry_safe: false
 - code: ssh_unreachable
   category: network
   retry_safe: true
+- *id001
 backed_by:
   cli: hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id>
     [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec
