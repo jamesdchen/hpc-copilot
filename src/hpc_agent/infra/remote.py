@@ -38,7 +38,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any, Final
 
-from hpc_agent.infra.ssh_options import ssh_argv
+from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -405,13 +405,15 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    # BatchMode=yes refuses password/keyboard-interactive prompts so an
-    # unknown host or missing key surfaces as an immediate auth failure
-    # rather than blocking until the timeout. _tar_ssh_push and
-    # _scp_pull already use this flag.
-    argv = [*ssh_argv("ssh"), ssh_target, cmd]
 
-    def _run() -> subprocess.CompletedProcess[str]:
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        # Rebuild argv each attempt: the named-pipe-failure retry path picks up
+        # the updated _ssh_multiplex_opts() after mark_named_pipe_broken().
+        # BatchMode=yes refuses password/keyboard-interactive prompts so an
+        # unknown host or missing key surfaces as an immediate auth failure
+        # rather than blocking until the timeout. _tar_ssh_push and
+        # _scp_pull already use this flag.
+        argv = [*ssh_argv("ssh"), ssh_target, cmd]
         try:
             if capture:
                 # POSIX: close-pipes-on-exit reader so a remote command that
@@ -433,5 +435,13 @@ def ssh_run(
             raise TimeoutError(
                 f"ssh to {ssh_target} timed out after {effective_timeout}s: {_truncate(cmd)}"
             ) from exc
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        # Auto-fallback on the syscall-layer named-pipe ControlMaster failure
+        # mode (Windows OpenSSH version probe can't catch it; 2026-06-04). The
+        # retry rebuilds argv inside _attempt to pick up the legacy override
+        # after mark_named_pipe_broken(). No-op for streaming mode (proc.stderr
+        # is None when capture_output=False).
+        return run_with_named_pipe_retry(_attempt)
 
     return _with_ssh_backoff(_run, label=f"ssh {ssh_target}")

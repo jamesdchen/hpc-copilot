@@ -32,7 +32,7 @@ from hpc_agent.infra.remote import (
     _with_ssh_backoff,
     ssh_run,
 )
-from hpc_agent.infra.ssh_options import ssh_argv, ssh_env
+from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv, ssh_env
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
 __all__ = [
@@ -445,9 +445,13 @@ def rsync_push(
     if delete:
         flags.append("--delete")
 
-    rsync_env = {**os.environ, **ssh_env()}
-
-    def _run() -> subprocess.CompletedProcess[str]:
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        # Rebuild env each attempt: ssh_env() returns RSYNC_RSH derived from
+        # ssh-options state; a named-pipe-failure retry needs to re-resolve it
+        # after mark_named_pipe_broken() (the override path doesn't itself
+        # change, but marking the verdict early prevents subsequent ssh_run
+        # calls from racing into the same broken master state).
+        rsync_env = {**os.environ, **ssh_env()}
         try:
             return subprocess.run(
                 [*flags, *exclude_flags, src, dst],
@@ -462,6 +466,11 @@ def rsync_push(
                 f"rsync push to {ssh_target} timed out after {effective_timeout}s: "
                 f"{_truncate(f'{src} -> {dst}')}"
             ) from exc
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        # Auto-fallback on the syscall-layer named-pipe ControlMaster failure
+        # mode (Windows OpenSSH version probe can't catch it; 2026-06-04).
+        return run_with_named_pipe_retry(_attempt)
 
     return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}")
 

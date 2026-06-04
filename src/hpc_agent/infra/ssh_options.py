@@ -41,11 +41,12 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 __all__ = [
     "_local_openssh_supports_gcm",
+    "_named_pipe_runtime_broken",
     "_resolve_ssh_persist_interval",
     "_rsync_rsh_env",
     "_scp_binary",
@@ -56,6 +57,9 @@ __all__ = [
     "_ssh_crypto_opts",
     "_ssh_multiplex_opts",
     "_windows_openssh_named_pipe_supported",
+    "mark_named_pipe_broken",
+    "reset_named_pipe_runtime_verdict",
+    "run_with_named_pipe_retry",
     "ssh_argv",
     "ssh_env",
 ]
@@ -234,6 +238,84 @@ def _windows_openssh_named_pipe_supported() -> bool:
         )
         return False
     return True
+
+
+# Runtime verdict for the named-pipe ControlMaster feature. The version probe
+# above (necessary-but-not-sufficient) cannot catch the syscall-layer failure
+# mode observed on at least one Windows OpenSSH 8.x+ build (2026-06-04):
+# ``getsockname failed: Not a socket`` at named-pipe bind time, despite a clean
+# version check. ``infra.remote`` subprocess plumbing calls
+# :func:`mark_named_pipe_broken` when it detects the marker in ssh stderr, and
+# :func:`_ssh_multiplex_opts` then switches to the legacy ``ControlMaster=no``
+# fallback for the rest of the process. None=untested, True=works (no negative
+# evidence), False=broken (marker observed).
+_NAMED_PIPE_RUNTIME_VERDICT: bool | None = None
+
+
+def mark_named_pipe_broken() -> None:
+    """Record that this process's local ssh failed the named-pipe bind.
+
+    Idempotent — subsequent calls no-op (verdict already set, warning already
+    emitted). Subprocess plumbing in :mod:`hpc_agent.infra.remote` calls this
+    when it detects ``getsockname failed: Not a socket`` in ssh's stderr, the
+    failure mode the version probe in
+    :func:`_windows_openssh_named_pipe_supported` cannot catch. Once marked,
+    :func:`_ssh_multiplex_opts` switches to the legacy ``ControlMaster=no`` /
+    ``ControlPath=none`` fallback for the rest of the process.
+    """
+    global _NAMED_PIPE_RUNTIME_VERDICT
+    if _NAMED_PIPE_RUNTIME_VERDICT is False:
+        return
+    _NAMED_PIPE_RUNTIME_VERDICT = False
+    print(
+        "hpc-agent: this Windows OpenSSH build failed the named-pipe "
+        "ControlMaster bind ('getsockname failed: Not a socket') despite "
+        "passing the OpenSSH version probe. Falling back to unmultiplexed "
+        "SSH for the rest of this session. Set HPC_SSH_NAMED_PIPE=0 in "
+        "your environment to skip the first-failure cost on future runs.",
+        file=sys.stderr,
+    )
+
+
+def _named_pipe_runtime_broken() -> bool:
+    """True when :func:`mark_named_pipe_broken` has been called this process."""
+    return _NAMED_PIPE_RUNTIME_VERDICT is False
+
+
+def reset_named_pipe_runtime_verdict() -> None:
+    """Reset the runtime verdict to ``None`` (testing seam)."""
+    global _NAMED_PIPE_RUNTIME_VERDICT
+    _NAMED_PIPE_RUNTIME_VERDICT = None
+
+
+def run_with_named_pipe_retry(
+    rebuild_and_run: Callable[[], subprocess.CompletedProcess[str]],
+) -> subprocess.CompletedProcess[str]:
+    """Run *rebuild_and_run*; on the named-pipe ``getsockname`` failure, retry once.
+
+    Detects ``getsockname failed: Not a socket`` in the returned
+    :class:`subprocess.CompletedProcess` stderr — the syscall-layer named-pipe
+    ControlMaster bind failure the version probe in
+    :func:`_windows_openssh_named_pipe_supported` cannot catch (observed on a
+    Windows OpenSSH 8.x+ build, 2026-06-04). On detection,
+    :func:`mark_named_pipe_broken` is called (short-circuits future named-pipe
+    attempts in :func:`_ssh_multiplex_opts`), then *rebuild_and_run* is invoked
+    again — it MUST rebuild any argv or env derived from the now-updated
+    multiplex opts (i.e. call ``ssh_argv("ssh")`` / ``ssh_env()`` *inside* the
+    closure, not before).
+
+    Returns the proc as-is when no marker is present, when the verdict is
+    already broken (this process has already done its one retry, or another
+    code path marked it), or when the retry itself also fails. Exactly one
+    retry per process — the verdict is sticky.
+    """
+    proc = rebuild_and_run()
+    if _named_pipe_runtime_broken():
+        return proc
+    if proc.returncode != 0 and proc.stderr and "getsockname failed: Not a socket" in proc.stderr:
+        mark_named_pipe_broken()
+        return rebuild_and_run()
+    return proc
 
 
 # ControlMaster values that ENABLE multiplexing (a client/master is set up).
@@ -452,6 +534,7 @@ def _ssh_multiplex_opts() -> list[str]:
         # a named-pipe ControlPath (the probe warns once and demotes us).
         if (
             os.environ.get("HPC_SSH_NAMED_PIPE") == "0"
+            or _named_pipe_runtime_broken()
             or not _windows_openssh_named_pipe_supported()
         ):
             # Legacy fallback: native Windows OpenSSH can't use a ControlPath
@@ -459,6 +542,9 @@ def _ssh_multiplex_opts() -> list[str]:
             # explicit ControlMaster=no/ControlPath=none override (see
             # _ssh_config_override_opts) — returning [] would only omit OUR
             # flags and let a user's ~/.ssh/config ControlMaster bite.
+            # _named_pipe_runtime_broken() catches the version-passes-but-bind-
+            # fails case (mark_named_pipe_broken() is called by infra.remote
+            # when it detects the marker in stderr; see that module).
             return _ssh_config_override_opts()
         # Default: the ``\\.\pipe\<name>`` namespace is the Windows equivalent
         # of a Unix domain socket; %C is substituted by ssh at runtime

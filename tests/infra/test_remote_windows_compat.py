@@ -15,6 +15,7 @@ rather than a hardcoded ``/tmp``.
 
 from __future__ import annotations
 
+import subprocess
 import tempfile
 from types import SimpleNamespace
 
@@ -36,12 +37,17 @@ def _ensure_multiplex_enabled(monkeypatch):
     monkeypatch.delenv("HPC_SSH_NAMED_PIPE", raising=False)
     ssh_options._windows_openssh_named_pipe_supported.cache_clear()
     ssh_options._ssh_config_forces_no_multiplex.cache_clear()
+    # Reset the runtime verdict so a test that calls mark_named_pipe_broken()
+    # doesn't leak its False verdict into the next test's _ssh_multiplex_opts()
+    # branch — the verdict is a module-level mutable.
+    ssh_options.reset_named_pipe_runtime_verdict()
     # Default: no ~/.ssh/config in play, so the #243 probe never fires unless a
     # test opts in by stubbing this. Keeps tests off the runner's real home.
     monkeypatch.setattr(ssh_options, "_read_ssh_config_text", lambda: None)
     yield
     ssh_options._windows_openssh_named_pipe_supported.cache_clear()
     ssh_options._ssh_config_forces_no_multiplex.cache_clear()
+    ssh_options.reset_named_pipe_runtime_verdict()
 
 
 def _control_path_values(opts: list[str]) -> list[str]:
@@ -452,3 +458,123 @@ class TestSshConfigForcesNoMultiplex:
         monkeypatch.setattr(ssh_options, "_local_openssh_major", lambda: 9)
         paths = _control_path_values(ssh_options._ssh_multiplex_opts())
         assert paths == [r"\\.\pipe\openssh-hpc-cm-%C"]
+
+
+# ---------------------------------------------------------------------------
+# Runtime verdict + retry wrapper — version-probe-missed bind failure (2026-06-04)
+# ---------------------------------------------------------------------------
+
+
+class TestNamedPipeRuntimeFallback:
+    """Pin the runtime auto-fallback for the version-probe-missed Windows
+    OpenSSH named-pipe bind failure.
+
+    The version probe (:func:`_windows_openssh_named_pipe_supported`) checks
+    the local OpenSSH major version, but at least one Windows OpenSSH 8.x+
+    build still fails the named-pipe ControlMaster bind at the syscall layer
+    (``getsockname failed: Not a socket``) despite passing the version check
+    — the guard tests one thing, the failure mode is at another layer.
+
+    :func:`run_with_named_pipe_retry` is the recovery: it detects the
+    ``getsockname failed: Not a socket`` marker in the returned
+    CompletedProcess's stderr, calls :func:`mark_named_pipe_broken` (which
+    flips :func:`_ssh_multiplex_opts` to the legacy ControlMaster=no override
+    for the rest of the process), and retries the closure once.
+    """
+
+    def test_no_marker_returns_proc_unchanged(self):
+        proc = subprocess.CompletedProcess(["ssh", "host"], 0, stdout="ok", stderr="")
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return proc
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is proc
+        assert len(calls) == 1  # no retry on success
+        assert not ssh_options._named_pipe_runtime_broken()
+
+    def test_marker_triggers_one_retry_and_marks_broken(self):
+        bad = subprocess.CompletedProcess(
+            ["ssh", "host"], 1, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        good = subprocess.CompletedProcess(["ssh", "host"], 0, stdout="ok", stderr="")
+        outcomes = iter([bad, good])
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return next(outcomes)
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is good
+        assert len(calls) == 2  # exactly one retry
+        assert ssh_options._named_pipe_runtime_broken()  # verdict marked
+
+    def test_already_broken_skips_retry_even_on_marker(self):
+        # If a prior code path already marked the verdict broken, the wrapper
+        # short-circuits the retry — exactly one attempt regardless of the
+        # marker. Avoids infinite retry on a host that consistently fails.
+        ssh_options.mark_named_pipe_broken()
+        bad = subprocess.CompletedProcess(
+            ["ssh", "host"], 1, stdout="", stderr="getsockname failed: Not a socket\n"
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return bad
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is bad
+        assert len(calls) == 1  # no retry
+
+    def test_other_failure_not_retried(self):
+        # A non-zero exit with a different stderr is NOT our marker — return
+        # as-is, don't mark the verdict, don't retry. (Some other code path
+        # owns that failure mode.)
+        proc = subprocess.CompletedProcess(
+            ["ssh", "host"], 1, stdout="", stderr="Permission denied (publickey)."
+        )
+        calls: list[None] = []
+
+        def rebuild() -> subprocess.CompletedProcess[str]:
+            calls.append(None)
+            return proc
+
+        result = ssh_options.run_with_named_pipe_retry(rebuild)
+        assert result is proc
+        assert len(calls) == 1
+        assert not ssh_options._named_pipe_runtime_broken()
+
+    def test_mark_broken_demotes_multiplex_opts_to_legacy(self, monkeypatch):
+        # Once the runtime verdict flips to False, _ssh_multiplex_opts switches
+        # to the legacy ControlMaster=no / ControlPath=none override on win32
+        # even when (a) the env default would otherwise emit named-pipe and
+        # (b) the version probe says the local binary supports it. This is
+        # the mechanism by which the retry's "rebuilt argv" actually picks
+        # up the new option set inside the closure.
+        monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+        monkeypatch.setattr(ssh_options, "_local_openssh_major", lambda: 9)
+        opts_before = ssh_options._ssh_multiplex_opts()
+        assert "ControlMaster=auto" in opts_before
+        assert r"ControlPath=\\.\pipe\openssh-hpc-cm-%C" in opts_before
+
+        ssh_options.mark_named_pipe_broken()
+
+        opts_after = ssh_options._ssh_multiplex_opts()
+        assert "ControlMaster=no" in opts_after
+        assert "ControlPath=none" in opts_after
+
+    def test_mark_broken_is_idempotent(self):
+        # Subsequent mark_named_pipe_broken() calls no-op: the verdict is
+        # already False, and the user-facing stderr warning fires once per
+        # process. (Captured via :func:`capsys` is overkill here; just
+        # confirm the verdict stays sticky-False.)
+        assert not ssh_options._named_pipe_runtime_broken()
+        ssh_options.mark_named_pipe_broken()
+        assert ssh_options._named_pipe_runtime_broken()
+        ssh_options.mark_named_pipe_broken()
+        ssh_options.mark_named_pipe_broken()
+        assert ssh_options._named_pipe_runtime_broken()  # still True, no flip
