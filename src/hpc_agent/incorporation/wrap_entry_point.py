@@ -39,7 +39,12 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-__all__ = ["materialize_shell_wrapper", "WrapperResult", "wrapper_executor_cmd"]
+__all__ = [
+    "materialize_shell_wrapper",
+    "register_run_executor_cmd",
+    "WrapperResult",
+    "wrapper_executor_cmd",
+]
 
 
 _WRAPPERS_SUBDIR = Path(".hpc") / "wrappers"
@@ -159,6 +164,52 @@ def wrapper_executor_cmd(
         "import argparse,importlib.util,os,sys;"
         f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel.as_posix()!r});"
         "_s=importlib.util.spec_from_file_location('_hpc_wrapper',_p);"
+        "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
+        "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
+        "for k,v in os.environ.items() if k.startswith('HPC_KW_')});"
+        "_m.compute(_n)"
+    )
+    return f'python3 -c "{py}"'
+
+
+def register_run_executor_cmd(
+    *,
+    campaign_dir: Path,
+    run_path: Path,
+) -> str:
+    """Return the shell command to invoke a ``@register_run``-decorated
+    function in the user's existing file on a task.
+
+    Mirror of :func:`wrapper_executor_cmd` for the **direct-decoration**
+    case — where the user's existing executor file carries
+    ``@register_run`` (as opposed to a materialized wrapper at
+    ``.hpc/wrappers/<run_name>.py`` for the shell_command fallback).
+
+    The ``@register_run`` decorator injects ``compute(args)`` into the
+    module's namespace at decoration time. The one-liner imports the
+    user's file by path, builds an ``args`` Namespace from ``HPC_KW_*``
+    env vars exported by the cluster dispatcher, and calls
+    ``compute(args)`` — which the decorator's wrapper then routes
+    through the user's function and writes the dict result to
+    ``args.output_file`` if one was provided.
+
+    Without this helper, the framework would naively use
+    ``python3 <run_path>`` as the executor command; the dispatcher
+    passes kwargs only as env vars (never argv), so a file whose
+    ``__main__`` block uses argparse would fail with "required argument
+    missing" — and a file without a ``__main__`` block would silently
+    exit 0 without invoking ``compute``. Both empirical cases observed
+    in live demos.
+
+    *run_path* must be a path inside *campaign_dir*; the embedded
+    POSIX relative form ships with the campaign rsync and is resolved
+    against ``$REPO_DIR`` at task time, matching the wrapper case.
+    """
+    rel = run_path.relative_to(campaign_dir).as_posix()
+    py = (
+        "import argparse,importlib.util,os;"
+        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel!r});"
+        "_s=importlib.util.spec_from_file_location('_hpc_run',_p);"
         "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
         "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
         "for k,v in os.environ.items() if k.startswith('HPC_KW_')});"

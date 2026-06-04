@@ -654,11 +654,51 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
     assert "interview.json" in result["artifacts"]
     assert not (tmp_path / ".hpc" / "wrappers").exists()
     # The materialized entry_point block records the pointer for downstream readers.
+    # `executor_cmd` is auto-generated so the per-task command is the correct
+    # `python3 -c "...; _m.compute(_n)"` one-liner that imports the user's file
+    # and dispatches via the HPC_KW_* env vars the cluster dispatcher exports.
+    # Without it, the cluster would default to `python3 <file>` which exits 0
+    # without invoking compute (empirical 0.10.2 demo failure).
     doc = json.loads((tmp_path / "interview.json").read_text())
-    assert doc["_materialized"]["entry_point"] == {
-        "kind": "register_run",
-        "run_name": "forecast",
-    }
+    materialized = doc["_materialized"]["entry_point"]
+    assert materialized["kind"] == "register_run"
+    assert materialized["run_name"] == "forecast"
+    assert "executor_cmd" in materialized
+    cmd = materialized["executor_cmd"]
+    assert cmd.startswith('python3 -c "')
+    # The one-liner imports by path, builds args from HPC_KW_*, calls compute(_n).
+    assert "notebooks/forecast.py" in cmd
+    assert "compute" in cmd
+    assert "HPC_KW_" in cmd
+
+
+def test_entry_point_register_run_executor_cmd_matches_wrapper_shape(tmp_path: Path) -> None:
+    """The register_run executor_cmd mirrors wrapper_executor_cmd's contract:
+    same import-by-path + argparse-from-HPC_KW_* + compute(_n) shape, only
+    the file path differs. This pins the two helpers to the same dispatch
+    convention so the cluster dispatcher's behavior is identical regardless
+    of whether the user direct-decorated their own file or the framework
+    materialized a wrapper for the shell_command fallback."""
+    from hpc_agent.incorporation.wrap_entry_point import register_run_executor_cmd
+
+    (tmp_path / "executors").mkdir()
+    user_file = tmp_path / "executors" / "monte_carlo_pi.py"
+    user_file.write_text(
+        "from hpc_agent import register_run\n"
+        "@register_run\n"
+        "def run(seed: int) -> dict:\n"
+        "    return {'pi': 3.14}\n"
+    )
+    cmd = register_run_executor_cmd(campaign_dir=tmp_path, run_path=user_file)
+    # POSIX path in the embedded import string (cluster is Linux).
+    assert "executors/monte_carlo_pi.py" in cmd
+    # Same Namespace-from-HPC_KW_* + compute(_n) shape as wrapper_executor_cmd.
+    assert "argparse.Namespace" in cmd
+    assert "HPC_KW_" in cmd
+    assert ".compute(_n)" in cmd
+    # Pulls from $REPO_DIR like wrapper_executor_cmd — runs at the cluster
+    # cwd post-rsync, where REPO_DIR is the experiment root.
+    assert "REPO_DIR" in cmd
 
 
 def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:

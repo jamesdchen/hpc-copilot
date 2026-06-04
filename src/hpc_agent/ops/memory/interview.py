@@ -209,10 +209,27 @@ def record_interview(
             # mature repo with a different layout passes the path via
             # ``notebooks_dir``. The fallback to campaign_dir handles the
             # tiny-repo case where everything sits at the root.
-            _validate_register_run_entry(ep, campaign_dir)
+            run_path = _validate_register_run_entry(ep, campaign_dir)
+            # Generate the per-task executor command the same way
+            # ``shell_command`` does for its materialized wrapper. The
+            # ``@register_run`` decorator injects ``compute(args)`` into
+            # the module's namespace at decoration time; the one-liner
+            # imports the user's file by path and dispatches with an
+            # argparse Namespace built from ``HPC_KW_*`` env vars. Without
+            # this, the framework would default to ``python3 <file>``,
+            # which fails because the dispatcher passes kwargs only as
+            # env vars, never argv (empirical case observed in live
+            # demos — 100 tasks ran with exit 0 but no metrics.json).
+            from hpc_agent.incorporation.wrap_entry_point import (
+                register_run_executor_cmd,
+            )
+
             entry_point_materialized = {
                 "kind": "register_run",
                 "run_name": ep["run_name"],
+                "executor_cmd": register_run_executor_cmd(
+                    campaign_dir=campaign_dir, run_path=run_path
+                ),
             }
 
     if "task_generator" in intent:
@@ -437,20 +454,27 @@ def _validate_python_module_entry(ep: Mapping[str, Any], campaign_dir: Path) -> 
         raise errors.SpecInvalid(f"python_module.entry_point: {module}.{function} is not callable")
 
 
-def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:
+def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> Path:
     """Confirm a ``@register_run`` function named ``run_name`` is discoverable.
 
     Walks ``campaign_dir`` recursively (via ``discover_runs``) — same primitive
     the rest of the framework keys off, so this validation matches the runtime
     discovery behavior exactly. The skip list (``.hpc``, ``.git``,
     ``__pycache__``, ``.mypy_cache``) is owned by ``discover_runs``.
+
+    Returns the absolute path of the matched run's file. The caller threads
+    this into :func:`register_run_executor_cmd` so the materialized
+    ``executor_cmd`` knows which file to import on the cluster — without
+    this the framework would default to invoking the file as a bare script
+    (``python3 <file>``), which fails because the dispatcher passes
+    kwargs only via env vars, never argv.
     """
     from hpc_agent.experiment_kit.discover import discover_runs
 
     run_name = ep["run_name"]
     for run in discover_runs(campaign_dir):
         if run.name == run_name:
-            return
+            return run.path
     candidates = _undecorated_candidates(campaign_dir, run_name)
     hint = ""
     if candidates:
