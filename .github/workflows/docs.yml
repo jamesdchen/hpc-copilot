@@ -7,6 +7,20 @@ name: docs
 #
 # Runs on every push to main / claude/* + every PR. Cheap (<30 seconds
 # total) so no reason not to gate.
+#
+# Flake auto-recovery (2026-06-04): when another PR lands primitives
+# while a branch is open, that branch's checked-in generated docs
+# (``docs/primitives/README.md``, ``docs/generated/operations.md``)
+# drift relative to the merge state. Previously the standard fix was
+# manual: ``git merge main && python scripts/build_*.py --write && git
+# push``. On ``pull_request`` events this workflow now runs ``--write``
+# itself and commits the result back to the PR branch via
+# ``stefanzweifel/git-auto-commit-action``. The auto-commit triggers a
+# fresh workflow run; the workflow-level ``concurrency`` block cancels
+# the in-flight (stale) run so only the post-regen run reports status.
+# On ``push`` events to ``main`` / ``claude/**`` the regen step is
+# skipped — ``--check`` is the hard gate there (main is expected to
+# land already-consistent).
 
 on:
   push:
@@ -17,11 +31,36 @@ on:
     branches:
       - main
 
+# Cancel an in-flight run when the auto-regen step pushes a new commit
+# to the PR branch (which fires the same workflow). The cancelled run
+# is superseded by its post-regen counterpart, which is guaranteed
+# self-consistent.
+concurrency:
+  group: docs-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docs:
     runs-on: ubuntu-latest
+    # ``contents: write`` so the auto-commit step can push the regen
+    # back to the PR branch. Only the same-repo PRs benefit (the
+    # default GITHUB_TOKEN is read-only for fork PRs); fork-PR authors
+    # still see the standard ``--check`` failure and run regen manually,
+    # the no-change-from-before path.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On ``pull_request`` events ``actions/checkout`` defaults to
+          # the ephemeral ``refs/pull/<n>/merge`` ref (a merge of PR
+          # head onto main). For the auto-commit step's push target to
+          # be the PR branch itself — not the merge ref — we check out
+          # the PR head SHA explicitly. On ``push`` events the head
+          # ref expression is empty and ``github.sha`` (the pushed
+          # commit) is used.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -32,8 +71,33 @@ jobs:
         # test. The package itself for the `hpc-agent capabilities`
         # subprocess call that build_operations_index.py depends on.
         run: pip install -e '.[dev]' pyyaml
+
+      - name: Auto-regenerate doc artifacts (PR only)
+        # Recovers from the "another PR landed primitives while this
+        # one was open" flake without forcing a manual merge+regen
+        # dance. Idempotent: a no-op when the committed docs are
+        # already consistent.
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/build_primitive_index.py --write
+          python scripts/build_operations_index.py --write
+
+      - name: Commit regen drift to PR branch (PR only)
+        # No-op when ``file_pattern`` shows no diff; only fires when
+        # regen actually changed something. Skipped entirely on push
+        # events (where --check below is the hard gate).
+        if: github.event_name == 'pull_request'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(docs): auto-regenerate primitive catalog + operations index"
+          file_pattern: "docs/primitives/README.md docs/generated/operations.md"
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
+
       - name: Primitive catalog up to date
         # docs/primitives/README.md auto-generated from frontmatter.
+        # On PR this trivially passes (we just ran --write above); on
+        # push to main / claude/** this is the safety-net gate.
         run: python scripts/build_primitive_index.py --check
       - name: Operations index up to date
         # docs/generated/operations.md auto-generated from `hpc-agent capabilities`.
