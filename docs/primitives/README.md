@@ -117,7 +117,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [recall](recall.md) | yes | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` |
 | [recommend-partition](recommend-partition.md) | yes | _none_ | `hpc-agent recommend-partition --spec <path> [--experiment-dir <dir>]` |
 | [recoveries-list](recoveries-list.md) | yes | _none_ | `hpc-agent recoveries list` |
-| [recoveries-show](recoveries-show.md) | yes | _none_ | `hpc-agent recoveries show --kind <kind>` |
+| [recoveries-show](recoveries-show.md) | yes | _none_ | `hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |

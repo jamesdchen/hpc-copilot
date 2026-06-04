@@ -173,9 +173,41 @@ def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
     assert "--exclude=clusters.yaml" in tar_cmd
 
 
+def _is_ssh_version_probe(call_args) -> bool:
+    """``True`` when *call_args* is the ``ssh -V`` lazy version probe from
+    :func:`hpc_agent.infra.ssh_options._local_openssh_major`.
+
+    The probe fires the first time ``_ssh_crypto_opts`` evaluates
+    ``_local_openssh_supports_gcm`` after that function's
+    ``functools.cache`` is empty. Other test files (e.g.
+    ``test_remote_windows_compat.py``) have fixtures that ``cache_clear()``
+    the named-pipe + GCM probes between tests; if they ran before this
+    fallback test in the same xdist worker, the cache is cold here and the
+    probe fires inside the ``transport.subprocess.run`` mock scope (the
+    patch is on the global ``subprocess`` module, so ``ssh_options``'s
+    calls land in it too). The probe is unrelated to the tar/ssh push
+    semantics this file pins, so filter it at the helper boundary rather
+    than mock it or pre-warm the cache (those would couple every test to
+    a global-cache invariant).
+    """
+    args = call_args[0]
+    if not args:
+        return False
+    cmd = args[0]
+    return (
+        isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] in ("ssh", "ssh.exe") and cmd[1] == "-V"
+    )
+
+
 def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool):
     """Run rsync_push in tar-fallback mode; return the mocked subprocess.run
-    call list (call 0 = pre-clean when delete=True, last = tar extract)."""
+    call list (call 0 = pre-clean when delete=True, last = tar extract).
+
+    The lazy ``ssh -V`` version probe (see :func:`_is_ssh_version_probe`)
+    is filtered out — it can appear at unpredictable positions depending
+    on the xdist worker's per-process cache state, but is unrelated to
+    the tar/ssh push semantics pinned here.
+    """
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
@@ -195,7 +227,7 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
             exclude=exclude,
             delete=delete,
         )
-    return run_mock.call_args_list
+    return [c for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
 
 
 def test_rsync_push_fallback_delete_true_runs_remote_preclean(tmp_path: Path) -> None:
