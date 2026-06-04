@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from hpc_agent._wire._shared import ErrorCode
+from hpc_agent._wire.fixtures.failure_features import FailureFeatures
 
 
 class _PartialError(BaseModel):
@@ -54,6 +55,17 @@ class ErrorEnvelope(BaseModel):
     category: Literal["user", "cluster", "network", "internal"]
     retry_safe: bool
     remediation: str | None = None
+    failure_features: FailureFeatures | None = Field(
+        default=None,
+        description=(
+            "Optional structured diagnostic evidence for this failure (#230): the "
+            "feature set a diagnosis would need (error_class, resource_spec, "
+            "temporal_context, liveness_vs_correctness, log_tail, probes), "
+            "independent of what failed. Evidence only — no recovery behavior; "
+            "populated where the operation can supply it. Consumed by deterministic "
+            "retry policy and the agentic escalation layer (#234)."
+        ),
+    )
 
 
 # Discriminated union over the ``ok`` field. Pydantic emits this as a

@@ -128,6 +128,7 @@ def _err(
     category: str,
     retry_safe: bool,
     remediation: str | None = None,
+    failure_features: dict[str, Any] | None = None,
 ) -> int:
     payload = {
         "ok": False,
@@ -138,6 +139,8 @@ def _err(
     }
     if remediation is not None:
         payload["remediation"] = remediation
+    if failure_features is not None:
+        payload["failure_features"] = failure_features
     _emit(payload)
     return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
 
