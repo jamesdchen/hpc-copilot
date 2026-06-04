@@ -65,7 +65,7 @@ The composite's `data` carries:
 
 - `data.install_commands.envelope` — same shape the standalone Step 0 produced; `data.cleared_collisions` lists any 0-byte sentinels the install-commands cleaned up at `~/.claude/{commands,skills,agents}/`.
 - `data.load_context.envelope` — same shape the standalone Step 1 produced; **branch on `data.load_context.envelope.data.next_step_hint` exactly as the prior prose described** (see Step 1b).
-- `data.check_preflight.envelope` — `null` when `--cluster` was omitted; the standard `{all_ok, checks}` shape when supplied, including the new `cluster_ssh_echo` functional probe. A non-green `cluster_ssh_echo` means the production submit path will fail; surface and stop before assembling the spec.
+- `data.check_preflight.envelope` — the standard `{all_ok, checks}` shape. With `--cluster` supplied, includes the cluster reachability probes (`cluster_tcp_22` + the `cluster_ssh_echo` functional probe that runs an actual `ssh <host> echo ok` round-trip through the production ssh path). Without `--cluster`, only the local-env checks fire (ssh agent, ssh/rsync on PATH, clusters.yaml parses) — still useful as an early-catch for environment regressions. A non-green `cluster_ssh_echo` means the production submit path will fail; surface and stop before assembling the spec.
 
 On `overall: "fail"`, surface the failing sub-envelope's `error_code` + `remediation` (preserved under `data.<subcall>.envelope`) and stop — the parallel siblings' results are kept, so a re-run can target only the failing piece via `--skip`. On `overall: "pass"`, proceed to Step 1b when `data.load_context.envelope.data.next_step_hint == "monitor"` (otherwise jump to Step 2).
 

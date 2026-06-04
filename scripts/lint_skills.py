@@ -437,13 +437,18 @@ def check_step_ends_in_action(path: Path, lines: list[str]) -> list[tuple[int, s
     # whose semantics were finite-enumerated despite missing a literal
     # `hpc-agent <verb>` line. WS4 design question 3 verdict: refine the
     # rule rather than accept the noise.
+    # ``\b`` (word boundary) after the Resolve sub-alternation prevents
+    # over-match: ``Resolve cluster_ssh_echo`` should NOT be treated as
+    # bookkeeping for "Resolve cluster", because the cluster_ssh_echo
+    # Step has its own action ending. The ``_`` is a word character so
+    # ``\b`` requires a non-word-character right after the alternative.
     bookkeeping = re.compile(
         r"^(?:Return ambiguities if any|Return envelope|Return the .+|"
         r"Propagate worker ambiguities|Hand off|Build the fields json|"
         r"Ensure agent assets installed|"
         r"Resolve\s+(?:cluster|run_id|run|data axis|homogeneous axes|"
         r"walltime|gpu_type|partition|task_generator|entry point|"
-        r"frozen_configs|ambiguities if any)|"
+        r"frozen_configs|ambiguities if any)\b|"
         r"Pre-fill from memory|Cache check|Detect or scaffold|"
         r"Identify the run|Cover non-axis|Skip if caller supplied|"
         r"Try the cheap match|Branch on)",

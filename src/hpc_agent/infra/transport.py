@@ -283,55 +283,71 @@ def _tar_ssh_push(
     # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout over
     # the pipe into ssh's stdin.
     ssh_remote_cmd = f"mkdir -p {quoted_remote} && tar x -C {quoted_remote}"
-    ssh_cmd = [*ssh_argv("ssh"), ssh_target, ssh_remote_cmd]
 
-    # tar's stderr goes to a temp file rather than a PIPE: it is only
-    # read after ``ssh`` exits, and a PIPE that fills its ~64 KB kernel
-    # buffer (e.g. many "file changed as we read it" warnings on a
-    # large tree) would block ``tar`` and deadlock the whole push.
-    tar_stderr_file = tempfile.TemporaryFile()  # noqa: SIM115 - closed in finally below
-    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=tar_stderr_file)
-    try:
-        assert tar_proc.stdout is not None
-        ssh_proc = subprocess.run(
-            ssh_cmd,
-            stdin=tar_proc.stdout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        # Rebuild ssh_cmd each attempt: a named-pipe-failure retry needs to
+        # pick up the updated _ssh_multiplex_opts() after
+        # mark_named_pipe_broken(). The tar half is rebuilt too because
+        # subprocess.Popen consumes its arg list — but tar_cmd doesn't
+        # depend on multiplex opts, so this is just rerunning the same
+        # command.
+        ssh_cmd = [*ssh_argv("ssh"), ssh_target, ssh_remote_cmd]
+
+        # tar's stderr goes to a temp file rather than a PIPE: it is only
+        # read after ``ssh`` exits, and a PIPE that fills its ~64 KB kernel
+        # buffer (e.g. many "file changed as we read it" warnings on a
+        # large tree) would block ``tar`` and deadlock the whole push.
+        tar_stderr_file = tempfile.TemporaryFile()  # noqa: SIM115 - closed in finally below
+        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=tar_stderr_file)
+        try:
+            assert tar_proc.stdout is not None
+            ssh_proc = subprocess.run(
+                ssh_cmd,
+                stdin=tar_proc.stdout,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+            tar_proc.stdout.close()
+            tar_proc.wait(timeout=timeout)
+            tar_stderr_file.seek(0)
+            tar_stderr_bytes = tar_stderr_file.read()
+        except subprocess.TimeoutExpired as exc:
+            tar_proc.kill()
+            # Reap the killed child and close its stdout pipe — otherwise the
+            # pipe FD and the zombie process leak on this timeout path (the
+            # happy path closes/waits, this one did not).
+            if tar_proc.stdout is not None:
+                with contextlib.suppress(OSError):
+                    tar_proc.stdout.close()
+            with contextlib.suppress(Exception):
+                tar_proc.wait(timeout=5)
+            raise TimeoutError(
+                f"tar/ssh push to {ssh_target} timed out after {timeout}s: "
+                f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"
+            ) from exc
+        finally:
+            tar_stderr_file.close()
+
+        tar_stderr = tar_stderr_bytes.decode(errors="replace")
+        combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))
+        rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_proc.returncode
+
+        return subprocess.CompletedProcess(
+            args=tar_cmd + ["|"] + ssh_cmd,
+            returncode=rc,
+            stdout=ssh_proc.stdout,
+            stderr=combined_stderr,
         )
-        tar_proc.stdout.close()
-        tar_proc.wait(timeout=timeout)
-        tar_stderr_file.seek(0)
-        tar_stderr_bytes = tar_stderr_file.read()
-    except subprocess.TimeoutExpired as exc:
-        tar_proc.kill()
-        # Reap the killed child and close its stdout pipe — otherwise the
-        # pipe FD and the zombie process leak on this timeout path (the
-        # happy path closes/waits, this one did not).
-        if tar_proc.stdout is not None:
-            with contextlib.suppress(OSError):
-                tar_proc.stdout.close()
-        with contextlib.suppress(Exception):
-            tar_proc.wait(timeout=5)
-        raise TimeoutError(
-            f"tar/ssh push to {ssh_target} timed out after {timeout}s: "
-            f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"
-        ) from exc
-    finally:
-        tar_stderr_file.close()
 
-    tar_stderr = tar_stderr_bytes.decode(errors="replace")
-    combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))
-    rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_proc.returncode
-
-    return subprocess.CompletedProcess(
-        args=tar_cmd + ["|"] + ssh_cmd,
-        returncode=rc,
-        stdout=ssh_proc.stdout,
-        stderr=combined_stderr,
-    )
+    # Auto-fallback on the syscall-layer named-pipe ControlMaster failure
+    # mode (Windows OpenSSH version probe can't catch it; 2026-06-04). The
+    # combined_stderr we return includes ssh_proc.stderr, so
+    # run_with_named_pipe_retry can detect the getsockname marker. The
+    # retry restarts the WHOLE tar | ssh pipeline (tar can be re-spawned
+    # cheaply; its inputs are filesystem paths, not stream state).
+    return run_with_named_pipe_retry(_attempt)
 
 
 def _scp_pull(
@@ -446,11 +462,19 @@ def rsync_push(
         flags.append("--delete")
 
     def _attempt() -> subprocess.CompletedProcess[str]:
-        # Rebuild env each attempt: ssh_env() returns RSYNC_RSH derived from
-        # ssh-options state; a named-pipe-failure retry needs to re-resolve it
-        # after mark_named_pipe_broken() (the override path doesn't itself
-        # change, but marking the verdict early prevents subsequent ssh_run
-        # calls from racing into the same broken master state).
+        # Rebuild env each attempt: ssh_env() is re-resolved after a
+        # mark_named_pipe_broken() trigger. Important nuance:
+        # _rsync_rsh_env() (the source of RSYNC_RSH) uses
+        # _ssh_config_override_opts() — which is already
+        # ControlMaster=no / ControlPath=none on Windows — NOT
+        # _ssh_multiplex_opts(), so RSYNC_RSH itself is byte-identical
+        # before and after the verdict flip. The wrapper is still worth
+        # running here for two reasons: (a) it catches the
+        # `getsockname failed: Not a socket` marker if it ever surfaces
+        # in rsync/ssh stderr; (b) marking the verdict early so any
+        # subsequent ssh_run call demotes to legacy ControlMaster=no on
+        # its FIRST attempt rather than racing into the same broken
+        # master state that brought us here.
         rsync_env = {**os.environ, **ssh_env()}
         try:
             return subprocess.run(
