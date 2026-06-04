@@ -23,6 +23,37 @@ def test_discovers_bare_decorator(tmp_path: Path) -> None:
     assert names == {"alpha", "mode"}
 
 
+def test_discovers_top_level_decorator(tmp_path: Path) -> None:
+    """``from hpc_agent import register_run`` — the form SKILL.md documents
+    as canonical; ``register_run`` is lazily re-exported from
+    ``hpc_agent.__init__`` so this is a valid import path."""
+    (tmp_path / "exp.py").write_text(
+        "from hpc_agent import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(alpha: float = 1.0):\n"
+        "    return {}\n"
+    )
+    runs = discover_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0].name == "run"
+    assert {f.name for f in runs[0].flags} == {"alpha"}
+
+
+def test_discovers_top_level_decorator_aliased(tmp_path: Path) -> None:
+    """``from hpc_agent import register_run as rr`` — alias on the top-level form."""
+    (tmp_path / "exp.py").write_text(
+        "from hpc_agent import register_run as rr\n"
+        "\n"
+        "@rr(gpu=True)\n"
+        "def run(epochs: int = 10):\n"
+        "    return {}\n"
+    )
+    runs = discover_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0].gpu is True
+
+
 def test_discovers_aliased_decorator(tmp_path: Path) -> None:
     (tmp_path / "exp.py").write_text(
         "from hpc_agent.experiment_kit import register_run as rr\n"
