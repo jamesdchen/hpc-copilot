@@ -29,6 +29,16 @@ Same as `hpc-submit`: walk every step, accumulate ambiguities (no early-return),
 
 ## Steps
 
+### 0. Ensure agent assets installed (idempotent)
+
+The handoff at the end of this skill dispatches the rendered procedure to the named subagent `hpc-worker` discovered under `~/.claude/agents/hpc-worker.md`. If that file is missing — typically because `hpc-agent install-commands` hasn't run on this machine yet — the dispatch fails. Run install-commands first so this never bites:
+
+```bash
+hpc-agent install-commands
+```
+
+Idempotent: a no-op when assets are already installed. A pre-existing 0-byte file at `~/.claude/{commands,skills,agents}` is auto-cleared (see `result.cleared_collisions`); a non-empty file raises `FileExistsError` with a clear remediation — stop and surface that. Costs ~50ms when re-run.
+
 ### 1. Load context
 
 ```bash

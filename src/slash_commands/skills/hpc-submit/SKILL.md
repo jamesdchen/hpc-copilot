@@ -49,6 +49,16 @@ This means **one round-trip per workflow invocation** — the caller resolves ev
 
 ## Steps
 
+### 0. Ensure agent assets installed (idempotent)
+
+Step 9's handoff dispatches the rendered procedure to the named subagent `hpc-worker` discovered under `~/.claude/agents/hpc-worker.md`. If that file is missing — typically because `hpc-agent install-commands` hasn't run on this machine yet — the dispatch fails mid-resolution and the agent falls back to running cluster procedures by hand (a known cause of fabricated cluster commands). Run install-commands first so this never bites:
+
+```bash
+hpc-agent install-commands
+```
+
+Idempotent: a no-op when assets are already installed (the same byte content lands at the same path). On a fresh machine it writes `~/.claude/{commands,skills,agents}/` and reports what was installed. A pre-existing 0-byte file at any of those three target paths is auto-cleared (see `result.cleared_collisions`); a non-empty file raises `FileExistsError` with a clear remediation — stop and surface that. Skipping this step is fine on a machine you know is already set up; running it twice costs ~50ms and is otherwise harmless.
+
 ### 1. Load context
 
 ```bash
