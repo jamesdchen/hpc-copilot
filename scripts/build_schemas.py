@@ -82,6 +82,7 @@ _ID_BASE = "https://github.com/jamesdchen/hpc-agent/schemas"
 _NON_SUFFIX_MAPPING: dict[str, str] = {
     "EnvelopeAdapter": "envelope.json",
     "FailureFeatures": "failure_features.json",
+    "Escalation": "escalation.json",
     "CampaignAdapter": "campaign.output.json",
     "StagesAdapter": "stages.input.json",
     "AxesConfig": "axes.json",

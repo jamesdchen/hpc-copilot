@@ -326,6 +326,21 @@
       ],
       "default": null,
       "title": "Extra Env"
+    },
+    "service_env": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Service Env"
     }
   }
 }

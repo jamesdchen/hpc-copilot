@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from hpc_agent._wire._shared import ErrorCode
+from hpc_agent._wire.fixtures.escalation import Escalation
 from hpc_agent._wire.fixtures.failure_features import FailureFeatures
 
 
@@ -42,6 +43,17 @@ class SuccessEnvelope(BaseModel):
             "failures while the operation as a whole succeeded."
         ),
     )
+    escalation: Escalation | None = Field(
+        default=None,
+        description=(
+            "Optional 'needs a decision' block (#231). Present on a SUCCESS when "
+            "the operation succeeded but a decision is still required — e.g. "
+            "campaign-advance reaching 'stop_converged' / 'stop_over_budget', or a "
+            "stage-out hitting a quota gate. 'Needs a decision' is orthogonal to "
+            "ok, so it rides as data on either envelope rather than as a third wire "
+            "state. A consumer that ignores it sees an ordinary success."
+        ),
+    )
 
 
 class ErrorEnvelope(BaseModel):
@@ -64,6 +76,17 @@ class ErrorEnvelope(BaseModel):
             "independent of what failed. Evidence only — no recovery behavior; "
             "populated where the operation can supply it. Consumed by deterministic "
             "retry policy and the agentic escalation layer (#234)."
+        ),
+    )
+    escalation: Escalation | None = Field(
+        default=None,
+        description=(
+            "Optional 'needs a decision' block (#231). Present on a FAILURE when the "
+            "deterministic resolver (#234) could not resolve it and the agentic layer "
+            "must decide; carries the failure_features evidence, the candidate "
+            "actions, and the affected-task cluster so a verdict fans back out "
+            "per-task. The same block shape appears on SuccessEnvelope — one socket, "
+            "both outcomes."
         ),
     )
 

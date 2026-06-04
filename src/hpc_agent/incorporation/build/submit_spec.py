@@ -213,6 +213,15 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         job_env["HPC_RUNTIME"] = "uv"
     if campaign_id:
         job_env["HPC_CAMPAIGN_ID"] = campaign_id
+    # Service-dependency passthrough (#231 Tier 1): ship the externally-
+    # provisioned address as JSON ``HPC_SERVICE_ENV`` so the cluster-side
+    # dispatcher threads each entry into every task's env as
+    # ``HPC_SERVICE_<KEY>``. Stamped before extra_env so an explicit
+    # caller override still wins.
+    if spec.service_env:
+        job_env["HPC_SERVICE_ENV"] = json.dumps(
+            {str(k): str(v) for k, v in spec.service_env.items()}, sort_keys=True
+        )
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
 

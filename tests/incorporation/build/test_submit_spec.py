@@ -37,6 +37,28 @@ def test_returns_minimal_valid_spec_with_synthesized_job_env() -> None:
     assert spec["skip_preflight"] is True
 
 
+def test_service_env_stamps_hpc_service_env_json() -> None:
+    """Seam closure (#231): a spec service_env ships as the JSON HPC_SERVICE_ENV
+    job_env var the cluster-side dispatcher reads to inject HPC_SERVICE_* vars."""
+    import json
+
+    from hpc_agent.ops.recover.service import inject_service_env
+
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(**_required(), service_env={"addr": "http://node7:8000"})
+    )
+    raw = spec["job_env"]["HPC_SERVICE_ENV"]
+    assert json.loads(raw) == {"addr": "http://node7:8000"}
+    # ...and the dispatcher side turns it into a namespaced task-env var.
+    task_env = inject_service_env({}, json.loads(raw))
+    assert task_env["HPC_SERVICE_ADDR"] == "http://node7:8000"
+
+
+def test_no_service_env_omits_the_var() -> None:
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))
+    assert "HPC_SERVICE_ENV" not in spec["job_env"]
+
+
 def test_gpu_picks_gpu_template() -> None:
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), is_gpu=True))
     assert spec["script"] == ".hpc/templates/gpu_array.sh"

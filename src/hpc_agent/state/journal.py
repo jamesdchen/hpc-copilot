@@ -37,6 +37,9 @@ __all__ = [
     "update_run_status",
     "update_run_record",
     "mark_run",
+    "mark_pending_verdict",
+    "clear_pending_verdict",
+    "is_held",
 ]
 
 
@@ -154,6 +157,53 @@ def mark_run(
         _atomic_write_json(path, record.to_dict())
     _refresh_index_entry(experiment_dir, record.run_id, record.status)
     return record
+
+
+def mark_pending_verdict(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    escalation: dict[str, Any],
+) -> RunRecord:
+    """Park a run on an escalation awaiting a verdict (#231/#234).
+
+    Stores the *escalation* block (an ``Escalation.model_dump()`` dict — the
+    state layer stays pure I/O and does not import the ``_wire`` model) in the
+    record's ``pending_verdict`` field. The run is now *held*: the deterministic
+    resolver could not resolve its failure, so it waits for a verdict instead of
+    blocking the campaign loop. The run's ``status`` is left untouched — a
+    failed-but-held run stays ``failed`` (so it is not re-monitored as
+    ``in_flight``) and is surfaced as parked by
+    :func:`hpc_agent.state.index.find_held_runs`.
+
+    The verdict's exit is :func:`clear_pending_verdict` followed by a
+    ``resubmit_flow`` with the chosen overrides (resubmit-on-verdict).
+    """
+    if not escalation:
+        raise ValueError("mark_pending_verdict: escalation block must be non-empty")
+    return update_run_status(experiment_dir, run_id, pending_verdict=dict(escalation))
+
+
+def clear_pending_verdict(experiment_dir: Path, run_id: str) -> RunRecord:
+    """Release a held run once its verdict has been applied (#231/#234).
+
+    Clears ``pending_verdict`` back to ``{}``. Idempotent — clearing a run
+    that is not held is a harmless no-op rewrite. The caller is expected to
+    have already enacted the verdict (typically a ``resubmit_flow`` with the
+    chosen overrides) before releasing the hold.
+    """
+    return update_run_status(experiment_dir, run_id, pending_verdict={})
+
+
+def is_held(record: RunRecord) -> bool:
+    """True when *record* is parked on a pending verdict (#231/#234).
+
+    The holding state is the non-emptiness of ``pending_verdict`` — the same
+    field-as-state idiom the journal already uses for ``pending_resubmit``.
+    A held run is neither live (``in_flight``) nor done from the campaign
+    loop's perspective; it is waiting on a decision.
+    """
+    return bool(record.pending_verdict)
 
 
 def _refresh_index_entry(

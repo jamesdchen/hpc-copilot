@@ -110,6 +110,7 @@ _UPDATABLE_FIELDS = frozenset(
         "last_resubmit_request_id",
         "recent_resubmit_request_ids",
         "pending_resubmit",
+        "pending_verdict",
     }
 )
 
@@ -156,6 +157,20 @@ class RunRecord:
     # submit) or skipping the remainder. Cleared once the resubmit
     # completes fully.
     pending_resubmit: dict = dataclasses.field(default_factory=dict)
+    # Holding state for an escalated cluster awaiting a verdict (#231/#234).
+    # Empty dict = not held. When non-empty it carries the Escalation block
+    # (decision-as-data: failure_features + candidate_actions + the affected
+    # cluster) that the deterministic resolver could not resolve. The run is
+    # *parked* — neither resubmitted (the verdict picks the fix) nor treated
+    # as terminal-done by the campaign loop — so the campaign keeps making
+    # progress on unaffected work. Stored as a plain dict to keep this layer
+    # pure I/O (no _wire import); the caller passes ``Escalation.model_dump()``.
+    # Cleared back to ``{}`` when the verdict is applied; the exit is
+    # resubmit_flow with the chosen overrides (resubmit-on-verdict). HPC
+    # schedulers can't cheaply freeze a *running* job, so a live task is left
+    # to run to terminal and only then enters this hold — there is no
+    # live-freeze state by design.
+    pending_verdict: dict = dataclasses.field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

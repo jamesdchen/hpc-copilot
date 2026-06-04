@@ -695,6 +695,23 @@ def main() -> None:
         if not namespace_only:
             env[key.upper()] = s
 
+    # Service-dependency passthrough (#231 Tier 1): an externally-provisioned
+    # service address recorded on the sidecar travels to the job as the JSON
+    # ``HPC_SERVICE_ENV`` var; thread each entry into the task env as a
+    # namespaced ``HPC_SERVICE_<KEY>`` (collision-free, like HPC_KW_*). Absent
+    # var → clean no-op for sweeps with no service dependency.
+    raw_service_env = os.environ.get("HPC_SERVICE_ENV", "").strip()
+    if raw_service_env:
+        from hpc_agent.ops.recover.service import inject_service_env
+
+        try:
+            service_env = json.loads(raw_service_env)
+        except json.JSONDecodeError as exc:
+            print(f"[dispatch] WARN: ignoring malformed HPC_SERVICE_ENV: {exc}", file=sys.stderr)
+        else:
+            if isinstance(service_env, dict):
+                inject_service_env(env, service_env)
+
     # Defense-in-depth for #195: warn if the command references an HPC_KW_* var
     # the kwargs never produced (would expand to empty and fail the task). The
     # env is fully built above, so this is the authoritative diff point.

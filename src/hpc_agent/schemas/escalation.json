@@ -1,6 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/escalation.json",
+  "title": "Escalation",
+  "description": "One *\"needs a decision\"* block attached to an envelope (#231).\n\nAttached optionally to ``SuccessEnvelope`` (e.g. campaign-advance's\nsucceeded-but-decide case) or ``ErrorEnvelope`` (a failure the\ndeterministic resolver could not resolve). Evidence + options +\nprovenance; it does not itself carry the verdict or the holding state\n(the journal's ``pending_verdict`` state owns that — Phase 2 / #234).",
+  "type": "object",
+  "required": [
+    "decided_by"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "decided_by": {
+      "description": "The decision seam (reuses spawn_contract's DecidedBy). 'code' = a deterministic resolver produced this (the block is a recommendation surfaced for confirmation / audit); 'judgement' = the deterministic layer could not resolve it and the agentic layer must decide. The rate of 'judgement' for a given cluster fingerprint is the #234 health signal that a context-keyed rule should be promoted.",
+      "enum": [
+        "code",
+        "judgement"
+      ],
+      "title": "Decided By",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable summary of why this escalated / what must be decided.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "failure_features": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FailureFeatures"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The #230 evidence vector — the single inter-layer interface. The deterministic resolver pattern-matches on it; the agentic layer reasons over it as its prompt payload. Same evidence, two consumers."
+    },
+    "candidate_actions": {
+      "description": "The actions the decision-maker may choose among.",
+      "items": {
+        "$ref": "#/$defs/CandidateAction"
+      },
+      "title": "Candidate Actions",
+      "type": "array"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EscalationCluster"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Provenance back to the affected tasks, so a verdict fans back out per-task."
+    }
+  },
   "$defs": {
     "CandidateAction": {
       "additionalProperties": false,
@@ -47,160 +103,6 @@
         "action"
       ],
       "title": "CandidateAction",
-      "type": "object"
-    },
-    "ErrorEnvelope": {
-      "additionalProperties": false,
-      "description": "The ``ok=false`` shape of every hpc-agent stdout response.",
-      "properties": {
-        "ok": {
-          "const": false,
-          "title": "Ok",
-          "type": "boolean"
-        },
-        "error_code": {
-          "enum": [
-            "ssh_unreachable",
-            "scheduler_throttled",
-            "spec_invalid",
-            "executor_not_found",
-            "cluster_unknown",
-            "journal_corrupt",
-            "remote_command_failed",
-            "config_invalid",
-            "combiner_failed",
-            "cluster_timeout",
-            "cluster_partially_degraded",
-            "outputs_missing",
-            "schema_incompat",
-            "preempted",
-            "precondition_failed",
-            "internal"
-          ],
-          "title": "Error Code",
-          "type": "string"
-        },
-        "message": {
-          "title": "Message",
-          "type": "string"
-        },
-        "category": {
-          "enum": [
-            "user",
-            "cluster",
-            "network",
-            "internal"
-          ],
-          "title": "Category",
-          "type": "string"
-        },
-        "retry_safe": {
-          "title": "Retry Safe",
-          "type": "boolean"
-        },
-        "remediation": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Remediation"
-        },
-        "failure_features": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FailureFeatures"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional structured diagnostic evidence for this failure (#230): the feature set a diagnosis would need (error_class, resource_spec, temporal_context, liveness_vs_correctness, log_tail, probes), independent of what failed. Evidence only — no recovery behavior; populated where the operation can supply it. Consumed by deterministic retry policy and the agentic escalation layer (#234)."
-        },
-        "escalation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Escalation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional 'needs a decision' block (#231). Present on a FAILURE when the deterministic resolver (#234) could not resolve it and the agentic layer must decide; carries the failure_features evidence, the candidate actions, and the affected-task cluster so a verdict fans back out per-task. The same block shape appears on SuccessEnvelope — one socket, both outcomes."
-        }
-      },
-      "required": [
-        "ok",
-        "error_code",
-        "message",
-        "category",
-        "retry_safe"
-      ],
-      "title": "ErrorEnvelope",
-      "type": "object"
-    },
-    "Escalation": {
-      "additionalProperties": false,
-      "description": "One *\"needs a decision\"* block attached to an envelope (#231).\n\nAttached optionally to ``SuccessEnvelope`` (e.g. campaign-advance's\nsucceeded-but-decide case) or ``ErrorEnvelope`` (a failure the\ndeterministic resolver could not resolve). Evidence + options +\nprovenance; it does not itself carry the verdict or the holding state\n(the journal's ``pending_verdict`` state owns that — Phase 2 / #234).",
-      "properties": {
-        "decided_by": {
-          "description": "The decision seam (reuses spawn_contract's DecidedBy). 'code' = a deterministic resolver produced this (the block is a recommendation surfaced for confirmation / audit); 'judgement' = the deterministic layer could not resolve it and the agentic layer must decide. The rate of 'judgement' for a given cluster fingerprint is the #234 health signal that a context-keyed rule should be promoted.",
-          "enum": [
-            "code",
-            "judgement"
-          ],
-          "title": "Decided By",
-          "type": "string"
-        },
-        "reason": {
-          "default": "",
-          "description": "Human-readable summary of why this escalated / what must be decided.",
-          "title": "Reason",
-          "type": "string"
-        },
-        "failure_features": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FailureFeatures"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The #230 evidence vector — the single inter-layer interface. The deterministic resolver pattern-matches on it; the agentic layer reasons over it as its prompt payload. Same evidence, two consumers."
-        },
-        "candidate_actions": {
-          "description": "The actions the decision-maker may choose among.",
-          "items": {
-            "$ref": "#/$defs/CandidateAction"
-          },
-          "title": "Candidate Actions",
-          "type": "array"
-        },
-        "cluster": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EscalationCluster"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Provenance back to the affected tasks, so a verdict fans back out per-task."
-        }
-      },
-      "required": [
-        "decided_by"
-      ],
-      "title": "Escalation",
       "type": "object"
     },
     "EscalationCluster": {
@@ -376,61 +278,6 @@
       "title": "FailureFeatures",
       "type": "object"
     },
-    "SuccessEnvelope": {
-      "additionalProperties": false,
-      "description": "The ``ok=true`` shape of every hpc-agent stdout response.",
-      "properties": {
-        "ok": {
-          "const": true,
-          "title": "Ok",
-          "type": "boolean"
-        },
-        "idempotent": {
-          "title": "Idempotent",
-          "type": "boolean"
-        },
-        "data": {
-          "additionalProperties": true,
-          "title": "Data",
-          "type": "object"
-        },
-        "partial_errors": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/_PartialError"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional top-level array surfacing soft per-source failures while the operation as a whole succeeded.",
-          "title": "Partial Errors"
-        },
-        "escalation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Escalation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional 'needs a decision' block (#231). Present on a SUCCESS when the operation succeeded but a decision is still required — e.g. campaign-advance reaching 'stop_converged' / 'stop_over_budget', or a stage-out hitting a quota gate. 'Needs a decision' is orthogonal to ok, so it rides as data on either envelope rather than as a third wire state. A consumer that ignores it sees an ordinary success."
-        }
-      },
-      "required": [
-        "ok",
-        "idempotent",
-        "data"
-      ],
-      "title": "SuccessEnvelope",
-      "type": "object"
-    },
     "_AttemptsThisEpisode": {
       "additionalProperties": false,
       "description": "What recovery has already been tried this failure episode — lets a\ndecision-maker avoid re-trying an exhausted strategy.\n\nReuses the journal's existing per-task retry record\n(``state/run_record.py:RunRecord.retries`` = ``{task_id: {attempts,\ncategory, overrides}}``, written by ``ops/recover/runner.py``): ``count``\nsnapshots that ``attempts`` counter rather than tracking attempts\nseparately. ``strategies`` is the only new piece — it generalizes the\nrecord's single ``category``/``overrides`` into the ordered list of what\nwas tried.",
@@ -543,27 +390,6 @@
       "title": "_LogTail",
       "type": "object"
     },
-    "_PartialError": {
-      "additionalProperties": false,
-      "description": "One soft per-source failure surfaced on a successful envelope.\n\nDistinct from ``data.errors``: this key documents *cluster-side*\ndegradations (qhost timed out, one of N nodes unreachable, sacct\nunavailable) that the planner considered and chose to tolerate.\nOperations that genuinely failed should set ``ok: false`` instead.",
-      "properties": {
-        "code": {
-          "description": "Machine-readable category, e.g. 'qhost_failed', 'scontrol_failed', 'qstat_unavailable', 'qacct_unavailable', 'malformed_row'.",
-          "title": "Code",
-          "type": "string"
-        },
-        "detail": {
-          "title": "Detail",
-          "type": "string"
-        }
-      },
-      "required": [
-        "code",
-        "detail"
-      ],
-      "title": "_PartialError",
-      "type": "object"
-    },
     "_Probe": {
       "additionalProperties": false,
       "description": "One targeted probe result from a caller-supplied probe hook.",
@@ -633,20 +459,5 @@
       "title": "_TemporalContext",
       "type": "object"
     }
-  },
-  "discriminator": {
-    "mapping": {
-      "false": "#/$defs/ErrorEnvelope",
-      "true": "#/$defs/SuccessEnvelope"
-    },
-    "propertyName": "ok"
-  },
-  "oneOf": [
-    {
-      "$ref": "#/$defs/SuccessEnvelope"
-    },
-    {
-      "$ref": "#/$defs/ErrorEnvelope"
-    }
-  ]
+  }
 }

@@ -105,6 +105,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "resources",  # dict — cpus/mem/walltime/gpus/gpu_type
     "env",  # dict — modules/conda_env
     "env_group",  # str — clusters.yaml env_group key
+    "service_env",  # dict — externally-provisioned service address vars (#231 Tier 1)
     "constraints",  # dict — overrides on clusters.yaml constraints
     "gpu_fallback",  # list — ordered GPU types to try
     "max_retries",  # int — auto-resubmission cap
@@ -141,6 +142,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "resources": None,
     "env": None,
     "env_group": None,
+    "service_env": None,
     "constraints": None,
     "gpu_fallback": None,
     "max_retries": None,
@@ -205,6 +207,7 @@ def write_run_sidecar(
     resources: dict[str, Any] | None = None,
     env: dict[str, Any] | None = None,
     env_group: str | None = None,
+    service_env: dict[str, Any] | None = None,
     constraints: dict[str, Any] | None = None,
     gpu_fallback: list[str] | None = None,
     max_retries: int | None = None,
@@ -278,6 +281,7 @@ def write_run_sidecar(
         "resources": resources,
         "env": env,
         "env_group": env_group,
+        "service_env": service_env,
         "constraints": constraints,
         "gpu_fallback": gpu_fallback,
         "max_retries": max_retries,

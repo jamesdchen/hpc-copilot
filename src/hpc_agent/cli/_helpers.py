@@ -91,6 +91,7 @@ def _ok(
     idempotent: bool | None = None,
     name: str | None = None,
     partial_errors: list[dict[str, str]] | None = None,
+    escalation: dict[str, Any] | None = None,
 ) -> None:
     """Emit an ok-true envelope.
 
@@ -108,6 +109,12 @@ def _ok(
     Used by primitives like ``inspect-cluster`` whose underlying data
     source can be partially degraded (qhost timed out, sacct
     unavailable) without the operation as a whole failing.
+
+    *escalation*: optional 'needs a decision' block (#231) for the
+    succeeded-but-decide case (e.g. campaign-advance reaching a stop
+    decision, or a stage-out quota gate). 'Needs a decision' is orthogonal
+    to ``ok``, so it rides as data on a success envelope rather than as a
+    third wire state.
     """
     if idempotent is None:
         idempotent = _meta_idempotent(name) if name else True
@@ -118,6 +125,8 @@ def _ok(
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
     if partial_errors:
         env["partial_errors"] = list(partial_errors)
+    if escalation is not None:
+        env["escalation"] = escalation
     _emit(env)
 
 
@@ -129,6 +138,7 @@ def _err(
     retry_safe: bool,
     remediation: str | None = None,
     failure_features: dict[str, Any] | None = None,
+    escalation: dict[str, Any] | None = None,
 ) -> int:
     payload = {
         "ok": False,
@@ -141,6 +151,8 @@ def _err(
         payload["remediation"] = remediation
     if failure_features is not None:
         payload["failure_features"] = failure_features
+    if escalation is not None:
+        payload["escalation"] = escalation
     _emit(payload)
     return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
 

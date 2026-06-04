@@ -67,3 +67,8 @@ class BuildSubmitSpecInput(BaseModel):
     slurm_account: str | None = None
     slurm_cluster: str | None = None
     extra_env: dict[str, str] | None = None
+    # Externally-provisioned companion-service address (#231 Tier 1). Travels
+    # to the cluster job as the JSON ``HPC_SERVICE_ENV`` var; the dispatcher
+    # threads each entry into every task's env as ``HPC_SERVICE_<KEY>``. The
+    # framework does not stand the service up — it only consumes the address.
+    service_env: dict[str, str] | None = None

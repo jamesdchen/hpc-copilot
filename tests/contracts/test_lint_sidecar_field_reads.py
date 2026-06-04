@@ -67,6 +67,7 @@ _V2_CONFIG = frozenset(
         "resources",
         "env",
         "env_group",
+        "service_env",
         "constraints",
         "gpu_fallback",
         "max_retries",

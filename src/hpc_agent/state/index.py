@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = [
     "find_in_flight_runs",
     "find_runs_by_campaign",
+    "find_held_runs",
     "prune_terminal_runs",
 ]
 
@@ -184,6 +185,37 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
         matched.append((_safe_mtime(path), record))
     matched.sort(key=lambda item: item[0])  # oldest-first
     return [r for _, r in matched]
+
+
+def find_held_runs(experiment_dir: Path, campaign_id: str | None = None) -> list[RunRecord]:
+    """Return every run parked on a pending verdict (#231/#234), newest-first.
+
+    A held run carries a non-empty ``pending_verdict`` escalation block — the
+    deterministic resolver could not resolve its failure and it is waiting on a
+    decision. The campaign loop uses this to know what is parked so it can keep
+    progressing on unaffected work while treating held runs as *not done* (a
+    pending verdict is neither a live run to monitor nor a terminal run to
+    aggregate).
+
+    Scans on-disk run files rather than the index, because the holding state is
+    a record field, not the indexed ``status``. Optional *campaign_id* narrows
+    to one campaign's parked set.
+    """
+    from hpc_agent.state.journal import is_held, load_run
+    from hpc_agent.state.run_record import _current_homedir
+
+    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
+        return []
+    held: list[tuple[float, RunRecord]] = []
+    for path in _all_run_files(experiment_dir):
+        record = load_run(experiment_dir, path.stem)
+        if record is None or not is_held(record):
+            continue
+        if campaign_id is not None and record.campaign_id != campaign_id:
+            continue
+        held.append((_safe_mtime(path), record))
+    held.sort(key=lambda item: item[0], reverse=True)
+    return [r for _, r in held]
 
 
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
