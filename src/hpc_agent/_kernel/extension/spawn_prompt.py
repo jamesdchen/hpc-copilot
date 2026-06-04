@@ -38,6 +38,7 @@ from hpc_agent._wire.spawn_contract import (
     WorkerDecision,
     WorkerReport,
     WorkflowName,
+    judgement_point_ids,
 )
 
 __all__ = [
@@ -274,5 +275,21 @@ def parse_worker_report(output: str, *, workflow: str) -> WorkerReport:
         raise SpawnContractError(
             f"worker reported decision point(s) not defined for {workflow!r}: "
             f"{unknown}; known: {sorted(known)}"
+        )
+    # A judgement point is a genuine break in control flow the deterministic
+    # layer could not decide; its rationale is the thing worth capturing
+    # (spawn_contract.DecisionPoint). Reject an empty ``why`` there — a branch
+    # taken with no recorded reason is a bug to surface, not a state to accept.
+    # Deterministic (code/plan) points are exempt: their backing primitive's
+    # envelope is the authoritative on-disk record.
+    judgement = judgement_point_ids(workflow)
+    missing_why = sorted(
+        {d.point for d in report.decisions if d.point in judgement and not d.why.strip()}
+    )
+    if missing_why:
+        raise SpawnContractError(
+            f"judgement decision point(s) {missing_why} for {workflow!r} must record "
+            "a non-empty 'why' — the rationale for a genuine control-flow branch is "
+            "the thing worth capturing (deterministic points are exempt)"
         )
     return report

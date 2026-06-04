@@ -27,7 +27,7 @@
   },
   "$defs": {
     "WorkerDecision": {
-      "description": "One decision a delegated worker reports making.\n\n``point`` must be a :class:`DecisionPoint` id for the worker's\nworkflow — cross-checked by ``parse_worker_report``.",
+      "description": "One decision a delegated worker reports making.\n\n``point`` must be a :class:`DecisionPoint` id for the worker's\nworkflow — cross-checked by ``parse_worker_report``.\n\nAt a ``decided_by=\"judgement\"`` point — a genuine break in the control\nflow, not a parameter the deterministic layer computed — the rationale\nis the thing worth capturing (see :class:`DecisionPoint`): ``why`` is\n**required** (``parse_worker_report`` rejects an empty one at a\njudgement point), ``chosen`` names the branch taken, and ``rejected``\nlists the alternatives weighed and discarded — so the record is the\n*choice*, not merely an outcome tag. At a deterministic point these\nstay optional; the backing primitive's envelope is the authoritative\nrecord there.",
       "properties": {
         "point": {
           "title": "Point",
@@ -41,6 +41,26 @@
           "default": "",
           "title": "Why",
           "type": "string"
+        },
+        "chosen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chosen"
+        },
+        "rejected": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected",
+          "type": "array"
         }
       },
       "required": [

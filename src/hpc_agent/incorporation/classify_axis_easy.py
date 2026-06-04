@@ -32,6 +32,13 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 
 __all__ = ["classify_axis_easy"]
 
+# The matcher kinds confident enough to record without the LLM tree — the
+# "code" branch. Everything else (unclassifiable / function_not_found) abstains
+# to the hpc-classify-axis LLM decision tree — the "judgement" branch.
+_CONFIDENT_KINDS = frozenset({"independent", "bounded_halo", "sequential", "no_loop_detected"})
+# The axis kinds the LLM tree chooses among when the matcher abstains.
+_AXIS_CANDIDATES = ("independent", "bounded_halo", "sequential", "associative")
+
 
 @primitive(
     name="classify-axis-easy",
@@ -81,11 +88,37 @@ def classify_axis_easy(*, source_path: str, run_name: str) -> dict[str, Any]:
     (useful so the calling skill knows which cheap patterns were already
     ruled out before falling back to the LLM tree).
     """
+    from hpc_agent._kernel.decision import decide
+    from hpc_agent._wire.fixtures.escalation import CandidateAction, Escalation
     from hpc_agent.experiment_kit.axis_matcher import classify_axis_easy as _match
 
     result = _match(Path(source_path), run_name)
+
+    # Route the verdict through the shared decision kernel so this matcher is
+    # symmetric with classify-campaign-path: a confident kind resolves
+    # decided_by="code"; the unclassifiable / function_not_found tail abstains
+    # to judgement, where the hpc-classify-axis LLM tree picks among the axis
+    # kinds. Same evaluator every decision point uses.
+    def _confident(_: Any) -> CandidateAction | None:
+        if result.kind in _CONFIDENT_KINDS:
+            return CandidateAction(
+                action=result.kind, source="catalog", rationale=f"AST matched {result.kind}"
+            )
+        return None
+
+    def _to_llm_tree(_: Any) -> Escalation:
+        return Escalation(
+            decided_by="judgement",
+            reason=f"{result.kind}: matcher abstained — the hpc-classify-axis LLM tree decides",
+            candidate_actions=[
+                CandidateAction(action=k, source="catalog") for k in _AXIS_CANDIDATES
+            ],
+        )
+
+    decision = decide("axis_class", None, rules=[_confident], on_abstain=_to_llm_tree)
     return {
         "kind": result.kind,
+        "decided_by": decision.decided_by,
         "evidence": result.evidence,
         "halo_expr": result.halo_expr,
         "tried": list(result.tried),

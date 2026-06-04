@@ -6,11 +6,11 @@ Two fields on the worker report carry observations back to the caller — they a
 
 - **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **aggregate** workflow there are exactly four allowed `point` IDs — any other value is rejected by `parse_worker_report`:
   - `mode` (backed by `aggregate-flow` — auto / combiner-only)
-  - `partial_handling` (proceed on incomplete waves or not)
+  - `partial_handling` (backed by `decide-partial-handling` — proceed on incomplete waves or not)
   - `completeness` (backed by `verify-aggregation-complete`)
-  - `reduce_locality` (where the reduce ran)
+  - `reduce_locality` (backed by `aggregate-flow` — deterministic: `mode=auto` reduces where the data sits)
 
-  Each entry is `{point, outcome, why}` — `outcome` is a short tag (e.g. `unexpected_tasks`, `partial`, `manual_pending`), `why` is a free-form one-liner.
+  Each entry is `{point, outcome, why, chosen?, rejected?}` — `outcome` is a short tag (e.g. `unexpected_tasks`, `partial`, `manual_pending`). At a **judgement** point (a genuine control-flow branch the deterministic layer could not decide for you — here `partial_handling`), `why` is **required** (`parse_worker_report` rejects an empty one), and you should set `chosen` (the branch taken) and `rejected` (the alternatives you weighed and discarded). At a deterministic point `why` is a free-form one-liner.
 
 - **`anomalies`** is a **free-form multi-line string** for everything else: the specific violation lists (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`), failed-wave ids, raw evidence — anything that isn't one of the four points.
 
@@ -87,7 +87,7 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
    - `ok=True` → proceed to interpretation.
    - `ok=False` → record a `completeness` decision with outcome `failed` and put the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) in `anomalies` before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — record it as a `completeness` decision with outcome `unexpected_tasks` (the ids go in `anomalies`), never paper over.
 
-8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Record a `partial_handling` decision with outcome `partial` (put the failed-wave list in `anomalies` / `why`); the caller decides whether the partial result is acceptable, or invokes [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
+8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Don't eyeball it — call [decide-partial-handling](../../docs/primitives/decide-partial-handling.md) with `--failed-count` (len `failed_waves`), `--combined-count` (len `combined_waves`), and `--retries-exhausted` (set, since these failed `combiner_max_retries`). On `decided_by="code"` it resolved `retry`/`proceed` — follow it (for `retry`, invoke [combine-wave](../../docs/primitives/combine-wave.md) with `force=true` for the failed waves). On `decided_by="judgement"` it returns the computed `missing_fraction` and the only open call is acceptability *for your purpose*: record a `partial_handling` decision choosing `accept-partial` vs `force-retry-failed` with `chosen`/`rejected`/`why` (put the failed-wave list in `anomalies`).
 
 9. **On error envelopes**, branch by `error_code` per the atom's frontmatter (`journal_corrupt` / `spec_invalid` / `ssh_unreachable` / `remote_command_failed`).
 

@@ -483,3 +483,66 @@ def test_link_credentials_prefers_symlink(tmp_path: Path) -> None:
         assert link.is_symlink()
         live.write_text("refreshed", encoding="utf-8")
         assert link.read_text(encoding="utf-8") == "refreshed"
+
+
+# ─── decode-time output constraint (--json-schema) ──────────────────────────
+
+
+def test_worker_output_schema_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    assert invoke_mod._worker_output_schema() is None
+
+
+def test_worker_output_schema_on_returns_minified_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    schema = invoke_mod._worker_output_schema()
+    assert schema is not None
+    assert "WorkerReport" in schema and '"decisions"' in schema
+    assert "\n" not in schema  # minified for argv
+
+
+def test_off_value_disables_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "0")
+    assert invoke_mod._worker_output_schema() is None
+
+
+def test_schema_constrained_invocation_adds_flags_and_unwraps_object(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    seen: dict[str, object] = {}
+    # --json-schema makes the inner `result` a structured object; we re-serialize
+    # it so parse_worker_report sees a JSON object on stdout either way.
+    inner = {"result": {}, "decisions": [], "anomalies": "ok"}
+    envelope = json.dumps({"type": "result", "result": inner})
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _json_envelope_run(seen, envelope))
+
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"), cwd=tmp_path
+    )
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--json-schema" in argv
+    assert "--output-format" in argv and "json" in argv
+    assert json.loads(result.output) == inner
+
+
+def test_schema_constrained_unwraps_string_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    seen: dict[str, object] = {}
+    inner = '{"result": {}, "decisions": [], "anomalies": "x"}'
+    envelope = json.dumps({"type": "result", "result": inner})
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _json_envelope_run(seen, envelope))
+
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"), cwd=tmp_path
+    )
+    assert result.output == inner

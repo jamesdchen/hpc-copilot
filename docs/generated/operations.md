@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**71 operations total**: 64 primitive atoms + 7 workflow atoms.
+**74 operations total**: 67 primitive atoms + 7 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (34)
+## `query` (37)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -29,10 +29,13 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-status`](../primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `hpc_agent.meta.campaign.atoms.status.campaign_status` | — | — |
 | [`capabilities`](../primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities [--full]` | `hpc_agent._kernel.extension.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
 | [`classify-axis-easy`](../primitives/classify-axis-easy.md) | ✓ | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` | `hpc_agent.incorporation.classify_axis_easy.classify_axis_easy` | — | — |
+| [`classify-campaign-path`](../primitives/classify-campaign-path.md) | ✓ | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` | `hpc_agent.incorporation.classify_campaign_path.classify_campaign_path` | — | — |
 | [`clusters-describe`](../primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `hpc_agent.ops.clusters.describe.describe_cluster` | — | `hpc_agent/schemas/clusters_describe.output.json` |
 | [`clusters-list`](../primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `hpc_agent.ops.clusters.list.list_clusters` | — | `hpc_agent/schemas/clusters_list.output.json` |
 | [`compute-run-id`](../primitives/compute-run-id.md) | ✓ | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` | `hpc_agent.incorporation.build.compute_run_id.compute_run_id` | — | — |
+| [`decide-concurrency`](../primitives/decide-concurrency.md) | ✓ | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` | `hpc_agent.meta.campaign.atoms.decide_concurrency.decide_concurrency` | — | — |
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.ops.monitor.arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |
+| [`decide-partial-handling`](../primitives/decide-partial-handling.md) | ✓ | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` | `hpc_agent.ops.aggregate.decide_partial_handling.decide_partial_handling` | — | — |
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `hpc_agent.cli.setup.describe` | — | — |
 | [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
 | [`discover-reducers`](../primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_reducers` | — | — |

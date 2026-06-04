@@ -18,14 +18,14 @@ Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteratio
 Two fields on the worker report carry observations back to the caller — they are NOT interchangeable:
 
 - **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **campaign** workflow there are exactly six allowed `point` IDs — any other value is rejected by `parse_worker_report`:
-  - `path` (manual grid vs strategy-driven)
+  - `path` (backed by `classify-campaign-path` — manual grid vs strategy-driven)
   - `stochastic_marker` (backed by `validate-stochastic-marker`)
   - `decide` (backed by `campaign-advance`)
   - `convergence` (backed by `campaign-converged`)
   - `budget` (backed by `campaign-budget`)
-  - `concurrency` (how many iterations in flight)
+  - `concurrency` (backed by `decide-concurrency` — how many iterations in flight)
 
-  Each entry is `{point, outcome, why}` — `outcome` is a short tag (e.g. `missing`, `converged`, `exhausted`), `why` is a free-form one-liner.
+  Each entry is `{point, outcome, why, chosen?, rejected?}` — `outcome` is a short tag (e.g. `missing`, `converged`, `exhausted`). At a **judgement** point (a genuine control-flow branch the deterministic layer could not decide for you — here `path`, `decide`, and `concurrency`), `why` is **required** (`parse_worker_report` rejects an empty one), and you should set `chosen` (the branch taken) and `rejected` (the alternatives you weighed and discarded). At a deterministic point `why` is a free-form one-liner.
 
 - **`anomalies`** is a **free-form multi-line string** for everything else: the finding `code`, the colliding iteration's `cmd_sha`, a `suggested_fix`, raw evidence — anything that isn't one of the six points.
 
@@ -58,6 +58,8 @@ Closed-loop campaigns split along whether `tasks.py` chooses parameters by hand 
 
 - **Path A — manual params**: `tasks.py` enumerates a fixed grid; iteration N submits exactly the entries the user specified. Use when the experimenter knows the search space upfront (small grid, walk-forward windows, ablations).
 - **Path B — strategy-driven**: `tasks.py` imports Optuna / RandomSearch / a custom optimizer; calls `prior(experiment_dir, campaign_id)` to read previous iterations' metrics, calls `study.tell(...)` for each one, then `study.ask()` for the next batch. Use when the search space is large and the experimenter wants adaptive sampling.
+
+**Don't infer the path by hand — call [classify-campaign-path](../../docs/primitives/classify-campaign-path.md):** `hpc-agent classify-campaign-path --source-path .hpc/tasks.py` AST-scans for optimizer imports + ask/tell/`prior` calls and returns `{path, decided_by, signals, supports_async_concurrency, candidates}`. On `decided_by="code"` (`path` = `strategy` or `manual`) branch on `path` directly — the deterministic layer resolved it. Only on `decided_by="judgement"` (`path="unclassifiable"`: tasks.py didn't parse, or a custom optimizer the scan doesn't recognize) do you decide between the `candidates` yourself, recording a `path` decision with `chosen`/`rejected`/`why`.
 
 The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `hpc_agent.models.mapreduce.reduce.history.prior`).
 
@@ -103,7 +105,7 @@ Per iteration, three workflow-atom invocations:
 
 Three CLI calls per iteration, all emitting the same JSON envelope shape. The same loop runs identically under Claude Code, cron, or any external orchestrator because composition is at the CLI-atom level.
 
-Concurrency is opt-in: invoke `submit-flow` again before the previous iteration's `monitor-flow` returns if you want K iterations in flight (Optuna's `constant_liar=True` is built for this). Default to sequential when in doubt.
+Concurrency is opt-in: invoke `submit-flow` again before the previous iteration's `monitor-flow` returns if you want K iterations in flight (Optuna's `constant_liar=True` is built for this). **Don't reason this from scratch — call [decide-concurrency](../../docs/primitives/decide-concurrency.md):** pass `--supports-async` (from `classify-campaign-path`'s `supports_async_concurrency`), `--remaining-jobs` (from `campaign-budget`'s `remaining.max_jobs`), and `--in-flight`. On `decided_by="code"` it resolved `sequential` (no async support, or no headroom) — follow it. On `decided_by="judgement"` it computed the safe `max_in_flight` bound and the only open choice is *how aggressive* within it: pick K ∈ [1, `max_in_flight`] and record a `concurrency` decision with `chosen`/`rejected`/`why`. Default to sequential when in doubt.
 
 For headless overnight runs, do not hand-write a loop script. Wrap the driver in a recurring trigger (e.g. `/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps`) — each tick advances exactly one step off the on-disk `delegate` block, and `tasks.total() == 0` ends the campaign automatically (the driver finds nothing in flight and emits a `submit` hint with no work).
 

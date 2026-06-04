@@ -171,6 +171,18 @@ class RunRecord:
     # to run to terminal and only then enters this hold — there is no
     # live-freeze state by design.
     pending_verdict: dict = dataclasses.field(default_factory=dict)
+    # Append-only audit log of judgement verdicts enacted on this run (#234).
+    # Each entry records the control-flow branch a non-deterministic decision
+    # took AND why — the rationale the deterministic resolver could not supply.
+    # Written by ``clear_pending_verdict`` as the hold is released (which resets
+    # ``pending_verdict`` to {}, otherwise discarding the reasoning), so the
+    # *why* survives enactment. Entry shape is caller-assembled to keep this
+    # layer pure I/O (no _wire import) — typically
+    # ``{decided_by, chosen, rejected, why, applied_at}`` — with ``applied_at``
+    # auto-stamped when omitted. Feeds the audit trail ("why did this campaign
+    # take branch X") and the ``source="history"`` recall input the resolver
+    # consults before re-escalating the same fingerprint. Never cleared.
+    verdict_history: list[dict] = dataclasses.field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

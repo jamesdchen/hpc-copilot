@@ -14,6 +14,7 @@ preamble).
 | `HPC_MAX_RUNS` | `500` | Max per-experiment sidecars retained before oldest-by-mtime eviction (`hpc_agent.state.runs`). |
 | `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.models.mapreduce.reduce.history.prior(...)`. |
 | `HPC_TELEMETRY_SINK` | `none` | One of `none` / `stderr-jsonl` / `monitor-jsonl`. Routes `hpc_agent._kernel.extension.telemetry.record` events. |
+| `HPC_AGENT_WORKER_JSON_SCHEMA` | (unset) | Set to `1`/`true` to spawn the delegated `claude -p` worker with `--json-schema` (the WorkerReport schema), constraining the worker's final report at **decode time** so malformed JSON can't be emitted — the structural complement to `parse_worker_report`'s cross-field checks (`hpc_agent._kernel.lifecycle.invoke`). Off by default until a live `claude -p --json-schema` run is validated against the `--bare` agent loop; when off, the worker uses the plain text transport. Making it the default is tracked in [#269](https://github.com/jamesdchen/hpc-agent/issues/269). |
 
 ## SSH / rsync transport
 

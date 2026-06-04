@@ -184,15 +184,38 @@ def mark_pending_verdict(
     return update_run_status(experiment_dir, run_id, pending_verdict=dict(escalation))
 
 
-def clear_pending_verdict(experiment_dir: Path, run_id: str) -> RunRecord:
+def clear_pending_verdict(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    verdict: dict[str, Any] | None = None,
+) -> RunRecord:
     """Release a held run once its verdict has been applied (#231/#234).
 
     Clears ``pending_verdict`` back to ``{}``. Idempotent — clearing a run
     that is not held is a harmless no-op rewrite. The caller is expected to
     have already enacted the verdict (typically a ``resubmit_flow`` with the
     chosen overrides) before releasing the hold.
+
+    When *verdict* is supplied it is appended — in the same locked write that
+    releases the hold — to the run's append-only ``verdict_history``, so the
+    rationale for the enacted control-flow branch survives the
+    ``pending_verdict`` reset (which would otherwise discard it). This is the
+    durable record of *why* a non-deterministic decision took the branch it
+    did: the audit trail, and the ``source="history"`` recall input the
+    deterministic resolver consults before re-escalating the same fingerprint.
+    An ``applied_at`` timestamp is auto-stamped when the entry omits one.
     """
-    return update_run_status(experiment_dir, run_id, pending_verdict={})
+    from hpc_agent.infra.time import utcnow_iso
+
+    def _mutate(record: RunRecord) -> None:
+        record.pending_verdict = {}
+        if verdict:
+            entry = dict(verdict)
+            entry.setdefault("applied_at", utcnow_iso())
+            record.verdict_history = [*record.verdict_history, entry]
+
+    return update_run_record(experiment_dir, run_id, _mutate)
 
 
 def is_held(record: RunRecord) -> bool:

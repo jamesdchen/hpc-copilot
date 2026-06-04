@@ -94,10 +94,13 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities [--full]` |
 | [classify-axis-easy](classify-axis-easy.md) | yes | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` |
+| [classify-campaign-path](classify-campaign-path.md) | yes | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [compute-run-id](compute-run-id.md) | yes | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` |
+| [decide-concurrency](decide-concurrency.md) | yes | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
+| [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name>` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` |

@@ -201,3 +201,31 @@ def test_parse_worker_report_rejects_an_unknown_decision_point() -> None:
 def test_parse_worker_report_rejects_missing_json() -> None:
     with pytest.raises(SpawnContractError, match="no JSON"):
         parse_worker_report("just prose, no object at all", workflow="submit")
+
+
+def test_parse_worker_report_requires_why_at_a_judgement_point() -> None:
+    # `axis_class` is the submit workflow's judgement point — a genuine
+    # control-flow branch. Reporting it with an empty `why` is rejected.
+    out = '{"result": {}, "decisions": [{"point": "axis_class", "outcome": "no_series"}]}'
+    with pytest.raises(SpawnContractError, match="judgement decision point"):
+        parse_worker_report(out, workflow="submit")
+
+
+def test_parse_worker_report_accepts_judgement_point_with_why_and_choice() -> None:
+    out = (
+        '{"result": {}, "decisions": [{"point": "axis_class", '
+        '"outcome": "no_series", "why": "AST shows independent rows", '
+        '"chosen": "cartesian", "rejected": ["date_window"]}]}'
+    )
+    report = parse_worker_report(out, workflow="submit")
+    decision = report.decisions[0]
+    assert decision.chosen == "cartesian"
+    assert decision.rejected == ["date_window"]
+
+
+def test_parse_worker_report_exempts_deterministic_points_from_why() -> None:
+    # `canary` is a deterministic (code) gate — its backing primitive's
+    # envelope is the record, so an empty `why` is allowed.
+    out = '{"result": {}, "decisions": [{"point": "canary", "outcome": "passed"}]}'
+    report = parse_worker_report(out, workflow="submit")
+    assert report.decisions[0].why == ""

@@ -188,6 +188,9 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     ``cron_create_args`` to the ``CronCreate`` tool to schedule the
     next monitor tick.
     """
+    from hpc_agent._kernel.decision import decide
+    from hpc_agent._wire.fixtures.escalation import CandidateAction
+
     run_id = spec.run_id
     summary = spec.summary
     total_tasks = spec.total_tasks
@@ -197,7 +200,6 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     pace_unstable = bool(spec.pace_unstable)
     queue_wait_sec = spec.queue_wait_sec
 
-    # Terminal — no arming, cancel any prior cron.
     complete = int(summary.get("complete") or 0)
     failed = int(summary.get("failed") or 0)
     running = int(summary.get("running") or 0)
@@ -206,38 +208,47 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     # would loop forever (the canary equivalent of this trap was fixed
     # in v1 BUG-2-17). Treat as immediately terminal so the slash
     # command surfaces a "no tasks" envelope and exits.
-    if int(total_tasks) <= 0:
-        decision = MonitorArm(
-            arm="none",
-            cadence_sec=0,
-            reason="no_tasks",
-            schedule=None,
-            cron_create_args=None,
-        )
-        return decision.to_envelope_data()
-    is_terminal = (complete == int(total_tasks)) or (failed > 0 and running == 0 and pending == 0)
-    if is_terminal:
-        decision = MonitorArm(
-            arm="none",
-            cadence_sec=0,
-            reason=("complete" if complete == total_tasks else "failed_no_running"),
-            schedule=None,
-            cron_create_args=None,
-        )
-        return decision.to_envelope_data()
+    is_terminal = int(total_tasks) > 0 and (
+        (complete == int(total_tasks)) or (failed > 0 and running == 0 and pending == 0)
+    )
 
-    # User invoked via /loop — they own the cadence; we skip CronCreate.
-    if user_invoked_via_loop:
-        decision = MonitorArm(
-            arm="loop",
-            cadence_sec=0,
-            reason="user_invoked_via_loop",
-            schedule=None,
-            cron_create_args=None,
-        )
-        return decision.to_envelope_data()
+    def _arm(mode: str, arm_obj: MonitorArm) -> CandidateAction:
+        # The full MonitorArm envelope rides in params; the arm mode is the
+        # branch the kernel selected.
+        return CandidateAction(action=mode, params=arm_obj.to_envelope_data())
 
-    # Adaptive cron arming.
+    # The arm-mode choice is a total deterministic ladder (none / loop / cron);
+    # route it through the shared kernel so the status 'monitor_cadence' point
+    # is a uniform Decision. Adaptive-cron is the default catch-all branch.
+    def _no_tasks(_: Any) -> CandidateAction | None:
+        if int(total_tasks) <= 0:
+            return _arm(
+                "none",
+                MonitorArm("none", 0, "no_tasks", None, None),
+            )
+        return None
+
+    def _terminal(_: Any) -> CandidateAction | None:
+        if is_terminal:
+            return _arm(
+                "none",
+                MonitorArm(
+                    "none",
+                    0,
+                    "complete" if complete == total_tasks else "failed_no_running",
+                    None,
+                    None,
+                ),
+            )
+        return None
+
+    def _loop(_: Any) -> CandidateAction | None:
+        # User invoked via /loop — they own the cadence; we skip CronCreate.
+        if user_invoked_via_loop:
+            return _arm("loop", MonitorArm("loop", 0, "user_invoked_via_loop", None, None))
+        return None
+
+    # Adaptive cron arming — the default branch when no early exit fired.
     label, cadence_sec = _classify_state(
         summary=summary,
         total_tasks=int(total_tasks),
@@ -246,15 +257,26 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
         queue_wait_sec=queue_wait_sec,
     )
     schedule = _seconds_to_cron(cadence_sec)
-    decision = MonitorArm(
-        arm="cron",
-        cadence_sec=cadence_sec,
-        reason=label,
-        schedule=schedule,
-        cron_create_args={
-            "schedule": schedule,
-            "prompt": invocation_argv,
-            "reason": f"adaptive {label} for run_id={run_id}",
-        },
+    cron_branch = _arm(
+        "cron",
+        MonitorArm(
+            arm="cron",
+            cadence_sec=cadence_sec,
+            reason=label,
+            schedule=schedule,
+            cron_create_args={
+                "schedule": schedule,
+                "prompt": invocation_argv,
+                "reason": f"adaptive {label} for run_id={run_id}",
+            },
+        ),
     )
-    return decision.to_envelope_data()
+
+    decision = decide(
+        "monitor_cadence",
+        spec,
+        rules=[_no_tasks, _terminal, _loop],
+        default=cron_branch,
+    )
+    assert decision.chosen is not None  # a total ladder always resolves
+    return decision.chosen.params

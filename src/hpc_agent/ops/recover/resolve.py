@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from hpc_agent._kernel.decision import Decision, decide, tally
 from hpc_agent._wire.fixtures.escalation import (
     CandidateAction,
     Escalation,
@@ -78,6 +79,11 @@ _WIDTH_KEYS: tuple[str, ...] = (
 )
 
 
+# The decision point id this resolver decides, on the wire seam shared with
+# DECISION_POINTS / WorkerDecision / the journal's verdict_history.
+_POINT = "recover"
+
+
 @dataclass(frozen=True)
 class Resolution:
     """The resolver's verdict for one failure cluster.
@@ -87,12 +93,32 @@ class Resolution:
     no escalation. ``decided_by="judgement"`` carries an :class:`Escalation`
     block to hand off to the agentic layer (and no ``action`` — the verdict
     picks one of the candidates). The two are mutually exclusive.
+
+    This is the domain view over the kernel's :class:`Decision`: the recovery
+    layer wants ``action`` as a flat ``suggested_fix`` dict for resubmit
+    overrides, so :meth:`from_decision` flattens the chosen
+    :class:`CandidateAction` (``{action, **params}``). Everything else —
+    the deterministic-vs-escalate control flow, the ``decided_by`` split,
+    the tally — is the kernel's.
     """
 
     decided_by: Literal["code", "judgement"]
     action: dict[str, Any] | None = None
     escalation: Escalation | None = None
     reason: str = ""
+
+    @classmethod
+    def from_decision(cls, decision: Decision[Any]) -> Resolution:
+        """Adapt a kernel :class:`Decision` into the recovery-domain view."""
+        action: dict[str, Any] | None = None
+        if decision.chosen is not None:
+            action = {"action": decision.chosen.action, **decision.chosen.params}
+        return cls(
+            decided_by=decision.decided_by,
+            action=action,
+            escalation=decision.escalation,
+            reason=decision.reason,
+        )
 
 
 def _degree(resource_spec: dict[str, Any] | None, keys: Iterable[str]) -> int | None:
@@ -138,21 +164,84 @@ def _gpu_oom_action(resource_spec: dict[str, Any] | None, *, first_attempt: bool
     return {"action": "increase-mem-per-gpu", "factor": 1.5}
 
 
-def _escalate(
+def _error_class(features: FailureFeatures) -> str:
+    return str(features.error_class) if features.error_class is not None else "unknown"
+
+
+def _deterministic_fix(
+    error_class: str, resource_spec: dict[str, Any] | None, *, first_attempt: bool
+) -> tuple[dict[str, Any], str]:
+    """The context-refined ``(suggested_fix, strategy)`` for a deterministic class."""
+    if error_class == "gpu_oom":
+        action = _gpu_oom_action(resource_spec, first_attempt=first_attempt)
+        return action, str(action["action"])
+    if error_class == "system_oom":
+        return {"action": "increase-mem", "factor": 1.5}, "increase-mem"
+    if error_class == "walltime":
+        # first_attempt = structural underestimate (double it); after progress
+        # = a long run that nearly finished (a smaller bump usually suffices).
+        factor = 2.0 if first_attempt else 1.5
+        return {"action": "increase-walltime", "factor": factor}, "increase-walltime"
+    # node_failure
+    return {"action": "retry-on-different-node"}, "retry-on-different-node"
+
+
+def _code_rule(
+    features: FailureFeatures, *, first_attempt: bool, max_code_attempts: int
+) -> CandidateAction | None:
+    """The deterministic rule: the context-refined fix, or ``None`` to abstain.
+
+    Abstains (→ escalation) for inherently-ambiguous classes, classes with no
+    rule, and any deterministic fix already exhausted this episode — the
+    #234 fall-through that stops looping a fix that isn't working.
+    """
+    error_class = _error_class(features)
+    if error_class in _ALWAYS_JUDGEMENT or error_class not in _DETERMINISTIC:
+        return None
+    action, strategy = _deterministic_fix(
+        error_class, features.resource_spec, first_attempt=first_attempt
+    )
+    if _strategy_exhausted(features, strategy, cap=max_code_attempts):
+        return None
+    params = {k: v for k, v in action.items() if k != "action"}
+    return CandidateAction(
+        action=strategy, params=params, source="policy", rationale=f"{error_class}: {strategy}"
+    )
+
+
+def _abstain(
     features: FailureFeatures,
     *,
-    reason: str,
-    candidates: list[CandidateAction],
     cluster: EscalationCluster | None,
-) -> Resolution:
-    block = Escalation(
+    first_attempt: bool,
+) -> Escalation:
+    """Build the escalation for a cluster no deterministic rule resolved.
+
+    Three shapes, keyed on *why* the rules abstained: an inherently-ambiguous
+    class (the named #234 Tier-2 cases), a class with no rule (the unknown
+    escape hatch), or a deterministic fix already exhausted this episode.
+    """
+    error_class = _error_class(features)
+    if error_class in _ALWAYS_JUDGEMENT:
+        reason = f"{error_class}: ambiguous, needs a decision"
+        candidates = _judgement_candidates(error_class)
+    elif error_class not in _DETERMINISTIC:
+        reason = f"{error_class}: no deterministic rule"
+        candidates = [CandidateAction(action="user-debug", source="catalog")]
+    else:
+        # A deterministic class that abstained → its fix was exhausted.
+        _, strategy = _deterministic_fix(
+            error_class, features.resource_spec, first_attempt=first_attempt
+        )
+        reason = f"{error_class}: deterministic fix '{strategy}' exhausted this episode"
+        candidates = [CandidateAction(action=strategy, source="policy", rationale="already tried")]
+    return Escalation(
         decided_by="judgement",
         reason=reason,
         failure_features=features,
         candidate_actions=candidates,
         cluster=cluster,
     )
-    return Resolution(decided_by="judgement", escalation=block, reason=reason)
 
 
 def resolve(
@@ -171,63 +260,25 @@ def resolve(
 
     *max_code_attempts* caps deterministic retries per episode — once spent,
     the cluster escalates rather than looping the same fix.
+
+    The recovery rules + the abstain candidates are this module's domain; the
+    try-rules-then-escalate control flow is the shared
+    :func:`hpc_agent._kernel.decision.decide` kernel.
     """
-    error_class = str(features.error_class) if features.error_class is not None else "unknown"
-    resource_spec = features.resource_spec
     first_attempt = bool(
         features.temporal_context is not None and features.temporal_context.phase == "first_attempt"
     )
-
-    # Inherently-ambiguous classes go straight to judgement.
-    if error_class in _ALWAYS_JUDGEMENT:
-        return _escalate(
-            features,
-            reason=f"{error_class}: ambiguous, needs a decision",
-            candidates=_judgement_candidates(error_class),
-            cluster=cluster,
-        )
-
-    if error_class not in _DETERMINISTIC:
-        # Anything the resolver has no rule for (a class outside both sets) is
-        # treated as the unknown escape hatch — escalate.
-        return _escalate(
-            features,
-            reason=f"{error_class}: no deterministic rule",
-            candidates=[CandidateAction(action="user-debug", source="catalog")],
-            cluster=cluster,
-        )
-
-    # Deterministic classes — compute the context-refined action.
-    if error_class == "gpu_oom":
-        action = _gpu_oom_action(resource_spec, first_attempt=first_attempt)
-        strategy = str(action["action"])
-    elif error_class == "system_oom":
-        action = {"action": "increase-mem", "factor": 1.5}
-        strategy = "increase-mem"
-    elif error_class == "walltime":
-        # first_attempt = structural underestimate (double it); after progress
-        # = a long run that nearly finished (a smaller bump usually suffices).
-        factor = 2.0 if first_attempt else 1.5
-        action = {"action": "increase-walltime", "factor": factor}
-        strategy = "increase-walltime"
-    else:  # node_failure
-        action = {"action": "retry-on-different-node"}
-        strategy = "retry-on-different-node"
-
-    # If this exact deterministic strategy was already tried this episode (or
-    # the attempt budget is spent), the fix isn't working — escalate instead
-    # of looping it. This fall-through to judgement is the #234 health signal.
-    if _strategy_exhausted(features, strategy, cap=max_code_attempts):
-        return _escalate(
-            features,
-            reason=f"{error_class}: deterministic fix '{strategy}' exhausted this episode",
-            candidates=[
-                CandidateAction(action=strategy, source="policy", rationale="already tried")
-            ],
-            cluster=cluster,
-        )
-
-    return Resolution(decided_by="code", action=action, reason=f"{error_class}: {strategy}")
+    decision = decide(
+        _POINT,
+        features,
+        rules=[
+            lambda f: _code_rule(
+                f, first_attempt=first_attempt, max_code_attempts=max_code_attempts
+            )
+        ],
+        on_abstain=lambda f: _abstain(f, cluster=cluster, first_attempt=first_attempt),
+    )
+    return Resolution.from_decision(decision)
 
 
 def _judgement_candidates(error_class: str) -> list[CandidateAction]:
@@ -254,9 +305,8 @@ def tally_decisions(resolutions: Iterable[Resolution]) -> dict[str, int]:
 
     A signature that repeatedly lands in ``judgement`` is the trigger to
     promote a context-keyed rule for it (manually — no automatic codegen).
-    Returns ``{"code": n, "judgement": m}``.
+    Returns ``{"code": n, "judgement": m}``. Delegates to the kernel
+    :func:`hpc_agent._kernel.decision.tally` — a :class:`Resolution` exposes
+    the same ``decided_by`` the kernel counts.
     """
-    counts = {"code": 0, "judgement": 0}
-    for r in resolutions:
-        counts[r.decided_by] += 1
-    return counts
+    return tally(resolutions)

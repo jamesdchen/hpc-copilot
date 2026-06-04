@@ -129,17 +129,36 @@ DECISION_POINTS: dict[str, tuple[DecisionPoint, ...]] = {
     ),
     "aggregate": (
         DecisionPoint("mode", "selection", "code", "aggregate-flow"),
-        DecisionPoint("partial_handling", "branch", "judgement", None),
+        # 'partial_handling' switches on observable evidence via
+        # decide-partial-handling: retry resolves decided_by=code while
+        # combiner retries remain; once exhausted, the accept-partial-vs-retry
+        # acceptability call escalates (the residue). Stays tagged judgement —
+        # that escalating residue is the worst case it can reach.
+        DecisionPoint("partial_handling", "branch", "judgement", "decide-partial-handling"),
         DecisionPoint("completeness", "gate", "code", "verify-aggregation-complete"),
-        DecisionPoint("reduce_locality", "branch", "judgement", None),
+        # 'reduce_locality' is decided deterministically by aggregate-flow's
+        # mode=auto routing (cluster-reduce iff aggregate_cmd is set, else
+        # combiner-only) — reduce where the data sits. It is not an LLM
+        # judgement; the override is a caller spec field, not a branch the
+        # worker reasons. Demoted judgement→code (the prior tag was inert).
+        DecisionPoint("reduce_locality", "branch", "code", "aggregate-flow"),
     ),
     "campaign": (
-        DecisionPoint("path", "selection", "judgement", None),
+        # 'path' (manual grid vs strategy-driven) is a structural fact about
+        # tasks.py — classify-campaign-path resolves the common cases by AST
+        # scan (decided_by=code) and escalates only the unparseable/unknown
+        # tail, mirroring axis_class→classify-axis. Stays tagged judgement
+        # because that escalating tail is the worst case it can reach.
+        DecisionPoint("path", "selection", "judgement", "classify-campaign-path"),
         DecisionPoint("stochastic_marker", "gate", "code", "validate-stochastic-marker"),
         DecisionPoint("decide", "plan", "judgement", "campaign-advance"),
         DecisionPoint("convergence", "gate", "code", "campaign-converged"),
         DecisionPoint("budget", "gate", "code", "campaign-budget"),
-        DecisionPoint("concurrency", "selection", "judgement", None),
+        # 'concurrency' switches on observable evidence via decide-concurrency:
+        # sequential resolves decided_by=code (no async support or no budget
+        # headroom); only how-aggressive-within-the-safe-bound escalates (the
+        # risk-appetite residue). Stays tagged judgement for that residue.
+        DecisionPoint("concurrency", "selection", "judgement", "decide-concurrency"),
     ),
 }
 
@@ -147,11 +166,36 @@ DECISION_POINTS: dict[str, tuple[DecisionPoint, ...]] = {
 # ── report side ──────────────────────────────────────────────────────────────
 
 
+def judgement_point_ids(workflow: str) -> frozenset[str]:
+    """The ids of *workflow*'s ``decided_by="judgement"`` decision points.
+
+    These are the genuine breaks in control flow — the branches a worker
+    *chose* rather than the deterministic ``code``/``plan`` points whose
+    outcome a backing primitive's envelope already records on disk. The
+    judgement set is what :func:`parse_worker_report` requires a non-empty
+    ``why`` for: a control-flow branch taken with no recorded rationale is
+    the bug worth catching, not a state worth silently accepting.
+    """
+    return frozenset(
+        point.id for point in DECISION_POINTS.get(workflow, ()) if point.decided_by == "judgement"
+    )
+
+
 class WorkerDecision(BaseModel):
     """One decision a delegated worker reports making.
 
     ``point`` must be a :class:`DecisionPoint` id for the worker's
     workflow — cross-checked by ``parse_worker_report``.
+
+    At a ``decided_by="judgement"`` point — a genuine break in the control
+    flow, not a parameter the deterministic layer computed — the rationale
+    is the thing worth capturing (see :class:`DecisionPoint`): ``why`` is
+    **required** (``parse_worker_report`` rejects an empty one at a
+    judgement point), ``chosen`` names the branch taken, and ``rejected``
+    lists the alternatives weighed and discarded — so the record is the
+    *choice*, not merely an outcome tag. At a deterministic point these
+    stay optional; the backing primitive's envelope is the authoritative
+    record there.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -159,6 +203,8 @@ class WorkerDecision(BaseModel):
     point: str
     outcome: str
     why: str = ""
+    chosen: str | None = None
+    rejected: list[str] = []
 
 
 class WorkerReport(BaseModel):

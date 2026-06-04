@@ -110,63 +110,88 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     if experiment_dir is None:
         raise errors.SpecInvalid("experiment_dir is required")
 
+    from hpc_agent._kernel.decision import decide
+    from hpc_agent._wire.fixtures.escalation import CandidateAction
     from hpc_agent.state.index import find_in_flight_runs
     from hpc_agent.state.runs import find_existing_runs
 
-    # Priority 0 — in-flight runs.
-    try:
-        in_flight = find_in_flight_runs(experiment_dir)
-    except (OSError, ValueError):
-        in_flight = []
-    if in_flight:
+    # The Setup cascade is a total deterministic priority ladder — express each
+    # tier as an ordered kernel rule so the submit 'entry_path' point routes
+    # through the same evaluator as every other decision point. Each branch
+    # carries its full payload (priority + candidates + recommended run) in the
+    # candidate's ``params``; the envelope is assembled from the chosen branch.
+    # 'fresh' is the default catch-all (this point never escalates). The rules
+    # short-circuit exactly like the prior if-ladder: a later tier's lookup runs
+    # only when every earlier tier abstained.
+    def _monitor(d: Path) -> CandidateAction | None:
+        try:
+            in_flight = find_in_flight_runs(d)
+        except (OSError, ValueError):
+            in_flight = []
+        if not in_flight:
+            return None
         candidates = [_summarize_record(r) for r in in_flight]
-        return {
-            "priority": 0,
-            "action": "monitor",
-            "recommended_run_id": candidates[0]["run_id"],
-            "candidates": candidates,
-            "reason": (
+        return CandidateAction(
+            action="monitor",
+            params={
+                "priority": 0,
+                "recommended_run_id": candidates[0]["run_id"],
+                "candidates": candidates,
+            },
+            rationale=(
                 f"{len(in_flight)} in-flight run(s) on the journal — "
                 "switch to /monitor-hpc rather than re-submitting."
             ),
-        }
+        )
 
-    # Priority 1 — per-experiment sidecars (any prior submit).
-    sidecars = find_existing_runs(experiment_dir)
-    if sidecars:
+    def _reuse(d: Path) -> CandidateAction | None:
+        sidecars = find_existing_runs(d)
+        if not sidecars:
+            return None
         candidates = [_summarize_sidecar(p) for p in sidecars[:10]]
-        return {
-            "priority": 1,
-            "action": "reuse",
-            "recommended_run_id": candidates[0]["run_id"],
-            "candidates": candidates,
-            "reason": (
+        return CandidateAction(
+            action="reuse",
+            params={
+                "priority": 1,
+                "recommended_run_id": candidates[0]["run_id"],
+                "candidates": candidates,
+            },
+            rationale=(
                 f"{len(sidecars)} previous run(s) on disk — offer the user "
                 'one of the recent (profile, cluster) pairs as "same as last".'
             ),
-        }
+        )
 
-    # Priority 2 — tasks.py exists, no run history yet.
-    tasks_py = experiment_dir / ".hpc" / "tasks.py"
-    if tasks_py.is_file():
-        return {
-            "priority": 2,
-            "action": "interview",
-            "recommended_run_id": None,
-            "candidates": [],
-            "reason": (
+    def _interview(d: Path) -> CandidateAction | None:
+        if not (d / ".hpc" / "tasks.py").is_file():
+            return None
+        return CandidateAction(
+            action="interview",
+            params={"priority": 2, "recommended_run_id": None, "candidates": []},
+            rationale=(
                 ".hpc/tasks.py exists but no run history — skip executor "
                 "discovery and the axes interview; jump to the planner."
             ),
-        }
+        )
 
-    # Priority 3 — fresh experiment.
+    decision = decide(
+        "entry_path",
+        experiment_dir,
+        rules=[_monitor, _reuse, _interview],
+        default=CandidateAction(
+            action="fresh",
+            params={"priority": 3, "recommended_run_id": None, "candidates": []},
+            rationale="no in-flight runs, no sidecars, no tasks.py — full interview.",
+        ),
+    )
+    chosen = decision.chosen
+    assert chosen is not None  # a total ladder always resolves to a branch
     return {
-        "priority": 3,
-        "action": "fresh",
-        "recommended_run_id": None,
-        "candidates": [],
-        "reason": "no in-flight runs, no sidecars, no tasks.py — full interview.",
+        "priority": chosen.params["priority"],
+        "action": chosen.action,
+        "recommended_run_id": chosen.params["recommended_run_id"],
+        "candidates": chosen.params["candidates"],
+        "reason": decision.reason,
     }
 
 

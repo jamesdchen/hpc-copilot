@@ -28,7 +28,7 @@ Two fields on the worker report carry observations back to the caller — they a
   - `preflight` (backed by `check-preflight`)
   - `validate_campaign` (backed by `validate-campaign`)
 
-  Each entry is `{point, outcome, why}` — `outcome` is a short tag describing what happened at that point (e.g. `unclassified`, `setup_required`, `fail`, `dispatcher_failed`), `why` is a free-form one-liner.
+  Each entry is `{point, outcome, why, chosen?, rejected?}` — `outcome` is a short tag describing what happened at that point (e.g. `unclassified`, `setup_required`, `fail`, `dispatcher_failed`). At a **judgement** point (a genuine control-flow branch the deterministic layer could not decide for you — here `axis_class`), `why` is **required** (`parse_worker_report` rejects an empty one), and you should set `chosen` (the branch taken) and `rejected` (the alternatives you weighed and discarded). At a deterministic point `why` is a free-form one-liner.
 
 - **`anomalies`** is a **free-form multi-line string** for everything else: stop conditions that don't correspond to an enumerated point, magnitude warnings, deduped notices, raw `stderr` tails, held-job details, missing-flag callouts. Anything you'd want the caller to see that isn't one of the seven points goes here.
 

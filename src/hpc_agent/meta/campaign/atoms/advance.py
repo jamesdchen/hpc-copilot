@@ -86,6 +86,8 @@ def campaign_advance(
     Returns the underlying ``status``, ``converged``, and ``budget``
     payloads so the agent can drill in without a second CLI call.
     """
+    from hpc_agent._kernel.decision import decide
+    from hpc_agent._wire.fixtures.escalation import CandidateAction
     from hpc_agent.meta.campaign.atoms.budget import campaign_budget
     from hpc_agent.meta.campaign.atoms.converged import campaign_converged
     from hpc_agent.meta.campaign.atoms.status import campaign_status
@@ -110,28 +112,49 @@ def campaign_advance(
         plateau_mode=plateau_mode,
     )
 
-    if budget["exhausted"]:
-        decision = "stop_over_budget"
-        reason = budget["reason"]
-    elif status["in_flight"] > 0:
-        # In-flight runs must finish before a stop decision so we don't
-        # orphan cluster jobs the campaign can't keep tracking.
-        decision = "wait_in_flight"
-        reason = f"{status['in_flight']} run(s) still in flight"
-    elif converged["converged"]:
-        decision = "stop_converged"
-        reason = converged["reason"]
-    else:
-        decision = "continue"
-        reason = (
-            f"{status['iterations']} iteration(s) complete, no stop criterion met, "
-            "no in-flight runs"
-        )
+    # The decision precedence is a total deterministic ladder over the three
+    # computed payloads — express it as ordered kernel rules so the campaign
+    # 'decide' point routes through the same evaluator as every other decision
+    # point. The 'continue' catch-all is the default branch (this point never
+    # escalates: every input lands on one of the four outcomes).
+    evidence = {"status": status, "budget": budget, "converged": converged}
+
+    def _over_budget(e: dict[str, Any]) -> CandidateAction | None:
+        if e["budget"]["exhausted"]:
+            return CandidateAction(action="stop_over_budget", rationale=e["budget"]["reason"])
+        return None
+
+    def _wait_in_flight(e: dict[str, Any]) -> CandidateAction | None:
+        # In-flight runs must finish before a stop decision so we don't orphan
+        # cluster jobs the campaign can't keep tracking.
+        n = e["status"]["in_flight"]
+        if n > 0:
+            return CandidateAction(action="wait_in_flight", rationale=f"{n} run(s) still in flight")
+        return None
+
+    def _converged(e: dict[str, Any]) -> CandidateAction | None:
+        if e["converged"]["converged"]:
+            return CandidateAction(action="stop_converged", rationale=e["converged"]["reason"])
+        return None
+
+    outcome = decide(
+        "decide",
+        evidence,
+        rules=[_over_budget, _wait_in_flight, _converged],
+        default=CandidateAction(
+            action="continue",
+            rationale=(
+                f"{status['iterations']} iteration(s) complete, no stop criterion met, "
+                "no in-flight runs"
+            ),
+        ),
+    )
+    assert outcome.chosen is not None  # a total ladder always resolves to a branch
 
     return {
         "campaign_id": campaign_id,
-        "decision": decision,
-        "reason": reason,
+        "decision": outcome.chosen.action,
+        "reason": outcome.reason,
         "status": status,
         "converged": converged,
         "budget": budget,

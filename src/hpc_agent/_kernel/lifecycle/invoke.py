@@ -260,6 +260,39 @@ def _extract_cache_stats(envelope: dict[str, object]) -> dict[str, int] | None:
     return stats or None
 
 
+# Decode-time output constraint. When enabled (``HPC_AGENT_WORKER_JSON_SCHEMA``
+# truthy), the worker is spawned with claude's ``--json-schema`` so the CLI
+# constrains the agent's FINAL report to the WorkerReport schema at decode time
+# — the agent still runs its rsync / qsub / canary tool loop; only the terminal
+# message is schema-forced. This is the *structural* half of the contract;
+# ``parse_worker_report`` still enforces the cross-field invariants a schema
+# cannot express (a non-empty ``why`` at judgement points), so the two are
+# complementary, not substitutes. Off by default until a live ``claude -p
+# --json-schema`` run is validated against the ``--bare`` agent loop — flip the
+# env var to enable; the plain text transport is otherwise untouched. Making
+# this the default once validated is tracked in issue #269.
+_WORKER_JSON_SCHEMA_ENV = "HPC_AGENT_WORKER_JSON_SCHEMA"
+
+
+def _worker_output_schema() -> str | None:
+    """The WorkerReport JSON Schema (minified) for ``--json-schema``, or ``None``.
+
+    ``None`` when the decode-time constraint is disabled (the default) or the
+    schema resource can't be read — the worker then runs on the plain transport
+    and report validation falls back to :func:`parse_worker_report` alone.
+    """
+    flag = os.environ.get(_WORKER_JSON_SCHEMA_ENV, "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return None
+    try:
+        from importlib.resources import files as _files
+
+        text = (_files("hpc_agent.schemas") / "worker.output.json").read_text(encoding="utf-8")
+        return json.dumps(json.loads(text), separators=(",", ":"))
+    except (FileNotFoundError, ModuleNotFoundError, OSError, json.JSONDecodeError):
+        return None
+
+
 def _run_claude_worker(
     *,
     executable: str,
@@ -268,6 +301,7 @@ def _run_claude_worker(
     cwd: str,
     env: dict[str, str] | None = None,
     report_cache_stats: bool = False,
+    output_schema: str | None = None,
 ) -> InvocationResult:
     """Spawn ``claude -p`` with the worker prompt kept OFF the command line.
 
@@ -293,7 +327,12 @@ def _run_claude_worker(
     surface the cache token counts on :attr:`InvocationResult.cache_stats`.
     Off by default — the plain text transport is untouched.
     """
-    output_format_args = ["--output-format", "json"] if report_cache_stats else []
+    # ``--json-schema`` (decode-time constraint) requires the JSON result
+    # envelope, as does cache-stats reporting; either turns on ``--output-format
+    # json`` and the envelope-unwrap below.
+    use_json = report_cache_stats or output_schema is not None
+    json_args = ["--output-format", "json"] if use_json else []
+    schema_args = ["--json-schema", output_schema] if output_schema is not None else []
     with tempfile.TemporaryDirectory(prefix="hpc-agent-worker-prompt-") as prompt_dir:
         system_prompt_file = Path(prompt_dir) / "append_system_prompt.txt"
         system_prompt_file.write_text(prompt.cacheable_prefix, encoding="utf-8")
@@ -302,7 +341,8 @@ def _run_claude_worker(
                 executable,
                 "-p",
                 *mode_args,
-                *output_format_args,
+                *json_args,
+                *schema_args,
                 "--append-system-prompt-file",
                 str(system_prompt_file),
             ],
@@ -319,20 +359,27 @@ def _run_claude_worker(
         )
     output = proc.stdout
     cache_stats: dict[str, int] | None = None
-    if report_cache_stats:
+    if use_json:
         # Unwrap the JSON result envelope: the worker's report is the inner
-        # ``result`` text, and ``usage`` carries the cache token counts. A
-        # malformed/non-JSON stdout (a crash before the envelope) leaves the
-        # raw stdout as the output so the caller's report-parse still surfaces
-        # the worker's last words; cache_stats just stays None.
+        # ``result`` (a string on the plain path; a structured object when
+        # ``--json-schema`` constrained it — re-serialize so the caller's
+        # parse_worker_report sees a JSON object either way), and ``usage``
+        # carries the cache token counts. A malformed/non-JSON stdout (a crash
+        # before the envelope) leaves the raw stdout as the output so the
+        # caller's report-parse still surfaces the worker's last words;
+        # cache_stats just stays None.
         try:
             envelope = json.loads(proc.stdout)
         except json.JSONDecodeError:
             envelope = None
         if isinstance(envelope, dict):
-            cache_stats = _extract_cache_stats(envelope)
-            if isinstance(envelope.get("result"), str):
-                output = envelope["result"]
+            if report_cache_stats:
+                cache_stats = _extract_cache_stats(envelope)
+            result = envelope.get("result")
+            if isinstance(result, dict):
+                output = json.dumps(result)
+            elif isinstance(result, str):
+                output = result
     return InvocationResult(
         exit_code=proc.returncode,
         output=output,
@@ -392,6 +439,7 @@ class ClaudeCliInvoker:
             prompt=prompt,
             cwd=str(cwd),
             report_cache_stats=report_cache_stats,
+            output_schema=_worker_output_schema(),
         )
 
     def missing_credential_remediation(self) -> str | None:
@@ -474,6 +522,7 @@ class ClaudeCliOAuthInvoker:
                 cwd=clean_cwd,
                 env={**os.environ, "CLAUDE_CONFIG_DIR": config_dir},
                 report_cache_stats=report_cache_stats,
+                output_schema=_worker_output_schema(),
             )
 
     def missing_credential_remediation(self) -> str | None:

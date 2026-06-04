@@ -101,6 +101,55 @@ def test_clear_is_idempotent_on_unheld_run(tmp_path: Path) -> None:
     assert is_held(load_run(tmp_path, "r1")) is False
 
 
+def test_clear_without_verdict_leaves_history_empty(tmp_path: Path) -> None:
+    upsert_run(tmp_path, _record("r1", status="failed"))
+    mark_pending_verdict(tmp_path, "r1", escalation=_ESCALATION)
+    clear_pending_verdict(tmp_path, "r1")
+    assert load_run(tmp_path, "r1").verdict_history == []
+
+
+def test_clear_with_verdict_appends_durable_record(tmp_path: Path) -> None:
+    """The applied branch + its rationale survive the hold being released —
+    ``pending_verdict`` resets to {} but ``verdict_history`` keeps the why."""
+    upsert_run(tmp_path, _record("r1", status="failed"))
+    mark_pending_verdict(tmp_path, "r1", escalation=_ESCALATION)
+    clear_pending_verdict(
+        tmp_path,
+        "r1",
+        verdict={
+            "decided_by": "judgement",
+            "chosen": "increase-mem-per-gpu",
+            "rejected": ["reshard", "retry-on-different-node"],
+            "why": "novel OOM signature; mem headroom is the cheapest first move",
+        },
+    )
+
+    rec = load_run(tmp_path, "r1")
+    assert is_held(rec) is False  # hold released
+    assert len(rec.verdict_history) == 1
+    entry = rec.verdict_history[0]
+    assert entry["chosen"] == "increase-mem-per-gpu"
+    assert entry["rejected"] == ["reshard", "retry-on-different-node"]
+    assert entry["applied_at"]  # auto-stamped
+
+
+def test_verdict_history_is_append_only_across_multiple_verdicts(tmp_path: Path) -> None:
+    upsert_run(tmp_path, _record("r1", status="failed"))
+    mark_pending_verdict(tmp_path, "r1", escalation=_ESCALATION)
+    clear_pending_verdict(tmp_path, "r1", verdict={"chosen": "a", "why": "first"})
+    mark_pending_verdict(tmp_path, "r1", escalation=_ESCALATION)
+    clear_pending_verdict(
+        tmp_path,
+        "r1",
+        verdict={"chosen": "b", "why": "second", "applied_at": "2026-06-04T01:02:03Z"},
+    )
+
+    history = load_run(tmp_path, "r1").verdict_history
+    assert [e["chosen"] for e in history] == ["a", "b"]
+    # A caller-supplied applied_at is preserved (not overwritten).
+    assert history[1]["applied_at"] == "2026-06-04T01:02:03Z"
+
+
 def test_mark_rejects_empty_escalation(tmp_path: Path) -> None:
     upsert_run(tmp_path, _record("r1"))
     with pytest.raises(ValueError):
