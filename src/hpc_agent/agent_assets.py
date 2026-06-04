@@ -32,30 +32,67 @@ def DEFAULT_CLAUDE_DIR() -> Path:
     return Path.home() / ".claude"
 
 
+def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> str | None:
+    """Resolve a pre-existing non-directory at *target* before mkdir.
+
+    The three install targets (``commands``/``skills``/``agents``) need to
+    become directories. A pre-existing path collides; resolution depends on
+    what's actually sitting there:
+
+    * Missing or already a directory → nothing to do, returns ``None``.
+    * Regular file with **zero bytes** → silently unlinked (or, in dry-run
+      mode, just reported). A 0-byte file can't carry meaningful user
+      content, and it's the empirically observed shape of stale scaffolding
+      artifacts on Windows (touch-then-crash, abandoned old-version
+      installs, etc.). Returns the cleared path as a string.
+    * Any other non-directory → raises :class:`FileExistsError` with a
+      clear remediation message. This is the historical guard preserved
+      for the only case where the user might lose real content.
+
+    *kind_phrase* is the inline phrase used in the error message
+    (e.g. ``"slash commands"``).
+    """
+    if not target.exists() or target.is_dir():
+        return None
+    try:
+        is_zero_byte = target.is_file() and target.stat().st_size == 0
+    except OSError:
+        is_zero_byte = False
+    if is_zero_byte:
+        if not dry_run:
+            target.unlink()
+        return str(target)
+    raise FileExistsError(
+        f"{target} exists but is not a directory — "
+        f"hpc-agent setup needs to install {kind_phrase} here. "
+        "Move or remove the conflicting file, then re-run."
+    )
+
+
 def _install_tree(
     root: Any, target: Path, *, dry_run: bool
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Copy one ``commands/`` + ``skills/`` + ``agents/`` asset tree rooted at *root*.
 
     *root* is any :mod:`importlib.resources` traversable. Returns
-    ``(commands, skills, agents)`` — the command stems, skill-directory
-    names, and agent-definition stems found. A missing ``commands/``,
-    ``skills/`` or ``agents/`` subtree is skipped, so a plugin may
-    contribute any subset of the three.
+    ``(commands, skills, agents, cleared)`` — the command stems,
+    skill-directory names, agent-definition stems found, and any
+    pre-existing 0-byte collision paths that were auto-cleared so the
+    install could proceed (see :func:`_resolve_dir_collision`). A missing
+    ``commands/``, ``skills/`` or ``agents/`` subtree is skipped, so a
+    plugin may contribute any subset of the three.
     """
     commands: list[str] = []
     skills: list[str] = []
     agents: list[str] = []
+    cleared: list[str] = []
 
     commands_src = root / "commands"
     if commands_src.is_dir():
         commands_dst = target / "commands"
-        if not dry_run and commands_dst.exists() and not commands_dst.is_dir():
-            raise FileExistsError(
-                f"{commands_dst} exists but is not a directory — "
-                "hpc-agent setup needs to install slash commands here. "
-                "Move or remove the conflicting file, then re-run."
-            )
+        cleared_path = _resolve_dir_collision(commands_dst, "slash commands", dry_run=dry_run)
+        if cleared_path is not None:
+            cleared.append(cleared_path)
         for entry in commands_src.iterdir():
             if not entry.name.endswith(".md"):
                 continue
@@ -68,12 +105,9 @@ def _install_tree(
     skills_src = root / "skills"
     if skills_src.is_dir():
         skills_dst = target / "skills"
-        if not dry_run and skills_dst.exists() and not skills_dst.is_dir():
-            raise FileExistsError(
-                f"{skills_dst} exists but is not a directory — "
-                "hpc-agent setup needs to install skills here. "
-                "Move or remove the conflicting file, then re-run."
-            )
+        cleared_path = _resolve_dir_collision(skills_dst, "skills", dry_run=dry_run)
+        if cleared_path is not None:
+            cleared.append(cleared_path)
         for skill in skills_src.iterdir():
             if not skill.is_dir():
                 continue
@@ -95,12 +129,9 @@ def _install_tree(
     agents_src = root / "agents"
     if agents_src.is_dir():
         agents_dst = target / "agents"
-        if not dry_run and agents_dst.exists() and not agents_dst.is_dir():
-            raise FileExistsError(
-                f"{agents_dst} exists but is not a directory — "
-                "hpc-agent setup needs to install agent definitions here. "
-                "Move or remove the conflicting file, then re-run."
-            )
+        cleared_path = _resolve_dir_collision(agents_dst, "agent definitions", dry_run=dry_run)
+        if cleared_path is not None:
+            cleared.append(cleared_path)
         for entry in agents_src.iterdir():
             if not entry.name.endswith(".md"):
                 continue
@@ -110,7 +141,7 @@ def _install_tree(
                 with as_file(entry) as real:
                     shutil.copy2(real, agents_dst / entry.name)
 
-    return commands, skills, agents
+    return commands, skills, agents, cleared
 
 
 def install_agent_assets(
@@ -135,21 +166,29 @@ def install_agent_assets(
             "commands_installed": ["aggregate-hpc", ...],
             "skills_installed": ["hpc-submit", ...],
             "agents_installed": ["hpc-worker", ...],
+            "cleared_collisions": ["/.../.claude/agents", ...],
             "wrote": <bool>,
         }
+
+    ``cleared_collisions`` lists any pre-existing 0-byte files at
+    ``<claude>/commands``/``skills``/``agents`` that were silently
+    removed before mkdir — see :func:`_resolve_dir_collision`. Non-empty
+    collisions still raise :class:`FileExistsError`.
     """
     target = (claude_dir or DEFAULT_CLAUDE_DIR()).expanduser()
 
     commands: set[str] = set()
     skills: set[str] = set()
     agents: set[str] = set()
+    cleared: list[str] = []
 
-    core_commands, core_skills, core_agents = _install_tree(
+    core_commands, core_skills, core_agents, core_cleared = _install_tree(
         files("slash_commands"), target, dry_run=dry_run
     )
     commands.update(core_commands)
     skills.update(core_skills)
     agents.update(core_agents)
+    cleared.extend(core_cleared)
 
     # Optional plugins overlay their own assets last — a plugin's
     # skills/<name>/ (or agents/<name>.md) overrides the core copy of the
@@ -157,15 +196,19 @@ def install_agent_assets(
     from hpc_agent._kernel.registry.plugins import plugin_slash_command_roots
 
     for root in plugin_slash_command_roots():
-        plugin_commands, plugin_skills, plugin_agents = _install_tree(root, target, dry_run=dry_run)
+        plugin_commands, plugin_skills, plugin_agents, plugin_cleared = _install_tree(
+            root, target, dry_run=dry_run
+        )
         commands.update(plugin_commands)
         skills.update(plugin_skills)
         agents.update(plugin_agents)
+        cleared.extend(plugin_cleared)
 
     return {
         "claude_dir": str(target),
         "commands_installed": sorted(commands),
         "skills_installed": sorted(skills),
         "agents_installed": sorted(agents),
+        "cleared_collisions": cleared,
         "wrote": not dry_run,
     }
