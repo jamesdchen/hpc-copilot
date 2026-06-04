@@ -146,9 +146,14 @@ def _tcp_ok() -> mock.MagicMock:
     return cm
 
 
+def _ssh_echo_ok() -> SimpleNamespace:
+    """Canned successful ``ssh_run`` result for the cluster_ssh_echo probe."""
+    return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+
 def test_preflight_fails_on_uncustomized_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
     """A clusters.yaml entry still carrying ``<your_...>`` tokens must fail the
-    cluster_config_customized check even when TCP :22 is open."""
+    cluster_config_customized check even when TCP :22 and ssh echo are green."""
     monkeypatch.setattr(
         preflight,
         "load_clusters_config",
@@ -157,10 +162,12 @@ def test_preflight_fails_on_uncustomized_placeholders(monkeypatch: pytest.Monkey
     with (
         mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
         mock.patch.object(preflight.socket, "create_connection", return_value=_tcp_ok()),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_ssh_echo_ok()),
     ):
         result = preflight.check_preflight(cluster="hoffman2")
     checks = {c["name"]: c for c in result["checks"]}
     assert checks["cluster_tcp_22"]["ok"] is True
+    assert checks["cluster_ssh_echo"]["ok"] is True
     assert checks["cluster_config_customized"]["ok"] is False
     assert "user" in checks["cluster_config_customized"]["detail"]
     assert result["all_ok"] is False
@@ -175,7 +182,71 @@ def test_preflight_passes_when_cluster_customized(monkeypatch: pytest.MonkeyPatc
     with (
         mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
         mock.patch.object(preflight.socket, "create_connection", return_value=_tcp_ok()),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_ssh_echo_ok()),
     ):
         result = preflight.check_preflight(cluster="hoffman2")
     checks = {c["name"]: c for c in result["checks"]}
     assert checks["cluster_config_customized"]["ok"] is True
+    # Pin the new functional ssh probe: green here means the production
+    # ssh path (ssh_argv + multiplex + crypto) actually works, not just
+    # that port 22 is reachable. Catches the 2026-06-04 demo class —
+    # named-pipe ControlMaster bind failure, Git-Bash-vs-native-OpenSSH
+    # binary mismatch, ssh-agent unreachable — that TCP alone misses.
+    assert checks["cluster_ssh_echo"]["ok"] is True
+
+
+def test_preflight_fails_when_ssh_echo_fails_despite_tcp_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the 2026-06-04 inert-guard class: port 22 open AND
+    ssh round-trip failing is the production-broken state preflight
+    previously missed. The new cluster_ssh_echo check must fail here."""
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {"hoffman2": {"host": "h", "user": "jamesdc1", "conda_envs": ["hpc-pi"]}},
+    )
+    # The classic named-pipe bind failure: ssh exits non-zero with the
+    # marker in stderr. Production submit would hit the same.
+    ssh_bad = SimpleNamespace(
+        returncode=255,
+        stdout="",
+        stderr="getsockname failed: Not a socket\n",
+    )
+    with (
+        mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
+        mock.patch.object(preflight.socket, "create_connection", return_value=_tcp_ok()),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=ssh_bad),
+    ):
+        result = preflight.check_preflight(cluster="hoffman2")
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_tcp_22"]["ok"] is True  # the inert guard would have said "green"
+    assert checks["cluster_ssh_echo"]["ok"] is False  # the new functional guard catches it
+    assert "getsockname" in checks["cluster_ssh_echo"]["detail"]
+    assert result["all_ok"] is False
+
+
+def test_preflight_skips_ssh_echo_when_tcp_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When TCP :22 is unreachable, the ssh_echo probe is skipped (no point
+    burning the 5s ssh timeout on a host we already know is offline)."""
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {"hoffman2": {"host": "h", "user": "jamesdc1", "conda_envs": ["hpc-pi"]}},
+    )
+    ssh_mock = mock.MagicMock()
+    with (
+        mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
+        mock.patch.object(
+            preflight.socket,
+            "create_connection",
+            side_effect=OSError("connection refused"),
+        ),
+        mock.patch("hpc_agent.infra.remote.ssh_run", ssh_mock),
+    ):
+        result = preflight.check_preflight(cluster="hoffman2")
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_tcp_22"]["ok"] is False
+    assert "cluster_ssh_echo" not in checks  # skipped on tcp fail
+    ssh_mock.assert_not_called()
+    assert result["all_ok"] is False

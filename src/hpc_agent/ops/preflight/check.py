@@ -62,26 +62,43 @@ def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
     side_effects=[],
     idempotent=True,
     cli=CliShape(
-        help="Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses.",
+        help=(
+            "Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses; "
+            "with --cluster also runs a TCP :22 probe + an actual ssh round-trip."
+        ),
         verb="preflight",
         args=(
             CliArg(
                 "--cluster",
                 type=str,
                 default=None,
-                help="Optional cluster name to TCP-probe on :22.",
+                help=(
+                    "Optional cluster name to probe: TCP :22 + a real ``ssh "
+                    "<host> echo ok`` round-trip through the production "
+                    "ssh_argv / multiplex / crypto path."
+                ),
             ),
         ),
+        # Conditional: only fires when ``--cluster`` is supplied. The
+        # contract is conservative — declare requires_ssh so the
+        # ssh-touching-primitives contract test (#WS4) does not flag the
+        # ssh_run call added for the cluster_ssh_echo functional probe.
+        requires_ssh=True,
     ),
     agent_facing=True,
 )
 def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     """Run all preflight checks; return a dict with ``all_ok`` and ``checks``.
 
-    *cluster*: optional cluster name; when supplied, adds a
-    ``cluster_known`` check (membership in clusters.yaml) and a
-    ``cluster_tcp_22`` check (TCP probe on the cluster's host:22 with
-    a 3s timeout). When omitted, those checks are skipped.
+    *cluster*: optional cluster name; when supplied, adds the
+    ``cluster_known`` check (membership in clusters.yaml), a
+    ``cluster_tcp_22`` check (TCP probe on the cluster's host:22 with a
+    3s timeout), and a ``cluster_ssh_echo`` check (a real ``ssh <host>
+    echo ok`` round-trip through the same production machinery — added
+    after the 2026-06-04 bare-TCP-probe-passed-but-rsync-failed demo
+    surfaced the inert-guard mismatch). When omitted, all three are
+    skipped. The SSH round-trip is skipped when the TCP probe fails (no
+    point burning the 5s ssh timeout on an unreachable host).
 
     Returns ``{"all_ok": bool, "checks": list[dict]}``. The CLI adapter
     maps ``all_ok=False`` to the cluster-error exit code.
@@ -207,6 +224,7 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                 try:
                     with socket.create_connection((host, 22), timeout=3):
                         checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
+                    tcp_ok = True
                 except OSError as exc:
                     checks.append(
                         _check(
@@ -216,6 +234,54 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                             "verify connectivity from your network",
                         )
                     )
+                    tcp_ok = False
+
+                # Functional SSH probe: the TCP check above is necessary
+                # but not sufficient. Port 22 open says nothing about
+                # whether the production SSH path actually works — the
+                # 2026-06-04 demo failed mid-submit with rsync hitting
+                # ``getsockname failed: Not a socket`` even though
+                # preflight had passed (the bare TCP probe never exercised
+                # the named-pipe ControlMaster bind, the Git-Bash vs
+                # native-OpenSSH binary resolution, or the ssh-agent
+                # reachability path). Run a real ``ssh <host> echo ok``
+                # round-trip through the same ``ssh_argv("ssh")`` /
+                # multiplex / crypto / runtime-fallback machinery
+                # production uses, so a green here means the production
+                # path is actually green. Skipped when the TCP probe
+                # failed (no point burning 5s on an unreachable host).
+                if tcp_ok:
+                    try:
+                        from hpc_agent.infra.remote import ssh_run
+
+                        result = ssh_run("echo ok", ssh_target=host, timeout=5)
+                        if result.returncode == 0 and (result.stdout or "").strip() == "ok":
+                            checks.append(
+                                _check(
+                                    "cluster_ssh_echo",
+                                    True,
+                                    f"{host} ssh round-trip succeeded",
+                                )
+                            )
+                        else:
+                            stderr_tail = (result.stderr or "")[-200:]
+                            checks.append(
+                                _check(
+                                    "cluster_ssh_echo",
+                                    False,
+                                    f"{host} ssh round-trip failed "
+                                    f"(exit {result.returncode}): {stderr_tail!r} — "
+                                    "production submits will hit the same failure",
+                                )
+                            )
+                    except (TimeoutError, OSError) as exc:
+                        checks.append(
+                            _check(
+                                "cluster_ssh_echo",
+                                False,
+                                f"{host} ssh round-trip raised: {exc}",
+                            )
+                        )
 
             # Reject un-customized placeholders: a clusters.yaml entry still
             # carrying <your_user> / <your_scratch> / <your_env> would pass
