@@ -7,6 +7,34 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.3 — 2026-06-04
+
+Six landed fixes since 0.10.2, motivated by the live UCLA Hoffman2 demo loop. No wire-surface breaks.
+
+### Fixed — `register_run` auto-generates `executor_cmd` (the metrics.json bug)
+
+When `entry_point.kind == "register_run"`, the materialized interview previously contained only `{kind, run_name}` — no `executor_cmd`. The framework defaulted the per-task command to `python3 <file>`, which on the cluster ran the file as a script. The dispatcher passes kwargs only via `HPC_KW_*` env vars (never argv), so a file with no `__main__` block silently exited 0 without invoking the decorator-injected `compute(args)` (empirical case: 100 tasks ran, only `_runtime.json` written, no `metrics.json`). A file with an argparse `__main__` block failed with "required argument missing". Mirror `wrapper_executor_cmd`'s contract with a new `register_run_executor_cmd(campaign_dir, run_path)` helper that emits the same `python3 -c "...; argparse.Namespace(**HPC_KW_*); _m.compute(_n)"` one-liner — only the file path differs. `_validate_register_run_entry` now returns the matched path so the interview can thread it.
+
+### Fixed — Defensive guard against bare-script `register_run` executor
+
+Backstop for the auto-gen above: when `extra_env["EXECUTOR"]` is the naive `python3 <file>.py` shape AND the file imports `register_run` from `hpc_agent`, `build_submit_spec` refuses with `SpecInvalid` pointing at the canonical one-liner shape. Catches sidecars assembled outside the framework's interview path (manual JSON, older interview outputs, third-party assemblers).
+
+### Fixed — `submit_spec` refuses relative `remote_path` and empty env-activation at the boundary
+
+A half-resolved cluster config previously produced `REPO_DIR=monte_carlo_pi-bc3eb1b5` (relative) and empty `CONDA_*` / `MODULES` — the canary crashed cluster-side and the bad sidecar poisoned later submit dedup by `cmd_sha`. Two guards in `build_submit_spec`: `remote_path` must be absolute Unix (start with `/`); at least one of `modules` / `conda_source` / `conda_env` must be non-empty. Both errors point the operator at `hpc-agent setup --cluster <name>` since the empirical case is "clusters.yaml wasn't onboarded". Includes a new `tests/incorporation/build/conftest.py` autouse fixture that isolates these tests from the host's `~/.hpc-agent/clusters.yaml` (env leakage was masking the test-side validity of the fixtures).
+
+### Fixed — Preflight `command -v uv` when `runtime=uv`
+
+`submit_flow` now SSHes once with the cluster's activation sequence (`module load … && source $CONDA_SOURCE && conda activate $CONDA_ENV && command -v uv`) when any fresh spec asks for `runtime=uv`. If the probe fails, `SpecInvalid` at preflight with `~/.conda/envs/<env>/bin/pip install uv` remediation. Saves a wasted canary cycle when the cluster env doesn't have uv. No-op when `HPC_RUNTIME != "uv"` or `skip_preflight=True`.
+
+### Added — `HPC_SSH_NAMED_PIPE=1` enables ControlMaster on Windows
+
+Opt-in path for SSH connection multiplexing on Windows via named-pipe `ControlPath`. Windows OpenSSH ≥ 8.x supports `ControlPath=\\.\pipe\…` namespaces; only Unix-socket `ControlPath` fails on Windows (the framework already detects this and disables multiplexing). With `HPC_SSH_NAMED_PIPE=1` set on Windows, `_ssh_multiplex_opts()` emits `-o ControlMaster=auto -o ControlPath=\\.\pipe\openssh-hpc-cm-%C` + the existing `ControlPersist` logic. Default left off pending live validation. Each SSH call drops from ~1-2s to ~50ms after the first when enabled. `HPC_NO_SSH_MULTIPLEX=1` still wins. POSIX unaffected.
+
+### Fixed — Worker-crash error surfaces `HPC_AGENT_INVOKER=inline` as fallback
+
+When the spawned `--bare` worker dies before emitting a valid report (typical: workspace API key over quota, separate from the caller's interactive Claude Code OAuth session), the malformed-report error now appends a single-sentence hint naming inline mode as the natural recovery. Always-on; the operator can ignore it when the failure is for a different reason.
+
 ## 0.10.2 — 2026-06-04
 
 Tiny follow-up release for one prose-layer fix that landed after the 0.10.1 cut. No code changes; just bundled-asset content the installed wheel ships into `~/.claude/skills/`.
