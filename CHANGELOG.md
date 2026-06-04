@@ -7,6 +7,36 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.7 — 2026-06-04
+
+Post-0.10.6 carry-forward: SSH/qsub determinism fixes, the WS2–WS5 escalation-funnel batch, and one #240 punch-list cleanup.
+
+### Added — SSH named-pipe runtime auto-fallback
+
+`infra/ssh_options.py` adds `_NAMED_PIPE_RUNTIME_VERDICT` + `mark_named_pipe_broken` + `run_with_named_pipe_retry`; `ssh_run`, `rsync_push`, `_tar_ssh_push`, and `_remote_preclean` wrap their subprocess calls — on a detected `getsockname failed: Not a socket` stderr they mark the runtime verdict broken and retry once with multiplexing demoted to `ControlMaster=no`. Catches the syscall-layer failure the OpenSSH version probe cannot see.
+
+### Added — `cluster_ssh_echo` functional preflight + cross-cluster qsub PATH
+
+`ops/preflight/check.py` gains a `cluster_ssh_echo` round-trip that exercises the same `ssh_argv` / multiplex / crypto machinery production uses, replacing the inert `socket.create_connection((host, 22))` proxy guard. `infra/backends/_remote_base.py::_execute_command` wraps remote `cd + qsub|sbatch` in `bash -lic` so cluster `/etc/profile.d/*.sh` sources the scheduler binary onto PATH (Hoffman2 + most non-login ssh paths).
+
+### Added — WS2/WS3/WS4 escalation-funnel batch
+
+- WS2 `cli/skill_returns.py` + 5 per-skill `schemas/skill_returns/*` + sub-skill SKILL.md final-step rewrites: `emit-skill-return` / `fetch-skill-return` carries sub-skill results to the parent (`hpc-submit`, `hpc-campaign`).
+- WS3 central recovery registry (`hpc_agent/recovery/registry.py`) keyed by `failure_features.error_class`; three ported kinds (`already_in_flight` / `submission_incomplete` / `spawn_worker_died`); `recoveries list` / `recoveries show --placeholders k1=v1,k2=v2`. Closes `verify-canary` `submission_incomplete` (`record.job_ids in (None, [])` now raises with a registry-backed remediation instead of silently classifying as `abandoned`).
+- WS4 SKILL.md linter (`scripts/lint_skills.py`) + `tests/contract/{primitive_remediation,schema_roundtrip}` + strict_xfail catalogues + CI auto-regen on PR (`stefanzweifel/git-auto-commit-action@v5` with workflow-level cancel-in-progress).
+
+### Added — WS5 composite preflight primitives (#270)
+
+`submit-preflight` (`install-commands` → `load-context` → `check-preflight` when `--cluster` set), `status-preflight`, `aggregate-preflight` + 5 more composites land via #270; collapses the per-skill Step 0 boilerplate.
+
+### Fixed — `_degree` accepts stringified ints (#240)
+
+`ops/recover/resolve.py::_degree` now coerces non-negative integer-shaped `str` values; a producer that emits `{"tp_size": "2"}` would otherwise route a `gpu_oom` to `increase-mem-per-gpu` instead of `increase-parallelism`. Latent today (the resolver isn't wired into the recover path yet) — hardened ahead of that seam landing.
+
+### Documented — `escalation` envelope block
+
+`docs/reference/cli-spec.md` and `docs/reference/agent-surface.md` describe the optional top-level `escalation` block (success or error envelope) — `schemas/escalation.json` was already the source of truth; the prose reference was missing it.
+
 ## 0.10.6 — 2026-06-04
 
 Two-PR batch (#246 + #266) addressing 17+ speedup and correctness issues filed during a single 2026-06-04 live demo session (#242-#265), plus a worker-prompt scaffold trim.
