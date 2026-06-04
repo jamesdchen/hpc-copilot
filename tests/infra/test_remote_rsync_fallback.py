@@ -190,13 +190,20 @@ def _is_ssh_version_probe(call_args) -> bool:
     than mock it or pre-warm the cache (those would couple every test to
     a global-cache invariant).
     """
+    import os
+
     args = call_args[0]
     if not args:
         return False
     cmd = args[0]
-    return (
-        isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] in ("ssh", "ssh.exe") and cmd[1] == "-V"
-    )
+    if not isinstance(cmd, list) or len(cmd) < 2:
+        return False
+    # Cross-platform: on Linux ``_ssh_binary()`` returns ``"ssh"``; on
+    # Windows it returns ``r"C:\Windows\System32\OpenSSH\ssh.exe"``.
+    # ``os.path.basename(...).lower()`` collapses both to the bare name
+    # so the predicate fires on either.
+    basename = os.path.basename(str(cmd[0])).lower()
+    return basename in ("ssh", "ssh.exe") and cmd[1] == "-V"
 
 
 def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool):
