@@ -7,6 +7,14 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.2 — 2026-06-04
+
+Tiny follow-up release for one prose-layer fix that landed after the 0.10.1 cut. No code changes; just bundled-asset content the installed wheel ships into `~/.claude/skills/`.
+
+### Fixed — `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc` skills get a Step 0 (idempotent `install-commands`)
+
+When `~/.claude/agents/hpc-worker.md` is missing on a fresh machine, every hpc-submit / hpc-status / hpc-aggregate run failed at the handoff step when it tried to dispatch the rendered procedure to the named subagent. The orchestrator agent then fell back to running the procedure by hand — frequently inventing cluster commands like `python -m hpc_agent.models.mapreduce.reduce.combine` (no such module). Add a Step 0 to all three skill prompts: run `hpc-agent install-commands` first. Idempotent (no-op when assets are already installed) and ~50ms when re-run, so safe to make a hard prerequisite. The 0-byte-collision auto-clear from 0.10.1 handles the empirically common stale-artifact case; non-empty file at the install path still raises a clear `FileExistsError` with remediation.
+
 ## 0.10.1 — 2026-06-04
 
 Patch release with four agent-UX fixes surfaced during live Hoffman2 demos against 0.10.0: scanner gap on the SKILL.md-documented `register_run` import form, `items_x_seeds` requiring agents to discover `items: [{}]` as the no-frozen-config shape, `install-commands` raising on a stale 0-byte file at `~/.claude/{commands,skills,agents}`, and the inline `hpc-worker` PreToolUse hook shelling `jq` (absent on native Windows, which let the orchestrator agent fall back to inventing cluster commands). No wire-surface breaks; previous spellings keep working.
