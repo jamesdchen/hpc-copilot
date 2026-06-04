@@ -110,10 +110,25 @@ class _CartesianProduct(BaseModel):
     params: _CartesianProductParams
 
 
+def _default_items_x_seeds_items() -> list[dict[str, Any]]:
+    """One no-op item, so the no-frozen-config case is a pure seed sweep.
+
+    See :class:`_ItemsXSeedsParams` for the rationale.
+    """
+    return [{}]
+
+
 class _ItemsXSeedsParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[dict[str, Any]] = Field(min_length=1)
+    # ``items`` defaults to ``[{}]`` — one no-op item, so a caller with no
+    # frozen kwargs can submit ``{"kind": "items_x_seeds", "params": {"seeds":
+    # [...]}}`` and get the pure seed-sweep case (N tasks parameterised only
+    # by seed). The materializer renders ``_TASKS = [{**item, 'seed': seed}
+    # for item in _ITEMS for seed in _SEEDS]``; with ``_ITEMS=[{}]`` that
+    # collapses to ``[{'seed': s} for s in _SEEDS]``, which is the natural
+    # sweep. Explicit ``items`` still works for the cartesian case.
+    items: list[dict[str, Any]] = Field(default_factory=_default_items_x_seeds_items, min_length=1)
     seeds: list[int] = Field(min_length=1)
 
 

@@ -333,6 +333,23 @@ def test_generator_items_x_seeds(tmp_path: Path) -> None:
     assert "env" in first and "seed" in first
 
 
+def test_generator_items_x_seeds_default_items(tmp_path: Path) -> None:
+    """``items`` defaults to ``[{}]`` so the no-frozen-config case is just
+    ``{"kind": "items_x_seeds", "params": {"seeds": [...]}}``. Common when a
+    user just wants to sweep seeds with no extra frozen kwargs."""
+    intent = _minimal_intent(
+        3,
+        task_generator={
+            "kind": "items_x_seeds",
+            "params": {"seeds": [0, 1, 2]},
+        },
+    )
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 3
+    first = data["preview"]["first"]
+    assert first == {"seed": 0}
+
+
 def test_generator_numeric_logspace(tmp_path: Path) -> None:
     """Logspace covers low→high inclusive at endpoints."""
     intent = _minimal_intent(

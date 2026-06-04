@@ -437,7 +437,6 @@
         }
       },
       "required": [
-        "items",
         "seeds"
       ],
       "title": "_ItemsXSeedsParams",
