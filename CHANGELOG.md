@@ -7,6 +7,26 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Fixed — `discover_runs` scanner accepts `from hpc_agent import register_run`
+
+`hpc_agent/__init__.py` lazily re-exports `register_run` and SKILL.md documents that as the canonical import form, but the `discover_runs` AST scanner only matched `from hpc_agent.experiment_kit import register_run` and `from hpc_agent import template`. An executor written against the documented spelling went undiscovered, and the agent then chased the wrong workaround (rewriting the import or pivoting to `shell_command`). The scanner now also binds `register_run` from the top-level `hpc_agent` ImportFrom node.
+
+### Fixed — `items_x_seeds.items` defaults to `[{}]`
+
+The pure seed-sweep case — no frozen kwargs, just N tasks parameterised by seed — required the caller to know that `items: [{}]` was the no-op shape against an otherwise unguessable required field. `_ItemsXSeedsParams.items` now defaults to `[{}]` via `default_factory`, so a seed-only request is just `{"kind": "items_x_seeds", "params": {"seeds": [...]}}`. The materializer collapses cleanly to `[{'seed': s} for s in _SEEDS]`. Explicit `items` still works for the cartesian case. `schemas/interview.input.json` regenerated.
+
+### Fixed — `install-commands` auto-clears 0-byte collisions at `commands`/`skills`/`agents`
+
+`~/.claude/{commands,skills,agents}` historically raised `FileExistsError` when one of those paths was a regular file rather than a directory — safe but high-friction for the empirically observed case of a 0-byte stale scaffold artifact (Windows touch-then-crash, abandoned old-version installs). The contract is now:
+
+- missing or already a directory — no-op (unchanged)
+- 0-byte regular file — silently unlinked, path reported in `result["cleared_collisions"]`; in `dry_run=True` reported but not unlinked
+- any other non-directory — `FileExistsError` with the same remediation as before (unchanged for the case where the user might lose real content)
+
+### Fixed — `hpc-worker` PreToolUse hook no longer requires `jq`
+
+The hook that fences the inline `hpc-worker` subagent to `hpc-agent` / `git` invocations only used `jq` to extract `.tool_input.command` from the hook's stdin JSON. On native Windows that meant the hook failed (`jq: command not found`), the subagent was blocked, and the orchestrator agent fell back to running aggregate procedures by hand — frequently inventing cluster commands. The parse step now shells `python3 -c 'import json, sys; print(json.loads(sys.stdin.read()).get("tool_input", {}).get("command", ""))'`, which is already a hard requirement of any hpc-agent install. The fence behaviour itself is unchanged. The 13 `test_hpc_worker_fence.py` cases that previously skipped on Windows (no jq on PATH) now run.
+
 ## 0.10.0 — 2026-06-03
 
 Highlights: PBS/Torque scheduler support via data-driven SchedulerProfiles (#202), Optuna/PBT scaffolds + campaign seam (#218, #219), structured `failure_features` schema wired into every ErrorEnvelope (#230, #237), single failure-classifier CATALOG (#236, #238), single-source vocabularies via `get_args` (#235), plus four polish fixes: schema-aware `spec_invalid` remediation + `register_run` discovery hint, worker stdout tail in `internal` envelopes, `verify-aggregation-complete --combiner-dir` default, and `aggregate-flow` `_combiner/`-missing diagnosis with three recovery paths. See `git log --oneline 0.9.0..` for the full per-commit history.

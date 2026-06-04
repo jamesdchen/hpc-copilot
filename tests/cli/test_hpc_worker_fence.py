@@ -54,7 +54,9 @@ def _find_bash() -> str | None:
 
 _BASH = _find_bash()
 
-needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the hook shells jq")
+needs_python3 = pytest.mark.skipif(
+    shutil.which("python3") is None, reason="the hook shells python3 for JSON parsing"
+)
 needs_bash = pytest.mark.skipif(_BASH is None, reason="no POSIX bash (Git Bash) found")
 
 
@@ -63,7 +65,7 @@ def _hook_command() -> str:
     doc = yaml.safe_load(fm)
     pre = doc["hooks"]["PreToolUse"]
     entry = next(e for e in pre if e["matcher"] == "Bash")
-    return entry["hooks"][0]["command"]
+    return str(entry["hooks"][0]["command"])
 
 
 def _rc(cmd: str) -> int:
@@ -89,7 +91,7 @@ def _rc(cmd: str) -> int:
 
 
 @needs_bash
-@needs_jq
+@needs_python3
 @pytest.mark.parametrize(
     "cmd",
     [
@@ -103,7 +105,7 @@ def test_allows_hpc_agent_and_git(cmd: str) -> None:
 
 
 @needs_bash
-@needs_jq
+@needs_python3
 @pytest.mark.parametrize(
     "cmd",
     [

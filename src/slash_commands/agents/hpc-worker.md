@@ -10,7 +10,11 @@ hooks:
         - type: command
           command: |
             input=$(cat)
-            cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
+            cmd=$(printf '%s' "$input" | python3 -c 'import json, sys
+            try:
+                print(json.loads(sys.stdin.read()).get("tool_input", {}).get("command", ""))
+            except Exception:
+                pass')
             case "$cmd" in *';'*|*'&&'*|*'||'*|*'|'*|*'`'*|*'$('*) echo "hpc-worker is invoke-only: shell chaining/substitution is not allowed (got: $cmd)" >&2; exit 2 ;; esac
             first=$(printf '%s' "$cmd" | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
             case "$first" in hpc-agent|git) exit 0 ;; *) echo "hpc-worker is invoke-only: only 'hpc-agent' and 'git' Bash commands are allowed (got: ${first:-empty})" >&2; exit 2 ;; esac
