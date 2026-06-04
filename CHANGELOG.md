@@ -7,6 +7,10 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.0 — 2026-06-03
+
+Highlights: PBS/Torque scheduler support via data-driven SchedulerProfiles (#202), Optuna/PBT scaffolds + campaign seam (#218, #219), structured `failure_features` schema wired into every ErrorEnvelope (#230, #237), single failure-classifier CATALOG (#236, #238), single-source vocabularies via `get_args` (#235), plus four polish fixes: schema-aware `spec_invalid` remediation + `register_run` discovery hint, worker stdout tail in `internal` envelopes, `verify-aggregation-complete --combiner-dir` default, and `aggregate-flow` `_combiner/`-missing diagnosis with three recovery paths. See `git log --oneline 0.9.0..` for the full per-commit history.
+
 ## 0.9.0 — 2026-06-01
 
 Highlights: worker-prompt invoke-only fence (#203), local dry-run gate before the cluster canary (#205), behavioral eval harness for agent decisions (#204), `--invalidate-on-code-change` opt-in dedup lever + code-drift warning (#207), centralized resource clamp/ceil + canonical walltime formatter (#206), `ssh_run` returns at foreground-exit speed when a remote child holds the pipe (#209), generic-plugin `setup` integration / drop named-plugin coupling (#213), unambiguous Step 9 in `hpc-submit/SKILL.md`. Also rolls up the 0.7.2–0.8.1 chain that landed without per-version CHANGELOG entries; for those, `git log --oneline` on `main` is the authoritative history.
