@@ -7,6 +7,76 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.6 — 2026-06-04
+
+Two-PR batch (#246 + #266) addressing 17+ speedup and correctness issues filed during a single 2026-06-04 live demo session (#242-#265), plus a worker-prompt scaffold trim.
+
+### Added — content-hash deploy cache + parallel scp
+
+`deploy_runtime` records a cluster-side manifest (`.hpc/.deploy_state.json`) of sha256 + producing package version per shipped file, and skips any file whose sha AND package version still match. The (cache-filtered) copies fire through a `ThreadPoolExecutor` (max 4) reusing the single ssh ControlMaster, overlapping fork/exec + transfer latency. A version bump, missing/corrupt manifest, `use_cache=False`, or `HPC_NO_DEPLOY_CACHE=1` falls back to a full deploy. (#242, #245)
+
+### Added — Windows multiplexing via named-pipe ControlPath (default on)
+
+Native Windows OpenSSH ≥ 8.x named-pipe multiplexing is now the default; opt out with `HPC_SSH_NAMED_PIPE=0`. A one-time `ssh -V` probe falls back to the legacy `ControlMaster=no` / `ControlPath=none` override on positively-detected OpenSSH < 8.x. A separate `~/.ssh/config` scan detects a global `Host *` Unix-socket `ControlMaster` stanza (which the cli `-o` override does not reliably beat on Windows) and forces `HPC_NO_SSH_MULTIPLEX` semantics after warning once. `HPC_NO_SSH_MULTIPLEX=1` still wins everywhere. (#243)
+
+### Added — prompt-cache hit instrumentation
+
+`hpc-agent run --report-cache-stats` runs the worker with `--output-format json`, unwraps the report from the result envelope, and surfaces `cache_read` / `creation` / `input` / `output` token counts under `data.cache_stats`. Off by default; integration test gated behind `RUN_NETWORK_TESTS=1`. (#244)
+
+### Added — task_generator-consistency guard
+
+`hpc-submit` Step 3 compares cached `interview.json`'s task_generator against caller-supplied. Different → `spec_invalid: task_generator_mismatch` by default (no more silent 8-vs-100 drift); `refresh` rewrites the interview; `prefer-caller` reproduces the old behavior as an explicit opt-in. (#247)
+
+### Added — `/aggregate-hpc` and `/submit-hpc` auto-reconcile
+
+When the journal records `next_step_hint == "monitor"` but the run is gone cluster-side, both skills run `hpc-agent reconcile` against the cluster and branch on the result — terminal / abandoned / still-in-flight — rather than refusing on the journal alone. (#248, #257)
+
+### Added — state caches: describe / discover-runs / preflight / canary
+
+Four caches keyed by stable inputs, all bypass-able via `HPC_NO_<NAME>_CACHE=1`:
+
+- `describe_cache.py` — `(pkg_version, verb_name)` → cached describe output. (#261)
+- `discover_cache.py` — directory `mtime` → cached journal scan. (#264)
+- `preflight_cache.py` — `(host, env_activation_hash, framework_version)` → cached "session healthy" within N-minute TTL. (#255)
+- `canary_cache.py` — `(cmd_sha, env_activation_hash)` → "this cmd_sha was validated; skip canary within TTL". Pairs with `total_tasks <= threshold` auto-skip. (#249, #263)
+
+### Added — afterok scheduler dependency for canary→main
+
+When both jobs submit, main has `--depend=afterok:<canary_id>` (SGE / SLURM / PBS variants). Eliminates the orchestrator round-trip between canary terminal and main qsub; main also gets earlier fairshare positioning. (#250)
+
+### Added — batched monitor-tick + adaptive polling + cluster-side reduce
+
+- Per-tick monitor queries combine into one ssh invocation (one RTT for `qstat` + sidecar + results listing). (#251)
+- Adaptive backoff on no-change ticks (30s → 60s → 120s); reset on state-change detection. (#253)
+- Final reduce + summary moves cluster-side; aggregate pulls one `metrics_aggregate.json` instead of N `wave_*.json`. (#254)
+
+### Added — rsync delta transfers + SSH cipher tuning
+
+- `deploy_runtime` cache-miss path uses rsync deltas (tar|ssh fallback on hosts without rsync). (#252)
+- Default cipher list bumped to `aes128-gcm,aes256-gcm` + ETM MACs. Tunable via `HPC_SSH_CIPHER` / `HPC_SSH_MAC` / `HPC_SSH_COMPRESSION`. (#256)
+
+### Added — reconcile cascades to canary + `unable_to_verify` state
+
+`hpc-agent reconcile --run-id <id>` also reconciles paired sibling entries sharing the same cmd_sha (e.g. `-canary`). Output adds an `unable_to_verify` lifecycle state distinct from `in_flight` for the case where the SSH/scheduler query itself failed. (#258)
+
+### Added — inline-mode prompt path forwarding + sandbox preflight
+
+- Inline-mode envelope writes large prompts (>4 KB) to `.hpc/_inline/<id>.prompt.md` and returns `prompt_path` instead of inlining; the orchestrator forwards the path to the subagent. (#262)
+- Inline-mode worker runs an SSH preflight as Step 0; on sandbox-blocked SSH returns `spec_invalid: sandbox_blocks_cluster_ssh` upfront, not as a buried message in an `ok: true` envelope. (#265)
+
+### Fixed — `data_axis_hint` prompt/schema divergence
+
+`hpc-wrap-entry-point` SKILL.md now conditions `data_axis_hint` emission on `entry_point.kind == "shell_command"`, matching the schema's constraint. (#260)
+
+### Fixed — skill prose: parallel TOOL CALLS, not shell concurrency; no PowerShell shelling
+
+- "Batch independent tool calls" bullet clarified across all orchestrator skills + the worker scaffold: "parallel" means multiple Bash / Read / Grep tool-call blocks in one message, NOT `cmd1 & cmd2 & wait` / `parallel` / `xargs -P` inside one Bash call. (#259)
+- The no-`python -c` / `bash -c` / `jq` / `cat` / `head` / `grep` / `find` rule (commit `69b1ee2d`) extended to `powershell -Command` / `pwsh -Command` / `cmd /c` / any shell-with-code-flag pattern. (#262)
+
+### Changed — worker-prompt scaffold trimmed ~46%
+
+The `cacheable_prefix` in `render_spawn_parts` shrunk from ~800 to ~430 tokens via section-by-section audit (opener, cd + load-context, adjustments preamble, 8 bullets → 6 via semantic merges, return contract, closing). Procedure body and structural shape unchanged. Saves cache-write tokens on first spawn per session and trims cache-read cost on subsequent spawns. Snapshot fixtures regenerated. (`dbad096c`)
+
 ## 0.10.5 — 2026-06-04
 
 Skill-prose fixes for two empirical demo-loop friction points.
