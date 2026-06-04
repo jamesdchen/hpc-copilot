@@ -119,9 +119,9 @@ FailureCategory = Literal[
 
 # Values accepted by the ``resubmit`` primitive's ``--spec.category``.
 # Must contain every value emitted by the classifier
-# (``ops.recover.failure_signatures.CATALOG`` and
-# ``ops.recover.runner_failures``'s ``_FAILURE_CATEGORY_PATTERNS``) —
-# five emissions (``import_error``, ``file_not_found``,
+# (``ops.recover.failure_signatures.CATALOG`` — the single classifier;
+# ``ops.recover.runner_failures.cluster_failures_by_fingerprint`` delegates
+# to it) — five emissions (``import_error``, ``file_not_found``,
 # ``permission_denied``, ``disk_full``, ``python_traceback``) were
 # missing from this Literal before this audit pass, so the up-front gate
 # accepted them but ``ResubmitSpec`` rejected them later, AFTER the

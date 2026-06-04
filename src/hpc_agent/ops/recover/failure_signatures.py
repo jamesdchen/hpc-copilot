@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["FailureSignature", "classify", "CATALOG"]
+__all__ = ["FailureSignature", "classify", "CATALOG", "CLASSIFIER_CATEGORIES"]
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ CATALOG: list[FailureSignature] = [
         error_class="gpu_oom",
         stderr_pattern=re.compile(
             r"CUDA out of memory|RuntimeError: cuda runtime error.*out of memory|"
-            r"torch\.cuda\.OutOfMemoryError",
+            r"torch\.cuda\.OutOfMemoryError|cuda.*OOM",
             re.I,
         ),
         exit_code=None,
@@ -87,11 +87,9 @@ CATALOG: list[FailureSignature] = [
         # Scheduler-specific markers only. The bare ``\bwalltime\b`` token
         # and ``signal SIGTERM.*15`` previously included here collide with
         # preemption (SLURM/SGE preemption is delivered via SIGTERM with
-        # exit 143). The narrowed set matches the sibling
-        # ``runner_failures._FAILURE_CATEGORY_PATTERNS`` so the two
-        # classifiers cannot disagree — a preempted task no longer gets
-        # ``suggested_fix=increase-walltime`` from this catalog while
-        # ``runner_failures.py`` correctly tags it ``preempted``.
+        # exit 143). The narrowed set keeps a preempted task from getting
+        # ``suggested_fix=increase-walltime`` from this catalog; the runner's
+        # exit-130/143 fallback routes it to ``preempted`` instead.
         stderr_pattern=re.compile(
             r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
             r"wall.?time.*expired|wall.?time.*exceeded|"
@@ -161,6 +159,15 @@ CATALOG: list[FailureSignature] = [
         priority=10,
     ),
 ]
+
+
+# Every ``error_class`` the catalog (and thus ``classify()``) can emit — the
+# single source for "categories the classifier produces". Consumed by the
+# ``FailureCategoryResubmittable`` contract test and the ``FailureCategory``
+# enum round-trip checks (which previously read the now-removed
+# ``runner_failures._FAILURE_CATEGORY_PATTERNS``). ``classify()`` also returns
+# ``"unknown"`` on no match; that is not a catalog row.
+CLASSIFIER_CATEGORIES: frozenset[str] = frozenset(sig.error_class for sig in CATALOG)
 
 
 def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:

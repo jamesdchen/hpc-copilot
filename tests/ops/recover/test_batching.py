@@ -105,15 +105,15 @@ class TestResubmitPlanBatching:
 class TestFailureCategoryVocabulary:
     """Cross-check: every category emitted by the auto-classifier must be
     accepted by the resubmit subcommand. Catches drift introduced when
-    someone adds a new pattern to ``_FAILURE_CATEGORY_PATTERNS`` without
+    someone adds a new row to ``failure_signatures.CATALOG`` without
     extending ``_VALID_RESUBMIT_CATEGORIES``.
     """
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from hpc_agent.cli.recover import _VALID_RESUBMIT_CATEGORIES
-        from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
+        from hpc_agent.ops.recover.failure_signatures import CLASSIFIER_CATEGORIES
 
-        emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
+        emitted = set(CLASSIFIER_CATEGORIES)
         missing = emitted - _VALID_RESUBMIT_CATEGORIES
         assert not missing, (
             "auto-classifier emits categories that resubmit silently rejects: "

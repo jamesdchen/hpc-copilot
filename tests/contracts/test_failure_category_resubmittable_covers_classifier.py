@@ -6,11 +6,9 @@ governs the values accepted by ``resubmit --spec.category``. Two
 classifiers can emit a category that the resubmit path must then
 accept:
 
-* :data:`hpc_agent.ops.recover.failure_signatures.CATALOG` — the
-  high-priority pattern catalog (``classify()``).
-* :data:`hpc_agent.ops.recover.runner_failures._FAILURE_CATEGORY_PATTERNS` — the
-  sibling fingerprint classifier used by
-  :func:`cluster_failures_by_fingerprint`.
+* :data:`hpc_agent.ops.recover.failure_signatures.CATALOG` — the single
+  pattern catalog (``classify()``); ``cluster_failures_by_fingerprint``
+  delegates to it (so ``CLASSIFIER_CATEGORIES`` is the emitted-category set).
 
 When ``FailureCategoryResubmittable`` is a strict subset of either
 emitter, a real failure mode classifies cleanly cluster-side but the
@@ -40,8 +38,7 @@ from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory as FailureCate
 from hpc_agent._wire._shared import (
     FailureCategoryResubmittable,
 )
-from hpc_agent.ops.recover.failure_signatures import CATALOG
-from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
+from hpc_agent.ops.recover.failure_signatures import CATALOG, CLASSIFIER_CATEGORIES
 
 
 def _resubmittable_args() -> set[str]:
@@ -54,13 +51,13 @@ def _catalog_categories() -> set[str]:
 
 
 def _fingerprint_categories() -> set[str]:
-    """Every category :data:`_FAILURE_CATEGORY_PATTERNS` can emit."""
-    # Each entry is ``(category, regex)``. Add the two sentinel
-    # categories emitted by ``cluster_failures_by_fingerprint`` for
-    # missing logs and SSH-unreachable transports — those are
-    # category strings the caller may see, even though they don't
-    # live in the pattern table.
-    base = {cat for cat, _pat in _FAILURE_CATEGORY_PATTERNS}
+    """Every category ``cluster_failures_by_fingerprint`` can emit."""
+    # The runner now delegates to ``classify()``, so its emitted classes are
+    # the catalog's (CLASSIFIER_CATEGORIES). Add the two sentinel categories
+    # ``cluster_failures_by_fingerprint`` emits for missing logs and
+    # SSH-unreachable transports — category strings the caller may see even
+    # though they aren't catalog rows.
+    base = set(CLASSIFIER_CATEGORIES)
     base |= {"ssh_unreachable", "log_missing"}
     return base
 
@@ -94,7 +91,7 @@ def test_resubmittable_covers_fingerprint_emissions() -> None:
     missing -= {"ssh_unreachable", "log_missing"}
     assert not missing, (
         "FailureCategoryResubmittable must be a superset of every "
-        "category that hpc_agent.ops.recover.runner_failures._FAILURE_CATEGORY_PATTERNS "
+        "category cluster_failures_by_fingerprint (via failure_signatures.CLASSIFIER_CATEGORIES) "
         f"emits — resubmit would 400 these otherwise: {sorted(missing)}."
     )
 

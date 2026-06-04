@@ -5,24 +5,17 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent.infra.parsing import (
-    FAILURE_CATEGORY_PATTERNS as _FAILURE_CATEGORY_PATTERNS,
-)
-from hpc_agent.infra.parsing import (
-    categorize_failure as _categorize,
-)
+from hpc_agent.ops.recover.failure_signatures import classify
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
-# Re-exported from :mod:`hpc_agent.infra.parsing` (extracted in PR 1.5 so
-# multiple Wave-2 subjects can share the catalog without contending for
-# this module). The high-level :func:`cluster_failures_by_fingerprint`
-# orchestrator below layers exit-code overrides and the richer
-# :func:`hpc_agent.ops.recover.failure_signatures.classify` catalog on top.
+# Single failure classifier: cluster_failures_by_fingerprint delegates both
+# category and suggested_fix to failure_signatures.classify (the one catalog),
+# so the cluster's category and error_class are derived from one source and
+# cannot disagree. (This module used to re-export a sibling pattern table from
+# infra.parsing; that duplicate classifier was removed — #236.)
 __all__ = [
-    "_FAILURE_CATEGORY_PATTERNS",
-    "_categorize",
     "fingerprint_stderr_tail",
     "annotate_clusters_with_retry_advice",
     "cluster_failures_by_fingerprint",
@@ -190,37 +183,24 @@ def cluster_failures_by_fingerprint(
             continue
         content = entry.get("content") or ""
         fp = fingerprint_stderr_tail(content)
-        category = _categorize(content)
-        # Exit-code-130 fallback: the dispatcher's SIGTERM-trap stderr
-        # line may have been clipped from the log tail, but exit 130
-        # is still a definitive preempted signal. Match the campus
-        # user's bumped jobs to the ``preempted`` cluster regardless.
-        # Also overrides ``walltime`` because the SLURM/SGE preempt
-        # notification contains "signal SIGTERM 15" which the walltime
-        # regex would otherwise claim.
-        # Exit 130 is the dispatcher's own SIGTERM-trap signal. Exit 143
-        # (128 + SIGTERM=15) is what the scheduler reports when the
-        # dispatcher was killed directly before it could re-emit 130 —
-        # so both indicate preemption.
+        # Single classifier: derive both category and suggested_fix from
+        # failure_signatures.classify (the one catalog) so they cannot disagree.
+        sig = classify(content, entry.get("exit_code"))
+        category = sig["error_class"]
+        # Exit-code 130/143 fallback: the dispatcher's SIGTERM-trap stderr line
+        # may have been clipped from the log tail, but exit 130 (dispatcher's
+        # own SIGTERM trap) / 143 (128 + SIGTERM=15, scheduler-reported) is
+        # still a definitive preemption signal. Route bumped campus jobs to the
+        # ``preempted`` cluster, overriding ``unknown``/``walltime`` — and
+        # override sig too, otherwise the cluster would carry
+        # ``suggested_fix=increase-walltime`` and auto-bump h_rt on every
+        # preempted job, burning the budget (v3 BUG-6V3-3).
         preempted_override = entry.get("exit_code") in (130, 143) and category in (
             "unknown",
             "walltime",
         )
         if preempted_override:
             category = "preempted"
-        # D1c: VASPilot-pattern catalog returns a suggested_fix per error
-        # class so integrating agents can auto-resubmit with adjusted
-        # resources rather than asking the user. Importable as
-        # ``hpc_agent.ops.recover.failure_signatures.classify``.
-        from hpc_agent.ops.recover.failure_signatures import classify
-
-        sig = classify(content, entry.get("exit_code"))
-        # The category fallback above also needs to override sig — otherwise
-        # the cluster carries ``category=preempted`` but
-        # ``suggested_fix=increase-walltime`` (or ``unknown``) from the catalog,
-        # which would auto-bump h_rt on every preempted job and burn the budget
-        # (v3 BUG-6V3-3).
-        if preempted_override:
             sig = {
                 "error_class": "preempted",
                 "suggested_fix": {"action": "resubmit-preempted"},

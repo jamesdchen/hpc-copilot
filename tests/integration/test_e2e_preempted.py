@@ -4,7 +4,7 @@ Wires together the cluster-side dispatcher's SIGTERM trap with the
 agent-surface's failure-clustering and envelope-key path:
 
   dispatch.py exit 130 + SIGTERM stderr line
-   → ops.recover.runner_failures._categorize finds the 'preempted' pattern
+   → ops.recover.failure_signatures.classify finds the 'preempted' pattern
    → ops.recover.runner_failures.cluster_failures_by_fingerprint groups all bumped tasks
    → ops.recover.failures_atom.fetch_failures surfaces preempted_count /
      preempted_task_ids on the envelope
@@ -21,10 +21,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent.ops.recover.runner_failures import (
-    _categorize,
-    cluster_failures_by_fingerprint,
-)
+from hpc_agent.ops.recover.failure_signatures import classify
+from hpc_agent.ops.recover.runner_failures import cluster_failures_by_fingerprint
 from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -50,7 +48,7 @@ class TestCategorizeRecognisesPreemption:
             "running executor\n"
             "[hpc-agent] SIGTERM received; cluster preemption imminent\n"
         )
-        assert _categorize(stderr) == "preempted"
+        assert classify(stderr, None)["error_class"] == "preempted"
 
     def test_exit_code_130_is_a_fallback_when_stderr_clipped(self) -> None:
         """If the stderr tail was clipped before the SIGTERM line lands,
