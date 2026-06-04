@@ -21,7 +21,10 @@ ship a partly-broken spec.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 from importlib.resources import files as _resource_files
+from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
@@ -231,6 +234,20 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         cluster_scratch = ""
     validate_remote_path_under_scratch(remote_path, cluster_scratch)
 
+    # Defensive preflight: refuse a bare-script EXECUTOR (e.g.
+    # ``python3 executors/foo.py``) when ``foo.py`` is actually a
+    # ``@register_run``-decorated file. The cluster-side dispatcher passes
+    # task kwargs only via ``HPC_KW_<NAME>`` env vars, never argv, so a
+    # naive script invocation hits the file's argparse-driven ``__main__``
+    # block and exits with "required argument missing" — empirically
+    # observed in the 0.10.2 Hoffman2 demo where 100 tasks ran with exit 0
+    # but produced no metrics.json (argparse exit 2 silenced downstream).
+    # The interview path auto-generates a ``python3 -c "...; _m.compute(_n)"``
+    # one-liner for ``register_run`` entry points; if the caller is hand-
+    # rolling extra_env or carrying a pre-fix interview, catch it here.
+    if extra_env and "EXECUTOR" in extra_env:
+        _check_register_run_executor(extra_env["EXECUTOR"])
+
     job_name = job_name or profile
     if script is None:
         script = _DEFAULT_SCRIPTS[(backend, bool(is_gpu))]
@@ -310,6 +327,65 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
 
     _validate(out)
     return out
+
+
+# Matches ``python`` / ``python3`` (possibly version-suffixed) followed by
+# exactly one positional ``<path>.py`` token — the naive bare-script shape.
+# A ``-c`` / ``-m`` / any other flag short-circuits the match: those forms
+# are presumed correct (the auto-generated ``python3 -c "..."`` one-liner
+# is exactly the path we want to allow through).
+_BARE_SCRIPT_RE = re.compile(r"^python[0-9.]*$")
+
+
+def _check_register_run_executor(executor: str) -> None:
+    """Raise :class:`errors.SpecInvalid` if *executor* is a bare-script invocation
+    of a ``@register_run``-decorated file.
+
+    Permissive by design: only fires on the exact ``python[3] <file>.py``
+    shape. Anything with ``-c`` / ``-m`` / extra flags is presumed correct
+    and short-circuits before any filesystem check.
+    """
+    try:
+        parts = shlex.split(executor)
+    except ValueError:
+        return  # unparseable shell — leave it to the cluster to surface
+    if len(parts) != 2:
+        return
+    interp, script = parts
+    if not _BARE_SCRIPT_RE.match(interp):
+        return
+    if not script.endswith(".py"):
+        return
+    local_path = Path(script)
+    if not local_path.is_file():
+        return
+    try:
+        source = local_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    # Cheap substring probe — discover.py does the rigorous AST walk, but
+    # for a defensive boundary guard the combined presence of both names
+    # is a strong-enough signal. A false positive on a comment-only file
+    # that mentions both strings is recoverable via the SpecInvalid below.
+    if "register_run" not in source or "hpc_agent" not in source:
+        return
+    raise errors.SpecInvalid(
+        f"EXECUTOR is the bare-script form {executor!r}, but {script} is a "
+        "@register_run-decorated file. The cluster-side dispatcher passes "
+        "task kwargs only via HPC_KW_<NAME> env vars, never argv, so this "
+        "invocation will hit the file's argparse __main__ block and fail "
+        "with 'required argument missing' (the failure is often silent — "
+        "argparse's exit 2 gets eaten and no metrics.json is written).\n"
+        "Use the one-liner form instead, e.g.:\n"
+        f"  python3 -c \"import runpy as _r; _m = _r.run_path('{script}'); "
+        '_n = next(v for v in _m.values() if getattr(v, "_hpc_run", False)); '
+        '_m.compute(_n)"\n'
+        "The framework's interview path generates this automatically for "
+        "register_run entry points — if you're seeing this error, you're "
+        "probably constructing the spec by hand or carrying an older "
+        "interview from before the auto-generation fix. Re-run the "
+        "interview (`hpc-agent setup` / `/submit-hpc`) to regenerate."
+    )
 
 
 def _validate(spec: dict[str, Any]) -> None:

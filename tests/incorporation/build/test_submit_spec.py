@@ -217,6 +217,87 @@ def test_invalid_ssh_target_raises_spec_invalid() -> None:
         )
 
 
+def test_rejects_bare_script_executor_for_register_run_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare ``python3 <file>.py`` EXECUTOR against a @register_run-decorated
+    file is the empirical 0.10.2-demo failure: argparse-__main__ fires, exits
+    2 silently, no metrics.json. Catch at the submission boundary."""
+    monkeypatch.chdir(tmp_path)
+    exec_dir = tmp_path / "executors"
+    exec_dir.mkdir()
+    (exec_dir / "monte_carlo_pi.py").write_text(
+        "from hpc_agent import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def monte_carlo_pi(n_samples: int = 1000) -> dict:\n"
+        "    return {'pi': 3.14}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": "python3 executors/monte_carlo_pi.py"},
+            )
+        )
+    msg = str(excinfo.value)
+    assert "register_run" in msg
+    assert "HPC_KW_" in msg
+    assert "python3 -c" in msg
+
+
+def test_accepts_one_liner_executor_for_register_run_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``python3 -c "..."`` form is the correct invocation — the guard
+    must NOT fire even when the targeted file is @register_run-decorated."""
+    monkeypatch.chdir(tmp_path)
+    exec_dir = tmp_path / "executors"
+    exec_dir.mkdir()
+    (exec_dir / "monte_carlo_pi.py").write_text(
+        "from hpc_agent import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def monte_carlo_pi(n_samples: int = 1000) -> dict:\n"
+        "    return {'pi': 3.14}\n",
+        encoding="utf-8",
+    )
+    one_liner = (
+        'python3 -c "import runpy as _r; '
+        "_m = _r.run_path('executors/monte_carlo_pi.py'); "
+        '_n = next(v for v in _m.values() if getattr(v, \\"_hpc_run\\", False)); '
+        '_m.compute(_n)"'
+    )
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": one_liner})
+    )
+    assert spec["job_env"]["EXECUTOR"] == one_liner
+
+
+def test_accepts_bare_script_executor_for_non_register_run_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare ``python3 <file>.py`` against a normal script (not @register_run)
+    is a legitimate use — the user is intentionally running a plain script.
+    The guard must not fire."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "plain.py").write_text(
+        "import sys\n"
+        "\n"
+        "def main() -> None:\n"
+        "    print('hello')\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": "python3 plain.py"})
+    )
+    assert spec["job_env"]["EXECUTOR"] == "python3 plain.py"
+
+
 def test_assembled_spec_passes_submit_flow_input_schema() -> None:
     """Belt-and-suspenders: the schema validator inside the primitive must
     accept its own output. A regression here means the framework-default
