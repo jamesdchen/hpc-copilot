@@ -699,6 +699,13 @@ def test_entry_point_register_run_executor_cmd_matches_wrapper_shape(tmp_path: P
     # Pulls from $REPO_DIR like wrapper_executor_cmd — runs at the cluster
     # cwd post-rsync, where REPO_DIR is the experiment root.
     assert "REPO_DIR" in cmd
+    # Default output_file to $RESULT_DIR/metrics.json so a function that just
+    # returns a dict lands its result without the user wiring up the kwarg
+    # themselves. Explicit HPC_KW_OUTPUT_FILE still wins (dict comprehension
+    # runs before the setdefault).
+    assert "setdefault('output_file'" in cmd
+    assert "RESULT_DIR" in cmd
+    assert "metrics.json" in cmd
 
 
 def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:

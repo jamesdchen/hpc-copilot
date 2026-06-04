@@ -206,13 +206,30 @@ def register_run_executor_cmd(
     against ``$REPO_DIR`` at task time, matching the wrapper case.
     """
     rel = run_path.relative_to(campaign_dir).as_posix()
+    # Default ``output_file`` to ``$RESULT_DIR/metrics.json`` so a
+    # user function that just ``return``s a dict (the common
+    # @register_run pattern) actually lands the result on disk. The
+    # decorator-injected ``compute(args)`` writes the dict to
+    # ``args.output_file`` when both are present — without this
+    # ``setdefault``, the dispatcher exports ``RESULT_DIR`` but no
+    # ``HPC_KW_OUTPUT_FILE`` (the dispatcher's HPC_KW_* contract
+    # carries only ``tasks.resolve(i)`` kwargs, never framework
+    # metadata), so the dict is silently dropped. Empirical 0.10.3
+    # demo: 100 tasks ran, only ``_runtime.json`` written, no
+    # ``metrics.json``. The explicit user-supplied output_file (via
+    # FLAGS / argparse) still wins because it lands as
+    # ``HPC_KW_OUTPUT_FILE`` and the dict comprehension picks it up
+    # before the setdefault fires.
     py = (
         "import argparse,importlib.util,os;"
         f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel!r});"
         "_s=importlib.util.spec_from_file_location('_hpc_run',_p);"
         "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
-        "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
-        "for k,v in os.environ.items() if k.startswith('HPC_KW_')});"
+        "_kw={k[len('HPC_KW_'):].lower():v "
+        "for k,v in os.environ.items() if k.startswith('HPC_KW_')};"
+        "_kw.setdefault('output_file', "
+        "os.path.join(os.environ.get('RESULT_DIR','.'), 'metrics.json'));"
+        "_n=argparse.Namespace(**_kw);"
         "_m.compute(_n)"
     )
     return f'python3 -c "{py}"'

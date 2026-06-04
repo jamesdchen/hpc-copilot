@@ -7,6 +7,14 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.4 — 2026-06-04
+
+One-line follow-up to 0.10.3's `register_run` auto-gen.
+
+### Fixed — `register_run_executor_cmd` defaults `output_file` to `$RESULT_DIR/metrics.json`
+
+The decorator-injected `compute(args)` wrapper writes a returned dict to `args.output_file` only when both the dict AND `output_file` are present. The dispatcher's `HPC_KW_*` convention carries only `tasks.resolve(i)` kwargs (per-task user data), never framework metadata like `output_file`. Without an explicit `setdefault`, the dispatcher exports `RESULT_DIR` but no `HPC_KW_OUTPUT_FILE`, so the dict gets silently dropped — exactly the empirical 0.10.3 demo case (100 tasks ran, only `_runtime.json` written, no `metrics.json`). Inject `output_file = $RESULT_DIR/metrics.json` via `setdefault` in the `-c` one-liner so the common `@register_run` pattern (function `return`s a dict) actually lands the result. An explicit user-supplied `output_file` (via FLAGS / `HPC_KW_OUTPUT_FILE`) still wins — the dict comprehension reads HPC_KW_* before the `setdefault` fires.
+
 ## 0.10.3 — 2026-06-04
 
 Six landed fixes since 0.10.2, motivated by the live UCLA Hoffman2 demo loop. No wire-surface breaks.
