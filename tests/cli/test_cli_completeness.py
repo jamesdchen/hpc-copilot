@@ -47,6 +47,8 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
     "campaign-health": "campaign health",
     "clusters-list": "clusters list",
     "clusters-describe": "clusters describe",
+    "recoveries-list": "recoveries list",
+    "recoveries-show": "recoveries show",
 }
 
 # Primitives that intentionally have no standalone CLI subcommand —

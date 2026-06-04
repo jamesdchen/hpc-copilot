@@ -55,6 +55,7 @@ EXPECTED_ALL: frozenset[str] = frozenset(
 
 EXPECTED_ERRORS: frozenset[str] = frozenset(
     {
+        "AlreadyInFlight",
         "ClusterPartiallyDegraded",
         "ClusterTimeout",
         "ClusterUnknown",
@@ -69,8 +70,10 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "RemoteCommandFailed",
         "SchedulerThrottled",
         "SchemaIncompat",
+        "SpawnWorkerDied",
         "SpecInvalid",
         "SshUnreachable",
+        "SubmissionIncomplete",
         # ``from __future__ import annotations`` leaks ``annotations`` into
         # ``dir(module)``. Snapshotted verbatim so a future cleanup (e.g.
         # ``del annotations`` or dropping the future import) is a deliberate

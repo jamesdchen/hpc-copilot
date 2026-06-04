@@ -30,6 +30,19 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "emit-skill-return",
+    "output_schema": null,
+    "python": "hpc_agent.cli.skill_returns.emit_skill_return",
+    "side_effects": [
+      "filesystem"
+    ],
+    "verb": "mutate"
+  },
+  {
     "agent_facing": false,
     "cli": null,
     "idempotent": true,
@@ -311,6 +324,19 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "fetch-skill-return",
+    "output_schema": null,
+    "python": "hpc_agent.cli.skill_returns.fetch_skill_return",
+    "side_effects": [
+      "filesystem"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>",
     "idempotent": true,
     "input_schema": null,
@@ -410,6 +436,28 @@
     "name": "recommend-partition",
     "output_schema": "recommend_partition.output.json",
     "python": "hpc_agent.ops.submit.recommend_partition.recommend_partition",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent recoveries list",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "recoveries-list",
+    "output_schema": null,
+    "python": "hpc_agent.recovery.cli.recoveries_list",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent recoveries show --kind <kind>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "recoveries-show",
+    "output_schema": null,
+    "python": "hpc_agent.recovery.cli.recoveries_show",
     "side_effects": [],
     "verb": "query"
   },
@@ -634,6 +682,28 @@
     "name": "dry-run-local",
     "output_schema": "dry_run_local.output.json",
     "python": "hpc_agent.ops.validate.dry_run_local.dry_run_local",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent status-preflight --experiment-dir <experiment_dir>",
+    "idempotent": true,
+    "input_schema": "status_preflight.input.json",
+    "name": "status-preflight",
+    "output_schema": "status_preflight.output.json",
+    "python": "hpc_agent.ops.status_preflight.status_preflight",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-preflight --experiment-dir <experiment_dir> --cluster <cluster> --profile <profile> [--campaign-id <campaign_id>] [--expected-cmd-sha <expected_cmd_sha>]",
+    "idempotent": true,
+    "input_schema": "submit_preflight.input.json",
+    "name": "submit-preflight",
+    "output_schema": "submit_preflight.output.json",
+    "python": "hpc_agent.ops.submit_preflight.submit_preflight",
     "side_effects": [],
     "verb": "validate"
   },

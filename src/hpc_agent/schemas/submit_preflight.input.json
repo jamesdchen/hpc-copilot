@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_preflight.input.json",
+  "title": "SubmitPreflightSpec",
+  "description": "Input spec for the ``submit-preflight`` composite primitive (WS5 #1).\n\nFans out to ``export-package`` + ``plan-throughput`` + ``validate-campaign``\nconcurrently. Replaces three independent ssh-bound CLI calls the agent\ncurrently has to remember to sequence (the live-witnessed 2026-06-04\nfailure mode where the agent narrated \"Running Step 0, plan-throughput,\nvalidate-campaign in parallel\" — convertible to one composite that owns\nthe parallelism). All three sub-calls share ``experiment_dir`` + ``cluster``;\nthe rest are pass-throughs to the respective sub-call.",
+  "type": "object",
+  "required": [
+    "experiment_dir",
+    "cluster",
+    "profile"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory (per the standard hpc-agent convention)."
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string",
+      "description": "Cluster name from clusters.yaml; passed through to plan-throughput + validate-campaign."
+    },
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string",
+      "description": "Scheduler profile (sge / slurm / pbspro / torque); passed through to validate-campaign."
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Campaign Id",
+      "description": "Optional campaign slug; pass-through to validate-campaign for the stochastic-marker check."
+    },
+    "expected_cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 8,
+          "pattern": "^[0-9a-f]{8,64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Cmd Sha",
+      "description": "Required alongside ``campaign_id`` to enable validate-campaign's stochastic-marker check."
+    },
+    "force_export": {
+      "default": false,
+      "type": "boolean",
+      "title": "Force Export",
+      "description": "Pass-through to export-package's ``--force`` (ignore the build cache)."
+    },
+    "notebooks_dir": {
+      "default": "notebooks",
+      "minLength": 1,
+      "type": "string",
+      "title": "Notebooks Dir",
+      "description": "Pass-through to export-package's ``--notebooks-dir``."
+    },
+    "skip": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "export-package",
+          "plan-throughput",
+          "validate-campaign"
+        ]
+      },
+      "default": [],
+      "title": "Skip",
+      "description": "Sub-calls to skip; useful for partial reruns. Empty list runs all three."
+    },
+    "fanout_strategy": {
+      "enum": [
+        "asyncio",
+        "sequential"
+      ],
+      "default": "asyncio",
+      "type": "string",
+      "title": "Fanout Strategy",
+      "description": "Concurrency mode. ``asyncio`` runs the three concurrently (the speedup motivation); ``sequential`` runs them in series for debugging or rare network-saturation-sensitive clusters."
+    },
+    "timeout_sec": {
+      "minimum": 1,
+      "default": 600,
+      "type": "integer",
+      "title": "Timeout Sec",
+      "description": "Per-sub-call subprocess timeout. The default of 600s tolerates a slow export-package + cluster ssh; aggressive callers can lower it."
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_preflight.output.json",
+  "title": "SubmitPreflightReport",
+  "description": "Output ``data`` block for ``submit-preflight`` (WS5 #1).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries one ``SubResult`` per fanned-out sub-call plus\nthe overall verdict derived from them. Skipped sub-calls (per\n``input.skip``) appear as ``null`` so consumers can still introspect\nshape uniformly.\n\nOn a sub-call failure (a sub-envelope with ``ok: false``):\n\n* ``overall`` becomes ``\"fail\"``.\n* The composite still emits ``ok: true`` at the OUTER envelope — the\n  rationale is that the *composite ran successfully*; the failure is in\n  the sub-call's data, surfaced via ``overall`` + the SubResult's\n  ``envelope`` payload. This preserves work done by the parallel\n  siblings that succeeded (no partial-results loss). The CLI verb may\n  choose to translate ``overall: \"fail\"`` to a non-zero exit code for\n  shell-style callers; the envelope shape stays uniform either way.",
+  "type": "object",
+  "required": [
+    "overall",
+    "elapsed_total_sec",
+    "fanout_strategy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "overall": {
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ],
+      "type": "string",
+      "title": "Overall",
+      "description": "Derived: ``fail`` if any non-skipped sub-call returned ``ok: false``; else ``warn`` if validate-campaign returned ``overall: warn``; else ``pass``."
+    },
+    "elapsed_total_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Total Sec",
+      "description": "Wall-clock seconds for the entire fan-out — with the ``asyncio`` strategy this is approximately the slowest single sub-call's elapsed_sec, not the sum."
+    },
+    "fanout_strategy": {
+      "enum": [
+        "asyncio",
+        "sequential"
+      ],
+      "type": "string",
+      "title": "Fanout Strategy",
+      "description": "Echoed from input; confirms which mode actually ran."
+    },
+    "export_package": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Export Package"
+    },
+    "plan_throughput": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Plan Throughput"
+    },
+    "validate_campaign": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Validate Campaign"
+    }
+  },
+  "$defs": {
+    "SubResult": {
+      "additionalProperties": false,
+      "description": "One sub-call's outcome inside the composite.\n\n* ``envelope`` — the verbatim envelope the sub-call emitted (matches\n  envelope.json's oneOf shape; not re-validated here so a sub-call's\n  data block can use any open shape).\n* ``elapsed_sec`` — wall-clock seconds for *this* sub-call only.\n* ``ok`` — mirror of ``envelope.ok`` so consumers can branch without\n  needing to dive into the envelope.\n\nSkipped sub-calls appear at the parent level as ``null``, not as a\nSubResult with ``ok: false`` — the distinction matters for\ncallers that re-run only the failed pieces.",
+      "properties": {
+        "envelope": {
+          "additionalProperties": true,
+          "title": "Envelope",
+          "type": "object",
+          "description": "Verbatim envelope from the sub-call (see envelope.json)."
+        },
+        "elapsed_sec": {
+          "minimum": 0,
+          "type": "number",
+          "title": "Elapsed Sec"
+        },
+        "ok": {
+          "type": "boolean",
+          "title": "Ok",
+          "description": "Mirror of ``envelope.ok`` for fast branching without diving in."
+        }
+      },
+      "required": [
+        "envelope",
+        "elapsed_sec",
+        "ok"
+      ],
+      "title": "SubResult",
+      "type": "object"
+    }
+  }
+}

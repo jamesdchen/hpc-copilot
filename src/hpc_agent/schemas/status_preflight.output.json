@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/status_preflight.output.json",
+  "title": "StatusPreflightReport",
+  "description": "Output ``data`` block for ``status-preflight`` (WS5 #3).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries one ``SubResult`` per fanned-out sub-call;\nskipped sub-calls appear as ``null`` so consumers can introspect uniformly.\n\nThe ``overall`` semantics here is simpler than submit-preflight (no\nvalidate-campaign warn band): ``fail`` if any non-skipped sub-call\nreturned ``ok: false``; else ``pass``. The composite itself emits\n``ok: true`` at the outer envelope — sub-failures surface via\n``overall`` so partial results are preserved.",
+  "type": "object",
+  "required": [
+    "overall",
+    "elapsed_total_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "overall": {
+      "enum": [
+        "pass",
+        "fail"
+      ],
+      "type": "string",
+      "title": "Overall"
+    },
+    "elapsed_total_sec": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Elapsed Total Sec"
+    },
+    "install_commands": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Install Commands"
+    },
+    "load_context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Load Context"
+    }
+  },
+  "$defs": {
+    "SubResult": {
+      "additionalProperties": false,
+      "description": "One sub-call's outcome — verbatim envelope + elapsed wall-clock + ``ok`` mirror. Skipped sub-calls show as ``null`` at the parent (not a SubResult with ``ok: false``) so a re-run can target only the missing piece.",
+      "properties": {
+        "envelope": {
+          "additionalProperties": true,
+          "title": "Envelope",
+          "type": "object"
+        },
+        "elapsed_sec": {
+          "minimum": 0,
+          "type": "number",
+          "title": "Elapsed Sec"
+        },
+        "ok": {
+          "type": "boolean",
+          "title": "Ok"
+        }
+      },
+      "required": [
+        "envelope",
+        "elapsed_sec",
+        "ok"
+      ],
+      "title": "SubResult",
+      "type": "object"
+    }
+  }
+}

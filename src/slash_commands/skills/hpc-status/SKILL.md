@@ -14,6 +14,7 @@ Agent-facing decision layer over the **[monitor-flow](../../../../docs/primitive
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
 - **Don't preemptively override the invoker default — but DO auto-retry inline on a real spawn failure.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. The framework refuses an agent-supplied `--inline` flag when worker credentials exist (#155 guard), and that refusal is by design. **However:** when the spawn actually fails and the returned `internal` error message includes the framework's `Fallback: …HPC_AGENT_INVOKER=inline…` remediation hint, AUTOMATICALLY set `HPC_AGENT_INVOKER=inline` in the env and retry — the env var bypasses the #155 guard because it is the documented operator-opt-in form, and the framework's own hint is the signal that inline is the correct recovery path. Do NOT pause to ask the user. PowerShell `$env:HPC_AGENT_INVOKER = "inline"`, bash `export HPC_AGENT_INVOKER=inline`.
 - **No narration at sub-skill boundaries.** When a composed sub-skill returns control, IMMEDIATELY chain to the next resolution step without emitting a summary message. Writing "X returned" or "Now resolving Y" reads as an end-of-turn signal to the harness and yields control back to the user — but the procedure has more steps to walk, so just continue tool-calling. The user sees only the final envelope.
+- **Return via the emit-skill-return file primitive — never via chat.** This skill is composed by `hpc-campaign`; the parent reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-status.json`, not from any closing chat message. Step 7 below stages the envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call. The schema lives at `hpc_agent/schemas/skill_returns/hpc-status.json` and is enforced by the emit verb.
 - **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns (`python -c`, `bash -c`, command substitution, pipes) **regardless of `allow` rules** — issuing one stalls the workflow on a non-bypassable prompt, breaking the no-narration / no-pause invariants above. To read a JSON file (sidecar, `runs/<id>.json`, `axes.yaml`, anything under `.hpc/`): use the `Read` tool. To search filenames: `Glob`. To grep contents: `Grep`. If you need a value computed from cluster or framework state, there is almost always a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `inspect-runs`, `verify-canary`, `reconcile`) — call that. The ONLY Bash this skill should issue is the `hpc-agent` calls listed in the Steps below (plus `git` if you commit a scaffolded file).
 
 ## Inputs
@@ -31,21 +32,17 @@ Same as `hpc-submit`: walk every step, accumulate ambiguities (no early-return),
 
 ## Steps
 
-### 0. Ensure agent assets installed (idempotent)
-
-The handoff at the end of this skill dispatches the rendered procedure to the named subagent `hpc-worker` discovered under `~/.claude/agents/hpc-worker.md`. If that file is missing — typically because `hpc-agent install-commands` hasn't run on this machine yet — the dispatch fails. Run install-commands first so this never bites:
+### 0. Run the status-preflight composite (install + load)
 
 ```bash
-hpc-agent install-commands
+hpc-agent status-preflight --experiment-dir <experiment_dir>
 ```
 
-Idempotent: a no-op when assets are already installed. A pre-existing 0-byte file at `~/.claude/{commands,skills,agents}` is auto-cleared (see `result.cleared_collisions`); a non-empty file raises `FileExistsError` with a clear remediation — stop and surface that. Costs ~50ms when re-run.
+Single verb that runs `install-commands` then `load-context` as one deterministic state machine — replaces the two-step Step 0 (`install-commands`) + Step 1 (`load-context`) pattern this skill carried through 0.10.6. Sequential by design: install must succeed before load-context can resolve framework paths. The composite's `data` carries both sub-envelopes verbatim under `data.install_commands.envelope` and `data.load_context.envelope` — same shapes the steps had individually, so downstream branching on `data.in_flight` etc. is unchanged. Skipped (`null`) slots are visible per-call so a re-run can target only the failing piece.
 
-### 1. Load context
+On `overall: fail`, the failing sub-envelope's `error_code` + `remediation` is one parse away under `data.<subcall>.envelope`; surface that to the caller and stop. On `overall: pass`, proceed to Step 2. The old Step 0's `install-commands` collision handling (cleared 0-byte sentinel files, `FileExistsError` on non-empty collisions) still applies and is reported under `data.install_commands.envelope.data.cleared_collisions`.
 
-```bash
-hpc-agent load-context --experiment-dir <experiment_dir>
-```
+Replaces the prose-discipline contract where the agent had to remember Step 0 (whose omission motivated the entire 0.10.2 release).
 
 ### 2. Resolve run_id
 
@@ -118,9 +115,19 @@ Branch on the envelope's `data.lifecycle_state` (or `data.report.result.lifecycl
   ```
   At >10% failure, auto-resubmitting usually wastes more cluster time on the same bug. The safe_default is `investigate` — don't auto-resubmit.
 
-### 7. Return envelope
+### 7. Emit the return envelope (final tool call)
 
-Surface to caller verbatim.
+The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-status.json`. Stage it, then emit:
+
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-status.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-status"`, `run_id`, `lifecycle_state` (from `data.lifecycle_state` on the snapshot branch or `data.report.result.lifecycle_state` on the worker branch). Optional: `next_step_hint` (e.g. `"aggregate"` when complete), `failed_task_ids` (on `terminal_with_failures`), `resubmit_run_id` (when Step 6 auto-resubmitted), `decisions` (the accumulated decisions list). On a fatal error, write the standard `ErrorEnvelope` shape.
+
+2. Invoke as your FINAL tool call:
+
+   ```bash
+   hpc-agent emit-skill-return --skill hpc-status --experiment-dir <experiment_dir>
+   ```
+
+   The verb validates against `hpc_agent/schemas/skill_returns/hpc-status.json` and atomically renames `.staged.json` → `.json`. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-status`.
 
 ## Notes
 

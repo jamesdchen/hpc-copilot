@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/status_preflight.input.json",
+  "title": "StatusPreflightSpec",
+  "description": "Input spec for the ``status-preflight`` composite primitive (WS5 #3, lowest-hanging variant).\n\nCollapses the boilerplate at the top of ``hpc-status`` — Step 0\n(install-commands) and Step 1 (load-context) — into one CLI call.\nNo ``reconcile`` branch (only submit/aggregate have that), so this is\nthe simplest of the ``<skill>-preflight`` family and a clean prototype\nfor the pattern.\n\nThe agent's prose-discipline at the top of every status invocation is\nreplaced by one verb that runs the same deterministic sequence — no\nrisk of skipping Step 0 (the entire 0.10.2 release was motivated by\nthat exact failure).",
+  "type": "object",
+  "required": [
+    "experiment_dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory."
+    },
+    "skip": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "install-commands",
+          "load-context"
+        ]
+      },
+      "default": [],
+      "title": "Skip",
+      "description": "Sub-calls to skip. Mostly useful in tests where the install-commands network round-trip is already known fresh; in production callers should pass an empty list."
+    },
+    "timeout_sec": {
+      "minimum": 1,
+      "default": 60,
+      "type": "integer",
+      "title": "Timeout Sec",
+      "description": "Per-sub-call subprocess timeout. install-commands is a local filesystem operation (<1s typical); load-context can touch ``~/.claude/hpc/`` and clusters.yaml (single-digit seconds)."
+    }
+  }
+}
