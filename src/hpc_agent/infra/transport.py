@@ -206,23 +206,38 @@ def _remote_preclean(
     """
     quoted_remote = shlex.quote(remote_path)
     clean_cmd = f"mkdir -p {quoted_remote} && {_remote_clean_cmd(remote_path, exclude)}"
-    ssh_cmd = [*ssh_argv("ssh"), ssh_target, clean_cmd]
-    try:
-        return subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"remote --delete pre-clean of {remote_path} on {ssh_target} timed out "
-            f"after {timeout}s, before the transfer could start. This usually means a "
-            "large debris tree (e.g. crash-loop WIP dirs under results/) under a path "
-            "the pre-clean still traverses. Clean it manually (e.g. "
-            f"`rm -rf {remote_path.rstrip('/')}/results/<run_id>`) or push with delete=False."
-        ) from exc
+
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        # Rebuild ssh_cmd inside so a named-pipe retry picks up the
+        # updated :func:`_ssh_multiplex_opts` after
+        # :func:`mark_named_pipe_broken`. The remote ``clean_cmd`` itself
+        # is constant — only the ssh-side opts change.
+        ssh_cmd = [*ssh_argv("ssh"), ssh_target, clean_cmd]
+        try:
+            return subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"remote --delete pre-clean of {remote_path} on {ssh_target} timed out "
+                f"after {timeout}s, before the transfer could start. This usually means a "
+                "large debris tree (e.g. crash-loop WIP dirs under results/) under a path "
+                "the pre-clean still traverses. Clean it manually (e.g. "
+                f"`rm -rf {remote_path.rstrip('/')}/results/<run_id>`) or push with delete=False."
+            ) from exc
+
+    # Auto-fallback on the syscall-layer named-pipe ControlMaster failure
+    # mode (Windows OpenSSH version probe can't catch it; 2026-06-04). The
+    # preclean is the LAST ssh-touching surface that wasn't wrapped —
+    # ``ssh_run`` and ``rsync_push``/``_tar_ssh_push`` already had the
+    # retry helper. Without this wrap a preclean that hit the marker would
+    # surface a hard failure even if the actual cluster connectivity was
+    # fine via the legacy ControlMaster=no path.
+    return run_with_named_pipe_retry(_attempt)
 
 
 def _tar_ssh_push(
