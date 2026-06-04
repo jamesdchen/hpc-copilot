@@ -65,7 +65,7 @@ Idempotent: a no-op when assets are already installed (the same byte content lan
 hpc-agent load-context --experiment-dir <experiment_dir>
 ```
 
-If `data.next_step_hint == "monitor"`, return `spec_invalid: already_in_flight` with the run_id (different from `needs_resolution` — this isn't an ambiguity, it's a state conflict).
+If `data.next_step_hint == "monitor"`, return `spec_invalid: already_in_flight` with the run_id (different from `needs_resolution` — this isn't an ambiguity, it's a state conflict). The error envelope should name three concrete recovery paths in the remediation: (a) `/monitor-hpc` to drive the run to terminal (the normal case — the prior submit really is still running); (b) `hpc-agent reconcile --run-id <id> --scheduler <sge|slurm|pbspro|torque>` when the operator knows the cluster state is gone (scratch wiped, job manually cancelled, cluster bounced) — reconcile polls the cluster, sees the dir/job is missing, and marks the journal `abandoned` so the next submit isn't blocked; (c) `--no-canary` only when the prior run's *canary* is the in-flight one and the operator has independently confirmed it succeeded. Do NOT skip canary as a generic workaround for a journal-cluster mismatch — (b) is the right tool, not (c).
 
 ### 2. Resolve cluster
 
