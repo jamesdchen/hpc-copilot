@@ -26,6 +26,15 @@ def test_gpu_oom_with_parallelism_reshards_not_more_memory():
     assert r.action["action"] == "increase-parallelism"
 
 
+def test_gpu_oom_with_stringified_parallelism_still_reshards():
+    """A producer that stringifies resource_spec values must not regress the
+    OOM-discriminator (the int-only ``_degree`` would treat ``"2"`` as
+    no-parallelism and route to ``increase-mem-per-gpu``)."""
+    r = resolve(_features(error_class="gpu_oom", resource_spec={"tp_size": "2"}))
+    assert r.decided_by == "code"
+    assert r.action["action"] == "increase-parallelism"
+
+
 def test_gpu_oom_with_large_width_first_attempt_shrinks():
     """OOM at a large batch width on the first attempt → shrink the width."""
     r = resolve(

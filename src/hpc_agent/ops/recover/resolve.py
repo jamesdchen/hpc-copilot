@@ -122,7 +122,13 @@ class Resolution:
 
 
 def _degree(resource_spec: dict[str, Any] | None, keys: Iterable[str]) -> int | None:
-    """Largest integer value among *keys* present in *resource_spec*, or None."""
+    """Largest integer value among *keys* present in *resource_spec*, or None.
+
+    Coerces non-negative integer-shaped ``str`` values (``"2"``); a producer
+    that stringifies ``resource_spec`` would otherwise silently bypass the
+    parallelism/width discriminators and route a ``gpu_oom`` to the wrong
+    fix.
+    """
     if not resource_spec:
         return None
     best: int | None = None
@@ -130,6 +136,8 @@ def _degree(resource_spec: dict[str, Any] | None, keys: Iterable[str]) -> int | 
         v = resource_spec.get(k)
         if isinstance(v, bool):  # bool is an int subclass — exclude it
             continue
+        if isinstance(v, str) and v.isdigit():
+            v = int(v)
         if isinstance(v, int):
             best = v if best is None else max(best, v)
     return best

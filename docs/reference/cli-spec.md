@@ -83,6 +83,25 @@ some subcommands keep for back-compat. Consumers should prefer
 
 Source of truth: `hpc_agent/schemas/envelope.json` and the `HpcError` hierarchy in `hpc_agent/errors.py`.
 
+### Escalation block (optional)
+
+Either envelope variant may carry a top-level `"escalation"` block — one *"needs a decision"* record attached when the deterministic resolver can't fully discharge the decision. Same shape on success (e.g. a campaign-advance that succeeded but flags a follow-up choice) and failure (a failure the resolver could not resolve).
+
+```json
+{"ok": false, "error_code": "remote_command_failed", ...,
+ "escalation": {
+   "decided_by": "judgement",
+   "reason": "<human-readable summary>",
+   "failure_features": {...},
+   "candidate_actions": [{...}, ...],
+   "cluster": {"fingerprint": "...", "task_ids": [...]}
+ }}
+```
+
+`decided_by` is `"code"` when a deterministic resolver produced this (surfaced for confirmation / audit) and `"judgement"` when the deterministic layer could not resolve it and the agentic layer must decide. The block does not itself carry the verdict — the journal's `pending_verdict` holding state owns that.
+
+Source of truth: `hpc_agent/schemas/escalation.json`.
+
 ## Exit code → error_code mapping
 
 Wired in `hpc_agent/cli/_helpers.py` (`_EXIT_CODE_BY_CATEGORY`).

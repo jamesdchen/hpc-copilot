@@ -21,6 +21,7 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 - **One stdout shape**: a single-line JSON envelope.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
+  - Either may carry an optional top-level `escalation` block (`schemas/escalation.json`) when a "needs a decision" record is attached — surfaced for `code`-decided audit or for `judgement`-decided agentic resolution.
   - See [`schemas/envelope.json`](../../src/hpc_agent/schemas/envelope.json) and
     [`docs/reference/cli-spec.md`](cli-spec.md).
 - **Stable exit codes**: 0 ok, 1 user error, 2 cluster/network, 3 internal.
