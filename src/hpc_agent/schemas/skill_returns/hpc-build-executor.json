@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/skill_returns/hpc-build-executor.json",
+  "title": "hpc-build-executor skill return envelope",
+  "description": "Return envelope written by the hpc-build-executor sub-skill (covers both the executor scaffold AND the companion axes-init step) at <experiment_dir>/.hpc/_returns/hpc-build-executor.json. oneOf [Success, Error].",
+  "oneOf": [
+    { "$ref": "#/$defs/Success" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "skill", "executor_path", "executor_type", "executor_source"],
+      "properties": {
+        "ok": { "const": true },
+        "skill": { "const": "hpc-build-executor" },
+        "executor_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the materialized executor file (build-executor primitive's data.path)."
+        },
+        "executor_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The build-executor primitive's data.type (e.g. 'python_script')."
+        },
+        "executor_source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provenance label from build-executor (e.g. 'template:starter')."
+        },
+        "axes_path": {
+          "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }],
+          "default": null,
+          "description": "Absolute path to the .hpc/axes.yaml the axes-init companion wrote. Null when axes-init was not invoked."
+        },
+        "axes_wrote": {
+          "anyOf": [{ "type": "boolean" }, { "type": "null" }],
+          "default": null,
+          "description": "Companion axes-init's wrote flag. True when axes-init authored a new file; false when an existing file was kept (without --force). Null when axes-init was not invoked."
+        },
+        "homogeneous_axes": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            { "type": "null" }
+          ],
+          "default": null,
+          "description": "Homogeneous axes the companion recorded into axes.yaml. Null when axes-init was not invoked."
+        }
+      }
+    },
+    "Error": { "$ref": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json#/$defs/ErrorEnvelope" }
+  }
+}

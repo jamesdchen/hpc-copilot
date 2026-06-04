@@ -72,6 +72,7 @@ include = ["hpc_agent*", "slash_commands*"]
 hpc_agent = [
     "config/*.yaml",
     "schemas/*.json",
+    "schemas/skill_returns/*.json",
     "operations.json",
     "models/mapreduce/templates/scaffolds/*.py",
     "incorporation/build/scaffolds/*",

@@ -16,6 +16,7 @@ The slash `/submit-hpc` is the human-interview wrapper around this skill; an ext
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
 - **Don't preemptively override the invoker default — but DO auto-retry inline on a real spawn failure.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. The framework refuses an agent-supplied `--inline` flag when worker credentials exist (#155 guard), and that refusal is by design — don't dodge a *hypothetical* worker-auth risk. **However:** when the spawn actually fails and the returned `internal` error message includes the framework's `Fallback: …HPC_AGENT_INVOKER=inline…` remediation hint (the spawn-worker quota / billing / auth recovery signal added in 0.10.3), AUTOMATICALLY set `HPC_AGENT_INVOKER=inline` in the env and retry — the env var bypasses the #155 guard because it is the documented operator-opt-in form, and the framework's own hint is the signal that inline is the correct recovery path. Do NOT pause to ask the user; this skill delegates the decision when the framework explicitly recommends it. The shell-level set varies by host: PowerShell `$env:HPC_AGENT_INVOKER = "inline"`, bash `export HPC_AGENT_INVOKER=inline`.
 - **No narration at sub-skill boundaries.** When a composed sub-skill (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`, `axes-init`, etc.) returns control, IMMEDIATELY chain to the next resolution step without emitting a summary message. Writing "X returned" or "Now resolving Y" reads as an end-of-turn signal to the harness and yields control back to the user — but the procedure has more steps to walk, so just continue tool-calling. The user sees only the final envelope (success, `needs_resolution`, or `spec_invalid`).
+- **Read sub-skill returns from the file primitive, not from the Skill tool result.** Sub-skills (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`) emit their return envelope to `<experiment_dir>/.hpc/_returns/<skill>.json` and intentionally do NOT write a closing chat message — that would fire an end-of-turn signal and stall this skill mid-procedure. After every `Skill(<sub>)` tool call returns, the FIRST follow-up action MUST be `hpc-agent fetch-skill-return --skill <sub> --experiment-dir <experiment_dir>` — that verb reads, re-validates, and prints the sub-skill's envelope (and deletes it). Parse the JSON the verb emits to stdout; that's the sub-skill's return value. If `fetch-skill-return` returns `precondition_failed` with `failure_features.error_class_raw == "skill_return_missing"`, the sub-skill never emitted — re-invoke it or surface the missing-envelope error to the caller.
 - **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns (`python -c`, `bash -c`, command substitution, pipes) **regardless of `allow` rules** — issuing one stalls the workflow on a non-bypassable prompt, breaking the no-narration / no-pause invariants above. To read a JSON file (submit_spec, sidecar, `interview.json`, `axes.yaml`, anything under `.hpc/`): use the `Read` tool. To search filenames: `Glob`. To grep contents: `Grep`. If you need a value computed from cluster or framework state, there is almost always a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `inspect-runs`, `verify-canary`, `reconcile`) — call that. The ONLY Bash this skill should issue is the `hpc-agent` calls listed in the Steps below (plus `git` if you commit a scaffolded file).
 
 ## Inputs
@@ -116,6 +117,14 @@ Otherwise (no `@register_run` and no `interview.json`), invoke the `hpc-wrap-ent
 {"field": "entry_point", "candidates": ["train.py", "main.py"], "depends_on": [], "safe_default": "<first match>"}
 ```
 
+Immediately after `Skill(hpc-wrap-entry-point)` returns, read its envelope from the file primitive:
+
+```bash
+hpc-agent fetch-skill-return --skill hpc-wrap-entry-point --experiment-dir <experiment_dir>
+```
+
+The verb prints the sub-skill's return envelope to stdout (and deletes it). Parse the JSON to pick up `entry_point_kind`, `run_name`, `tasks_py_path`, `interview_json_path`, `wrapper_path?`, `total_tasks`, `cmd_sha`. A `precondition_failed` / `skill_return_missing` envelope means the sub-skill never emitted — surface as `spec_invalid: skill_return_missing` or re-invoke.
+
 ### 3b. Cover non-axis required executor params
 
 Once the entry point is resolved, cross-check its signature against the `task_generator`'s axes (this is what `validate-executor-signatures` gates on at submit — `uncovered_required_param`). A param that is **required** (no default in the executor's CLI surface) and **not a swept axis** must be given a constant, or every cluster task crashes at argparse (#195).
@@ -131,7 +140,7 @@ Once the entry point is resolved, cross-check its signature against the `task_ge
 
 Check `.hpc/axes.yaml` for `executors.<run_name>` matching the current sha. If present, resolved — continue.
 
-Otherwise, invoke `hpc-classify-axis` sub-skill. If it returns ambiguities, propagate. Sub-skill's own safe_default (`Sequential` for ambiguous trees) populates the entry's `safe_default`.
+Otherwise, invoke `hpc-classify-axis` sub-skill. After `Skill(hpc-classify-axis)` returns, fetch its envelope via `hpc-agent fetch-skill-return --skill hpc-classify-axis --experiment-dir <experiment_dir>` and parse `run_name` / `run_signature_sha` / `data_axis` / `classified_by` from stdout. If it returns ambiguities (Error branch), propagate. Sub-skill's own safe_default (`Sequential` for ambiguous trees) populates the entry's `safe_default`.
 
 ```json
 {"field": "data_axis", "candidates": null, "depends_on": ["entry_point"], "safe_default": {"kind": "sequential"}}
@@ -141,7 +150,7 @@ Note the `depends_on: ["entry_point"]` — the data_axis dialog needs to know wh
 
 ### 5. Resolve homogeneous axes (cold-start only)
 
-Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, invoke `hpc-build-executor` sub-skill (axes-init companion). Propagate ambiguities.
+Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, invoke `hpc-build-executor` sub-skill (axes-init companion). After `Skill(hpc-build-executor)` returns, fetch its envelope via `hpc-agent fetch-skill-return --skill hpc-build-executor --experiment-dir <experiment_dir>` and parse `executor_path` / `axes_path` / `homogeneous_axes` from stdout. Propagate ambiguities.
 
 ### 6. Resolve walltime, gpu_type, partition
 

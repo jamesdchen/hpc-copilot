@@ -14,6 +14,7 @@ Agent-facing composition over the **[classify-axis](../../../../docs/primitives/
 
 - **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+- **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-classify-axis.json`. The final step of this skill (Step 7 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-classify-axis.json` and is enforced by the emit verb.
 
 ## Inputs
 
@@ -151,6 +152,20 @@ Persist the reasoning via the existing [interview](../../../../docs/primitives/i
 ### 7. The elision gate is the backstop
 
 A classification can be wrong — agent-side via heuristic mistake, human-side via misread. A misclassified axis runs fine and returns **plausible-but-wrong** numbers. `/submit-hpc` runs `hpc_agent.experiment_kit.assert_elision_equivalent` (whole run vs split run, assert equality) as a pre-submit gate. For autonomous callers (MARs), wire the elision gate into CI hard-blocking — without a fixture the gate currently warns rather than blocks, which is acceptable for the human-driven path but thin cover for the agent-driven one.
+
+### 8. Emit the return envelope (final tool call)
+
+The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-classify-axis.json`, not from any chat message you might write. Stage it, then emit:
+
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-classify-axis.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-classify-axis"`, `run_name`, `run_signature_sha`, `data_axis` (the same shape Step 5 passed to the primitive), `classified_by` (`"interview"` / `"recall"` / `"agent"`). Optional: `reasoning` (the one-line rationale from Step 6). On a fatal error, write the standard `ErrorEnvelope` shape (`ok: false`, `error_code`, `message`, `category`, `retry_safe`) — same fields as any `hpc-agent` error envelope.
+
+2. Invoke as your FINAL tool call:
+
+   ```bash
+   hpc-agent emit-skill-return --skill hpc-classify-axis --experiment-dir <experiment_dir>
+   ```
+
+   The verb validates the staged envelope against `hpc_agent/schemas/skill_returns/hpc-classify-axis.json`, then atomically renames `.staged.json` → `.json`. On schema failure the staged file is preserved for debugging and a `spec_invalid` envelope identifies the failing JSON path. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-classify-axis`.
 
 ## Notes
 

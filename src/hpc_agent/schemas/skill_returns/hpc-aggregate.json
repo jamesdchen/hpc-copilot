@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/skill_returns/hpc-aggregate.json",
+  "title": "hpc-aggregate skill return envelope",
+  "description": "Return envelope written by the hpc-aggregate sub-skill at <experiment_dir>/.hpc/_returns/hpc-aggregate.json. oneOf [Success, Error].",
+  "oneOf": [
+    { "$ref": "#/$defs/Success" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "skill", "run_id", "profile", "stage"],
+      "properties": {
+        "ok": { "const": true },
+        "skill": { "const": "hpc-aggregate" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "stage": { "type": "string", "minLength": 1 },
+        "metrics_path": {
+          "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }],
+          "default": null,
+          "description": "Local path of the materialized aggregated metrics artifact (e.g. results/metrics.json). Null when aggregate-flow did not produce a single canonical path."
+        },
+        "allow_partial": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the aggregation proceeded with missing waves (the caller-resolved allow_partial flag)."
+        },
+        "missing_waves": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+            { "type": "null" }
+          ],
+          "default": null,
+          "description": "When allow_partial=true, the wave ids that were missing; otherwise null."
+        },
+        "decisions": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true },
+          "default": [],
+          "description": "Decision log entries the skill accumulated (e.g. 'proceeded past allow_partial=true')."
+        }
+      }
+    },
+    "Error": { "$ref": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json#/$defs/ErrorEnvelope" }
+  }
+}

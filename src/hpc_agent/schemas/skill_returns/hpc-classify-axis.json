@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/skill_returns/hpc-classify-axis.json",
+  "title": "hpc-classify-axis skill return envelope",
+  "description": "Return envelope written by the hpc-classify-axis sub-skill at <experiment_dir>/.hpc/_returns/hpc-classify-axis.json. oneOf [Success, Error].",
+  "oneOf": [
+    { "$ref": "#/$defs/Success" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "skill", "run_name", "run_signature_sha", "data_axis", "classified_by"],
+      "properties": {
+        "ok": { "const": true },
+        "skill": { "const": "hpc-classify-axis" },
+        "run_name": { "type": "string", "minLength": 1 },
+        "run_signature_sha": { "type": "string", "minLength": 1 },
+        "data_axis": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["independent", "associative", "bounded_halo", "sequential", "cartesian"] },
+            "monoid": { "enum": ["sum", "moments"] },
+            "halo": {
+              "type": "object",
+              "required": ["expr"],
+              "properties": { "expr": { "type": "string", "minLength": 1 } }
+            }
+          }
+        },
+        "classified_by": { "enum": ["interview", "recall", "agent"] },
+        "reasoning": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }],
+          "default": null,
+          "description": "Optional one-line rationale (which branch resolved). Same content the skill also writes to the interview transcript."
+        }
+      }
+    },
+    "Error": { "$ref": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json#/$defs/ErrorEnvelope" }
+  }
+}

@@ -17,6 +17,7 @@ The skill persists, in either pathway:
 
 - **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+- **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. The final step of this skill (Step 8 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and is enforced by the emit verb.
 
 ## Inputs
 
@@ -261,14 +262,19 @@ hpc-agent interview --spec /tmp/interview_spec.json --campaign-dir .
 
 On `ok=True`: the envelope reports the materialized artifacts (`tasks.py`, `interview.json`, plus `.hpc/wrappers/<run_name>.py` only on the wrapper path), `total_tasks`, and `cmd_sha`. On `error_code=spec_invalid`: surface the message to the caller — most often a typo (argv placeholder not in signature) or a missing frozen config. The skill does not loop on its own; the caller (slash or MARs) decides whether to re-supply.
 
-### 8. Return the materialization summary
+### 8. Emit the return envelope (final tool call)
 
-Return to the caller (no in-chat prose):
-- `entry_point.kind` (`register_run` or `shell_command`)
-- `run_name`
-- `tasks_py_path`, `interview_json_path` (and `wrapper_path` on 3b)
-- `total_tasks`, `cmd_sha`
-- The list of files edited (Step 3a only)
+The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. Stage it, then emit:
+
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-wrap-entry-point"`, `entry_point_kind` (`"register_run"` or `"shell_command"`), `run_name`, `tasks_py_path`, `interview_json_path`, `total_tasks` (from `interview`'s envelope), `cmd_sha` (from `interview`'s envelope). Optional: `wrapper_path` (set on the 3b wrapper path; null/omit on the 3a direct-decoration path), `files_edited` (the list of source files Step 3a edited; empty `[]` on the 3b path). On a fatal error, write the standard `ErrorEnvelope` shape.
+
+2. Invoke as your FINAL tool call:
+
+   ```bash
+   hpc-agent emit-skill-return --skill hpc-wrap-entry-point --experiment-dir <experiment_dir>
+   ```
+
+   The verb validates against `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and atomically renames `.staged.json` → `.json`. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-wrap-entry-point`.
 
 The submit workflow's Step 0b picks up `_materialized.entry_point` and threads `executor_cmd` into the submit-flow spec (wrapper path) or runs its normal `@register_run` discovery (direct-decoration path) — no further setup needed.
 

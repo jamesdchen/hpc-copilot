@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/skill_returns/hpc-status.json",
+  "title": "hpc-status skill return envelope",
+  "description": "Return envelope written by the hpc-status sub-skill at <experiment_dir>/.hpc/_returns/hpc-status.json. Covers both the snapshot (single primitive) and blocking-poll (worker handoff) branches. oneOf [Success, Error].",
+  "oneOf": [
+    { "$ref": "#/$defs/Success" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "skill", "run_id", "lifecycle_state"],
+      "properties": {
+        "ok": { "const": true },
+        "skill": { "const": "hpc-status" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "lifecycle_state": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The terminal or interim lifecycle state from the underlying status / monitor-flow envelope (running / pending / complete / terminal_with_failures / terminal_no_progress, etc.)."
+        },
+        "next_step_hint": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }],
+          "default": null,
+          "description": "Suggested follow-on action for the parent (e.g. 'aggregate', 'monitor'). Populated by the skill's Step 5 decision logic."
+        },
+        "failed_task_ids": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "null" }
+          ],
+          "default": null,
+          "description": "Per-task failures (when lifecycle_state == terminal_with_failures); null when not applicable."
+        },
+        "resubmit_run_id": {
+          "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }],
+          "default": null,
+          "description": "When the skill auto-resubmitted failures within the threshold, the new run_id; otherwise null."
+        },
+        "decisions": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true },
+          "default": [],
+          "description": "Decision log entries the skill accumulated (mirrors the standard worker-report decisions list)."
+        }
+      }
+    },
+    "Error": { "$ref": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json#/$defs/ErrorEnvelope" }
+  }
+}

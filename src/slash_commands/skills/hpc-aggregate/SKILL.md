@@ -14,6 +14,7 @@ Agent-facing decision layer over the **[aggregate-flow](../../../../docs/primiti
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
 - **Don't preemptively override the invoker default — but DO auto-retry inline on a real spawn failure.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. The framework refuses an agent-supplied `--inline` flag when worker credentials exist (#155 guard), and that refusal is by design. **However:** when the spawn actually fails and the returned `internal` error message includes the framework's `Fallback: …HPC_AGENT_INVOKER=inline…` remediation hint, AUTOMATICALLY set `HPC_AGENT_INVOKER=inline` in the env and retry — the env var bypasses the #155 guard because it is the documented operator-opt-in form, and the framework's own hint is the signal that inline is the correct recovery path. Do NOT pause to ask the user. PowerShell `$env:HPC_AGENT_INVOKER = "inline"`, bash `export HPC_AGENT_INVOKER=inline`.
 - **No narration at sub-skill boundaries.** When a composed sub-skill returns control, IMMEDIATELY chain to the next resolution step without emitting a summary message. Writing "X returned" or "Now resolving Y" reads as an end-of-turn signal to the harness and yields control back to the user — but the procedure has more steps to walk, so just continue tool-calling. The user sees only the final envelope.
+- **Return via the emit-skill-return file primitive — never via chat.** This skill is composed by `hpc-campaign`; the parent reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-aggregate.json`, not from any closing chat message. Step 6 below stages the envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call. The schema lives at `hpc_agent/schemas/skill_returns/hpc-aggregate.json` and is enforced by the emit verb.
 - **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns (`python -c`, `bash -c`, command substitution, pipes) **regardless of `allow` rules** — issuing one stalls the workflow on a non-bypassable prompt, breaking the no-narration / no-pause invariants above. To read a JSON file (sidecar, `_combiner/wave_*.json`, `runs/<id>.json`, anything under `.hpc/` or `_aggregated/`): use the `Read` tool. To search filenames: `Glob`. To grep contents: `Grep`. If you need a value computed from cluster or framework state, there is almost always a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `verify-aggregation-complete`, `cluster-reduce`) — call that. The ONLY Bash this skill should issue is the `hpc-agent` calls listed in the Steps below (plus `git` if you commit a scaffolded file).
 
 ## Inputs
@@ -123,7 +124,19 @@ Spawns a fresh-context bare worker that reads `worker_prompts/aggregate.md` — 
 **Isolation ceiling:** a subagent recovers *context* isolation but not *environment* isolation — it shares this session's sandbox posture and auto-loads project CLAUDE.md, unlike the default `--bare` spawn (sandbox forced off, CLAUDE.md stripped). If a sandboxed session would block the cluster SSH, or project memory must not color the run, that's a sign the *user* wants the default spawn, not inline.
 <!-- decision-content:inline-isolation-ceiling end -->
 
-### 6. Return envelope
+### 6. Emit the return envelope (final tool call)
+
+The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-aggregate.json`. Stage it, then emit:
+
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-aggregate.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-aggregate"`, `run_id`, `profile`, `stage`. Optional: `metrics_path` (the local path of the aggregated metrics artifact, e.g. `results/metrics.json`), `allow_partial` (the resolved flag), `missing_waves` (when `allow_partial: true`), `decisions` (accumulated decisions list). On a fatal error, write the standard `ErrorEnvelope` shape.
+
+2. Invoke as your FINAL tool call:
+
+   ```bash
+   hpc-agent emit-skill-return --skill hpc-aggregate --experiment-dir <experiment_dir>
+   ```
+
+   The verb validates against `hpc_agent/schemas/skill_returns/hpc-aggregate.json` and atomically renames `.staged.json` → `.json`. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-aggregate`.
 
 ## Notes
 

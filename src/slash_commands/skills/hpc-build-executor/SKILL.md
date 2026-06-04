@@ -14,6 +14,7 @@ This skill also covers axis-init — the companion step that writes `.hpc/axes.y
 
 - **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+- **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-build-executor.json`. After Steps 5 (axes-init) finishes, write the envelope and invoke `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-build-executor.json` and is enforced by the emit verb.
 
 ## Inputs
 
@@ -63,6 +64,20 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
 3. **Invoke** [axes-init](../../../../docs/primitives/axes-init.md) with `--homogeneous-axes <comma-separated-names>`. Refuses to overwrite an existing `axes.yaml`; pass `--force` only when intentional.
 
 4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents to the caller (the slash, which re-prompts the user for `--force`; an autonomous caller decides programmatically). The skill itself does not prompt — the wrote-false envelope is the signal back to whoever invoked it.
+
+## Step 5 — Emit the return envelope (final tool call)
+
+The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-build-executor.json`. Stage it, then emit:
+
+1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-build-executor.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-build-executor"`, `executor_path` (from `build-executor`'s `data.path`), `executor_type` (from `data.type`), `executor_source` (from `data.source`). Optional axes-init fields: `axes_path`, `axes_wrote`, `homogeneous_axes` — populate when the companion ran; leave as `null` (or omit) when it didn't. On a fatal error, write the standard `ErrorEnvelope` shape.
+
+2. Invoke as your FINAL tool call:
+
+   ```bash
+   hpc-agent emit-skill-return --skill hpc-build-executor --experiment-dir <experiment_dir>
+   ```
+
+   The verb validates against `hpc_agent/schemas/skill_returns/hpc-build-executor.json` and atomically renames `.staged.json` → `.json`. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-build-executor`.
 
 ## Notes
 

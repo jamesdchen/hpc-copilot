@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/skill_returns/hpc-wrap-entry-point.json",
+  "title": "hpc-wrap-entry-point skill return envelope",
+  "description": "Return envelope written by the hpc-wrap-entry-point sub-skill at <experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json. Read by the parent skill (hpc-submit / hpc-campaign) after the Skill tool returns. oneOf [Success, Error]; the Error shape mirrors hpc_agent/schemas/envelope.json ErrorEnvelope.",
+  "oneOf": [
+    { "$ref": "#/$defs/Success" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "skill", "entry_point_kind", "run_name", "tasks_py_path", "interview_json_path", "total_tasks", "cmd_sha"],
+      "properties": {
+        "ok": { "const": true },
+        "skill": { "const": "hpc-wrap-entry-point" },
+        "entry_point_kind": { "enum": ["register_run", "shell_command"] },
+        "run_name": { "type": "string", "minLength": 1 },
+        "tasks_py_path": { "type": "string", "minLength": 1 },
+        "interview_json_path": { "type": "string", "minLength": 1 },
+        "wrapper_path": {
+          "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }],
+          "default": null,
+          "description": "Path to the materialized wrapper at .hpc/wrappers/<run_name>.py. Present on the shell_command (3b) path; null on the register_run (3a) direct-decoration path."
+        },
+        "total_tasks": { "type": "integer", "minimum": 1 },
+        "cmd_sha": { "type": "string", "minLength": 1 },
+        "files_edited": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Files the skill edited on disk (e.g. the user's entry-point file on the direct-decoration path). Empty array on the wrapper path."
+        }
+      }
+    },
+    "Error": { "$ref": "https://github.com/jamesdchen/hpc-agent/schemas/envelope.json#/$defs/ErrorEnvelope" }
+  }
+}
