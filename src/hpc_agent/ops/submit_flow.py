@@ -129,6 +129,60 @@ def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
         )
 
 
+def _preflight_runtime_check(
+    ssh_target: str,
+    *,
+    job_env: dict[str, str],
+    skip: bool,
+) -> None:
+    """When ``HPC_RUNTIME=uv``, verify ``uv`` is on PATH after the cluster
+    env is activated — BEFORE the canary qsub.
+
+    The job preamble runs ``module load $MODULES``, ``source
+    $CONDA_SOURCE``, ``conda activate $CONDA_ENV``, then checks
+    ``command -v uv`` (rejecting the run if missing). Reproducing that
+    sequence once over SSH at submit time turns "all 100 tasks fail
+    with `[template] HPC_RUNTIME=uv but 'uv' not on PATH`" into a single
+    `SpecInvalid` at preflight with an actionable remediation.
+
+    Reads activation fields from *job_env* (the dict assembled by
+    :func:`build_submit_spec`). Skipped when ``HPC_RUNTIME`` is not
+    ``"uv"`` (no other runtime currently triggers a binary-availability
+    constraint) or when the operator opted into ``skip_preflight``.
+    """
+    if skip or job_env.get("HPC_RUNTIME") != "uv":
+        return
+
+    modules = (job_env.get("MODULES") or "").strip()
+    conda_source = (job_env.get("CONDA_SOURCE") or "").strip()
+    conda_env = (job_env.get("CONDA_ENV") or "").strip()
+
+    parts: list[str] = []
+    if modules:
+        parts.append(f"module load {modules}")
+    if conda_source:
+        parts.append(f"source {conda_source}")
+    if conda_env:
+        parts.append(f"conda activate {conda_env}")
+    parts.append("command -v uv")
+    cmd = " && ".join(parts)
+
+    probe = ssh_run(cmd, ssh_target=ssh_target)
+    if probe.returncode != 0 or not (probe.stdout or "").strip():
+        env_hint = (
+            f"~/.conda/envs/{conda_env}/bin/pip install uv" if conda_env else "pip install uv"
+        )
+        raise errors.SpecInvalid(
+            f"preflight: runtime=uv but `uv` was not found on PATH after activating "
+            f"the cluster env on {ssh_target}. Without it, every task fails "
+            f"`[template] HPC_RUNTIME=uv but 'uv' not on PATH`. Install uv into the "
+            f"env (e.g. `{env_hint}`) and resubmit, OR drop `runtime: uv` from the "
+            f"spec if the repo doesn't actually need uv. "
+            f"Activation command attempted: `{cmd}` (exit {probe.returncode}; "
+            f"stderr: {(probe.stderr or '').strip()[:200]})."
+        )
+
+
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster
 # node *needs*: the executor package built at Step 0 (``src/``) and the
 # dispatch contract (``.hpc/tasks.py`` / ``.hpc/cli.py``). A caller derives
@@ -1034,6 +1088,19 @@ def _submit_flow_batch_locked(
     ssh_target, remote_path = next(iter(targets))
     _validate_ssh_target(ssh_target)
     _preflight_probe(ssh_target, skip=skip_preflight)
+    # Runtime-binary check: when any fresh spec asks for ``runtime=uv``,
+    # verify ``uv`` is actually on PATH after the cluster env is activated
+    # — before the canary qsub. All specs in a batch share
+    # ``(ssh_target, remote_path)`` ⇒ same cluster, so a single probe
+    # using the first uv-runtime spec's activation fields is enough.
+    for i in fresh_indices:
+        if (specs[i].job_env or {}).get("HPC_RUNTIME") == "uv":
+            _preflight_runtime_check(
+                ssh_target,
+                job_env=dict(specs[i].job_env or {}),
+                skip=skip_preflight,
+            )
+            break
     # #185: Phase 2 of submit.md's two-phase canary gate re-invokes
     # submit-flow with the same target right after Phase 1 deployed —
     # the rsync+deploy is a no-op in normal use, but still pays the SSH

@@ -247,6 +247,107 @@ class TestSubmitFlowBatch:
         assert all(r.deduped for r in results)
         assert [r.run_id for r in results] == ["r0", "r1"]
 
+    def test_runtime_uv_check_passes_when_uv_on_path(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """When HPC_RUNTIME=uv and the activation+`command -v uv` probe
+        succeeds, the canary qsub proceeds without raising."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        job_env = {
+            "EXECUTOR": "python run.py",
+            "HPC_RUNTIME": "uv",
+            "CONDA_SOURCE": "/opt/conda/etc/profile.d/conda.sh",
+            "CONDA_ENV": "hpc-pi",
+            "MODULES": "",
+        }
+        specs = [_spec(f"r{i}", job_env=job_env) for i in range(2)]
+        ok_probe = mock.Mock(returncode=0, stdout="/opt/conda/envs/hpc-pi/bin/uv\n", stderr="")
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "ssh_run", return_value=ok_probe) as ssh,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(tmp_path, spec=_batch(specs))
+
+        # ssh_run was called once for the runtime probe (first uv-runtime
+        # spec wins); the rest of the batch reuses the verdict.
+        assert ssh.call_count == 1
+        cmd = ssh.call_args.args[0]
+        assert "source /opt/conda/etc/profile.d/conda.sh" in cmd
+        assert "conda activate hpc-pi" in cmd
+        assert "command -v uv" in cmd
+
+    def test_runtime_uv_check_raises_when_uv_missing(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """When HPC_RUNTIME=uv but the cluster env doesn't have uv on PATH,
+        preflight raises SpecInvalid BEFORE any qsub — turning "all 100 tasks
+        fail at runtime" into one clear error with an actionable remediation."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+
+        job_env = {
+            "EXECUTOR": "python run.py",
+            "HPC_RUNTIME": "uv",
+            "CONDA_SOURCE": "/opt/conda/etc/profile.d/conda.sh",
+            "CONDA_ENV": "hpc-pi",
+            "MODULES": "",
+        }
+        specs = [_spec("r0", job_env=job_env)]
+        missing_probe = mock.Mock(returncode=1, stdout="", stderr="uv: command not found")
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "ssh_run", return_value=missing_probe),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+            pytest.raises(errors.SpecInvalid) as excinfo,
+        ):
+            submit_flow_batch(tmp_path, spec=_batch(specs))
+
+        msg = str(excinfo.value)
+        assert "runtime=uv" in msg and "not found on PATH" in msg
+        assert "~/.conda/envs/hpc-pi/bin/pip install uv" in msg
+        # Critical: push/deploy/qsub never ran — we caught it at preflight.
+        assert push_deploy.call_count == 0
+        assert submit_one.call_count == 0
+
+    def test_runtime_uv_check_skipped_when_runtime_not_uv(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """When HPC_RUNTIME is unset or not 'uv', the runtime probe is a no-op
+        (no extra ssh_run call). Only the standard reachability probe fires
+        (which the test mocks out via _preflight_probe)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        specs = [_spec("r0", job_env={"EXECUTOR": "python run.py"})]  # no HPC_RUNTIME
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "ssh_run") as ssh,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=["job_r0"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(tmp_path, spec=_batch(specs))
+
+        assert ssh.call_count == 0
+
     def test_skip_rsync_deploy_skips_push_and_deploy(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
