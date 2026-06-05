@@ -69,9 +69,18 @@ def test_rerun_does_not_duplicate_the_entry(tmp_path: Path) -> None:
     assert len(_autofetch_entries(settings)) == 1
 
 
-def test_idempotent_across_python_executable_change(tmp_path: Path) -> None:
-    """The entry matches on the module path, so a moved venv path is recognised."""
+def test_stale_hook_command_is_replaced_in_place(tmp_path: Path) -> None:
+    """A stale entry (different interpreter path, or pre-0.10.10 broken encoding) is updated.
+
+    Earlier versions emitted a raw ``sys.executable`` Windows backslash path
+    that bash mis-interpreted as escape sequences ('C:\\\\U' → 'C:U'), and the
+    old idempotency check (module-path-only) treated the broken entry as
+    already-present, so ``install-commands`` could not heal it. The merge now
+    matches on module path AND replaces a mismatched command, so a re-run from
+    a fresh install repoints the entry without appending a duplicate.
+    """
     settings_path = tmp_path / "settings.json"
+    stale_command = f"/some/other/venv/bin/python -m {_HOOK_MODULE}"
     settings_path.write_text(
         json.dumps(
             {
@@ -82,8 +91,7 @@ def test_idempotent_across_python_executable_change(tmp_path: Path) -> None:
                             "hooks": [
                                 {
                                     "type": "command",
-                                    # Different interpreter path, same module.
-                                    "command": f"/some/other/venv/bin/python -m {_HOOK_MODULE}",
+                                    "command": stale_command,
                                 }
                             ],
                         }
@@ -95,7 +103,23 @@ def test_idempotent_across_python_executable_change(tmp_path: Path) -> None:
     )
 
     result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_hook"]["action"] == "updated"
+    assert result["settings_hook"]["wrote"] is True
+
+    entries = _autofetch_entries(_settings(tmp_path))
+    assert len(entries) == 1
+    # The stale command is gone — replaced with the canonical install-time form.
+    assert entries[0]["hooks"][0]["command"] != stale_command
+
+
+def test_byte_equal_entry_is_already_present(tmp_path: Path) -> None:
+    """An entry byte-equal to the canonical install short-circuits as already-present."""
+    # Bootstrap by running once — the first install writes the canonical entry.
+    install_agent_assets(claude_dir=tmp_path)
+
+    result = install_agent_assets(claude_dir=tmp_path)
     assert result["settings_hook"]["action"] == "already-present"
+    assert result["settings_hook"]["wrote"] is False
     assert len(_autofetch_entries(_settings(tmp_path))) == 1
 
 

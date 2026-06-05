@@ -148,9 +148,9 @@ hpc-agent classify-axis --experiment-dir <dir> --spec <spec.json>
 
 On a `spec_invalid` envelope the most common cause is a `bounded_halo` whose `halo.expr` is not safe arithmetic over the run's parameters — fall back to `Sequential` and re-invoke. (A human-driven caller surfaces the message and re-elicits; an autonomous caller takes the fail-safe.)
 
-### 6. Persist the *why* (transcript)
+### 6. Carry the *why* into the return envelope
 
-Persist the reasoning via the existing [interview](../../../../docs/primitives/interview.md) primitive — add a single turn (`role: agent`) summarising which tree branch resolved and which parameters were referenced. `classify-axis` records the *answer*; `interview` records the *one-line rationale*. When `classified_by: "interview"`, the slash command writes its own operator/agent turns to the transcript directly — this skill does not duplicate them.
+The one-line rationale (which tree branch resolved, which parameters were referenced) is carried forward in the return envelope's `reasoning` field — written in Step 8, read by the parent skill. There is **no separate transcript CLI call** here: the `interview` primitive is one-shot (`--spec` / `--campaign-dir`), with no incremental add-turn surface. The interview transcript is owned by the slash command (`/classify-axis-hpc` etc.) for human-driven runs; agent-classified runs surface their reasoning through the return envelope, not through `interview.json`.
 
 ### 7. The elision gate is the backstop
 

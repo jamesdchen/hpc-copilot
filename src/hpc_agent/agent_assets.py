@@ -20,6 +20,7 @@ same name (last writer wins by path).
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import sys
 from importlib.resources import as_file, files
@@ -28,13 +29,36 @@ from typing import Any
 
 __all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
 
+
+def _build_hook_command() -> str:
+    """Build a bash-safe hook command targeting the current Python interpreter.
+
+    Claude Code runs ``PostToolUse`` hooks via ``bash -c '<command>'``. Two
+    Windows pitfalls the raw ``sys.executable`` walks into:
+
+    * **Backslashes.** ``sys.executable`` is a native backslash path on Windows
+      (e.g. ``C:\\Users\\james\\.venv\\Scripts\\python.exe``). Bash treats
+      ``\\U``, ``\\j``, ``\\d`` etc. as escape sequences and collapses the
+      backslash, turning the path into ``C:Usersjames.venvScriptspython.exe``
+      → "command not found". Forward slashes are universally accepted by
+      Windows for executable invocation and pass through bash unchanged.
+    * **Spaces.** Some interpreter paths contain spaces (e.g.
+      ``C:/Program Files/Python311/python.exe`` or a repo dir with a space).
+      Without quoting bash splits on the space and tries to run a non-existent
+      first token. ``shlex.quote`` wraps the path in single quotes when needed.
+    """
+    executable = sys.executable.replace("\\", "/")
+    return f"{shlex.quote(executable)} -m hpc_agent._kernel.hooks.skill_return_autofetch"
+
+
 # The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope after
 # a composed ``Skill(<sub>)`` returns (see
 # :mod:`hpc_agent._kernel.hooks.skill_return_autofetch`). install-commands merges
 # this entry into ``~/.claude/settings.json``'s ``hooks.PostToolUse`` array,
-# additively and idempotently. ``matcher: "Skill"`` scopes it to the Skill tool;
-# the command pipes the PostToolUse payload on stdin into the module's ``main``.
-_HOOK_COMMAND = f"{sys.executable} -m hpc_agent._kernel.hooks.skill_return_autofetch"
+# additively, idempotently, and self-healing on a stale prior install.
+# ``matcher: "Skill"`` scopes it to the Skill tool; the command pipes the
+# PostToolUse payload on stdin into the module's ``main``.
+_HOOK_COMMAND = _build_hook_command()
 _SKILL_RETURN_HOOK_ENTRY: dict[str, Any] = {
     "matcher": "Skill",
     "hooks": [
@@ -51,18 +75,18 @@ def DEFAULT_CLAUDE_DIR() -> Path:
     return Path.home() / ".claude"
 
 
-def _hook_entry_present(post_tool_use: list[Any]) -> bool:
-    """Return whether the autofetch hook is already wired into *post_tool_use*.
+def _find_hook_entry_index(post_tool_use: list[Any]) -> int | None:
+    """Return the index of the existing autofetch entry, or ``None`` if absent.
 
-    Idempotency key: any PostToolUse entry whose ``hooks`` list contains a
-    ``command`` hook that invokes
-    ``hpc_agent._kernel.hooks.skill_return_autofetch``. We match on the module
-    path rather than the full command string so a re-run from a different
-    ``sys.executable`` (e.g. a moved venv) still recognises the existing entry
-    instead of appending a duplicate.
+    Match key: any ``PostToolUse`` entry whose ``hooks`` list contains a
+    ``command`` hook invoking ``hpc_agent._kernel.hooks.skill_return_autofetch``.
+    We match on the module path (not the full command string) so a re-run from
+    a different ``sys.executable`` — moved venv, **or an upgrade that fixes
+    the command encoding** — still finds the existing entry instead of
+    appending a duplicate.
     """
     needle = "hpc_agent._kernel.hooks.skill_return_autofetch"
-    for entry in post_tool_use:
+    for i, entry in enumerate(post_tool_use):
         if not isinstance(entry, dict):
             continue
         hooks = entry.get("hooks")
@@ -75,8 +99,8 @@ def _hook_entry_present(post_tool_use: list[Any]) -> bool:
                 and isinstance(hook.get("command"), str)
                 and needle in hook["command"]
             ):
-                return True
-    return False
+                return i
+    return None
 
 
 def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
@@ -90,9 +114,13 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
     merge only ever *adds* our one entry.
 
     Returns a small report ``{settings_path, action, wrote}`` where ``action``
-    is one of ``"added"`` (appended), ``"already-present"`` (idempotent
+    is one of ``"added"`` (appended), ``"updated"`` (a stale entry from an
+    earlier install — e.g. a moved venv, or the pre-0.10.10 backslash-encoded
+    Windows path that bash mis-interpreted as escapes — replaced in place),
+    ``"already-present"`` (byte-equal to the canonical entry; idempotent
     no-op), ``"skipped-unparseable"`` (existing settings.json is not a JSON
-    object — we refuse to clobber it), or ``"dry-run-would-add"``.
+    object — we refuse to clobber it), ``"dry-run-would-add"``, or
+    ``"dry-run-would-update"``.
 
     Safety: if ``settings.json`` exists but does not parse as a JSON **object**,
     we do **not** overwrite it — the install reports ``skipped-unparseable`` so
@@ -132,7 +160,8 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
     if not isinstance(post_tool_use, list):
         post_tool_use = []
 
-    if _hook_entry_present(post_tool_use):
+    existing_idx = _find_hook_entry_index(post_tool_use)
+    if existing_idx is not None and post_tool_use[existing_idx] == _SKILL_RETURN_HOOK_ENTRY:
         return {
             "settings_path": str(settings_path),
             "action": "already-present",
@@ -142,11 +171,17 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
     if dry_run:
         return {
             "settings_path": str(settings_path),
-            "action": "dry-run-would-add",
+            "action": "dry-run-would-update" if existing_idx is not None else "dry-run-would-add",
             "wrote": False,
         }
 
-    post_tool_use = [*post_tool_use, _SKILL_RETURN_HOOK_ENTRY]
+    post_tool_use = list(post_tool_use)
+    if existing_idx is not None:
+        post_tool_use[existing_idx] = _SKILL_RETURN_HOOK_ENTRY
+        action = "updated"
+    else:
+        post_tool_use.append(_SKILL_RETURN_HOOK_ENTRY)
+        action = "added"
     hooks["PostToolUse"] = post_tool_use
     settings["hooks"] = hooks
 
@@ -156,7 +191,7 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
     )
     return {
         "settings_path": str(settings_path),
-        "action": "added",
+        "action": action,
         "wrote": True,
     }
 
