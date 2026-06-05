@@ -332,6 +332,42 @@ def test_rejects_bare_script_executor_for_register_run_file(
     assert "python3 -c" in msg
 
 
+def test_rejects_bare_script_executor_with_trailing_args_for_register_run_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empirical 2026-06-05 demo failure: an agent built the spec by hand and
+    emitted ``python executors/monte_carlo_pi.py --samples 100000 --seed $SEED``
+    against a @register_run-decorated file. The pre-0.10.11 guard required
+    ``len(parts) == 2`` and let the with-args form slip through; the dispatcher
+    runs it literally, argparse exits 2 on the missing ``--output-file``, the
+    canary fails, the user is stuck. Trailing args are not a safe path — they
+    are the *exact* signal that the agent forgot the ``-c`` one-liner.
+    """
+    monkeypatch.chdir(tmp_path)
+    exec_dir = tmp_path / "executors"
+    exec_dir.mkdir()
+    (exec_dir / "monte_carlo_pi.py").write_text(
+        "from hpc_agent import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def monte_carlo_pi(seed: int = 0, samples: int = 1000) -> dict:\n"
+        "    return {'pi': 3.14}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={
+                    "EXECUTOR": "python executors/monte_carlo_pi.py --samples 100000 --seed $SEED"
+                },
+            )
+        )
+    msg = str(excinfo.value)
+    assert "register_run" in msg
+    assert "HPC_KW_" in msg
+
+
 def test_accepts_one_liner_executor_for_register_run_file(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

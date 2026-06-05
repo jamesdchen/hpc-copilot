@@ -343,17 +343,25 @@ def _check_register_run_executor(executor: str) -> None:
     """Raise :class:`errors.SpecInvalid` if *executor* is a bare-script invocation
     of a ``@register_run``-decorated file.
 
-    Permissive by design: only fires on the exact ``python[3] <file>.py``
-    shape. Anything with ``-c`` / ``-m`` / extra flags is presumed correct
-    and short-circuits before any filesystem check.
+    Fires on any ``python[3] <file>.py [...]`` shape against a
+    ``register_run``-decorated file — including the with-trailing-args form
+    (``python executors/foo.py --samples 100000 --seed $SEED``) that the
+    pre-0.10.11 strict ``len(parts) == 2`` check let slip through. Trailing
+    args are not the safe path — they are the *exact* smoking gun for an
+    agent that forgot the canonical ``python -c "..."`` form and shell-
+    templated kwargs into argv instead, which the cluster-side dispatcher
+    drops on the floor (it routes task kwargs via ``HPC_KW_<NAME>`` env vars,
+    not argv). Anything with a flag *before* the script (``python -c "..."``,
+    ``python -m pkg``, ``python -O file.py``) short-circuits at the
+    ``script.endswith(".py")`` check — those forms are presumed correct.
     """
     try:
         parts = shlex.split(executor)
     except ValueError:
         return  # unparseable shell — leave it to the cluster to surface
-    if len(parts) != 2:
+    if len(parts) < 2:
         return
-    interp, script = parts
+    interp, script, *_trailing = parts
     if not _BARE_SCRIPT_RE.match(interp):
         return
     if not script.endswith(".py"):

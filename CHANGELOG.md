@@ -5,6 +5,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.11 — 2026-06-05
+
+One upstream fix off the same demo session: tighten the 0.10.3 bare-script-against-register_run guard so the with-trailing-args shape is also refused.
+
+### Fixed — bare-script EXECUTOR guard catches the with-args form too
+
+`incorporation/build/submit_spec.py::_check_register_run_executor` was the 0.10.3 defensive guard (`bf0a4de7`) that refuses an `EXECUTOR` of the shape `python[3] <file>.py` when `<file>.py` is `@register_run`-decorated — that combination silently exits 2 in the cluster-side dispatcher because task kwargs flow through `HPC_KW_<NAME>` env vars, not argv. The guard's `if len(parts) != 2: return` gate was the gap: it only caught the no-args form (`python3 executors/foo.py`). The with-args shape (`python executors/monte_carlo_pi.py --samples 100000 --seed $SEED` — empirical from the 2026-06-05 demo where the orchestrator hand-built the spec, the divined cmd downgraded a `register_run` executor to the bare-script shape, the canary task crashed with `--output-file required`) slipped through.
+
+Tightened to fire on any `python[3] <file>.py [...]` shape against a `register_run`-decorated file, regardless of trailing args. A flag *before* the script (`python -c "..."`, `python -m pkg`, `python -O file.py`) still short-circuits at the `script.endswith(".py")` check — those forms are presumed correct.
+
+Closes the long tail of #275 / #281 / #287's "agent hand-builds the spec and the framework accepts it" pattern at this specific boundary.
+
+### Changed — orchestrator SKILL.md prose: chain sequential `hpc-agent` calls with `&&`
+
+Added a one-line execution-discipline bullet to all seven orchestrator-side SKILL.md (`hpc-submit`, `hpc-status`, `hpc-aggregate`, `hpc-campaign`, `hpc-classify-axis`, `hpc-wrap-entry-point`, `hpc-build-executor`): chain dependent `hpc-agent` calls with `&&` in one Bash block when the next call doesn't branch on prior structured output (e.g. `hpc-agent install-commands && hpc-agent load-context …`). Saves a round-trip + permission prompt per chained pair. Worker-side `hpc-worker.md` keeps its `PreToolUse` chaining block — the worker's one-verb-per-envelope discipline is a separate decision-boundary contract.
+
 ## 0.10.10 — 2026-06-05
 
 Two upstream fixes off a live demo session: a broken `PostToolUse` skill-return hook on Windows, and an `interview`-CLI prose mismatch in the classify-axis skill that the agent kept hallucinating into an `--add-turn` flag.
