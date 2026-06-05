@@ -117,11 +117,11 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         Closed-loop campaign tag. Stamped on the run sidecar AND
         forwarded to the cluster as ``HPC_CAMPAIGN_ID`` so the user's
         tasks.py can read it at module-load.
-    canary, partial_ok, skip_preflight:
+    canary, partial_ok:
         Boolean knobs threaded through to the spec verbatim.
-        ``skip_preflight`` defaults to True because Step 6b in the
-        slash command runs the preflight gate immediately before this
-        spec is built; the duplicate ssh probe is wasteful.
+        (``skip_preflight`` was removed in #275 — the preflight skip is
+        operator-only now via ``HPC_AGENT_SKIP_PREFLIGHT``, never a built
+        spec field; an agent could otherwise silence the uv runtime probe.)
     pass_env_keys:
         SGE-only — which job_env keys to ``qsub -v``. None = forward
         everything in job_env. SLURM forwards everything via
@@ -184,7 +184,9 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     campaign_id = spec.campaign_id or ""
     canary = bool(spec.canary) if spec.canary is not None else True
     partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
-    skip_preflight = bool(spec.skip_preflight) if spec.skip_preflight is not None else True
+    # #275: ``skip_preflight`` is no longer emitted onto the submit_flow spec —
+    # it was an agent-settable bypass that silenced the uv runtime probe. The
+    # preflight skip is operator-only now (``HPC_AGENT_SKIP_PREFLIGHT=1``).
     invalidate_on_code_change = (
         bool(spec.invalidate_on_code_change)
         if spec.invalidate_on_code_change is not None
@@ -293,7 +295,6 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         "job_env": job_env,
         "canary": bool(canary),
         "partial_ok": bool(partial_ok),
-        "skip_preflight": bool(skip_preflight),
     }
     if spec.result_dir_template is not None:
         out["result_dir_template"] = spec.result_dir_template

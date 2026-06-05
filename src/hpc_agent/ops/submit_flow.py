@@ -35,10 +35,11 @@ from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import ssh_run
+from hpc_agent.infra.runtime_preflight import runtime_uv_preflight as _preflight_runtime_check
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import deploy_runtime, rsync_push
 from hpc_agent.ops.submit.runner import submit_and_record
-from hpc_agent.state.journal import load_run
+from hpc_agent.state.journal import is_resubmittable_terminal, load_run
 
 
 def _submit_flow_handler(ns):  # type: ignore[no-untyped-def]
@@ -118,6 +119,33 @@ def _validate_ssh_target(ssh_target: str) -> str:
         raise errors.SpecInvalid(str(exc)) from exc
 
 
+# ``skip_preflight`` was demoted from an agent-settable spec field to an
+# operator-only control (#275). An agent following SKILL.md used to set
+# ``skip_preflight: true``, which silenced the ``command -v uv`` runtime probe
+# below and launched arrays doomed by ``HPC_RUNTIME=uv but 'uv' not on PATH``.
+_SKIP_PREFLIGHT_ENV = "HPC_AGENT_SKIP_PREFLIGHT"
+
+
+def _skip_preflight_requested(internal: bool | None) -> bool:
+    """Resolve whether to skip the pre-flight probes — operator-only (#275).
+
+    Two honoured sources, neither reachable by an agent-authored spec:
+
+    * *internal* — a Python-only kwarg threaded by a trusted internal caller
+      (``submit_and_verify``'s Phase-2 main-array launch, where the canary
+      already paid the preflight). It is on no wire schema. ``None`` means "no
+      internal opinion; consult the environment."
+    * ``HPC_AGENT_SKIP_PREFLIGHT=1`` — an operator who just ran
+      ``check-preflight`` and wants to save the duplicate probe.
+
+    Mirrors the ``--inline`` / ``HPC_AGENT_INVOKER`` precedent (#155): an
+    agent-supplied bypass is refused; an operator env var is honoured.
+    """
+    if internal is not None:
+        return internal
+    return os.environ.get(_SKIP_PREFLIGHT_ENV) == "1"
+
+
 def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
     """Single ssh probe to verify cluster reachability. Caller may skip."""
     if skip:
@@ -130,58 +158,13 @@ def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
         )
 
 
-def _preflight_runtime_check(
-    ssh_target: str,
-    *,
-    job_env: dict[str, str],
-    skip: bool,
-) -> None:
-    """When ``HPC_RUNTIME=uv``, verify ``uv`` is on PATH after the cluster
-    env is activated — BEFORE the canary qsub.
-
-    The job preamble runs ``module load $MODULES``, ``source
-    $CONDA_SOURCE``, ``conda activate $CONDA_ENV``, then checks
-    ``command -v uv`` (rejecting the run if missing). Reproducing that
-    sequence once over SSH at submit time turns "all 100 tasks fail
-    with `[template] HPC_RUNTIME=uv but 'uv' not on PATH`" into a single
-    `SpecInvalid` at preflight with an actionable remediation.
-
-    Reads activation fields from *job_env* (the dict assembled by
-    :func:`build_submit_spec`). Skipped when ``HPC_RUNTIME`` is not
-    ``"uv"`` (no other runtime currently triggers a binary-availability
-    constraint) or when the operator opted into ``skip_preflight``.
-    """
-    if skip or job_env.get("HPC_RUNTIME") != "uv":
-        return
-
-    modules = (job_env.get("MODULES") or "").strip()
-    conda_source = (job_env.get("CONDA_SOURCE") or "").strip()
-    conda_env = (job_env.get("CONDA_ENV") or "").strip()
-
-    parts: list[str] = []
-    if modules:
-        parts.append(f"module load {modules}")
-    if conda_source:
-        parts.append(f"source {conda_source}")
-    if conda_env:
-        parts.append(f"conda activate {conda_env}")
-    parts.append("command -v uv")
-    cmd = " && ".join(parts)
-
-    probe = ssh_run(cmd, ssh_target=ssh_target)
-    if probe.returncode != 0 or not (probe.stdout or "").strip():
-        env_hint = (
-            f"~/.conda/envs/{conda_env}/bin/pip install uv" if conda_env else "pip install uv"
-        )
-        raise errors.SpecInvalid(
-            f"preflight: runtime=uv but `uv` was not found on PATH after activating "
-            f"the cluster env on {ssh_target}. Without it, every task fails "
-            f"`[template] HPC_RUNTIME=uv but 'uv' not on PATH`. Install uv into the "
-            f"env (e.g. `{env_hint}`) and resubmit, OR drop `runtime: uv` from the "
-            f"spec if the repo doesn't actually need uv. "
-            f"Activation command attempted: `{cmd}` (exit {probe.returncode}; "
-            f"stderr: {(probe.stderr or '').strip()[:200]})."
-        )
+# ``_preflight_runtime_check`` (the ``command -v uv`` probe) moved to
+# :mod:`hpc_agent.infra.runtime_preflight` and is imported above under its
+# historic private name (#275): ``check-preflight`` (ops/preflight) needs the
+# SAME probe but may not import ops/submit_flow across the subject boundary, so
+# the one implementation lives in infra. ``_run_uv_preflight_for_batch`` below
+# still calls ``_preflight_runtime_check`` (the alias), and tests that patch
+# ``submit_flow._preflight_runtime_check`` keep working.
 
 
 def _canary_skip_threshold(spec: SubmitFlowSpec) -> int:
@@ -767,6 +750,7 @@ def submit_flow(
     experiment_dir: Path,
     *,
     spec: SubmitFlowSpec,
+    _skip_preflight: bool | None = None,
 ) -> SubmitFlowResult:
     """Execute the full submit pipeline and emit a single result.
 
@@ -775,9 +759,10 @@ def submit_flow(
     1. **Idempotency check** — if a journal record for ``spec.run_id``
        exists, return ``deduped=True`` immediately. No SSH, no scheduler
        calls.
-    2. **Pre-flight gate** (skippable via ``spec.skip_preflight``) —
-       verifies SSH agent forwarding + cluster reachability. Aborts on
-       failure.
+    2. **Pre-flight gate** (operator-skippable via
+       ``HPC_AGENT_SKIP_PREFLIGHT=1`` or the internal ``_skip_preflight``
+       kwarg — never via the agent's spec, #275) — verifies SSH agent
+       forwarding + cluster reachability. Aborts on failure.
     3. **rsync_push** — sync ``experiment_dir`` to ``spec.remote_path``.
     4. **deploy_runtime** — scp framework files into
        ``<remote_path>/.hpc/``.
@@ -806,15 +791,22 @@ def submit_flow(
     batch_spec = _BatchSpec(
         specs=[spec],
         rsync_excludes=spec.rsync_excludes,
-        skip_preflight=spec.skip_preflight,
     )
-    return submit_flow_batch(experiment_dir, spec=batch_spec)[0]
+    return submit_flow_batch(experiment_dir, spec=batch_spec, _skip_preflight=_skip_preflight)[0]
 
 
 def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowResult | None:
-    """Return a deduped SubmitFlowResult if a journal record already exists."""
+    """Return a deduped SubmitFlowResult if a *live* journal record already exists."""
     existing = load_run(experiment_dir, spec.run_id)
     if existing is None:
+        return None
+    # #276: a terminal-but-not-``complete`` record (``failed`` / ``abandoned``)
+    # is not a live run — its ``job_ids`` are forensic, not an in-flight marker.
+    # Deduping against it blocked every future submit for this run_id (a single
+    # transient status-probe flake was enough to mint an ``abandoned`` corpse).
+    # Fall through to a fresh submission. ``complete`` still dedups (idempotency);
+    # ``in_flight`` (including a timed-out run) still blocks — don't double-submit.
+    if is_resubmittable_terminal(existing):
         return None
     return SubmitFlowResult(
         run_id=existing.run_id,
@@ -866,12 +858,17 @@ def _submit_one_spec(
     if _should_run_canary(spec):
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
-        if existing_canary is not None:
+        if existing_canary is not None and not is_resubmittable_terminal(existing_canary):
             # Replay: a prior call landed the canary but failed before
             # recording the main run, so the main-run dedup check (keyed
             # on spec.run_id) misses it. Reuse the recorded canary
             # job_ids instead of firing a duplicate canary qsub —
             # submit_flow is documented idempotent on run_id.
+            #
+            # #276: a terminal-but-not-``complete`` canary (``failed`` /
+            # ``abandoned``) is excluded — it is NOT a live canary to reuse (the
+            # monitor gave up, e.g. on a transient status-probe flake). Fall
+            # through and fire a fresh one rather than gating main on a corpse.
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
@@ -1051,14 +1048,17 @@ def submit_flow_batch(
     experiment_dir: Path,
     *,
     spec: SubmitFlowBatchSpec,
+    _skip_preflight: bool | None = None,
 ) -> list[SubmitFlowResult]:
     """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
 
     The Pydantic ``SubmitFlowBatchSpec`` is the canonical wire +
     Python authoring surface; ``spec.specs`` is a list of full
     :class:`SubmitFlowSpec` models (the same type the standalone
-    ``submit-flow`` atom takes). ``spec.rsync_excludes`` and
-    ``spec.skip_preflight`` apply once across the bundle.
+    ``submit-flow`` atom takes). ``spec.rsync_excludes`` applies once
+    across the bundle; the pre-flight skip is operator-only
+    (``HPC_AGENT_SKIP_PREFLIGHT=1`` / the internal ``_skip_preflight``
+    kwarg, #275), not a bundle field.
 
     The motivating problem: a campaign-time fan-out of N submissions
     used to do N × (rsync + deploy_runtime + qsub), which sent ~13×N
@@ -1086,7 +1086,10 @@ def submit_flow_batch(
     Order of returned results matches the order of ``spec.specs``.
     """
     rsync_excludes = list(spec.rsync_excludes) if spec.rsync_excludes is not None else None
-    skip_preflight = spec.skip_preflight if spec.skip_preflight is not None else False
+    # skip_preflight is operator-only now (#275): resolve from the internal
+    # kwarg (trusted callers like submit_and_verify) or HPC_AGENT_SKIP_PREFLIGHT,
+    # never from the spec — an agent can no longer silence the runtime probe.
+    skip_preflight = _skip_preflight_requested(_skip_preflight)
     inner_specs = list(spec.specs)
 
     # Per-repo advisory submit lock: serialize multiple `submit-flow` /

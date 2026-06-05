@@ -30,6 +30,6 @@ The primitive synthesizes the framework-required `job_env` keys (`EXECUTOR`, `HP
 ## Notes
 
 - **Default `script` per `(backend, is_gpu)`**: `cpu_array.{sh,slurm}` or `gpu_array.{sh,slurm}` under `.hpc/templates/`. Override with `script="..."` if your repo carries a custom template.
-- **`skip_preflight` defaults to `True`** — the slash command's Step 6b runs the preflight gate immediately before this primitive; the duplicate ssh probe inside `submit-flow` would be wasteful.
+- **No `skip_preflight` field** (#275) — it was an agent-settable bypass that silenced `submit-flow`'s `command -v uv` runtime probe. The preflight skip is operator-only now via `HPC_AGENT_SKIP_PREFLIGHT=1`; build-submit-spec never emits it onto the spec.
 - **Validation is mandatory**: the assembled spec is run through `schemas/submit_flow.input.json` before return. A missing required field surfaces as `spec_invalid` with the JSON Pointer path of the offending property.
 - **Headless-friendly**: pure function, no filesystem writes. Safe to call from a non-Claude-Code orchestrator (external agent harness, cron-based campaign loop, etc.).

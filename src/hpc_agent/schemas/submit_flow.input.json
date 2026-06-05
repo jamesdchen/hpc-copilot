@@ -244,12 +244,6 @@
       "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
       "title": "Rsync Excludes"
     },
-    "skip_preflight": {
-      "default": false,
-      "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution.",
-      "title": "Skip Preflight",
-      "type": "boolean"
-    },
     "skip_rsync_deploy": {
       "default": false,
       "description": "Skip the shared rsync+deploy prelude. Use ONLY when an earlier submit-flow call to the same (ssh_target, remote_path) has just completed and the local tree hasn't changed since — typical Phase 2 of submit.md's two-phase canary gate. submit-flow trusts the caller: a stale assertion leaves the cluster with whatever code the previous deploy shipped (#185).",

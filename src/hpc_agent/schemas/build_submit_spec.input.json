@@ -234,18 +234,6 @@
       "default": null,
       "title": "Partial Ok"
     },
-    "skip_preflight": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Skip Preflight"
-    },
     "invalidate_on_code_change": {
       "anyOf": [
         {

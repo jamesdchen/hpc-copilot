@@ -231,13 +231,15 @@ class SubmitFlowSpec(BaseModel):
         default=None,
         description="Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
     )
-    skip_preflight: bool = Field(
-        default=False,
-        description=(
-            "Skip the pre-flight check (caller has just run it; "
-            "saves one SSH probe). Use with caution."
-        ),
-    )
+    # ``skip_preflight`` was removed from this wire surface (#275). It was an
+    # agent-settable field whose SKILL.md example told agents to set it
+    # ``true`` — which silenced submit-flow's ``command -v uv`` runtime probe
+    # and launched arrays doomed by ``HPC_RUNTIME=uv but 'uv' not on PATH``.
+    # The skip is now operator-only: ``HPC_AGENT_SKIP_PREFLIGHT=1`` in the
+    # environment, or a Python-only ``_skip_preflight`` kwarg for trusted
+    # internal callers (submit_and_verify's post-canary main launch). Same
+    # operator-vs-agent boundary as ``--inline`` / ``HPC_AGENT_INVOKER`` (#155).
+    # ``extra="forbid"`` now refuses a stray ``skip_preflight`` outright.
     skip_rsync_deploy: bool = Field(
         default=False,
         description=(

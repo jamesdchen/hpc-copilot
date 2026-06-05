@@ -266,7 +266,8 @@ class TestSubmitFlowBatch:
         ok_probe = mock.Mock(returncode=0, stdout="/opt/conda/envs/hpc-pi/bin/uv\n", stderr="")
         with (
             mock.patch.object(sf_module, "_preflight_probe"),
-            mock.patch.object(sf_module, "ssh_run", return_value=ok_probe) as ssh,
+            # The probe lives in infra.runtime_preflight now (#275); patch its ssh_run.
+            mock.patch("hpc_agent.infra.runtime_preflight.ssh_run", return_value=ok_probe) as ssh,
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
@@ -307,7 +308,7 @@ class TestSubmitFlowBatch:
         missing_probe = mock.Mock(returncode=1, stdout="", stderr="uv: command not found")
         with (
             mock.patch.object(sf_module, "_preflight_probe"),
-            mock.patch.object(sf_module, "ssh_run", return_value=missing_probe),
+            mock.patch("hpc_agent.infra.runtime_preflight.ssh_run", return_value=missing_probe),
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
             pytest.raises(errors.SpecInvalid) as excinfo,
@@ -333,7 +334,7 @@ class TestSubmitFlowBatch:
         specs = [_spec("r0", job_env={"EXECUTOR": "python run.py"})]  # no HPC_RUNTIME
         with (
             mock.patch.object(sf_module, "_preflight_probe"),
-            mock.patch.object(sf_module, "ssh_run") as ssh,
+            mock.patch("hpc_agent.infra.runtime_preflight.ssh_run") as ssh,
             mock.patch.object(sf_module, "_push_and_deploy"),
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
@@ -763,3 +764,261 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     csc = read_run_sidecar(tmp_path, "rC-canary")
     assert csc["task_count"] == 1
     assert csc["executor"] == "python run.py"
+
+
+# ---------------------------------------------------------------------------
+# #275 — skip_preflight demoted from agent spec to operator-only control
+# ---------------------------------------------------------------------------
+
+
+class TestSkipPreflightDemotion:
+    """skip_preflight is no longer an agent-settable spec field (#275).
+
+    It silenced submit-flow's `command -v uv` runtime probe — an agent
+    following SKILL.md set `skip_preflight: true` and launched arrays doomed by
+    `HPC_RUNTIME=uv but 'uv' not on PATH`. The skip is operator-only now:
+    `HPC_AGENT_SKIP_PREFLIGHT=1`, or a Python-only `_skip_preflight` kwarg for
+    trusted internal callers. Same operator-vs-agent boundary as `--inline` (#155).
+    """
+
+    def test_submit_flow_spec_rejects_skip_preflight(self) -> None:
+        from pydantic import ValidationError
+
+        from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+
+        payload = _spec("r0").model_dump()
+        payload["skip_preflight"] = True
+        with pytest.raises(ValidationError):
+            SubmitFlowSpec(**payload)
+
+    def test_batch_spec_rejects_skip_preflight(self) -> None:
+        from pydantic import ValidationError
+
+        from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
+
+        with pytest.raises(ValidationError):
+            SubmitFlowBatchSpec(specs=[_spec("r0")], skip_preflight=True)  # type: ignore[call-arg]
+
+    def test_resolver_internal_kwarg_overrides_env(self, monkeypatch: Any) -> None:
+        from hpc_agent.ops import submit_flow as sf
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_PREFLIGHT", raising=False)
+        assert sf._skip_preflight_requested(None) is False
+        assert sf._skip_preflight_requested(True) is True
+        monkeypatch.setenv("HPC_AGENT_SKIP_PREFLIGHT", "1")
+        assert sf._skip_preflight_requested(None) is True
+        # An explicit internal verdict wins over the env in both directions.
+        assert sf._skip_preflight_requested(False) is False
+
+    def test_env_var_skips_the_preflight_probe(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.setenv("HPC_AGENT_SKIP_PREFLIGHT", "1")
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert preflight.call_args.kwargs["skip"] is True
+
+    def test_internal_kwarg_skips_the_preflight_probe(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_PREFLIGHT", raising=False)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_preflight=True)
+        assert preflight.call_args.kwargs["skip"] is True
+
+    def test_default_runs_the_preflight_probe(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        """No env var, no internal kwarg → the probe runs (skip=False)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_PREFLIGHT", raising=False)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert preflight.call_args.kwargs["skip"] is False
+
+
+# ---------------------------------------------------------------------------
+# #276 Bug 1 — an `abandoned` record is a corpse, not a live run to block on
+# ---------------------------------------------------------------------------
+
+
+def _seed_record(tmp_path: Any, run_id: str, status: str, job_ids=("13554560",)) -> None:
+    """Seed a journal record then transition it to *status* (via mark_run)."""
+    from hpc_agent.state.journal import mark_run, upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    rec = RunRecord(
+        run_id=run_id,
+        profile="p",
+        cluster="c",
+        ssh_target="user@host",
+        remote_path="/r",
+        job_name=run_id,
+        job_ids=list(job_ids),
+        total_tasks=4,
+        submitted_at="2026-01-01T00:00:00+00:00",
+        experiment_dir=str(tmp_path.resolve()),
+    )
+    upsert_run(tmp_path, rec)
+    if status != "in_flight":
+        mark_run(tmp_path, run_id, status=status)
+
+
+class TestTerminalNotBlocking:
+    """#276: a terminal-but-not-`complete` journal entry (`failed` / `abandoned`)
+    with populated `job_ids` must NOT block a fresh submit — it is not a live run,
+    so its `job_ids` are forensic, not an in-flight marker. A single transient
+    status-probe failure used to mint an `abandoned` corpse and wedge every future
+    submit until the user nuked `~/.claude/hpc/<hash>/`. `complete` still dedups
+    (idempotency); `in_flight` (incl. a timed-out run) still blocks."""
+
+    def test_is_resubmittable_terminal_helper(self) -> None:
+        from hpc_agent.state.journal import is_resubmittable_terminal
+        from hpc_agent.state.run_record import RunRecord
+
+        def _r(status: str) -> RunRecord:
+            return RunRecord(
+                run_id="r",
+                profile="p",
+                cluster="c",
+                ssh_target="u@h",
+                remote_path="/r",
+                job_name="r",
+                job_ids=["1"],
+                total_tasks=1,
+                submitted_at="t",
+                experiment_dir="/e",
+                status=status,
+            )
+
+        # Terminal-but-not-complete → resubmittable (fall through to a fresh submit).
+        assert is_resubmittable_terminal(_r("abandoned")) is True
+        assert is_resubmittable_terminal(_r("failed")) is True
+        # complete still dedups (idempotency); in_flight is still live — incl. a
+        # timed-out run, which stays in_flight in the journal (never `timeout`).
+        assert is_resubmittable_terminal(_r("complete")) is False
+        assert is_resubmittable_terminal(_r("in_flight")) is False
+
+    def test_held_run_still_blocks(self) -> None:
+        """A held run (pending_verdict, #231/#234) is parked awaiting a decision —
+        even though it is `failed` it is NOT resubmittable, so a plain submit can't
+        clobber the hold. The escalation flow owns its resubmission."""
+        from hpc_agent.state.journal import is_resubmittable_terminal
+        from hpc_agent.state.run_record import RunRecord
+
+        held_failed = RunRecord(
+            run_id="r",
+            profile="p",
+            cluster="c",
+            ssh_target="u@h",
+            remote_path="/r",
+            job_name="r",
+            job_ids=["1"],
+            total_tasks=1,
+            submitted_at="t",
+            experiment_dir="/e",
+            status="failed",
+            pending_verdict={"reason": "ambiguous failure"},
+        )
+        assert is_resubmittable_terminal(held_failed) is False
+
+    @pytest.mark.parametrize("status", ["abandoned", "failed"])
+    def test_terminal_record_does_not_dedup_submit_proceeds(
+        self, tmp_path: Any, _journal_home: Any, status: str
+    ) -> None:
+        """Acceptance (#276): seed a terminal-not-complete record + job_ids, run
+        submit-flow → it PROCEEDS (doesn't short-circuit as deduped)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        _seed_record(tmp_path, "r0", status)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=["fresh"],
+                total_tasks=4,
+                deduped=False,
+                canary_done=False,
+            )
+            results = submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        # It proceeded to a real submission rather than short-circuiting deduped.
+        assert submit_one.call_count == 1
+        assert results[0].deduped is False
+        assert results[0].job_ids == ["fresh"]
+
+    def test_complete_record_still_dedups(self, tmp_path: Any, _journal_home: Any) -> None:
+        """Idempotency preserved: a `complete` run with the same run_id still dedups."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+
+        _seed_record(tmp_path, "r0", "complete")
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            results = submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert submit_one.call_count == 0
+        assert results[0].deduped is True
+        assert preflight.call_count == 0  # fully short-circuited — no cluster traffic
+
+    @pytest.mark.parametrize("status", ["abandoned", "failed"])
+    def test_submit_and_record_skips_terminal(
+        self, tmp_path: Any, _journal_home: Any, status: str
+    ) -> None:
+        """runner.submit_and_record: a terminal-not-complete record is not a dedup target."""
+        import warnings
+
+        from hpc_agent._wire.actions.submit import SubmitSpec
+        from hpc_agent.ops.submit.runner import submit_and_record
+
+        _seed_record(tmp_path, "r0", status, job_ids=["old"])
+        spec = SubmitSpec(
+            profile="p",
+            cluster="c",
+            ssh_target="user@host",
+            remote_path="/r",
+            job_name="r0",
+            run_id="r0",
+            job_ids=["new"],
+            total_tasks=4,
+        )
+        with warnings.catch_warnings():
+            # No sidecar on disk → the post-qsub finalize warns; not under test.
+            warnings.simplefilter("ignore")
+            record, deduped = submit_and_record(tmp_path, spec=spec)
+        assert deduped is False  # terminal-not-complete → fresh record, not a replay
+        assert record.job_ids == ["new"]

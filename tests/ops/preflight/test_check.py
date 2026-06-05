@@ -16,6 +16,7 @@ from unittest import mock
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra import ssh_agent, ssh_options
 from hpc_agent.ops.preflight import check as preflight
 
@@ -338,3 +339,81 @@ def test_preflight_skips_ssh_echo_when_tcp_fails(monkeypatch: pytest.MonkeyPatch
     assert "cluster_ssh_echo" not in checks  # skipped on tcp fail
     ssh_mock.assert_not_called()
     assert result["all_ok"] is False
+
+
+# ─── runtime (uv) probe via --spec (issue #275) ──────────────────────────────
+
+
+def _uv_spec(**overrides: Any) -> dict[str, Any]:
+    """A minimal submit-flow-shaped spec dict whose job_env requests runtime=uv."""
+    spec: dict[str, Any] = {
+        "ssh_target": "user@hoffman2",
+        "job_env": {
+            "HPC_RUNTIME": "uv",
+            "CONDA_SOURCE": "/opt/conda/etc/profile.d/conda.sh",
+            "CONDA_ENV": "hpc-pi",
+            "MODULES": "",
+        },
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_runtime_uv_check_passes_when_probe_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--spec` with runtime=uv: a clean `_preflight_runtime_check` → `runtime_uv` ok.
+
+    check-preflight reuses submit-flow's probe (one implementation), so a green
+    here means the same `command -v uv` submit-flow would run actually passed.
+    """
+    monkeypatch.setattr(
+        preflight, "runtime_uv_preflight", lambda ssh_target, *, job_env, skip: None
+    )
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight(spec=_uv_spec())
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["runtime_uv"]["ok"] is True
+    assert "user@hoffman2" in checks["runtime_uv"]["detail"]
+
+
+def test_runtime_uv_check_fails_when_uv_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The #275 fix: a `runtime: uv` spec on a uv-less cluster is caught HERE.
+
+    The probe raises `SpecInvalid`; check-preflight surfaces it as a failed
+    `runtime_uv` check (not an exception) so the envelope stays uniform — before
+    any qsub, instead of every task dying ``HPC_RUNTIME=uv but 'uv' not on PATH``.
+    """
+
+    def _boom(ssh_target: str, *, job_env: dict, skip: bool) -> None:
+        raise errors.SpecInvalid("preflight: runtime=uv but `uv` was not found — pip install uv")
+
+    monkeypatch.setattr(preflight, "runtime_uv_preflight", _boom)
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight(spec=_uv_spec())
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["runtime_uv"]["ok"] is False
+    assert "uv" in checks["runtime_uv"]["detail"]
+    assert result["all_ok"] is False
+
+
+def test_no_runtime_uv_check_without_spec() -> None:
+    """Bare check-preflight (no `--spec`) never adds the probe — unchanged behaviour."""
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert "runtime_uv" not in checks
+
+
+def test_no_runtime_uv_check_for_non_uv_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spec that does not set `HPC_RUNTIME=uv` skips the probe — no extra ssh."""
+    called: list[int] = []
+    monkeypatch.setattr(
+        preflight,
+        "runtime_uv_preflight",
+        lambda *a, **k: called.append(1),  # pragma: no cover
+    )
+    spec = _uv_spec(job_env={"CONDA_ENV": "hpc-pi"})  # no HPC_RUNTIME
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight(spec=spec)
+    checks = {c["name"]: c for c in result["checks"]}
+    assert "runtime_uv" not in checks
+    assert called == []

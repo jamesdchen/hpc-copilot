@@ -73,7 +73,10 @@ def test_returns_minimal_valid_spec_with_synthesized_job_env() -> None:
     assert spec["job_env"]["HPC_TASK_COUNT"] == "42"
     assert spec["job_env"]["REPO_DIR"] == "/u/scratch/alice/exp"
     assert spec["canary"] is True
-    assert spec["skip_preflight"] is True
+    # #275: build-submit-spec no longer emits skip_preflight — it was an
+    # agent-settable bypass that silenced the uv runtime probe. The preflight
+    # skip is operator-only now (HPC_AGENT_SKIP_PREFLIGHT), never a built field.
+    assert "skip_preflight" not in spec
 
 
 def test_service_env_stamps_hpc_service_env_json() -> None:

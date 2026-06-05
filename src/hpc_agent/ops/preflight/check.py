@@ -28,9 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.runtime_preflight import runtime_uv_preflight
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary
 
@@ -64,9 +66,19 @@ def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
     cli=CliShape(
         help=(
             "Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses; "
-            "with --cluster also runs a TCP :22 probe + an actual ssh round-trip."
+            "with --cluster also runs a TCP :22 probe + an actual ssh round-trip; "
+            "with --spec <built submit-flow spec> also runs the runtime (uv) "
+            "probe submit-flow would, so a uv-on-a-uv-less-cluster spec is caught "
+            "here, before qsub (#275)."
         ),
         verb="preflight",
+        # Optional submit-flow spec (#275): when supplied, check-preflight runs
+        # the same ``command -v uv`` runtime probe submit-flow runs, reusing the
+        # built spec's ssh_target + job_env. ``spec_required=False`` keeps the
+        # bare ``--cluster`` (and no-arg) invocations working unchanged.
+        spec_arg=True,
+        spec_required=False,
+        schema_ref=SchemaRef(input="submit_flow"),
         args=(
             CliArg(
                 "--cluster",
@@ -87,8 +99,21 @@ def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
     ),
     agent_facing=True,
 )
-def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
+def check_preflight(
+    *, cluster: str | None = None, spec: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Run all preflight checks; return a dict with ``all_ok`` and ``checks``.
+
+    *spec*: optional built submit-flow spec (#275). When supplied AND its
+    ``job_env`` declares ``HPC_RUNTIME=uv``, adds a ``runtime_uv`` check that
+    runs the SAME ``command -v uv`` probe submit-flow runs (via the shared
+    :func:`hpc_agent.ops.submit_flow._preflight_runtime_check`), using the
+    spec's ``ssh_target`` + activation ``job_env``. This closes the #275 gap:
+    the SKILL.md flow ran check-preflight (no spec) then submit-flow, whose uv
+    guard was skippable, so a ``runtime=uv`` spec on a uv-less cluster sailed
+    past preflight and doomed every task with ``HPC_RUNTIME=uv but 'uv' not on
+    PATH``. No spec (or a non-uv runtime) leaves the check absent — no extra
+    ssh round-trip.
 
     *cluster*: optional cluster name; when supplied, adds the
     ``cluster_known`` check (membership in clusters.yaml), a
@@ -209,6 +234,39 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     except (OSError, Exception) as exc:  # noqa: BLE001
         clusters = {}
         checks.append(_check("clusters_yaml_parses", False, str(exc)))
+
+    # Runtime-binary probe (#275): when a built submit-flow spec is supplied AND
+    # it asks for ``runtime=uv``, verify ``uv`` is actually on PATH after the
+    # cluster env is activated — the SAME probe submit-flow runs, via the shared
+    # ``_preflight_runtime_check``. This is the fix for the gap where the
+    # SKILL.md flow ran check-preflight (spec-less) then submit-flow with the
+    # (now-removed) ``skip_preflight``, so the uv guard never fired and an array
+    # died with ``HPC_RUNTIME=uv but 'uv' not on PATH``. A non-uv runtime or no
+    # spec skips it (no extra ssh round-trip). Raises are surfaced as a failed
+    # check, never an exception, so the envelope stays uniform.
+    if isinstance(spec, dict):
+        job_env = spec.get("job_env") or {}
+        spec_ssh_target = spec.get("ssh_target")
+        if isinstance(job_env, dict) and job_env.get("HPC_RUNTIME") == "uv" and spec_ssh_target:
+            try:
+                runtime_uv_preflight(str(spec_ssh_target), job_env=dict(job_env), skip=False)
+                checks.append(
+                    _check(
+                        "runtime_uv",
+                        True,
+                        f"uv present on PATH after cluster env activation on {spec_ssh_target}",
+                    )
+                )
+            except errors.SpecInvalid as exc:
+                checks.append(_check("runtime_uv", False, str(exc)))
+            except (TimeoutError, OSError) as exc:
+                checks.append(
+                    _check(
+                        "runtime_uv",
+                        False,
+                        f"runtime uv probe to {spec_ssh_target} could not complete: {exc}",
+                    )
+                )
 
     # If a cluster name was passed, attempt a TCP probe on port 22.
     if cluster:

@@ -131,7 +131,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [aggregate-preflight](aggregate-preflight.md) | yes | _none_ | `hpc-agent aggregate-preflight --experiment-dir <experiment_dir> [--reconcile-scheduler <reconcile_scheduler>]` |
-| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <cluster>]` |
+| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--spec <path>] [--cluster <cluster>]` |
 | [check-task-generator-mismatch](check-task-generator-mismatch.md) | yes | _none_ | `hpc-agent check-task-generator-mismatch --caller-task-generator <caller_task_generator> [--cached-task-generator <cached_task_generator>]` |
 | [classify-axis-preflight](classify-axis-preflight.md) | yes | _none_ | `hpc-agent classify-axis-preflight --experiment-dir <experiment_dir> [--run-name <run_name>] [--run-signature-sha <run_signature_sha>] [--root <root>] [--task-kind <task_kind>] [--data-axis-supplied]` |
 | [dry-run-local](dry-run-local.md) | yes | _none_ | `(none — Python-only primitive)` |

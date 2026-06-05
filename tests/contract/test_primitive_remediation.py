@@ -94,6 +94,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "decide-monitor-arm",
         "interview",
         "monitor-flow",
+        # check-preflight gained an optional --spec (#275) to run the uv runtime
+        # probe; it has no own input schema (reuses submit_flow.input.json), so
+        # it appears here but not in the schema-file-parametrized remediation tests.
+        "preflight",
         "recommend-partition",
         "resubmit",
         "submit",

@@ -11,7 +11,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.journal import is_resubmittable_terminal, load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
 
@@ -123,7 +123,13 @@ def submit_and_record(
     campaign_id = spec.campaign_id or ""
 
     existing = load_run(experiment_dir, run_id)
-    if existing is not None:
+    if existing is not None and not is_resubmittable_terminal(existing):
+        # #276: a terminal-but-not-``complete`` record (``failed`` / ``abandoned``)
+        # is not a live run — do not dedup against it (that blocked every future
+        # submit for this run_id after a transient status-probe failure minted an
+        # abandoned record, or after any prior failure). A ``complete`` run still
+        # dedups (idempotency) and an ``in_flight`` one still blocks; only the
+        # terminal-failure record falls through to a fresh RunRecord + upsert below.
         return existing, True
 
     # A5: cmd_sha-based dedup. Covers the case where the journal at

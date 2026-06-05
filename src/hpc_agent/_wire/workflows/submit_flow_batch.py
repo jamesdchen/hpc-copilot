@@ -38,10 +38,11 @@ class SubmitFlowBatchSpec(BaseModel):
         default=None,
         description="Optional rsync exclude patterns applied once across the bundle.",
     )
-    skip_preflight: bool | None = Field(
-        default=None,
-        description="Skip the single ssh probe; default false.",
-    )
+    # ``skip_preflight`` was removed here too (#275) — see the note on
+    # ``SubmitFlowSpec``. The skip is operator-only now
+    # (``HPC_AGENT_SKIP_PREFLIGHT=1`` / the internal ``_skip_preflight`` kwarg on
+    # ``submit_flow_batch``); an agent can no longer silence the preflight by
+    # setting a bundle-level flag. ``extra="forbid"`` refuses a stray one.
 
 
 class _SubmitFlowResultEntry(BaseModel):

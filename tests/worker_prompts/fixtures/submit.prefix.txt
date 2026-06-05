@@ -138,7 +138,7 @@ If `discover_executors` returns empty, scaffolding requires an interactive sub-i
 
 The caller has already parsed the user's natural-language request into a list of `(executor_id, axis_shape)` tuples; the result arrives via the invocation `fields`. Flags `--no-canary` and `campaign_id=<slug>` thread through verbatim.
 
-For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...], "skip_preflight": ...}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md).
+For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...]}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md).
 
 ## Step 3: Consume the recorded parallelization verdict (never infer it)
 
@@ -230,9 +230,10 @@ Returns `{run_id, cmd_sha}`. `run_id` is `<run_name>-<sha[:8]>`; `cmd_sha` is th
 hpc-agent find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
 ```
 
-Branch on envelope's `{found, is_orphan}`:
+Branch on envelope's `{found, is_orphan, status}`:
 - `found=False` → fresh; continue to 6d.
-- `found=True, is_orphan=False` → real prior. Record a `prior_run` decision with outcome `found` (put the `run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh.
+- `found=True` AND `status` is `abandoned` or `failed` → a terminal-but-not-`complete` record (the monitor gave up tracking it, or it failed), NOT a live prior (#276). Its `job_ids` are forensic, not in-flight. Proceed to 6d as if fresh — `submit-flow` re-submits over it (it no longer dedups against an abandoned/failed record), and the canary refires rather than reusing the dead one. Do not surface a resume prompt. (A `complete` prior still dedups; an `in_flight` one — including a timed-out run, which stays `in_flight` — still blocks.)
+- `found=True, is_orphan=False` (and `status` is `complete` or `in_flight`) → real prior. Record a `prior_run` decision with outcome `found` (put the `run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh.
 - `found=True, is_orphan=True` → half-baked sidecar. Suggest `prune-orphan-sidecars` or proceed and let `submit_flow_batch`'s auto-prune handle it.
 
 ### 6d: Write sidecar + build submit-flow spec
@@ -253,9 +254,11 @@ The spec is a `WriteRunSidecarInput` JSON (see `schemas/write_run_sidecar.input.
 
 ## Step 6b: Pre-flight Gate (cached per cluster)
 
-Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` (TTL 24h). If marker exists, `all_ok=true`, < 24h old → log `preflight: cached <N>m ago — OK` and skip to Step 7.
+Invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>` **and `--spec <the submit-flow spec built in Step 6d>`**. Passing the spec lets check-preflight run the same `command -v uv` runtime probe `submit-flow` runs (a `runtime_uv` check), so a `runtime: "uv"` spec against a cluster without `uv` is refused **here**, before any qsub — the gap #275 closed (there is no longer a `skip_preflight` spec field that could silence it).
 
-Otherwise invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>`. On `data.all_ok == true`: write/update marker, continue. On any check failure: do NOT write marker, record a `preflight` decision with outcome `setup_required`, put the failing checks verbatim in `anomalies`, and stop — the user fixes their environment with `hpc-agent setup --cluster <name>` and the caller re-invokes.
+Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` (TTL 24h) caches the cluster-environment checks (ssh agent, ssh/rsync on PATH, cluster reachability). If the marker is fresh **and the spec does not set `runtime: "uv"`** → log `preflight: cached <N>m ago — OK` and skip to Step 7. When the spec sets `runtime: "uv"`, run check-preflight `--spec` regardless of the marker — the marker does not cover per-spec `uv` availability (the conda env can change without the cluster env changing).
+
+On `data.all_ok == true`: write/update marker, continue. On any check failure (including `runtime_uv`): do NOT write marker, record a `preflight` decision with outcome `setup_required`, put the failing checks verbatim in `anomalies`, and stop — the user fixes their environment (`hpc-agent setup --cluster <name>`, or installs uv into the cluster env, e.g. `~/.conda/envs/<env>/bin/pip install uv`) and the caller re-invokes.
 
 ## Step 6c: Pre-submit campaign validation
 
@@ -282,8 +285,7 @@ Branch on `data.overall`:
   "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
   "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
   "pass_env_keys": null,
-  "canary": true, "canary_only": true, "campaign_id": "<slug>", "runtime": "uv",
-  "skip_preflight": true
+  "canary": true, "canary_only": true, "campaign_id": "<slug>", "runtime": "uv"
 }
 ```
 
@@ -291,7 +293,7 @@ Branch on `data.overall`:
 
 `pass_env_keys` is `null` (or omit it) to forward **every** `job_env` key via `qsub -v` — that is what you almost always want. A **non-empty** list restricts to those keys. **Never `[]`** — an empty list forwards *zero* vars (every `$EXECUTOR`/`$CONDA_ENV`/`$REPO_DIR` unset), producing the same broken job; submit-flow now refuses `[]` at intake (#192).
 
-`skip_preflight: true` is correct — Step 6b just ran. For GPU jobs: `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
+There is **no** `skip_preflight` field (#275): Step 6b already ran the cluster-env + runtime probes, and the skip is operator-only now — an operator who wants to avoid the re-probe sets `HPC_AGENT_SKIP_PREFLIGHT=1` in the environment; an agent cannot silence it (the field is rejected by the schema). For GPU jobs: `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
 
 **Phase 1 — submit the canary only** (`canary_only: true`): preflight + rsync + deploy + the 1-task canary, but NOT the main array.
 
@@ -312,7 +314,7 @@ hpc-agent verify-canary --experiment-dir . --canary-run-id "$CANARY_RUN_ID" --ex
 - `ok=False` → record a `canary` decision with outcome set to the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put `stderr_tail` verbatim in `anomalies`, then **stop. The main array never launches.**
 - `ok=True` → proceed to Phase 2.
 
-**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false`, `"canary_only": false`, **and `"skip_rsync_deploy": true`** (the canary's Phase 1 just deployed the code; the local tree hasn't changed since, so the rsync+deploy would be a no-op — #185). Keep `"skip_preflight": true` as in Phase 1.
+**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false`, `"canary_only": false`, **and `"skip_rsync_deploy": true`** (the canary's Phase 1 just deployed the code; the local tree hasn't changed since, so the rsync+deploy would be a no-op — #185). Phase 1 already paid the preflight; Phase 2 re-runs only a cheap cluster-reachability probe (the runtime probe is TTL-cached), which is fine — there is no agent-settable skip (#275).
 
 ```bash
 hpc-agent submit-flow --spec spec_main.json --experiment-dir .

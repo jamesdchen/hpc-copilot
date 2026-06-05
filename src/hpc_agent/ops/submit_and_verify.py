@@ -156,9 +156,12 @@ def submit_and_verify(
     # skip the redundant preflight Phase 1 just performed).
     main_submit = submit_flow(
         experiment_dir,
-        spec=base.model_copy(
-            update={"canary": False, "canary_only": False, "skip_preflight": True}
-        ),
+        spec=base.model_copy(update={"canary": False, "canary_only": False}),
+        # #275: skip_preflight is no longer a spec field. Phase 1 (the canary
+        # submit) already paid the preflight, so the main-array launch skips the
+        # redundant probe via the internal operator-trusted kwarg — not an
+        # agent-visible spec field an agent could set to silence the runtime probe.
+        _skip_preflight=True,
     )
     return SubmitAndVerifyResult(
         run_id=main_submit.run_id,

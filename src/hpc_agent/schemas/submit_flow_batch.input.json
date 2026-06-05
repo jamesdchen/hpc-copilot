@@ -32,19 +32,6 @@
       "default": null,
       "description": "Optional rsync exclude patterns applied once across the bundle.",
       "title": "Rsync Excludes"
-    },
-    "skip_preflight": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Skip the single ssh probe; default false.",
-      "title": "Skip Preflight"
     }
   },
   "$defs": {
@@ -277,12 +264,6 @@
           "default": null,
           "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
           "title": "Rsync Excludes"
-        },
-        "skip_preflight": {
-          "default": false,
-          "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution.",
-          "title": "Skip Preflight",
-          "type": "boolean"
         },
         "skip_rsync_deploy": {
           "default": false,

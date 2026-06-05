@@ -742,7 +742,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent preflight [--cluster <cluster>]",
+    "cli": "hpc-agent preflight [--spec <path>] [--cluster <cluster>]",
     "idempotent": true,
     "input_schema": null,
     "name": "check-preflight",
