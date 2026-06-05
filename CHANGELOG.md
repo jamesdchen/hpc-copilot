@@ -5,6 +5,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.12 — 2026-06-05
+
+Reconcile two-tier fix off the same demo session. Tier 1 = root cause (the bare-python reporter shape resurrected as a regression in the reconcile path), Tier 2 = defense in depth (route reporter-failure through `unable_to_verify`, the same lifecycle state #258 already added for alive-check failures).
+
+### Fixed — reconcile threads `remote_activation` into the reporter probe (Tier 1)
+
+`ops/monitor/reconcile.py::_reconcile_one` called `_ssh_status_report` without the `remote_activation` keyword, defaulting it to the empty string. The cluster-side reporter then ran under the login node's bare `python` (Hoffman2: `/usr/bin/python` 3.6.8, no `hpc_agent`), crashing with `No module named hpc_agent.models.mapreduce.reduce`. The monitor-side `record_status` path (`ops/monitor/status.py:109-125`) already threaded `remote_activation_for_sidecar(_sidecar)` correctly — reconcile just didn't mirror it. Symmetric fix: read the sidecar, compute the activation prefix, pass it to the reporter call. Same bug shape as the 2026-06-03-handoff-withdrawn 0.7.5 "Bug B" — that withdrawal was correct for the monitor/status path; reconcile reborn the same hole independently.
+
+### Fixed — reporter failure routes through `unable_to_verify` (Tier 2)
+
+Pre-0.10.12 `_reconcile_one`'s verdict logic gated `unable_to_verify` solely on `alive_check_failed`. If the alive-check succeeded (scheduler answered "no jobs alive") AND the reporter raised, the verdict still routed through `abandoned` because the reporter exception was caught into a `summary = {"error": str(exc)}` dict but no flag influenced the verdict. The empirical 2026-06-05 demo: reporter died (Tier 1 cause), alive-check confirmed job gone, run marked `abandoned` — but the framework had no independent confirmation results didn't exist. A completed-but-reporter-broken run would have looked identical. Added a `reporter_failed` flag mirroring `alive_check_failed`; either failing routes through `unable_to_verify`. `abandoned` now requires BOTH probes clean + no alive jobs.
+
+Two new tests pin both tiers: `test_reporter_failure_routes_through_unable_to_verify` (Tier 2 — reporter crashes with the empirical "No module named hpc_agent.models.mapreduce.reduce" string, assert envelope = `unable_to_verify` not `abandoned`) and `test_reconcile_threads_remote_activation_to_reporter` (Tier 1 — assert the reporter call receives a non-empty `remote_activation` keyword).
+
 ## 0.10.11 — 2026-06-05
 
 One upstream fix off the same demo session: tighten the 0.10.3 bare-script-against-register_run guard so the with-trailing-args shape is also refused.

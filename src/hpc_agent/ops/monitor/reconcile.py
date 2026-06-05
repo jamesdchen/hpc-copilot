@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -221,14 +222,49 @@ def _reconcile_one(
          flip ``status`` to ``"abandoned"``.
 
     All three SSH calls run concurrently. Writes the reconciled record
-    back atomically. When the alive-check itself failed (SSH/auth/network),
-    the run is NOT marked abandoned and ``last_status.verify_state`` is set to
-    ``unable_to_verify`` (#258) so the envelope can surface that distinctly;
-    the bool return mirrors it.
+    back atomically.
+
+    Two failure modes route through ``unable_to_verify`` instead of
+    abandoned (the journal status is left untouched in both):
+
+    - **Alive-check SSH failure** (#258 — the original case). We couldn't
+      ask the scheduler whether the job is alive; treating "no alive jobs
+      returned" as confirmed-dead would mark a healthy run abandoned on a
+      connectivity blip.
+    - **Status reporter SSH failure** (0.10.12). When the cluster-side
+      reporter can't run — e.g. the reconcile shells under bare ``python``
+      because the activation prefix wasn't threaded through (pre-0.10.12
+      bug) — we can't confirm whether results exist on disk. Routing
+      through ``abandoned`` would mask a "completed-but-reporter-broken"
+      run. The ``record_status`` / monitor path already threads
+      ``remote_activation_for_sidecar`` (see ``ops/monitor/status.py``);
+      reconcile now does the same.
+
+    The bool return mirrors ``alive_check_failed`` (kept for
+    backward-compat with ``reconcile``'s caller; the reporter-failed
+    signal lives in ``last_status.verify_state``).
     """
+    # Activate the run's cluster env (conda/modules) for the control-plane
+    # reporter — same shape as record_status (ops/monitor/status.py:109-125).
+    # Without this, the reporter shells under the login node's bare
+    # /usr/bin/python which has no hpc_agent → the cluster-side reduce
+    # module fails to import → reporter raises RemoteCommandFailed → the
+    # verdict (pre-0.10.12) silently routed through abandoned because only
+    # alive_check_failed gated unable_to_verify.
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.state.runs import read_run_sidecar
+
     record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")
+
+    try:
+        _sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, json.JSONDecodeError):
+        # Missing/malformed sidecar → bare-python reporter call → the
+        # reporter-failed routing below will catch the resulting error and
+        # surface unable_to_verify rather than silent abandon.
+        _sidecar = {}
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         fut_status = pool.submit(
@@ -239,6 +275,7 @@ def _reconcile_one(
             job_ids=record.job_ids,
             job_name=record.job_name,
             file_glob=file_glob,
+            remote_activation=remote_activation_for_sidecar(_sidecar),
         )
         fut_waves = pool.submit(
             _ssh_list_combined_waves,
@@ -257,8 +294,11 @@ def _reconcile_one(
         try:
             report = fut_status.result()
             summary = dict(report.get("summary", {}))
+            reporter_failed = False
         except Exception as exc:
             summary = {"error": str(exc)}
+            warnings.append(f"status reporter: {exc}")
+            reporter_failed = True
         summary["checked_at"] = utcnow_iso()
         if isinstance(report.get("waves"), dict) and report["waves"]:
             summary["waves"] = report["waves"]
@@ -287,10 +327,11 @@ def _reconcile_one(
     if warnings:
         summary["warnings"] = warnings
 
-    # #258: when the alive-check couldn't run, the run's true state is unknown.
-    # Mark the snapshot so the envelope can surface ``unable_to_verify`` instead
-    # of masquerading the stale journal status as a confirmed reading.
-    if alive_check_failed:
+    # #258 + 0.10.12: when either the alive-check or the status reporter
+    # couldn't run, the run's true state is unknown. Mark the snapshot so
+    # the envelope surfaces ``unable_to_verify`` instead of masquerading the
+    # stale journal status as a confirmed reading.
+    if alive_check_failed or reporter_failed:
         summary["verify_state"] = "unable_to_verify"
 
     fields: dict[str, Any] = {
@@ -301,9 +342,11 @@ def _reconcile_one(
     }
     updated = update_run_status(experiment_dir, run_id, **fields)
 
-    # Only mark abandoned when the alive check actually ran and found
-    # nothing — never on SSH failure of the alive check itself.
-    if record.job_ids and not alive and not alive_check_failed:
+    # Only mark abandoned when BOTH probes ran cleanly and the alive check
+    # found nothing. Either probe failing routes through ``unable_to_verify``
+    # (set above) — confirmed-dead-on-scheduler + reporter-dead-so-results-unknown
+    # is not provable abandon.
+    if record.job_ids and not alive and not alive_check_failed and not reporter_failed:
         updated = mark_run(experiment_dir, run_id, status="abandoned")
     return updated, alive_check_failed
 
