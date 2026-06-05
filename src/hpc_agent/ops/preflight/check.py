@@ -32,7 +32,7 @@ from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
-from hpc_agent.infra.ssh_options import _ssh_add_binary
+from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary
 
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
@@ -154,13 +154,19 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
         # because the pipe is reachable, and the detail surfaces it.
         checks.append(_check("ssh_auth_sock", True, agent_detail()))
 
-    # ssh is mandatory for every remote operation.
-    ssh_path = shutil.which("ssh")
+    # ssh is mandatory for every remote operation. Probe the *same* binary
+    # production invokes (``_ssh_binary()``), not a bare ``"ssh"``: on Windows
+    # production prefers native ``C:\\Windows\\System32\\OpenSSH\\ssh.exe`` (the
+    # binary that reaches the ssh-agent named-pipe), so a bare-``ssh`` probe
+    # would report green for Git Bash's agent-blind ``ssh`` that production
+    # never runs. ``HPC_SSH_BINARY`` pins it on any platform.
+    ssh_binary = _ssh_binary()
+    ssh_path = shutil.which(ssh_binary)
     ssh_detail = (
         ssh_path
         if ssh_path
         else (
-            "not found — install openssh-client "
+            f"{ssh_binary} not found — install openssh-client "
             "(`apt install openssh-client` / `brew install openssh`)"
         )
     )
@@ -171,8 +177,12 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     # absent (typically Windows without WSL/MSYS rsync). The capability is
     # satisfied by rsync OR the scp+tar pair — don't fail preflight just
     # because rsync is missing when the fallback transport is available.
+    # Probe the same ``scp`` binary the fallback pipeline invokes
+    # (``_scp_binary()`` — native OpenSSH ``scp.exe`` on Windows), not a bare
+    # ``"scp"`` that could resolve to Git Bash's. ``HPC_SCP_BINARY`` pins it.
     rsync_path = shutil.which("rsync")
-    scp_path = shutil.which("scp")
+    scp_binary = _scp_binary()
+    scp_path = shutil.which(scp_binary)
     tar_path = shutil.which("tar")
     fallback_ok = scp_path is not None and tar_path is not None
     transfer_ok = rsync_path is not None or fallback_ok

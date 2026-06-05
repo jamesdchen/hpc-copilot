@@ -16,15 +16,43 @@ from unittest import mock
 
 import pytest
 
-from hpc_agent.infra import ssh_agent
+from hpc_agent.infra import ssh_agent, ssh_options
 from hpc_agent.ops.preflight import check as preflight
 
 
 def _which_for(present: set[str]) -> Callable[[str], str | None]:
-    """Return a ``shutil.which`` stub that resolves only *present* binaries."""
+    """``shutil.which`` stub that resolves a binary when its *capability* is present.
+
+    *present* names capabilities (``"ssh"``, ``"scp"``, ``"rsync"``, ``"tar"``),
+    not literal argv. Production probes the *resolved* ssh/scp binary
+    (``_ssh_binary()`` / ``_scp_binary()`` — a native ``...\\ssh.exe`` path on
+    Windows), so map those resolved names back to their capability key. Without
+    this the stub keys on a bare ``"ssh"`` that production no longer asks for,
+    and every ssh/scp check silently fails on the Windows runner.
+    """
+    resolved = {
+        ssh_options._ssh_binary(): "ssh",
+        ssh_options._scp_binary(): "scp",
+    }
 
     def _which(binary: str) -> str | None:
-        return f"/usr/bin/{binary}" if binary in present else None
+        capability = resolved.get(binary, binary)
+        return f"/usr/bin/{capability}" if capability in present else None
+
+    return _which
+
+
+def _which_exact(present: set[str]) -> Callable[[str], str | None]:
+    """``shutil.which`` stub matching the *exact* string asked for.
+
+    Unlike :func:`_which_for` (which keys on bare names), this resolves the
+    precise argument — so a probe for ``C:\\...\\ssh.exe`` only succeeds when
+    that exact path is present, while a bare ``"ssh"`` is a distinct key. This
+    is what lets a test distinguish the production binary from Git Bash's.
+    """
+
+    def _which(binary: str) -> str | None:
+        return binary if binary in present else None
 
     return _which
 
@@ -71,6 +99,66 @@ def test_ssh_check_named_ssh_on_path_and_no_legacy_rsync_check() -> None:
     checks = _checks_by_name({"ssh", "rsync"})
     assert checks["ssh_on_path"]["ok"] is True
     assert "rsync_on_path" not in checks
+
+
+# ─── ssh/scp probe the production binary, not a bare name (issue #271) ────────
+
+
+def test_ssh_check_fails_when_pinned_binary_absent_despite_bare_ssh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``HPC_SSH_BINARY`` pinned to a missing path → ssh check fails.
+
+    The regression guard: a bare ``"ssh"`` is on PATH (Git Bash's), but
+    production would invoke the pinned binary. The old ``shutil.which("ssh")``
+    probe reported green here while production ssh would die — now the probe
+    follows ``_ssh_binary()``, so the check fails and names the real binary.
+    """
+    pinned = r"C:\Windows\System32\OpenSSH\does-not-exist-ssh.exe"
+    monkeypatch.setenv("HPC_SSH_BINARY", pinned)
+    # Git Bash's bare ``ssh``/``scp``/``tar`` are present; the pinned path is not.
+    with mock.patch.object(preflight.shutil, "which", _which_exact({"ssh", "scp", "tar"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["ssh_on_path"]["ok"] is False
+    assert pinned in checks["ssh_on_path"]["detail"]
+
+
+def test_ssh_check_passes_with_windows_native_openssh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows host, native OpenSSH at the default path → ssh check passes.
+
+    No override set: ``_ssh_binary()`` resolves the native
+    ``_WIN_OPENSSH_SSH`` because the file exists, and the probe reports that
+    exact path rather than a bare ``"ssh"``.
+    """
+    monkeypatch.delenv("HPC_SSH_BINARY", raising=False)
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    native = ssh_options._WIN_OPENSSH_SSH
+    monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: p == native)
+    with mock.patch.object(preflight.shutil, "which", _which_exact({native, "ssh", "scp", "tar"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["ssh_on_path"]["ok"] is True
+    assert checks["ssh_on_path"]["detail"] == native
+
+
+def test_scp_fallback_follows_pinned_scp_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``HPC_SCP_BINARY`` pinned to a missing path breaks the scp+tar fallback.
+
+    rsync absent and the pinned scp missing → no transport, even though a bare
+    ``scp`` is on PATH. Mirrors the ssh divergence for the file-transfer probe.
+    """
+    pinned_scp = r"C:\Windows\System32\OpenSSH\scp.exe"
+    monkeypatch.setenv("HPC_SCP_BINARY", pinned_scp)
+    # Bare ssh/scp/tar present (so ssh check still passes), pinned scp is not.
+    with mock.patch.object(preflight.shutil, "which", _which_exact({"ssh", "scp", "tar"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["file_transfer_on_path"]["ok"] is False
 
 
 def test_ssh_auth_sock_windows_named_pipe_passes(monkeypatch: pytest.MonkeyPatch) -> None:
