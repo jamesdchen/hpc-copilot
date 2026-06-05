@@ -7,6 +7,23 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.10.8 — 2026-06-05
+
+Two upstream fixes off the post-0.10.7 inert-guard punch list.
+
+### Fixed — preflight ssh/scp probes follow production binary resolution (#271, PR #272)
+
+`ops/preflight/check.py` previously probed bare `"ssh"` / `"scp"` via `shutil.which`, but production resolves the binary through `infra.ssh_options._ssh_binary()` / `_scp_binary()`, which on Windows prefer native `C:\Windows\System32\OpenSSH\{ssh,scp}.exe` (the binaries that reach the ssh-agent named pipe). Same different-binary-from-production class as the `cluster_ssh_echo` fix: on a Windows host with Git Bash's agent-blind ssh on PATH but native OpenSSH absent, preflight reported green while every production ssh/scp call would die. Now probes the resolved binary and names it in the detail string.
+
+### Added — PBS node-level snapshot via `pbsnodes` parser (#215, PR #273)
+
+PBS `inspect_cluster` previously returned a minimal `ClusterSnapshot` (`nodes=[]` + a `pbs_inspect_minimal` note), so the planner had no node-level backfill/throughput signal for PBS clusters. A family-keyed `pbsnodes` parser now populates the snapshot:
+
+- **pbspro**: `pbsnodes -av` stanzas (`resources_available.*` / `resources_assigned.*`)
+- **torque**: `pbsnodes -a` stanzas (`np` + packed status line: `ncpus` / `physmem` / `availmem` / `loadave`)
+
+PBS node states map to `is_drained` conservatively (`down`/`offline`/`unknown`/`stale`/`provisioning`/`maintenance` ⇒ unusable; `free`/`job-busy`/`job-exclusive` stay up with busy-ness carried by `alloc_*` fields). `alloc_mem_pct` is clamped to `[0,1]` because PBS Pro reports `resources_available.mem` and `resources_assigned.mem` independently (no SLURM-style `AllocMem <= RealMemory` invariant), so an over-committed node would otherwise breach `inspect_cluster.output.json` and raise `OutputSchemaDrift`. CPU-only nodes no longer advertise a phantom `gpu:0` GRES — only emit `gres`/`gres_used` when count > 0, matching SLURM. The minimal snapshot is retained as the safe fallback for missing runner / non-zero `pbsnodes` exit / unparseable output.
+
 ## 0.10.7 — 2026-06-04
 
 Post-0.10.6 carry-forward: SSH/qsub determinism fixes, the WS2–WS5 escalation-funnel batch, and one #240 punch-list cleanup.
