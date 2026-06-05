@@ -5,7 +5,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## Unreleased
+## 0.10.9 — 2026-06-05
+
+A control-flow-out-of-the-LLM batch: pipeline parallelism + guard tightening (PR #282 + the first half of PR #285) followed by four workflow composites that fold the deterministic worker-prompt spines into single typed calls (PR #285 stage 3).
+
+### Added — submit-pipeline parallelism (#277, #278, #279, #280)
+
+- **#277 `submit-preflight`**: the sequential `install-commands` → `load-context` prelude is preserved, but `check-preflight` and `resolve-resources` now fan out concurrently via `ThreadPoolExecutor`.
+- **#280 `submit-flow`**: the `command -v uv` runtime probe runs in parallel with `rsync_push` + `deploy_runtime` via a shared `_run_shared_prelude`, instead of stacking ahead of the network-bound deploy.
+- **#279 `prepare-phase2-spec`**: new primitive for the deterministic phase-2 spec flips (canary/canary_only off, skip_rsync_deploy on). Wires the worker canary gate to one `submit-and-verify` call — no agent in the submit→verify→submit loop.
+- **#278 `prepare-followup-specs`**: new primitive that pre-stages `monitor_spec.json` + `aggregate_spec.json` at submit time so `hpc-status` / `hpc-aggregate` honor the cmd_sha-gated pre-staged spec and skip the interview.
+
+### Changed — `skip_preflight` demoted to operator-only env var (#275, PR #282 + PR #285)
+
+`skip_preflight` is no longer an agent-settable spec field. It was a bypass that silenced the runtime `command -v uv` guard, and the documented SKILL.md example had `skip_preflight: true` baked in, making the guard architecturally unreachable. Two-part fix:
+
+- **Fix 1** — `check-preflight --spec <built submit-flow spec>` now runs the same `command -v uv` probe `submit-flow` runs (new `runtime_uv` check via `infra/runtime_preflight.py`), so a `runtime: "uv"` spec against a uv-less cluster is refused before any qsub.
+- **Fix 2** — `skip_preflight` removed from `SubmitFlowSpec` / `SubmitFlowBatchSpec` / `build-submit-spec` (`extra="forbid"` rejects a stray field). The operator-opt-in path is the `HPC_AGENT_SKIP_PREFLIGHT=1` env var, matching the `HPC_AGENT_INVOKER=inline` precedent (#155). Internal post-canary main launches use a Python-only `_skip_preflight` kwarg.
+
+### Fixed — abandoned journal records no longer block fresh submits (#276)
+
+A monitor that gave up after a transient status-probe flake would mint a journal record with `status: "abandoned"` AND non-empty `job_ids`, and the dedup / canary-reuse paths keyed on `job_ids` presence rather than terminal status — so every subsequent submit hit "in-flight canary detected". Generalised the predicate to "terminal but not complete": added `state.journal.is_resubmittable_terminal` matching `TERMINAL_STATUSES - {complete} = {failed, abandoned}`. `complete` still dedups (idempotency); `in_flight` still blocks; `timeout` is deliberately excluded (it's a LifecycleState, never a JournalStatus); held runs (`pending_verdict`, #231/#234) still block (the escalation flow owns resubmission). The companion status-poll auto-recovery (bug 2 of #276 — `getsockname failed: Not a socket` on Windows OpenSSH) was already covered by 0.10.7's `run_with_named_pipe_retry` wrap; a regression test locks that.
+
+### Fixed — incoherent `conda_env` without `conda_source` is unrepresentable (#281)
+
+`build_submit_spec`'s env-activation guard accepted the partial `conda_env=set + conda_source=""` shape (the "all-empty refuses" `or` chain), and the preamble crashed at line 62 with `conda: command not found` because line 58's `if [ -n "$CONDA_SOURCE" ]` skipped the source step. Resolved env-activation now goes through one `Activation` value object that back-fills `conda_source` from `clusters.yaml` when only `conda_env` is supplied, making the incoherent state unrepresentable rather than merely rejected at the boundary.
 
 ### Added — workflow composites (control-flow-out-of-the-LLM, stage 3)
 
