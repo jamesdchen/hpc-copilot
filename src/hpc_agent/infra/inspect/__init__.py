@@ -62,6 +62,7 @@ from ._persist import (
     persist_snapshot,
     read_cluster_history,
 )
+from .pbs import _pbs_inspect, parse_pbsnodes
 from .sge import _parse_qhost, _parse_qstat_full, _sge_inspect
 from .slurm import (
     _bucket_tenants_by_node,
@@ -80,6 +81,7 @@ __all__ = [
     # public parsers (kept as documented API)
     "parse_scontrol_show_node",
     "parse_sacct_node_jobs",
+    "parse_pbsnodes",
     # history persistence
     "persist_snapshot",
     "read_cluster_history",
@@ -179,6 +181,7 @@ __all__ += [
     "_parse_gpu_count_from_tres",
     "_parse_qhost",
     "_parse_qstat_full",
+    "_pbs_inspect",
     "_sge_inspect",
     "_slurm_inspect",
     "_snapshot_from_dict",
