@@ -152,11 +152,18 @@ def submit_and_verify(
             verify_result=verify_result,
         )
 
-    # Phase 2 — canary verified → launch the main array (the canary already ran;
-    # skip the redundant preflight Phase 1 just performed).
+    # Phase 2 — canary verified → launch the main array. The deterministic
+    # Phase-2 flips (#279, mirrored by the prepare-phase2-spec primitive): no
+    # canary, launch main, and skip the rsync+deploy Phase 1 already did (#185).
+    # No ``skip_preflight`` here — preflight is operator-gated now (#275 Fix 2);
+    # Phase 1's probe plus the #255 TTL cache already cover the re-check cheaply.
     main_submit = submit_flow(
         experiment_dir,
-        spec=base.model_copy(update={"canary": False, "canary_only": False}),
+        # #185: Phase 1 just deployed, so the main launch skips the redundant
+        # rsync+deploy via ``skip_rsync_deploy``.
+        spec=base.model_copy(
+            update={"canary": False, "canary_only": False, "skip_rsync_deploy": True}
+        ),
         # #275: skip_preflight is no longer a spec field. Phase 1 (the canary
         # submit) already paid the preflight, so the main-array launch skips the
         # redundant probe via the internal operator-trusted kwarg — not an

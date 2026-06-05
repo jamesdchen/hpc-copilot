@@ -77,9 +77,9 @@ If that block is present, branch on its `kind`:
 
 | `kind` | Procedure behavior |
 |---|---|
-| `shell_command` | **The fallback path.** A wrapper has been materialized at `<wrapper_path>` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract for an entry point the framework can't decorate directly. **Skip Step 1's discover scan**; treat `<run_name>` as the picked run. **Use `<executor_cmd>` as the `EXECUTOR` in Step 6d's `job_env`** instead of synthesizing one from `discover_executors`. If `data_axis` is on the block, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6a's reuse branch picks it up. |
+| `shell_command` | **The fallback path.** A wrapper has been materialized at `<wrapper_path>` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract for an entry point the framework can't decorate directly. **Skip Step 1's discover scan**; treat `<run_name>` as the picked run. **Use `<executor_cmd>` as the `EXECUTOR` in Step 6's `job_env`** instead of synthesizing one from `discover_executors`. If `data_axis` is on the block, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6's reuse branch (omit `build_tasks`) picks it up. |
 | `register_run` | A pointer to a `@register_run`-decorated function the user has on disk — the canonical Python path. No wrapper to honor; fall through to Step 1's discovery, optionally scoped to `<run_name>` rather than enumerating. |
-| `python_module` | A pointer to an importable Python module. No wrapper to honor; fall through to Step 1's discovery, scoped to `<module>:<function>`. The `EXECUTOR` at Step 6d is `python3 -m <module>` (or a one-liner that imports `<function>`) if Step 1 doesn't otherwise resolve it. |
+| `python_module` | A pointer to an importable Python module. No wrapper to honor; fall through to Step 1's discovery, scoped to `<module>:<function>`. The `EXECUTOR` at Step 6 is `python3 -m <module>` (or a one-liner that imports `<function>`) if Step 1 doesn't otherwise resolve it. |
 
 Both `register_run` and `python_module` are **pointers, not wrappers** — they declare which function the worker should target but don't materialize anything. They get resolved through the normal Step 1 discovery flow; only `shell_command` short-circuits it.
 
@@ -116,7 +116,7 @@ For environment classification (Step 4) you still need the run's imports; invoke
 Invoke [discover-executors](../../docs/primitives/discover-executors.md). The primitive scans `executors/`, `scripts/`, `src/` (in order, falling back to repo root), filters utilities, and classifies each executor by contract.
 
 Map flag set per contract:
-- **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If first submit, capture intended flags during Step 6b interview.
+- **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If first submit, capture intended flags for Step 6's `build_tasks` scaffold spec.
 - **Old-contract** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface.
 
 If `discover_executors` returns empty, scaffolding requires an interactive sub-interview which a headless worker cannot run — record the boundary in `anomalies` and stop for the caller to handle.
@@ -125,20 +125,20 @@ If `discover_executors` returns empty, scaffolding requires an interactive sub-i
 
 The caller has already parsed the user's natural-language request into a list of `(executor_id, axis_shape)` tuples; the result arrives via the invocation `fields`. Flags `--no-canary` and `campaign_id=<slug>` thread through verbatim.
 
-For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...]}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md).
+For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...]}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md). (There is no `skip_preflight` key — preflight is operator-gated via `HPC_AGENT_SKIP_PREFLIGHT`, #275.)
 
 ## Step 3: Consume the recorded parallelization verdict (never infer it)
 
 The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 scaffolds it once per experiment; from then on it is committed and reused on every submit. There are two shapes:
 
-- **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) at Step 6b with **no** `data_axis`. The 80% case.
+- **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) (inside Step 6's resolve-submit-inputs) with **no** `data_axis`. The 80% case.
 - **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) fanned out across chunks. Splitting a *stateful* series is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.experiment_kit.plan_tasks`, emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis`.
 
 **Which shape is not the worker's call.** The classification is resolved *upstream* by the caller — the `hpc-classify-axis` skill (a deterministic AST matcher for the common shapes; the human/LLM decision tree for the long tail) — and recorded in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha` it was classified against. Read it and branch:
 
 - **`executors.<run_name>` present AND its `run_signature_sha` matches the picked run's current `run_signature_sha`** (Step 1) → the verdict is valid:
-  - `data_axis.kind == "cartesian"` → no ordered series to split; build a **plain cartesian** `tasks.py` (Step 6b, **omit** `data_axis` from the spec).
-  - `independent` / `associative` / `bounded_halo` / `sequential` → planner-driven; thread the `data_axis` block into Step 6b's `build-tasks-py` spec verbatim.
+  - `data_axis.kind == "cartesian"` → no ordered series to split; build a **plain cartesian** `tasks.py` (Step 6, **omit** `data_axis` from `build_tasks`).
+  - `independent` / `associative` / `bounded_halo` / `sequential` → planner-driven; thread the `data_axis` block into Step 6's `build_tasks` spec verbatim.
 - **No entry, or the `run_signature_sha` drifted** → unresolved. **Do NOT read the executor's code to infer an axis, and do NOT default to a cartesian grid** — a wrong "no series" guess silently mishandles a stateful series and returns plausible-but-wrong numbers. Record an `axis_class` decision with outcome `unclassified` (put `run_name=<name>, run_signature_sha=<sha>` in `why`) and **stop**; the caller runs `hpc-classify-axis`, writes the verdict to `axes.yaml`, and re-invokes this workflow.
 
 The distinction that makes this safe: a *recorded* `cartesian` verdict means the caller's matcher **confidently** found no ordered series; an *absent* verdict means "not yet resolved → escalate." The worker never conflates the two.
@@ -173,11 +173,11 @@ After grid expansion produces `total_tasks`, invoke [plan-throughput](../../docs
 hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <s>]
 ```
 
-It reads the cluster's scheduler constraints from `clusters.yaml`, packs the grid into concurrency-bounded waves, and returns `{strategy, total_batches, n_waves, est_total_wall_s, wave_map, ...}`. Thread the returned `wave_map` into `write_run_sidecar(..., wave_map=wave_map)` at Step 6d — the cluster-side combiner reads it from the sidecar. A cluster with no `constraints:` block falls back to scheduler defaults (a single array for a grid under the default `max_array_size`).
+It reads the cluster's scheduler constraints from `clusters.yaml`, packs the grid into concurrency-bounded waves, and returns `{strategy, total_batches, n_waves, est_total_wall_s, wave_map, ...}`. Thread the returned `wave_map` into `write_run_sidecar(..., wave_map=wave_map)` at Step 6 — the cluster-side combiner reads it from the sidecar. A cluster with no `constraints:` block falls back to scheduler defaults (a single array for a grid under the default `max_array_size`).
 
 ## Step 5: Confirm Run Plan (via summarize-submit-plan)
 
-Don't hand-author the summary. Once Step 6c emits the resolved spec via [build-submit-spec](../../docs/primitives/build-submit-spec.md), render the canonical confirmation via [summarize-submit-plan](../../docs/primitives/summarize-submit-plan.md):
+Don't hand-author the summary. Once Step 6 emits the resolved spec via [resolve-submit-inputs](../../docs/primitives/resolve-submit-inputs.md) (`data.submit_spec`), render the canonical confirmation via [summarize-submit-plan](../../docs/primitives/summarize-submit-plan.md):
 
 ```bash
 hpc-agent summarize-submit-plan --spec /tmp/submit_spec.json
@@ -185,63 +185,46 @@ hpc-agent summarize-submit-plan --spec /tmp/submit_spec.json
 
 The envelope's `data` carries `{headline, body, confirm_prompt}`. Surface `headline`, `body`, and `confirm_prompt` in the worker `result` so the caller can show them to the user. For multi-job submissions, call once per spec and concatenate bodies under one combined header. The primitive flips to a magnitude-warning prompt automatically when `total_tasks > 1000`.
 
-## Step 6: Scaffold (or reuse) `.hpc/tasks.py` and write the per-run sidecar
+## Step 6: Resolve submit inputs (one call)
 
-### 6a: Reuse if `.hpc/tasks.py` exists
+The deterministic input-resolution chain — ensure `.hpc/tasks.py` (reuse or scaffold) → compute `run_id`/`cmd_sha` → detect a resumable prior run → build + validate the submit-flow spec → write the per-run sidecar — runs as ONE call to [resolve-submit-inputs](../../docs/primitives/resolve-submit-inputs.md). It folds the former Steps 6a-6d so you read one typed `stage_reached` instead of hand-walking five verbs, and its `resolved` outcome is **fully submit-ready** (spec built AND the per-run sidecar written, so the #171 write-first precondition is already satisfied before Step 7-10).
 
-The Setup-step `action` already told you whether tasks.py exists: `reuse` / `interview` ⇒ present, `fresh` ⇒ absent. If you need to confirm, use the **Glob** tool for `.hpc/tasks.py` — do **not** shell `test`/`mkdir`, and do **not** import `hpc_agent` internals (`RepoLayout`, `load_tasks_module`, `hpc_agent.state.run_sha`); 6c's `compute-run-id` owns the `cmd_sha`, and 6b's `build-tasks-py` creates `.hpc/` itself.
+Assemble the spec from the values Steps 0-5 already resolved:
 
-If it exists, read it as-is — never regenerate. To change the axis, the user edits `.hpc/tasks.py` directly and re-runs. Skip to 6c.
-
-### 6b: Scaffold from canonical example (first submit only)
-
-If `tp.exists()` is False, walk through `hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
-
-**Planner-driven axis (Step 3b).** When Step 3 classified a non-trivial `DataAxis`, source it from `axes.yaml`'s `executors.<run_name>.data_axis` block (written by `classify-axis`) and pass it to [build-tasks-py](../../docs/primitives/build-tasks-py.md) in the spec's `data_axis` field: `{kind, chunks, series_length, halo_expr?, monoid?}`. The primitive then emits a `plan_tasks`-driven `tasks.py` deterministically — the `axes` become the sweep, the series axis is partitioned per the classification. The agent classifies; it never hand-writes `tasks.py`. `series_length` is the integer you probed at Step 3a; `chunks` is the desired per-sweep-point split count. Thread the classification's `halo.expr` from `axes.yaml` into `data_axis.halo_expr` **verbatim** — `build-tasks-py` consumes the same bare-name arithmetic form (`train_window * 48`, validated to `+ - * //` / `min` / `max`); do not rewrite it to `params['...']`.
-
-The serial-elision gate (Step 3c) must have passed before the file is committed.
-
-**Axis naming**: prefer experiment-prefixed axis names (`exp_horizon`, `ridge_alpha`) over bare ones (`horizon`, `alpha`) — a bare name whose uppercase form is a real env var (an axis `home` → `$HOME`) corrupts the executor's environment. `build-tasks-py` rejects names that collide with a reserved set at scaffold time; the mechanism and the recommended `HPC_KW_NAMESPACE_ONLY=1` default are in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md).
-
-`build-tasks-py` also deploys the sibling dispatcher `.hpc/cli.py` in the same call (the two are the dispatch-contract pair the cluster needs) — no separate copy step. Commit `.hpc/tasks.py` + `.hpc/cli.py` with `git`. No push — user controls upstream.
-
-### 6c: Compute `cmd_sha` + `run_id`, check for resume
-
-```bash
-hpc-agent compute-run-id --experiment-dir . --run-name "<run_name>"
+```json
+{
+  "run_name": "<run_name>",
+  "submit": { "...the build-submit-spec input: profile / cluster / ssh_target / remote_path / total_tasks / backend / job_env knobs..." },
+  "sidecar": {
+    "executor": "python train.py --seed $SEED",
+    "result_dir_template": "results/{run_id}",
+    "task_count": "<tasks.total()>",
+    "cluster": "<cluster>", "profile": "<run_name>", "campaign_id": "<slug>", "runtime": "uv"
+  },
+  "build_tasks": { "...ONLY when .hpc/tasks.py is absent: axes + flags_by_executor + (data_axis from Step 3's classification)..." }
+}
 ```
 
-Returns `{run_id, cmd_sha}`. `run_id` is `<run_name>-<sha[:8]>`; `cmd_sha` is the full 64-char hex used by `find-prior-run` and threaded into the spec at Step 6d. Replaces the prior `compute_cmd_sha(load_tasks_module(tp))` Python call — the agent never imports `hpc_agent.state.run_sha` directly.
+`submit.run_id` / `submit.cmd_sha` and `sidecar.run_id` / `sidecar.cmd_sha` are **placeholders** — resolve-submit-inputs overrides them with the values `compute-run-id` derives (it hashes the materialized `.hpc/tasks.py`), so you never hand-compute the run_id, and the built spec + written sidecar always match the reported one.
+
+**`sidecar.executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED`), NOT the job-script dispatcher (`python3 .hpc/_hpc_dispatch.py`), which would make the array self-recurse (#162). The dispatcher command belongs in the submit-flow spec's `job_env["EXECUTOR"]` (Step 7-10), not the sidecar's `executor`; `write-run-sidecar` refuses dispatcher-shaped values at intake.
+
+When `.hpc/tasks.py` is **absent**, supply `build_tasks` — the pre-classified `axes` + `flags_by_executor`, with `data_axis` (`{kind, chunks, series_length, halo_expr?, monoid?}`) sourced verbatim from Step 3's `axes.yaml` `executors.<run_name>.data_axis` block when the run is planner-driven (the serial-elision gate, Step 3c, must have passed first; prefer experiment-prefixed axis names so a bare name like `home` can't shadow `$HOME`). When `.hpc/tasks.py` **exists**, OMIT `build_tasks` — it is reused byte-identical so `cmd_sha` matches. The composite scaffolds `.hpc/tasks.py` + the sibling `.hpc/cli.py` via build-tasks-py; commit both with `git` after a `resolved` outcome.
 
 ```bash
-hpc-agent find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
+hpc-agent resolve-submit-inputs --spec spec.json --experiment-dir .
 ```
 
-Branch on envelope's `{found, is_orphan, status}`:
-- `found=False` → fresh; continue to 6d.
-- `found=True` AND `status` is `abandoned` or `failed` → a terminal-but-not-`complete` record (the monitor gave up tracking it, or it failed), NOT a live prior (#276). Its `job_ids` are forensic, not in-flight. Proceed to 6d as if fresh — `submit-flow` re-submits over it (it no longer dedups against an abandoned/failed record), and the canary refires rather than reusing the dead one. Do not surface a resume prompt. (A `complete` prior still dedups; an `in_flight` one — including a timed-out run, which stays `in_flight` — still blocks.)
-- `found=True, is_orphan=False` (and `status` is `complete` or `in_flight`) → real prior. Record a `prior_run` decision with outcome `found` (put the `run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh.
-- `found=True, is_orphan=True` → half-baked sidecar. Suggest `prune-orphan-sidecars` or proceed and let `submit_flow_batch`'s auto-prune handle it.
+Branch on `stage_reached` (read `needs_decision`):
 
-### 6d: Write sidecar + build submit-flow spec
-
-Use [build-submit-spec](../../docs/primitives/build-submit-spec.md) to assemble the spec — synthesizes `EXECUTOR`/`HPC_RUN_ID`/`HPC_CMD_SHA`/`HPC_TASK_COUNT`/`REPO_DIR`/`MODULES`/`CONDA_SOURCE`/`CONDA_ENV`/`HPC_RUNTIME`/`HPC_CAMPAIGN_ID`, picks the canonical script path from `(backend, is_gpu)`, validates against `schemas/submit_flow.input.json`.
-
-Write the per-run sidecar via:
-
-```bash
-hpc-agent write-run-sidecar --experiment-dir . --spec <file>
-```
-
-The spec is a `WriteRunSidecarInput` JSON (see `schemas/write_run_sidecar.input.json`). Pass `null` for any v2 field that doesn't apply. **Don't pass `job_ids`** — the sidecar is *pending* until `submit-flow` runs `update_run_sidecar_job_ids` after qsub returns. The primitive auto-stamps `submitted_at` and `hpc_agent_version`; the agent never sets them.
-
-**`executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED` / `python3 .hpc/_hpc_dispatch.py`'s *resolved* target), NOT the job-script dispatcher command (`python3 .hpc/_hpc_dispatch.py`) itself — a dispatcher-as-executor sidecar makes the dispatcher run itself and the whole array self-recurses (#162). `write-run-sidecar` refuses dispatcher-shaped values at intake.
-
-**Write-first is a hard precondition, not a manual unblock (#171).** `submit-flow` (Step 7-8) now *refuses* to run when the per-run sidecar is absent, or present but "pending" with an empty/dispatcher-only `executor` — it raises a `spec_invalid` telling you to write the sidecar first. And `write-run-sidecar` itself **refuses dispatcher-shaped `executor` values at intake** (#162). So the "sidecar present + real per-task executor" invariant is enforced by the two primitives you just called — do **not** re-read the sidecar with `hpc_agent.state.runs` internals to re-assert it by hand. A non-error envelope from `write-run-sidecar` is the confirmation; if it errored, fix the spec and re-run before building the submit-flow spec.
+- `needs_scaffold_interview` (`needs_decision=true`) → `.hpc/tasks.py` is absent and no `build_tasks` scaffold spec was supplied — scaffolding needs an executor-discovery + axes interview the headless worker can't run. Record it in `anomalies` (prefix `mature_repo_needs_interview:`) and stop; the user adds `@register_run` / runs `/wrap-entry-point-hpc`, or resolves the axes upstream, then re-invokes.
+- `prior_run_found` (`needs_decision=true`) → a live prior run (`complete` / `in_flight`) matches this `cmd_sha`. Record a `prior_run` decision with outcome `found` (`data.prior_run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh. (A terminal-but-not-`complete` prior — `failed` / `abandoned`, #276 — is forensic, not live; the composite proceeds to `resolved` and re-submits over it, the canary refiring rather than reusing the dead one.)
+- `resolved` (`needs_decision=false`) → inputs resolved: `data.submit_spec` is the built + validated submit-flow spec, `data.sidecar_path` confirms the per-run sidecar is written (#171), and `data.run_id` / `data.cmd_sha` are set. Carry `data.submit_spec` into the submit-pipeline spec's inner `submit.submit` block (Step 7-10) and continue to Step 6b.
+- Error envelopes: branch by `error_code` per the primitive's contract.
 
 ## Step 6b: Pre-flight Gate (cached per cluster)
 
-Invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>` **and `--spec <the submit-flow spec built in Step 6d>`**. Passing the spec lets check-preflight run the same `command -v uv` runtime probe `submit-flow` runs (a `runtime_uv` check), so a `runtime: "uv"` spec against a cluster without `uv` is refused **here**, before any qsub — the gap #275 closed (there is no longer a `skip_preflight` spec field that could silence it).
+Invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>` **and `--spec <the submit-flow spec built in Step 6>`**. Passing the spec lets check-preflight run the same `command -v uv` runtime probe `submit-flow` runs (a `runtime_uv` check), so a `runtime: "uv"` spec against a cluster without `uv` is refused **here**, before any qsub — the gap #275 closed (there is no longer a `skip_preflight` spec field that could silence it).
 
 Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` (TTL 24h) caches the cluster-environment checks (ssh agent, ssh/rsync on PATH, cluster reachability). If the marker is fresh **and the spec does not set `runtime: "uv"`** → log `preflight: cached <N>m ago — OK` and skip to Step 7. When the spec sets `runtime: "uv"`, run check-preflight `--spec` regardless of the marker — the marker does not cover per-spec `uv` availability (the conda env can change without the cluster env changing).
 
@@ -260,82 +243,59 @@ Branch on `data.overall`:
 - `warn` → record warnings in `anomalies`; proceed.
 - `fail` → do NOT proceed. Record a `validate_campaign` decision with outcome `fail`, put the `error`-severity findings (`code`/`message`/`suggested_fix` verbatim) in `anomalies`, and stop. **No `--force` flag by design** — the caller edits `.hpc/playbook.yaml` if a rule is wrong, then re-invokes.
 
-## Step 7-8: Invoke `submit-flow` (two-phase canary gate)
+## Step 7-10: Invoke `submit-pipeline` (the submit spine, one envelope)
 
-`submit-flow` runs preflight + rsync + deploy + qsub + journal-record. To make canary **success** gate the main array (#160), drive it in TWO phases — the main array NEVER launches until the canary is verified. Spec shape (matches `schemas/submit_flow.input.json`):
+The deterministic post-resolution submit spine — canary-gated submit → post-qsub health check → follow-up-spec pre-staging — runs as ONE call to [submit-pipeline](../../docs/primitives/submit-pipeline.md). It folds what used to be three hand-walked steps — `submit-and-verify` (Steps 7-8) → `verify-submitted` (Step 8b) → `prepare-followup-specs` (Steps 9-10) — so you read one typed `stage_reached` instead of branching each envelope by hand.
+
+The canary is still a GATE (#160): the 1-task canary is submitted, verified to land and produce output, and the main array launches ONLY on success — all INSIDE the primitive, so the agent is never in the submit→poll→submit loop. The deterministic Phase-2 flips (`canary`/`canary_only` off, `skip_rsync_deploy` on — #185/#279) are applied inside it; you never rebuild a second spec by hand.
+
+The spec embeds the canary-gated submit under `submit` (a `submit-and-verify` spec, which itself embeds the `submit-flow` spec under its own `submit`), plus an optional `profile` forwarded to follow-up staging. It matches `schemas/submit_pipeline.input.json`:
 
 ```json
 {
-  "profile": "<job_name>", "cluster": "<cluster>", "ssh_target": "user@host",
-  "remote_path": "<remote_path>", "job_name": "<job_name>",
-  "run_id": "<run_id from 6d>", "total_tasks": <tasks.total()>,
-  "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
-  "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
-  "pass_env_keys": null,
-  "canary": true, "canary_only": true, "campaign_id": "<slug>", "runtime": "uv"
+  "submit": {
+    "submit": {
+      "profile": "<job_name>", "cluster": "<cluster>", "ssh_target": "user@host",
+      "remote_path": "<remote_path>", "job_name": "<job_name>",
+      "run_id": "<run_id from 6d>", "total_tasks": <tasks.total()>,
+      "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
+      "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
+      "pass_env_keys": null,
+      "canary": true, "campaign_id": "<slug>", "runtime": "uv"
+    },
+    "expect_output": "results/seed_42/metrics.json"
+  },
+  "profile": "<run_name>"
 }
 ```
 
-`job_env["EXECUTOR"]` is **mandatory and non-empty** — it is the dispatcher command (`python3 .hpc/_hpc_dispatch.py`). Never ship `""` or omit it: the cluster would run `time` with no command and exit 0 in milliseconds, the canary would "succeed", and the main array would fire the same no-op qsub (#191). `build-submit-spec` defaults it; if you hand-craft the fields-file, set it explicitly.
+`submit.submit.job_env["EXECUTOR"]` is **mandatory and non-empty** — it is the dispatcher command (`python3 .hpc/_hpc_dispatch.py`). Never ship `""` or omit it: the cluster would run `time` with no command and exit 0 in milliseconds, the canary would "succeed", and the main array would fire the same no-op qsub (#191). `build-submit-spec` defaults it; if you hand-craft the fields-file, set it explicitly.
 
-`pass_env_keys` is `null` (or omit it) to forward **every** `job_env` key via `qsub -v` — that is what you almost always want. A **non-empty** list restricts to those keys. **Never `[]`** — an empty list forwards *zero* vars (every `$EXECUTOR`/`$CONDA_ENV`/`$REPO_DIR` unset), producing the same broken job; submit-flow now refuses `[]` at intake (#192).
+`submit.submit.pass_env_keys` is `null` (or omit it) to forward **every** `job_env` key via `qsub -v` — that is what you almost always want. A **non-empty** list restricts to those keys. **Never `[]`** — an empty list forwards *zero* vars (every `$EXECUTOR`/`$CONDA_ENV`/`$REPO_DIR` unset), producing the same broken job; submit-flow refuses `[]` at intake (#192).
 
-There is **no** `skip_preflight` field (#275): Step 6b already ran the cluster-env + runtime probes, and the skip is operator-only now — an operator who wants to avoid the re-probe sets `HPC_AGENT_SKIP_PREFLIGHT=1` in the environment; an agent cannot silence it (the field is rejected by the schema). For GPU jobs: `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
-
-**Phase 1 — submit the canary only** (`canary_only: true`): preflight + rsync + deploy + the 1-task canary, but NOT the main array.
+There is **no `skip_preflight`** field (#275 Fix 2): preflight — including the cluster-side `command -v uv` check — runs inside `submit-flow` and is skippable only by the operator env var `HPC_AGENT_SKIP_PREFLIGHT`, never by a field on the spec the agent authors, so the uv guard can't be silenced into letting a uv-less run reach qsub. For GPU jobs: `submit.submit.script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
 
 ```bash
-hpc-agent submit-flow --spec spec.json --experiment-dir .
+hpc-agent submit-pipeline --spec spec.json --experiment-dir .
 ```
 
-- `data.deduped: true` → the main run already ran; original jobs are live. Record this in `anomalies` (`deduped: <run_id>`); switch to the status workflow. Do NOT re-submit.
-- `data.deduped: false` → fresh. `data.main_launched` is **false** (only the canary went out). Capture `data.canary_run_id` / `data.canary_job_ids`.
-- Error envelopes: branch by `error_code` per submit-flow's contract.
+Branch on the single envelope's `stage_reached` (`needs_decision` tells you whether a genuine decision is handed back):
 
-**Verify the canary — this is the gate** (route through `verify-canary`):
-
-```bash
-hpc-agent verify-canary --experiment-dir . --canary-run-id "$CANARY_RUN_ID" --expect-output "results/seed_42/metrics.json"
-```
-
-- `ok=False` → record a `canary` decision with outcome set to the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put `stderr_tail` verbatim in `anomalies`, then **stop. The main array never launches.**
-- `ok=True` → proceed to Phase 2.
-
-**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false`, `"canary_only": false`, **and `"skip_rsync_deploy": true`** (the canary's Phase 1 just deployed the code; the local tree hasn't changed since, so the rsync+deploy would be a no-op — #185). Phase 1 already paid the preflight; Phase 2 re-runs only a cheap cluster-reachability probe (the runtime probe is TTL-cached), which is fine — there is no agent-settable skip (#275).
-
-```bash
-hpc-agent submit-flow --spec spec_main.json --experiment-dir .
-```
-
-Capture `data.run_id` / `data.job_ids` (`data.main_launched` is now true).
-
-## Step 8b: Verify the array is queued/running
-
-`qsub`/`sbatch` returning a job ID is necessary but not sufficient — an SGE array can land in `Eqw` (error) and a SLURM job can be held, both of which a plain alive-check still reports as "present." Confirm the submitted jobs landed cleanly with a verb (never raw `ssh qstat`):
-
-```bash
-hpc-agent verify-submitted --experiment-dir . --run-id "$RUN_ID"
-```
-
-It reads the run's job_ids from the journal, queries per-job scheduler state over SSH, and returns `{ok, states, healthy, error, held, missing, details}`. A wave-2+ job pending on a dependency reports as healthy.
-
-Branch:
-- `ok=True` → every submitted job is queued/running, none in error/held → proceed.
-- `ok=False` → record the `error`/`held` job IDs, `states`, and `details` verbatim in `anomalies`, then stop. Do NOT run Step 9 or Step 10.
-
-`missing` (submitted IDs absent from the queue right after submit) is suspicious — surface it too. See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state (e.g. `Eqw`) to its fix.
-
-## Step 9-10: Cache + report
+- `deduped` (`needs_decision=false`) → the main run already ran; original jobs are live. Record `deduped: <run_id>` in `anomalies`; switch to the status workflow. Do NOT re-submit.
+- `canary_failed` (`needs_decision=true`) → the canary failed the gate. Record a `canary` decision with outcome = `data.failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put the stderr tail verbatim in `anomalies`, then **stop. The main array never launched** — `data.job_ids` is empty.
+- `verify_submitted_failed` (`needs_decision=true`) → the array launched but did not all land queued/running — an SGE array can land in `Eqw`, a SLURM job can be held, both of which a plain alive-check reports as "present." Record the offending job ids + states from `data.verify_submitted_result` verbatim in `anomalies`, then stop. (See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state to its fix.)
+- `complete` (`needs_decision=false`) → the canary passed, the main array is live and healthy, and the follow-up specs are pre-staged (`data.monitor_spec_path` / `data.aggregate_spec_path`, #278 — so `/monitor-hpc` and `/aggregate-hpc` skip their interview round-trip, each `cmd_sha`-gated against the journal). Capture `data.run_id` / `data.job_ids` and report.
+- Error envelopes: branch by `error_code` per the primitive's contract.
 
 Do not cache run config in conversational memory. `submit-flow` persists the full v2 config snapshot (executor, cluster, remote_path, env, resources) to the run sidecar; any later step recovers it with `hpc-agent load-context`. Conversational memory is lost on context compaction or a session restart — the sidecar is not.
 
-Report after submission and Step 8b verification: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. The caller suggests `/monitor-hpc` to track progress.
+Report after a `complete` stage: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. The caller suggests `/monitor-hpc` to track progress.
 
-The journal write happens inside `submit-flow` via `runner.submit_and_record`. For multi-executor submissions (one sidecar per executor), invoke `submit-flow` once per submitted job — each call writes its own sidecar.
+The journal write happens inside `submit-flow` (which `submit-pipeline` calls) via `runner.submit_and_record`. For multi-executor submissions (one sidecar per executor), invoke `submit-pipeline` once per submitted job — each call writes its own sidecar.
 
 ## Common failure modes
 
-When Step 8b finds a job in a failed state, or a later check surfaces task failures, map the symptom:
+When the `verify_submitted_failed` stage surfaces a job in a failed state, or a later check surfaces task failures, map the symptom:
 
 | Symptom | Cause | Fix |
 |---|---|---|

@@ -3,6 +3,8 @@ collapses to one primitive call."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from hpc_agent import errors
@@ -20,9 +22,15 @@ def _required() -> dict:
         cmd_sha="a" * 64,
         total_tasks=42,
         backend="sge",
-        # At least one env-activation field must be non-empty (see
-        # test_rejects_all_empty_env_activation). Realistic minimal value.
+        # A COHERENT env-activation (#281): conda_env paired with the
+        # conda_source the preamble sources before `conda activate`. conda_env
+        # without a source is the incoherent partial state Activation now
+        # refuses, so the minimal-valid fixture carries both. The
+        # build-dir conftest isolates clusters.yaml to an empty config, so
+        # there is nothing to back-fill from — the fixture must be coherent
+        # on its own.
         conda_env="ml-py311",
+        conda_source="/u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh",
     )
 
 
@@ -46,6 +54,7 @@ def test_rejects_all_empty_env_activation() -> None:
     login inherits — frequently fatal. Reject at the boundary."""
     intent = _required()
     intent.pop("conda_env")
+    intent.pop("conda_source", None)  # leave modules/conda_source/conda_env all empty
     with pytest.raises(errors.SpecInvalid) as excinfo:
         build_submit_spec(spec=BuildSubmitSpecInput(**intent))
     msg = str(excinfo.value)
@@ -57,9 +66,82 @@ def test_accepts_modules_alone_as_env_activation() -> None:
     """`modules` alone is a valid env-activation (pure module-based clusters)."""
     intent = _required()
     intent.pop("conda_env")
+    intent.pop("conda_source", None)
     intent["modules"] = "anaconda3/2024.06"
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
     assert spec["job_env"]["MODULES"] == "anaconda3/2024.06"
+
+
+def test_conda_env_with_source_is_coherent() -> None:
+    """conda_env + conda_source is the coherent activation the preamble needs (#281)."""
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))
+    assert spec["job_env"]["CONDA_ENV"] == "ml-py311"
+    assert spec["job_env"]["CONDA_SOURCE"].endswith("conda.sh")
+
+
+def test_conda_env_without_source_rejected_when_no_backfill() -> None:
+    """#281: conda_env set, conda_source empty, and (under the conftest's empty
+    isolated clusters.yaml) nothing to back-fill from → refused at the build
+    boundary instead of crashing every task at `conda: command not found`."""
+    intent = _required()
+    intent.pop("conda_source")  # conda_env stays; no source, no modules
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    msg = str(excinfo.value)
+    assert "conda_env" in msg and "conda: command not found" in msg
+
+
+def test_conda_source_backfilled_from_clusters_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#281 code-forward fix: when conda_env is set but the agent dropped
+    conda_source, build-submit-spec resolves activation as ONE unit and
+    back-fills conda_source from clusters.yaml — so the incoherent state can't
+    reach qsub (the 2026-06-05 Hoffman2 incident: clusters.yaml had the source,
+    the agent lost it between `clusters describe` and spec construction)."""
+    cfg = tmp_path / "clusters.yaml"
+    cfg.write_text(
+        "hoffman2:\n"
+        "  scheduler: sge\n"
+        "  host: h2.idre.ucla.edu\n"
+        "  conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh\n"
+        "  conda_envs: [ml-py311]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+    intent = _required()
+    intent.pop("conda_source")  # agent dropped it; the cluster config carries it
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert (
+        spec["job_env"]["CONDA_SOURCE"] == "/u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh"
+    )
+    assert spec["job_env"]["CONDA_ENV"] == "ml-py311"
+
+
+def test_activation_value_object_makes_illegal_states_unrepresentable() -> None:
+    """The Activation value object (#281) enforces the coherence invariant at
+    construction — you cannot build one the cluster preamble would crash on."""
+    from hpc_agent.infra.clusters import Activation, resolve_activation
+
+    with pytest.raises(errors.SpecInvalid):
+        Activation()  # all empty
+    with pytest.raises(errors.SpecInvalid):
+        Activation(conda_env="ml-py311")  # env with no source/modules
+    assert Activation(modules="anaconda3").as_job_env()["MODULES"] == "anaconda3"
+    # resolve_activation back-fills conda_source from the cluster block...
+    assert (
+        resolve_activation(cluster_cfg={"conda_source": "/x/conda.sh"}, conda_env="e").conda_source
+        == "/x/conda.sh"
+    )
+    # ...but a caller-supplied source wins over the cluster default.
+    assert (
+        resolve_activation(
+            cluster_cfg={"conda_source": "/cluster/conda.sh"},
+            conda_source="/caller/conda.sh",
+            conda_env="e",
+        ).conda_source
+        == "/caller/conda.sh"
+    )
 
 
 def test_returns_minimal_valid_spec_with_synthesized_job_env() -> None:

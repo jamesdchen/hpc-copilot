@@ -44,6 +44,14 @@ On `overall: fail`, the failing sub-envelope's `error_code` + `remediation` is o
 
 Replaces the prose-discipline contract where the agent had to remember Step 0 (whose omission motivated the entire 0.10.2 release).
 
+#### 0b. Honor a pre-staged spec (skip the interview)
+
+`hpc-submit` pre-stages `<experiment_dir>/monitor_spec.json` (`prepare-followup-specs`, #278) so a submit→monitor handoff skips the run_id round-trip. Use the `Read` tool on `<experiment_dir>/monitor_spec.json`, then branch on a **`cmd_sha` staleness gate** computed against the Step-0 `status-preflight` / `load-context` output — that gate is the only thing that makes adopting a pre-staged run_id safe (a re-submit must NOT silently inherit the old run):
+
+- **absent →** no pre-staged spec; fall through to *2. Resolve run_id* (today's path).
+- **stale →** the spec's `cmd_sha` matches no current journal run for its `run_id` (a re-submit landed a new `cmd_sha`, or it targets a different run): treat the file as stale, ignore it, and fall through to *2. Resolve run_id* — including its `spec_invalid` / `needs_resolution` outcomes.
+- **fresh →** the spec's `cmd_sha` matches the current journal run for that `run_id` (compare against `data.latest_run.cmd_sha` for the run named in `data.in_flight`): adopt the spec's `run_id` directly. *2. Resolve run_id* is satisfied — do NOT raise a run_id ambiguity — and proceed with `wait_terminal` from the caller (default `false`), leaving the spec's `null` sentinel untouched.
+
 ### 2. Resolve run_id
 
 - Caller supplied → use.

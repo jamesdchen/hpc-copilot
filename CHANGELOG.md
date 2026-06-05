@@ -7,6 +7,19 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — workflow composites (control-flow-out-of-the-LLM, stage 3)
+
+Four agent-facing composites fold a deterministic worker-prompt spine into ONE typed `stage_reached` call, so the agent stops hand-walking (and hand-branching) the verbs. Each is additive and sets `needs_decision=True` only on a genuine judgement gate (escalation-as-data, #231):
+
+- **`submit-pipeline`** — `submit.md` Steps 7-10: `submit-and-verify` (the #160 canary gate) → `verify-submitted` (post-qsub health) → `prepare-followup-specs`. `stage_reached ∈ {deduped, canary_failed, verify_submitted_failed, complete}`.
+- **`status-pipeline`** — `status.md` wait-until-terminal + lifecycle dispatch: `monitor-flow` → branch on `lifecycle_state`. `stage_reached ∈ {complete, timeout, failed, abandoned}`; only `failed`/`abandoned` escalate (`timeout` is budget-elapsed, re-invoke).
+- **`campaign-run`** — one campaign iteration's `submit-pipeline → status-pipeline → aggregate-flow` spine (a composite-of-composites). A distinct `run_timeout` stage keeps a budget-elapsed run from being mislabeled a failure; it does NOT advance the campaign cursor (that stays a driver judgement).
+- **`resolve-submit-inputs`** — `submit.md` Step 6 laptop-side input spine: ensure `.hpc/tasks.py` → `compute-run-id` → `find-prior-run` → `build-submit-spec` → `write-run-sidecar`. The `resolved` outcome is fully submit-ready (spec built AND per-run sidecar written, the #171 write-first precondition). The composite injects its `compute-run-id` `run_id`/`cmd_sha` into both the build-submit-spec and write-run-sidecar inputs (whose own values are placeholders), so the built spec + written sidecar always match the reported `run_id`.
+
+### Changed — worker prompts wired to the composites (conservative)
+
+`worker_prompts/submit.md` (Step 6 → `resolve-submit-inputs`, Steps 7-10 → `submit-pipeline`) and `status.md` (wait path → `status-pipeline`) now call the composites for their deterministic spines instead of hand-walking the verbs. The `DECISION_POINTS` judgement contract, the required-`why`-at-judgement-points rule, and the spawned-worker context isolation are unchanged — only the mechanical branches are folded. `scripts/count_llm_touchpoints.py`'s committed baseline drops accordingly (total 97 → 86); the regression gate ensures it can only go down.
+
 ## 0.10.8 — 2026-06-05
 
 Two upstream fixes off the post-0.10.7 inert-guard punch list.

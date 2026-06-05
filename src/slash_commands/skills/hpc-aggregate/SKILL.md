@@ -66,6 +66,14 @@ Either path produces a reconcile envelope. Branch on `data.lifecycle_state` (und
 
 When `load-context` already shows a terminal run for the profile (the normal post-monitor path), `next_step_hint` is not `monitor`, the reconcile branch never fires, and there's nothing to reconcile — proceed straight to Step 2.
 
+#### 0b. Honor a pre-staged spec (skip the interview)
+
+`hpc-submit` pre-stages `<experiment_dir>/aggregate_spec.json` (`prepare-followup-specs`, #278) so a submit→aggregate handoff skips the profile/run_id round-trip. Use the `Read` tool on `<experiment_dir>/aggregate_spec.json`, then branch on a **`cmd_sha` staleness gate** computed against the Step-0 preflight / `load-context` output — that gate is the only thing that makes adopting a pre-staged run_id safe (a re-submit must NOT silently inherit the old run):
+
+- **absent →** no pre-staged spec; fall through to *2. Resolve profile + run_id + stage* (today's path).
+- **stale →** the spec's `cmd_sha` matches no current journal run for its `run_id` (a re-submit landed a new `cmd_sha`, or it targets a different run): treat the file as stale, ignore it, and fall through to *2. Resolve profile + run_id + stage* — including its reconcile / `spec_invalid` / `needs_resolution` outcomes.
+- **fresh →** the spec's `cmd_sha` matches the current journal run for that `run_id` (compare against `data.load_context.envelope.data.latest_run.cmd_sha`): adopt the spec's `run_id` + `profile` directly. *2. Resolve profile + run_id + stage* is satisfied for those two — do NOT raise a profile or run_id ambiguity. Leave `stage` and `allow_partial` to the operator/caller: they are sentinel `null` in the spec, so `stage` still defaults to the run's final stage and `allow_partial` defaults to `false` (resolved at *3. Verify aggregation readiness*).
+
 ### 2. Resolve profile + run_id + stage
 
 - Caller supplied profile → use.

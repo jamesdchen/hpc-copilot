@@ -90,6 +90,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "aggregate-flow",
         "build-submit-spec",
         "build-tasks-py",
+        "campaign-run",
         "classify-axis",
         "decide-monitor-arm",
         "interview",
@@ -98,12 +99,16 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # probe; it has no own input schema (reuses submit_flow.input.json), so
         # it appears here but not in the schema-file-parametrized remediation tests.
         "preflight",
+        "prepare-phase2-spec",
         "recommend-partition",
+        "resolve-submit-inputs",
         "resubmit",
+        "status-pipeline",
         "submit",
         "submit-and-verify",
         "submit-flow",
         "submit-flow-batch",
+        "submit-pipeline",
         "summarize-submit-plan",
         "validate-campaign",
         "write-run-sidecar",
@@ -197,6 +202,13 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "summarize-submit-plan",
     "find-prior-run",
     "write-run-sidecar",
+    # status-pipeline / submit-pipeline / campaign-run / resolve-submit-inputs are
+    # new spec-verb composites; like the other workflow composites they do not yet
+    # thread failure_features into their spec_invalid envelope (WS3).
+    "status-pipeline",
+    "submit-pipeline",
+    "campaign-run",
+    "resolve-submit-inputs",
 }
 
 

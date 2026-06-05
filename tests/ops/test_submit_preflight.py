@@ -1,9 +1,12 @@
 """Tests for the repurposed ``submit-preflight`` composite primitive (WS5 #1).
 
-Pins the sequential install-commands → load-context → check-preflight
-orchestration: argv composition (including the optional ``--cluster``
-that drives check-preflight's cluster_ssh_echo branch), skip behavior,
-overall-derivation precedence, and the synthesised-ErrorEnvelope shape.
+Pins the install-commands → load-context prelude (sequential) followed by
+the check-preflight ∥ resolve-resources fan-out (concurrent when
+``--cluster`` is supplied, #277): argv composition (including the optional
+``--cluster`` that drives check-preflight's cluster_ssh_echo branch and
+gates resolve-resources), skip behavior, overall-derivation precedence,
+the concurrency of the parallel pair, and the synthesised-ErrorEnvelope
+shape.
 
 The ``subprocess.run`` plumbing is mocked at :func:`_run_subprocess` so
 these tests don't depend on a real ``hpc-agent`` binary being on PATH
@@ -12,12 +15,35 @@ inside the venv.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from hpc_agent.ops import submit_preflight as sp
+
+
+def _empty_resolve_kwargs() -> dict[str, Any]:
+    """The full passthrough-kwargs dict :func:`submit_preflight` builds.
+
+    ``_resolve_resources_argv`` declares all seven overrides as required
+    keyword-only args (no defaults), so ``_build_subcalls`` needs every key
+    present even when each is ``None`` — that is exactly the dict
+    ``submit_preflight`` assembles before delegating. Direct
+    ``_build_subcalls`` callers in these tests reuse it instead of relying on
+    the ``resolve_kwargs={}`` default, which would raise ``TypeError`` once a
+    cluster is supplied.
+    """
+    return {
+        "profile": None,
+        "cmd_sha": None,
+        "walltime_sec": None,
+        "gpu_type": None,
+        "safety_mult": None,
+        "partition": None,
+        "user_preferred_partition": None,
+    }
 
 
 def _ok_subresult(envelope_data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -58,12 +84,20 @@ class TestBuildSubcalls:
     """argv composition + per-skip wiring + the optional --cluster branch."""
 
     def test_all_three_built_when_cluster_supplied(self) -> None:
-        calls = sp._build_subcalls(experiment_dir=Path("/exp"), cluster="hoffman2", skip=[])
-        # Order pin: install-commands → load-context → check-preflight.
+        calls = sp._build_subcalls(
+            experiment_dir=Path("/exp"),
+            cluster="hoffman2",
+            skip=[],
+            resolve_kwargs=_empty_resolve_kwargs(),
+        )
+        # Order pin: install-commands → load-context → check-preflight →
+        # resolve-resources. resolve-resources now also builds when a cluster
+        # is supplied (#277); the last two fan out concurrently at run time.
         assert [c.name for c in calls] == [
             "install-commands",
             "load-context",
             "check-preflight",
+            "resolve-resources",
         ]
         exp = str(Path("/exp"))
         ic = next(c for c in calls if c.name == "install-commands")
@@ -72,6 +106,17 @@ class TestBuildSubcalls:
         assert lc.argv == ["hpc-agent", "load-context", "--experiment-dir", exp]
         cp = next(c for c in calls if c.name == "check-preflight")
         assert cp.argv == ["hpc-agent", "preflight", "--cluster", "hoffman2"]
+        # resolve_kwargs defaults to {} so no optional overrides are forwarded;
+        # only --cluster + --experiment-dir appear.
+        rr = next(c for c in calls if c.name == "resolve-resources")
+        assert rr.argv == [
+            "hpc-agent",
+            "resolve-resources",
+            "--cluster",
+            "hoffman2",
+            "--experiment-dir",
+            exp,
+        ]
 
     def test_cluster_none_omits_flag_on_check_preflight(self) -> None:
         calls = sp._build_subcalls(experiment_dir=Path("/exp"), cluster=None, skip=[])
@@ -80,14 +125,23 @@ class TestBuildSubcalls:
         # (no cluster_ssh_echo probe).
         assert cp.argv == ["hpc-agent", "preflight"]
         assert "--cluster" not in cp.argv
+        # resolve-resources requires a cluster, so it is omitted entirely.
+        assert "resolve-resources" not in [c.name for c in calls]
 
     def test_skip_check_preflight_drops_only_that_subcall(self) -> None:
         calls = sp._build_subcalls(
             experiment_dir=Path("/exp"),
             cluster="hoffman2",
             skip=["check-preflight"],
+            resolve_kwargs=_empty_resolve_kwargs(),
         )
-        assert [c.name for c in calls] == ["install-commands", "load-context"]
+        # check-preflight is skipped but resolve-resources (cluster supplied,
+        # not skipped) still builds — the two are independent.
+        assert [c.name for c in calls] == [
+            "install-commands",
+            "load-context",
+            "resolve-resources",
+        ]
 
     def test_skip_all_yields_empty_list(self) -> None:
         calls = sp._build_subcalls(
@@ -155,7 +209,7 @@ class TestOverallDerivation:
 
 
 class TestExecutionOrder:
-    """Sequential — install-commands MUST run before load-context."""
+    """install-commands → load-context prelude is sequential; the rest fan out."""
 
     def test_install_commands_runs_first(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -167,11 +221,17 @@ class TestExecutionOrder:
                 "install-commands": _ok_subresult(),
                 "load-context": _ok_subresult(),
                 "check-preflight": _ok_subresult(),
+                "resolve-resources": _ok_subresult(),
             },
             record_order=ordered,
         )
         sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
-        assert ordered == ["install-commands", "load-context", "check-preflight"]
+        # The prelude runs strictly in order; check-preflight + resolve-resources
+        # then fan out concurrently so their relative order is nondeterministic.
+        # (Appends from the two pool threads are fine for set membership; the
+        # "first two" check looks only at the sequential prelude.)
+        assert ordered[:2] == ["install-commands", "load-context"]
+        assert set(ordered[2:]) == {"check-preflight", "resolve-resources"}
 
 
 class TestSkipBehavior:
@@ -196,6 +256,54 @@ class TestSkipBehavior:
         assert result["install_commands"] is not None
         assert result["load_context"] is not None
         assert result["overall"] == "pass"
+
+
+class TestConcurrentFanOut:
+    """check-preflight ∥ resolve-resources overlap (#277): timing + failure."""
+
+    def test_parallel_pair_overlaps_not_serial(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Each of the two slow arms sleeps ~0.4s; the instant prelude calls do
+        # not. Run serially that pair would cost ~0.8s; fanned out it is bounded
+        # by the slower arm (~0.4s). Assert well under the serial sum.
+        def slow(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            if call.name in ("check-preflight", "resolve-resources"):
+                time.sleep(0.4)
+            return _ok_subresult()
+
+        monkeypatch.setattr(sp, "_run_subprocess", slow)
+
+        started = time.monotonic()
+        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.7, f"parallel pair did not overlap (elapsed={elapsed:.3f}s)"
+        # Both arms ran and populated their slots.
+        assert result["check_preflight"] is not None
+        assert result["resolve_resources"] is not None
+        assert result["overall"] == "pass"
+
+    def test_resolve_resources_failure_flips_overall_fail(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # A resolve-resources failure must surface under its own slot and flip
+        # overall to fail — the concurrent fan-out never swallows it.
+        _patch_run_subprocess(
+            monkeypatch,
+            {
+                "install-commands": _ok_subresult(),
+                "load-context": _ok_subresult(),
+                "check-preflight": _ok_subresult(),
+                "resolve-resources": _err_subresult("resource_resolution_failed"),
+            },
+        )
+        result = sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
+        assert result["overall"] == "fail"
+        assert result["resolve_resources"]["ok"] is False
+        assert result["resolve_resources"]["envelope"]["error_code"] == "resource_resolution_failed"
+        # The healthy sibling arm's work is preserved.
+        assert result["check_preflight"]["ok"] is True
 
 
 class TestSynthErrorSubresult:

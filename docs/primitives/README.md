@@ -101,6 +101,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-concurrency](decide-concurrency.md) | yes | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
 | [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |
+| [decide-resubmit](decide-resubmit.md) | yes | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name>` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |
@@ -135,9 +136,10 @@ The verb partitions primitives into bands the reader can scan independently:
 | [check-task-generator-mismatch](check-task-generator-mismatch.md) | yes | _none_ | `hpc-agent check-task-generator-mismatch --caller-task-generator <caller_task_generator> [--cached-task-generator <cached_task_generator>]` |
 | [classify-axis-preflight](classify-axis-preflight.md) | yes | _none_ | `hpc-agent classify-axis-preflight --experiment-dir <experiment_dir> [--run-name <run_name>] [--run-signature-sha <run_signature_sha>] [--root <root>] [--task-kind <task_kind>] [--data-axis-supplied]` |
 | [dry-run-local](dry-run-local.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [prepare-phase2-spec](prepare-phase2-spec.md) | yes | _none_ | `hpc-agent prepare-phase2-spec --spec <path>` |
 | [smoke-test-executor](smoke-test-executor.md) | yes | runs: `user`; filesystem: `<output_file>` | `hpc-agent smoke-test-executor --module-path <module_path> [--output-file <output_file>]` |
 | [status-preflight](status-preflight.md) | yes | _none_ | `hpc-agent status-preflight --experiment-dir <experiment_dir>` |
-| [submit-preflight](submit-preflight.md) | yes | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]` |
+| [submit-preflight](submit-preflight.md) | yes | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]` |
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |
@@ -178,6 +180,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [export-package](export-package.md) | yes | writes-sidecar: `<experiment>/src/*.py`; writes-sidecar: `<experiment>/.hpc/.build-cache.json` | `hpc-agent export-package [--experiment-dir <dir>] [--force]` |
 | [install-commands](install-commands.md) | yes | filesystem: `~/.claude/` | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` |
 | [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json,.claude/settings.json}` | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` |
+| [prepare-followup-specs](prepare-followup-specs.md) | yes | writes-followup-specs: `<experiment_dir>/monitor_spec.json` | `hpc-agent prepare-followup-specs --experiment-dir <experiment_dir> --run-id <run_id> [--cmd-sha <cmd_sha>] [--profile <profile>]` |
 | [setup](setup.md) | yes | filesystem: `~/.claude/`; ssh: `<cluster>` | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` |
 
 ### `workflow` primitives
@@ -185,10 +188,14 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; sync-pull: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]` |
+| [campaign-run](campaign-run.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-aggregate-output: `<experiment_dir>/_aggregated/<run_id>/` | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` |
+| [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
+| [status-pipeline](status-pipeline.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [submit-and-verify](submit-and-verify.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>` | `hpc-agent submit-and-verify --spec <path> [--experiment-dir <dir>]` |
 | [submit-flow](submit-flow.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok] [--invalidate-on-code-change]` |
 | [submit-flow-batch](submit-flow-batch.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]` |
+| [submit-pipeline](submit-pipeline.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-followup-specs: `<experiment_dir>/{monitor,aggregate}_spec.json` | `hpc-agent submit-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` |
 | [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` |
 <!-- END PRIMITIVE CATALOG -->

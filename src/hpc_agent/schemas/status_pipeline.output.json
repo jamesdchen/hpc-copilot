@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/status_pipeline.output.json",
+  "title": "status-pipeline output data",
+  "description": "Shape of the ``data`` field on a ``status-pipeline`` envelope.\n\n``stage_reached`` is the deterministic dispatch the agent used to walk by\nhand. ``needs_decision`` flags the lifecycle outcomes that require a caller\ndecision (failed / abandoned) — the decision-as-data shape (#231): the\npipeline ran the lifecycle branch; only the genuine judgement (classify the\nfailure, decide resubmit) is handed back.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason",
+    "run_id",
+    "lifecycle_state",
+    "last_status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Which lifecycle the monitored run reached.",
+      "enum": [
+        "complete",
+        "failed",
+        "abandoned",
+        "timeout"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True for failed / abandoned (the caller classifies + decides resubmit/reconcile); False for the clean terminals (complete / timeout).",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Human-readable summary of the outcome / what must be decided.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "lifecycle_state": {
+      "description": "The terminal-or-budget lifecycle_state monitor-flow returned.",
+      "enum": [
+        "complete",
+        "failed",
+        "abandoned",
+        "timeout"
+      ],
+      "title": "Lifecycle State",
+      "type": "string"
+    },
+    "last_status": {
+      "additionalProperties": true,
+      "description": "Final per-task status snapshot from the cluster-side reporter.",
+      "title": "Last Status",
+      "type": "object"
+    },
+    "combined_waves": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Combined Waves",
+      "type": "array"
+    },
+    "failed_waves": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Failed Waves",
+      "type": "array"
+    },
+    "ticks": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Poll iterations monitor-flow executed before terminal/budget.",
+      "title": "Ticks"
+    },
+    "elapsed_seconds": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Wall-clock seconds monitor-flow spent watching.",
+      "title": "Elapsed Seconds"
+    },
+    "escalation_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "monitor-flow's escalation_reason when it stopped short of 'complete' (e.g. failed_tasks_no_auto_recover_in_mvp); null on a clean complete.",
+      "title": "Escalation Reason"
+    }
+  }
+}

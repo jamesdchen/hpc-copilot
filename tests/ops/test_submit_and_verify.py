@@ -148,6 +148,35 @@ def test_passes_through_verify_envelope_on_success(tmp_path: Path) -> None:
     assert result.verify_result.ok is True
 
 
+def test_phase2_applies_deterministic_flips(tmp_path: Path) -> None:
+    """#279/#185: on a verified canary, the Phase-2 main submit flips canary off
+    and skip_rsync_deploy ON (the canary already deployed the same tree) — and
+    carries NO skip_preflight (removed in #275 Fix 2; preflight is operator-
+    gated via HPC_AGENT_SKIP_PREFLIGHT, never a spec field)."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.submit_flow",
+            return_value=_submit_envelope(canary=True),
+        ) as m_submit,
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.verify_canary",
+            return_value=_verify_envelope(ok=True),
+        ),
+    ):
+        submit_and_verify(tmp_path, spec=_spec(canary=True))
+
+    # Two submit_flow calls: Phase 1 (canary_only) then Phase 2 (main array).
+    assert m_submit.call_count == 2
+    phase2_spec = m_submit.call_args_list[1].kwargs["spec"]
+    assert phase2_spec.canary is False
+    assert phase2_spec.canary_only is False
+    assert phase2_spec.skip_rsync_deploy is True
+    # skip_preflight is no longer a field on SubmitFlowSpec (#275 Fix 2).
+    assert not hasattr(phase2_spec, "skip_preflight")
+
+
 def test_surfaces_failure_kind_from_verify(tmp_path: Path) -> None:
     from hpc_agent.ops.submit_and_verify import submit_and_verify
 

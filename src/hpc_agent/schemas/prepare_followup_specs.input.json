@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/prepare_followup_specs.input.json",
+  "title": "PrepareFollowupSpecsSpec",
+  "description": "Input spec for the ``prepare-followup-specs`` primitive (#278).\n\nFrom submit-time state, pre-stage two small spec files into the\nexperiment dir — ``monitor_spec.json`` + ``aggregate_spec.json`` — so a\nlater ``/monitor-hpc`` and ``/aggregate-hpc`` can honor the pre-staged\nspec instead of re-running the operator interview. Because monitor-flow\nand aggregate-flow only strictly require ``run_id`` (they derive\ncluster/ssh_target/remote_path/etc. from the run sidecar on disk), the\ninput is just ``run_id`` plus the optional ``cmd_sha`` staleness gate the\nconsuming skill validates against the journal, and the optional\n``profile`` recorded in the aggregate spec.",
+  "type": "object",
+  "required": [
+    "experiment_dir",
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Experiment directory the two pre-staged spec files (monitor_spec.json + aggregate_spec.json) are written into."
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string",
+      "description": "Run id both followup specs target. The only field monitor-flow / aggregate-flow strictly require; everything else is derived from the run sidecar on disk."
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cmd Sha",
+      "description": "cmd_sha staleness gate stamped into both specs. The consuming skill validates it against the journal before honoring the pre-staged spec; a mismatch (code changed since submit) means the spec is stale and the skill falls back to the interview."
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile",
+      "description": "Optional run profile (run_name) recorded in the aggregate spec. Null when no profile is known at submit time."
+    }
+  }
+}

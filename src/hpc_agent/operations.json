@@ -300,6 +300,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]",
+    "idempotent": true,
+    "input_schema": "decide_resubmit.input.json",
+    "name": "decide-resubmit",
+    "output_schema": "decide_resubmit.output.json",
+    "python": "hpc_agent.ops.decide_resubmit.decide_resubmit",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent describe <name>",
     "idempotent": true,
     "input_schema": null,
@@ -703,6 +714,19 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent prepare-followup-specs --experiment-dir <experiment_dir> --run-id <run_id> [--cmd-sha <cmd_sha>] [--profile <profile>]",
+    "idempotent": true,
+    "input_schema": "prepare_followup_specs.input.json",
+    "name": "prepare-followup-specs",
+    "output_schema": "prepare_followup_specs.output.json",
+    "python": "hpc_agent.ops.prepare_followup_specs.prepare_followup_specs",
+    "side_effects": [
+      "writes-followup-specs"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]",
     "idempotent": true,
     "input_schema": null,
@@ -786,6 +810,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent prepare-phase2-spec --spec <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "prepare-phase2-spec",
+    "output_schema": "prepare_phase2_spec.output.json",
+    "python": "hpc_agent.ops.prepare_phase2_spec.prepare_phase2_spec",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent smoke-test-executor --module-path <module_path> [--output-file <output_file>]",
     "idempotent": true,
     "input_schema": "smoke_test_executor.input.json",
@@ -811,7 +846,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]",
+    "cli": "hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]",
     "idempotent": true,
     "input_schema": "submit_preflight.input.json",
     "name": "submit-preflight",
@@ -892,6 +927,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_run.input.json",
+    "name": "campaign-run",
+    "output_schema": "campaign_run.output.json",
+    "python": "hpc_agent.ops.campaign_run.campaign_run",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh",
+      "writes-aggregate-output"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]",
     "idempotent": true,
     "input_schema": "monitor_flow.input.json",
@@ -901,6 +951,33 @@
     "side_effects": [
       "ssh",
       "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "resolve_submit_inputs.input.json",
+    "name": "resolve-submit-inputs",
+    "output_schema": "resolve_submit_inputs.output.json",
+    "python": "hpc_agent.ops.resolve_submit_inputs.resolve_submit_inputs",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "status_pipeline.input.json",
+    "name": "status-pipeline",
+    "output_schema": "status_pipeline.output.json",
+    "python": "hpc_agent.ops.status_pipeline.status_pipeline",
+    "side_effects": [
+      "ssh",
+      "writes-tick-log"
     ],
     "verb": "workflow"
   },
@@ -945,6 +1022,21 @@
       "scheduler-submit",
       "sync-push",
       "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-pipeline --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_pipeline.input.json",
+    "name": "submit-pipeline",
+    "output_schema": "submit_pipeline.output.json",
+    "python": "hpc_agent.ops.submit_pipeline.submit_pipeline",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh",
+      "writes-followup-specs"
     ],
     "verb": "workflow"
   },

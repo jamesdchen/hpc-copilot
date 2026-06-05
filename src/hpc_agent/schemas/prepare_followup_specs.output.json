@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/prepare_followup_specs.output.json",
+  "title": "PrepareFollowupSpecsReport",
+  "description": "Output ``data`` block for ``prepare-followup-specs`` (#278).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Reports the absolute paths of the two pre-staged spec\nfiles written under the experiment dir (``monitor_spec.json`` +\n``aggregate_spec.json``), plus the ``run_id`` they target and the\n``cmd_sha`` staleness gate stamped into them (echoed so the caller can\nconfirm what was written without re-reading the files).",
+  "type": "object",
+  "required": [
+    "monitor_spec_path",
+    "aggregate_spec_path",
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "monitor_spec_path": {
+      "type": "string",
+      "title": "Monitor Spec Path",
+      "description": "Absolute path of the written monitor_spec.json (<experiment_dir>/monitor_spec.json)."
+    },
+    "aggregate_spec_path": {
+      "type": "string",
+      "title": "Aggregate Spec Path",
+      "description": "Absolute path of the written aggregate_spec.json (<experiment_dir>/aggregate_spec.json)."
+    },
+    "run_id": {
+      "type": "string",
+      "title": "Run Id",
+      "description": "Run id both pre-staged specs target."
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cmd Sha",
+      "description": "cmd_sha staleness gate stamped into both specs, echoed back. Null when none was supplied at submit time."
+    }
+  }
+}

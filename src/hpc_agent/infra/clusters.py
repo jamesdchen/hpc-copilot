@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -406,6 +407,97 @@ def write_back_scheduler_profile(cluster_name: str, profile_dict: dict[str, Any]
         return True
     except (OSError, yaml.YAMLError):
         return False
+
+
+@dataclass(frozen=True)
+class Activation:
+    """A coherent cluster env-activation unit (#281).
+
+    The cluster preamble (``hpc_preamble.sh``) sets the job env up from three
+    vars — ``$MODULES`` / ``$CONDA_SOURCE`` / ``$CONDA_ENV``. Threading those
+    as three *independent* strings let an incoherent partial state through:
+    ``conda_env`` set with ``conda_source`` empty passes a naive "at least one
+    is non-empty" guard, then the preamble skips ``source $CONDA_SOURCE`` and
+    crashes every task at ``conda activate $CONDA_ENV`` → ``conda: command not
+    found`` (the 2026-06-05 Hoffman2 canary, job 13556972). Resolving the
+    three as ONE value object with the coherence invariant enforced at
+    construction makes that state *unrepresentable* — you cannot build an
+    ``Activation`` the preamble would crash on — instead of validating against
+    it case-by-case at each call site that assembles the fields.
+
+    Construct via :func:`resolve_activation`, which back-fills ``conda_source``
+    from ``clusters.yaml`` when a ``conda_env`` is selected but the source was
+    dropped — the data the agent kept losing (#281).
+    """
+
+    modules: str = ""
+    conda_source: str = ""
+    conda_env: str = ""
+
+    def __post_init__(self) -> None:
+        # The illegal states are rejected at construction, so no downstream
+        # call site has to re-assert the invariant by hand.
+        if not (self.modules or self.conda_source or self.conda_env):
+            raise errors.SpecInvalid(
+                "submission has no env-activation declared: modules, conda_source, "
+                "and conda_env are all empty. The cluster-side preamble would skip "
+                "every env-setup step and run whatever python the SSH login shell "
+                "happens to inherit, which usually fails. Populate at least one of "
+                "these in clusters.yaml (commonly `conda_source` + `conda_envs`, "
+                "or `modules`) and re-run `hpc-agent setup --cluster <name>` to "
+                "regenerate the resolved spec."
+            )
+        if self.conda_env and not (self.conda_source or self.modules):
+            raise errors.SpecInvalid(
+                f"conda_env={self.conda_env!r} requires either conda_source or a "
+                "modules entry that puts conda on PATH; both are empty. The "
+                "cluster-side preamble would skip `source $CONDA_SOURCE` (because "
+                "$CONDA_SOURCE is empty) and then fail at `conda activate "
+                "$CONDA_ENV` with `conda: command not found`, crashing every task "
+                "in the array. Either populate `conda_source` in clusters.yaml "
+                "(commonly `/u/local/apps/anaconda3/<ver>/etc/profile.d/conda.sh`) "
+                "and re-run `hpc-agent setup --cluster <name>`, or drop `conda_env` "
+                "if env activation is handled by a module."
+            )
+
+    def as_job_env(self) -> dict[str, str]:
+        """The three preamble env vars, as the job_env carries them."""
+        return {
+            "MODULES": self.modules,
+            "CONDA_SOURCE": self.conda_source,
+            "CONDA_ENV": self.conda_env,
+        }
+
+
+def resolve_activation(
+    *,
+    cluster_cfg: dict[str, Any] | None,
+    modules: str | None = None,
+    conda_source: str | None = None,
+    conda_env: str | None = None,
+) -> Activation:
+    """Resolve a coherent :class:`Activation` from caller fields + cluster config.
+
+    Caller-supplied values win; the cluster config is the back-fill source.
+    The load-bearing move (#281): when a ``conda_env`` is selected but
+    ``conda_source`` was left empty, back-fill it from
+    ``cluster_cfg['conda_source']`` — clusters.yaml already carries the right
+    source, so an agent that drops it (the 2026-06-05 incident) still gets a
+    coherent spec instead of a crashing one. Only when the cluster ALSO has no
+    source (and no module puts conda on PATH) does the :class:`Activation`
+    invariant fire and refuse at the boundary, before any rsync or qsub.
+    """
+    cfg = cluster_cfg or {}
+    resolved_modules = (modules or "").strip()
+    resolved_conda_env = (conda_env or "").strip()
+    resolved_conda_source = (conda_source or "").strip()
+    if resolved_conda_env and not resolved_conda_source:
+        resolved_conda_source = str(cfg.get("conda_source") or "").strip()
+    return Activation(
+        modules=resolved_modules,
+        conda_source=resolved_conda_source,
+        conda_env=resolved_conda_env,
+    )
 
 
 def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | None = None) -> str:

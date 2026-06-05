@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/decide_resubmit.input.json",
+  "title": "decide-resubmit input",
+  "description": "Failure evidence for ``hpc_agent.ops.decide_resubmit.decide_resubmit``.\n\nDrives the complete / resubmit / escalate decision for a terminal-with-failures wave. Lifts hpc-status Step 6's resubmit policy out of prose into code.",
+  "type": "object",
+  "required": [
+    "failed_count",
+    "total_tasks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "failed_count": {
+      "minimum": 0,
+      "description": "Number of failed tasks (len(failed_task_ids)).",
+      "title": "Failed Count",
+      "type": "integer"
+    },
+    "total_tasks": {
+      "minimum": 1,
+      "description": "Total tasks in the wave (record.total_tasks). Must be >= 1; a failed fraction over zero tasks is undefined (SpecInvalid).",
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "resubmit_failed_threshold": {
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.1,
+      "description": "Auto-resubmit at or below this failed fraction. The boundary is inclusive — failed_fraction == threshold still resubmits.",
+      "title": "Resubmit Failed Threshold",
+      "type": "number"
+    }
+  }
+}

@@ -59,6 +59,18 @@
       ],
       "default": null,
       "title": "Check Preflight"
+    },
+    "resolve_resources": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resolve Resources"
     }
   },
   "$defs": {

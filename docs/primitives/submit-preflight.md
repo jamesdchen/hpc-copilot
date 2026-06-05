@@ -7,6 +7,9 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]
+    [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type
+    <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition
+    <user_preferred_partition>]
   python: hpc_agent.ops.submit_preflight.submit_preflight
 ---
 # submit-preflight

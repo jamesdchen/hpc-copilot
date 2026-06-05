@@ -1,7 +1,7 @@
 # Adding a new primitive
 
 Recipe for adding a wire-surface primitive (atom or workflow) to
-hpc-agent. Mirrors the patterns the existing 81 primitives follow;
+hpc-agent. Mirrors the patterns the existing 88 primitives follow;
 once you know the recipe the per-primitive work is mechanical.
 
 ## Decide first

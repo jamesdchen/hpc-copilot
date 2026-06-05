@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_pipeline.output.json",
+  "title": "submit-pipeline output data",
+  "description": "Shape of the ``data`` field on a ``submit-pipeline`` envelope.\n\n``stage_reached`` is the deterministic dispatch the agent used to walk by\nhand. ``needs_decision`` flags the gate failures that require a caller\ndecision — the decision-as-data shape (#231): the pipeline ran every\ndeterministic branch; only the genuine judgement is handed back.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Which stage the pipeline reached / stopped at.",
+      "enum": [
+        "deduped",
+        "canary_failed",
+        "verify_submitted_failed",
+        "complete"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True for the gate failures (canary / verify-submitted) that need a caller decision; False for the clean terminal stages (complete / deduped).",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Human-readable summary of the outcome / what must be decided.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "job_ids": {
+      "description": "Main array job ids; empty unless the main array launched.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+    },
+    "deduped": {
+      "default": false,
+      "description": "True when the submit half was a deduped replay.",
+      "title": "Deduped",
+      "type": "boolean"
+    },
+    "verified": {
+      "default": false,
+      "description": "True iff the canary was verified and the main array launched (#160).",
+      "title": "Verified",
+      "type": "boolean"
+    },
+    "failure_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Canary failure kind on ``stage_reached='canary_failed'``; else None.",
+      "title": "Failure Kind"
+    },
+    "verify_submitted_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Post-qsub scheduler health; None when that stage was not reached.",
+      "title": "Verify Submitted Ok"
+    },
+    "monitor_spec_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pre-staged monitor spec path (set on the complete stage).",
+      "title": "Monitor Spec Path"
+    },
+    "aggregate_spec_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pre-staged aggregate spec path (set on the complete stage).",
+      "title": "Aggregate Spec Path"
+    },
+    "verify_submitted_result": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The verify-submitted ``data`` on a ``verify_submitted_failed`` stage (the error/held/missing job ids + states the caller surfaces).",
+      "title": "Verify Submitted Result"
+    }
+  }
+}

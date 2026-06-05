@@ -159,27 +159,28 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     is_gpu = bool(spec.is_gpu)
     job_name = spec.job_name
     script = spec.script
-    modules = spec.modules or ""
-    conda_source = spec.conda_source or ""
-    conda_env = spec.conda_env or ""
-    # At least ONE env-activation mechanism must be declared. The preamble
-    # has no defaults — when all three are empty it skips `module load`,
-    # `source $CONDA_SOURCE`, and `conda activate $CONDA_ENV` entirely, and
-    # the job runs with whatever python the SSH login shell happened to
-    # inherit. That's the empirical failure when clusters.yaml hasn't been
-    # onboarded: the cluster runs the wrong (or no) python, the canary
-    # crashes, and the bad sidecar poisons later submit dedup. Refuse at
-    # the boundary instead of letting it through to qsub.
-    if not (modules or conda_source or conda_env):
-        raise errors.SpecInvalid(
-            "submission has no env-activation declared: modules, conda_source, "
-            "and conda_env are all empty. The cluster-side preamble would skip "
-            "every env-setup step and run whatever python the SSH login shell "
-            "happens to inherit, which usually fails. Populate at least one of "
-            "these in clusters.yaml (commonly `conda_source` + `conda_envs`, "
-            "or `modules`) and re-run `hpc-agent setup --cluster <name>` to "
-            "regenerate the resolved spec."
-        )
+    # Env-activation resolved as ONE coherent unit (#281), not three
+    # independent strings the caller threads. ``resolve_activation`` back-fills
+    # ``conda_source`` from clusters.yaml when a ``conda_env`` is selected but
+    # the source was dropped — the 2026-06-05 Hoffman2 incident, where the
+    # agent lost ``conda_source`` between ``clusters describe`` and here and
+    # the preamble then crashed every task at ``conda: command not found``. The
+    # resulting ``Activation`` enforces the coherence invariant at construction:
+    # the incoherent partial state (conda_env set, no source AND no
+    # conda-loading module) is unrepresentable — it raises ``SpecInvalid`` at
+    # this boundary instead of sailing through to a doomed qsub. The old inline
+    # all-empty + per-pair guards now live inside ``Activation.__post_init__``.
+    from hpc_agent.infra.clusters import load_clusters_config, resolve_activation
+
+    _activation = resolve_activation(
+        cluster_cfg=load_clusters_config().get(cluster) or {},
+        modules=spec.modules,
+        conda_source=spec.conda_source,
+        conda_env=spec.conda_env,
+    )
+    modules = _activation.modules
+    conda_source = _activation.conda_source
+    conda_env = _activation.conda_env
     runtime = spec.runtime
     campaign_id = spec.campaign_id or ""
     canary = bool(spec.canary) if spec.canary is not None else True

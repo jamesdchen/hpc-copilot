@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_run.output.json",
+  "title": "campaign-run output data",
+  "description": "Shape of the ``data`` field on a ``campaign-run`` envelope.\n\n``stage_reached`` is the deterministic dispatch over the three sub-stage\noutcomes; ``needs_decision`` flags the stages that hand a genuine\njudgement back (the failure / budget stages). This is the\ndecision-as-data shape (#231): the composite ran the whole spine; only\nthe irreducible decisions (classify a failure, reconcile an abandoned\nrun, re-invoke after budget, inspect a partial aggregate) escalate.\n\n``complete`` is the clean terminal — the driver proceeds from it to its\nown advance/converge judgement, which is NOT part of this composite.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Which stage of the iteration spine the composite reached / stopped at.",
+      "enum": [
+        "submit_failed",
+        "run_failed",
+        "run_timeout",
+        "run_abandoned",
+        "aggregate_failed",
+        "complete"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True for the failure / budget stages (submit_failed / run_failed / run_timeout / run_abandoned / aggregate_failed) that hand a decision back; False for the clean `complete` terminal. run_timeout is the budget case — nothing failed; the driver re-invokes to keep watching.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Human-readable summary of the outcome / what must be decided.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The iteration tag echoed from the spec (pass-through; null when unset).",
+      "title": "Campaign Id"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run_id threaded from the submit / status sub-stages; null on early failure.",
+      "title": "Run Id"
+    },
+    "job_ids": {
+      "description": "Main array job ids from the submit sub-stage; empty unless the array launched.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+    },
+    "lifecycle_state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The terminal lifecycle_state from the status sub-stage (complete / failed / abandoned / timeout); null when submit stopped first.",
+      "title": "Lifecycle State"
+    },
+    "aggregate_result": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The aggregate-flow `data` summary on a `complete` stage (combined_waves, failed_waves, aggregated_metrics, etc.); null when aggregate was not reached or did not produce a clean result.",
+      "title": "Aggregate Result"
+    }
+  }
+}

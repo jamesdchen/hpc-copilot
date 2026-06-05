@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/decide_resubmit.output.json",
+  "title": "decide-resubmit output",
+  "description": "Decision record from decide-resubmit.\n\naction == 'complete' (nothing failed) / 'resubmit' (failed_fraction <= threshold, auto) / 'escalate' (failed_fraction > threshold; caller decides, safe_default 'investigate').",
+  "type": "object",
+  "required": [
+    "action",
+    "failed_count",
+    "total_tasks",
+    "failed_fraction",
+    "threshold",
+    "safe_default",
+    "rationale"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "complete",
+        "resubmit",
+        "escalate"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "failed_count": {
+      "minimum": 0,
+      "title": "Failed Count",
+      "type": "integer"
+    },
+    "total_tasks": {
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "failed_fraction": {
+      "minimum": 0,
+      "maximum": 1,
+      "description": "failed_count / total_tasks, rounded to 4 places — the evidence the threshold decision turns on.",
+      "title": "Failed Fraction",
+      "type": "number"
+    },
+    "threshold": {
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The resubmit_failed_threshold the decision was taken against.",
+      "title": "Threshold",
+      "type": "number"
+    },
+    "safe_default": {
+      "anyOf": [
+        {
+          "const": "investigate",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "'investigate' on escalate (don't auto-resubmit at a high failure rate); null on complete/resubmit (no judgement needed).",
+      "title": "Safe Default"
+    },
+    "rationale": {
+      "description": "Human-readable explanation of the chosen action.",
+      "title": "Rationale",
+      "type": "string"
+    }
+  }
+}

@@ -318,8 +318,13 @@ class TestSubmitFlowBatch:
         msg = str(excinfo.value)
         assert "runtime=uv" in msg and "not found on PATH" in msg
         assert "~/.conda/envs/hpc-pi/bin/pip install uv" in msg
-        # Critical: push/deploy/qsub never ran — we caught it at preflight.
-        assert push_deploy.call_count == 0
+        # #280: the uv probe now runs CONCURRENTLY with rsync+deploy, so the
+        # deploy arm may complete before the uv SpecInvalid surfaces — a
+        # completed deploy with no qsub is harmless and idempotent (push_deploy
+        # is mocked here, so it does nothing either way). The load-bearing
+        # safety invariant is unchanged: the uv failure aborts before ANY qsub,
+        # so _submit_one_spec (the scheduler submit) never ran.
+        assert push_deploy.call_count <= 1
         assert submit_one.call_count == 0
 
     def test_runtime_uv_check_skipped_when_runtime_not_uv(
@@ -348,6 +353,83 @@ class TestSubmitFlowBatch:
             submit_flow_batch(tmp_path, spec=_batch(specs))
 
         assert ssh.call_count == 0
+
+    def test_shared_prelude_overlaps_uv_probe_with_deploy(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """#280: the `command -v uv` probe runs CONCURRENTLY with rsync+deploy,
+        so the prelude's wall-clock is ~max(uv, deploy), not their sum."""
+        import time as _time
+
+        from hpc_agent.ops import submit_flow as sf_module
+
+        def _slow_uv(*, ssh_target: Any, job_envs: Any, skip_preflight: Any) -> None:
+            _time.sleep(0.4)
+
+        def _slow_deploy(
+            *,
+            experiment_dir: Any,
+            ssh_target: Any,
+            remote_path: Any,
+            rsync_excludes: Any,
+            scheduler: Any,
+        ) -> None:
+            _time.sleep(0.4)
+
+        with (
+            mock.patch.object(sf_module, "_validate_ssh_target"),
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_run_uv_preflight_for_batch", side_effect=_slow_uv),
+            mock.patch.object(sf_module, "_push_and_deploy", side_effect=_slow_deploy),
+        ):
+            t0 = _time.monotonic()
+            sf_module._run_shared_prelude(
+                experiment_dir=tmp_path,
+                ssh_target="u@h",
+                remote_path="/r",
+                rsync_excludes=None,
+                scheduler="sge",
+                job_envs=[{}],
+                skip_preflight=False,
+                skip_prelude_io=False,
+            )
+            elapsed = _time.monotonic() - t0
+        assert elapsed < 0.7, f"expected concurrent (~0.4s), got {elapsed:.2f}s"
+
+    def test_shared_prelude_uv_failure_aborts_but_tolerates_concurrent_deploy(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """#280: a uv ``SpecInvalid`` still aborts the prelude (no qsub), while
+        the concurrent deploy arm is allowed to complete — a finished deploy
+        with no qsub is harmless and idempotent."""
+        from hpc_agent.ops import submit_flow as sf_module
+
+        deploy_ran: list[bool] = []
+
+        def _fail_uv(*, ssh_target: Any, job_envs: Any, skip_preflight: Any) -> None:
+            raise errors.SpecInvalid("preflight: runtime=uv but `uv` not found on PATH")
+
+        def _deploy(**_kwargs: Any) -> None:
+            deploy_ran.append(True)
+
+        with (
+            mock.patch.object(sf_module, "_validate_ssh_target"),
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_run_uv_preflight_for_batch", side_effect=_fail_uv),
+            mock.patch.object(sf_module, "_push_and_deploy", side_effect=_deploy),
+            pytest.raises(errors.SpecInvalid),
+        ):
+            sf_module._run_shared_prelude(
+                experiment_dir=tmp_path,
+                ssh_target="u@h",
+                remote_path="/r",
+                rsync_excludes=None,
+                scheduler="sge",
+                job_envs=[{}],
+                skip_preflight=False,
+                skip_prelude_io=False,
+            )
+        assert deploy_ran == [True]  # deploy completed concurrently before the uv error surfaced
 
     def test_skip_rsync_deploy_skips_push_and_deploy(
         self, tmp_path: Any, _journal_home: Any

@@ -14,7 +14,7 @@ Standing adjustments to the procedure below:
 Agent-facing composition over two primitives that share the same observation surface but differ in scope:
 
 - **One-shot snapshot** → invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive. Returns the current `last_status` and `lifecycle_state`. Use when the caller wants a single check ("is it done yet?") and will decide cadence itself.
-- **Wait until terminal (or budget)** → invoke the [monitor-flow](../../docs/primitives/monitor-flow.md) workflow atom. Internal poll loop; auto-combines waves; returns when `lifecycle_state` reaches `complete`/`failed`/`abandoned` or `wall_clock_budget_seconds` elapses. Use when the caller wants to wait synchronously for a run to finish (the canonical campaign-loop case).
+- **Wait until terminal (or budget)** → invoke the [status-pipeline](../../docs/primitives/status-pipeline.md) composite. It runs [monitor-flow](../../docs/primitives/monitor-flow.md) to terminal/budget and folds the `lifecycle_state` dispatch into one typed `stage_reached` ∈ `{complete, timeout, failed, abandoned}` plus a `needs_decision` flag (escalation-as-data) — so you read one outcome instead of hand-branching the lifecycle. Use when the caller wants to wait synchronously for a run to finish (the canonical campaign-loop case).
 
 Both write the same journal `last_status` and the same `.monitor.jsonl` tick log; they're interchangeable views of the same operation.
 
@@ -24,7 +24,7 @@ Two fields on the worker report carry observations back to the caller — they a
 
 - **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **status** workflow there are exactly four allowed `point` IDs — any other value is rejected by `parse_worker_report`:
   - `surface` (caller-determined via the `blocking` spawn field — snapshot vs wait-until-terminal)
-  - `lifecycle_dispatch` (backed by `poll-run-status` — the branch on `lifecycle_state`)
+  - `lifecycle_dispatch` (the branch on `lifecycle_state` — now deterministic inside `status-pipeline` on the wait path; `poll-run-status` on the snapshot path)
   - `resubmit` (backed by `resubmit-failed`)
   - `monitor_cadence` (backed by `decide-monitor-arm`)
 
@@ -49,19 +49,21 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 1. **If `run_id` is unknown**, pick it from `data.in_flight` returned by Step 0 (filter by `profile`, `cluster`, or `submitted_at`). `list-in-flight` is the same data if you need a standalone call.
 
 2. **Pick the surface — caller-determined via the `blocking` field, not your judgement.** Read `blocking` from the spawn `fields` (the JSON block above):
-   - `blocking: true` → **wait-until-terminal**: `hpc-agent monitor-flow --spec foo.json` (with `run_id` + `wall_clock_budget_seconds`). Blocks until terminal/budget. The canonical campaign-loop case — the driver sets this.
+   - `blocking: true` → **wait-until-terminal**: `hpc-agent status-pipeline --spec foo.json` (the spec embeds the monitor spec under `monitor`: `run_id` + `wall_clock_budget_seconds` + cadence). Blocks until terminal/budget, then returns one typed `stage_reached`. The canonical campaign-loop case — the driver sets this.
    - `blocking: false`, or **absent** → **snapshot**: `hpc-agent status --run-id <id>`. Returns immediately. (The `status` subcommand is the CLI alias for the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive.) Snapshot is the default for an ad-hoc check.
 
    Surface is the caller's `blocking` intent, lifted into the spawn spec — it is *not* a branch you reason from scratch. Only when `blocking` is absent **and** the caller's context unmistakably wants a synchronous wait do you record a `surface` decision (with `chosen`/`why`); otherwise just follow the flag.
 
-3. **Parse the envelope** per the chosen primitive's `outputs:` contract: both expose `lifecycle_state`, `last_status`, `combined_waves`, `failed_waves`. `monitor-flow` adds `ticks`, `elapsed_seconds`, `escalation_reason`.
+3. **Parse the envelope** per the chosen primitive's `outputs:` contract.
+   - **Wait path (`status-pipeline`)**: read the single typed `stage_reached` (`complete`/`timeout`/`failed`/`abandoned`) and `needs_decision` — the lifecycle branch already ran in code. `last_status`, `combined_waves`, `failed_waves`, `ticks`, `elapsed_seconds`, `escalation_reason` ride along as evidence.
+   - **Snapshot path (`poll-run-status`)**: read `lifecycle_state` (`in_flight`/`complete`/`failed`/`abandoned`), `last_status`, `combined_waves`, `failed_waves` and branch yourself — a single poll has no loop to fold.
 
-4. **Decide next action** based on `lifecycle_state`:
-   - `complete` — terminal; the caller proceeds to final aggregation via the aggregate workflow.
-   - `failed` — record a `lifecycle_dispatch` decision with outcome `failed` (the failure detail goes in `why` / `anomalies`); the caller may invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
-   - `abandoned` — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
-   - `in_flight` (poll-run-status only) — caller waits and re-polls later.
-   - `timeout` (monitor-flow only) — budget elapsed; cluster jobs continue; caller can re-invoke `monitor-flow` to keep watching.
+4. **Decide next action** — on the wait path branch on `status-pipeline`'s `stage_reached`; on the snapshot path branch on `lifecycle_state`. Either way record a `lifecycle_dispatch` decision with the matching outcome:
+   - `complete` (`needs_decision=false`) — terminal; the caller proceeds to final aggregation via the aggregate workflow.
+   - `timeout` (`needs_decision=false`, wait path only) — budget elapsed; cluster jobs continue; caller re-invokes `status-pipeline` to keep watching.
+   - `failed` (`needs_decision=true`) — failure detail goes in `why` / `anomalies`; go to the **Resubmit decision flow** below ([resubmit-failed](../../docs/primitives/resubmit-failed.md) if recoverable, else [reconcile-journal](../../docs/primitives/reconcile-journal.md)).
+   - `abandoned` (`needs_decision=true`) — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
+   - `in_flight` (snapshot path only) — caller waits and re-polls later.
 
 5. **On error envelopes**, branch by `error_code` per the chosen primitive's frontmatter table.
 

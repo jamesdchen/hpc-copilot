@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/resolve_submit_inputs.output.json",
+  "title": "resolve-submit-inputs output data",
+  "description": "Shape of the ``data`` field on a ``resolve-submit-inputs`` envelope.\n\n``stage_reached`` is the deterministic dispatch the agent used to walk\nby hand. ``needs_decision`` flags the outcomes that require a caller\ndecision — the decision-as-data shape (#231): the composite ran every\ndeterministic branch; only the genuine judgement (resume-vs-fresh on a\nlive prior, or the scaffold sub-interview) is handed back.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Which stage the chain reached / stopped at.",
+      "enum": [
+        "resolved",
+        "prior_run_found",
+        "needs_scaffold_interview"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True for prior_run_found (only the user picks resume-vs-fresh) and needs_scaffold_interview (the headless worker can't run the scaffold interview); False for the clean resolved terminal.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Human-readable summary of the outcome / what must be decided.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The computed run_id (<run_name>-<sha[:8]>); set on every stage.",
+      "title": "Run Id"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Full 64-char cmd_sha hash of the materialized task list; set on every stage.",
+      "title": "Cmd Sha"
+    },
+    "submit_spec": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The built + validated submit-flow spec (a submit_flow.input.json dict), ready to hand to submit-pipeline / submit-flow. Set only on stage_reached='resolved'.",
+      "title": "Submit Spec"
+    },
+    "sidecar_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Absolute path of the per-run sidecar written on the 'resolved' path (.hpc/runs/<run_id>.json) — the #171 write-first precondition is satisfied, so submit-pipeline can run directly. Set only on stage_reached='resolved'.",
+      "title": "Sidecar Path"
+    },
+    "prior_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Resume context — the matching live prior run's run_id on stage_reached='prior_run_found'; else null.",
+      "title": "Prior Run Id"
+    },
+    "prior_status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Resume context — the live prior's lifecycle status (complete / in_flight) on stage_reached='prior_run_found'; else null.",
+      "title": "Prior Status"
+    }
+  }
+}

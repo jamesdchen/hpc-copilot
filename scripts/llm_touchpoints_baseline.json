@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "description": "Deterministic control-flow markers still narrated in prose for the LLM to execute, per worker prompt. total_touchpoints = branches + stop_gates + retry_loops (expected to DROP as workflow composites absorb the spine into code). escalation_points is the legitimate LLM residual (judgement points handed back to the caller) and is expected to STAY.",
+    "prompts_dir": "src/hpc_agent/_kernel/extension/worker_prompts",
+    "workflows": [
+      "aggregate",
+      "campaign",
+      "status",
+      "submit"
+    ]
+  },
+  "aggregate": {
+    "branches": 9,
+    "escalation_points": 3,
+    "retry_loops": 5,
+    "stop_gates": 0,
+    "total_touchpoints": 14
+  },
+  "campaign": {
+    "branches": 10,
+    "escalation_points": 1,
+    "retry_loops": 11,
+    "stop_gates": 0,
+    "total_touchpoints": 21
+  },
+  "status": {
+    "branches": 6,
+    "escalation_points": 3,
+    "retry_loops": 13,
+    "stop_gates": 1,
+    "total_touchpoints": 20
+  },
+  "submit": {
+    "branches": 16,
+    "escalation_points": 4,
+    "retry_loops": 9,
+    "stop_gates": 6,
+    "total_touchpoints": 31
+  }
+}

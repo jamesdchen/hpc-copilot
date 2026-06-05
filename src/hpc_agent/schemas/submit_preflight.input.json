@@ -27,7 +27,103 @@
       ],
       "default": null,
       "title": "Cluster",
-      "description": "Optional cluster name. When supplied, check-preflight runs the cluster_ssh_echo functional probe through the production ssh_argv / multiplex / crypto path; without it, only the local-env checks fire (ssh agent, ssh/rsync on PATH, clusters.yaml parses)."
+      "description": "Optional cluster name. When supplied, check-preflight runs the cluster_ssh_echo functional probe through the production ssh_argv / multiplex / crypto path AND resolve-resources runs concurrently to resolve walltime/gpu_type/partition; without it, only the local-env checks fire (ssh agent, ssh/rsync on PATH, clusters.yaml parses)."
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile",
+      "description": "Run profile (run_name) forwarded to resolve-resources' runtime-prior lookup. No-op when --cluster is absent."
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cmd Sha",
+      "description": "Optional cmd_sha to filter resolve-resources' runtime prior. No-op when --cluster is absent."
+    },
+    "walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Walltime Sec",
+      "description": "Caller override for walltime_sec forwarded to resolve-resources; skips the runtime-prior probe. No-op when --cluster is absent."
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Type",
+      "description": "Caller override for gpu_type forwarded to resolve-resources; skips the cluster gpu_types[0] default. No-op when --cluster is absent."
+    },
+    "safety_mult": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Safety Mult",
+      "description": "Multiplier applied to the prior p95 to size walltime in resolve-resources (default 1.30). No-op when --cluster is absent."
+    },
+    "partition": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Partition",
+      "description": "Caller override for partition forwarded to resolve-resources; skips recommend-partition. No-op when --cluster is absent."
+    },
+    "user_preferred_partition": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Preferred Partition",
+      "description": "Soft partition preference forwarded to resolve-resources. No-op when --cluster is absent."
     },
     "skip": {
       "type": "array",
@@ -35,7 +131,8 @@
         "enum": [
           "install-commands",
           "load-context",
-          "check-preflight"
+          "check-preflight",
+          "resolve-resources"
         ]
       },
       "default": [],
