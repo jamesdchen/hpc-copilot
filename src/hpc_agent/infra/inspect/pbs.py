@@ -26,6 +26,7 @@ degrade safely even when node enumeration is impossible.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from hpc_agent.infra.parsing import (
@@ -39,9 +40,16 @@ from hpc_agent.infra.parsing import (
 )
 from hpc_agent.infra.time import utcnow_iso
 
-from ._common import ClusterSnapshot, NodeSnapshot, _CommandRunner, _is_stressed
+from ._common import (
+    ClusterSnapshot,
+    NodeSnapshot,
+    _CommandRunner,
+    _is_stressed,
+    _parse_max_nodes,
+    _split_section,
+)
 
-__all__ = ["_pbs_inspect", "parse_pbsnodes"]
+__all__ = ["_pbs_inspect", "parse_pbsnodes", "parse_qstat_co_tenants", "parse_qstat_queues"]
 
 
 # PBS node states that mean the node is not usable capacity (down / drained
@@ -95,14 +103,33 @@ def _pbs_inspect(
         )
 
     # PBS Pro needs ``-av`` (attributes, all nodes); TORQUE's ``pbsnodes``
-    # prints the same per-node stanzas with ``-a``.
-    cmd = "pbsnodes -av" if family == "pbspro" else "pbsnodes -a"
-    rc, out, err = runner.run(cmd)
+    # prints the same per-node stanzas with ``-a``. Co-tenant context (which
+    # other users' jobs share a node) comes from ``qstat -an1`` — a SECOND probe
+    # PBS inspect previously lacked entirely (it only ran pbsnodes), so a PBS
+    # cluster got none of the co-tenant signal SLURM/SGE surface. The two are
+    # independent reads, so they ride ONE merged ssh round-trip (echo-delimited
+    # sections) — applying the #295 batching lesson from the start. ``qstat``'s
+    # output is best-effort: a failure leaves co_tenants empty, never raises.
+    pbsnodes_cmd = "pbsnodes -av" if family == "pbspro" else "pbsnodes -a"
+    combined = (
+        f"echo __HPC_PBSNODES__; {pbsnodes_cmd}; echo __HPC_PBSNODES_RC__=$?; "
+        "echo __HPC_QSTAT__; qstat -an1 2>/dev/null; echo __HPC_QSTAT_RC__=$?; "
+        "echo __HPC_QUEUES__; qstat -Qf 2>/dev/null; echo __HPC_QUEUES_RC__=$?"
+    )
+    rc_all, out_all, err = runner.run(combined)
+    rc, out = _split_section(out_all, "__HPC_PBSNODES__", "__HPC_PBSNODES_RC__")
+    _qstat_rc, qstat_out = _split_section(out_all, "__HPC_QSTAT__", "__HPC_QSTAT_RC__")
+    _queues_rc, queues_out = _split_section(out_all, "__HPC_QUEUES__", "__HPC_QUEUES_RC__")
+    # Markers absent → round-trip died before the shell ran; fall back so the
+    # pbsnodes-failure branch still fires on the combined result.
+    if rc is None:
+        rc, out = rc_all, out_all
+
     if rc != 0:
         return _minimal_snapshot(
             cluster_name,
             scheduler_kind,
-            f"`{cmd}` failed (rc={rc}): {err.strip()[:300]}",
+            f"`{pbsnodes_cmd}` failed (rc={rc}): {err.strip()[:300]}",
         )
 
     nodes = parse_pbsnodes(out, family=family)
@@ -110,10 +137,14 @@ def _pbs_inspect(
         return _minimal_snapshot(
             cluster_name,
             scheduler_kind,
-            f"`{cmd}` returned no parseable node stanzas",
+            f"`{pbsnodes_cmd}` returned no parseable node stanzas",
         )
 
+    tenants_by_node = parse_qstat_co_tenants(qstat_out)
     for n in nodes:
+        # Match on the bare hostname: pbsnodes may report FQDNs while qstat's
+        # exec_host uses short names (or vice versa); normalize both sides.
+        n.co_tenants = tenants_by_node.get(n.name.split(".")[0], [])
         n.is_stressed = _is_stressed(n, stress_alloc_mem_pct, stress_cpu_load_frac)
 
     return ClusterSnapshot(
@@ -122,7 +153,160 @@ def _pbs_inspect(
         now_iso=utcnow_iso(),
         nodes=nodes,
         errors=[],
+        parallel_environments=parse_qstat_queues(queues_out, family=family),
     )
+
+
+# A qstat -an1 data row opens with a job id: ``123``, ``123.server``,
+# ``123[].server`` (array parent) or ``123[4].server`` (array subjob).
+_QSTAT_JOBID_RE = re.compile(r"^\d+(\[\d*\])?(\.\S+)?$")
+
+
+def _exec_host_cpus(exec_host: str) -> dict[str, int]:
+    """Map each node in a PBS ``exec_host`` spec to the core count placed there.
+
+    ``exec_host`` is ``host/range[*count]`` segments joined by ``+`` —
+    ``node01/0*4`` (4 cores on node01), ``node02/0*4+node03/0*4`` (4 each), or
+    ``node01/0+node01/1`` (1+1 → 2 on node01). Hosts are normalized to their
+    bare first label so they match pbsnodes' node names.
+    """
+    counts: dict[str, int] = {}
+    for seg in exec_host.split("+"):
+        seg = seg.strip()
+        if "/" not in seg:
+            continue
+        host = seg.split("/", 1)[0].split(".")[0]
+        if not host:
+            continue
+        # cores on this host: PBS Pro ``/0*4`` → 4; a TORQUE-style range
+        # ``/0-3`` → 4; otherwise a single core (``/0``) → 1.
+        star = re.search(r"\*(\d+)", seg)
+        if star:
+            cpus = int(star.group(1))
+        else:
+            rng = re.search(r"/(\d+)-(\d+)", seg)
+            cpus = (int(rng.group(2)) - int(rng.group(1)) + 1) if rng else 1
+        counts[host] = counts.get(host, 0) + cpus
+    return counts
+
+
+def parse_qstat_co_tenants(text: str) -> dict[str, list[dict[str, Any]]]:
+    """Bucket ``qstat -an1`` rows into co-tenants per (bare) node name.
+
+    The ``-an1`` layout puts each job on one line ending in its ``exec_host``
+    (``node01/0*4+...``); column order is JobID, Username, Queue, Jobname,
+    SessID, NDS, TSK, Memory, Req'd-Time, S(tate), Elap-Time, exec_host. We
+    anchor on the job-id-shaped first token and the trailing host-bearing token,
+    so header/separator/``server:`` lines are skipped. Queued/held jobs (no
+    exec_host) carry no node placement and are omitted. Permissive: an
+    unparseable row is skipped, never raised — the same posture as parse_pbsnodes.
+
+    Returns ``{bare_node: [{user, job_id, state, cpus, mem_gb, started_h_ago,
+    elapsed_s, gpus}]}`` (None for fields qstat -an1 doesn't expose per-node),
+    matching the co_tenant shape SLURM/SGE emit.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        cols = line.split()
+        if len(cols) < 4 or not _QSTAT_JOBID_RE.match(cols[0]):
+            continue
+        exec_host = cols[-1]
+        if "/" not in exec_host:
+            continue  # queued/held — not placed on a node yet
+        user = cols[1]
+        # State is the single-char column just before Elap-Time + exec_host.
+        state = cols[-3] if len(cols) >= 3 and len(cols[-3]) == 1 else ""
+        for node, cpus in _exec_host_cpus(exec_host).items():
+            out.setdefault(node, []).append(
+                {
+                    "user": user,
+                    "job_id": cols[0],
+                    "state": state,
+                    "cpus": cpus,
+                    "mem_gb": None,
+                    "started_h_ago": None,
+                    "elapsed_s": None,
+                    "gpus": None,
+                }
+            )
+    return out
+
+
+def _queue_max_nodes(fields: dict[str, str], *, family: str) -> int | None:
+    """Per-job node ceiling for a PBS queue, family-aware (#293).
+
+    PBS Pro states it as ``resources_max.nodect`` (a plain int). TORQUE uses
+    ``resources_max.nodes``, which can be a *nodespec* (``4`` or ``4:ppn=8``) —
+    take the leading node count. TORQUE builds that emit ``nodect`` too are
+    honored as a fallback.
+    """
+    if family == "torque":
+        raw = (
+            fields.get("resources_max.nodes") or fields.get("resources_max.nodect") or ""
+        ).strip()
+        m = re.match(r"(\d+)", raw)
+        return int(m.group(1)) if m else None
+    return _parse_max_nodes(fields.get("resources_max.nodect", ""))
+
+
+def _queue_entry(name: str, fields: dict[str, str], *, family: str) -> dict[str, Any] | None:
+    """Build the normalized parallel_environment entry for one PBS queue, or None.
+
+    Route queues forward jobs to execution queues rather than running them, so
+    they aren't a place you'd target a multi-rank job — skipped. ``kind`` is
+    ``smp`` only when the per-job node ceiling is 1, else ``mpi`` (PBS allows
+    multi-node by default). The per-job ``slots`` ceiling is PBS-specific → raw.
+    """
+    if not name or fields.get("queue_type", "").lower() == "route":
+        return None
+    max_nodes = _queue_max_nodes(fields, family=family)
+    return {
+        "name": name,
+        "source": "queue",
+        "kind": "smp" if max_nodes == 1 else "mpi",
+        "max_nodes": max_nodes,
+        "raw": {"slots": _to_int_or_none(fields.get("resources_max.ncpus"))},
+    }
+
+
+def parse_qstat_queues(text: str, *, family: str = "pbspro") -> list[dict[str, Any]]:
+    """Parse ``qstat -Qf`` execution queues into normalized PE entries (#293).
+
+    PBS's analog to an SGE PE / SLURM partition is the *queue* you submit to.
+    ``qstat -Qf`` prints per-queue ``Queue: <name>`` blocks of ``key = value``
+    lines. *family* (``pbspro`` | ``torque``) gates how the per-job node ceiling
+    is read (see :func:`_queue_max_nodes`). Returns the normalized
+    ``{name, source="queue", kind, max_nodes, raw={slots}}`` for each non-Route
+    queue. Permissive — unparseable lines skipped, never raises.
+    """
+    out: list[dict[str, Any]] = []
+    name: str | None = None
+    fields: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("Queue:"):
+            if name is not None:
+                entry = _queue_entry(name, fields, family=family)
+                if entry is not None:
+                    out.append(entry)
+            name = line.split(":", 1)[1].strip()
+            fields = {}
+            continue
+        if name is None:
+            continue
+        if "=" in line:
+            key, _, val = line.partition("=")
+            fields[key.strip()] = val.strip()
+    if name is not None:
+        entry = _queue_entry(name, fields, family=family)
+        if entry is not None:
+            out.append(entry)
+    return out
 
 
 def _minimal_snapshot(

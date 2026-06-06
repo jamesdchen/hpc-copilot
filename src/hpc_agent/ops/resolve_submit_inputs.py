@@ -176,8 +176,13 @@ def resolve_submit_inputs(
     # 4. build-submit-spec: assemble + validate the submit-flow spec. Inject the
     #    compute-run-id values — the spec's run_id/cmd_sha are placeholders — so
     #    the built spec always matches the reported run_id, not a stale caller value.
+    # Pass experiment_dir (#292): the bare-script / $VAR guards resolve the
+    # EXECUTOR's script path and load .hpc/tasks.py against it, not this
+    # worker's CWD — the empirical path where the 0.10.11 register_run guard
+    # silently no-op'd because Path(script).is_file() was CWD-relative.
     submit_spec = build_submit_spec(
-        spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha})
+        experiment_dir,
+        spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
     )
 
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first

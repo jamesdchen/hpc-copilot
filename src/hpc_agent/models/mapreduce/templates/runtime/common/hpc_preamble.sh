@@ -22,6 +22,10 @@
 #   $CONDA_ENV      conda env to activate (optional)
 #   $REPO_DIR       repo root to cd into (defaulted before sourcing)
 #   $HPC_RUNTIME    "uv" to enable uv sync; anything else is no-op
+#   $HPC_WALLTIME_SEC
+#                   the job's walltime in seconds (stamped by build_submit_spec
+#                   when the submit set one). Used to export
+#                   $HPC_WALLTIME_END_EPOCH for checkpoint-aware executors.
 #   $HPC_OMP_NUM_THREADS / $HPC_MKL_NUM_THREADS / $HPC_OPENBLAS_NUM_THREADS /
 #     $HPC_NUMEXPR_NUM_THREADS / $HPC_VECLIB_NUM_THREADS
 #                   per-library thread cap overrides; default 1 each
@@ -41,6 +45,18 @@
 # This file is scp'd to the cluster as .hpc/templates/common/hpc_preamble.sh
 # alongside the per-scheduler templates by deploy_runtime().
 # ==============================================================
+
+# --- Walltime deadline (checkpoint-aware executors, #294) ---
+# Capture the job start NOW — before the (possibly slow) module / conda / uv
+# steps below — so the deadline reflects the real walltime clock, not the time
+# left after a long preamble. Checkpoint-aware executors read
+# $HPC_WALLTIME_END_EPOCH via should_checkpoint(strategy="walltime_margin") /
+# run_iterations and checkpoint with margin to spare before the scheduler's
+# walltime kill. Only when the submit set a walltime (build_submit_spec stamps
+# $HPC_WALLTIME_SEC) and a deadline wasn't already provided.
+if [ -n "${HPC_WALLTIME_SEC:-}" ] && [ -z "${HPC_WALLTIME_END_EPOCH:-}" ]; then
+    export HPC_WALLTIME_END_EPOCH=$(( $(date +%s) + HPC_WALLTIME_SEC ))
+fi
 
 # --- Module Setup ---
 # Hoffman2 needs the UGE path; other clusters may not.

@@ -380,3 +380,63 @@ def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
     assert len(runs) == 1
     # No status poll yet: last_status is empty/missing -> age is None.
     assert runs[0].get("last_status_age_seconds") is None
+
+
+# ─── #294 PR3: resubmit --from-checkpoint ─────────────────────────────────
+
+
+def test_resubmit_spec_from_checkpoint_defaults_false() -> None:
+    from hpc_agent._wire.actions.resubmit import ResubmitSpec
+
+    assert ResubmitSpec(failed_task_ids=[0], category="walltime").from_checkpoint is False
+    spec = ResubmitSpec(failed_task_ids=[0], category="walltime", from_checkpoint=True)
+    assert spec.from_checkpoint is True
+
+
+def test_resubmit_from_checkpoint_stamps_job_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """from_checkpoint=true stamps HPC_RESUME_FROM_CHECKPOINT=1 into the job_env
+    forwarded to the cluster, so the dispatcher resumes each retried task."""
+    import argparse
+    from types import SimpleNamespace
+
+    from hpc_agent.cli import recover
+
+    captured: dict = {}
+
+    def _fake_flow(experiment_dir, run_id, **kw):  # noqa: ANN001, ANN202
+        captured.update(kw)
+        return SimpleNamespace(to_envelope_data=lambda: {"ok": True, "resubmitted": []})
+
+    monkeypatch.setattr("hpc_agent.ops.recover_flow.resubmit_flow", _fake_flow)
+    spec = tmp_path / "rs.json"
+    spec.write_text(
+        json.dumps({"failed_task_ids": [0, 1], "category": "walltime", "from_checkpoint": True})
+    )
+    args = argparse.Namespace(spec=spec, experiment_dir=str(tmp_path), run_id="rid")
+    rc = recover.cmd_resubmit(args)
+    assert rc == 0
+    assert captured["job_env"] == {"HPC_RESUME_FROM_CHECKPOINT": "1"}
+
+
+def test_resubmit_without_from_checkpoint_leaves_job_env_passthrough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argparse
+    from types import SimpleNamespace
+
+    from hpc_agent.cli import recover
+
+    captured: dict = {}
+
+    def _fake_flow(experiment_dir, run_id, **kw):  # noqa: ANN001, ANN202
+        captured.update(kw)
+        return SimpleNamespace(to_envelope_data=lambda: {"ok": True})
+
+    monkeypatch.setattr("hpc_agent.ops.recover_flow.resubmit_flow", _fake_flow)
+    spec = tmp_path / "rs.json"
+    spec.write_text(json.dumps({"failed_task_ids": [0], "category": "walltime"}))
+    args = argparse.Namespace(spec=spec, experiment_dir=str(tmp_path), run_id="rid")
+    recover.cmd_resubmit(args)
+    assert captured["job_env"] is None  # unchanged passthrough, no stamp

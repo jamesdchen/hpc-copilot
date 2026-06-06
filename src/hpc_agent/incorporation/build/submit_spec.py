@@ -75,15 +75,31 @@ _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
         spec_arg=True,
         spec_model=BuildSubmitSpecInput,
         schema_ref=SchemaRef(input="build_submit_spec"),
+        # #292: the bare-script / $VAR guards resolve the EXECUTOR's script
+        # path and load .hpc/tasks.py RELATIVE to the experiment dir, not the
+        # caller's CWD. ``experiment_dir_arg`` injects ``--experiment-dir``
+        # (default cwd) so a worker whose CWD isn't the experiment dir can
+        # still point the guards at the real tree. The composite
+        # ``resolve-submit-inputs`` threads its own experiment_dir through.
+        experiment_dir_arg=True,
     ),
     agent_facing=True,
 )
-def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
+def build_submit_spec(
+    experiment_dir: Path | None = None, *, spec: BuildSubmitSpecInput
+) -> dict[str, Any]:
     """Build + validate a ``submit_flow.input.json`` spec dict.
 
     The wire-validated ``spec`` (a :class:`BuildSubmitSpecInput`)
     carries every field this atom needs; the body destructures it
     into typed locals at the top so the rest reads unchanged.
+
+    ``experiment_dir`` (optional) is the local experiment tree the
+    EXECUTOR's script path and ``.hpc/tasks.py`` are resolved against
+    by the defensive guards (#292). When None the guards fall back to
+    the process CWD — correct for a standalone invocation run from the
+    experiment dir, but NOT for a worker whose CWD differs, which is why
+    ``resolve-submit-inputs`` threads its real experiment_dir through.
 
     Parameters
     ----------
@@ -249,7 +265,7 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     # one-liner for ``register_run`` entry points; if the caller is hand-
     # rolling extra_env or carrying a pre-fix interview, catch it here.
     if extra_env and "EXECUTOR" in extra_env:
-        _check_register_run_executor(extra_env["EXECUTOR"])
+        _check_register_run_executor(extra_env["EXECUTOR"], base_dir=experiment_dir)
 
     job_name = job_name or profile
     if script is None:
@@ -271,6 +287,12 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         job_env["HPC_RUNTIME"] = "uv"
     if campaign_id:
         job_env["HPC_CAMPAIGN_ID"] = campaign_id
+    if spec.walltime_sec:
+        # #294: surface the walltime to the cluster preamble so it can stamp
+        # HPC_WALLTIME_END_EPOCH (job start + walltime) for checkpoint-aware
+        # executors — should_checkpoint(strategy="walltime_margin") / run_iterations
+        # then checkpoint with margin to spare before the scheduler's walltime kill.
+        job_env["HPC_WALLTIME_SEC"] = str(int(spec.walltime_sec))
     # Service-dependency passthrough (#231 Tier 1): ship the externally-
     # provisioned address as JSON ``HPC_SERVICE_ENV`` so the cluster-side
     # dispatcher threads each entry into every task's env as
@@ -282,6 +304,29 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         )
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
+
+    # #292 Bug B: cross-check the effective EXECUTOR's ``$VAR`` references
+    # against the vars the cluster-side dispatcher will actually export. The
+    # dispatcher exports ``$<NAME>`` / ``$HPC_KW_<NAME>`` ONLY for keys
+    # ``tasks.resolve(i)`` returns; a reference to anything it never sets
+    # expands to EMPTY and the command fails downstream (the empirical
+    # ``--samples $SAMPLES`` where ``samples`` isn't a swept axis → argparse
+    # 'expected one argument'). Refuses at build time so the broken EXECUTOR
+    # never reaches the canary. No-ops unless the kwarg set can be positively
+    # established from ``experiment_dir/.hpc/tasks.py``, so an unknowable set
+    # can never trigger a false refusal.
+    # Only resolve the kwarg set — which imports ``.hpc/tasks.py`` — when the
+    # effective EXECUTOR actually references a ``$VAR`` worth checking. The
+    # default dispatcher command has none, so the common path (and the
+    # resolve-submit-inputs composite, which already imported tasks.py for
+    # cmd_sha) pays no second user-code import.
+    _effective_executor = job_env.get("EXECUTOR", "")
+    if "$" in _effective_executor:
+        _check_executor_var_references(
+            _effective_executor,
+            job_env_keys=set(job_env),
+            kwargs_keys=_resolve_kwargs_keys(experiment_dir),
+        )
 
     out: dict[str, Any] = {
         "profile": profile,
@@ -339,7 +384,7 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
 _BARE_SCRIPT_RE = re.compile(r"^python[0-9.]*$")
 
 
-def _check_register_run_executor(executor: str) -> None:
+def _check_register_run_executor(executor: str, *, base_dir: Path | None = None) -> None:
     """Raise :class:`errors.SpecInvalid` if *executor* is a bare-script invocation
     of a ``@register_run``-decorated file.
 
@@ -354,6 +399,15 @@ def _check_register_run_executor(executor: str) -> None:
     not argv). Anything with a flag *before* the script (``python -c "..."``,
     ``python -m pkg``, ``python -O file.py``) short-circuits at the
     ``script.endswith(".py")`` check — those forms are presumed correct.
+
+    *base_dir* (#292 Bug A): the experiment tree the (relative) script path is
+    resolved against. The pre-#292 code did ``Path(script).is_file()`` — a
+    CWD-relative probe that returned False (and silently passed the guard)
+    whenever ``build_submit_spec`` ran in a worker whose CWD wasn't the
+    experiment dir, exactly the contract the 0.10.11 CHANGELOG asserts holds.
+    When *base_dir* is given, a relative script resolves against it; when None,
+    the old CWD-relative behaviour is preserved (correct for an invocation run
+    from the experiment dir).
     """
     try:
         parts = shlex.split(executor)
@@ -367,6 +421,8 @@ def _check_register_run_executor(executor: str) -> None:
     if not script.endswith(".py"):
         return
     local_path = Path(script)
+    if base_dir is not None and not local_path.is_absolute():
+        local_path = Path(base_dir) / local_path
     if not local_path.is_file():
         return
     try:
@@ -396,6 +452,136 @@ def _check_register_run_executor(executor: str) -> None:
         "interview from before the auto-generation fix. Re-run the "
         "interview (`hpc-agent setup` / `/submit-hpc`) to regenerate."
     )
+
+
+# --- #292 Bug B: EXECUTOR $VAR ↔ exported-env cross-check -------------------
+#
+# Vars the cluster-side dispatcher / array template inject per-task that are
+# NOT carried in the built ``job_env`` (so they wouldn't show up in
+# ``job_env.keys()``): the per-task result dir and the task/run identity. A
+# ``$RESULT_DIR`` / ``$TASK_ID`` reference is legitimate and must not be
+# flagged. Everything else the framework forwards rides ``job_env`` itself.
+_FRAMEWORK_INJECTED_VARS: frozenset[str] = frozenset(
+    {"RESULT_DIR", "HPC_RESULT_DIR", "TASK_ID", "HPC_TASK_ID", "RUN_ID", "HPC_RUN_ID"}
+)
+
+# Common cluster shell vars an EXECUTOR may legitimately inherit from the job
+# environment (the user's ``--data $SCRATCH/...`` etc.). The dispatcher's own
+# ``_warn_unset_kwarg_refs`` deliberately stays in the unambiguous ``HPC_KW_``
+# namespace because a bare ``$SAMPLES`` "can't be reliably told apart from a
+# genuine env var"; the build-time refuse resolves that ambiguity with an
+# explicit allowlist (exact names + scheduler/runtime prefixes) so a real
+# inherited var is never mistaken for an unset-kwarg typo.
+_INHERITED_SHELL_VARS: frozenset[str] = frozenset(
+    {
+        "HOME", "PATH", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "SHLVL",
+        "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM", "HOSTNAME", "HOST",
+        "SCRATCH", "WORK", "PROJECT", "GROUP", "LD_LIBRARY_PATH", "LIBRARY_PATH",
+        "PYTHONPATH", "MANPATH", "CPATH", "CUDA_VISIBLE_DEVICES", "NSLOTS",
+        "JOB_ID", "JOB_NAME", "NHOSTS", "NQUEUES", "REPO_DIR",
+    }
+)  # fmt: skip
+_INHERITED_SHELL_PREFIXES: tuple[str, ...] = (
+    "SLURM_", "SGE_", "PBS_", "OMPI_", "PMI_", "PMIX_", "MPI_", "OMP_",
+    "CUDA_", "NCCL_", "I_MPI_", "HPC_AGENT_", "HPC_SERVICE_",
+)  # fmt: skip
+
+# ``$NAME`` or ``${NAME}`` / ``${NAME:-default}``. The braced form keeps any
+# trailing modifier so a default-providing reference (``:-``/``-``/``:=``/``=``)
+# can be recognised as safe (it never expands to empty on an unset var).
+_VAR_REF_RE = re.compile(
+    r"\$\{(?P<bname>[A-Za-z_][A-Za-z0-9_]*)(?P<bmod>[^}]*)\}"
+    r"|\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+_DEFAULT_MOD_RE = re.compile(r"^:?[-=]")
+
+
+def _is_inherited_shell_var(name: str) -> bool:
+    """True when *name* is a cluster shell var an EXECUTOR may legitimately use."""
+    return name in _INHERITED_SHELL_VARS or name.startswith(_INHERITED_SHELL_PREFIXES)
+
+
+def _iter_var_refs(executor: str):
+    """Yield ``(var_name, is_defaulted)`` for every ``$VAR`` ref in *executor*.
+
+    ``is_defaulted`` is True for the ``${VAR:-x}`` / ``${VAR-x}`` (and ``:=``)
+    fallback forms, which are safe even when ``VAR`` is unset and so are never
+    flagged.
+    """
+    for m in _VAR_REF_RE.finditer(executor):
+        if m.group("name") is not None:
+            yield m.group("name"), False
+        else:
+            yield m.group("bname"), bool(_DEFAULT_MOD_RE.match(m.group("bmod") or ""))
+
+
+def _resolve_kwargs_keys(experiment_dir: Path | None) -> set[str] | None:
+    """Lowercased per-task kwarg names from ``<experiment_dir>/.hpc/tasks.py``.
+
+    Returns None when the kwarg set can't be *positively* established — no
+    experiment_dir, no tasks.py, an import/resolve error, or a zero-task
+    sweep. The var-reference check skips entirely on None, so an unknowable
+    kwarg set can never produce a false refusal. Best-effort: importing the
+    user's tasks.py is a read the framework already does to compute cmd_sha
+    (``compute_cmd_sha(load_tasks_module(...))``), so this introduces no new
+    class of side effect; any failure degrades to "skip the check".
+    """
+    if experiment_dir is None:
+        return None
+    tasks_py = Path(experiment_dir) / ".hpc" / "tasks.py"
+    if not tasks_py.is_file():
+        return None
+    try:
+        from hpc_agent import load_tasks_module
+
+        mod = load_tasks_module(tasks_py)
+        if int(mod.total()) < 1:
+            return None
+        kwargs = mod.resolve(0)
+        if not isinstance(kwargs, dict):
+            return None
+        return {str(k).lower() for k in kwargs}
+    except Exception:  # noqa: BLE001 — any failure → degrade to "skip"
+        return None
+
+
+def _check_executor_var_references(
+    executor: str, *, job_env_keys: set[str], kwargs_keys: set[str] | None
+) -> None:
+    """Refuse an EXECUTOR that references a ``$VAR`` the dispatcher never exports.
+
+    Covered references (never flagged): a key already in *job_env* (forwarded
+    to the job env verbatim), a framework-injected identity/result var, an
+    inherited cluster shell var, a ``:-``-defaulted reference, and — the point
+    of the check — a real task kwarg, exported by the dispatcher as both bare
+    ``$<NAME>`` and ``$HPC_KW_<NAME>``. Anything else (the empirical
+    ``$SAMPLES`` for a ``samples`` that isn't a swept axis) is an unset-expands-
+    to-empty bug; raise :class:`errors.SpecInvalid` with the two resolutions.
+
+    No-ops when *kwargs_keys* is None (the kwarg set couldn't be established) —
+    the conservative posture that only refuses on a *provable* miss.
+    """
+    if kwargs_keys is None or "$" not in executor:
+        return
+    covered = _FRAMEWORK_INJECTED_VARS | set(job_env_keys)
+    for ref, defaulted in _iter_var_refs(executor):
+        if defaulted or ref in covered or _is_inherited_shell_var(ref):
+            continue
+        kwarg = ref[len("HPC_KW_") :].lower() if ref.startswith("HPC_KW_") else ref.lower()
+        if kwarg in kwargs_keys:
+            continue
+        raise errors.SpecInvalid(
+            f"EXECUTOR references ${ref} but no {kwarg!r} kwarg is exported and it "
+            "is not a framework or inherited cluster variable. The cluster-side "
+            "dispatcher exports a task kwarg as $<NAME> / $HPC_KW_<NAME> only for "
+            f"keys tasks.resolve(i) returns (here: {sorted(kwargs_keys)}). A "
+            f"reference the dispatcher never sets expands to EMPTY and the command "
+            "fails downstream (e.g. argparse 'expected one argument'). Resolve by "
+            "either:\n"
+            f"  • adding {kwarg!r} to a homogeneous_axes / fixed_params block so "
+            "tasks.resolve() returns it (then it's exported), or\n"
+            f"  • dropping the ${ref} reference from the EXECUTOR command."
+        )
 
 
 def _validate(spec: dict[str, Any]) -> None:

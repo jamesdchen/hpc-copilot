@@ -25,7 +25,48 @@ __all__ = [
     "_parse_gpu_count_from_tres",
     "_is_stressed",
     "_snapshot_from_dict",
+    "_split_section",
 ]
+
+
+def _parse_max_nodes(raw: str) -> int | None:
+    """Normalize a scheduler's max-nodes-per-job field to ``int | None`` (#293).
+
+    ``None`` means unbounded or unknown — SLURM ``UNLIMITED``, an unset PBS
+    ``resources_max.nodect``, or an unparseable value all map to it, so a
+    consumer can treat None uniformly as "no node-span ceiling".
+    """
+    raw = (raw or "").strip()
+    if not raw or raw.upper() == "UNLIMITED":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _split_section(stdout: str, begin: str, rc_marker: str) -> tuple[int | None, str]:
+    """Extract one ``echo``-delimited section from a merged multi-command stdout.
+
+    A merged probe (#295 Fix 3, extended in #293) frames each command as
+    ``echo <begin>; <cmd>; echo <rc_marker>=$?`` so a single ssh round-trip can
+    carry several. This pulls back ``(exit_code, body)`` for one section: *body*
+    is the text between *begin* and *rc_marker*, *exit_code* the integer after
+    ``<rc_marker>=``. Returns ``(None, "")`` when the markers are absent (the
+    round-trip died before that command ran), letting the caller fall back to the
+    combined result. Presence-based, so command output interleaved around the
+    markers never corrupts the split.
+    """
+    if begin not in stdout or rc_marker not in stdout:
+        return None, ""
+    after = stdout.split(begin, 1)[1]
+    body, _, tail = after.partition(rc_marker)
+    rc_field = tail.lstrip("=").splitlines()[0].strip() if tail else ""
+    try:
+        rc = int(rc_field)
+    except ValueError:
+        rc = None
+    return rc, body.strip("\n")
 
 
 # In-process cache so a single submit cycle that calls inspect_cluster
@@ -78,6 +119,11 @@ class ClusterSnapshot:
     now_iso: str
     nodes: list[NodeSnapshot]
     errors: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    # Scheduler parallel environments (#293 PR1) — SGE ``qconf -spl`` enumerated
+    # + classified by allocation_rule into single-node (smp) vs multi-node (mpi)
+    # capability. Empty on schedulers that don't yet enumerate them (SLURM/PBS).
+    # Each entry: {name, allocation_rule, kind, slots}.
+    parallel_environments: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +132,7 @@ class ClusterSnapshot:
             "now_iso": self.now_iso,
             "nodes": [n.to_dict() for n in self.nodes],
             "errors": list(self.errors),
+            "parallel_environments": [dict(pe) for pe in self.parallel_environments],
         }
 
 
@@ -179,4 +226,5 @@ def _snapshot_from_dict(d: dict[str, Any]) -> ClusterSnapshot:
         now_iso=d["now_iso"],
         nodes=nodes,
         errors=list(d.get("errors", [])),
+        parallel_environments=list(d.get("parallel_environments", [])),
     )

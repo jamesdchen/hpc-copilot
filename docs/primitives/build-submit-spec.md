@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent build-submit-spec --spec <path>
+  cli: hpc-agent build-submit-spec --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.incorporation.build.submit_spec.build_submit_spec
 exit_codes:
 - 0: ok

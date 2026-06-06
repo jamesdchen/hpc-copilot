@@ -61,6 +61,19 @@ class ResubmitSpec(BaseModel):
         default=None,
         description="Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true.",
     )
+    from_checkpoint: bool = Field(
+        default=False,
+        description=(
+            "When true, resubmitted tasks RESUME from their latest checkpoint "
+            "instead of restarting (#294 PR3). Stamps HPC_RESUME_FROM_CHECKPOINT=1 "
+            "into the batch job_env; the cluster-side dispatcher then locates the "
+            "latest <result_dir>/_checkpoints/checkpoint-*.pkl per task and exposes "
+            "it to the executor as args.resume_from / args.checkpoint_dir (env: "
+            "HPC_RESUME_FROM / HPC_CHECKPOINT_DIR). No-op unless submit_to_cluster "
+            "is true and the executor opts into checkpointing; a task with no "
+            "checkpoint simply starts fresh."
+        ),
+    )
 
     @model_validator(mode="after")
     def _enforce_cluster_submit_fields(self) -> ResubmitSpec:

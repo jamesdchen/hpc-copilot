@@ -71,6 +71,14 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
                 f"--spec.failed_task_ids[{i}]={t!r} is not an integer"
             ) from exc
 
+    # #294 PR3: `from_checkpoint` resumes each retried task from its latest
+    # checkpoint. The signal travels to the cluster as a job_env var the
+    # dispatcher reads — so it only bites on an actual cluster re-run
+    # (submit_to_cluster=true), and a task with no checkpoint just starts fresh.
+    job_env = spec.get("job_env")
+    if spec.get("from_checkpoint"):
+        job_env = {**(job_env or {}), "HPC_RESUME_FROM_CHECKPOINT": "1"}
+
     result = resubmit_flow(
         Path(args.experiment_dir),
         args.run_id,
@@ -83,7 +91,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         script=spec.get("script"),
         backend=spec.get("backend"),
         job_name=spec.get("job_name"),
-        job_env=spec.get("job_env"),
+        job_env=job_env,
     )
     _ok(
         result.to_envelope_data(),

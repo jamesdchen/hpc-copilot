@@ -278,10 +278,89 @@ _SPAWN_WORKER_DIED = RecoveryMenu(
 )
 
 
+_WALLTIME = RecoveryMenu(
+    kind="walltime",
+    summary=(
+        "The scheduler killed the job at its walltime limit — the dispatcher "
+        "trapped SIGTERM and exited 130, marking the in-flight tasks preempted. "
+        "The unfinished tasks need to continue, not the whole array rerun."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: walltime, from_checkpoint: true, "
+                "submit_to_cluster: true}>"
+            ),
+            when_to_use=(
+                "Resume the unfinished tasks from their last checkpoint (#294) — "
+                "the privileged path for a long solve that checkpoints. A task "
+                "with no checkpoint simply restarts fresh, so this is safe to "
+                "prefer."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: walltime, submit_to_cluster: true, "
+                "overrides: {walltime_sec: <larger>}}>"
+            ),
+            when_to_use=(
+                "When the executor does NOT checkpoint and the work genuinely "
+                "needs longer — bump the walltime and rerun the unfinished tasks "
+                "from scratch."
+            ),
+            safety_rank=1,
+        ),
+    ),
+    references=("#294",),
+)
+
+
+_NODE_FAILURE = RecoveryMenu(
+    kind="node_failure",
+    summary=(
+        "A compute node died mid-run (hardware / scheduler fault), killing its "
+        "tasks through no fault of the job. The affected tasks need to re-run on "
+        "healthy nodes."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: node_failure, from_checkpoint: true, "
+                "submit_to_cluster: true}>"
+            ),
+            when_to_use=(
+                "Resume the affected tasks from their last checkpoint (#294); "
+                "they land on healthy nodes. A task with no checkpoint restarts "
+                "fresh."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: node_failure, submit_to_cluster: true}>"
+            ),
+            when_to_use=(
+                "When the executor does NOT checkpoint — node failure is "
+                "transient, so a from-scratch rerun on healthy nodes is the fix."
+            ),
+            safety_rank=1,
+        ),
+    ),
+    references=("#294",),
+)
+
+
 REGISTRY: dict[str, RecoveryMenu] = {
     _ALREADY_IN_FLIGHT.kind: _ALREADY_IN_FLIGHT,
     _SUBMISSION_INCOMPLETE.kind: _SUBMISSION_INCOMPLETE,
     _SPAWN_WORKER_DIED.kind: _SPAWN_WORKER_DIED,
+    _WALLTIME.kind: _WALLTIME,
+    _NODE_FAILURE.kind: _NODE_FAILURE,
 }
 
 

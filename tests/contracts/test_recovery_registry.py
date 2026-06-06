@@ -176,6 +176,17 @@ def test_every_menu_summary_and_options_are_nonempty() -> None:
             assert opt.safety_rank >= 0
 
 
+def test_resumable_kill_kinds_offer_resume_from_checkpoint_first() -> None:
+    """#294: walltime / node_failure kills deterministically map to a
+    resume-from-checkpoint remediation as the rank-0 (primary) option."""
+    for kind in ("walltime", "node_failure"):
+        text = remediation_for(kind, placeholders={"run_id": "r1", "experiment_dir": "/x"})
+        assert "resubmit" in text and "from_checkpoint: true" in text
+        # the resume option is rank 0 → rendered as (a), before (b)
+        assert text.index("from_checkpoint: true") < text.index("(b)")
+        assert "r1" in text  # placeholder substituted
+
+
 def test_safety_ranks_unique_within_menu() -> None:
     """Two options in the same menu should not share a safety_rank — the
     renderer relies on rank for deterministic ordering."""

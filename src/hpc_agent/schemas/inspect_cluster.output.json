@@ -45,6 +45,14 @@
       },
       "title": "Errors",
       "type": "array"
+    },
+    "parallel_environments": {
+      "description": "Scheduler 'parallel environments' — the named pools you target for (multi-rank) work — normalized across SGE PEs (qconf -spl/-sp), SLURM partitions (scontrol show partition), and PBS execution queues (qstat -Qf) onto one shape. Empty pre-#293 or when none are exposed.",
+      "items": {
+        "$ref": "#/$defs/_ParallelEnvironment"
+      },
+      "title": "Parallel Environments",
+      "type": "array"
     }
   },
   "$defs": {
@@ -166,6 +174,63 @@
         "name"
       ],
       "title": "_NodeSnapshot",
+      "type": "object"
+    },
+    "_ParallelEnvironment": {
+      "additionalProperties": false,
+      "description": "One scheduler 'parallel environment' — the named pool you target for work.\n\nNormalized across schedulers (#293) so a consumer never branches on\nscheduler_kind: SGE PEs, SLURM partitions, and PBS queues all project onto\nthe SAME core. Scheduler-specific extras live in ``raw`` (whose keys DO vary)\nrather than the core, so the core never lies about uniformity — e.g. SGE's\n``allocation_rule`` and the fuzzy per-scheduler ``slots`` (SGE/SLURM total\ncapacity vs PBS per-job ceiling) are raw, not core.",
+      "properties": {
+        "name": {
+          "description": "What you request: SGE -pe NAME / SLURM -p NAME / PBS -q NAME.",
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "description": "Which scheduler concept this is: SGE PE, SLURM partition, or PBS queue.",
+          "enum": [
+            "pe",
+            "partition",
+            "queue"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Node-span capability: smp = single-node only, mpi = multi-node capable, other = couldn't be classified (inspect the raw allocation_rule).",
+          "enum": [
+            "smp",
+            "mpi",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_nodes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max nodes a single job may span here; None = unbounded or unknown.",
+          "title": "Max Nodes"
+        },
+        "raw": {
+          "additionalProperties": true,
+          "description": "Scheduler-specific detail whose keys vary by source: SGE carries {allocation_rule, slots}, SLURM/PBS carry {slots}. slots' meaning is scheduler-specific (SGE/SLURM total capacity; PBS per-job ncpus ceiling).",
+          "title": "Raw",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "kind"
+      ],
+      "title": "_ParallelEnvironment",
       "type": "object"
     }
   }

@@ -230,6 +230,15 @@ def _make_compute(spec: RunSpec) -> Callable[[Any], None]:
 
     def compute(args: Any) -> None:
         ns: dict[str, Any] = dict(vars(args)) if hasattr(args, "__dict__") else dict(args)
+        # #294: surface the framework's checkpoint resume point to executors that
+        # opt in by declaring a ``resume_from`` / ``checkpoint_dir`` parameter.
+        # The dispatcher sets HPC_RESUME_FROM (latest checkpoint, on `resubmit
+        # --from-checkpoint`) and HPC_CHECKPOINT_DIR (stable per-task dir). Absent
+        # → None (fresh start). ``setdefault`` so an explicit arg still wins, and
+        # the ``accepted`` filter drops these for functions that don't take them
+        # (so existing executors are unaffected).
+        ns.setdefault("resume_from", os.environ.get("HPC_RESUME_FROM") or None)
+        ns.setdefault("checkpoint_dir", os.environ.get("HPC_CHECKPOINT_DIR") or None)
         kwargs = {k: ns[k] for k in accepted if k in ns}
         output_file = ns.get("output_file")
         with _run_context(ns):

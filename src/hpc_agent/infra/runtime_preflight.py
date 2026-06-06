@@ -13,7 +13,50 @@ from __future__ import annotations
 from hpc_agent import errors
 from hpc_agent.infra.remote import ssh_run
 
-__all__ = ["runtime_uv_preflight"]
+__all__ = ["runtime_uv_preflight", "uv_activation_prefix", "uv_missing_message"]
+
+
+def uv_activation_prefix(job_env: dict[str, str]) -> str:
+    """The cluster env-activation prefix the job preamble runs, ``&&``-joined.
+
+    ``module load $MODULES && source $CONDA_SOURCE && conda activate $CONDA_ENV``
+    with each clause present only when its field is set; "" when none are. Shared
+    by :func:`runtime_uv_preflight` and the merged ``check-preflight`` probe
+    (#295 Fix 2) so the SAME activation sequence drives both the standalone and
+    the batched ``command -v uv`` check.
+    """
+    modules = (job_env.get("MODULES") or "").strip()
+    conda_source = (job_env.get("CONDA_SOURCE") or "").strip()
+    conda_env = (job_env.get("CONDA_ENV") or "").strip()
+    parts: list[str] = []
+    if modules:
+        parts.append(f"module load {modules}")
+    if conda_source:
+        parts.append(f"source {conda_source}")
+    if conda_env:
+        parts.append(f"conda activate {conda_env}")
+    return " && ".join(parts)
+
+
+def uv_missing_message(
+    ssh_target: str, *, conda_env: str, cmd: str, returncode: int, stderr: str
+) -> str:
+    """The actionable ``runtime=uv but uv missing`` remediation, single-sourced.
+
+    Used both by :func:`runtime_uv_preflight` (raised as ``SpecInvalid``) and by
+    the merged ``check-preflight`` probe (surfaced as a failed check), so the two
+    paths never drift.
+    """
+    env_hint = f"~/.conda/envs/{conda_env}/bin/pip install uv" if conda_env else "pip install uv"
+    return (
+        f"preflight: runtime=uv but `uv` was not found on PATH after activating "
+        f"the cluster env on {ssh_target}. Without it, every task fails "
+        f"`[template] HPC_RUNTIME=uv but 'uv' not on PATH`. Install uv into the "
+        f"env (e.g. `{env_hint}`) and resubmit, OR drop `runtime: uv` from the "
+        f"spec if the repo doesn't actually need uv. "
+        f"Activation command attempted: `{cmd}` (exit {returncode}; "
+        f"stderr: {(stderr or '').strip()[:200]})."
+    )
 
 
 def runtime_uv_preflight(
@@ -40,31 +83,17 @@ def runtime_uv_preflight(
     if skip or job_env.get("HPC_RUNTIME") != "uv":
         return
 
-    modules = (job_env.get("MODULES") or "").strip()
-    conda_source = (job_env.get("CONDA_SOURCE") or "").strip()
-    conda_env = (job_env.get("CONDA_ENV") or "").strip()
-
-    parts: list[str] = []
-    if modules:
-        parts.append(f"module load {modules}")
-    if conda_source:
-        parts.append(f"source {conda_source}")
-    if conda_env:
-        parts.append(f"conda activate {conda_env}")
-    parts.append("command -v uv")
-    cmd = " && ".join(parts)
+    prefix = uv_activation_prefix(job_env)
+    cmd = f"{prefix} && command -v uv" if prefix else "command -v uv"
 
     probe = ssh_run(cmd, ssh_target=ssh_target)
     if probe.returncode != 0 or not (probe.stdout or "").strip():
-        env_hint = (
-            f"~/.conda/envs/{conda_env}/bin/pip install uv" if conda_env else "pip install uv"
-        )
         raise errors.SpecInvalid(
-            f"preflight: runtime=uv but `uv` was not found on PATH after activating "
-            f"the cluster env on {ssh_target}. Without it, every task fails "
-            f"`[template] HPC_RUNTIME=uv but 'uv' not on PATH`. Install uv into the "
-            f"env (e.g. `{env_hint}`) and resubmit, OR drop `runtime: uv` from the "
-            f"spec if the repo doesn't actually need uv. "
-            f"Activation command attempted: `{cmd}` (exit {probe.returncode}; "
-            f"stderr: {(probe.stderr or '').strip()[:200]})."
+            uv_missing_message(
+                ssh_target,
+                conda_env=(job_env.get("CONDA_ENV") or "").strip(),
+                cmd=cmd,
+                returncode=probe.returncode,
+                stderr=probe.stderr or "",
+            )
         )

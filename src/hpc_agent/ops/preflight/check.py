@@ -24,7 +24,6 @@ import os
 import shutil
 import socket
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +39,22 @@ from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binar
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
+
+
+def _cluster_ssh_timeout() -> int:
+    """Per-probe cluster ssh round-trip timeout in seconds (#295 Fix 1).
+
+    Env-overridable via ``HPC_CLUSTER_SSH_TIMEOUT``; default 15s. The prior
+    hardcoded 5s was too tight for login nodes under load — the empirical
+    2026-06-06 demo fired a ``cluster_ssh_timeout`` failure on a healthy cluster
+    whose round-trip momentarily exceeded 5s. 15s tolerates routine slowness;
+    ops can pin it tighter or looser. A non-integer value falls back to the
+    default rather than erroring out.
+    """
+    try:
+        return int(os.environ.get("HPC_CLUSTER_SSH_TIMEOUT", "15"))
+    except ValueError:
+        return 15
 
 
 def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
@@ -103,7 +118,7 @@ def _cluster_ssh_echo_check(host: str) -> dict[str, Any]:
     from hpc_agent.infra.remote import ssh_run
 
     try:
-        result = ssh_run("echo ok", ssh_target=host, timeout=5)
+        result = ssh_run("echo ok", ssh_target=host, timeout=_cluster_ssh_timeout())
     except (TimeoutError, OSError) as exc:
         return _check("cluster_ssh_echo", False, f"{host} ssh round-trip raised: {exc}")
     if result.returncode == 0 and (result.stdout or "").strip() == "ok":
@@ -115,6 +130,87 @@ def _cluster_ssh_echo_check(host: str) -> dict[str, Any]:
         f"{host} ssh round-trip failed (exit {result.returncode}): {stderr_tail!r} — "
         "production submits will hit the same failure",
     )
+
+
+def _cluster_combined_probe(ssh_target: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Echo round-trip + runtime-uv probe over ONE ssh connection (#295 Fix 2).
+
+    #289 fanned these two independent cluster probes onto a ``ThreadPoolExecutor``
+    so their wall-clock was one RTT, not two — but with named-pipe ControlMaster
+    multiplexing broken (the empirical Windows case) each concurrent connection
+    still pays a full cold TCP+SSH handshake. Collapsing both into a single
+    multi-command round-trip eliminates one handshake per submit preflight, a win
+    that lands whether or not multiplexing works.
+
+    Targets the spec's ``ssh_target`` (``user@host``) for BOTH legs — the exact
+    endpoint the real submit (rsync/qsub) uses. The standalone echo probe targets
+    the bare clusters.yaml ``host``; routing the merged echo through ``ssh_target``
+    is strictly more production-faithful (it exercises the same explicit user the
+    canary will, catching a wrong-default-user mismatch the bare-host probe would
+    miss).
+
+    Robust to activation noise: the command emits unique sentinel tokens and the
+    parser checks for their *presence*, so ``module load`` / ``conda activate``
+    chatter interleaved in stdout can't corrupt the verdict. Activation stderr is
+    not suppressed, so a uv-missing failure still surfaces the cluster's diagnostic
+    tail. Returns ``[echo_check, uv_check]``.
+    """
+    from hpc_agent.infra.remote import ssh_run
+    from hpc_agent.infra.runtime_preflight import uv_activation_prefix, uv_missing_message
+
+    job_env = dict(spec.get("job_env") or {})
+    prefix = uv_activation_prefix(job_env)
+    uv_cond = f"{prefix} && command -v uv" if prefix else "command -v uv"
+    # Echo first (proves the round-trip), then the activation-aware uv check
+    # reduced to a single OK/MISSING token. ``>/dev/null`` drops uv's path (we
+    # only need presence); activation stdout/stderr still flow for diagnostics.
+    cmd = (
+        "echo __HPC_ECHO_OK__; "
+        f"if {uv_cond} >/dev/null 2>&1; then echo __HPC_UV_OK__; "
+        "else echo __HPC_UV_MISSING__; fi"
+    )
+    try:
+        result = ssh_run(cmd, ssh_target=ssh_target, timeout=_cluster_ssh_timeout())
+    except (TimeoutError, OSError) as exc:
+        detail = f"{ssh_target} ssh round-trip raised: {exc}"
+        return [
+            _check("cluster_ssh_echo", False, detail),
+            _check("runtime_uv", False, f"runtime uv probe could not complete: {detail}"),
+        ]
+
+    out = result.stdout or ""
+    # No echo token means the shell never ran cleanly — the round-trip itself
+    # failed (auth/host-key/etc.). Report both legs against that shared cause
+    # rather than mislabeling it as "uv missing".
+    if "__HPC_ECHO_OK__" not in out:
+        stderr_tail = (result.stderr or "")[-200:]
+        detail = (
+            f"{ssh_target} ssh round-trip failed (exit {result.returncode}): "
+            f"{stderr_tail!r} — production submits will hit the same failure"
+        )
+        return [
+            _check("cluster_ssh_echo", False, detail),
+            _check("runtime_uv", False, f"runtime uv probe could not complete: {detail}"),
+        ]
+
+    echo_check = _check("cluster_ssh_echo", True, f"{ssh_target} ssh round-trip succeeded")
+    if "__HPC_UV_OK__" in out:
+        uv_check = _check(
+            "runtime_uv", True, f"uv present on PATH after cluster env activation on {ssh_target}"
+        )
+    else:
+        uv_check = _check(
+            "runtime_uv",
+            False,
+            uv_missing_message(
+                ssh_target,
+                conda_env=str(job_env.get("CONDA_ENV") or "").strip(),
+                cmd=uv_cond,
+                returncode=result.returncode,
+                stderr=result.stderr or "",
+            ),
+        )
+    return [echo_check, uv_check]
 
 
 @primitive(
@@ -182,7 +278,8 @@ def check_preflight(
     after the 2026-06-04 bare-TCP-probe-passed-but-rsync-failed demo
     surfaced the inert-guard mismatch). When omitted, all three are
     skipped. The SSH round-trip is skipped when the TCP probe fails (no
-    point burning the 5s ssh timeout on an unreachable host).
+    point burning the (HPC_CLUSTER_SSH_TIMEOUT, default 15s) ssh timeout on an
+    unreachable host).
 
     Returns ``{"all_ok": bool, "checks": list[dict]}``. The CLI adapter
     maps ``all_ok=False`` to the cluster-error exit code.
@@ -294,17 +391,18 @@ def check_preflight(
         clusters = {}
         checks.append(_check("clusters_yaml_parses", False, str(exc)))
 
-    # Runtime-binary probe (#275) — DEFERRED so it can fan with the
-    # cluster_ssh_echo round-trip below (#289). When a built submit-flow spec
-    # asks for ``runtime=uv``, the probe verifies ``uv`` is on PATH after the
-    # cluster env activates (the SAME probe submit-flow runs) — closing the gap
-    # where a uv-less cluster's array died with ``HPC_RUNTIME=uv but 'uv' not on
-    # PATH``. It is one ssh round-trip; so is cluster_ssh_echo. Both go to the
-    # cluster and are independent, so we run them CONCURRENTLY when both fire
-    # (the documented ``check-preflight --cluster X --spec <uv-spec>`` submit
-    # path — submit.md Step 7) instead of stacking two RTTs. ``uv_pending`` marks
-    # the probe owed; it runs inside the cluster block (fanned) or standalone
-    # afterwards (no --cluster, or tcp:22 unreachable).
+    # Runtime-binary probe (#275) — DEFERRED so it can ride the same ssh
+    # round-trip as cluster_ssh_echo. When a built submit-flow spec asks for
+    # ``runtime=uv``, the probe verifies ``uv`` is on PATH after the cluster env
+    # activates (the SAME probe submit-flow runs) — closing the gap where a
+    # uv-less cluster's array died with ``HPC_RUNTIME=uv but 'uv' not on PATH``.
+    # #289 fanned it concurrently with cluster_ssh_echo (one RTT wall-clock);
+    # #295 Fix 2 goes further and collapses BOTH into ONE ssh connection
+    # (``_cluster_combined_probe``) when both fire — the documented
+    # ``check-preflight --cluster X --spec <uv-spec>`` submit path (submit.md
+    # Step 7) — so a broken ControlMaster pays one handshake, not two.
+    # ``uv_pending`` marks the probe owed; it runs inside the cluster block
+    # (merged) or standalone afterwards (no --cluster, or tcp:22 unreachable).
     uv_pending = (
         isinstance(spec, dict)
         and isinstance(spec.get("job_env"), dict)
@@ -363,18 +461,19 @@ def check_preflight(
                 # path is actually green. Skipped when the TCP probe
                 # failed (no point burning 5s on an unreachable host).
                 if tcp_ok:
-                    if uv_pending:
-                        # Two independent cluster ssh round-trips (echo + the
-                        # #275 uv probe) — fan them so the wall-clock is one RTT,
-                        # not two (#289). Concurrent ssh to one host is the
-                        # established reconcile pattern (ops/monitor/reconcile).
-                        with ThreadPoolExecutor(max_workers=2) as pool:
-                            fut_echo = pool.submit(_cluster_ssh_echo_check, host)
-                            fut_uv = pool.submit(_runtime_uv_check, spec)
-                            checks.append(fut_echo.result())
-                            uv_result = fut_uv.result()
-                        if uv_result is not None:
-                            checks.append(uv_result)
+                    # ``uv_pending`` already implies ``spec`` is a dict with an
+                    # ssh_target (see its definition above); the ``isinstance``
+                    # re-states that invariant so the type checker narrows ``spec``
+                    # from ``dict | None`` here.
+                    if uv_pending and isinstance(spec, dict):
+                        # #295 Fix 2: collapse the two independent cluster probes
+                        # (echo round-trip + the #275 uv probe) into ONE ssh
+                        # round-trip. #289 fanned them concurrently (one RTT
+                        # wall-clock), but each still paid its own handshake — so
+                        # with named-pipe ControlMaster broken (Windows) this saves
+                        # a full cold handshake per submit preflight. Routed through
+                        # the spec's ssh_target (the production submit endpoint).
+                        checks.extend(_cluster_combined_probe(str(spec["ssh_target"]), spec))
                         uv_pending = False
                     else:
                         checks.append(_cluster_ssh_echo_check(host))

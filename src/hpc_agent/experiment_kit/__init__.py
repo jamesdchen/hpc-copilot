@@ -62,6 +62,15 @@ from hpc_agent.experiment_kit.axis_config import (
     data_axis_from_config,
     eval_halo_expr,
 )
+from hpc_agent.experiment_kit.checkpoint import (
+    checkpoint_dir,
+    latest_checkpoint,
+    read_checkpoint,
+    read_latest_checkpoint,
+    run_iterations,
+    should_checkpoint,
+    write_checkpoint,
+)
 from hpc_agent.experiment_kit.discover import RunInfo, discover_runs
 from hpc_agent.experiment_kit.elision import (
     ElisionReport,
@@ -103,6 +112,14 @@ __all__ = [
     "flags_from_signature",
     "flags_from_ast",
     "flags_for_run",
+    # Checkpoint-aware recovery helpers (#294)
+    "write_checkpoint",
+    "read_checkpoint",
+    "read_latest_checkpoint",
+    "latest_checkpoint",
+    "checkpoint_dir",
+    "should_checkpoint",
+    "run_iterations",
     # Layer 2 — parallelization planner
     "DataAxis",
     "Independent",

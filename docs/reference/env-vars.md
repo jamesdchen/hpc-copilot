@@ -21,6 +21,7 @@ preamble).
 | Variable | Default | Purpose |
 |---|---|---|
 | `HPC_SSH_TIMEOUT_SEC` | `60` | Per-call subprocess timeout for `ssh` / `scp` invocations from `hpc_agent.infra.remote`. Raise on slow login nodes; lowering risks false-positive timeouts. |
+| `HPC_CLUSTER_SSH_TIMEOUT` | `15` | Per-probe timeout (seconds) for the `check-preflight --cluster` cluster ssh round-trips (the `cluster_ssh_echo` and merged echo+runtime-uv probes). The prior hardcoded 5s fired false `cluster_ssh_timeout` failures on healthy-but-loaded login nodes; 15s tolerates routine slowness. Pin tighter or looser as needed. A non-integer value falls back to the default. |
 | `HPC_RSYNC_TIMEOUT_SEC` | `1800` | Per-call subprocess timeout for `rsync` push / pull. Raise when transferring large repos over slow links. |
 | `HPC_NO_SSH_MULTIPLEX` | (unset) | Set to `1` to disable OpenSSH connection multiplexing. Some clusters disallow it (e.g. PAM session limits). Without multiplexing, every status poll pays a full SSH handshake. |
 | `HPC_SSH_BINARY` | (auto) | Path to the `ssh` binary to invoke. On native Windows, when unset, hpc-agent prefers `C:\Windows\System32\OpenSSH\ssh.exe` over Git Bash's bundled `ssh` (Git's ssh can't reach the Windows OpenSSH named-pipe agent). Elsewhere it falls back to bare `ssh` on `PATH`. Set explicitly to pin a specific binary on any platform. |

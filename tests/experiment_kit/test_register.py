@@ -7,6 +7,8 @@ import json
 import types
 from pathlib import Path
 
+import pytest
+
 
 def _exec_module(src: str, name: str = "hpc_tmpl_test_mod") -> types.ModuleType:
     """Exec *src* as a fresh module so ``run.__globals__`` is isolated."""
@@ -86,3 +88,64 @@ def test_register_run_gpu_flag() -> None:
     spec = mod._RUNS["run"]
     assert spec.gpu is True
     assert spec.name == "run"
+
+
+def test_compute_injects_resume_from_for_opted_in_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #294 PR3: a run that declares resume_from / checkpoint_dir receives the
+    # dispatcher-provided values (HPC_RESUME_FROM set on `resubmit --from-checkpoint`).
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(alpha: float = 1.0, resume_from=None, checkpoint_dir=None):\n"
+        "    return {\n"
+        "        'alpha': alpha,\n"
+        "        'resume_from': resume_from,\n"
+        "        'checkpoint_dir': checkpoint_dir,\n"
+        "    }\n"
+    )
+    monkeypatch.setenv("HPC_RESUME_FROM", "/ck/checkpoint-7.pkl")
+    monkeypatch.setenv("HPC_CHECKPOINT_DIR", "/ck")
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(alpha=2.0, output_file=str(out)))
+    data = json.loads(out.read_text())
+    assert data["resume_from"] == "/ck/checkpoint-7.pkl"
+    assert data["checkpoint_dir"] == "/ck"
+
+
+def test_compute_resume_from_none_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HPC_RESUME_FROM", raising=False)
+    monkeypatch.delenv("HPC_CHECKPOINT_DIR", raising=False)
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(resume_from=None):\n"
+        "    return {'resume_from': resume_from}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(output_file=str(out)))
+    assert json.loads(out.read_text())["resume_from"] is None
+
+
+def test_compute_unaffected_for_run_without_resume_param(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Backwards-compat: a run that doesn't declare resume_from is untouched even
+    # when the env vars are set (the kwargs filter drops the unaccepted keys).
+    monkeypatch.setenv("HPC_RESUME_FROM", "/ck/checkpoint-1.pkl")
+    monkeypatch.setenv("HPC_CHECKPOINT_DIR", "/ck")
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(alpha: float = 1.0):\n"
+        "    return {'alpha': alpha}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(alpha=1.0, output_file=str(out)))
+    assert json.loads(out.read_text()) == {"alpha": 1.0}

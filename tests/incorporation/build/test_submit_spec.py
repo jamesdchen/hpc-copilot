@@ -459,6 +459,204 @@ def test_accepts_bare_script_executor_for_non_register_run_file(
     assert spec["job_env"]["EXECUTOR"] == "python3 plain.py"
 
 
+def test_register_run_guard_resolves_script_against_experiment_dir(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#292 Bug A: the bare-script-vs-register_run guard must fire even when the
+    process CWD is NOT the experiment dir — the empirical worker case where the
+    pre-#292 ``Path(script).is_file()`` was CWD-relative and silently no-op'd.
+    Passing ``experiment_dir`` resolves the script against the real tree."""
+    exp = tmp_path / "exp"
+    (exp / "executors").mkdir(parents=True)
+    (exp / "executors" / "monte_carlo_pi.py").write_text(
+        "from hpc_agent import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def monte_carlo_pi(seed: int = 0) -> dict:\n"
+        "    return {'pi': 3.14}\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)  # CWD != experiment dir — the empirical case
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            exp,
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": "python executors/monte_carlo_pi.py --seed $SEED"},
+            ),
+        )
+    assert "register_run" in str(excinfo.value)
+
+
+def test_register_run_guard_is_cwd_relative_without_experiment_dir(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion to the above: with no ``experiment_dir`` AND a CWD that isn't
+    the experiment dir, the guard can't see the script, so it can't fire — this
+    is exactly the #292 hole, pinned so the experiment_dir thread-through stays
+    the thing that closes it (and so the CWD-relative fallback is intentional,
+    not accidental, for invocations run from inside the experiment dir)."""
+    exp = tmp_path / "exp"
+    (exp / "executors").mkdir(parents=True)
+    (exp / "executors" / "monte_carlo_pi.py").write_text(
+        "from hpc_agent import register_run\n\n"
+        "@register_run\ndef f(seed: int = 0):\n    return {}\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    # No experiment_dir → CWD-relative probe misses → guard silently passes.
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(
+            **_required(),
+            extra_env={"EXECUTOR": "python executors/monte_carlo_pi.py --seed 1"},
+        )
+    )
+    assert spec["job_env"]["EXECUTOR"] == "python executors/monte_carlo_pi.py --seed 1"
+
+
+def _write_tasks_py(exp: Path, resolve_body: str) -> None:
+    (exp / ".hpc").mkdir(parents=True, exist_ok=True)
+    (exp / ".hpc" / "tasks.py").write_text(
+        f"def total():\n    return 3\n\n\ndef resolve(i):\n    return {resolve_body}\n",
+        encoding="utf-8",
+    )
+
+
+def test_rejects_executor_referencing_unexported_var(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#292 Bug B: a hand-built EXECUTOR referencing ``$SAMPLES`` when ``samples``
+    is not a swept axis (tasks.resolve() returns only ``seed``) is the empirical
+    silent failure — ``$SAMPLES`` expands to empty cluster-side and argparse
+    dies. Refuse at build time, naming the var and the two resolutions."""
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    (exp / "analyze.py").write_text("print('plain, not register_run')\n", encoding="utf-8")
+    _write_tasks_py(exp, "{'seed': i}")
+    monkeypatch.chdir(tmp_path)  # CWD != exp — guard still resolves via experiment_dir
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            exp,
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={
+                    "EXECUTOR": (
+                        "python3 analyze.py --samples $SAMPLES --seed $SEED "
+                        "--output-file $RESULT_DIR/metrics.json"
+                    )
+                },
+            ),
+        )
+    msg = str(excinfo.value)
+    assert "SAMPLES" in msg and "samples" in msg
+    assert "homogeneous_axes" in msg  # the remediation
+
+
+def test_accepts_executor_with_only_covered_vars(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#292 Bug B must NOT false-positive: a swept-axis kwarg ($SEED, $SAMPLES),
+    a framework var ($RESULT_DIR), an inherited cluster var ($SCRATCH) and a
+    ``:-``-defaulted ref (${OUTDIR:-/tmp}) are all covered."""
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    (exp / "analyze.py").write_text("print('plain')\n", encoding="utf-8")
+    _write_tasks_py(exp, "{'seed': i, 'samples': 100}")
+    monkeypatch.chdir(tmp_path)
+    spec = build_submit_spec(
+        exp,
+        spec=BuildSubmitSpecInput(
+            **_required(),
+            extra_env={
+                "EXECUTOR": (
+                    "python3 analyze.py --samples $SAMPLES --seed $SEED "
+                    "--data $SCRATCH/in --out ${OUTDIR:-/tmp} "
+                    "--output-file $RESULT_DIR/metrics.json"
+                )
+            },
+        ),
+    )
+    assert "analyze.py" in spec["job_env"]["EXECUTOR"]
+
+
+def test_var_reference_check_noops_when_kwargs_unknowable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no experiment_dir the kwarg set can't be established, so the check
+    must degrade to a no-op rather than false-refuse a possibly-fine EXECUTOR."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "analyze.py").write_text("print('plain')\n", encoding="utf-8")
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(
+            **_required(),
+            extra_env={"EXECUTOR": "python3 analyze.py --samples $SAMPLES"},
+        )
+    )
+    assert "$SAMPLES" in spec["job_env"]["EXECUTOR"]
+
+
+def test_default_executor_does_not_import_tasks_py(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The $VAR cross-check must NOT import .hpc/tasks.py when the EXECUTOR has no
+    $VAR refs (the default dispatcher command) — otherwise resolve-submit-inputs
+    would re-import user tasks.py a second time on every submit."""
+    import hpc_agent
+
+    calls: list = []
+    real = hpc_agent.load_tasks_module
+    monkeypatch.setattr(hpc_agent, "load_tasks_module", lambda p: (calls.append(p), real(p))[1])
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    _write_tasks_py(exp, "{'seed': i}")
+    # Default executor (no extra_env) → job_env["EXECUTOR"] has no '$'.
+    build_submit_spec(exp, spec=BuildSubmitSpecInput(**_required()))
+    assert calls == [], "default executor must not trigger a tasks.py import"
+
+
+def test_check_executor_var_references_unit() -> None:
+    """Direct coverage of the #292 Bug B predicate."""
+    from hpc_agent.incorporation.build.submit_spec import _check_executor_var_references
+
+    job_env_keys = {"EXECUTOR", "HPC_RUN_ID", "REPO_DIR", "HPC_CAMPAIGN_ID"}
+    # Covered: seed kwarg, RESULT_DIR framework, SCRATCH shell, SLURM_ prefix,
+    # HPC_CAMPAIGN_ID job_env key, ${Q:-1} defaulted, $HPC_KW_SEED namespaced.
+    _check_executor_var_references(
+        "p --seed $SEED --kw $HPC_KW_SEED --o $RESULT_DIR --d $SCRATCH/x "
+        "--n $SLURM_JOB_ID --c $HPC_CAMPAIGN_ID --q ${Q:-1}",
+        job_env_keys=job_env_keys,
+        kwargs_keys={"seed"},
+    )
+    # Uncovered bare var → refuse.
+    with pytest.raises(errors.SpecInvalid):
+        _check_executor_var_references(
+            "p --samples $SAMPLES", job_env_keys=job_env_keys, kwargs_keys={"seed"}
+        )
+    # Uncovered HPC_KW_ namespaced var → refuse.
+    with pytest.raises(errors.SpecInvalid):
+        _check_executor_var_references(
+            "p --samples $HPC_KW_SAMPLES", job_env_keys=job_env_keys, kwargs_keys={"seed"}
+        )
+    # Unknowable kwarg set → never refuse.
+    _check_executor_var_references(
+        "p --samples $SAMPLES", job_env_keys=job_env_keys, kwargs_keys=None
+    )
+
+
+def test_walltime_sec_stamped_into_job_env_for_checkpoint_deadline() -> None:
+    """#294: a submit with a walltime stamps HPC_WALLTIME_SEC so the cluster
+    preamble can derive HPC_WALLTIME_END_EPOCH for walltime-margin checkpointing.
+    Absent a walltime, the key is omitted (no deadline → checkpoint no-op)."""
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), walltime_sec=7200))
+    assert spec["job_env"]["HPC_WALLTIME_SEC"] == "7200"
+    assert (
+        "HPC_WALLTIME_SEC"
+        not in build_submit_spec(spec=BuildSubmitSpecInput(**_required()))["job_env"]
+    )
+
+
 def test_assembled_spec_passes_submit_flow_input_schema() -> None:
     """Belt-and-suspenders: the schema validator inside the primitive must
     accept its own output. A regression here means the framework-default

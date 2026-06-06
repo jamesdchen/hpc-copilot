@@ -35,10 +35,13 @@ from ._common import (
     _hours_since,
     _is_stressed,
     _parse_gpu_count_from_tres,
+    _parse_max_nodes,
+    _split_section,
 )
 
 __all__ = [
     "parse_scontrol_show_node",
+    "parse_scontrol_show_partition",
     "parse_sacct_node_jobs",
     "_slurm_inspect",
     "_bucket_tenants_by_node",
@@ -181,6 +184,43 @@ def parse_sacct_node_jobs(text: str, *, recent_only: bool = True) -> list[dict[s
     return rows
 
 
+def parse_scontrol_show_partition(text: str) -> list[dict[str, Any]]:
+    """Parse ``scontrol show partition`` into parallel_environment entries (#293).
+
+    SLURM has no SGE-style "parallel environment" — a job requests multi-node
+    parallelism directly via ``--nodes`` — so a *partition* is the closest
+    analog: the named pool you target, carrying its node-span limit. Blocks are
+    blank-line separated whitespace ``Key=Value`` pairs (same shape as
+    ``scontrol show node``, so it reuses the KV parser). Returns the normalized
+    ``_ParallelEnvironment`` shape ``{name, source="partition", kind, max_nodes,
+    raw={slots}}`` per partition, where ``kind`` is ``smp`` only when
+    ``MaxNodes=1`` (capped to one node) else ``mpi`` (SLURM is multi-node-capable
+    by default). Permissive — partial input yields partial entries, never raises.
+    """
+    out: list[dict[str, Any]] = []
+    if not text:
+        return out
+    for block in re.split(r"\n\s*\n", text.strip()):
+        if "PartitionName=" not in block:
+            continue
+        fields = _parse_scontrol_kv_block(block)
+        name = fields.get("PartitionName", "").strip()
+        if not name:
+            continue
+        max_nodes = _parse_max_nodes(fields.get("MaxNodes", ""))
+        out.append(
+            {
+                "name": name,
+                "source": "partition",
+                # SLURM is multi-node-capable unless MaxNodes pins to 1.
+                "kind": "smp" if max_nodes == 1 else "mpi",
+                "max_nodes": max_nodes,
+                "raw": {"slots": _to_int_or_none(fields.get("TotalCPUs"))},
+            }
+        )
+    return out
+
+
 def _slurm_inspect(
     cluster_name: str,
     cluster_cfg: dict[str, Any],
@@ -197,11 +237,34 @@ def _slurm_inspect(
         now_iso=utcnow_iso(),
         nodes=[],
     )
-    # Step 1: scontrol show node (all nodes; planner filters by candidate
-    # pool downstream rather than us pre-filtering here).
-    scontrol_rc, scontrol_out, scontrol_err = runner.run("scontrol show node")
+    # Step 1: scontrol show node (all nodes; planner filters by candidate pool
+    # downstream) + scontrol show partition (#293 parallel_environments). The two
+    # are independent reads, so they ride ONE merged ssh round-trip (echo-
+    # delimited sections + per-section $?) — no extra handshake for the partition
+    # enumeration. ``sacct`` (Step 2) can't join them: its -N nodelist is built
+    # from this step's parsed output, so it stays a dependent second round-trip.
+    combined = (
+        "echo __HPC_SCONTROL_NODE__; scontrol show node; echo __HPC_SCONTROL_NODE_RC__=$?; "
+        "echo __HPC_SCONTROL_PART__; scontrol show partition; echo __HPC_SCONTROL_PART_RC__=$?"
+    )
+    rc_all, out_all, err_all = runner.run(combined)
+    scontrol_rc, scontrol_out = _split_section(
+        out_all, "__HPC_SCONTROL_NODE__", "__HPC_SCONTROL_NODE_RC__"
+    )
+    _part_rc, part_out = _split_section(
+        out_all, "__HPC_SCONTROL_PART__", "__HPC_SCONTROL_PART_RC__"
+    )
+    # Markers absent → round-trip died before the shell ran; fall back so the
+    # scontrol-failure branch still fires on the combined result.
+    if scontrol_rc is None:
+        scontrol_rc, scontrol_out = rc_all, out_all
+
+    # Partitions are surfaced regardless of node-probe state — they came back on
+    # the same connection, so a node hiccup shouldn't hide them.
+    snap.parallel_environments = parse_scontrol_show_partition(part_out)
+
     if scontrol_rc != 0:
-        errors.append({"code": "scontrol_failed", "detail": scontrol_err.strip()[:500]})
+        errors.append({"code": "scontrol_failed", "detail": err_all.strip()[:500]})
         snap.errors = errors
         return snap
     snap.nodes = parse_scontrol_show_node(scontrol_out)

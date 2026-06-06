@@ -562,3 +562,19 @@ def test_warn_unset_kwarg_refs_ignores_bare_env_vars() -> None:
     """Only the framework-owned HPC_KW_ namespace is checked — a bare $HOME or
     $SAMPLES reference is left alone (can't tell it from a real env var)."""
     assert dispatch._warn_unset_kwarg_refs("run --home $HOME --s $SAMPLES", {}) == []
+
+
+def test_latest_checkpoint_picks_highest_nonempty(tmp_path: Path) -> None:
+    # #294 PR3: the dispatcher's stdlib resume-point finder picks the
+    # highest-iteration NON-empty checkpoint, skips 0-byte files, and returns
+    # "" when there's nothing to resume from.
+    ckdir = tmp_path / "_checkpoints"
+    ckdir.mkdir()
+    (ckdir / "checkpoint-1.pkl").write_bytes(b"a")
+    (ckdir / "checkpoint-5.pkl").write_bytes(b"b")
+    (ckdir / "checkpoint-3.pkl").write_bytes(b"c")
+    (ckdir / "checkpoint-9.pkl").write_bytes(b"")  # 0-byte → ignored
+    (ckdir / "not-a-checkpoint.txt").write_text("x")
+    assert dispatch._latest_checkpoint(str(ckdir)) == str(ckdir / "checkpoint-5.pkl")
+    # Missing dir → no resume point, no raise.
+    assert dispatch._latest_checkpoint(str(tmp_path / "absent")) == ""

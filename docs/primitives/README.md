@@ -173,7 +173,7 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [axes-init](axes-init.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes <homogeneous_axes>] [--force]` |
 | [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-agent build-executor --name <name> [--output-dir <output_dir>] [--type <type>] [--force]` |
-| [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-agent build-submit-spec --spec <path>` |
+| [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-agent build-submit-spec --spec <path> [--experiment-dir <dir>]` |
 | [build-tasks-py](build-tasks-py.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py` | `hpc-agent build-tasks-py [--experiment-dir <dir>] --spec <spec> [--force]` |
 | [build-template](build-template.md) | yes | writes-file: `<repo_dir>/{.hpc/template.mk,.hpc/scaffold.py}` | `hpc-agent build-template [--repo-dir <repo_dir>] [--force] [--shape <shape>]` |
 | [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]` |

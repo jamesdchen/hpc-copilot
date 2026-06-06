@@ -394,6 +394,41 @@ def _write_failure_capture(wip_dir, *, task_id, returncode, executor, stderr_tai
         )
 
 
+# #294: checkpoint filename shape, mirrored from
+# ``hpc_agent.experiment_kit.checkpoint`` (this module is stdlib-only and
+# cannot import the package).
+_CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)\.pkl$")
+
+
+def _latest_checkpoint(checkpoint_dir):
+    """Absolute path to the highest-iteration non-empty checkpoint, or "" if none.
+
+    Stdlib-only twin of ``experiment_kit.checkpoint.latest_checkpoint``: on
+    ``resubmit --from-checkpoint`` the dispatcher uses this to hand the executor
+    a resume point. Skips 0-byte files (a crash mid-write, pre-atomic) and never
+    raises — a missing/unreadable dir just means "no checkpoint, start fresh".
+    """
+    best = ""
+    best_it = -1
+    try:
+        names = os.listdir(checkpoint_dir)
+    except OSError:
+        return ""
+    for name in names:
+        m = _CHECKPOINT_RE.match(name)
+        if not m:
+            continue
+        path = os.path.join(checkpoint_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                iteration = int(m.group(1))
+                if iteration > best_it:
+                    best_it, best = iteration, path
+        except OSError:
+            continue
+    return best
+
+
 def _format_result_dir(template, *, task_id, run_id, kwargs):
     """Render *template* using ``str.format`` with task/run identity + kwargs.
 
@@ -677,6 +712,29 @@ def main() -> None:
     env["HPC_RESULT_DIR"] = wip_dir
     env["HPC_TASK_ID"] = str(task_id)
     env["HPC_RUN_ID"] = run_id
+
+    # #294: checkpoints go in a STABLE per-task dir — the FINAL result dir, not
+    # the WIP dir (which is renamed to _wip_*_failed_* / recreated on retry). A
+    # killed run's checkpoints therefore survive to the resubmit. Always exported
+    # so any checkpointing executor writes here; the executor's checkpoint helper
+    # prefers HPC_CHECKPOINT_DIR.
+    checkpoint_dir = os.path.join(result_dir, "_checkpoints")
+    env["HPC_CHECKPOINT_DIR"] = checkpoint_dir
+    # On `resubmit --from-checkpoint` (the dispatcher sees HPC_RESUME_FROM_CHECKPOINT=1
+    # forwarded in the batch job_env), find the latest checkpoint and hand the
+    # executor a concrete resume point as HPC_RESUME_FROM. No checkpoint → leave it
+    # unset, and the run starts fresh (the flag is best-effort, never fatal).
+    if os.environ.get("HPC_RESUME_FROM_CHECKPOINT", "").strip() == "1":
+        latest_ckpt = _latest_checkpoint(checkpoint_dir)
+        if latest_ckpt:
+            env["HPC_RESUME_FROM"] = latest_ckpt
+            print(f"[dispatch] resuming task {task_id} from checkpoint {latest_ckpt}")
+        else:
+            print(
+                f"[dispatch] --from-checkpoint set but no checkpoint under "
+                f"{checkpoint_dir}; starting task {task_id} fresh",
+                file=sys.stderr,
+            )
     # Kwarg export contract. Each kwarg ships as ``HPC_KW_<KEY>`` always
     # — namespaced, collision-free. The bare-uppercase ``<KEY>`` form is
     # the legacy contract (kept default-on for back-compat) and is the
