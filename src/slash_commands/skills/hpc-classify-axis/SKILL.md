@@ -6,14 +6,14 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[classify-axis](../../../../docs/primitives/classify-axis.md) primitive**. The skill is autonomous: it reads `run()`, walks the decision tree, commits a `DataAxis`, and records it. No `[Y/n]` prompts. Callers that need a human in the loop (the in-chat agent driving `/classify-axis-hpc`) conduct the interview *before* invoking the skill and pass the human-confirmed `data_axis` in as input — in that mode the skill skips its own classification and just records.
+Agent-facing composition over the **[classify-axis](../../../../docs/primitives/classify-axis.md) primitive**. Autonomous: reads `run()`, walks the decision tree, commits a `DataAxis`, records it. No `[Y/n]` prompts. Human-driven callers (`/classify-axis-hpc`) pass a pre-resolved `data_axis` and the skill skips classification, just records.
 
-`@register_run` already captures the entry point, the CLI flags (from the signature), and `gpu`. It does **not** capture the *parallel decomposition* of the totally-ordered series the experiment iterates. This skill closes that gap.
+`@register_run` captures entry point, CLI flags, and `gpu` — but **not** the parallel decomposition of the ordered series the experiment iterates. This skill closes that gap.
 
 ## Execution style
 
-- **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
-- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Each separate Bash tool call costs a round-trip + permission prompt; chaining unconditionally-sequential dependent invocations into one block saves both at no cost. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The framework's dispatched `hpc-worker` subagent blocks `&&` by a `PreToolUse` hook — one verb per envelope is its decision-boundary contract — but that block applies only to the spawned worker, NOT to this orchestrator skill.)
+- **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
+- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Saves a round-trip + permission prompt. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
 - **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-classify-axis.json`. The final step of this skill (Step 7 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-classify-axis.json` and is enforced by the emit verb.
 
@@ -106,7 +106,7 @@ Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-
 
 #### 4b. Walk the LLM decision tree (long-tail fallback)
 
-Only invoked on `unclassifiable` / `function_not_found` from Step 4a (a confident `no_loop_detected` is already the terminal `cartesian` verdict — see 4a). The long tail covers novel patterns the matcher doesn't recognize — including **Associative** classifications (since the matcher does not detect Associative autonomously). Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
+Only invoked on `unclassifiable` / `function_not_found` from Step 4a. Covers novel patterns including **Associative** (which the matcher does not detect). Read the run's source. The classifying question: **is there carried state across the series, and is its transition associative?**
 
 <!-- decision-content:axis-tree start -->
 1. **Does each row's result depend on rows computed before it?**

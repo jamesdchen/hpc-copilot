@@ -41,7 +41,7 @@ def _sidecar_input() -> WriteRunSidecarInput:
         run_id="ridge-placeholder",  # overridden by compute-run-id inside the composite
         cmd_sha="0" * 8,  # placeholder; overridden too
         executor="python -m src.ridge --alpha $alpha",
-        result_dir_template="results/{run_id}",
+        result_dir_template="results/{run_id}/task_{task_id}",
         task_count=4,
     )
 

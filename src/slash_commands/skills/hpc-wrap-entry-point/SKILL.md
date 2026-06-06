@@ -6,17 +6,17 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode: given a partial `InterviewSpec`, fill in the rest from repo inspection, apply edits, materialize artifacts. The slash command consumer (`/wrap-entry-point-hpc`) elicits the same fields from the human first and passes a fully-resolved spec — in that mode the skill just records.
+Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode fills a partial `InterviewSpec` from repo inspection; the slash consumer (`/wrap-entry-point-hpc`) passes a fully-resolved spec and the skill just records.
 
 The skill persists, in either pathway:
-- A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` correctly distinguishes `exp_42.yaml` from `exp_43.yaml` and catches accidental in-place edits.
-- An `interview.json` recording the entry-point shape (a `register_run` pointer for the direct-decoration path; a `shell_command` block with the materialized wrapper for the fallback path).
-- **Only in the fallback path**: a `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. The wrapper's typed signature is what downstream framework primitives (`classify-axis`, `validate-executor-signatures`) introspect. The underlying entry point stays untouched.
+- A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` distinguishes `exp_42.yaml` from `exp_43.yaml` and catches in-place edits.
+- An `interview.json` recording the entry-point shape (`register_run` pointer for 3a; `shell_command` block with the wrapper for 3b).
+- **Only in the fallback path**: a `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. Downstream primitives (`classify-axis`, `validate-executor-signatures`) introspect the wrapper's typed signature; the underlying entry point stays untouched.
 
 ## Execution style
 
-- **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
-- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Each separate Bash tool call costs a round-trip + permission prompt; chaining unconditionally-sequential dependent invocations into one block saves both at no cost. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The framework's dispatched `hpc-worker` subagent blocks `&&` by a `PreToolUse` hook — one verb per envelope is its decision-boundary contract — but that block applies only to the spawned worker, NOT to this orchestrator skill.)
+- **Batch independent tool calls into one assistant message.** "Parallel" means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. NOT shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — that trips the permission classifier as a compound command.
+- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The `&&` block on the dispatched `hpc-worker` subagent does NOT apply here.)
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
 - **Return via the emit-skill-return file primitive — never via chat.** The Skill tool result is no longer the return mechanism; the parent (`hpc-submit`, `hpc-campaign`, …) reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-wrap-entry-point.json`. The final step of this skill (Step 8 below) writes that envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call — no closing chat message of any kind. A non-tool-call closing message fires the harness's end-of-turn signal, the parent never resumes, and the user has to type "keep going". The schema for the envelope lives at `hpc_agent/schemas/skill_returns/hpc-wrap-entry-point.json` and is enforced by the emit verb.
 
@@ -106,7 +106,7 @@ Deterministic decision table:
 
 Apply the two-line edit autonomously. The decorator goes on the function the framework should treat as the entry point — not on the `if __name__ == "__main__":` block, but on the function it ultimately calls.
 
-**Common shape: argparse-driven `main()` reading `sys.argv`.** Factor out an inner function and decorate that, keeping the existing argparse block intact so the CLI still works:
+**Common shape: argparse-driven `main()` reading `sys.argv`.** Factor out an inner function and decorate it; keep the argparse block so the CLI still works:
 
 ```python
 # train.py
@@ -128,7 +128,7 @@ if __name__ == "__main__":
 
 **Shape: function already takes kwargs.** Just add the import and the decorator — no refactor.
 
-Apply the edit via the `Edit` tool (autonomous; no confirmation). Record the picked `run_name` (the function name) and proceed to Step 4. The interview in Step 7 will carry `entry_point.kind = "register_run"`; the submit worker's Step 1 discovery picks up the freshly decorated function via the normal flow.
+Apply the edit via the `Edit` tool (autonomous; no confirmation). Record the picked `run_name` (the function name) and proceed to Step 4. Step 7's interview carries `entry_point.kind = "register_run"`.
 
 ### 3b. Wrapper materialization (fallback path)
 
@@ -176,18 +176,18 @@ The skill does **not** invent a `task_generator` — refuse with `spec_invalid` 
 
 ### 5b. Cover non-axis required params (fixed_params)
 
-The entry point's signature may require params the `task_generator` does NOT vary — e.g. an executor `monte_carlo_pi(seed, samples)` where only `seed` is swept. If nothing supplies `samples`, the generated `tasks.py` `resolve(i)` returns only the axis kwargs, the cluster never exports `HPC_KW_SAMPLES`, and the executor crashes on every task (#195).
+The entry point's signature may require params the `task_generator` does NOT vary — e.g. `monte_carlo_pi(seed, samples)` where only `seed` is swept. If nothing supplies `samples`, the executor crashes on every task (#195).
 
 Partition the signature params:
 
-- **Axis params** — names the `task_generator` produces (cartesian axes, the `param` of a numeric sweep, keys in enumerated/items dicts). Handled per-task; leave them out of `fixed_params`.
-- **Covered-by-default params** — params with a default in the entry point's CLI surface (argparse `default=`, a Python default value). The executor supplies its own value; safe to omit (no `fixed_params` entry needed), though you MAY pin one to make the run reproducible.
-- **Uncovered required params** — required (no default) AND not an axis. These MUST be resolved or every task fails. For each, set a constant in `entry_point.fixed_params`:
-  - Use the entry point's argparse/CLI **default** if it has one you're pinning.
-  - Else the caller-supplied value (the slash elicits it; see `/submit-hpc`'s `uncovered_param` dialog).
-  - Never invent a value silently — if there's no default and the caller gave none, that's an ambiguity to surface, not a guess.
+- **Axis params** — names the `task_generator` produces. Handled per-task; leave them out of `fixed_params`.
+- **Covered-by-default params** — params with a default in the entry point's CLI surface (argparse `default=`, Python default). Safe to omit; you MAY pin one for reproducibility.
+- **Uncovered required params** — required (no default) AND not an axis. MUST be resolved or every task fails. For each, set a constant in `entry_point.fixed_params`:
+  - Use the entry point's argparse/CLI **default** if pinning one.
+  - Else the caller-supplied value (the slash's `uncovered_param` dialog).
+  - Never invent silently — no default + no caller value = ambiguity to surface.
 
-`fixed_params` is baked into every `resolve(i)` dict (same seam as frozen-config shas), so the param ships per-task. A swept axis of the same name wins. `fixed_params` requires `task_generator` (the framework can only thread constants into a materialized `tasks.py`). The submit-time `validate-executor-signatures` gate refuses an uncovered required param (`uncovered_required_param`) — covering it here is what keeps that gate green.
+`fixed_params` is baked into every `resolve(i)` dict; a swept axis of the same name wins. Requires `task_generator`. Submit-time `validate-executor-signatures` refuses `uncovered_required_param` — covering it here keeps that gate green.
 
 ### 6. Pre-declare the DataAxis hint (autonomous tree walk)
 

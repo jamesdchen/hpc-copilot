@@ -38,7 +38,7 @@ def _seed_run_sidecar(
         "hpc_agent_version": "0.3.0",
         "submitted_at": "2026-05-07T12:00:00Z",
         "executor": "python3 src/test.py",
-        "result_dir_template": "results/{run_id}",
+        "result_dir_template": "results/{run_id}/task_{task_id}",
         "task_count": 4,
         "tasks_py_sha": "",
         "wave_map": {"0": [0, 1, 2, 3]},

@@ -10,31 +10,31 @@
     ]
   },
   "aggregate": {
-    "branches": 9,
+    "branches": 8,
     "escalation_points": 3,
     "retry_loops": 5,
     "stop_gates": 0,
-    "total_touchpoints": 14
+    "total_touchpoints": 13
   },
   "campaign": {
     "branches": 10,
-    "escalation_points": 1,
-    "retry_loops": 11,
+    "escalation_points": 2,
+    "retry_loops": 10,
     "stop_gates": 0,
-    "total_touchpoints": 21
+    "total_touchpoints": 20
   },
   "status": {
     "branches": 6,
-    "escalation_points": 3,
-    "retry_loops": 13,
+    "escalation_points": 4,
+    "retry_loops": 12,
     "stop_gates": 1,
-    "total_touchpoints": 20
+    "total_touchpoints": 19
   },
   "submit": {
     "branches": 16,
-    "escalation_points": 4,
-    "retry_loops": 9,
+    "escalation_points": 3,
+    "retry_loops": 8,
     "stop_gates": 6,
-    "total_touchpoints": 31
+    "total_touchpoints": 30
   }
 }

@@ -11,7 +11,7 @@ Standing adjustments to the procedure below:
 - Work tersely and in parallel — 'parallel' means parallel TOOL CALLS: multiple reads / `describe` / greps with no data dependency → multiple tool-call blocks in ONE message (the harness runs them concurrently), NOT shell-level concurrency in one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`).
 
 === BEGIN campaign PROCEDURE ===
-Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.
+Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as user-imported Python libraries; the framework ships **zero** strategy code.
 
 ## Reporting conventions
 
@@ -54,26 +54,22 @@ For one-shot parallel work with no feedback loop, use the submit workflow direct
 
 ## Two paths: manual vs strategy-driven
 
-Closed-loop campaigns split along whether `tasks.py` chooses parameters by hand or via a Python optimization library:
+- **Path A — manual params**: `tasks.py` enumerates a fixed grid. Use for small grids, walk-forward windows, ablations.
+- **Path B — strategy-driven**: `tasks.py` imports Optuna / RandomSearch / a custom optimizer; calls `prior(experiment_dir, campaign_id)` to read previous iterations' metrics, `study.tell(...)` for each, then `study.ask()` for the next batch. Use for large search spaces with adaptive sampling.
 
-- **Path A — manual params**: `tasks.py` enumerates a fixed grid; iteration N submits exactly the entries the user specified. Use when the experimenter knows the search space upfront (small grid, walk-forward windows, ablations).
-- **Path B — strategy-driven**: `tasks.py` imports Optuna / RandomSearch / a custom optimizer; calls `prior(experiment_dir, campaign_id)` to read previous iterations' metrics, calls `study.tell(...)` for each one, then `study.ask()` for the next batch. Use when the search space is large and the experimenter wants adaptive sampling.
+**Don't infer the path by hand — call [classify-campaign-path](../../docs/primitives/classify-campaign-path.md):** `hpc-agent classify-campaign-path --source-path .hpc/tasks.py` returns `{path, decided_by, signals, supports_async_concurrency, candidates}`. On `decided_by="code"` branch on `path` directly. On `decided_by="judgement"` (`path="unclassifiable"`) decide between `candidates` yourself and record a `path` decision with `chosen`/`rejected`/`why`.
 
-**Don't infer the path by hand — call [classify-campaign-path](../../docs/primitives/classify-campaign-path.md):** `hpc-agent classify-campaign-path --source-path .hpc/tasks.py` AST-scans for optimizer imports + ask/tell/`prior` calls and returns `{path, decided_by, signals, supports_async_concurrency, candidates}`. On `decided_by="code"` (`path` = `strategy` or `manual`) branch on `path` directly — the deterministic layer resolved it. Only on `decided_by="judgement"` (`path="unclassifiable"`: tasks.py didn't parse, or a custom optimizer the scan doesn't recognize) do you decide between the `candidates` yourself, recording a `path` decision with `chosen`/`rejected`/`why`.
-
-The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `hpc_agent.models.mapreduce.reduce.history.prior`).
+Both paths thread `campaign_id` through `submit-flow` and read history via `campaign-status` (Python form: `hpc_agent.models.mapreduce.reduce.history.prior`).
 
 ## Stochastic-marker gate (Path B only) — MANDATORY before each submit
 
-Strategies that re-sample the same param ranges across iterations (Optuna, random-search, PBT) MUST include a unique iteration-disambiguating field in `tasks.resolve()` so each iteration's `cmd_sha` differs even when the strategy happens to pick repeat params. Idiomatic: a `_optuna_trial_number` (or equivalent) integer in the kwargs dict. Without this, two iterations with identical params would compute the same `cmd_sha`, and the second one would dedupe at submit time — collapsing the campaign into a single iteration silently.
+Path B strategies (Optuna, random-search, PBT) MUST include a unique iteration-disambiguating field in `tasks.resolve()` (idiomatic: `_optuna_trial_number`) so each iteration's `cmd_sha` differs even on repeat params. Without it, identical-param iterations dedupe at submit time and the campaign silently collapses.
 
-This is **not** advisory. Before every Path B submit (Step 1 of "Driving the loop"), you MUST run the `validate-campaign` gate below; an `error`-severity finding from the `validate-stochastic-marker` validator means `overall: "fail"` and you may NOT proceed to `submit-flow`. The caller fixes the `tasks.py` and re-invokes.
-
-For Path A (manual params), this isn't needed: the param tuple itself differs per iteration.
+Before every Path B submit, run the `validate-campaign` gate below; an `error`-severity finding from `validate-stochastic-marker` means `overall: "fail"` and you may NOT proceed to `submit-flow`. The caller fixes `tasks.py` and re-invokes. Path A doesn't need this — param tuples differ per iteration.
 
 ### Running the gate
 
-Compute the about-to-submit run's `cmd_sha` (the same value `build-submit-spec` produces), then invoke `validate-campaign` with both `campaign_id` and `expected_cmd_sha` set so the stochastic-marker validator fires:
+Compute the about-to-submit run's `cmd_sha` (the value `build-submit-spec` produces), then invoke `validate-campaign` with `campaign_id` + `expected_cmd_sha` set:
 
 ```bash
 hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir .
@@ -82,7 +78,7 @@ hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir
 Spec must include `{"campaign_id": "<slug>", "expected_cmd_sha": "<cmd_sha>", ...}`. Branch on `data.overall`:
 
 - `pass` / `warn` → proceed to `submit-flow`.
-- `fail` → STOP. Record a `stochastic_marker` decision with outcome `missing`, and put the `validate-stochastic-marker` finding (`code: stochastic_marker_missing`), the prior iteration whose `cmd_sha` collides, and the `suggested_fix` (add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output) in `anomalies` / `why`. There is no `--force`; the dedup would be silent, so the gate is hard by design.
+- `fail` → STOP. Record a `stochastic_marker` decision with outcome `missing`, and put the `validate-stochastic-marker` finding (`code: stochastic_marker_missing`), the colliding iteration's `cmd_sha`, and the `suggested_fix` (add `_optuna_trial_number` to `tasks.resolve()`'s output) in `anomalies` / `why`. No `--force` — the gate is hard by design.
 
 ## Inspection
 
@@ -117,9 +113,9 @@ Resume after a network drop or laptop sleep is trivial: there is no driver state
 
 ## Notes
 
-- **No automatic retry at the campaign level.** A single iteration's failure surfaces in `submit-flow`'s envelope or `monitor-flow`'s `lifecycle_state == "failed"`; reissuing is the loop's call (or the user's `tasks.py` can skip failed entries in `_PRIOR`).
-- **`MAX_RUNS` retention.** Long campaigns may bump up against the per-experiment cap (default 500). Set `HPC_MAX_RUNS=<n>` in the env if `campaign-status` starts missing iterations near the start of a long run.
-- **Cluster-side queue is out of scope.** Each iteration is a separate `qsub`/`sbatch`. Workloads with thousands of sub-minute tasks may hit scheduler submit-rate limits.
+- **No automatic retry at the campaign level.** Failures surface in `submit-flow`'s envelope or `monitor-flow`'s `lifecycle_state == "failed"`; reissuing is the loop's call (or `tasks.py` skips failed entries in `_PRIOR`).
+- **`MAX_RUNS` retention.** Per-experiment cap defaults to 500. Set `HPC_MAX_RUNS=<n>` if `campaign-status` starts missing early iterations.
+- **Cluster-side queue is out of scope.** Each iteration is a separate `qsub`/`sbatch`; thousands of sub-minute tasks may hit scheduler submit-rate limits.
 - `campaign-list` and `campaign-status` exit codes: 0 ok, 3 internal.
 === END campaign PROCEDURE ===
 

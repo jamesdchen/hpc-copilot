@@ -5,6 +5,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.16 — 2026-06-06
+
+Prose trim pass + two shared-fixture follow-ups from 0.10.15.
+
+### Changed — trim verbose prose from error messages, SKILL.md, and worker prompts
+
+71 prose sites inventoried across error messages (raise sites with multi-sentence strings), SKILL.md / slash command markdown, and worker prompts; tight criterion applied (keep "what failed + how to fix", drop "why this happens" / empirical-incident parentheticals / cross-reference markers / multi-sentence repetition). 17 files trimmed. Aggregate word count: 18,549 → 15,151 (~18% reduction across the touched surfaces). Docstrings, CHANGELOG entries, and inline maintainer-facing comments unchanged. Worker prompt fixture snapshots regenerated alongside the worker_prompts/*.md edits.
+
+### Fixed — shared test fixtures updated for the 0.10.15 `result_dir_template` per-task isolation guard
+
+`tests/ops/test_resolve_submit_inputs.py::_sidecar_input` and `tests/ops/validate/test_validate_stochastic_marker.py` both used `result_dir_template = "results/{run_id}"` with `task_count = 4` — the exact shape the 0.10.15 `WriteRunSidecarInput` validator refuses. Updated both to `"results/{run_id}/task_{task_id}"`. The 0.10.15 release missed these shared fixtures; this release closes the gap so the validator's invariant holds across the test suite.
+
+### Fixed — `scripts/llm_touchpoints_baseline.json` regenerated for the trimmed prose
+
+`tests/contracts/test_llm_touchpoints.py::test_check_mode_reports_clean` pins the deterministic-touchpoint count against a baseline. The prose trim pass shrank some worker_prompts/*.md content, lowering the count from the previous baseline. Regenerated to the new count (82 total touchpoints).
+
 ## 0.10.15 — 2026-06-06
 
 One fix off the 2026-06-06 demo failure trail.

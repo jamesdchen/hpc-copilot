@@ -95,19 +95,16 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
 ## Reduce where the data lives (why `mode: "auto"` is the default)
 
-You never move bulk result files yourself — `aggregate-flow` does all cluster I/O internally. Your only lever is the spec, and the principle behind it is: reduce where the data already sits, pull only the small result. That is exactly what `mode: "auto"` does — it routes to `cluster-reduce` (run the user's reducer on the cluster, pull the single KB-sized JSON output) when an `aggregate_cmd` is available, and only falls back to combiner-only otherwise.
+`aggregate-flow` does all cluster I/O internally; your only lever is the spec. Principle: reduce where the data sits, pull only the small result. `mode: "auto"` routes to `cluster-reduce` (run the reducer on the cluster, pull the KB-sized JSON) when `aggregate_cmd` is set, else combiner-only.
 
-So the decision encoded in the spec is:
+1. **HPC-scale / bulk data** → stay on `mode: "auto"` (the 90% case).
+2. **Need raw per-task files local** → set `pull_summaries: true` with an explicit `summary_glob`.
 
-1. **Genuinely HPC-scale or bulk data** → stay on `mode: "auto"`; the reduction runs cluster-side and only the reduced output comes back. This is the 90% case.
-2. **You need the raw per-task files local** (debug, manual interpretation) → set `pull_summaries: true` with an explicit `summary_glob`. Opt-in precisely because pulling thousands of small files is slow.
-
-Don't override `mode` to force a local pull of bulk partials to reach a Python environment — that's the anti-pattern `cluster-reduce` exists to prevent. If the cluster-side reducer lacks a dependency, that's a fix to the user's cluster environment (their combiner/reducer script), surfaced via the envelope — not a reason to drag the data to where the deps are.
+Don't override `mode` to force a local pull of bulk partials — that's the anti-pattern `cluster-reduce` exists to prevent. A missing cluster-side dependency is a fix to the user's combiner/reducer script, surfaced via the envelope.
 
 ## Notes
 
-- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. The user runs `hpc-agent setup --cluster <name>` once per machine to probe the environment before submitting.
-- **Idempotency**: re-invoking `aggregate-flow` on the same `run_id` is safe and cheap. `combine-wave` skips already-combined waves; `rsync_pull` handles the diff; `reduce_partials` is a pure function over the pulled files.
-- **No cancel/abort**: `combine-wave` runs the user's combiner script on the cluster; once started, it cannot be stopped from here. Set sensible walltimes in the combiner job itself.
-- **CLI does NOT choose the combiner script or output schema.** The user's repo provides `.hpc/_hpc_combiner.py`. This procedure only orchestrates the call and records outcomes via the workflow atom.
-- **`mode: "auto"` is load-bearing.** It's what makes `cluster-reduce` (small JSON output) the default route and `combiner-only + pull_summaries=true` (raw per-task files) opt-in. Don't override unless the caller has a specific reason.
+- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` or the call hangs on auth. Run `hpc-agent setup --cluster <name>` once per machine.
+- **Idempotency**: re-invoking `aggregate-flow` on the same `run_id` is safe. `combine-wave` skips already-combined waves; `rsync_pull` diffs; `reduce_partials` is pure.
+- **No cancel/abort**: once `combine-wave` starts the user's combiner script, it cannot be stopped from here. Set walltimes in the combiner job.
+- **CLI does NOT choose the combiner script or output schema.** The user's repo provides `.hpc/_hpc_combiner.py`; this procedure only orchestrates the call.
