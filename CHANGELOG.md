@@ -5,7 +5,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## Unreleased
+## 0.10.13 — 2026-06-05
+
+Folds PR #290: parallel canvassing during worker startup (#286), `scaffold-spec` query verb (#287), heavy-import contract test (#288), and parallel-by-default fans of `check-preflight`'s two cluster probes + SGE `inspect-cluster`'s qhost/qstat (#289). No worker-prompt or skill-contract changes — `/submit-hpc` / `/aggregate-hpc` / `/monitor-hpc` SKILL.md gain a parallel-canvass prelude only.
 
 ### Added — main-agent / worker parallelism: parallel canvassing during worker startup (#286)
 
