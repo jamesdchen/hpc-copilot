@@ -19,6 +19,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
 from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
 from hpc_agent._wire.workflows.validate_campaign import ValidateCampaignSpec
@@ -27,11 +28,18 @@ from hpc_agent.ops.scaffold_spec import (
     _Acc,
     _build_submit_block,
     _Context,
+    _scaffold_interview,
     _scaffold_resolve_submit_inputs,
     scaffold_spec,
 )
 
-_SUPPORTED = ["build-submit-spec", "campaign-run", "resolve-submit-inputs", "validate-campaign"]
+_SUPPORTED = [
+    "build-submit-spec",
+    "campaign-run",
+    "interview",
+    "resolve-submit-inputs",
+    "validate-campaign",
+]
 
 
 def _warm_ctx(**overrides: Any) -> _Context:
@@ -165,3 +173,55 @@ class TestResolveComposesBlocks:
         # sidecar.executor is never derivable → still unresolved even on the warm path.
         assert "sidecar.executor" in acc.unresolved
         ResolveSubmitInputsSpec.model_validate(spec)
+
+
+class TestInterviewScaffold:
+    """Coverage for the ``interview`` verb — entry verb for hpc-wrap-entry-point.
+
+    Closes the demo-session gap: the orchestrator hand-built an InterviewSpec
+    after emit-skill-return and burned 7m+ on schema-divination. The
+    scaffolder emits ``goal`` + ``task_generator`` + ``produced_by`` as
+    typed placeholders so the caller mutates rather than synthesizes a
+    discriminated-union node from scratch.
+    """
+
+    def test_cold_start_skeleton_validates(self, tmp_path: Any) -> None:
+        res = scaffold_spec(experiment_dir=tmp_path, verb="interview")
+        assert res.verb == "interview"
+        assert "interview" in res.supported_verbs
+        # The #287 guarantee: the emitted spec passes the target verb's own model.
+        InterviewSpec.model_validate(res.spec)
+        # The two fields the task spec calls out: caller MUST override goal +
+        # task_generator (the wrap-entry-point skill always supplies a recipe).
+        assert "goal" in res.unresolved_fields
+        assert "task_generator" in res.unresolved_fields
+        # Every unresolved field carries a placeholder marker in sources.
+        for path in res.unresolved_fields:
+            assert "placeholder" in res.sources[path]
+
+    def test_register_run_default_omits_data_axis_hint(self, tmp_path: Any) -> None:
+        # #260 — the register_run entry-point schema rejects data_axis_hint.
+        # On a bare experiment dir (no detect-entry-point candidates) the
+        # scaffolder must fall back to register_run and NEVER emit the field.
+        acc = _Acc()
+        spec = _scaffold_interview(
+            _Context(
+                cluster_name=None,
+                cluster_cfg=None,
+                run_name=None,
+                latest_run={},
+                run_id=None,
+                cmd_sha=None,
+                experiment_dir=tmp_path,
+            ),
+            acc,
+        )
+        ep = spec["entry_point"]
+        assert ep["kind"] == "register_run"
+        assert "data_axis_hint" not in ep
+        # And the whole skeleton still validates.
+        InterviewSpec.model_validate(spec)
+
+    def test_supported_verbs_list_includes_interview(self, tmp_path: Any) -> None:
+        res = scaffold_spec(experiment_dir=tmp_path, verb="build-submit-spec")
+        assert sorted(res.supported_verbs) == _SUPPORTED

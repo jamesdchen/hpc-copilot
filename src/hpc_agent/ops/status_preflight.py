@@ -5,10 +5,16 @@ Step 1 (``load-context``) — into one CLI call. The simplest of the
 ``<skill>-preflight`` family (no ``reconcile`` branch like
 ``aggregate-preflight`` has) and a clean prototype for the pattern.
 
-Sequential by design: ``install-commands`` must succeed before
-``load-context`` — install lays down the bundled SKILL.md / agent
-files and ``load-context`` may resolve paths that depend on them.
-Plain ``subprocess.run`` is sufficient; no asyncio fan-out.
+Concurrency (#291): ``install-commands`` and ``load-context`` fan out on
+a ``ThreadPoolExecutor``. They are write-disjoint AND read-disjoint —
+``install-commands`` writes only ``~/.claude/{commands,skills,agents}/``
+plus ``~/.claude/settings.json``; ``load-context`` reads only
+``$EXPERIMENT/.hpc/runs/*.json``, ``.hpc/journal/*.json``, and
+``.hpc/campaigns/<id>/cursor.json``. The earlier "install must succeed
+first so load-context can resolve framework paths" claim was inert: the
+audit (#289) flagged it as a strict data-dependent chain; a focused
+source-walk verified no ``~/.claude`` reads anywhere in load-context's
+transitive call tree. Fanning saves ~50-150 ms per status poll.
 
 **Scaffold only.** Not registered as a CLI verb yet — the dispatcher
 registration is held until WS2 (sub-skill return file primitive) lands
@@ -28,6 +34,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +46,12 @@ __all__ = [
     "SubCall",
     "status_preflight",
 ]
+
+# install-commands and load-context are write-disjoint AND read-disjoint
+# (#291), so they fan out concurrently on a thread pool. The composite's
+# wall-clock for the pair is bounded by the slower of the two, not their
+# sum.
+_PARALLEL_SUBCALLS = frozenset({"install-commands", "load-context"})
 
 
 @dataclass(frozen=True)
@@ -52,8 +65,10 @@ class SubCall:
 def _build_subcalls(*, experiment_dir: Path, skip: list[str]) -> list[SubCall]:
     """Construct one :class:`SubCall` per non-skipped sub-step.
 
-    Order is install-commands first, then load-context — install must
-    succeed before load-context can resolve framework paths reliably.
+    install-commands and load-context are both members of
+    :data:`_PARALLEL_SUBCALLS` and fan out concurrently at run time
+    (#291). The listing order here is purely conventional — the runner
+    dispatches both on a thread pool.
     """
     exp_str = str(experiment_dir)
     calls: list[SubCall] = []
@@ -152,6 +167,37 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
     }
 
 
+def _run_subcalls(calls: list[SubCall], *, timeout_sec: float) -> dict[str, dict[str, Any]]:
+    """Run *calls*: members of :data:`_PARALLEL_SUBCALLS` fan out concurrently.
+
+    install-commands and load-context are write-disjoint AND read-disjoint
+    (#291), so they fan out on a thread pool. With a single call (e.g. one
+    arm skipped) the pool is unnecessary and we run inline. Returns
+    ``{name: SubResult}``; a sub-call failure surfaces inside its
+    ``SubResult.envelope`` rather than raising, so the healthy arm's work
+    is preserved.
+    """
+    results: dict[str, dict[str, Any]] = {}
+
+    parallel = [c for c in calls if c.name in _PARALLEL_SUBCALLS]
+    sequential = [c for c in calls if c.name not in _PARALLEL_SUBCALLS]
+
+    if len(parallel) == 1:
+        results[parallel[0].name] = _run_subprocess(parallel[0], timeout_sec=timeout_sec)
+    elif parallel:
+        with ThreadPoolExecutor(max_workers=len(parallel)) as pool:
+            futures = {
+                pool.submit(_run_subprocess, c, timeout_sec=timeout_sec): c.name for c in parallel
+            }
+            for fut, name in futures.items():
+                results[name] = fut.result()
+
+    for c in sequential:
+        results[c.name] = _run_subprocess(c, timeout_sec=timeout_sec)
+
+    return results
+
+
 @primitive(
     name="status-preflight",
     verb="validate",
@@ -159,8 +205,8 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
     idempotent=True,
     cli=CliShape(
         help=(
-            "Composite preflight before status: install-commands + "
-            "load-context, sequenced, returned as one envelope."
+            "Composite preflight before status: install-commands ∥ "
+            "load-context, fanned concurrently, returned as one envelope."
         ),
         verb="status-preflight",
         args=(
@@ -181,16 +227,23 @@ def status_preflight(
     skip: list[str] | None = None,
     timeout_sec: float = 60.0,
 ) -> dict[str, Any]:
-    """Run install-commands then load-context; return the composite ``data`` block.
+    """Run install-commands ∥ load-context; return the composite ``data`` block.
 
     Returns a dict matching ``schemas/status_preflight.output.json``;
     the CLI dispatcher wraps it in a SuccessEnvelope. *experiment_dir*
     accepts both ``str`` (the CLI path) and ``Path`` (the in-process
     path) and is coerced internally.
 
+    install-commands and load-context fan out CONCURRENTLY on a thread
+    pool (#291) — they are write-disjoint AND read-disjoint, so the
+    composite's wall-clock for the pair is bounded by the slower of the
+    two rather than their sum.
+
     The composite never raises on a sub-call failure — failures surface
     inside ``SubResult.envelope`` so the install-commands run is preserved
-    even when load-context blows up.
+    even when load-context blows up. ``overall`` is ``fail`` iff any
+    non-skipped sub-call returned ``ok: false`` — fanning never swallows
+    a failure.
     """
     experiment_dir_path = (
         experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
@@ -199,13 +252,10 @@ def status_preflight(
     calls = _build_subcalls(experiment_dir=experiment_dir_path, skip=skip_list)
 
     started = time.monotonic()
-    sub_results: list[dict[str, Any]] = []
-    for c in calls:
-        sub_results.append(_run_subprocess(c, timeout_sec=timeout_sec))
+    by_name = _run_subcalls(calls, timeout_sec=timeout_sec)
     elapsed_total_sec = time.monotonic() - started
 
-    by_name = {c.name: r for c, r in zip(calls, sub_results, strict=False)}
-    overall = "fail" if any(not r["ok"] for r in sub_results) else "pass"
+    overall = "fail" if any(not r["ok"] for r in by_name.values()) else "pass"
 
     return {
         "overall": overall,

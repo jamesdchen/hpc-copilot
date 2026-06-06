@@ -1,10 +1,12 @@
 """Tests for the ``aggregate-preflight`` composite primitive (WS5 #3b).
 
-Pins the sequential install-commands → load-context orchestration plus
-the conditional reconcile branch that distinguishes aggregate from its
-two siblings: reconcile fires only when load-context's *output* reports
-``next_step_hint == "monitor"`` AND ``--reconcile-scheduler`` was
-supplied, and its argv (run_id) is read from load-context's envelope.
+Pins the install-commands ∥ load-context fan-out (concurrent — #291,
+write-disjoint AND read-disjoint) plus the conditional reconcile branch
+that distinguishes aggregate from its two siblings: reconcile fires only
+when load-context's *output* reports ``next_step_hint == "monitor"`` AND
+``--reconcile-scheduler`` was supplied, and its argv (run_id) is read
+from load-context's envelope — a real data dependency, so reconcile
+stays sequential AFTER the fan.
 
 The ``subprocess.run`` plumbing is mocked at :func:`_run_subprocess` so
 these tests don't depend on a real ``hpc-agent`` binary being on PATH
@@ -13,6 +15,8 @@ inside the venv.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -75,8 +79,9 @@ class TestBuildBaseSubcalls:
 
     def test_both_built_with_required_fields_only(self) -> None:
         calls = ap._build_subcalls(experiment_dir=Path("/exp"), skip=[])
-        # Order pin: install-commands FIRST (its assets may shape load-context).
-        assert [c.name for c in calls] == ["install-commands", "load-context"]
+        # Both members of _PARALLEL_SUBCALLS (#291): listing order is purely
+        # conventional — the runner fans them on a thread pool.
+        assert {c.name for c in calls} == {"install-commands", "load-context"}
         exp = str(Path("/exp"))
         ic = next(c for c in calls if c.name == "install-commands")
         assert ic.argv == ["hpc-agent", "install-commands"]
@@ -201,11 +206,11 @@ class TestReconcileOrchestration:
             record=recorded,
         )
         result = ap.aggregate_preflight(experiment_dir=tmp_path, reconcile_scheduler="pbspro")
-        assert [c.name for c in recorded] == [
-            "install-commands",
-            "load-context",
-            "reconcile",
-        ]
+        # install-commands ∥ load-context fan concurrently (#291) so their
+        # relative order is nondeterministic; reconcile stays sequential
+        # AFTER the fan (its argv depends on load-context's envelope).
+        assert set(c.name for c in recorded[:2]) == {"install-commands", "load-context"}
+        assert recorded[-1].name == "reconcile"
         recon = recorded[-1]
         assert recon.argv[:5] == ["hpc-agent", "reconcile", "--run-id", "run-77", "--scheduler"]
         assert recon.argv[5] == "pbspro"
@@ -225,7 +230,8 @@ class TestReconcileOrchestration:
             record=recorded,
         )
         result = ap.aggregate_preflight(experiment_dir=tmp_path, reconcile_scheduler="sge")
-        assert [c.name for c in recorded] == ["install-commands", "load-context"]
+        # Nondeterministic order across the fan (#291); both arms must run.
+        assert {c.name for c in recorded} == {"install-commands", "load-context"}
         # Not-applicable reconcile is a null slot, not a SubResult with ok: false.
         assert result["reconcile"] is None
         assert result["overall"] == "pass"
@@ -243,7 +249,7 @@ class TestReconcileOrchestration:
             record=recorded,
         )
         result = ap.aggregate_preflight(experiment_dir=tmp_path)
-        assert [c.name for c in recorded] == ["install-commands", "load-context"]
+        assert {c.name for c in recorded} == {"install-commands", "load-context"}
         assert result["reconcile"] is None
         assert result["overall"] == "pass"
 
@@ -282,7 +288,8 @@ class TestOverallDerivation:
         assert result["overall"] == "fail"
         assert result["load_context"]["envelope"]["error_code"] == "journal_corrupt"
         assert result["reconcile"] is None
-        assert [c.name for c in recorded] == ["install-commands", "load-context"]
+        # Fan order (#291) is nondeterministic across the parallel pair.
+        assert {c.name for c in recorded} == {"install-commands", "load-context"}
 
     def test_reconcile_fails_overall_fail_siblings_preserved(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -320,6 +327,57 @@ class TestSkipBehavior:
         assert result["install_commands"] is None
         assert result["load_context"] is not None
         assert result["reconcile"] is None
+        assert result["overall"] == "pass"
+
+
+class TestConcurrentFanOut:
+    """install-commands ∥ load-context overlap (#291): they fan concurrently.
+
+    Write-disjoint AND read-disjoint — install writes only
+    ``~/.claude/{commands,skills,agents}/`` plus ``~/.claude/settings.json``;
+    load-context reads only the experiment's ``.hpc/{runs,journal,campaigns}``
+    tree. The earlier "install must succeed first" claim was inert; the
+    #289 audit and source-walk confirmed no ``~/.claude`` reads anywhere in
+    load-context's transitive call tree.
+    """
+
+    def test_install_and_load_context_dispatch_concurrently(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # threading.Barrier(2) releases only when BOTH arms have arrived;
+        # if they ran sequentially the first wait() would block until the
+        # 5s timeout and raise BrokenBarrierError, failing the test.
+        barrier = threading.Barrier(2, timeout=5)
+
+        def fake(call: ap.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            barrier.wait()  # releases only if the OTHER arm is ALSO running
+            return _ok_subresult({"next_step_hint": "aggregate", "in_flight": []})
+
+        monkeypatch.setattr(ap, "_run_subprocess", fake)
+
+        result = ap.aggregate_preflight(experiment_dir=tmp_path)
+        assert result["overall"] == "pass"
+        assert result["install_commands"]["ok"] is True
+        assert result["load_context"]["ok"] is True
+        # reconcile didn't fire (hint != monitor) and so the fan dominates.
+        assert result["reconcile"] is None
+
+    def test_parallel_pair_overlaps_not_serial(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Each arm sleeps ~0.4s. Serial: ~0.8s; fanned: bounded by the
+        # slower arm (~0.4s). Assert well under the serial sum.
+        def slow(call: ap.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            time.sleep(0.4)
+            return _ok_subresult({"next_step_hint": "aggregate", "in_flight": []})
+
+        monkeypatch.setattr(ap, "_run_subprocess", slow)
+
+        started = time.monotonic()
+        result = ap.aggregate_preflight(experiment_dir=tmp_path)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.7, f"parallel pair did not overlap (elapsed={elapsed:.3f}s)"
         assert result["overall"] == "pass"
 
 

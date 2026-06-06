@@ -1,8 +1,9 @@
 """Tests for the ``status-preflight`` composite primitive (WS5 #3 scaffold).
 
-Pins the sequential install-commands → load-context orchestration:
-argv composition, skip behavior, overall-derivation precedence, and the
-synthesised-ErrorEnvelope shape on spawn / timeout / parse failures.
+Pins the install-commands ∥ load-context fan-out (concurrent — #291,
+write-disjoint AND read-disjoint), argv composition, skip behavior,
+overall-derivation precedence, and the synthesised-ErrorEnvelope shape
+on spawn / timeout / parse failures.
 
 The ``subprocess.run`` plumbing is mocked at :func:`_run_subprocess` so
 these tests don't depend on a real ``hpc-agent`` binary being on PATH
@@ -11,6 +12,8 @@ inside the venv.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +61,9 @@ class TestBuildSubcalls:
 
     def test_both_built_with_required_fields_only(self) -> None:
         calls = sp._build_subcalls(experiment_dir=Path("/exp"), skip=[])
-        # Order pin: install-commands FIRST (its outputs may shape load-context paths).
-        assert [c.name for c in calls] == ["install-commands", "load-context"]
+        # Both members of _PARALLEL_SUBCALLS (#291): listing order is purely
+        # conventional — the runner fans them on a thread pool.
+        assert {c.name for c in calls} == {"install-commands", "load-context"}
         exp = str(Path("/exp"))
         ic = next(c for c in calls if c.name == "install-commands")
         assert ic.argv == ["hpc-agent", "install-commands"]
@@ -126,23 +130,53 @@ class TestOverallDerivation:
         assert result["load_context"]["envelope"]["error_code"] == "journal_corrupt"
 
 
-class TestExecutionOrder:
-    """Sequential — install-commands MUST run before load-context."""
+class TestConcurrentFanOut:
+    """install-commands ∥ load-context overlap (#291): they fan concurrently.
 
-    def test_install_commands_runs_first(
+    Write-disjoint AND read-disjoint — install writes only
+    ``~/.claude/{commands,skills,agents}/`` plus ``~/.claude/settings.json``;
+    load-context reads only the experiment's ``.hpc/{runs,journal,campaigns}``
+    tree. The earlier "install must succeed first" claim was inert; the
+    #289 audit and source-walk confirmed no ``~/.claude`` reads anywhere in
+    load-context's transitive call tree.
+    """
+
+    def test_install_and_load_context_dispatch_concurrently(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        ordered: list[str] = []
-        _patch_run_subprocess(
-            monkeypatch,
-            {
-                "install-commands": _ok_subresult(),
-                "load-context": _ok_subresult(),
-            },
-            record_order=ordered,
-        )
-        sp.status_preflight(experiment_dir=tmp_path)
-        assert ordered == ["install-commands", "load-context"]
+        # threading.Barrier(2) releases only when BOTH arms have arrived;
+        # if they ran sequentially the first wait() would block until the
+        # 5s timeout and raise BrokenBarrierError, failing the test.
+        barrier = threading.Barrier(2, timeout=5)
+
+        def fake(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            barrier.wait()  # releases only if the OTHER arm is ALSO running
+            return _ok_subresult()
+
+        monkeypatch.setattr(sp, "_run_subprocess", fake)
+
+        result = sp.status_preflight(experiment_dir=tmp_path)
+        assert result["overall"] == "pass"
+        assert result["install_commands"]["ok"] is True
+        assert result["load_context"]["ok"] is True
+
+    def test_parallel_pair_overlaps_not_serial(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Each arm sleeps ~0.4s. Serial: ~0.8s; fanned: bounded by the
+        # slower arm (~0.4s). Assert well under the serial sum.
+        def slow(call: sp.SubCall, *, timeout_sec: float) -> dict[str, Any]:
+            time.sleep(0.4)
+            return _ok_subresult()
+
+        monkeypatch.setattr(sp, "_run_subprocess", slow)
+
+        started = time.monotonic()
+        result = sp.status_preflight(experiment_dir=tmp_path)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.7, f"parallel pair did not overlap (elapsed={elapsed:.3f}s)"
+        assert result["overall"] == "pass"
 
 
 class TestSkipBehavior:

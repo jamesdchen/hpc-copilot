@@ -17,11 +17,15 @@ statically from ``--cluster``), reconcile fires only when ``load-context``'s
 ``--reconcile-scheduler``. So the reconcile sub-call is built *after*
 load-context runs, from its envelope, not pre-composed up front.
 
-Internal composition: sequential ``subprocess.run`` over the existing
-``hpc-agent`` verbs. ``install-commands`` must succeed before
-``load-context`` can resolve framework paths reliably; ``reconcile`` is
-then run last (and only conditionally) because it's the SSH-touching
-call — we want the cheap local checks to fail-fast first.
+Internal composition (#291): ``install-commands`` and ``load-context``
+fan out CONCURRENTLY on a thread pool — they are write-disjoint AND
+read-disjoint (install writes only ``~/.claude/{commands,skills,agents}``
++ ``settings.json``; load-context reads only the experiment's
+``.hpc/{runs,journal,campaigns}`` tree, never ``~/.claude``), so the
+prior "install must succeed first to register framework paths" claim was
+inert. The reconcile sub-call is then run last (and only conditionally)
+because (a) it's the SSH-touching call and (b) its argv is read from
+load-context's runtime output — a real data dependency.
 
 I/O contracts:
 
@@ -34,6 +38,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +55,12 @@ __all__ = [
 # the ``reconcile`` primitive's CliArg choices (ops/monitor/reconcile.py).
 _SCHEDULERS: tuple[str, ...] = ("sge", "slurm", "pbspro", "torque")
 
+# install-commands and load-context are write-disjoint AND read-disjoint
+# (#291), so they fan out concurrently on a thread pool. reconcile stays
+# sequential AFTER the fan — its argv is read from load-context's
+# envelope, a real data dependency.
+_PARALLEL_SUBCALLS = frozenset({"install-commands", "load-context"})
+
 
 @dataclass(frozen=True)
 class SubCall:
@@ -62,11 +73,13 @@ class SubCall:
 def _build_subcalls(*, experiment_dir: Path, skip: list[str]) -> list[SubCall]:
     """Construct the always-run base sub-steps per *skip*.
 
-    Order is install-commands → load-context. install must succeed
-    first; ``load-context`` may resolve framework paths that depend on
-    the assets install lays down. The conditional ``reconcile`` sub-call
-    is NOT built here — it depends on load-context's runtime output and
-    is assembled by :func:`_maybe_build_reconcile` after load-context runs.
+    install-commands and load-context are both members of
+    :data:`_PARALLEL_SUBCALLS` and fan out concurrently at run time
+    (#291) — they are write-disjoint AND read-disjoint, so the listing
+    order here is purely conventional. The conditional ``reconcile``
+    sub-call is NOT built here — it depends on load-context's runtime
+    output and is assembled by :func:`_maybe_build_reconcile` after the
+    fan completes.
     """
     exp_str = str(experiment_dir)
     calls: list[SubCall] = []
@@ -221,6 +234,39 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
     }
 
 
+def _run_subcalls(calls: list[SubCall], *, timeout_sec: float) -> dict[str, dict[str, Any]]:
+    """Run *calls*: members of :data:`_PARALLEL_SUBCALLS` fan out concurrently.
+
+    install-commands and load-context are write-disjoint AND read-disjoint
+    (#291), so they fan out on a thread pool. With a single call (e.g. one
+    arm skipped) the pool is unnecessary and we run inline. Any sub-call
+    NOT in ``_PARALLEL_SUBCALLS`` runs sequentially after the fan — but
+    in this composite the only such sub-call is ``reconcile``, which is
+    built post-hoc by :func:`_maybe_build_reconcile` rather than mixed in
+    here. Returns ``{name: SubResult}``; a sub-call failure surfaces
+    inside its ``SubResult.envelope`` rather than raising.
+    """
+    results: dict[str, dict[str, Any]] = {}
+
+    parallel = [c for c in calls if c.name in _PARALLEL_SUBCALLS]
+    sequential = [c for c in calls if c.name not in _PARALLEL_SUBCALLS]
+
+    if len(parallel) == 1:
+        results[parallel[0].name] = _run_subprocess(parallel[0], timeout_sec=timeout_sec)
+    elif parallel:
+        with ThreadPoolExecutor(max_workers=len(parallel)) as pool:
+            futures = {
+                pool.submit(_run_subprocess, c, timeout_sec=timeout_sec): c.name for c in parallel
+            }
+            for fut, name in futures.items():
+                results[name] = fut.result()
+
+    for c in sequential:
+        results[c.name] = _run_subprocess(c, timeout_sec=timeout_sec)
+
+    return results
+
+
 @primitive(
     name="aggregate-preflight",
     verb="validate",
@@ -228,9 +274,9 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
     idempotent=True,
     cli=CliShape(
         help=(
-            "Composite preflight at the top of aggregate: install-commands + "
-            "load-context + (when the journal says 'monitor' and "
-            "--reconcile-scheduler is supplied) reconcile."
+            "Composite preflight at the top of aggregate: install-commands ∥ "
+            "load-context fanned concurrently, then (when the journal says "
+            "'monitor' and --reconcile-scheduler is supplied) reconcile."
         ),
         verb="aggregate-preflight",
         args=(
@@ -267,22 +313,27 @@ def aggregate_preflight(
     skip: list[str] | None = None,
     timeout_sec: float = 60.0,
 ) -> dict[str, Any]:
-    """Run install-commands → load-context → (conditional) reconcile.
+    """Run install-commands ∥ load-context, then (conditional) reconcile.
 
     Returns a dict matching ``schemas/aggregate_preflight.output.json``;
     the CLI dispatcher wraps it in a SuccessEnvelope. *experiment_dir*
     accepts both ``str`` (the CLI path) and ``Path`` (the in-process
     path) and is coerced internally.
 
-    The reconcile sub-call is built from load-context's envelope *after*
-    it runs (see :func:`_maybe_build_reconcile`) — it fires only when the
-    journal reports ``next_step_hint == "monitor"`` and the caller
-    supplied ``reconcile_scheduler``. When it doesn't fire, the
-    ``reconcile`` slot stays ``null``.
+    install-commands and load-context fan out CONCURRENTLY on a thread
+    pool (#291); the composite's wall-clock for the pair is bounded by
+    the slower of the two rather than their sum. The reconcile sub-call
+    is built from load-context's envelope *after* the fan completes (see
+    :func:`_maybe_build_reconcile`) — it fires only when the journal
+    reports ``next_step_hint == "monitor"`` and the caller supplied
+    ``reconcile_scheduler``. When it doesn't fire, the ``reconcile`` slot
+    stays ``null``.
 
     The composite never raises on a sub-call failure — failures surface
     inside ``SubResult.envelope`` so the cheaper sub-calls' work is
-    preserved even when reconcile blows up.
+    preserved even when reconcile blows up. ``overall`` is ``fail`` iff
+    any non-skipped sub-call returned ``ok: false`` — fanning never
+    swallows a failure.
     """
     experiment_dir_path = (
         experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
@@ -291,12 +342,7 @@ def aggregate_preflight(
     base_calls = _build_subcalls(experiment_dir=experiment_dir_path, skip=skip_list)
 
     started = time.monotonic()
-    by_name: dict[str, dict[str, Any]] = {}
-    sub_results: list[dict[str, Any]] = []
-    for c in base_calls:
-        r = _run_subprocess(c, timeout_sec=timeout_sec)
-        by_name[c.name] = r
-        sub_results.append(r)
+    by_name = _run_subcalls(base_calls, timeout_sec=timeout_sec)
 
     reconcile_call = _maybe_build_reconcile(
         load_context_result=by_name.get("load-context"),
@@ -305,12 +351,10 @@ def aggregate_preflight(
         skip=skip_list,
     )
     if reconcile_call is not None:
-        r = _run_subprocess(reconcile_call, timeout_sec=timeout_sec)
-        by_name[reconcile_call.name] = r
-        sub_results.append(r)
+        by_name[reconcile_call.name] = _run_subprocess(reconcile_call, timeout_sec=timeout_sec)
 
     elapsed_total_sec = time.monotonic() - started
-    overall = "fail" if any(not r["ok"] for r in sub_results) else "pass"
+    overall = "fail" if any(not r["ok"] for r in by_name.values()) else "pass"
 
     return {
         "overall": overall,

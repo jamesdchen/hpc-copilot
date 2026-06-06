@@ -18,13 +18,18 @@ listed in ``unresolved_fields``; the agent overrides those and invokes.
 ``verb="query"`` — read-only, no side effects (it never writes the spec to
 disk; the skeleton rides the envelope ``data``, like ``prepare-phase2-spec``).
 
-Coverage: the four verbs #287 names. The three submit-family verbs with
-measured divination loops in the demo — ``build-submit-spec`` (7 rounds),
-``validate-campaign`` (3), ``resolve-submit-inputs`` (11) — plus
-``campaign-run``, which composes three nested *workflow* specs
-(submit-pipeline → submit-and-verify → submit-flow, status-pipeline →
-monitor-flow, aggregate-flow). campaign-run is the worst offender to
-hand-build, so scaffolding its full nested structure is the biggest win.
+Coverage: the four verbs #287 names plus ``interview`` (added as a #287
+follow-up after the demo session burned 7m+ of schema-divination on a
+hand-built ``InterviewSpec`` after emit-skill-return). The three submit-
+family verbs with measured divination loops in the demo —
+``build-submit-spec`` (7 rounds), ``validate-campaign`` (3),
+``resolve-submit-inputs`` (11) — plus ``campaign-run``, which composes
+three nested *workflow* specs (submit-pipeline → submit-and-verify →
+submit-flow, status-pipeline → monitor-flow, aggregate-flow). campaign-run
+is the worst offender to hand-build, so scaffolding its full nested
+structure is the biggest win. ``interview`` is the entry verb for
+``hpc-wrap-entry-point`` and is the spec the orchestrator hand-builds
+every onboarding.
 
 I/O contracts:
 
@@ -44,6 +49,7 @@ import pydantic
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent._wire.queries.scaffold_spec import ScaffoldSpecResult
 from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
 from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
@@ -52,6 +58,7 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config
 from hpc_agent.meta.campaign.atoms.load_context import load_context
+from hpc_agent.ops.detect_entry_point import detect_entry_point
 from hpc_agent.state.discover import discover_executors
 
 if TYPE_CHECKING:
@@ -78,6 +85,13 @@ _PH_EXECUTOR = "python executor.py"
 _PH_RESULT_DIR = "results/{run_id}/task_{task_id}"
 _PH_JOB_NAME = "PLACEHOLDER_array"
 _PH_SCRIPT = ".hpc/templates/cpu_array.sh"
+# Interview-specific placeholders. ``goal`` is free text the caller writes;
+# ``run_name`` must satisfy ``^[a-zA-Z_][a-zA-Z0-9_]*$`` on the shell_command
+# kind. ``session_sha`` keeps ``produced_by`` schema-valid for agent kind.
+_PH_GOAL = "PLACEHOLDER goal — replace with the campaign's one-sentence intent"
+_PH_RUN_NAME = "placeholder_run"
+_PH_SESSION_SHA = "PLACEHOLDER-session-sha"
+_PH_ARGV = ["python3", "main.py"]
 
 
 @dataclasses.dataclass
@@ -132,6 +146,10 @@ class _Context:
     latest_run: dict[str, Any]
     run_id: str | None
     cmd_sha: str | None
+    # The experiment dir threads through so interview-scaffolding can fan out
+    # to filesystem-touching probes (detect-entry-point + ``configs/*.yaml``
+    # globbing) without re-walking the cluster/run-id context first.
+    experiment_dir: Path | None = None
 
 
 def _gather_context(
@@ -200,6 +218,7 @@ def _gather_context(
         latest_run=latest,
         run_id=run_id,
         cmd_sha=cmd_sha,
+        experiment_dir=experiment_dir,
     )
 
 
@@ -522,6 +541,193 @@ def _scaffold_campaign_run(ctx: _Context, acc: _Acc) -> dict[str, Any]:
     return spec
 
 
+# Filesystem glob patterns for the frozen-config probe in the interview
+# scaffolder. Mirrors the conventional locations the wrap-entry-point skill
+# scans on the shell_command path (``configs/<exp>.yaml`` for hydra-style
+# repos, ``conf/<exp>.yaml`` as the second-most-common convention). All paths
+# come back relative to the experiment dir in POSIX form.
+_CONFIG_GLOBS: tuple[str, ...] = ("configs/*.yaml", "configs/*.yml", "conf/*.yaml")
+
+
+def _detect_entry_point_candidates(
+    experiment_dir: Path | None, acc: _Acc
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Best-effort entry-point probe; returns (preferred_kind, candidates).
+
+    Composes the existing ``detect-entry-point`` op; degrades to ``(None, [])``
+    on any failure with a warning so the scaffolder always falls back to the
+    ``register_run`` default. ``preferred_kind`` is ``"shell_command"`` when
+    the only candidates are non-Python (``argv_kind == "shell"``); otherwise
+    ``"register_run"`` when at least one Python candidate exists; ``None``
+    when nothing was detected.
+    """
+    if experiment_dir is None:
+        return None, []
+    try:
+        result = detect_entry_point(experiment_dir=experiment_dir)
+    except Exception as exc:  # noqa: BLE001 — degrade, don't fail a scaffold
+        acc.warnings.append(f"detect-entry-point failed; entry_point falls back to default: {exc}")
+        return None, []
+    candidates: list[dict[str, str]] = list(result.get("candidates") or [])
+    if not candidates:
+        return None, []
+    python_candidates = [c for c in candidates if c.get("argv_kind") != "shell"]
+    if python_candidates:
+        return "register_run", candidates
+    return "shell_command", candidates
+
+
+def _glob_frozen_configs(experiment_dir: Path | None) -> list[str]:
+    """Return POSIX-relative paths matching the convention frozen-config globs.
+
+    Used only on the ``shell_command`` entry-point shape: the
+    ``register_run`` entry-point schema has no ``frozen_configs`` field, so
+    on that path we omit the glob entirely (the scaffolder never calls in).
+    """
+    if experiment_dir is None:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for pattern in _CONFIG_GLOBS:
+        for match in sorted(experiment_dir.glob(pattern)):
+            if not match.is_file():
+                continue
+            rel = match.relative_to(experiment_dir).as_posix()
+            if rel in seen:
+                continue
+            seen.add(rel)
+            out.append(rel)
+    return out
+
+
+def _scaffold_interview(ctx: _Context, acc: _Acc) -> dict[str, Any]:
+    """Populate an ``InterviewSpec`` skeleton — the entry verb for wrap-entry-point.
+
+    Three required fields: ``goal`` (free-text intent, never derivable from
+    context), ``task_count`` (caller-supplied — the materializer cross-checks
+    it against ``tasks.total()``), and ``produced_by`` (a provenance dict the
+    caller stamps). All three are emitted as schema-valid placeholders and
+    flagged unresolved. ``task_generator`` is included as an unresolved
+    placeholder too — the verb accepts it as ``None`` but the wrap-entry-point
+    skill always supplies one, so scaffolding the shape buys the caller a
+    pre-validated discriminated-union node to fill in.
+
+    ``entry_point`` is best-effort populated from ``detect-entry-point``. When
+    the probe finds a Python candidate we emit a ``register_run`` block with
+    ``run_name`` from context (or a placeholder); when it finds only a
+    shell/binary candidate we emit a ``shell_command`` block with the
+    detected path threaded into ``argv``. ``data_axis_hint`` is never emitted
+    on ``register_run`` (#260 — schema-rejected on that shape) and is left
+    null on ``shell_command`` (the wrap-entry-point Step 6 decision tree
+    resolves it from the user, not from filesystem state).
+    """
+    spec: dict[str, Any] = {}
+
+    # ── Required scalars the caller must always override.
+    acc.req(
+        spec,
+        "goal",
+        None,
+        "caller-supplied (no context source)",
+        _PH_GOAL,
+    )
+    # ``task_count`` only makes sense after the caller has chosen a task
+    # generator; ``1`` keeps the placeholder schema-valid (``ge=1``).
+    acc.req(
+        spec,
+        "task_count",
+        None,
+        "caller-supplied (depends on task_generator)",
+        1,
+    )
+    # ``produced_by`` is a nested model with a kind discriminator. Emit the
+    # ``agent`` shape with a placeholder ``session_sha`` (kind-conditional
+    # invariant requires it on agent) so the skeleton validates; the caller
+    # overrides kind+operator for a human interview.
+    spec["produced_by"] = {"kind": "agent", "session_sha": _PH_SESSION_SHA}
+    acc.sources["produced_by"] = "placeholder — caller stamps real provenance"
+    acc.unresolved.append("produced_by")
+
+    # ── ``task_generator``: optional in the schema but always wanted by the
+    # wrap-entry-point skill. Emit a single-item ``enumerated`` placeholder so
+    # the caller has a typed shape to mutate rather than synthesizing a
+    # discriminated-union node from scratch.
+    spec["task_generator"] = {"kind": "enumerated", "params": {"items": [{}]}}
+    acc.sources["task_generator"] = (
+        "placeholder — single-item enumerated; replace with the real recipe"
+    )
+    acc.unresolved.append("task_generator")
+
+    # ── ``entry_point``: probe the experiment dir; default to register_run.
+    preferred_kind, candidates = _detect_entry_point_candidates(ctx.experiment_dir, acc)
+    if preferred_kind == "shell_command":
+        ep: dict[str, Any] = {"kind": "shell_command"}
+        acc.sources["entry_point.kind"] = "detect-entry-point candidates[0] (shell)"
+        acc.req(
+            ep,
+            "run_name",
+            ctx.run_name,
+            "load-context latest_run.profile / --run-name",
+            _PH_RUN_NAME,
+            prefix="entry_point.",
+        )
+        # ``argv``: build from the detected shell path when available so the
+        # caller has a real first token rather than only a placeholder; the
+        # caller still owns the rest (flags, ``{param}`` placeholders).
+        shell_path = next((c["path"] for c in candidates if c.get("argv_kind") == "shell"), None)
+        if shell_path:
+            ep["argv"] = [f"./{shell_path}"]
+            acc.sources["entry_point.argv"] = (
+                f"detect-entry-point candidates[0].path={shell_path!r}"
+            )
+        else:
+            ep["argv"] = list(_PH_ARGV)
+            acc.sources["entry_point.argv"] = "placeholder — no shell candidate"
+        acc.unresolved.append("entry_point.argv")
+        # ``frozen_configs``: best-effort glob the conventional locations
+        # (``configs/*.yaml`` / ``conf/*.yaml``). The schema only allows this
+        # on shell_command (a hand-written register_run carries config wiring
+        # itself), so the probe only fires here.
+        frozen = _glob_frozen_configs(ctx.experiment_dir)
+        if frozen:
+            ep["frozen_configs"] = frozen
+            acc.sources["entry_point.frozen_configs"] = (
+                f"glob {list(_CONFIG_GLOBS)} → {len(frozen)} match(es)"
+            )
+        # ``data_axis_hint`` is valid on shell_command but the wrap-entry-point
+        # Step 6 decision tree resolves it from a user dialog, not the
+        # filesystem — leave it null and let the caller fill in if known.
+        ep["data_axis_hint"] = None
+        spec["entry_point"] = ep
+    else:
+        # Default / Python-candidate path: register_run. ``run_name`` is the
+        # only required field beyond ``kind``; ``fixed_params`` defaults to {}.
+        # ``data_axis_hint`` is NEVER emitted here (#260 — schema rejects it).
+        ep_rr: dict[str, Any] = {"kind": "register_run"}
+        if preferred_kind == "register_run":
+            python_path = next(
+                (c["path"] for c in candidates if c.get("argv_kind") != "shell"), None
+            )
+            acc.sources["entry_point.kind"] = (
+                f"detect-entry-point candidates[0] (python: {python_path!r})"
+                if python_path
+                else "detect-entry-point candidates[0] (python)"
+            )
+        else:
+            acc.sources["entry_point.kind"] = "default — register_run (no candidates detected)"
+        acc.req(
+            ep_rr,
+            "run_name",
+            ctx.run_name,
+            "load-context latest_run.profile / --run-name",
+            _PH_RUN_NAME,
+            prefix="entry_point.",
+        )
+        spec["entry_point"] = ep_rr
+
+    return spec
+
+
 # verb -> (scaffolder, target input model). The model double-checks the
 # emitted skeleton before it leaves (the #287 "refuses to emit a spec the
 # verb would itself reject" guarantee).
@@ -530,12 +736,14 @@ _SCAFFOLDERS: dict[str, Callable[[_Context, _Acc], dict[str, Any]]] = {
     "validate-campaign": _scaffold_validate_campaign,
     "resolve-submit-inputs": _scaffold_resolve_submit_inputs,
     "campaign-run": _scaffold_campaign_run,
+    "interview": _scaffold_interview,
 }
 _TARGET_MODELS: dict[str, type[pydantic.BaseModel]] = {
     "build-submit-spec": BuildSubmitSpecInput,
     "validate-campaign": ValidateCampaignSpec,
     "resolve-submit-inputs": ResolveSubmitInputsSpec,
     "campaign-run": CampaignRunSpec,
+    "interview": InterviewSpec,
 }
 
 
@@ -548,11 +756,12 @@ _TARGET_MODELS: dict[str, type[pydantic.BaseModel]] = {
     cli=CliShape(
         help=(
             "Emit a populated, schema-valid --spec skeleton for another verb "
-            "(build-submit-spec / resolve-submit-inputs / validate-campaign / campaign-run), "
-            "pulling cluster / run_id / context values from clusters.yaml, "
-            "compute-run-id, and load-context so the agent stops divining the "
-            "schema one spec_invalid at a time (#287). Read the returned spec, "
-            "fill its unresolved_fields, then invoke the target verb."
+            "(build-submit-spec / resolve-submit-inputs / validate-campaign / "
+            "campaign-run / interview), pulling cluster / run_id / context values "
+            "from clusters.yaml, compute-run-id, and load-context so the agent "
+            "stops divining the schema one spec_invalid at a time (#287). Read "
+            "the returned spec, fill its unresolved_fields, then invoke the "
+            "target verb."
         ),
         verb="scaffold-spec",
         experiment_dir_arg=True,
