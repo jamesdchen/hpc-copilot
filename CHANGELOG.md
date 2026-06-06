@@ -5,6 +5,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.15 — 2026-06-06
+
+One fix off the 2026-06-06 demo failure trail.
+
+### Fixed — refuse `result_dir_template` that renders to the same path for every task in a multi-task run
+
+Empirical: orchestrator hand-built a sidecar with `result_dir_template = "results/{run_id}"` and `task_count = 100`. The dispatcher rendered the template per task — but `{run_id}` is constant per run, so every task wrote `metrics.json` into the same directory. The last writer won; the other 99 results were silently clobbered. The framework had every input to detect this at sidecar-write time.
+
+New `@model_validator(mode="after")` on both `WriteRunSidecarInput` and `BuildSubmitSpecInput`: when `task_count > 1` (or `total_tasks > 1`) AND no per-task placeholder is present (anything other than `{run_id}`), refuse with a clear error naming the offending template, the task count, and both fix paths — `{task_id}` for guaranteed uniqueness, or any swept kwarg from `tasks.py` FLAGS like `{seed}`. The validator accepts templates containing `{task_id}` or any non-constant placeholder; `{run_id}`-only or literal-string templates are refused. Single-task runs (`task_count = 1`) bypass the check.
+
+The guard fires at both boundaries: build-submit-spec time (one step earlier) AND sidecar-write time (defensive, in case the build path is bypassed by a primitive path that constructs the sidecar directly). Twelve new tests pin every branch — constant-only refused, literal refused, single-task allowed, `{task_id}` accepted, swept-kwarg accepted, error-message content, `None` template passes through to the build-time default.
+
+Same class as #275 / #281 / #287 / #292 — the "agent hand-built a spec, framework accepted it" pattern, closed at one more boundary.
+
 ## 0.10.14 — 2026-06-06
 
 Three independent fixes off the 2026-06-06 demo failure trail, plus the previously-committed install/load fan-out (#291) and scaffold-spec interview coverage from the same day.

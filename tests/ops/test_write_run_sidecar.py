@@ -52,6 +52,51 @@ def test_happy_path_writes_sidecar_and_returns_path(tmp_path: Path) -> None:
     assert data["hpc_agent_version"]
 
 
+class TestResultDirTemplateIsolation:
+    """Per-task isolation guard on ``result_dir_template`` (multi-task runs).
+
+    Empirical 2026-06-06 demo: orchestrator hand-built a sidecar with
+    ``result_dir_template = "results/{run_id}"`` and ``task_count = 100``.
+    Every task wrote to the same dir; 99 outputs got clobbered. The
+    validator refuses at sidecar-write time so the bad config never lands.
+    """
+
+    def test_constant_only_template_refused_for_multi_task(self) -> None:
+        with pytest.raises(ValueError, match="no per-task placeholder"):
+            _spec(result_dir_template="results/{run_id}", task_count=100)
+
+    def test_literal_template_refused_for_multi_task(self) -> None:
+        with pytest.raises(ValueError, match="no per-task placeholder"):
+            _spec(result_dir_template="results", task_count=2)
+
+    def test_constant_template_allowed_for_single_task(self) -> None:
+        # task_count=1 cannot clobber itself; the guard is a no-op.
+        spec = _spec(result_dir_template="results/{run_id}", task_count=1)
+        assert spec.result_dir_template == "results/{run_id}"
+
+    def test_task_id_placeholder_accepted(self) -> None:
+        spec = _spec(result_dir_template="results/{run_id}/task_{task_id}", task_count=100)
+        assert "{task_id}" in spec.result_dir_template
+
+    def test_swept_kwarg_placeholder_accepted(self) -> None:
+        # ``{seed}`` is a kwarg from tasks.py FLAGS; if seed is swept, each
+        # task renders to a unique dir. The validator doesn't know what's
+        # swept (that's in tasks.py) but accepts ANY non-constant placeholder.
+        spec = _spec(result_dir_template="results/{run_id}/seed_{seed}", task_count=100)
+        assert "{seed}" in spec.result_dir_template
+
+    def test_error_message_names_the_template_and_offers_two_fixes(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            _spec(result_dir_template="results/{run_id}", task_count=100)
+        msg = str(exc_info.value)
+        # Names the offending template and the task_count
+        assert "results/{run_id}" in msg
+        assert "task_count=100" in msg
+        # Offers both the {task_id} and the swept-kwarg fix paths
+        assert "{task_id}" in msg
+        assert "swept kwarg" in msg
+
+
 def test_dispatcher_executor_refused(tmp_path: Path) -> None:
     spec = _spec(executor="python3 .hpc/_hpc_dispatch.py")
     with pytest.raises(errors.SpecInvalid, match="dispatcher"):

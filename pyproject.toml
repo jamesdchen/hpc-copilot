@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hpc-agent"
-version = "0.10.14"
+version = "0.10.15"
 description = "HPC orchestrator for Claude Code and external agent harnesses"
 readme = "README.md"
 license = { text = "MIT" }

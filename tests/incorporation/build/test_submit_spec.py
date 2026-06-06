@@ -34,6 +34,46 @@ def _required() -> dict:
     )
 
 
+class TestResultDirTemplateIsolation:
+    """Per-task isolation guard on ``result_dir_template`` at the
+    build-submit-spec boundary (mirror of the same guard on
+    WriteRunSidecarInput; fires one step earlier in the pipeline)."""
+
+    def test_constant_only_template_refused_for_multi_task(self) -> None:
+        with pytest.raises(ValueError, match="no per-task placeholder"):
+            BuildSubmitSpecInput.model_validate(
+                _required() | {"result_dir_template": "results/{run_id}"}
+            )
+
+    def test_literal_template_refused_for_multi_task(self) -> None:
+        with pytest.raises(ValueError, match="no per-task placeholder"):
+            BuildSubmitSpecInput.model_validate(_required() | {"result_dir_template": "results"})
+
+    def test_constant_template_allowed_when_total_tasks_is_one(self) -> None:
+        spec = BuildSubmitSpecInput.model_validate(
+            _required() | {"total_tasks": 1, "result_dir_template": "results/{run_id}"}
+        )
+        assert spec.result_dir_template == "results/{run_id}"
+
+    def test_task_id_placeholder_accepted(self) -> None:
+        spec = BuildSubmitSpecInput.model_validate(
+            _required() | {"result_dir_template": "results/{run_id}/task_{task_id}"}
+        )
+        assert "{task_id}" in (spec.result_dir_template or "")
+
+    def test_swept_kwarg_placeholder_accepted(self) -> None:
+        spec = BuildSubmitSpecInput.model_validate(
+            _required() | {"result_dir_template": "results/seed_{seed}"}
+        )
+        assert "{seed}" in (spec.result_dir_template or "")
+
+    def test_none_template_passes_through(self) -> None:
+        # build_submit_spec fills in a framework default when None — the
+        # validator must not refuse here.
+        spec = BuildSubmitSpecInput.model_validate(_required() | {"result_dir_template": None})
+        assert spec.result_dir_template is None
+
+
 def test_rejects_relative_remote_path() -> None:
     """A relative remote_path becomes REPO_DIR in the qsub env and the
     preamble's `cd "$REPO_DIR"` then runs from an unpredictable SSH login

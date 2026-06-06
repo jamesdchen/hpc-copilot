@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
     BackendName,
@@ -10,6 +10,10 @@ from hpc_agent._wire._shared import (
     RunIdStrict,
     Runtime,
     SshTarget,
+)
+from hpc_agent._wire.actions.write_run_sidecar import (
+    _CONSTANT_PER_RUN_PLACEHOLDERS,
+    _result_dir_per_task_placeholders,
 )
 
 
@@ -74,3 +78,35 @@ class BuildSubmitSpecInput(BaseModel):
     # threads each entry into every task's env as ``HPC_SERVICE_<KEY>``. The
     # framework does not stand the service up — it only consumes the address.
     service_env: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def _per_task_result_dir_isolation(self) -> BuildSubmitSpecInput:
+        """Refuse a ``result_dir_template`` that would render to the same
+        path for every task when ``total_tasks > 1``.
+
+        Mirrors the same guard on ``WriteRunSidecarInput`` (see that model
+        for the empirical case). Catches the bad template one step earlier
+        — at submit-spec build time, before the sidecar is even written —
+        with the same per-task-placeholder rule.
+
+        ``None`` passes through unchanged; the build site fills in a
+        framework default (which itself includes ``{task_id}``).
+        """
+        if self.result_dir_template is None or self.total_tasks <= 1:
+            return self
+        per_task = _result_dir_per_task_placeholders(self.result_dir_template)
+        if per_task:
+            return self
+        import re as _re
+
+        all_placeholders = set(_re.findall(r"\{([^}]+)\}", self.result_dir_template))
+        raise ValueError(
+            f"result_dir_template={self.result_dir_template!r} has no per-task "
+            f"placeholder, but total_tasks={self.total_tasks}. All tasks would "
+            f"render to the same directory and clobber each other's output. "
+            f"Found placeholders {sorted(all_placeholders) or 'none'}; only "
+            f"{sorted(_CONSTANT_PER_RUN_PLACEHOLDERS & all_placeholders) or 'no'} "
+            f"are constant per run. Add {{task_id}} for guaranteed uniqueness, "
+            f"e.g. 'results/{{run_id}}/task_{{task_id}}', or use a swept kwarg "
+            f"from tasks.py FLAGS such as 'results/{{run_id}}/seed_{{seed}}'."
+        )
