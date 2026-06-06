@@ -109,6 +109,49 @@
     }
   },
   "$defs": {
+    "CanaryFailureFeatures": {
+      "additionalProperties": false,
+      "description": "Structured diagnostic evidence attached to a failed canary envelope.\n\nToday (pre-fix) a canary that died cluster-side returned\n``{failure_kind: \"dispatcher_failed\"}`` with no cluster context — the\norchestrator's prose-level \"go fetch the log\" step was the only path\nto the actual error, and agents kept skipping it. This object moves\nthat step into framework code: the same ``stderr_tail`` is restated\nunder ``cluster_log_tail`` for structured consumers, and\n``classified_error`` carries the\n:func:`hpc_agent.ops.recover.failure_signatures.classify` result so a\ndecision-maker reads an ``error_class`` + ``suggested_fix`` instead\nof paraphrasing the log.",
+      "properties": {
+        "cluster_log_tail": {
+          "description": "Raw last ~50 lines of the canary's cluster log, verbatim. The same content as the top-level ``stderr_tail`` field, restated under a structured key so downstream consumers don't have to know which top-level field carries it.",
+          "title": "Cluster Log Tail",
+          "type": "string"
+        },
+        "log_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Remote path of the cluster log file the tail was read from, when known. Lets the operator ssh over and tail more if 50 lines isn't enough. ``None`` when no log was fetched.",
+          "title": "Log Path"
+        },
+        "classified_error": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The ``{error_class, suggested_fix, matched_pattern}`` triple returned by :func:`ops.recover.failure_signatures.classify` on the cluster log tail. ``None`` when the stderr was empty (nothing to classify).",
+          "title": "Classified Error"
+        }
+      },
+      "required": [
+        "cluster_log_tail"
+      ],
+      "title": "CanaryFailureFeatures",
+      "type": "object"
+    },
     "VerifyCanaryResult": {
       "additionalProperties": false,
       "description": "Result of the wait + grep + output-check protocol for a 1-task canary.\n\nCaller branches on ``ok``: True → main array submit; False →\nsurface stderr_tail to the user verbatim.",
@@ -164,6 +207,18 @@
           "default": null,
           "description": "Optional sha256 of the canary's expected output file when the caller asked for a fingerprint. None on every failure path and when fingerprinting is skipped or fails.",
           "title": "Metrics Fingerprint"
+        },
+        "failure_features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanaryFailureFeatures"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Structured diagnostic evidence attached to failed-canary envelopes (``ok=False``). Carries the raw cluster log tail under a structured key plus a ``classify()`` result against the same failure-signature CATALOG ``ops/recover`` uses, so the orchestrator gets an actionable remediation instead of a bare ``failure_kind``. ``None`` on success."
         }
       },
       "required": [

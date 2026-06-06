@@ -6,10 +6,14 @@ from hpc_agent.ops.recover.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
-    """The catalog covers the 10 documented failure modes (segv was
+    """The catalog covers the 15 documented failure modes (segv was
     removed when the SEGV blacklist feature was deleted; preempted was
-    added when dispatch.py learned to trap SIGTERM)."""
-    assert len(CATALOG) == 10
+    added when dispatch.py learned to trap SIGTERM; five empirical canary
+    signatures — ``uv_not_on_path`` / ``conda_command_not_found`` /
+    ``output_file_required`` / ``module_not_found_hpc_agent`` /
+    ``undefined_var_expansion`` — were added so the verifier surfaces a
+    structured remediation instead of a bare ``dispatcher_failed``)."""
+    assert len(CATALOG) == 15
 
 
 def test_preempted_matches_exit_130() -> None:
@@ -122,3 +126,77 @@ def test_classify_returns_a_fresh_dict() -> None:
     a["action"] = "mutated"
     b = classify("CUDA out of memory", None)["suggested_fix"]
     assert b["action"] == "increase-mem-per-gpu"
+
+
+# ── empirical canary signatures (Fix 1) ─────────────────────────────────────
+
+
+def test_uv_not_on_path_matches() -> None:
+    """The cluster preamble error token when HPC_RUNTIME=uv but uv is missing.
+
+    Matches the verbatim string the preamble emits, not the operator's
+    paraphrase — the catalog row is a structural-failure remediation, not a
+    spell-check on the user's stderr.
+    """
+    out = classify("[template] HPC_RUNTIME=uv but 'uv' not on PATH", 2)
+    assert out["error_class"] == "uv_not_on_path"
+    assert out["suggested_fix"]["action"] == "drop-runtime-uv-or-install"
+    assert "drop" in out["suggested_fix"]["hint"].lower()
+
+
+def test_conda_command_not_found_matches() -> None:
+    """Conda activation failed because conda was never sourced — usually a
+    bad ``conda_source`` in clusters.yaml."""
+    out = classify("conda: command not found", None)
+    assert out["error_class"] == "conda_command_not_found"
+    assert out["suggested_fix"]["action"] == "fix-cluster-conda-source"
+    out2 = classify("bash: conda: command not found", None)
+    assert out2["error_class"] == "conda_command_not_found"
+
+
+def test_output_file_required_matches() -> None:
+    """Executor's argparse rejects its invocation because --output-file
+    wasn't auto-injected. Points at a register_run / kind misconfig."""
+    out = classify(
+        "executor.py: error: the following arguments are required: --output-file",
+        2,
+    )
+    assert out["error_class"] == "output_file_required"
+    assert out["suggested_fix"]["action"] == "verify-register-run-on-disk"
+
+
+def test_module_not_found_hpc_agent_matches() -> None:
+    """Cluster-side python can't import hpc_agent — wrong env activation."""
+    out = classify("ModuleNotFoundError: No module named 'hpc_agent'", 1)
+    assert out["error_class"] == "module_not_found_hpc_agent"
+    assert out["suggested_fix"]["action"] == "fix-cluster-env-activation"
+
+
+def test_module_not_found_hpc_agent_beats_generic_import_error() -> None:
+    """The hpc_agent-specific signature wins over the generic import_error
+    catalog row — higher priority (85 > 80)."""
+    out = classify(
+        "Traceback (most recent call last):\nModuleNotFoundError: No module named 'hpc_agent'\n",
+        1,
+    )
+    assert out["error_class"] == "module_not_found_hpc_agent"
+
+
+def test_undefined_var_expansion_matches() -> None:
+    """An executor flag expected a value but got an empty string from
+    ``--samples $SAMPLES`` when SAMPLES was unexported."""
+    out = classify("executor.py: error: argument --samples: expected one argument", 2)
+    assert out["error_class"] == "undefined_var_expansion"
+    assert out["suggested_fix"]["action"] == "fix-empty-env-var-in-executor"
+
+
+def test_uv_not_on_path_beats_python_traceback() -> None:
+    """When the stderr carries both a uv structural marker and an
+    incidental Traceback, the structural marker wins (priority 95 > 10)."""
+    stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "x.py", ...\n'
+        "[template] HPC_RUNTIME=uv but 'uv' not on PATH"
+    )
+    out = classify(stderr, 2)
+    assert out["error_class"] == "uv_not_on_path"

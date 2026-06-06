@@ -33,7 +33,12 @@
         "permission_denied",
         "disk_full",
         "python_traceback",
-        "preempted"
+        "preempted",
+        "uv_not_on_path",
+        "conda_command_not_found",
+        "output_file_required",
+        "module_not_found_hpc_agent",
+        "undefined_var_expansion"
       ],
       "title": "Category",
       "type": "string"

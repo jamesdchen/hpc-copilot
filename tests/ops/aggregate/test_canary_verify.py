@@ -317,6 +317,257 @@ def test_vanished_canary_with_stderr_marker_prefers_the_marker(
     assert out["failure_kind"] == "oom_killed"
 
 
+# ── Fix 1: failure_features attached on every ok=False path ──────────────────
+
+
+def test_failure_features_attached_on_dispatcher_failed(tmp_path: Path, journal_home: Path) -> None:
+    """The empirical demo failure: dispatcher_failed today gives no cluster
+    context. Fix 1 attaches `failure_features.cluster_log_tail` (the raw log
+    tail under a structured key) AND `failure_features.classified_error`
+    (the catalog match). For the bare `[dispatch] FAILED` marker no specific
+    signature fires, so classified_error.error_class is "unknown" — the LOG
+    TAIL is what the agent reads, and `_FAILURE_MARKERS` already routes it
+    to dispatcher_failed."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    log_path = "/x/logs/p_canary.o42.1"
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": "[dispatch] FAILED (exit 1)\n",
+                    "path": log_path,
+                    "job_id": "job_42",
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "dispatcher_failed"
+    feats = out["failure_features"]
+    assert feats is not None
+    assert "[dispatch] FAILED" in feats["cluster_log_tail"]
+    assert feats["log_path"] == log_path
+    classified = feats["classified_error"]
+    assert classified is not None
+    # No specific catalog row matches a bare dispatcher_failed marker, but the
+    # classifier still ran (the proof Fix 1 wired it up).
+    assert "error_class" in classified
+
+
+def test_failure_features_classifies_uv_not_on_path(tmp_path: Path, journal_home: Path) -> None:
+    """The most common 0.10.x cluster-side demo failure: ``HPC_RUNTIME=uv
+    but 'uv' not on PATH``. classify() must surface ``uv_not_on_path``
+    with the structured remediation, so the orchestrator sees an
+    actionable fix rather than a generic dispatcher_failed."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": (
+                        "[dispatch] FAILED (exit 2)\n"
+                        "[template] HPC_RUNTIME=uv but 'uv' not on PATH\n"
+                    ),
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is False
+    feats = out["failure_features"]
+    assert feats is not None
+    classified = feats["classified_error"]
+    assert classified["error_class"] == "uv_not_on_path"
+    assert classified["suggested_fix"]["action"] == "drop-runtime-uv-or-install"
+
+
+def test_failure_features_classifies_conda_command_not_found(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A bad ``conda_source`` in clusters.yaml surfaces as
+    ``conda: command not found`` in the cluster log. The classifier
+    must route this to ``conda_command_not_found``."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": (
+                        "[dispatch] FAILED (exit 127)\n"
+                        "preamble.sh: line 12: conda: command not found\n"
+                    ),
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    feats = out["failure_features"]
+    assert feats["classified_error"]["error_class"] == "conda_command_not_found"
+
+
+def test_failure_features_classifies_module_not_found_hpc_agent(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """Cluster-side python isn't the conda env's python — verifier routes
+    to the hpc_agent-specific signature, not the generic import_error."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": (
+                        "Traceback (most recent call last):\n"
+                        '  File "cli.py", line 1\n'
+                        "ModuleNotFoundError: No module named 'hpc_agent'\n"
+                    ),
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    feats = out["failure_features"]
+    assert feats["classified_error"]["error_class"] == "module_not_found_hpc_agent"
+
+
+def test_failure_features_classifies_output_file_required(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """Executor's argparse rejected its invocation — the framework's
+    --output-file auto-inject didn't fire."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": (
+                        "executor.py: error: the following arguments are required: --output-file\n"
+                    ),
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    feats = out["failure_features"]
+    assert feats["classified_error"]["error_class"] == "output_file_required"
+
+
+def test_failure_features_classifies_undefined_var_expansion(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """``--samples $SAMPLES`` with SAMPLES unexported → argparse sees an
+    empty value and rejects with 'expected one argument'."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[
+                {
+                    "task_id": 0,
+                    "content": ("executor.py: error: argument --samples: expected one argument\n"),
+                }
+            ],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    feats = out["failure_features"]
+    assert feats["classified_error"]["error_class"] == "undefined_var_expansion"
+
+
+def test_failure_features_none_on_ok_canary(tmp_path: Path, journal_home: Path) -> None:
+    """The success envelope intentionally omits ``failure_features`` —
+    callers can use its non-None-ness as a "this is a failed canary"
+    sentinel."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is True
+    assert out["failure_features"] is None
+
+
+def test_failure_features_on_timeout_and_reporter_unreachable(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-stderr-fetch failure paths (reporter_unreachable, timeout)
+    still emit ``failure_features``, just with empty cluster_log_tail and
+    classified_error=None — the structured shape is uniform across every
+    ok=False path so the consumer never has to special-case 'no features
+    here yet'."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    ticks = iter([0.0, 1.0, 1e9, 1e9, 1e9])
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(ticks))
+    with mock.patch(
+        "hpc_agent.infra.cluster_status.ssh_status_report",
+        side_effect=errors.RemoteCommandFailed("reporter died"),
+    ):
+        result = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=30)
+    assert result["ok"] is False
+    assert result["failure_kind"] == "reporter_unreachable"
+    feats = result["failure_features"]
+    assert feats is not None
+    assert feats["cluster_log_tail"] == ""
+    assert feats["classified_error"] is None
+
+
 def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_home: Path) -> None:
     """#176: the status reporter runs on the login node via ssh, so it needs the
     run's conda activation — otherwise it falls to bare login python, every poll

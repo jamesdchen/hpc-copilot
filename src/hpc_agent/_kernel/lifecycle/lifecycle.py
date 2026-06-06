@@ -145,3 +145,12 @@ class FailureCategory(StrEnum):
     # Bumped, not failed; harness should resubmit cleanly without
     # surfacing a real failure to the user.
     PREEMPTED = "preempted"
+    # Empirical-failure signatures the canary verifier learned to classify
+    # (see ops/recover/failure_signatures.py). Each names a concrete
+    # remediation: the wire layer must accept these so a resubmit carrying
+    # them isn't rejected at the boundary.
+    UV_NOT_ON_PATH = "uv_not_on_path"
+    CONDA_COMMAND_NOT_FOUND = "conda_command_not_found"
+    OUTPUT_FILE_REQUIRED = "output_file_required"
+    MODULE_NOT_FOUND_HPC_AGENT = "module_not_found_hpc_agent"
+    UNDEFINED_VAR_EXPANSION = "undefined_var_expansion"

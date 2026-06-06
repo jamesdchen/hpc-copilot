@@ -158,6 +158,121 @@ CATALOG: list[FailureSignature] = [
         suggested_fix={"action": "user-debug"},
         priority=10,
     ),
+    # ── empirical canary signatures ─────────────────────────────────────
+    # Learned from real demo failures where the orchestrator gave up at
+    # ``dispatcher_failed`` without inspecting the cluster log. Each carries
+    # a *specific* remediation so an agent (or human) can act without
+    # rerunning the failure to gather context. Priority is set above the
+    # bare ``python_traceback`` fallback so they win when the same stderr
+    # carries both a structural marker and an incidental traceback.
+    FailureSignature(
+        error_class="uv_not_on_path",
+        # The cluster preamble explicitly errors out with this token when
+        # ``HPC_RUNTIME=uv`` was set but no ``uv`` binary is available after
+        # the activation block ran. See common/hpc_preamble.sh.
+        stderr_pattern=re.compile(
+            r"HPC_RUNTIME=uv but ['\"]?uv['\"]? (is )?not on PATH",
+            re.I,
+        ),
+        exit_code=2,
+        suggested_fix={
+            "action": "drop-runtime-uv-or-install",
+            "hint": (
+                'uv missing on cluster — drop `runtime: "uv"` from the spec, OR '
+                "install uv into the cluster conda env "
+                "(`~/.conda/envs/<env>/bin/pip install uv`) and resubmit."
+            ),
+        },
+        priority=95,
+    ),
+    FailureSignature(
+        error_class="conda_command_not_found",
+        # ``conda activate`` fails because conda was never sourced — usually
+        # ``clusters.yaml`` has the wrong ``conda_source`` or the cluster's
+        # module-load step that exports conda is missing.
+        stderr_pattern=re.compile(
+            r"conda:\s*command not found|conda:\s*not found|"
+            r"command not found:\s*conda",
+            re.I,
+        ),
+        exit_code=None,
+        suggested_fix={
+            "action": "fix-cluster-conda-source",
+            "hint": (
+                "Cluster preamble couldn't source conda — verify the "
+                "`conda_source` path in `clusters.yaml` for this cluster, and "
+                "that the conda module is loaded by the preamble."
+            ),
+        },
+        priority=95,
+    ),
+    FailureSignature(
+        error_class="output_file_required",
+        # The executor's argparse rejected its invocation because the
+        # ``--output-file`` flag (auto-injected for ``@register_run`` entry
+        # points) was not supplied. Means the framework's auto-inject didn't
+        # fire — the @register_run decorator may not be on disk, or the
+        # entry_point.kind is wrong.
+        stderr_pattern=re.compile(
+            r"error: the following arguments are required:[^\n]*--output-file",
+            re.I,
+        ),
+        exit_code=2,
+        suggested_fix={
+            "action": "verify-register-run-on-disk",
+            "hint": (
+                "Executor expects `--output-file` but the framework didn't "
+                "auto-inject it. Verify `entry_point.kind` is `register_run` "
+                "AND the executor's `@register_run` decorator is on disk."
+            ),
+        },
+        priority=95,
+    ),
+    FailureSignature(
+        error_class="module_not_found_hpc_agent",
+        # The cluster-side python can't import ``hpc_agent``. The likeliest
+        # cause is that the running python is not the conda env's python —
+        # either the activation didn't fire, or the wrong env was activated.
+        stderr_pattern=re.compile(
+            r"ModuleNotFoundError:.*hpc_agent|No module named ['\"]hpc_agent['\"]",
+            re.I,
+        ),
+        exit_code=1,
+        suggested_fix={
+            "action": "fix-cluster-env-activation",
+            "hint": (
+                "Cluster-side python isn't the conda env's python — verify "
+                "conda activation in the preamble + that "
+                "`remote_activation_for_sidecar` threads `conda_env` through "
+                "to the cluster status reporter."
+            ),
+        },
+        # Higher than the generic ``import_error`` so the hpc_agent-specific
+        # signature wins when both match.
+        priority=85,
+    ),
+    FailureSignature(
+        error_class="undefined_var_expansion",
+        # argparse rejects an empty value because an env-var reference in the
+        # executor command (e.g. ``--samples $SAMPLES``) expanded to "". The
+        # marker pattern catches the argparse error; we cannot infer which
+        # variable was empty from a single line, so the hint is generic.
+        stderr_pattern=re.compile(
+            r"error: argument [^:]+: expected one argument",
+            re.I,
+        ),
+        exit_code=2,
+        suggested_fix={
+            "action": "fix-empty-env-var-in-executor",
+            "hint": (
+                "An executor flag expected a value but got an empty string — "
+                "most likely an env-var reference (`$VAR`) in the executor "
+                "command expanded to empty. Verify every `$VAR` referenced in "
+                "the executor is exported in `job_env`."
+            ),
+        },
+        priority=80,
+    ),
 ]
 
 

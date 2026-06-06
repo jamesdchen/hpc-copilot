@@ -5,6 +5,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.14 — 2026-06-06
+
+Three independent fixes off the 2026-06-06 demo failure trail, plus the previously-committed install/load fan-out (#291) and scaffold-spec interview coverage from the same day.
+
+### Added — `failure_features` on every canary-failed envelope, classified against an extended signature catalog
+
+`ops/verify_canary.py` now attaches `failure_features: {cluster_log_tail, log_path, classified_error}` on every `ok=False` return path (`dispatcher_failed`, `import_error`, `oom_killed`, `traceback`, `reporter_unreachable`, `timeout`, `completed_unknown`, `missing_output`, `abandoned`). Moves the "look at the cluster log to know what actually failed" step out of SKILL.md prose (where agents forget it — empirical 2026-06-06 demo: agent recorded `dispatcher_failed` and stopped without inspecting any log) into framework code that runs on every failed canary. Five new entries in `ops/recover/failure_signatures.CATALOG` covering the empirical demo failures: `uv_not_on_path`, `conda_command_not_found`, `output_file_required`, `module_not_found_hpc_agent`, `undefined_var_expansion` — each with a `suggested_fix.action` + `suggested_fix.hint` so the envelope tells the agent what to do without a second tool call. New `CanaryFailureFeatures` Pydantic model on `VerifyCanaryResult`; schemas regenerated.
+
+### Fixed — worker_prompts/submit.md no longer hardcodes `"runtime": "uv"` in the example spec
+
+The submit preflight gate (`runtime_uv_preflight` via `_run_shared_prelude`) is structurally closed — every submit funnels through it, and `SubmitFlowSpec` has no `skip_preflight` field at all (0.10.9 #275 demote). The only remaining surface that kept producing the empirical "agent built a spec with `runtime: \"uv\"` against a no-uv cluster" failure was the worker prompt example. Dropped `"runtime": "uv"` from both example JSON snippets in `worker_prompts/submit.md`; added an explicit "Do NOT add `runtime: 'uv'` by default" rule with the gating criteria (uv lock file + operator-confirmed cluster env).
+
+### Added — `install-commands` auto-merges `Skill(<name>)` allow rules for bundled skills (companion to #190)
+
+Claude Code's auto-mode classifier silently denies `Skill(<name>)` calls from `/submit-hpc` / `/aggregate-hpc` / `/monitor-hpc` / `/campaign-hpc` despite `skipAutoPermissionPrompt: true` (the flag suppresses the explicit prompt but the classifier still gates risky tools). Empirical 2026-06-06 demo: `Skill(hpc-submit)` blocked back-to-back, orchestrator fell back to inline-mode execution. The framework already mitigates the analogous problem for the bare worker's `Bash(hpc-agent:*)` calls via `ops/memory/interview.py`'s `_maybe_write_claude_permissions` (project-scoped, #190); this release extends the same pattern to the orchestrator's Skill calls at user-global scope (orchestrator can invoke `/submit-hpc` from any CWD). New `_merge_skill_permissions` sibling of `_merge_skill_return_hook` in `agent_assets.py`: same additive + idempotent + skip-unparseable + dry-run contract, targets `permissions.allow` with one `Skill(<name>)` entry per bundled skill (tracks the actual installed skills set, so plugin-contributed skills get grants too). Matcher format chosen: `Skill(<name>)` per-skill mirroring the `Bash(<prefix>:*)` parameterised precedent — narrowest reasonable grant.
+
+### Changed — `aggregate-preflight` + `status-preflight` fan `install-commands ∥ load-context` (#291)
+
+(Already committed as `b63a67b3` on 2026-06-06; folded into 0.10.14.) The 2026-06-05 #289 audit classified the install→load ordering as a "strict data-dependent chain"; a focused source-walk verified it's INERT — install-commands writes only `~/.claude/{commands,skills,agents}/`, load-context reads only `$EXPERIMENT/.hpc/{runs,journal,campaigns}/`. Write- and read-disjoint. Now fanned on a `ThreadPoolExecutor` mirroring submit-preflight's pattern; threading.Barrier concurrency tests pin the fan-out shape; the misleading "Order pin" comments dropped from the test files.
+
+### Added — `scaffold-spec --verb interview` (#287 follow-up)
+
+(Already committed as `b63a67b3`.) The four verbs #287 named did not include `interview` — the entry verb for hpc-wrap-entry-point that the orchestrator hand-builds every onboarding. The 2026-06-05 demo burned 7m+ on schema-divination after `emit-skill-return` because the agent had no scaffold for `InterviewSpec`. New `_scaffold_interview` composes `detect-entry-point` + `clusters.yaml` + `compute-run-id` + filesystem glob of `configs/*.yaml`; emits a populated `register_run`-shape skeleton by default, switches to `shell_command` shape when detect-entry-point's candidate is non-Python. `data_axis_hint` is unconditionally omitted on `register_run` (#260 schema rejects it on that shape). Skeleton validates against `InterviewSpec` before return.
+
 ## 0.10.13 — 2026-06-05
 
 Folds PR #290: parallel canvassing during worker startup (#286), `scaffold-spec` query verb (#287), heavy-import contract test (#288), and parallel-by-default fans of `check-preflight`'s two cluster probes + SGE `inspect-cluster`'s qhost/qstat (#289). No worker-prompt or skill-contract changes — `/submit-hpc` / `/aggregate-hpc` / `/monitor-hpc` SKILL.md gain a parallel-canvass prelude only.

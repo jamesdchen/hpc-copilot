@@ -212,11 +212,13 @@ Assemble the spec from the values Steps 0-5 already resolved:
     "executor": "python train.py --seed $SEED",
     "result_dir_template": "results/{run_id}",
     "task_count": "<tasks.total()>",
-    "cluster": "<cluster>", "profile": "<run_name>", "campaign_id": "<slug>", "runtime": "uv"
+    "cluster": "<cluster>", "profile": "<run_name>", "campaign_id": "<slug>"
   },
   "build_tasks": { "...ONLY when .hpc/tasks.py is absent: axes + flags_by_executor + (data_axis from Step 3's classification)..." }
 }
 ```
+
+**Do NOT add `"runtime": "uv"` by default** — most clusters don't have `uv` on PATH, and the cluster preamble's "`HPC_RUNTIME=uv but 'uv' not on PATH`" guard fails every task in the array. Only set `runtime: "uv"` when the repo genuinely depends on `uv sync` (a `pyproject.toml` with a uv lock file AND the operator has confirmed the cluster conda env carries `uv`). When in doubt, omit it; the submit-flow's preflight (`command -v uv` against the cluster env, #275) refuses the spec at preflight if you set it on a uv-less cluster, but the friendlier path is "don't set it in the first place."
 
 `submit.run_id` / `submit.cmd_sha` and `sidecar.run_id` / `sidecar.cmd_sha` are **placeholders** — resolve-submit-inputs overrides them with the values `compute-run-id` derives (it hashes the materialized `.hpc/tasks.py`), so you never hand-compute the run_id, and the built spec + written sidecar always match the reported one.
 
@@ -274,7 +276,7 @@ The spec embeds the canary-gated submit under `submit` (a `submit-and-verify` sp
       "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
       "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
       "pass_env_keys": null,
-      "canary": true, "campaign_id": "<slug>", "runtime": "uv"
+      "canary": true, "campaign_id": "<slug>"
     },
     "expect_output": "results/seed_42/metrics.json"
   },

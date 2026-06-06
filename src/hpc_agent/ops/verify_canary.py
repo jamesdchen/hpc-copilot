@@ -45,6 +45,45 @@ _FAILURE_MARKERS: tuple[tuple[str, str], ...] = (
     ("segmentation fault", "segfault"),
 )
 
+
+def _failure_features(stderr_tail: str, log_path: str | None) -> dict[str, Any]:
+    """Build the structured ``failure_features`` envelope for a failed canary.
+
+    Two layers of evidence the LLM (or human) would otherwise have to
+    fetch by hand:
+
+    * **cluster_log_tail** — the raw last ~50 lines of the canary's
+      cluster log, verbatim. ``stderr_tail`` already holds this; we
+      attach it under the structured key so downstream consumers don't
+      have to know which top-level field to read. ``log_path`` records
+      the remote path (when known) so the user can ``ssh`` over and
+      tail more if they need to.
+
+    * **classified_error** — the structured pattern match from
+      :data:`failure_signatures.CATALOG` (the same classifier
+      ``ops/recover`` uses for resubmit categorization). Gives the
+      decision-maker an ``error_class`` + ``suggested_fix`` + the
+      ``matched_pattern`` regex, so an agent can act on the structured
+      remediation instead of paraphrasing the log tail. ``None`` when
+      the stderr is empty (nothing to classify).
+    """
+    # Import inside the helper — `failure_signatures` lives in `ops/recover`,
+    # and `verify_canary` is loaded at module-discovery time. Keeping the
+    # import lazy avoids dragging the recover package in for callers that
+    # only ever hit the happy path.
+    from hpc_agent.ops.recover.failure_signatures import classify
+
+    classified: dict[str, Any] | None = None
+    if stderr_tail:
+        classified = classify(stderr_tail, exit_code=None)
+
+    return {
+        "cluster_log_tail": stderr_tail,
+        "log_path": log_path,
+        "classified_error": classified,
+    }
+
+
 _DEFAULT_POLL_INTERVAL_SEC = 30
 _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
 
@@ -308,6 +347,7 @@ def verify_canary(
                 ),
                 "stderr_tail": "",
                 "metrics_fingerprint": None,
+                "failure_features": _failure_features("", None),
             }
         return {
             "ok": False,
@@ -318,6 +358,7 @@ def verify_canary(
             ),
             "stderr_tail": "",
             "metrics_fingerprint": None,
+            "failure_features": _failure_features("", None),
         }
 
     # Fetch the canary's stderr tail (1 task, task_id=0).
@@ -349,8 +390,10 @@ def verify_canary(
         lines=50,
     )
     stderr_tail = ""
+    log_path: str | None = None
     if logs and isinstance(logs[0], dict):
         stderr_tail = str(logs[0].get("content") or "")
+        log_path = logs[0].get("path") if isinstance(logs[0].get("path"), str) else None
 
     # Scan for failure markers.
     haystack = stderr_tail.lower()
@@ -365,6 +408,7 @@ def verify_canary(
                 ),
                 "stderr_tail": stderr_tail,
                 "metrics_fingerprint": None,
+                "failure_features": _failure_features(stderr_tail, log_path),
             }
 
     # The canary left the scheduler queue without ever recording a completion
@@ -387,6 +431,7 @@ def verify_canary(
             ),
             "stderr_tail": stderr_tail,
             "metrics_fingerprint": None,
+            "failure_features": _failure_features(stderr_tail, log_path),
         }
 
     # Optional output verification.
@@ -405,6 +450,7 @@ def verify_canary(
                 ),
                 "stderr_tail": stderr_tail,
                 "metrics_fingerprint": None,
+                "failure_features": _failure_features(stderr_tail, log_path),
             }
 
     # Final check: complete == total_tasks, no failures.
@@ -419,6 +465,7 @@ def verify_canary(
             ),
             "stderr_tail": stderr_tail,
             "metrics_fingerprint": None,
+            "failure_features": _failure_features(stderr_tail, log_path),
         }
 
     # Optional fingerprint. Best-effort: a fingerprint failure does NOT
@@ -468,4 +515,8 @@ def verify_canary(
         ),
         "stderr_tail": stderr_tail,
         "metrics_fingerprint": metrics_fingerprint,
+        # ``failure_features`` is only attached to ``ok=False`` envelopes — the
+        # success envelope intentionally omits it so consumers can use its
+        # presence as a "this is a failed canary" sentinel.
+        "failure_features": None,
     }
