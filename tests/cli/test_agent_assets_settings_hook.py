@@ -146,8 +146,11 @@ def test_preserves_existing_settings_and_hooks(tmp_path: Path) -> None:
     install_agent_assets(claude_dir=tmp_path)
     settings = _settings(tmp_path)
 
-    # Unrelated keys preserved verbatim.
-    assert settings["permissions"] == {"deny": ["Bash(rm -rf:*)"]}
+    # Unrelated keys preserved verbatim. ``permissions.deny`` is untouched;
+    # ``permissions.allow`` is augmented with Skill(<name>) entries by the
+    # sibling _merge_skill_permissions step (see the dedicated test module
+    # test_agent_assets_settings_permissions.py for the permissions contract).
+    assert settings["permissions"]["deny"] == ["Bash(rm -rf:*)"]
     assert settings["customKey"] == {"nested": [1, 2, 3]}
     assert settings["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": []}]
 

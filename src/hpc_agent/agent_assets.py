@@ -196,6 +196,115 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
     }
 
 
+def _skill_allow_rule(skill_name: str) -> str:
+    """Return the canonical ``permissions.allow`` entry for a Skill grant.
+
+    Mirrors the ``Bash(<prefix>:*)`` parameterised matcher format Claude Code
+    uses for the existing precedent in ``ops/memory/interview.py``'s
+    ``_maybe_write_claude_permissions`` (which grants ``Bash(hpc-agent:*)``).
+    For Skill, the natural matcher is the skill name, so the entry is
+    ``Skill(<name>)`` — narrowest grant per bundled skill rather than a
+    blanket ``"Skill"``.
+    """
+    return f"Skill({skill_name})"
+
+
+def _merge_skill_permissions(
+    claude_dir: Path, skill_names: list[str], *, dry_run: bool
+) -> dict[str, Any]:
+    """Idempotently add ``Skill(<name>)`` allow rules for every installed skill.
+
+    Without these grants, Claude Code's auto-mode classifier silently denies
+    the first ``Skill(<name>)`` call from ``/submit-hpc`` /
+    ``/aggregate-hpc`` / ``/monitor-hpc`` / ``/campaign-hpc`` (empirical
+    2026-06-06 demo: ``Skill(hpc-submit)`` blocked with ``Denied by auto
+    mode classifier`` despite ``skipAutoPermissionPrompt: true`` — the flag
+    only suppresses the explicit prompt, the classifier still gates).
+
+    Sibling of :func:`_merge_skill_return_hook`: same additive + idempotent
+    + skip-unparseable + dry-run semantics, but targets
+    ``permissions.allow`` rather than ``hooks.PostToolUse``. User-global
+    scope here (the bundled skills are user-global; the orchestrator can
+    invoke ``/submit-hpc`` from any working directory) — distinct from
+    ``ops/memory/interview.py``'s project-scoped Bash grant (#190).
+
+    Returns ``{settings_path, action, added, wrote}`` where ``action`` is:
+
+    * ``"added"`` — at least one new ``Skill(<name>)`` rule appended
+    * ``"already-present"`` — every rule already in ``permissions.allow``
+    * ``"skipped-unparseable"`` — existing settings.json is not a JSON object
+    * ``"dry-run-would-add"`` — would have added rules but ``dry_run=True``
+
+    ``added`` lists the rule strings actually appended (empty on
+    ``"already-present"``); on dry-run, lists the strings that *would*
+    have been added.
+    """
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict[str, Any]
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "wrote": False,
+            }
+        if not isinstance(loaded, dict):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "wrote": False,
+            }
+        settings = loaded
+    else:
+        settings = {}
+
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = {}
+    allow = permissions.get("allow")
+    if not isinstance(allow, list):
+        allow = []
+
+    canonical_rules = [_skill_allow_rule(name) for name in skill_names]
+    missing = [rule for rule in canonical_rules if rule not in allow]
+
+    if not missing:
+        return {
+            "settings_path": str(settings_path),
+            "action": "already-present",
+            "added": [],
+            "wrote": False,
+        }
+
+    if dry_run:
+        return {
+            "settings_path": str(settings_path),
+            "action": "dry-run-would-add",
+            "added": missing,
+            "wrote": False,
+        }
+
+    allow = list(allow) + missing
+    permissions["allow"] = allow
+    settings["permissions"] = permissions
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
+    return {
+        "settings_path": str(settings_path),
+        "action": "added",
+        "added": missing,
+        "wrote": True,
+    }
+
+
 def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> str | None:
     """Resolve a pre-existing non-directory at *target* before mkdir.
 
@@ -332,6 +441,8 @@ def install_agent_assets(
             "agents_installed": ["hpc-worker", ...],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
+            "settings_permissions": {"settings_path": "...", "action": "added",
+                                     "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "wrote": <bool>,
         }
 
@@ -343,8 +454,16 @@ def install_agent_assets(
     ``settings_hook`` reports the additive, idempotent merge of the
     skill-return autofetch ``PostToolUse`` hook into
     ``<claude>/settings.json`` — see :func:`_merge_skill_return_hook`. Its
-    ``action`` is ``"added"`` / ``"already-present"`` /
-    ``"skipped-unparseable"`` / ``"dry-run-would-add"``.
+    ``action`` is ``"added"`` / ``"already-present"`` / ``"updated"`` /
+    ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
+
+    ``settings_permissions`` reports the additive, idempotent merge of
+    ``Skill(<name>)`` allow rules for every installed skill into
+    ``<claude>/settings.json``'s ``permissions.allow`` — see
+    :func:`_merge_skill_permissions`. Its ``action`` is ``"added"`` /
+    ``"already-present"`` / ``"skipped-unparseable"`` /
+    ``"dry-run-would-add"``, and ``added`` lists the rule strings
+    actually appended (or that *would* have been on dry-run).
     """
     target = (claude_dir or DEFAULT_CLAUDE_DIR()).expanduser()
 
@@ -379,6 +498,12 @@ def install_agent_assets(
     # additive + idempotent, never clobbering existing hooks/keys.
     settings_hook = _merge_skill_return_hook(target, dry_run=dry_run)
 
+    # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
+    # classifier stops silently denying the first /submit-hpc → Skill(hpc-submit)
+    # call. Same additive + idempotent + skip-unparseable contract as the hook
+    # merge above.
+    settings_permissions = _merge_skill_permissions(target, sorted(skills), dry_run=dry_run)
+
     return {
         "claude_dir": str(target),
         "commands_installed": sorted(commands),
@@ -386,5 +511,6 @@ def install_agent_assets(
         "agents_installed": sorted(agents),
         "cleared_collisions": cleared,
         "settings_hook": settings_hook,
+        "settings_permissions": settings_permissions,
         "wrote": not dry_run,
     }
