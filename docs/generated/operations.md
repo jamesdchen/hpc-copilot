@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**88 operations total**: 77 primitive atoms + 11 workflow atoms.
+**89 operations total**: 78 primitive atoms + 11 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (41)
+## `query` (42)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -57,6 +57,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`recoveries-list`](../primitives/recoveries-list.md) | ✓ | _none_ | `hpc-agent recoveries list` | `hpc_agent.recovery.cli.recoveries_list` | — | — |
 | [`recoveries-show`](../primitives/recoveries-show.md) | ✓ | _none_ | `hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]` | `hpc_agent.recovery.cli.recoveries_show` | — | — |
 | [`resolve-resources`](../primitives/resolve-resources.md) | ✓ | _none_ | `hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]` | `hpc_agent.ops.resolve_resources.resolve_resources` | `hpc_agent/schemas/resolve_resources.input.json` | `hpc_agent/schemas/resolve_resources.output.json` |
+| [`scaffold-spec`](../primitives/scaffold-spec.md) | ✓ | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` | `hpc_agent.ops.scaffold_spec.scaffold_spec` | — | `hpc_agent/schemas/scaffold_spec.output.json` |
 | [`suggest-setup-action`](../primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `hpc_agent.cli.setup_actions.suggest_setup_action` | — | `hpc_agent/schemas/suggest_setup_action.output.json` |
 | [`summarize-submit-plan`](../primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `hpc_agent.ops.submit.plan_summary.summarize_submit_plan` | — | `hpc_agent/schemas/summarize_submit_plan.output.json` |
 | [`verify-aggregation-complete`](../primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` | `hpc_agent.ops.aggregate.invariants.verify_aggregation_complete` | — | `hpc_agent/schemas/verify_aggregation_complete.output.json` |

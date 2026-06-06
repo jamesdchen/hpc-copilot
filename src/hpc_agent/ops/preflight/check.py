@@ -24,6 +24,7 @@ import os
 import shutil
 import socket
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,64 @@ def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
         if any(isinstance(v, str) and "<your_" in v for v in candidates):
             bad.append(key)
     return sorted(bad)
+
+
+def _runtime_uv_check(spec: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The #275 runtime-``uv`` probe as a self-contained check (or None when N/A).
+
+    Returns the ``runtime_uv`` check dict when *spec* is a built submit-flow
+    spec asking for ``HPC_RUNTIME=uv`` with an ``ssh_target`` — the same
+    ``command -v uv`` probe ``submit-flow`` runs — else None (no probe, no ssh
+    round-trip). One ssh round-trip, fannable with the cluster_ssh_echo probe
+    (#289). Raises are surfaced as a failed check, never an exception, so the
+    envelope stays uniform.
+    """
+    if not isinstance(spec, dict):
+        return None
+    job_env = spec.get("job_env") or {}
+    spec_ssh_target = spec.get("ssh_target")
+    if not (isinstance(job_env, dict) and job_env.get("HPC_RUNTIME") == "uv" and spec_ssh_target):
+        return None
+    try:
+        runtime_uv_preflight(str(spec_ssh_target), job_env=dict(job_env), skip=False)
+        return _check(
+            "runtime_uv",
+            True,
+            f"uv present on PATH after cluster env activation on {spec_ssh_target}",
+        )
+    except errors.SpecInvalid as exc:
+        return _check("runtime_uv", False, str(exc))
+    except (TimeoutError, OSError) as exc:
+        return _check(
+            "runtime_uv",
+            False,
+            f"runtime uv probe to {spec_ssh_target} could not complete: {exc}",
+        )
+
+
+def _cluster_ssh_echo_check(host: str) -> dict[str, Any]:
+    """The functional ``ssh <host> echo ok`` round-trip as a self-contained check.
+
+    Runs through the same production ssh path a real submit takes (the fix for
+    the 2026-06-04 bare-TCP-passed-but-rsync-failed demo). One ssh round-trip,
+    fannable with the runtime_uv probe (#289); the caller gates this on a
+    passing tcp:22 probe.
+    """
+    from hpc_agent.infra.remote import ssh_run
+
+    try:
+        result = ssh_run("echo ok", ssh_target=host, timeout=5)
+    except (TimeoutError, OSError) as exc:
+        return _check("cluster_ssh_echo", False, f"{host} ssh round-trip raised: {exc}")
+    if result.returncode == 0 and (result.stdout or "").strip() == "ok":
+        return _check("cluster_ssh_echo", True, f"{host} ssh round-trip succeeded")
+    stderr_tail = (result.stderr or "")[-200:]
+    return _check(
+        "cluster_ssh_echo",
+        False,
+        f"{host} ssh round-trip failed (exit {result.returncode}): {stderr_tail!r} — "
+        "production submits will hit the same failure",
+    )
 
 
 @primitive(
@@ -235,38 +294,23 @@ def check_preflight(
         clusters = {}
         checks.append(_check("clusters_yaml_parses", False, str(exc)))
 
-    # Runtime-binary probe (#275): when a built submit-flow spec is supplied AND
-    # it asks for ``runtime=uv``, verify ``uv`` is actually on PATH after the
-    # cluster env is activated — the SAME probe submit-flow runs, via the shared
-    # ``_preflight_runtime_check``. This is the fix for the gap where the
-    # SKILL.md flow ran check-preflight (spec-less) then submit-flow with the
-    # (now-removed) ``skip_preflight``, so the uv guard never fired and an array
-    # died with ``HPC_RUNTIME=uv but 'uv' not on PATH``. A non-uv runtime or no
-    # spec skips it (no extra ssh round-trip). Raises are surfaced as a failed
-    # check, never an exception, so the envelope stays uniform.
-    if isinstance(spec, dict):
-        job_env = spec.get("job_env") or {}
-        spec_ssh_target = spec.get("ssh_target")
-        if isinstance(job_env, dict) and job_env.get("HPC_RUNTIME") == "uv" and spec_ssh_target:
-            try:
-                runtime_uv_preflight(str(spec_ssh_target), job_env=dict(job_env), skip=False)
-                checks.append(
-                    _check(
-                        "runtime_uv",
-                        True,
-                        f"uv present on PATH after cluster env activation on {spec_ssh_target}",
-                    )
-                )
-            except errors.SpecInvalid as exc:
-                checks.append(_check("runtime_uv", False, str(exc)))
-            except (TimeoutError, OSError) as exc:
-                checks.append(
-                    _check(
-                        "runtime_uv",
-                        False,
-                        f"runtime uv probe to {spec_ssh_target} could not complete: {exc}",
-                    )
-                )
+    # Runtime-binary probe (#275) — DEFERRED so it can fan with the
+    # cluster_ssh_echo round-trip below (#289). When a built submit-flow spec
+    # asks for ``runtime=uv``, the probe verifies ``uv`` is on PATH after the
+    # cluster env activates (the SAME probe submit-flow runs) — closing the gap
+    # where a uv-less cluster's array died with ``HPC_RUNTIME=uv but 'uv' not on
+    # PATH``. It is one ssh round-trip; so is cluster_ssh_echo. Both go to the
+    # cluster and are independent, so we run them CONCURRENTLY when both fire
+    # (the documented ``check-preflight --cluster X --spec <uv-spec>`` submit
+    # path — submit.md Step 7) instead of stacking two RTTs. ``uv_pending`` marks
+    # the probe owed; it runs inside the cluster block (fanned) or standalone
+    # afterwards (no --cluster, or tcp:22 unreachable).
+    uv_pending = (
+        isinstance(spec, dict)
+        and isinstance(spec.get("job_env"), dict)
+        and (spec.get("job_env") or {}).get("HPC_RUNTIME") == "uv"
+        and bool(spec.get("ssh_target"))
+    )
 
     # If a cluster name was passed, attempt a TCP probe on port 22.
     if cluster:
@@ -319,37 +363,21 @@ def check_preflight(
                 # path is actually green. Skipped when the TCP probe
                 # failed (no point burning 5s on an unreachable host).
                 if tcp_ok:
-                    try:
-                        from hpc_agent.infra.remote import ssh_run
-
-                        result = ssh_run("echo ok", ssh_target=host, timeout=5)
-                        if result.returncode == 0 and (result.stdout or "").strip() == "ok":
-                            checks.append(
-                                _check(
-                                    "cluster_ssh_echo",
-                                    True,
-                                    f"{host} ssh round-trip succeeded",
-                                )
-                            )
-                        else:
-                            stderr_tail = (result.stderr or "")[-200:]
-                            checks.append(
-                                _check(
-                                    "cluster_ssh_echo",
-                                    False,
-                                    f"{host} ssh round-trip failed "
-                                    f"(exit {result.returncode}): {stderr_tail!r} — "
-                                    "production submits will hit the same failure",
-                                )
-                            )
-                    except (TimeoutError, OSError) as exc:
-                        checks.append(
-                            _check(
-                                "cluster_ssh_echo",
-                                False,
-                                f"{host} ssh round-trip raised: {exc}",
-                            )
-                        )
+                    if uv_pending:
+                        # Two independent cluster ssh round-trips (echo + the
+                        # #275 uv probe) — fan them so the wall-clock is one RTT,
+                        # not two (#289). Concurrent ssh to one host is the
+                        # established reconcile pattern (ops/monitor/reconcile).
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            fut_echo = pool.submit(_cluster_ssh_echo_check, host)
+                            fut_uv = pool.submit(_runtime_uv_check, spec)
+                            checks.append(fut_echo.result())
+                            uv_result = fut_uv.result()
+                        if uv_result is not None:
+                            checks.append(uv_result)
+                        uv_pending = False
+                    else:
+                        checks.append(_cluster_ssh_echo_check(host))
 
             # Reject un-customized placeholders: a clusters.yaml entry still
             # carrying <your_user> / <your_scratch> / <your_env> would pass
@@ -370,6 +398,13 @@ def check_preflight(
                 checks.append(
                     _check("cluster_config_customized", True, "no placeholder values remain")
                 )
+
+    # The runtime_uv probe runs standalone when it could NOT be fanned with a
+    # cluster_ssh_echo round-trip — no --cluster, or tcp:22 unreachable (#289).
+    if uv_pending:
+        standalone_uv = _runtime_uv_check(spec)
+        if standalone_uv is not None:
+            checks.append(standalone_uv)
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}

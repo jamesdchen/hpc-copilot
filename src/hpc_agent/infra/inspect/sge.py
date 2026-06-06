@@ -7,6 +7,7 @@ Parses ``qhost -F gpu -q`` (resource state) and ``qstat -u '*' -F gpu``
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from hpc_agent.infra.parsing import (
@@ -54,15 +55,24 @@ def _sge_inspect(
         now_iso=utcnow_iso(),
         nodes=[],
     )
-    rc, out, err = runner.run("qhost -F gpu -q")
+    # qhost (node resource state) and qstat (live co-tenants) are two
+    # independent ssh round-trips — neither reads the other's output — so fan
+    # them concurrently (the reconcile precedent) instead of stacking two RTTs
+    # (#289). On the qhost-failure early-return below the qstat result is just
+    # discarded; it ran concurrently, so it cost no extra wall-clock.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_qhost = pool.submit(runner.run, "qhost -F gpu -q")
+        fut_qstat = pool.submit(runner.run, "qstat -u '*' -F gpu")
+        rc, out, err = fut_qhost.result()
+        rc2, out2, err2 = fut_qstat.result()
+
     if rc != 0:
         errors.append({"code": "qhost_failed", "detail": err.strip()[:500]})
         snap.errors = errors
         return snap
     snap.nodes = _parse_qhost(out)
 
-    # qstat for live co-tenants.
-    rc2, out2, err2 = runner.run("qstat -u '*' -F gpu")
+    # qstat co-tenants (fetched above, concurrently with qhost).
     if rc2 == 0:
         tenants_by_node = _parse_qstat_full(out2)
         for n in snap.nodes:

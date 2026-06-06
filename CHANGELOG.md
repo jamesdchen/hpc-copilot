@@ -5,6 +5,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## Unreleased
+
+### Added — main-agent / worker parallelism: parallel canvassing during worker startup (#286)
+
+`/submit-hpc` no longer serialises human-thinking time behind worker-startup time. The slash now dispatches the `hpc-submit` skill in the **background** (Claude Code's `Agent` tool `run_in_background: true`, autonomous mode) and, in parallel, canvasses the predictable runtime-behaviour questions (`overwrite_prior_run`, `on_task_generator_mismatch`, the `data_axis` confirmation when the classifier is `unclassifiable`, `k_in_flight`) and runs local config validation (`clusters.yaml` coherence, `.hpc/axes.yaml` freshness, working-tree dirtiness) + surfaces recent history — none of which need worker output. At the **join** it reconciles the user's answers against the speculative dispatch: a no-op merge in the common case (the answers are runtime knobs the built spec doesn't depend on), or a cheap cancel + re-dispatch on the rare *spec conflict* (a cancelled dispatch has done preflight + maybe rsync, not the main-array `qsub`).
+
+This is the layer **above** the in-worker pipeline parallelism of #277–#280 (which overlaps stages *inside* the worker). It is a **slash-side change only** — the `hpc-submit` skill and the worker contract are unchanged, so the `scripts/count_llm_touchpoints.py` baseline (which measures `worker_prompts/`, not the slashes) is unmoved. Piloted on `/submit-hpc` and ported to `/aggregate-hpc` (local results-tree summary ∥ load-context/reconcile/pull) and `/monitor-hpc` (journal snapshot ∥ poll loop). Design notes: [`docs/design/submit-parallel-canvass.md`](docs/design/submit-parallel-canvass.md).
+
+### Added — `scaffold-spec`: break the schema-divination loop with a context-populated skeleton (#287)
+
+New read-only `scaffold-spec` query verb. When an agent must invoke a verb that takes a `--spec` JSON, it had no way to get a valid skeleton — each missing field / wrong type / stray `extra=forbid` key surfaced ONE at a time as a `spec_invalid` envelope, so the agent walked the schema by failed-validation feedback (the 2026-06-05 demo burned 11 rounds on `resolve-submit-inputs`, 7 on `build-submit-spec`, 3 on `validate-campaign`). `scaffold-spec` composes the read-only context sources — `load-context` + `clusters.yaml` + `compute-run-id` + `discover-executors` — into a populated skeleton for the named verb, **validated against that verb's own input model before it is returned** (it refuses to emit a spec the verb would reject). The handful of fields context can't supply come back as schema-valid placeholders listed in `unresolved_fields`, with per-field `sources` provenance. The loop collapses to one scaffold + one edit + one invoke.
+
+- Covers all four verbs #287 names: `build-submit-spec`, `validate-campaign`, `resolve-submit-inputs` (which reuses the `submit` + `sidecar` block builders), and `campaign-run` — the worst offender to hand-build. campaign-run's three nested workflow specs (submit-pipeline → submit-and-verify → submit-flow, status-pipeline → monitor-flow, aggregate-flow) are emitted as one structurally-valid skeleton with the run-identity + cluster fields threaded into all three levels; the non-derivable leaves (`job_env`'s EXECUTOR, `script`, …) come back in `unresolved_fields`.
+- Emits only the **coherent** conda-activation pair: a `conda_env` without a `conda_source` (#281) crashes the cluster preamble, so the half-state is never produced.
+- Read-only (`verb: query`, no side effects): the skeleton rides the envelope `data`, never written to disk. New `scaffold_spec.output.json`; docs at `docs/primitives/scaffold-spec.md`.
+
+### Added — regression guard: heavy deps stay out of module-level imports (#288)
+
+Audit of the per-verb Python startup tax. Every `hpc-agent <verb>` builds the CLI parser, which `pkgutil.walk_packages`-imports every module under the primitive-discovery roots — so a top-level `import pandas` / `numpy` in any CLI-reachable module would tax *every* verb's startup, not just the aggregate-side one that needs it. The audit found the hot path **already clean**: pandas / numpy / scipy / sklearn / matplotlib are imported nowhere in `src/`, and the lone `pyarrow.parquet` (`ops/validate/input_dataset.py`) is already function-local. The residual startup cost is pydantic + `importlib.metadata` (version + plugin entry-point scans) + transitive `asyncio` — the hot path the issue itself flags as not movable without a model-loading refactor.
+
+Locked in with `tests/contract/test_no_heavy_toplevel_imports.py`: it AST-scans every framework module (excluding the user-facing `models/mapreduce/templates/` scaffolds) and fails if any imports a heavy data/ML dep (`pandas`, `numpy`, `scipy`, `sklearn`, `pyarrow`, `torch`, `matplotlib`, …) at module level — so a future top-level import re-growing the tax trips in CI, with the function-local fix named in the failure message.
+
+### Changed — parallel-by-default audit: fan check-preflight + SGE inspect-cluster ssh probes (#289)
+
+Audit of independent stages running sequentially across the composites. Two concrete wins. **(1) check-preflight:** `check-preflight --cluster X --spec <uv-spec>` (the documented submit Step 7, `submit.md:227`) fired TWO independent cluster ssh round-trips back-to-back — the #275 `runtime_uv` probe and the `cluster_ssh_echo` functional probe. They now run **concurrently** on a `ThreadPoolExecutor` (the established `reconcile` pattern — concurrent ssh to one host via the multiplexed ControlMaster), so that pair's wall-clock is one RTT, not two, on every uv-cluster submit. The probes are extracted into `_runtime_uv_check` / `_cluster_ssh_echo_check`; the standalone paths (no `--cluster`, or tcp:22 unreachable) are preserved, and a `threading.Barrier` test pins the concurrency. **(2) inspect-cluster (SGE):** `_sge_inspect`'s `qhost` (node state) and `qstat` (co-tenants) are two independent ssh round-trips — neither reads the other's output — now fanned the same way for a second ~1-RTT win.
+
+The rest of the audit found the high-value fans already in place and the remaining candidates genuinely sequential:
+
+- **`reconcile`** already fans its three ssh calls (status + combined-waves + alive-check) on a thread pool; its `load_run` is a *prerequisite* (it provides `ssh_target`/`job_ids`), not an overlappable stage — the issue's "scheduler probe ∥ local read" win isn't available.
+- **`submit-preflight`** already fans `check-preflight ∥ resolve-resources` (#277); **`monitor-flow`** already batches the per-tick query into one ssh (#251).
+- **`aggregate-flow`** (combine → pull → reduce) and **`status`/`aggregate-preflight`** (install → load → reconcile, where reconcile is built *from* load-context's envelope) are strict data-dependent chains — not parallelisable without changing semantics.
+- **`inspect-cluster` SLURM** is *not* fanned: `sacct -N <nodes>` is scoped to the node list `scontrol show node` returns, a genuine data dependency (only SGE's two probes are independent). **`discover`** walks `.hpc/*.py` with `ast.parse` — GIL-bound CPU, so a thread pool buys nothing; left sequential.
+
 ## 0.10.12 — 2026-06-05
 
 Reconcile two-tier fix off the same demo session. Tier 1 = root cause (the bare-python reporter shape resurrected as a regression in the reconcile path), Tier 2 = defense in depth (route reporter-failure through `unable_to_verify`, the same lifecycle state #258 already added for alive-check failures).

@@ -300,3 +300,25 @@ class TestInspectClusterEntry:
         ins.inspect_cluster("discovery", runner=runner, use_cache=False)
         assert any(c.startswith("scontrol show node") for c in runner.calls)
         assert any(c.startswith("sacct -N") for c in runner.calls)
+
+    def test_sge_qhost_qstat_run_concurrently(self) -> None:
+        # The two SGE probes (qhost + qstat) are independent and fan on a
+        # thread pool (#289). A Barrier(2) only releases if both run at once;
+        # serial execution blocks the first wait() to timeout and raises.
+        import threading
+
+        barrier = threading.Barrier(2, timeout=5)
+
+        class _BarrierRunner:
+            def run(self, cmd: str) -> tuple[int, str, str]:
+                barrier.wait()
+                return (0, "", "")
+
+        snap = ins._sge_inspect(
+            "c",
+            {},
+            stress_alloc_mem_pct=0.8,
+            stress_cpu_load_frac=0.8,
+            runner=_BarrierRunner(),
+        )
+        assert snap.scheduler_kind == "sge"

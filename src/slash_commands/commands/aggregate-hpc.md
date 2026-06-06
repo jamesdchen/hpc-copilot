@@ -20,6 +20,15 @@ Skill("hpc-aggregate", {
 
 The skill auto-discovers profile/run/stage from on-disk state; only fields the user pinned go in the initial spec.
 
+## Parallel startup
+
+The aggregate dispatch spends its startup on load-context + reconcile + the cluster rsync-pull. **Dispatch the `hpc-aggregate` skill in the background** (Claude Code's `Agent` tool `run_in_background: true`) and, in parallel, do the local work (#286):
+
+- **Summarise the local results tree.** Show what's already under `<experiment_dir>/_aggregated/<run_id>/` (prior pulls, partial combiner output) so the user has context while the pull runs.
+- **Canvass `allow_partial`.** When the run is terminal-with-failures the skill will ask whether to aggregate on partial data; pull that question forward so the answer rides the join.
+
+Await the dispatch at the join — immediate when the results are already pulled/cached. An `allow_partial` answer folds in (it changes how the worker reduces, not what it pulls). Same shape as `/submit-hpc`'s parallel startup, ported per #286.
+
 ## On `needs_resolution` — walking ambiguities
 
 ### Dialog: `profile`

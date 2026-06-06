@@ -540,6 +540,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "scaffold-spec",
+    "output_schema": "scaffold_spec.output.json",
+    "python": "hpc_agent.ops.scaffold_spec.scaffold_spec",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent suggest-setup-action [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,

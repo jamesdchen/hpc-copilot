@@ -21,6 +21,15 @@ Skill("hpc-status", {
 
 If `wait_terminal` is unset, default to `false` (snapshot) unless the user said "wait until done."
 
+## Parallel startup
+
+Monitoring is a long poll — don't leave the user idle until the first tick. **Dispatch the `hpc-status` skill in the background** (Claude Code's `Agent` tool `run_in_background: true`) and, in parallel, do the work that needs no fresh cluster output (#286):
+
+- **Surface the journal snapshot first.** The run's last recorded `last_status` + lifecycle are on disk — render them immediately with `monitor-summary` so the user sees where the run stood without waiting for the poll.
+- **Canvass the predictable decision.** When the local snapshot already shows a high failure count, ask `high_failure_rate_action` (investigate / resubmit / abandon) in parallel, so the verdict is ready when the poll confirms terminal.
+
+Await the background poll at the join — immediate on the fast path (run already terminal). The user's answer folds into the surfaced result; if it conflicts with what the poll found (e.g. the run actually completed clean), drop it. Same shape as `/submit-hpc`'s parallel startup, ported per #286.
+
 ## On `needs_resolution` — walking ambiguities
 
 ### Dialog: `run_id`

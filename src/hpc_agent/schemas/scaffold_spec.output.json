@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/scaffold_spec.output.json",
+  "title": "scaffold-spec output data",
+  "description": "Shape of the ``data`` field on a ``scaffold-spec`` envelope.\n\nThe agent reads ``spec``, overrides the ``unresolved_fields`` (the\nhandful of values context could not supply — surfaced as schema-valid\nplaceholders), then invokes the target verb with the result. One\nscaffold + one edit + one invoke, instead of N rounds of\n``spec_invalid`` feedback.",
+  "type": "object",
+  "required": [
+    "verb",
+    "spec",
+    "supported_verbs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "verb": {
+      "description": "The target verb this skeleton is for (e.g. `resolve-submit-inputs`).",
+      "title": "Verb",
+      "type": "string"
+    },
+    "spec": {
+      "additionalProperties": true,
+      "description": "The populated, schema-valid skeleton. Already validated against the target verb's input model, so the verb will not reject its shape — pass it (after filling `unresolved_fields`) to `hpc-agent <verb> --spec`.",
+      "title": "Spec",
+      "type": "object"
+    },
+    "unresolved_fields": {
+      "description": "Dotted paths (e.g. `submit.ssh_target`, `sidecar.executor`) whose values are PLACEHOLDERS context could not supply. The caller must fill or override these before invoking the target verb — they are schema-valid so the skeleton validates, but they are not real.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Unresolved Fields",
+      "type": "array"
+    },
+    "sources": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Per-field provenance: which context source populated each value (`clusters.yaml#<cluster>.ssh_target`, `compute-run-id(<run>)`, `load-context latest_run.*`), or a `placeholder — ...` marker for the unresolved ones.",
+      "title": "Sources",
+      "type": "object"
+    },
+    "supported_verbs": {
+      "description": "The verbs `scaffold-spec` can populate today.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Supported Verbs",
+      "type": "array"
+    },
+    "warnings": {
+      "description": "Context-gathering degradations (e.g. clusters.yaml unreadable, or `.hpc/tasks.py` absent so run_id/cmd_sha came back as placeholders).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  }
+}

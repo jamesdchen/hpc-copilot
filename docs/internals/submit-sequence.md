@@ -68,6 +68,15 @@ is loaded into the chat agent's context. It does:
    The skill body is inlined into the chat agent's context. The agent
    now executes the skill's procedure.
 
+   > **Parallel startup (#286).** On `/submit-hpc` this Skill invocation
+   > is dispatched in the *background* (`Agent` tool `run_in_background`,
+   > autonomous mode) so the slash can canvass the predictable
+   > runtime-behaviour questions and validate local config *in parallel*
+   > with the slow worker startup, then reconcile at the join. The
+   > sequence below is the same; only the slash's *dispatch timing*
+   > changes. See [the Variants section](#variants) and
+   > [`docs/design/submit-parallel-canvass.md`](../design/submit-parallel-canvass.md).
+
 ## Step 2: Workflow skill executes (decision layer)
 
 The `hpc-submit` skill body
@@ -342,6 +351,32 @@ The aggregate worker returns the final metrics envelope to the slash;
 the slash surfaces to the user.
 
 ## Variants
+
+### Parallel startup (`/submit-hpc`)
+
+The slash overlaps the worker's startup latency (load-context, ssh
+probes, rsync deploy — a live 2026-06-05 submit spent 2m22s here) with
+the main thread's *user-facing and local* work:
+
+- The `Skill(hpc-submit, …)` of Step 1 is dispatched in the **background**
+  (`Agent` tool `run_in_background: true`) in **autonomous mode** — it
+  applies each ambiguity's `safe_default` instead of pausing for the user
+  (the same resolution the "Autonomous caller (MARs)" variant below uses).
+- In the foreground the slash **canvasses** the predictable
+  runtime-behaviour questions (`overwrite_prior_run`,
+  `on_task_generator_mismatch`, the `data_axis` confirmation when the
+  classifier is `unclassifiable`, `k_in_flight`) and **validates** local
+  config (`clusters.yaml` coherence, `.hpc/axes.yaml` freshness,
+  working-tree dirtiness).
+- At the **join** it reconciles: most answers are runtime knobs the built
+  spec doesn't depend on (fold in), so the background work is reused; a
+  rare *spec conflict* (`refresh`, a non-`Sequential` axis override,
+  `keep`) cancels the background task — cheaply, before the main-array
+  `qsub` — and re-dispatches with the corrected spec.
+
+Steps 2–5 are unchanged: this variant moves *when* the slash asks, not
+*what* the worker is handed. See
+[`docs/design/submit-parallel-canvass.md`](../design/submit-parallel-canvass.md).
 
 ### Campaign tick
 
