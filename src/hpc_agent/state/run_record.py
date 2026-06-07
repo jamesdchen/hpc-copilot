@@ -28,6 +28,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -218,9 +220,60 @@ class RunRecord:
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
+# Path-form translators applied on Windows BEFORE resolve() so the same
+# logical drive expressed under Bash MINGW (/c/...) or WSL (/mnt/c/...)
+# canonicalizes into the Windows drive-letter form. Without this, the same
+# experiment dir under different shells gets distinct namespace hashes and
+# submitter / reconcile silently miss each other (#296).
+_BASH_MINGW_DRIVE_RE = re.compile(r"^/([a-zA-Z])(/.*)?$")
+_WSL_DRIVE_RE = re.compile(r"^/mnt/([a-zA-Z])(/.*)?$")
+
+
+def _canonicalize_for_hash(experiment_dir: Path) -> str:
+    """Path-form-invariant string for hashing.
+
+    On Windows, translates Bash MINGW (``/c/...``) and WSL (``/mnt/c/...``)
+    prefixes into the Windows drive-letter form before ``resolve()``, then
+    folds ``/`` → ``\\`` and uppercases the drive letter. Existing canonical
+    Windows-form paths (``C:\\...``) hash unchanged, preserving every
+    journal namespace dir already on disk.
+
+    On non-Windows, returns ``str(Path(p).resolve())`` unchanged.
+    """
+    if sys.platform != "win32":
+        return str(Path(experiment_dir).resolve())
+
+    # On Windows, ``Path('/c/Users/...')`` normalizes immediately to
+    # ``\c\Users\...`` — the forward slashes are gone before this function
+    # runs. Fold to forward slashes BEFORE the regex check so the prefix
+    # patterns match regardless of which slash flavor the caller passed.
+    raw = str(experiment_dir).replace(chr(92), "/")
+
+    m = _WSL_DRIVE_RE.match(raw)
+    if m:
+        drive, rest = m.groups()
+        raw = f"{drive.upper()}:{rest or '/'}"
+    else:
+        m = _BASH_MINGW_DRIVE_RE.match(raw)
+        if m:
+            drive, rest = m.groups()
+            raw = f"{drive.upper()}:{rest or '/'}"
+
+    resolved = str(Path(raw).resolve()).replace("/", chr(92))
+    if len(resolved) >= 2 and resolved[1] == ":":
+        resolved = resolved[0].upper() + resolved[1:]
+    return resolved
+
+
 def repo_hash(experiment_dir: Path) -> str:
-    """Stable 12-char hex digest of the resolved experiment directory."""
-    return hashlib.sha256(str(Path(experiment_dir).resolve()).encode()).hexdigest()[:12]
+    """Stable 12-char hex digest of the resolved experiment directory.
+
+    Path-form-invariant on Windows (#296): the same logical dir under
+    backslash, Bash MINGW ``/c/...``, and WSL ``/mnt/c/...`` produces the
+    same hash so the submitter writes the journal under the same namespace
+    the reconcile / monitor reader looks up.
+    """
+    return hashlib.sha256(_canonicalize_for_hash(experiment_dir).encode()).hexdigest()[:12]
 
 
 def journal_dir(experiment_dir: Path) -> Path:

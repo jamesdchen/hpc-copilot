@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.17 — 2026-06-06
+
+### Fixed — `repo_hash` is path-form-invariant on Windows (#296)
+
+`state.run_record.repo_hash` was computing `sha256(str(Path(experiment_dir).resolve()))` and treating Bash MINGW (`/c/...`), WSL (`/mnt/c/...`), and the native backslash form as different namespaces. Empirical 2026-06-06: a submit issued via the Bash tool wrote the journal under one namespace; a reconcile call from the native session read from another; the run looked corrupt locally even though the cluster sidecar was fine. Four distinct hashes for the same logical dir: `C:\Users\james\demo-hpc` → `bc64a2106672`, `/c/Users/james/demo-hpc` → `74833c5d08f3`, `/mnt/c/Users/james/demo-hpc` → `806262f70e37`.
+
+New `_canonicalize_for_hash` translates Bash MINGW and WSL prefixes into the Windows drive-letter form before `resolve()`, folds `/` → `\\`, and uppercases the drive letter. All three forms now produce the canonical `C:\Users\james\demo-hpc` string → identical hash. The translator only fires when `sys.platform == "win32"`; Linux / macOS behavior is unchanged. The canonical Windows form's hash is unchanged, so every existing `~/.claude/hpc/<hash>/` namespace dir continues to work — backward-compat preserved end-to-end (regression test `test_demo_hpc_hash_is_stable` pins the empirical `bc64a2106672` value).
+
+11 new tests pin every branch: each of the three Windows forms agrees with the others, drive-letter case canonicalizes, distinct drives still hash distinctly, distinct paths under the same drive still hash distinctly, the cluster `/u/scratch/...` form remains distinct (it's a remote location, must NOT collide with any local namespace), POSIX is unchanged, repeats are deterministic, and the canonical demo-hpc value matches the pre-#296 hash.
+
 ## 0.10.16 — 2026-06-06
 
 Prose trim pass + two shared-fixture follow-ups from 0.10.15.
