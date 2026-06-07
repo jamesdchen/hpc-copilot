@@ -124,6 +124,46 @@ def test_update_run_status_rejects_unknown_field(journal_home, experiment):
         update_run_status(experiment, "ridge_abcd1234", profile="hacked")
 
 
+def test_pre_299_record_loads_with_auto_resume_defaults(journal_home, experiment):
+    """A record written before the #299 auto-resume keystone existed (no
+    ``script`` / ``auto_resume_on_kill`` / cap fields) must load unchanged —
+    ``from_dict`` filters to known fields and the dataclass supplies defaults,
+    so no migration is needed and the run stays default-OFF."""
+    rid = "legacy_aaaa1111"
+    legacy_payload = {
+        "run_id": rid,
+        "profile": "ml_ridge",
+        "cluster": "hoffman2",
+        "ssh_target": "user@hoffman2.idre.ucla.edu",
+        "remote_path": "/u/scratch/exp",
+        "job_name": "ml_ridge",
+        "job_ids": ["12345678"],
+        "total_tasks": 100,
+        "submitted_at": "2026-04-26T17:00:00+00:00",
+        "experiment_dir": "/tmp/exp",
+        "schema_version": run_record.SCHEMA_VERSION,
+    }
+    _atomic_write_json(_run_path(experiment, rid), legacy_payload)
+
+    loaded = load_run(experiment, rid)
+    assert loaded is not None
+    assert loaded.script == ""
+    assert loaded.backend == ""
+    assert loaded.job_env == {}
+    assert loaded.auto_resume_on_kill is False
+    assert loaded.max_auto_resumes == 2
+    assert loaded.auto_resume_count == 0
+
+
+def test_auto_resume_count_is_updatable(journal_home, experiment):
+    """The composite bumps ``auto_resume_count`` via the whitelisted
+    read-modify-write path."""
+    upsert_run(experiment, _make_record(auto_resume_on_kill=True))
+    updated = update_run_status(experiment, "ridge_abcd1234", auto_resume_count=1)
+    assert updated.auto_resume_count == 1
+    assert load_run(experiment, "ridge_abcd1234").auto_resume_count == 1
+
+
 def test_mark_run_removes_from_in_flight(journal_home, experiment):
     record = _make_record()
     upsert_run(experiment, record)

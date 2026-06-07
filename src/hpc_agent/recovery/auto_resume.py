@@ -28,7 +28,12 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
-__all__ = ["AutoResumeDecision", "resumable_task_ids", "decide_auto_resume"]
+__all__ = [
+    "AutoResumeDecision",
+    "resumable_task_ids",
+    "decide_auto_resume",
+    "decide_auto_resume_from_ids",
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -76,16 +81,41 @@ def decide_auto_resume(
     preempted, and the run is under its resume *cap*. Every other case is an
     ``"escalate"`` verdict carrying the reason, so a human / the agent decides
     (OOM mitigation, a real bug, or "cap reached — investigate").
+
+    This sidecar-shaped entry point reads the resumable ids out of the per-task
+    ``preempt`` marks. The composite uses :func:`decide_auto_resume_from_ids`
+    instead so it can feed the *cluster-authoritative* preempted set (the
+    monitor's local sidecar is not refreshed with the dispatcher's marks).
     """
-    ids = resumable_task_ids(sidecar)
+    return decide_auto_resume_from_ids(
+        resumable_task_ids(sidecar), policy_on=policy_on, count=count, cap=cap
+    )
+
+
+def decide_auto_resume_from_ids(
+    resumable_ids: list[int] | tuple[int, ...],
+    *,
+    policy_on: bool,
+    count: int,
+    cap: int,
+) -> AutoResumeDecision:
+    """Same three-gate decision as :func:`decide_auto_resume`, but taking the
+    resumable (preempted) task ids directly.
+
+    The composite sources *resumable_ids* from the cluster-authoritative
+    failure classification (``fetch_failures``' ``preempted_task_ids``), which
+    is both available without a refreshed local sidecar AND reflects the
+    *current* attempt's exit reason — so a task that was preempted, resumed,
+    then OOM-killed is classified ``system_oom`` (absent here) and correctly
+    escalates instead of re-resuming a stale ``preempt`` mark.
+    """
+    ids = tuple(sorted(int(i) for i in resumable_ids))
     if not policy_on:
-        return AutoResumeDecision("escalate", tuple(ids), "auto_resume_on_kill not enabled")
+        return AutoResumeDecision("escalate", ids, "auto_resume_on_kill not enabled")
     if not ids:
         return AutoResumeDecision(
             "escalate", (), "no preempted (resumable) tasks — not a resumable kill"
         )
     if int(count) >= int(cap):
-        return AutoResumeDecision(
-            "escalate", tuple(ids), f"auto-resume cap reached ({count}/{cap})"
-        )
-    return AutoResumeDecision("resume", tuple(ids), "preempted tasks present and under resume cap")
+        return AutoResumeDecision("escalate", ids, f"auto-resume cap reached ({count}/{cap})")
+    return AutoResumeDecision("resume", ids, "preempted tasks present and under resume cap")

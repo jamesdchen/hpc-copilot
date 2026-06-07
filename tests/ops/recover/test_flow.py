@@ -148,6 +148,32 @@ class TestPreemptedDetection:
         )
         assert isinstance(result, ResubmitFlowResult)
 
+    def test_bypass_preempt_throttle_skips_all_preempted_guard(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        """The auto-resume composite's posture (#299): an all-preempted set is
+        exactly what it WANTS to resume, so bypass_preempt_throttle=True must
+        suppress the manual "back off" raise (journal-only here, no cluster)."""
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment)
+        make_sidecar_json(
+            experiment,
+            run_id=RUN_ID,
+            cluster=CLUSTER,
+            profile=PROFILE,
+            tasks={"1": {"preempt": "sigterm"}, "2": {"preempt": "sigterm"}},
+        )
+        # Without bypass this raises Preempted (see test_all_preempted_raises);
+        # with bypass it proceeds to the journal-only resubmit record.
+        result = resubmit_flow(
+            experiment,
+            RUN_ID,
+            failed_task_ids=[1, 2],
+            category="preempted",
+            bypass_preempt_throttle=True,
+        )
+        assert isinstance(result, ResubmitFlowResult)
+
 
 class TestOverridePassThrough:
     def test_caller_overrides_recorded_verbatim(

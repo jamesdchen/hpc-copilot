@@ -207,6 +207,29 @@ class SubmitFlowSpec(BaseModel):
     )
     campaign_id: CampaignId | None = Field(default=None)
     runtime: Runtime | None = Field(default=None)
+    auto_resume_on_kill: bool = Field(
+        default=False,
+        description=(
+            "Opt-in automatic checkpoint-resume on a preemption/walltime kill "
+            "(#294 Layer 2 / #299). Default OFF: a run that does not set this is "
+            "NEVER auto-resubmitted. When ON, the monitor's terminal-FAILED hook "
+            "consults the auto-resume gate — and ONLY on an explicit per-task "
+            "preempt mark (the dispatcher's SIGTERM signal; exit 130). OOM (137) "
+            "and executor errors carry no mark and always escalate instead of "
+            "looping. Requires checkpoint-writing executors to make progress; a "
+            "task with no checkpoint just restarts from scratch on resume."
+        ),
+    )
+    max_auto_resumes: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Hard cap on automatic resumes for this run when auto_resume_on_kill "
+            "is set (#299). The ultimate backstop: even total misclassification "
+            "can waste at most this many resubmits before the gate escalates with "
+            "'cap reached'. Ignored when auto_resume_on_kill is false."
+        ),
+    )
     resources: SubmitResources | None = Field(
         default=None,
         description=(

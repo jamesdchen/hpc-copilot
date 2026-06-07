@@ -227,6 +227,8 @@ def resubmit_flow(
     backend: str | None = None,
     job_name: str | None = None,
     job_env: dict[str, str] | None = None,
+    from_checkpoint: bool = False,
+    bypass_preempt_throttle: bool = False,
     constraints: Any = None,
     backend_factory: Any = None,
 ) -> ResubmitFlowResult:
@@ -235,6 +237,14 @@ def resubmit_flow(
     Errors raise the existing :class:`~hpc_agent.errors.HpcError`
     hierarchy so the CLI adapter can surface them as typed envelope
     errors uniformly with ``submit_flow``.
+
+    *from_checkpoint* stamps ``HPC_RESUME_FROM_CHECKPOINT=1`` into the
+    cluster ``job_env`` so the dispatcher resumes each retried task from
+    its latest checkpoint (#294 PR3). *bypass_preempt_throttle* skips the
+    "all tasks preempted → back off" guard that fires for manual
+    ``category="preempted"`` resubmits; the auto-resume composite sets it
+    because resuming preempted work is its entire purpose and the resume
+    cap is its backstop instead (#299).
 
     Raises
     ------
@@ -256,9 +266,25 @@ def resubmit_flow(
             f"category must be one of {sorted(_VALID_CATEGORIES)}; got {category!r}"
         )
 
+    # #294 PR3 / #299: ``from_checkpoint`` resumes each retried task from its
+    # latest checkpoint. The signal travels to the cluster as a job_env var the
+    # dispatcher reads (``HPC_RESUME_FROM_CHECKPOINT=1``) — so it only bites on
+    # an actual cluster re-run (``submit_to_cluster=True``), and a task with no
+    # checkpoint just starts fresh. Single-sourced here so every caller
+    # (``cmd_resubmit``, the auto-resume composite) gets the identical
+    # convention rather than each hand-stamping the var.
+    if from_checkpoint:
+        job_env = {**(job_env or {}), "HPC_RESUME_FROM_CHECKPOINT": "1"}
+
     sidecar = _safe_read_sidecar(experiment_dir, run_id)
 
-    if category == "preempted" and sidecar is not None:
+    if category == "preempted" and sidecar is not None and not bypass_preempt_throttle:
+        # The "all preempted → wait for pressure to abate" throttle is the
+        # MANUAL/agent posture (#299): an operator resubmitting an all-preempted
+        # set by hand should back off. The auto-resume composite is the opposite
+        # — the deliberate, opt-in, hard-capped path whose whole job is to resume
+        # preempted work — so it passes ``bypass_preempt_throttle=True`` and
+        # relies on ``max_auto_resumes`` as its backstop instead.
         _raise_if_all_preempted(sidecar, failed_task_ids)
 
     effective_overrides = overrides

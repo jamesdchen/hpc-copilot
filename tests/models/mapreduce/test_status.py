@@ -60,6 +60,66 @@ class TestReportStatus:
             assert k in ru
 
 
+class TestPreemptedDetection:
+    """The reporter surfaces a fresh, per-poll scheduler-side preempt signal
+    (exit 130/143 or state PREEMPTED) so the monitor's auto-resume gate reads
+    it straight off last_status (#299)."""
+
+    def test_is_preempted_task_exit_codes_and_state(self):
+        from hpc_agent.models.mapreduce.reduce.status import _is_preempted_task
+
+        assert _is_preempted_task({"state": "FAILED", "exit_code": "130:0"}) is True
+        assert _is_preempted_task({"state": "FAILED", "exit_code": "143"}) is True
+        assert _is_preempted_task({"state": "PREEMPTED", "exit_code": "0:0"}) is True
+        # OOM / real failure / running are NOT preempted.
+        assert _is_preempted_task({"state": "OUT_OF_MEMORY", "exit_code": "137:0"}) is False
+        assert _is_preempted_task({"state": "FAILED", "exit_code": "1:0"}) is False
+        assert _is_preempted_task({"state": "RUNNING", "exit_code": None}) is False
+        assert _is_preempted_task({}) is False
+
+    def test_preempted_ids_from_tasks_sorts_and_filters(self):
+        from hpc_agent.models.mapreduce.reduce.status import _preempted_ids_from_tasks
+
+        tasks = {
+            "3": {"state": "FAILED", "exit_code": "130:0"},
+            "1": {"state": "PREEMPTED"},
+            "2": {"state": "OUT_OF_MEMORY", "exit_code": "137:0"},  # OOM excluded
+        }
+        assert _preempted_ids_from_tasks(tasks) == [1, 3]
+
+    def test_report_status_folds_preempted_task_ids(self, tmp_path):
+        fake_query = {
+            "tasks": {
+                1: {"state": "FAILED", "exit_code": "130:0"},  # preempted
+                2: {"state": "OUT_OF_MEMORY", "exit_code": "137:0"},  # OOM
+            },
+            "errors": [],
+        }
+        with (
+            patch(
+                "hpc_agent.models.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status(
+                result_dir=tmp_path, job_ids=["12345"], total_tasks=2, scheduler="slurm"
+            )
+        assert result["preempted_task_ids"] == [1]
+
+    def test_report_status_omits_key_when_none_preempted(self, tmp_path):
+        fake_query = {"tasks": {1: {"state": "FAILED", "exit_code": "1:0"}}, "errors": []}
+        with (
+            patch(
+                "hpc_agent.models.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status(
+                result_dir=tmp_path, job_ids=["12345"], total_tasks=1, scheduler="slurm"
+            )
+        assert "preempted_task_ids" not in result
+
+
 class TestReportStatusResourceUsage:
     def test_resource_usage_sums_from_query(self, tmp_path):
         # Fake query returns two running tasks with usage data so we can

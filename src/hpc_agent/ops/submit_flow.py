@@ -1052,6 +1052,17 @@ def _submit_one_spec(
         ),
         cmd_sha=dedup_cmd_sha,
         invalidate_on_code_change=spec.invalidate_on_code_change,
+        # #299 auto-resume keystone — persist what a monitor-side auto-resume
+        # would re-submit *with* (the actual augmented env that shipped to the
+        # scheduler, the cluster script, and the backend), plus the opt-in
+        # policy + cap. Default-OFF: a spec that didn't set auto_resume_on_kill
+        # is never auto-resubmitted. The canary record above deliberately omits
+        # these — a canary is never auto-resumed.
+        script=spec.script,
+        backend=spec.backend,
+        job_env=job_env_full,
+        auto_resume_on_kill=spec.auto_resume_on_kill,
+        max_auto_resumes=spec.max_auto_resumes,
     )
 
     if spec.partial_ok:

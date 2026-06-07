@@ -77,6 +77,11 @@ def submit_and_record(
     cmd_sha: str | None = None,
     tasks_py_sha: str | None = None,
     invalidate_on_code_change: bool = False,
+    script: str = "",
+    backend: str = "",
+    job_env: dict[str, str] | None = None,
+    auto_resume_on_kill: bool = False,
+    max_auto_resumes: int = 2,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -204,6 +209,15 @@ def submit_and_record(
                     submitted_at=str(sidecar_data.get("submitted_at") or utcnow_iso()),
                     experiment_dir=str(Path(experiment_dir).resolve()),
                     campaign_id=str(sidecar_data.get("campaign_id") or campaign_id),
+                    # Carry the caller's #299 auto-resume keystone onto the
+                    # journal-wiped reconstruction too (the sidecar does not
+                    # store it), so a cross-machine resubmit keeps the opt-in
+                    # alive instead of silently reverting to default-OFF.
+                    script=script,
+                    backend=backend,
+                    job_env=dict(job_env or {}),
+                    auto_resume_on_kill=auto_resume_on_kill,
+                    max_auto_resumes=int(max_auto_resumes),
                 )
                 # Repair the journal so future load_run calls hit it
                 # directly without re-doing the cmd_sha scan.
@@ -222,6 +236,15 @@ def submit_and_record(
         submitted_at=utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
         campaign_id=campaign_id,
+        # #299 auto-resume keystone: the inputs a monitor-side auto-resume
+        # re-submits *with*, plus the opt-in policy + cap. Empty/False
+        # defaults mean a caller that does not thread these gets the
+        # zero-blast-radius baseline (auto-resume never fires).
+        script=script,
+        backend=backend,
+        job_env=dict(job_env or {}),
+        auto_resume_on_kill=auto_resume_on_kill,
+        max_auto_resumes=int(max_auto_resumes),
     )
     upsert_run(experiment_dir, record)
     # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids

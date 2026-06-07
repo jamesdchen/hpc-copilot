@@ -284,6 +284,53 @@ class TestClusterSubmission:
         record = load_run(experiment, RUN_ID)
         assert result.new_job_ids[0] in record.job_ids
 
+    def test_from_checkpoint_stamps_resume_var_into_job_env(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        """from_checkpoint=True single-sources HPC_RESUME_FROM_CHECKPOINT=1 into
+        the job_env that ships to the scheduler (#294 PR3 / #299), so the
+        dispatcher resumes each retried task from its latest checkpoint."""
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment, total_tasks=10)
+        stub = _StubBackend()
+        resubmit_flow(
+            experiment,
+            RUN_ID,
+            failed_task_ids=[1, 2],
+            category="walltime",
+            submit_to_cluster=True,
+            script="run.sh",
+            backend="slurm",
+            job_name="resub",
+            job_env={"HPC_RUN_ID": RUN_ID},
+            from_checkpoint=True,
+            backend_factory=_make_factory(stub),
+        )
+        build_calls = [c for c in stub.calls if c["step"] == "build_command"]
+        assert build_calls, "expected at least one batch submission"
+        assert "HPC_RESUME_FROM_CHECKPOINT" in build_calls[0]["job_env_keys"]
+
+    def test_no_from_checkpoint_leaves_job_env_unstamped(
+        self, journal_home, experiment, tmp_path, monkeypatch
+    ):
+        _write_clusters_yaml(tmp_path, monkeypatch)
+        _seed(experiment, total_tasks=10)
+        stub = _StubBackend()
+        resubmit_flow(
+            experiment,
+            RUN_ID,
+            failed_task_ids=[1, 2],
+            category="walltime",
+            submit_to_cluster=True,
+            script="run.sh",
+            backend="slurm",
+            job_name="resub",
+            job_env={"HPC_RUN_ID": RUN_ID},
+            backend_factory=_make_factory(stub),
+        )
+        build_calls = [c for c in stub.calls if c["step"] == "build_command"]
+        assert "HPC_RESUME_FROM_CHECKPOINT" not in build_calls[0]["job_env_keys"]
+
     def test_skips_qsub_on_dedupe(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)

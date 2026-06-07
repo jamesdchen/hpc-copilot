@@ -130,6 +130,17 @@ def record_status(
     # cluster-side reporter emitted one (sidecar carried a wave_map).
     if isinstance(report.get("waves"), dict) and report["waves"]:
         summary["waves"] = report["waves"]
+    # Carry the fresh scheduler-side preemption signal (exit 130/143 / state
+    # PREEMPTED) into last_status so the monitor's auto-resume gate (#299)
+    # reads it without a second round-trip. These are *report-space* ids
+    # (1-based scheduler array indices, matching report["tasks"] keys); the
+    # auto-resume composite converts them to 0-based HPC_TASK_ID for resubmit.
+    # Present only when the reporter found preempted tasks; absent → the
+    # composite falls back to a log-based fetch (cross-scheduler, e.g. SGE
+    # without exit codes).
+    preempted_ids = report.get("preempted_task_ids")
+    if isinstance(preempted_ids, list) and preempted_ids:
+        summary["preempted_task_ids"] = preempted_ids
     record = update_run_status(experiment_dir, run_id, last_status=summary)
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.

@@ -111,6 +111,9 @@ _UPDATABLE_FIELDS = frozenset(
         "recent_resubmit_request_ids",
         "pending_resubmit",
         "pending_verdict",
+        # Bumped by the auto-resume composite after each fired resubmit so the
+        # gate's "count < cap" backstop tightens with every attempt (#299).
+        "auto_resume_count",
     }
 )
 
@@ -183,6 +186,27 @@ class RunRecord:
     # take branch X") and the ``source="history"`` recall input the resolver
     # consults before re-escalating the same fingerprint. Never cleared.
     verdict_history: list[dict] = dataclasses.field(default_factory=list)
+    # ── #294 Layer-2 auto-resume keystone (#299) ──────────────────────────────
+    # The inputs a monitor-side auto-resume needs to re-submit *with*. Before
+    # this, ``script`` / ``backend`` / ``job_env`` only existed on the
+    # agent-supplied resubmit spec, so a read-only monitor path had nothing to
+    # resubmit from. Populated at submit (submit-flow's record-creation path).
+    # All three carry harmless empty defaults so a pre-#299 record loads
+    # unchanged (``from_dict`` filters to known fields → dataclass defaults).
+    script: str = ""
+    backend: str = ""
+    job_env: dict[str, str] = dataclasses.field(default_factory=dict)
+    # Opt-in, default OFF: a run that did not set this is NEVER auto-resubmitted
+    # (zero blast radius for everyone else — the #294 safety posture). The
+    # monitor's terminal-FAILED hook consults the auto-resume gate only when
+    # this is True.
+    auto_resume_on_kill: bool = False
+    # Hard cap + running counter — the ultimate backstop. Even total
+    # misclassification can waste at most ``max_auto_resumes`` resubmits before
+    # the gate escalates with "cap reached". ``auto_resume_count`` is bumped by
+    # the auto-resume composite each time it fires.
+    max_auto_resumes: int = 2
+    auto_resume_count: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

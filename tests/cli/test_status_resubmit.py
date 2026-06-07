@@ -393,11 +393,13 @@ def test_resubmit_spec_from_checkpoint_defaults_false() -> None:
     assert spec.from_checkpoint is True
 
 
-def test_resubmit_from_checkpoint_stamps_job_env(
+def test_resubmit_from_checkpoint_passes_flag_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """from_checkpoint=true stamps HPC_RESUME_FROM_CHECKPOINT=1 into the job_env
-    forwarded to the cluster, so the dispatcher resumes each retried task."""
+    """from_checkpoint=true is forwarded to resubmit_flow, which now owns the
+    HPC_RESUME_FROM_CHECKPOINT=1 stamping (single-sourced so the CLI and the
+    auto-resume composite share one convention — #299). The CLI passes the
+    flag and the raw job_env through unmodified."""
     import argparse
     from types import SimpleNamespace
 
@@ -417,10 +419,13 @@ def test_resubmit_from_checkpoint_stamps_job_env(
     args = argparse.Namespace(spec=spec, experiment_dir=str(tmp_path), run_id="rid")
     rc = recover.cmd_resubmit(args)
     assert rc == 0
-    assert captured["job_env"] == {"HPC_RESUME_FROM_CHECKPOINT": "1"}
+    assert captured["from_checkpoint"] is True
+    # The CLI no longer hand-stamps the var — job_env is the raw spec value
+    # (None here) and resubmit_flow does the stamping.
+    assert captured["job_env"] is None
 
 
-def test_resubmit_without_from_checkpoint_leaves_job_env_passthrough(
+def test_resubmit_without_from_checkpoint_leaves_flag_false(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import argparse
@@ -439,4 +444,5 @@ def test_resubmit_without_from_checkpoint_leaves_job_env_passthrough(
     spec.write_text(json.dumps({"failed_task_ids": [0], "category": "walltime"}))
     args = argparse.Namespace(spec=spec, experiment_dir=str(tmp_path), run_id="rid")
     recover.cmd_resubmit(args)
+    assert captured["from_checkpoint"] is False
     assert captured["job_env"] is None  # unchanged passthrough, no stamp

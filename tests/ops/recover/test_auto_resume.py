@@ -5,6 +5,7 @@ from __future__ import annotations
 from hpc_agent.recovery.auto_resume import (
     AutoResumeDecision,
     decide_auto_resume,
+    decide_auto_resume_from_ids,
     resumable_task_ids,
 )
 
@@ -75,3 +76,36 @@ def test_gate_count_zero_under_cap_one_resumes() -> None:
     # The minimal opt-in: cap=1 allows exactly one auto-resume.
     assert decide_auto_resume(_sidecar(0), policy_on=True, count=0, cap=1).action == "resume"
     assert decide_auto_resume(_sidecar(0), policy_on=True, count=1, cap=1).action == "escalate"
+
+
+# ── decide_auto_resume_from_ids (the composite's authoritative-ids entry) ──
+
+
+def test_from_ids_sorts_dedups_and_resumes() -> None:
+    d = decide_auto_resume_from_ids([2, 0], policy_on=True, count=0, cap=3)
+    assert d.action == "resume"
+    assert d.task_ids == (0, 2)
+
+
+def test_from_ids_empty_escalates() -> None:
+    d = decide_auto_resume_from_ids([], policy_on=True, count=0, cap=3)
+    assert d.action == "escalate" and "not a resumable kill" in d.reason
+
+
+def test_from_ids_policy_off_escalates() -> None:
+    d = decide_auto_resume_from_ids([0, 1], policy_on=False, count=0, cap=3)
+    assert d.action == "escalate" and "not enabled" in d.reason
+
+
+def test_from_ids_cap_reached_escalates() -> None:
+    d = decide_auto_resume_from_ids([0], policy_on=True, count=3, cap=3)
+    assert d.action == "escalate" and "cap reached (3/3)" in d.reason
+
+
+def test_decide_auto_resume_delegates_to_from_ids() -> None:
+    # The sidecar-shaped entry point produces the same verdict as feeding the
+    # extracted ids directly — they share one decision core.
+    sc = _sidecar(1, 4)
+    a = decide_auto_resume(sc, policy_on=True, count=0, cap=3)
+    b = decide_auto_resume_from_ids([1, 4], policy_on=True, count=0, cap=3)
+    assert a == b

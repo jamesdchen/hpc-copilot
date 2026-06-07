@@ -584,6 +584,57 @@ def _categorize(state: str) -> str:
     return TaskStatus.UNKNOWN
 
 
+# Dispatcher exit codes that mean "the scheduler bumped this task" — its
+# SIGTERM trap exits 130 (128+SIGINT) on preemption / walltime; 143
+# (128+SIGTERM) covers an untrapped SIGTERM kill. Single-sourced in spirit
+# with the failure-signatures catalog's preempted entry so this fresh,
+# per-poll scheduler signal agrees with the log-fingerprint classifier.
+_PREEMPT_EXIT_CODES = frozenset({130, 143})
+
+
+def _is_preempted_task(info: dict) -> bool:
+    """True when a per-task scheduler record indicates a preemption.
+
+    Fresh by construction — it reads the *current* attempt's scheduler
+    ``exit_code`` (sacct ``ExitCode`` ``"130:0"`` / PBS ``Exit_status`` /
+    SGE qacct ``exit_status``) and ``state`` (SLURM ``PREEMPTED``), NOT the
+    never-cleared sidecar ``preempt`` mark — so a task that was preempted,
+    resumed, then OOM-killed reads exit 137 here and is correctly excluded.
+    """
+    if not isinstance(info, dict):
+        return False
+    state = str(info.get("state") or "").strip().upper()
+    if state == "PREEMPTED":
+        return True
+    raw = info.get("exit_code")
+    if raw is None:
+        return False
+    # exit_code arrives as "130:0" (sacct), "130" (pbs/sge), etc. Parse the
+    # leading integer before any ':' separator; ignore anything unparseable.
+    head = str(raw).split(":", 1)[0].strip()
+    try:
+        return int(head) in _PREEMPT_EXIT_CODES
+    except (TypeError, ValueError):
+        return False
+
+
+def _preempted_ids_from_tasks(tasks: dict) -> list[int]:
+    """Sorted *report-space* task ids whose scheduler record reads preempted.
+
+    Ids are in the report's own 1-based scheduler-array space (``report_status*``
+    key tasks ``range(1, N+1)``). Consumers that need 0-based ``HPC_TASK_ID``
+    (e.g. the auto-resume composite, before ``resubmit_flow``) must shift by -1.
+    """
+    out: list[int] = []
+    for tid_str, info in (tasks or {}).items():
+        if _is_preempted_task(info):
+            try:
+                out.append(int(tid_str))
+            except (TypeError, ValueError):
+                continue
+    return sorted(out)
+
+
 def report_status(
     result_dir: str | Path,
     job_ids: list[str],
@@ -668,6 +719,13 @@ def report_status(
     }
     if err_paths:
         report["err_log_paths"] = err_paths
+    # Fresh, free preemption signal: which currently-failed tasks the
+    # scheduler bumped (exit 130/143 or state PREEMPTED). Surfaced so the
+    # monitor's auto-resume gate (#299) reads it straight off last_status
+    # without a second cluster round-trip. Optional — present only when > 0.
+    preempted = _preempted_ids_from_tasks(tasks)
+    if preempted:
+        report["preempted_task_ids"] = preempted
     return report
 
 
@@ -853,6 +911,11 @@ def report_status_from_tasks(
     }
     if err_paths:
         report["err_log_paths"] = err_paths
+    # See report_status: surface the fresh scheduler-side preemption signal
+    # for the monitor's auto-resume gate (#299). Optional — present only > 0.
+    preempted = _preempted_ids_from_tasks(tasks)
+    if preempted:
+        report["preempted_task_ids"] = preempted
     return report
 
 
