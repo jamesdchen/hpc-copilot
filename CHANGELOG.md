@@ -7,6 +7,28 @@ on the wire surface enumerated in
 
 ## 0.10.17 — 2026-06-06
 
+Bundles five externally-landed PRs (#297, #300, #302, #303) alongside the #296 `repo_hash` fix — all in the 2026-06-06 window.
+
+### Fixed — `build_submit_spec` guards resolve against `experiment_dir` + `$VAR` cross-check (#292, PR #297)
+
+Bug A: the 0.10.11 bare-script-vs-`register_run` guard probed `Path(script).is_file()` CWD-relative, so it silently no-op'd whenever `build_submit_spec` ran in a worker whose CWD wasn't the experiment dir — breaking the contract the 0.10.11 CHANGELOG asserts. `experiment_dir` is now threaded through `build_submit_spec` (via the `--experiment-dir` injector); a relative `script` resolves against it, with the CWD-relative fallback preserved for invocations from the experiment dir. Bug B: a build-time cross-check refuses an EXECUTOR referencing a `$VAR` the cluster dispatcher never exports (the empirical `--samples $SAMPLES` where `samples` isn't a swept axis → expands empty → argparse dies). Covered references: swept-axis kwargs (bare + `HPC_KW_` forms from `.hpc/tasks.py`), framework identity/result vars, inherited cluster shell vars, and `:-`-defaulted refs. No-ops when the kwarg set can't be positively established, so it never false-refuses.
+
+### Changed — SSH batching trio (#295, PR #297)
+
+Three Windows-named-pipe-independent latency wins. (1) `cluster_ssh_echo`'s hardcoded 5s timeout now reads `HPC_CLUSTER_SSH_TIMEOUT` (default 15s) — stops false `cluster_ssh_timeout` failures under cluster load. (2) `_cluster_combined_probe` collapses the echo round-trip + the uv probe into a single ssh with sentinel tokens (`__HPC_ECHO_OK__` / `__HPC_UV_OK__` / `__HPC_UV_MISSING__`), routed through the spec's `ssh_target`; the standalone probes remain only as the no-`--cluster`/unreachable fallback. (3) `_sge_inspect` merges `qhost` + `qstat` into one ssh. Saves 1–2 cold handshakes per submit/inspect cycle regardless of whether ControlMaster multiplexing works.
+
+### Added — auto-resume auto-fire wired into submit/journal/monitor (#299, PR #300)
+
+Layer-2 of the #294 checkpoint-recovery work: resume from a preemption/walltime kill is now automatic (opt-in, default OFF) rather than a surfaced recommendation. `RunRecord` persists the resubmit keystone (script/backend/job_env) plus the policy (`auto_resume_on_kill`), cap (`max_auto_resumes`), and counter (`auto_resume_count`) — all with harmless defaults so pre-#299 records load unchanged (`from_dict` filters to known fields). `resubmit_flow` gains `from_checkpoint` (single-sources the `HPC_RESUME_FROM_CHECKPOINT=1` stamp) and `bypass_preempt_throttle` (the auto-resume path opts out of the manual back-off guard; the cap is its backstop). `ops/auto_resume_flow.maybe_auto_resume` is the composite — reads sidecar + record, calls `decide_auto_resume`, and on a resume verdict re-submits exactly the preempted ids from checkpoint and bumps the counter (request_id keyed on the preempt-mark generation so an immediate monitor re-entry dedups). `monitor_flow`'s FAILED seam consults the composite when the run opted in. `SubmitFlowSpec` gains `auto_resume_on_kill` + `max_auto_resumes` (schemas regenerated).
+
+### Added — canary checkpoint write+kill round-trip verification (#294 PR4, PR #302)
+
+Completes the #294 checkpoint-recovery workstream's canary-integration leg. Cluster-side `experiment_kit/checkpoint.py` writes a checkpoint when the framework requests it; `ops/verify_canary.py` gains a `--verify-checkpoint` mode that drives a write → kill → resume round-trip, so a malformed checkpoint format is caught by the canary before the main array burns hours. `submit_and_verify` / `verify_canary` wire schemas regenerated alongside `operations.json` + primitive docs.
+
+### Fixed — unify task-id base at the scheduler membrane (#301 Phase 2, PR #303)
+
+Normalizes the task-id base at the single scheduler-boundary seam (`infra/backends/query.py` + `_engine.py` + `_kernel/contract/task_id.py`) rather than per-consumer, so the `failures` / `status` / `aggregate_flow` queries, the reduce layer (`metrics` / `rollup` / `status` / `tui`), `cluster_logs`, and `auto_resume_flow` all read a consistent task-id space. Phase 2 of the membrane unification.
+
 ### Fixed — `repo_hash` is path-form-invariant on Windows (#296)
 
 `state.run_record.repo_hash` was computing `sha256(str(Path(experiment_dir).resolve()))` and treating Bash MINGW (`/c/...`), WSL (`/mnt/c/...`), and the native backslash form as different namespaces. Empirical 2026-06-06: a submit issued via the Bash tool wrote the journal under one namespace; a reconcile call from the native session read from another; the run looked corrupt locally even though the cluster sidecar was fine. Four distinct hashes for the same logical dir: `C:\Users\james\demo-hpc` → `bc64a2106672`, `/c/Users/james/demo-hpc` → `74833c5d08f3`, `/mnt/c/Users/james/demo-hpc` → `806262f70e37`.
