@@ -122,13 +122,18 @@ def submit_and_verify(
             verify_result=None,
         )
 
-    # Verify the canary — THE GATE.
+    # Verify the canary — THE GATE. #294 PR4: an auto_resume_on_kill run fired a
+    # CHECKPOINT canary (HPC_CHECKPOINT_CANARY=1), so verification swaps to the
+    # round-trip assertion (a loadable checkpoint survived the kill) instead of
+    # the exit-0/output criteria — a preempted canary is the expected outcome.
     verify_result = VerifyCanaryResult.model_validate(
         verify_canary(
             experiment_dir,
             canary_run_id=canary_submit.canary_run_id,
             expect_output=spec.expect_output,
             fingerprint=spec.fingerprint,
+            verify_checkpoint=base.auto_resume_on_kill,
+            checkpoint_result_dir=spec.checkpoint_result_dir,
             poll_interval_sec=spec.poll_interval_sec,
             wait_budget_sec=spec.wait_budget_sec,
             log_dir=spec.log_dir,

@@ -198,7 +198,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [submit-flow-batch](submit-flow-batch.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]` |
 | [submit-pipeline](submit-pipeline.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-followup-specs: `<experiment_dir>/{monitor,aggregate}_spec.json` | `hpc-agent submit-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` |
-| [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` |
+| [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--verify-checkpoint] [--checkpoint-result-dir <checkpoint_result_dir>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

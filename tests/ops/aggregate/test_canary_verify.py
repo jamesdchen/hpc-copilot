@@ -568,6 +568,264 @@ def test_failure_features_on_timeout_and_reporter_unreachable(
     assert feats["classified_error"] is None
 
 
+# ── #294 PR4: checkpoint-canary round-trip verification ──────────────────────
+
+
+def _fake_ssh_completed(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    """A subprocess.CompletedProcess stand-in for a mocked ssh_run."""
+    import subprocess
+
+    return subprocess.CompletedProcess(
+        args=["ssh"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def _seed_canary_with_sidecar(
+    experiment: Path, *, result_dir_template: str = "results/{run_id}/task_{task_id}"
+) -> None:
+    """Journal record + canary sidecar (so the checkpoint dir can be derived)."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    _seed_canary(experiment)
+    write_run_sidecar(
+        experiment,
+        run_id="r1-canary",
+        cmd_sha="",
+        hpc_agent_version="",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template=result_dir_template,
+        task_count=1,
+        tasks_py_sha="",
+        cluster="hoffman2",
+    )
+
+
+# A canary that was preempted (exit 130) shows failed=1 / complete=0 — that is
+# the EXPECTED terminal state for a checkpoint canary, so the poll loop breaks
+# on it and the checkpoint branch (not the exit-0 path) decides the verdict.
+_PREEMPTED_SUMMARY = {"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}}
+_PREEMPT_STDERR = [
+    {
+        "task_id": 0,
+        "content": (
+            "[hpc-agent] SIGTERM received; cluster preemption imminent\n"
+            "[dispatch] FAILED (exit 130), partial output preserved in ...\n"
+        ),
+    }
+]
+
+
+def test_checkpoint_canary_ok_when_loadable(tmp_path: Path, journal_home: Path) -> None:
+    """A loadable checkpoint that survived the kill → ok=True, even though the
+    canary exited 130 with a '[dispatch] FAILED' marker (which the non-checkpoint
+    path would have flagged as dispatcher_failed)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    probe_out = (
+        '{"status": "ok", "path": "/x/results/r1-canary/task_0/_checkpoints/'
+        'checkpoint-0.pkl", "next_iteration": 1}'
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
+        ) as m_ssh,
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+    assert "resumes at iteration 1" in out["details"]
+    assert out["failure_features"] is None
+    # The probe ran against the derived task-0 checkpoint dir.
+    cmd = m_ssh.call_args.args[0]
+    assert "results/r1-canary/task_0" in cmd
+
+
+def test_checkpoint_canary_missing_fails_gate(tmp_path: Path, journal_home: Path) -> None:
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(stdout='{"status": "missing"}'),
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is False
+    assert out["failure_kind"] == "checkpoint_missing"
+    # Stderr is classified into failure_features so the operator gets the cause.
+    assert out["failure_features"] is not None
+
+
+def test_checkpoint_canary_unloadable_fails_gate(tmp_path: Path, journal_home: Path) -> None:
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    probe = (
+        '{"status": "unloadable", '
+        '"path": "/x/results/r1-canary/task_0/_checkpoints/checkpoint-0.pkl"}'
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe)
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is False
+    assert out["failure_kind"] == "checkpoint_unloadable"
+    assert "does not round-trip" in out["details"]
+
+
+def test_checkpoint_canary_probe_failure_is_reporter_unreachable(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """An ssh error / non-zero remote probe can't confirm the round-trip — fail
+    loudly (reporter_unreachable) rather than silently pass."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(returncode=1, stderr="No module named 'hpc_agent'"),
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is False
+    assert out["failure_kind"] == "reporter_unreachable"
+
+
+def test_checkpoint_canary_explicit_result_dir_override(tmp_path: Path, journal_home: Path) -> None:
+    """An explicit checkpoint_result_dir is used verbatim (no sidecar template
+    derivation needed)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)  # journal record only, NO sidecar template
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(
+                stdout=(
+                    '{"status": "ok", "path": "/x/custom/dir/_checkpoints/'
+                    'checkpoint-0.pkl", "next_iteration": 1}'
+                )
+            ),
+        ) as m_ssh,
+    ):
+        out = verify_canary(
+            tmp_path,
+            canary_run_id="r1-canary",
+            verify_checkpoint=True,
+            checkpoint_result_dir="custom/dir",
+            wait_budget_sec=10,
+        )
+    assert out["ok"] is True
+    assert "custom/dir" in m_ssh.call_args.args[0]
+
+
+def test_checkpoint_canary_unrenderable_template_raises(tmp_path: Path, journal_home: Path) -> None:
+    """A result_dir_template that references a per-task kwarg can't be rendered
+    locally → SpecInvalid asking for an explicit checkpoint_result_dir."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path, result_dir_template="results/seed_{seed}")
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        pytest.raises(errors.SpecInvalid, match="checkpoint_result_dir"),
+    ):
+        verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+
+
+def test_checkpoint_mode_off_keeps_normal_marker_scan(tmp_path: Path, journal_home: Path) -> None:
+    """verify_checkpoint defaults False — a '[dispatch] FAILED' canary still
+    routes to dispatcher_failed via the normal marker scan (no behavior change
+    for non-checkpoint runs)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "dispatcher_failed"
+
+
+def test_remote_checkpoint_snippet_logic(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the REMOTE snippet (executed as a string on the cluster) in-process
+    so its missing/ok/unloadable branches + the throwaway-checkpoint cleanup are
+    actually covered — otherwise they only fail on a real cluster."""
+    import json
+    import sys
+
+    from hpc_agent.experiment_kit import checkpoint as ck
+    from hpc_agent.ops.verify_canary import _REMOTE_CHECKPOINT_SNIPPET
+
+    code = compile(_REMOTE_CHECKPOINT_SNIPPET, "<snippet>", "exec")
+    d = tmp_path / "rd"
+
+    def _run() -> dict:
+        monkeypatch.setattr(sys, "argv", ["-c", str(d)])
+        exec(code, {})  # noqa: S102 — exercising the remote snippet's own logic
+        return json.loads(capsys.readouterr().out.strip())
+
+    # No checkpoint yet → missing.
+    assert _run()["status"] == "missing"
+
+    # A loadable checkpoint → ok, resumes at iteration 1, and the dir is cleaned up.
+    ck.write_checkpoint({"w": [1, 2]}, iteration=0, result_dir=d)
+    out = _run()
+    assert out["status"] == "ok"
+    assert out["next_iteration"] == 1
+    assert not (d / "_checkpoints").exists()  # throwaway probe cleaned up
+
+    # A present-but-corrupt checkpoint → unloadable (distinct from missing).
+    ckdir = d / "_checkpoints"
+    ckdir.mkdir(parents=True)
+    (ckdir / "checkpoint-0.pkl").write_bytes(b"\x80\x05 not a pickle")
+    assert _run()["status"] == "unloadable"
+
+
 def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_home: Path) -> None:
     """#176: the status reporter runs on the login node via ssh, so it needs the
     run's conda activation — otherwise it falls to bare login python, every poll

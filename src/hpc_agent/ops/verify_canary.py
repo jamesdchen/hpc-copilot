@@ -88,6 +88,136 @@ _DEFAULT_POLL_INTERVAL_SEC = 30
 _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
 
 
+# Remote snippet that round-trips the canary's latest checkpoint ON THE CLUSTER
+# — where ``hpc_agent`` is importable in the run's own env and where a resume
+# would actually reload it. Emits a single JSON line on stdout:
+#   {"status": "missing"}                              → no checkpoint written
+#   {"status": "unloadable", "path": ...}              → file present, won't load
+#   {"status": "ok", "path": ..., "next_iteration": N} → loadable; resumes at N
+# ``read_latest_checkpoint`` returns next_iteration>0 only when a checkpoint
+# actually LOADED (it walks newest→oldest and skips corrupt files), so a present
+# file with next_iteration<=0 is the "wrong format" signal — distinct from a
+# legitimately checkpointed ``None`` state, which still yields next_iteration>0.
+#
+# After reading, it REMOVES the canary's _checkpoints/ dir: the canary checkpoint
+# is a throwaway probe, and a result_dir_template WITHOUT {run_id} (e.g.
+# "results/task_{task_id}") would otherwise have the MAIN run's task 0 share the
+# dir and resume off the canary's checkpoint (run_iterations always reads latest).
+# Cleanup runs after the JSON is emitted so the verdict is unaffected; harmless
+# for the recommended {run_id}-scoped template where there is no sharing.
+_REMOTE_CHECKPOINT_SNIPPET = (
+    "import json,sys,shutil\n"
+    "from hpc_agent.experiment_kit.checkpoint import "
+    "latest_checkpoint, read_latest_checkpoint, checkpoint_dir\n"
+    "d=sys.argv[1]\n"
+    "p=latest_checkpoint(d)\n"
+    "if p is None:\n"
+    "    print(json.dumps({'status':'missing'}))\n"
+    "else:\n"
+    "    _,nxt=read_latest_checkpoint(d)\n"
+    "    if int(nxt)<=0:\n"
+    "        print(json.dumps({'status':'unloadable','path':str(p)}))\n"
+    "    else:\n"
+    "        print(json.dumps({'status':'ok','path':str(p),'next_iteration':int(nxt)}))\n"
+    "shutil.rmtree(str(checkpoint_dir(d)), ignore_errors=True)\n"
+)
+
+
+def _verify_remote_checkpoint(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    ckpt_result_dir: str,
+    remote_activation: str,
+) -> dict[str, Any]:
+    """Round-trip the canary's checkpoint on the cluster; return a status dict.
+
+    Runs :data:`_REMOTE_CHECKPOINT_SNIPPET` over SSH under the run's activation
+    (so ``hpc_agent`` imports in the right env, exactly like the status reporter).
+    *ckpt_result_dir* is the canary task's result dir (absolute, or relative to
+    *remote_path*); the snippet looks under its ``_checkpoints/``.
+
+    Returns ``{"status": "ok"|"missing"|"unloadable"|"probe_failed", ...}``. A
+    ``probe_failed`` (ssh error / unparseable output) carries ``detail`` so the
+    caller can fail the gate loudly rather than silently pass an unverified run.
+    """
+    import json
+    import shlex
+
+    from hpc_agent.infra.remote import ssh_run
+
+    target = ckpt_result_dir
+    if not target.startswith("/"):
+        target = f"{remote_path.rstrip('/')}/{target.lstrip('/')}"
+    # remote_activation already ends in " && " (or is empty); cd into remote_path
+    # so a relative result dir resolves the same way the dispatcher rendered it.
+    cmd = (
+        f"{remote_activation}cd {shlex.quote(remote_path)} && "
+        f"python3 -c {shlex.quote(_REMOTE_CHECKPOINT_SNIPPET)} {shlex.quote(target)}"
+    )
+    try:
+        res = ssh_run(cmd, ssh_target=ssh_target)
+    except (errors.RemoteCommandFailed, OSError) as exc:
+        return {"status": "probe_failed", "detail": f"ssh checkpoint probe raised: {exc}"}
+    if res.returncode != 0:
+        return {
+            "status": "probe_failed",
+            "detail": (
+                f"remote checkpoint probe exited {res.returncode}: "
+                f"{(res.stderr or '').strip()[:300]}"
+            ),
+        }
+    line = (res.stdout or "").strip().splitlines()
+    if not line:
+        return {"status": "probe_failed", "detail": "remote checkpoint probe produced no output"}
+    try:
+        parsed = json.loads(line[-1])
+    except json.JSONDecodeError:
+        return {
+            "status": "probe_failed",
+            "detail": f"remote checkpoint probe output not JSON: {line[-1][:200]!r}",
+        }
+    if not isinstance(parsed, dict) or "status" not in parsed:
+        return {"status": "probe_failed", "detail": f"unexpected probe payload: {parsed!r}"}
+    return parsed
+
+
+def _resolve_canary_checkpoint_dir(
+    sidecar: dict[str, Any],
+    *,
+    canary_run_id: str,
+    explicit: str | None,
+) -> str:
+    """The canary task-0 result dir whose ``_checkpoints/`` the probe inspects.
+
+    An explicit *explicit* wins. Otherwise derive it from the canary sidecar's
+    ``result_dir_template`` rendered for task 0 (``{task_id}`` / ``{run_id}``) —
+    the common case. A template that also references per-task kwargs cannot be
+    rendered without ``tasks.resolve(0)``, so it raises
+    :class:`errors.SpecInvalid` asking the caller to pass ``checkpoint_result_dir``
+    explicitly (the same path it would pass for ``expect_output``).
+    """
+    if explicit:
+        return explicit
+    template = sidecar.get("result_dir_template")
+    if not isinstance(template, str) or not template:
+        raise errors.SpecInvalid(
+            f"checkpoint verification for canary {canary_run_id!r} needs the canary's "
+            "result dir, but its sidecar carries no result_dir_template and no explicit "
+            "checkpoint_result_dir was passed."
+        )
+    try:
+        rendered: str = template.format(task_id=0, run_id=canary_run_id)
+        return rendered
+    except (KeyError, IndexError) as exc:
+        raise errors.SpecInvalid(
+            f"cannot derive the canary checkpoint dir: result_dir_template "
+            f"{template!r} references {exc} (a per-task kwarg) so it can't be "
+            "rendered locally. Pass checkpoint_result_dir explicitly (the canary's "
+            "task-0 result dir, relative to remote_path)."
+        ) from None
+
+
 @primitive(
     name="verify-canary",
     verb="workflow",
@@ -130,6 +260,29 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
                 ),
             ),
             CliArg(
+                "--verify-checkpoint",
+                action="store_true",
+                help=(
+                    "Checkpoint canary (#294 PR4): the canary wrote a checkpoint then "
+                    "killed itself; assert a loadable checkpoint survived under the "
+                    "stable _checkpoints/ dir (read_latest_checkpoint succeeds on the "
+                    "cluster). Replaces the exit-0/output success criteria — a "
+                    "preempted canary is EXPECTED. Use for auto_resume_on_kill runs."
+                ),
+            ),
+            CliArg(
+                "--checkpoint-result-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Canary task-0 result dir (relative to remote_path or absolute) "
+                    "whose _checkpoints/ the round-trip probe inspects. Omit to derive "
+                    "it from the canary sidecar's result_dir_template (works unless the "
+                    "template references per-task kwargs). Only used with "
+                    "--verify-checkpoint."
+                ),
+            ),
+            CliArg(
                 "--poll-interval-sec",
                 type=int,
                 default=30,
@@ -151,6 +304,8 @@ def verify_canary(
     canary_run_id: str,
     expect_output: str | None = None,
     fingerprint: str | None = None,
+    verify_checkpoint: bool = False,
+    checkpoint_result_dir: str | None = None,
     poll_interval_sec: int = _DEFAULT_POLL_INTERVAL_SEC,
     wait_budget_sec: int = _DEFAULT_WAIT_BUDGET_SEC,
     log_dir: str = "logs",
@@ -175,6 +330,24 @@ def verify_canary(
         output against a local reference run of the same task to detect
         framework-induced divergence (different GPU SKU, library drift,
         env-var collision). ``None`` skips the fingerprint.
+    verify_checkpoint:
+        Checkpoint-canary mode (#294 PR4). When True, the canary was fired with
+        ``HPC_CHECKPOINT_CANARY=1`` so it wrote a checkpoint at iteration 1 then
+        killed itself at iteration 2 via the dispatcher's SIGTERM path. This
+        SWAPS the success criteria: instead of "exit 0 + output present" (a
+        preempted canary never completes), the gate passes iff a *loadable*
+        checkpoint survived under the canary's ``_checkpoints/`` dir — proven by
+        running ``read_latest_checkpoint`` on the cluster. Fails the gate with
+        ``checkpoint_missing`` (no checkpoint written) or ``checkpoint_unloadable``
+        (a wrong/non-portable checkpoint format) so the "my checkpoint can't be
+        reloaded" class is caught BEFORE the long main array launches. The
+        reporter_unreachable / timeout poll-failure paths still apply.
+    checkpoint_result_dir:
+        Only with *verify_checkpoint*. The canary task-0 result dir (relative to
+        ``remote_path`` or absolute) whose ``_checkpoints/`` the round-trip probe
+        inspects. ``None`` derives it from the canary sidecar's
+        ``result_dir_template`` (task 0) — pass it explicitly when the template
+        references per-task kwargs that can't be rendered locally.
     poll_interval_sec, wait_budget_sec:
         Adaptive poll knobs. Exits early once the canary is terminal;
         otherwise gives up after *wait_budget_sec* with
@@ -196,7 +369,8 @@ def verify_canary(
       failed — broken cluster-side reporter) / ``"completed_unknown"`` (the
       job left the scheduler queue without recording a completion and no
       stderr marker explains why — resolved fast instead of timing out) /
-      ``"timeout"`` / ``"abandoned"``.
+      ``"timeout"`` / ``"abandoned"`` / (checkpoint mode) ``"checkpoint_missing"``
+      / ``"checkpoint_unloadable"``.
     * ``details`` is a one-line human-readable summary the slash
       command can surface to the user above the raw stderr_tail.
     * ``stderr_tail`` is the last 50 lines of the canary's stderr
@@ -394,6 +568,85 @@ def verify_canary(
     if logs and isinstance(logs[0], dict):
         stderr_tail = str(logs[0].get("content") or "")
         log_path = logs[0].get("path") if isinstance(logs[0].get("path"), str) else None
+
+    # Checkpoint canary (#294 PR4): SWAP the success criteria. The canary was
+    # SUPPOSED to be preempted (exit 130) after writing one checkpoint, so the
+    # exit-0/marker/output assertions below don't apply — a preempted dispatch is
+    # the expected outcome, not a failure. The ONLY thing that matters is that a
+    # loadable checkpoint survived under the stable _checkpoints/ dir. Run the
+    # round-trip probe on the cluster (where a resume would reload it) and gate on
+    # it directly. A genuine executor crash before iteration 1 leaves no
+    # checkpoint → checkpoint_missing, with the real stderr classified into
+    # failure_features for the operator.
+    if verify_checkpoint:
+        ckpt_dir = _resolve_canary_checkpoint_dir(
+            _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
+        )
+        probe = _verify_remote_checkpoint(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            ckpt_result_dir=ckpt_dir,
+            remote_activation=remote_activation,
+        )
+        status = probe.get("status")
+        if status == "ok":
+            return {
+                "ok": True,
+                "failure_kind": None,
+                "details": (
+                    f"canary {canary_run_id!r} checkpoint round-trip verified: a loadable "
+                    f"checkpoint survived the preemption kill under {ckpt_dir}/_checkpoints "
+                    f"(resumes at iteration {probe.get('next_iteration')})."
+                ),
+                "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
+                "failure_features": None,
+            }
+        if status == "missing":
+            return {
+                "ok": False,
+                "failure_kind": "checkpoint_missing",
+                "details": (
+                    f"canary {canary_run_id!r} wrote NO checkpoint under {ckpt_dir}/_checkpoints "
+                    "before the iteration-2 kill — the executor never checkpointed (does it drive "
+                    "its loop through run_iterations / write_checkpoint?), or it crashed before "
+                    "iteration 1. A run that opted into auto_resume_on_kill would make NO progress "
+                    "on resume. See the stderr tail / classified_error for the cause."
+                ),
+                "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
+                "failure_features": _failure_features(stderr_tail, log_path),
+            }
+        if status == "unloadable":
+            return {
+                "ok": False,
+                "failure_kind": "checkpoint_unloadable",
+                "details": (
+                    f"canary {canary_run_id!r} wrote a checkpoint ({probe.get('path')}) but "
+                    "read_latest_checkpoint could NOT reload it — the checkpoint format does not "
+                    "round-trip (e.g. a pickle that needs a class/lib absent at resume time). A "
+                    "long auto_resume_on_kill run would discover this only at resume, hours in. "
+                    "Fix the checkpoint format before launching the main array."
+                ),
+                "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
+                "failure_features": _failure_features(stderr_tail, log_path),
+            }
+        # probe_failed (ssh error / unparseable output) — fail loudly rather than
+        # silently pass an unverified checkpoint, same posture as reporter_unreachable.
+        return {
+            "ok": False,
+            "failure_kind": "reporter_unreachable",
+            "details": (
+                f"canary {canary_run_id!r} checkpoint probe could not run: "
+                f"{probe.get('detail')}. Cannot confirm the checkpoint round-trips, so the "
+                "canary CANNOT be trusted — fix the cluster env (hpc-agent importable in the "
+                "run's conda env) before submitting the main array."
+            ),
+            "stderr_tail": stderr_tail,
+            "metrics_fingerprint": None,
+            "failure_features": _failure_features(stderr_tail, log_path),
+        }
 
     # Scan for failure markers.
     haystack = stderr_tail.lower()

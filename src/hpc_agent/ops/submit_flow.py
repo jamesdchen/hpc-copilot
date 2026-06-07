@@ -957,6 +957,17 @@ def _submit_one_spec(
             canary_env = dict(job_env_full)
             canary_env["HPC_RUN_ID"] = canary_run_id
             canary_env["HPC_TASK_COUNT"] = "1"
+            # #294 PR4: a run that opted into auto_resume_on_kill must prove its
+            # checkpoint format round-trips BEFORE the long main array launches —
+            # otherwise it discovers an unreloadable checkpoint only at resume,
+            # hours in. Stamp the canary as a CHECKPOINT canary: an executor
+            # driving its loop through run_iterations then writes a checkpoint at
+            # iteration 1 and kills itself at iteration 2 (the dispatcher SIGTERM
+            # path), and verify-canary (verify_checkpoint=True) asserts the
+            # checkpoint survived + reloads. No-op for executors that don't use
+            # run_iterations, so a non-checkpoint run is unaffected.
+            if spec.auto_resume_on_kill:
+                canary_env["HPC_CHECKPOINT_CANARY"] = "1"
             canary_job_ids = _make_single_array_submission(
                 backend_obj,
                 job_name=f"{spec.job_name}_canary",

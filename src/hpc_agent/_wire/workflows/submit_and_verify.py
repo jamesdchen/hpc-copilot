@@ -49,6 +49,18 @@ class SubmitAndVerifySpec(BaseModel):
             "skips fingerprinting."
         ),
     )
+    checkpoint_result_dir: str | None = Field(
+        default=None,
+        description=(
+            "Checkpoint canary (#294 PR4) override: the canary task-0 result dir "
+            "(relative to remote_path or absolute) whose _checkpoints/ the "
+            "round-trip probe inspects. Only consulted when submit.auto_resume_on_kill "
+            "is true (which auto-enables checkpoint verification). None derives it "
+            "from the canary sidecar's result_dir_template — pass it explicitly only "
+            "when that template references per-task kwargs that can't be rendered "
+            "locally."
+        ),
+    )
     poll_interval_sec: int = Field(
         default=10,
         ge=1,

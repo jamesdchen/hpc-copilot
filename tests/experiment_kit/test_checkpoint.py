@@ -191,6 +191,103 @@ def test_run_iterations_zero_iterations_is_noop(tmp_path: Path) -> None:
     assert ck.latest_checkpoint(result_dir=tmp_path) is None
 
 
+def test_checkpoint_canary_writes_iter1_then_kills_at_iter2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#294 PR4: with HPC_CHECKPOINT_CANARY=1, run_iterations runs ONE step,
+    writes a checkpoint at iteration 1, then triggers the preemption kill at
+    iteration 2 — it never runs the rest of the loop. ``_preempt_self`` is seamed
+    so the test doesn't actually signal/exit."""
+    monkeypatch.setenv("HPC_CHECKPOINT_CANARY", "1")
+    fired: list[bool] = []
+    monkeypatch.setattr(ck, "_preempt_self", lambda: fired.append(True))
+    calls: list[int] = []
+
+    def step(state: int, i: int) -> int:
+        calls.append(i)
+        return state + 1
+
+    # n=1000 in the spec, but the canary caps the work at the single iteration-1
+    # step + checkpoint, regardless of n.
+    final = ck.run_iterations(step, init=0, n=1000, result_dir=tmp_path)
+    assert calls == [0]  # exactly one step ran (iteration 1)
+    assert fired == [True]  # the iteration-2 kill fired
+    # A loadable checkpoint survived under the stable _checkpoints/ dir.
+    latest = ck.latest_checkpoint(result_dir=tmp_path)
+    assert latest is not None and latest.name == "checkpoint-0.pkl"
+    state, nxt = ck.read_latest_checkpoint(result_dir=tmp_path)
+    assert state == 1 and nxt == 1
+    assert final == 1  # falls through with the iteration-1 state (test seam)
+
+
+def test_checkpoint_canary_inactive_runs_normal_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without HPC_CHECKPOINT_CANARY=1 the canary path is a no-op — the normal
+    loop runs to completion (a non-checkpoint run is unaffected)."""
+    monkeypatch.delenv("HPC_CHECKPOINT_CANARY", raising=False)
+    sentinel: list[bool] = []
+    monkeypatch.setattr(ck, "_preempt_self", lambda: sentinel.append(True))
+    final = ck.run_iterations(
+        lambda s, i: s + 1, init=0, n=4, result_dir=tmp_path, checkpoint_every=1
+    )
+    assert final == 4
+    assert sentinel == []  # never entered the canary path
+    assert ck.latest_checkpoint(result_dir=tmp_path).name == "checkpoint-3.pkl"
+
+
+def test_checkpoint_canary_value_other_than_one_is_inactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_CHECKPOINT_CANARY", "0")
+    monkeypatch.setattr(ck, "_preempt_self", lambda: pytest.fail("canary fired on '0'"))
+    final = ck.run_iterations(lambda s, i: s + 1, init=0, n=3, result_dir=tmp_path)
+    assert final == 3
+
+
+def test_preempt_self_outside_dispatcher_exits_130_without_signaling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Safety: with no dispatcher context (HPC_CHECKPOINT_DIR unset),
+    ``_preempt_self`` must NOT signal PPID (it would hit the user's shell) — it
+    exits 130 directly instead."""
+    monkeypatch.delenv("HPC_CHECKPOINT_DIR", raising=False)
+    killed: list[int] = []
+    monkeypatch.setattr(ck.os, "kill", lambda pid, sig: killed.append(pid))
+    exited: list[int] = []
+
+    def _fake_exit(code: int) -> None:
+        exited.append(code)
+        raise SystemExit(code)  # stop execution like the real os._exit would
+
+    monkeypatch.setattr(ck.os, "_exit", _fake_exit)
+    with pytest.raises(SystemExit):
+        ck._preempt_self()
+    assert killed == []  # never signaled an unrelated process
+    assert exited == [130]
+
+
+def test_preempt_self_under_dispatcher_signals_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under the dispatcher (HPC_CHECKPOINT_DIR set), ``_preempt_self`` signals
+    SIGTERM to PPID — exercising the dispatcher's real preemption handler."""
+    monkeypatch.setenv("HPC_CHECKPOINT_DIR", "/some/_checkpoints")
+    monkeypatch.setattr(ck.os, "getppid", lambda: 4242)
+    signaled: list[tuple[int, int]] = []
+    monkeypatch.setattr(ck.os, "kill", lambda pid, sig: signaled.append((pid, sig)))
+    # monotonic: first call computes the deadline (0.0 + WAIT), the next is the
+    # while-check — return a value past the deadline so the block loop exits at
+    # once, then we exit 130.
+    ticks = iter([0.0, 1e9, 1e9])
+    monkeypatch.setattr(ck.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(ck.time, "sleep", lambda _: None)
+    monkeypatch.setattr(ck.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        ck._preempt_self()
+    assert signaled == [(4242, ck.signal.SIGTERM)]
+
+
 def test_public_reexport_from_experiment_kit() -> None:
     from hpc_agent import experiment_kit as ek
 

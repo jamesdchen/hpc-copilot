@@ -23,6 +23,14 @@ CanaryFailureKind = Literal[
     "completed_unknown",
     "timeout",
     "abandoned",
+    # Checkpoint-canary verdicts (#294 PR4). A run that opts into
+    # auto_resume_on_kill fires a canary that writes a checkpoint then kills
+    # itself; verify-canary asserts the checkpoint round-trips on the cluster.
+    # "no checkpoint written" (the kill beat the write, or the executor never
+    # checkpoints) and "checkpoint present but read_latest_checkpoint cannot
+    # reload it" (a wrong/non-portable checkpoint format) respectively.
+    "checkpoint_missing",
+    "checkpoint_unloadable",
 ]
 
 

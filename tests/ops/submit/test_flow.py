@@ -848,6 +848,44 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     assert csc["executor"] == "python run.py"
 
 
+class TestCheckpointCanaryEnv:
+    """#294 PR4: a run that opts into auto_resume_on_kill stamps its CANARY
+    submission with HPC_CHECKPOINT_CANARY=1 (so the executor writes→kills→the
+    checkpoint round-trip is provable), while the MAIN array never carries it."""
+
+    def _run_one(self, tmp_path: Any, spec: Any) -> dict[str, dict[str, str]]:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import _submit_one_spec
+
+        captured: dict[str, dict[str, str]] = {}
+
+        def _fake_submit(backend, *, job_name, total_tasks, job_env, cwd, **_kw):
+            captured[job_name] = dict(job_env)
+            return ["job_1"]
+
+        with (
+            mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
+            mock.patch.object(sf_module, "_mirror_canary_sidecar"),
+            mock.patch.object(sf_module, "_make_single_array_submission", side_effect=_fake_submit),
+            mock.patch.object(sf_module, "submit_and_record"),
+            mock.patch.object(sf_module, "load_run", return_value=None),
+        ):
+            _submit_one_spec(experiment_dir=tmp_path, spec=spec)
+        return captured
+
+    def test_canary_carries_marker_main_does_not(self, tmp_path: Any, _journal_home: Any) -> None:
+        spec = _spec("rCK", canary=True, force_canary=True, auto_resume_on_kill=True)
+        captured = self._run_one(tmp_path, spec)
+        assert captured["rCK_canary"]["HPC_CHECKPOINT_CANARY"] == "1"
+        assert "HPC_CHECKPOINT_CANARY" not in captured["rCK"]
+
+    def test_no_marker_when_auto_resume_off(self, tmp_path: Any, _journal_home: Any) -> None:
+        spec = _spec("rCK2", canary=True, force_canary=True, auto_resume_on_kill=False)
+        captured = self._run_one(tmp_path, spec)
+        assert "HPC_CHECKPOINT_CANARY" not in captured["rCK2_canary"]
+        assert "HPC_CHECKPOINT_CANARY" not in captured["rCK2"]
+
+
 # ---------------------------------------------------------------------------
 # #275 — skip_preflight demoted from agent spec to operator-only control
 # ---------------------------------------------------------------------------

@@ -29,7 +29,9 @@
             "reporter_unreachable",
             "completed_unknown",
             "timeout",
-            "abandoned"
+            "abandoned",
+            "checkpoint_missing",
+            "checkpoint_unloadable"
           ],
           "type": "string"
         },

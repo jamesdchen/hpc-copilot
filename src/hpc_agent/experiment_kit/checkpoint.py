@@ -54,6 +54,8 @@ import contextlib
 import os
 import pickle
 import re
+import signal
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -70,6 +72,21 @@ __all__ = [
     "should_checkpoint",
     "run_iterations",
 ]
+
+# Env var the framework stamps on a *checkpoint canary* submission (#294 PR4).
+# When set to "1", :func:`run_iterations` runs the cheap 2-iteration probe that
+# proves the executor's checkpoint format round-trips: it writes a checkpoint at
+# iteration 1, then triggers a preemption kill at iteration 2 (the SAME SIGTERM
+# path the dispatcher's preemption handler exercises) so the canary verifier can
+# assert a loadable checkpoint survives under the stable ``_checkpoints/`` dir
+# BEFORE the long main array launches. No-op for any executor that does not drive
+# its loop through :func:`run_iterations`.
+_CHECKPOINT_CANARY_ENV = "HPC_CHECKPOINT_CANARY"
+
+# Seconds the canary blocks after signaling the dispatcher, giving the
+# dispatcher's preemption handler its grace window to forward SIGINT. Bounded so
+# a degenerate run with no dispatcher parent still terminates deterministically.
+_CHECKPOINT_CANARY_WAIT_SEC = 60.0
 
 # Per-task checkpoint subdir + filename shape. Kept deliberately simple so the
 # files sort by iteration and a human inspecting a result dir can read them.
@@ -271,6 +288,67 @@ def should_checkpoint(
     )
 
 
+def _checkpoint_canary_requested() -> bool:
+    """True when the framework asked this run to be a checkpoint canary (#294 PR4)."""
+    return os.environ.get(_CHECKPOINT_CANARY_ENV, "").strip() == "1"
+
+
+def _preempt_self() -> None:
+    """Trigger a preemption from inside a checkpoint canary — never returns.
+
+    Sends SIGTERM to the dispatcher parent so the dispatcher's REAL preemption
+    handler fires (mark the per-task ``preempt`` sidecar entry, forward SIGINT to
+    this process, exit 130) — the exact path a scheduler preemption / walltime
+    kill takes. Then blocks for the dispatcher's grace window to land that
+    forwarded SIGINT. If no dispatcher parent is present (a degenerate bare-local
+    canary), exits 130 directly so the canary is still deterministically terminal
+    the way a preemption would be.
+
+    Signaling is gated on the dispatcher context (``HPC_CHECKPOINT_DIR`` is
+    exported for every dispatched task): outside it we never signal PPID — that
+    would hit an unrelated process (e.g. the user's shell) — and just exit 130.
+    """
+    ppid = os.getppid()
+    under_dispatcher = bool(os.environ.get("HPC_CHECKPOINT_DIR")) and ppid > 1
+    if under_dispatcher:
+        with contextlib.suppress(OSError):
+            os.kill(ppid, signal.SIGTERM)
+        deadline = time.monotonic() + _CHECKPOINT_CANARY_WAIT_SEC
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+    # Parent never killed us (or no dispatcher) — exit as preempted (130) so the
+    # canary terminates exactly as a real preemption would. ``os._exit`` skips
+    # atexit/buffer flush, mirroring a signal-driven teardown.
+    sys.stderr.write("[hpc-agent] checkpoint canary: simulated preemption at iteration 2\n")
+    sys.stderr.flush()
+    os._exit(130)
+
+
+def _run_checkpoint_canary(
+    step: Callable[[Any, int], Any],
+    *,
+    init: Any,
+    result_dir: str | os.PathLike[str] | None,
+) -> Any:
+    """The 2-iteration checkpoint canary loop (#294 PR4).
+
+    Iteration 1: run one ``step`` and write a checkpoint, so a loadable
+    checkpoint lands under the stable ``_checkpoints/`` dir. Iteration 2: trigger
+    a preemption kill via :func:`_preempt_self` (the dispatcher's SIGTERM path),
+    which normally never returns — the canary verifier then asserts the
+    iteration-1 checkpoint survived AND reloads. Deliberately cheap: it proves
+    the checkpoint FORMAT round-trips without running the real workload.
+    """
+    state = init() if callable(init) else init
+    state = step(state, 0)
+    write_checkpoint(state, iteration=0, result_dir=result_dir)
+    # Kill at iteration 2 — exercises the dispatcher's real preemption handler.
+    # Normally does not return; if it does (a test seam, or a bare-local probe
+    # that exited rather than signaling), fall through with the iteration-1 state.
+    _preempt_self()
+    return state
+
+
 def run_iterations(
     step: Callable[[Any, int], Any],
     *,
@@ -315,7 +393,22 @@ def run_iterations(
     Returns the final state. On resume (a checkpoint exists) it loads the latest
     and continues from the next iteration, skipping already-done work — the
     executor side of ``resubmit --from-checkpoint``.
+
+    Checkpoint canary (#294 PR4)
+    ----------------------------
+    When the framework sets ``HPC_CHECKPOINT_CANARY=1`` (the checkpoint-canary
+    submission an ``auto_resume_on_kill`` run fires before its main array), this
+    runs the cheap 2-iteration probe instead of the full loop: it writes a
+    checkpoint at iteration 1, then triggers a preemption kill at iteration 2 via
+    the dispatcher's SIGTERM path. The canary verifier asserts the checkpoint
+    survived AND reloads — catching a "my checkpoint format is wrong" executor
+    before hours of the main run hit the same wall at resume time. An executor
+    that drives its loop through ``run_iterations`` gets this for free; one that
+    hand-rolls its loop is unaffected (the canary is a no-op for it).
     """
+    if _checkpoint_canary_requested():
+        return _run_checkpoint_canary(step, init=init, result_dir=result_dir)
+
     state, resume_point = read_latest_checkpoint(result_dir=result_dir)
     if state is None:
         state = init() if callable(init) else init

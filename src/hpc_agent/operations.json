@@ -1064,7 +1064,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]",
+    "cli": "hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--verify-checkpoint] [--checkpoint-result-dir <checkpoint_result_dir>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]",
     "idempotent": true,
     "input_schema": null,
     "name": "verify-canary",

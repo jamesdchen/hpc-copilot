@@ -148,6 +148,56 @@ def test_passes_through_verify_envelope_on_success(tmp_path: Path) -> None:
     assert result.verify_result.ok is True
 
 
+def test_enables_checkpoint_verification_when_auto_resume_on(tmp_path: Path) -> None:
+    """#294 PR4: when submit.auto_resume_on_kill is set, verify-canary is called
+    with verify_checkpoint=True (the canary fired as a checkpoint canary) and the
+    explicit checkpoint_result_dir is forwarded."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    spec = _spec(canary=True)
+    spec = spec.model_copy(
+        update={
+            "submit": spec.submit.model_copy(update={"auto_resume_on_kill": True}),
+            "checkpoint_result_dir": "results/ml_run_abcd1234_canary/task_0",
+        }
+    )
+    with (
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.submit_flow",
+            return_value=_submit_envelope(canary=True),
+        ),
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.verify_canary",
+            return_value=_verify_envelope(ok=True),
+        ) as m_verify,
+    ):
+        submit_and_verify(tmp_path, spec=spec)
+
+    kw = m_verify.call_args.kwargs
+    assert kw["verify_checkpoint"] is True
+    assert kw["checkpoint_result_dir"] == "results/ml_run_abcd1234_canary/task_0"
+
+
+def test_checkpoint_verification_off_by_default(tmp_path: Path) -> None:
+    """Without auto_resume_on_kill, verify-canary runs the normal (non-checkpoint)
+    gate — verify_checkpoint=False."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.submit_flow",
+            return_value=_submit_envelope(canary=True),
+        ),
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.verify_canary",
+            return_value=_verify_envelope(ok=True),
+        ) as m_verify,
+    ):
+        submit_and_verify(tmp_path, spec=_spec(canary=True))
+
+    assert m_verify.call_args.kwargs["verify_checkpoint"] is False
+
+
 def test_phase2_applies_deterministic_flips(tmp_path: Path) -> None:
     """#279/#185: on a verified canary, the Phase-2 main submit flips canary off
     and skip_rsync_deploy ON (the canary already deployed the same tree) — and
