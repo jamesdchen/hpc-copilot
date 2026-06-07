@@ -34,14 +34,16 @@ def _grid_point_key(params: dict) -> str:
 def rollup_by_grid_point(report: dict, tasks_data: dict) -> dict[str, dict]:
     """Group per-task statuses in *report* by grid point (from task ``params``).
 
-    Per-task dict task IDs are 0-based strings; report task IDs are 1-based strings.
-    Returned dict maps grid-point key -> ``{complete, running, pending, failed, unknown, total}``.
+    Both the per-task dict and the report key tasks by 0-based ``HpcTaskId``
+    (the query ingest edge converts at the source), so the keys line up
+    directly. Returned dict maps grid-point key ->
+    ``{complete, running, pending, failed, unknown, total}``.
     """
     rollup: dict[str, dict] = {}
     task_entries = tasks_data.get("tasks", {})
     for tid_str, task_info in report.get("tasks", {}).items():
         try:
-            entry_key = str(int(tid_str) - 1)
+            entry_key = str(int(tid_str))
         except (TypeError, ValueError):
             continue
         entry = task_entries.get(entry_key)
@@ -67,9 +69,9 @@ def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
     Returns ``{wave: {complete, running, pending, failed, unknown, total}}``.
     Empty when the per-task dict has no ``wave_map`` (un-batched submissions).
 
-    Wave map keys are stored as 0-based task ids; the
-    status report keys tasks 1-based to match scheduler array indexing,
-    so we shift on lookup.
+    Both the ``wave_map`` members and the status-report task keys are 0-based
+    ``HpcTaskId`` (the query ingest edge converts at the source), so lookups
+    are direct — no shift.
     """
     wave_map = tasks_data.get("wave_map") or {}
     if not wave_map:
@@ -87,9 +89,9 @@ def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
         }
         for tid in members or []:
             bucket["total"] += 1
-            # Per-task dict stores 0-based; report keys 1-based.
+            # Both spaces are 0-based HpcTaskId — look up directly.
             try:
-                report_key = str(int(tid) + 1)
+                report_key = str(int(tid))
             except (TypeError, ValueError):
                 report_key = str(tid)
             task_info = report_tasks.get(report_key) or {}

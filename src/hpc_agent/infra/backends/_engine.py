@@ -31,6 +31,7 @@ import shlex
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent.infra.backends import HPCBackend
 from hpc_agent.infra.backends.profile import SchedulerProfile
 from hpc_agent.infra.backends.profile import render_script as _render_script
@@ -469,16 +470,19 @@ class ProfileBackend(HPCBackend):
     def stderr_log_path(cls, remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 
-        Both families' array scripts derive the logical 0-based ``task_id``
-        as ``<scheduler task id> - 1``, so the on-disk filename index is
-        ``task_id + 1``.
+        *task_id* is the 0-based ``HpcTaskId``. Both families' array scripts
+        derive it as ``<scheduler array index> - 1``, so the on-disk filename
+        carries the 1-based ``ArrayIndex`` — recovered here through
+        :func:`~hpc_agent._kernel.contract.task_id.to_array_index`, the single
+        validated ``±1``.
         """
         base = remote_path.rstrip("/")
+        array_idx = int(to_array_index(HpcTaskId(task_id)))
         if cls.profile.family == "slurm":
             # sbatch --error <log_dir>/%x_%A_%a.err -> job_name_jobid_idx.err
-            return f"{base}/logs/{job_name}_{job_id}_{task_id + 1}.err"
-        # sge: ``-j y`` merges streams into <job_name>.o<job_id>.<task_id>
-        return f"{base}/logs/{job_name}.o{job_id}.{task_id + 1}"
+            return f"{base}/logs/{job_name}_{job_id}_{array_idx}.err"
+        # sge: ``-j y`` merges streams into <job_name>.o<job_id>.<array_idx>
+        return f"{base}/logs/{job_name}.o{job_id}.{array_idx}"
 
     @classmethod
     def err_log_disk_path(

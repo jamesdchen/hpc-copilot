@@ -13,15 +13,17 @@ are trivially confusable because both are plain ``int``:
   the ``JobId_N`` task index ``sacct`` / ``qstat`` report back. The array
   templates recover the 0-based id with ``ARRAY_TASK_ID - 1``.
 
-The conversion between the two is a single ``±1`` that is currently re-encoded
-independently in several places — ``resubmit_plan`` adds 1 in Python, the
-array templates subtract 1 in shell, and the status reporter just carries the
-1-based index upward — so a space mix-up silently resubmits the *wrong* task
-(it is invisible: both are ``int``). This module is the single home for that
-conversion. Downstream work (#TBD: routing the conversion through the backend
-query adapters so everything above the scheduler speaks ``HpcTaskId``) builds
-on it; until then it is the canonical helper any boundary should call rather
-than open-coding ``± 1``.
+The conversion between the two is a single ``±1`` and this module is its one
+home. As of Phase 2 (#301) everything above the scheduler speaks
+``HpcTaskId``: the conversion lives at exactly two boundary edges, both routed
+through here — the *submit edge* (``resubmit_plan``'s ``task_range`` and
+``get_err_log_paths`` / ``stderr_log_path`` build a 1-based ``ArrayIndex`` via
+:func:`to_array_index`) and the *ingest edge* (``query_sacct`` / ``query_pbs``
+/ ``query_sge`` parse the scheduler's ``JobId_N`` back to ``HpcTaskId`` via
+:func:`to_task_id`). No compensating shift survives downstream — a space
+mix-up would otherwise be invisible (both are ``int``) and silently resubmit
+the *wrong* task. Any new boundary must call these helpers rather than
+open-coding ``± 1``.
 
 The ``NewType`` distinction is the load-bearing part: it lets a type checker
 flag a function handed an ``ArrayIndex`` where an ``HpcTaskId`` is expected,

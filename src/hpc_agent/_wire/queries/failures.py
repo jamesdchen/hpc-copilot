@@ -62,7 +62,7 @@ class FailuresResult(BaseModel):
     )
     preempted_task_ids: list[int] | None = Field(
         default=None,
-        description="Sorted, deduplicated list of preempted task ids. Optional — present only when at least one preempted task is in the cluster set.",
+        description="Sorted, deduplicated list of preempted task ids in the 0-based HPC_TASK_ID domain space (the same space the dispatcher's HPC_TASK_ID, resubmit_flow.failed_task_ids, and /status use — feed straight to /resubmit, no shift). Optional — present only when at least one preempted task is in the cluster set.",
     )
     auto_retry_policy: dict[str, Any] | None = Field(
         default=None,

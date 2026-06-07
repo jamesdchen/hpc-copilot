@@ -37,15 +37,17 @@ def test_parse_qstat_full_pbs_states_and_exit_status():
     tasks: dict[int, dict] = {}
     _parse_qstat_full_pbs(_QSTAT_XF, tasks)
 
-    assert tasks[1]["state"] == "COMPLETED" and tasks[1]["exit_code"] == "0"
-    assert tasks[2]["state"] == "FAILED" and tasks[2]["exit_code"] == "1"
-    assert tasks[3]["state"] == "RUNNING" and tasks[3]["exit_code"] is None
+    # PBS subjob ``[idx]`` (1-based ArrayIndex) ingests to 0-based HpcTaskId:
+    # [1]->0, [2]->1, [3]->2.
+    assert tasks[0]["state"] == "COMPLETED" and tasks[0]["exit_code"] == "0"
+    assert tasks[1]["state"] == "FAILED" and tasks[1]["exit_code"] == "1"
+    assert tasks[2]["state"] == "RUNNING" and tasks[2]["exit_code"] is None
     # The array parent ``[]`` carries no task index → no entry.
-    assert set(tasks) == {1, 2, 3}
+    assert set(tasks) == {0, 1, 2}
     # Resource usage parsed: 01:00:00 -> 3600s, ncpus=4 -> cpu_s = 4*3600.
-    assert tasks[1]["elapsed_s"] == 3600
-    assert tasks[1]["cpu_s"] == 4 * 3600
-    assert tasks[1]["job_id"] == "12345"
+    assert tasks[0]["elapsed_s"] == 3600
+    assert tasks[0]["cpu_s"] == 4 * 3600
+    assert tasks[0]["job_id"] == "12345"
 
 
 def test_query_pbs_pbspro_uses_x_flag():
@@ -59,7 +61,8 @@ def test_query_pbs_pbspro_uses_x_flag():
         out = query_pbs(["12345"], fork="pbspro")
 
     assert captured[0][:4] == ["qstat", "-x", "-f", "-t"]  # pbspro needs -x for history
-    assert out["tasks"][2]["state"] == "FAILED"
+    # subjob [2] (ArrayIndex) -> HpcTaskId 1.
+    assert out["tasks"][1]["state"] == "FAILED"
     assert out["errors"] == []
 
 
@@ -85,7 +88,8 @@ def test_engine_query_jobs_dispatches_to_pbs():
 
     with patch("hpc_agent.infra.backends.query.subprocess.run", side_effect=_run):
         result = get_backend_class("pbspro").query_jobs(["12345"])
-    assert result["tasks"][1]["state"] == "COMPLETED"
+    # subjob [1] (ArrayIndex) -> HpcTaskId 0.
+    assert result["tasks"][0]["state"] == "COMPLETED"
 
 
 def test_pbs_inspect_returns_valid_minimal_snapshot():

@@ -32,6 +32,7 @@ from __future__ import annotations
 import dataclasses
 
 from hpc_agent import errors
+from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.infra.throughput import WorkloadSpec, compute_submission_plan
 
@@ -95,14 +96,15 @@ class ResubmitBatch:
     def task_range(self) -> str:
         """Scheduler-compatible 1-based array expression, e.g. ``"4,8,13-15"``.
 
-        ``task_ids`` are 0-based HPC_TASK_IDs (matching the resolve(i)
-        contract); the SLURM/SGE templates subtract 1 from
-        ``SLURM_ARRAY_TASK_ID``/``SGE_TASK_ID`` to recover the 0-based id.
-        Initial submits use ``1-N`` array expressions for exactly this
-        reason; resubmits must shift by +1 to stay on the same convention,
-        otherwise task ``k`` is retried as task ``k-1``.
+        ``task_ids`` are 0-based :data:`~hpc_agent._kernel.contract.task_id.HpcTaskId`
+        (matching the resolve(i) contract); the SLURM/SGE templates subtract
+        1 from ``SLURM_ARRAY_TASK_ID``/``SGE_TASK_ID`` to recover the 0-based
+        id. This is the *submit edge*: each id is mapped to its 1-based
+        :data:`~hpc_agent._kernel.contract.task_id.ArrayIndex` through
+        :func:`~hpc_agent._kernel.contract.task_id.to_array_index` — the single,
+        validated ``±1`` — so task ``k`` is retried as exactly task ``k``.
         """
-        return compact_task_ids([tid + 1 for tid in self.task_ids])
+        return compact_task_ids([int(to_array_index(HpcTaskId(tid))) for tid in self.task_ids])
 
     @property
     def array_size(self) -> int:

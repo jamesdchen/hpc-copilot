@@ -28,9 +28,10 @@ class TestCheckResultsIgnoresWip:
 
         results = check_results(result_dir, total_tasks=2)
 
-        # Only task 1 should be found; task 2 in _wip_ should be skipped
-        assert 1 in results
-        assert 2 not in results
+        # Only one task should be found (flat scan, 0-based position); the
+        # _wip_ CSV is skipped.
+        assert 0 in results
+        assert 1 not in results
         assert len(results) == 1
 
 
@@ -88,10 +89,11 @@ class TestPreemptedDetection:
         assert _preempted_ids_from_tasks(tasks) == [1, 3]
 
     def test_report_status_folds_preempted_task_ids(self, tmp_path):
+        # query output is now 0-based HpcTaskId.
         fake_query = {
             "tasks": {
-                1: {"state": "FAILED", "exit_code": "130:0"},  # preempted
-                2: {"state": "OUT_OF_MEMORY", "exit_code": "137:0"},  # OOM
+                0: {"state": "FAILED", "exit_code": "130:0"},  # preempted
+                1: {"state": "OUT_OF_MEMORY", "exit_code": "137:0"},  # OOM
             },
             "errors": [],
         }
@@ -104,10 +106,10 @@ class TestPreemptedDetection:
             result = report_status(
                 result_dir=tmp_path, job_ids=["12345"], total_tasks=2, scheduler="slurm"
             )
-        assert result["preempted_task_ids"] == [1]
+        assert result["preempted_task_ids"] == [0]
 
     def test_report_status_omits_key_when_none_preempted(self, tmp_path):
-        fake_query = {"tasks": {1: {"state": "FAILED", "exit_code": "1:0"}}, "errors": []}
+        fake_query = {"tasks": {0: {"state": "FAILED", "exit_code": "1:0"}}, "errors": []}
         with (
             patch(
                 "hpc_agent.models.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
@@ -124,10 +126,11 @@ class TestReportStatusResourceUsage:
     def test_resource_usage_sums_from_query(self, tmp_path):
         # Fake query returns two running tasks with usage data so we can
         # verify the report-level rollup wires through correctly.
+        # query output is now 0-based HpcTaskId.
         fake_query = {
             "tasks": {
-                1: {"state": "RUNNING", "elapsed_s": 3600, "cpu_s": 4 * 3600, "gpu_s": 3600},
-                2: {"state": "RUNNING", "elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
+                0: {"state": "RUNNING", "elapsed_s": 3600, "cpu_s": 4 * 3600, "gpu_s": 3600},
+                1: {"state": "RUNNING", "elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
             },
             "errors": [],
         }
@@ -160,35 +163,36 @@ class TestHeaderOnlyCsv:
 
     def test_header_only_csv_complete_by_default(self, tmp_path):
         result_dir = tmp_path / "results"
-        task_dir = result_dir / "task_1"
+        # task_N subdir is 0-based (renders the dispatcher's HPC_TASK_ID).
+        task_dir = result_dir / "task_0"
         task_dir.mkdir(parents=True)
         (task_dir / "out.csv").write_text("col_a,col_b\n")  # header only
 
         results = check_results(result_dir, total_tasks=1)
 
-        assert 1 in results
-        assert results[1]["status"] == "complete"
+        assert 0 in results
+        assert results[0]["status"] == "complete"
 
     def test_header_only_csv_incomplete_with_min_rows(self, tmp_path):
         result_dir = tmp_path / "results"
-        task_dir = result_dir / "task_1"
+        task_dir = result_dir / "task_0"
         task_dir.mkdir(parents=True)
         (task_dir / "out.csv").write_text("col_a,col_b\n")  # header only
 
         results = check_results(result_dir, total_tasks=1, min_rows=1)
 
-        assert 1 not in results
+        assert 0 not in results
 
     def test_zero_byte_file_still_incomplete(self, tmp_path):
         """A truly empty (zero-byte) file is still treated as incomplete."""
         result_dir = tmp_path / "results"
-        task_dir = result_dir / "task_1"
+        task_dir = result_dir / "task_0"
         task_dir.mkdir(parents=True)
         (task_dir / "out.csv").write_text("")
 
         results = check_results(result_dir, total_tasks=1)
 
-        assert 1 not in results
+        assert 0 not in results
 
     def test_header_only_csv_complete_via_tasks_dict(self, tmp_path):
         """Same contract as the check_results variant above, but driven
@@ -202,10 +206,10 @@ class TestHeaderOnlyCsv:
         }
 
         results = check_results_from_tasks(tasks_data, file_glob="*.csv")
-        assert 1 in results
+        assert 0 in results
 
         strict = check_results_from_tasks(tasks_data, file_glob="*.csv", min_rows=1)
-        assert 1 not in strict
+        assert 0 not in strict
 
 
 # ─── Bug 1: report timestamps include explicit UTC offset ─────────────────

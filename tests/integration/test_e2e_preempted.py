@@ -17,6 +17,7 @@ of one cluster-side mechanism contradicting another.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -172,3 +173,42 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         # Sanity: the underlying cluster shape still carries the
         # preempted category so per-cluster consumers keep working.
         assert any(c.get("error_class") == "preempted" for c in envelope["clusters"])
+
+
+class TestTaskIdSpaceSeam:
+    """Phase-2 (#301) boundary test: drive the REAL scheduler-query ingest
+    edge with a 1-based array row and assert the reporter's output and the
+    resubmit submit edge share one 0-based ``HpcTaskId`` space — closing the
+    /failures→/resubmit off-by-one at the seam rather than by mocking the
+    already-converted shape."""
+
+    def test_reporter_output_and_resubmit_input_share_hpctaskid_space(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hpc_agent.infra.backends import query as qmod
+        from hpc_agent.models.mapreduce.reduce.status import report_status
+        from hpc_agent.ops.recover.batching import resubmit_plan
+
+        # The scheduler reports array index 2 (1-based ArrayIndex) as a
+        # preemption (exit 130). sacct emits ``<job>_<array_idx>``.
+        stdout = "777_2|FAILED|130:0\n"
+        monkeypatch.setattr(
+            qmod.subprocess,
+            "run",
+            lambda *a, **kw: SimpleNamespace(stdout=stdout, stderr="", returncode=0),
+        )
+
+        # Ingest edge: query_sacct converts ArrayIndex 2 → HpcTaskId 1.
+        report = report_status(
+            result_dir=tmp_path, job_ids=["777"], total_tasks=3, scheduler="slurm"
+        )
+        # Reporter surfaces the preempted id in the 0-based domain space.
+        assert report["preempted_task_ids"] == [1]
+        assert report["tasks"]["1"]["status"] == "failed"
+
+        # The very same id flows into resubmit with NO compensating shift,
+        # and the submit edge maps it back to the original ArrayIndex 2 —
+        # the round-trip closes, so task k is resubmitted as exactly task k.
+        plan = resubmit_plan(task_count=3, failed_task_ids=report["preempted_task_ids"])
+        assert plan.batches[0].task_ids == (1,)
+        assert plan.batches[0].task_range == "2"

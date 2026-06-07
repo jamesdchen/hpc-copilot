@@ -211,8 +211,9 @@ class TestCheckResultsIgnoresWip:
         (wip_dir / "results_task_2.csv").write_text("col_a,col_b\n3,4\n")
 
         results = check_results(result_dir, total_tasks=2)
-        assert 1 in results
-        assert 2 not in results
+        # Flat-dir scan assigns 0-based positions; one valid CSV → key 0.
+        assert 0 in results
+        assert 1 not in results
         assert len(results) == 1
 
 

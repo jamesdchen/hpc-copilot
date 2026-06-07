@@ -128,8 +128,8 @@ def test_opt_in_off_skips_the_cluster_fetch(journal_home: Path, experiment: Path
 
 def test_supplied_ids_skip_the_cluster_fetch(journal_home: Path, experiment: Path) -> None:
     """When the monitor passes preempted_task_ids (folded from last_status by
-    the status reporter, report-space/1-based), the composite resumes from them,
-    does NOT fetch, and converts to 0-based HPC_TASK_ID for resubmit."""
+    the status reporter, now 0-based HPC_TASK_ID after the Phase-2 ingest-edge
+    conversion), the composite resumes from them directly — no fetch, no shift."""
     _seed_record(experiment)
     rec = _Recorder(new_job_ids=["9100"])
 
@@ -139,13 +139,13 @@ def test_supplied_ids_skip_the_cluster_fetch(journal_home: Path, experiment: Pat
     outcome = maybe_auto_resume(
         experiment,
         _RUN_ID,
-        preempted_task_ids=[1, 3],  # report-space (1-based array indices)
+        preempted_task_ids=[0, 2],  # 0-based HPC_TASK_ID (domain space)
         resubmit=rec,
         failures_fetcher=_boom,
     )
 
     assert outcome.action == "resume"
-    # Converted to 0-based HPC_TASK_ID (1->0, 3->2).
+    # Passed straight through — no compensating shift.
     assert outcome.task_ids == (0, 2)
     assert rec.calls[0]["failed_task_ids"] == [0, 2]
     assert load_run(experiment, _RUN_ID).auto_resume_count == 1
@@ -156,7 +156,7 @@ def test_empty_supplied_ids_falls_back_to_fetch(journal_home: Path, experiment: 
     log-based fetch (cross-scheduler, e.g. SGE without exit codes)."""
     _seed_record(experiment)
     rec = _Recorder()
-    fetch = _fetcher([1])  # report-space → 0-based [0]
+    fetch = _fetcher([0])  # fetch_failures now returns 0-based HPC_TASK_ID
 
     outcome = maybe_auto_resume(
         experiment,
@@ -176,10 +176,10 @@ def test_empty_supplied_ids_falls_back_to_fetch(journal_home: Path, experiment: 
 def test_resume_fires_with_exactly_preempted_ids(journal_home: Path, experiment: Path) -> None:
     _seed_record(experiment)
     rec = _Recorder(new_job_ids=["9100", "9101"])
-    # Cluster-authoritative report (report-space, 1-based) says array indices
-    # 1,3 were preempted → 0-based HPC_TASK_IDs 0,2 (the in-between task OOMed
-    # and is absent from preempted_task_ids).
-    fetch = _fetcher([1, 3])
+    # Cluster-authoritative report (now 0-based HPC_TASK_ID after the Phase-2
+    # ingest-edge conversion) says HpcTaskIds 0,2 were preempted (the
+    # in-between task OOMed and is absent from preempted_task_ids).
+    fetch = _fetcher([0, 2])
 
     outcome = maybe_auto_resume(experiment, _RUN_ID, resubmit=rec, failures_fetcher=fetch)
 

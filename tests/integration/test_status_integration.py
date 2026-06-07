@@ -344,16 +344,16 @@ def test_rollup_by_grid_point_groups_by_params() -> None:
     distinct statuses are summed within."""
     report = {
         "tasks": {
+            "0": {"status": "complete"},
             "1": {"status": "complete"},
-            "2": {"status": "complete"},
-            "3": {"status": "failed"},
+            "2": {"status": "failed"},
         },
     }
     tasks_data = {
         "tasks": {
-            "0": {"params": {"lr": 0.1}},  # report tid 1
-            "1": {"params": {"lr": 0.1}},  # report tid 2 — same bucket
-            "2": {"params": {"lr": 0.2}},  # report tid 3 — different bucket
+            "0": {"params": {"lr": 0.1}},  # report tid 0
+            "1": {"params": {"lr": 0.1}},  # report tid 1 — same bucket
+            "2": {"params": {"lr": 0.2}},  # report tid 2 — different bucket
         },
     }
     rollup = rollup_by_grid_point(report, tasks_data)
@@ -367,7 +367,7 @@ def test_rollup_by_grid_point_groups_by_params() -> None:
 def test_rollup_by_grid_point_skips_tasks_without_params_entry() -> None:
     """A report task with no matching per-task entry is dropped silently
     (not crashed on)."""
-    report = {"tasks": {"1": {"status": "complete"}, "5": {"status": "complete"}}}
+    report = {"tasks": {"0": {"status": "complete"}, "5": {"status": "complete"}}}
     tasks_data = {"tasks": {"0": {"params": {"x": 1}}}}  # only 1 entry
     rollup = rollup_by_grid_point(report, tasks_data)
     assert "x=1" in rollup
@@ -379,14 +379,14 @@ def test_rollup_by_wave_empty_wave_map_returns_empty() -> None:
     assert rollup_by_wave({"tasks": {}}, {"wave_map": {}}) == {}
 
 
-def test_rollup_by_wave_buckets_by_wave_with_id_shift() -> None:
-    """``wave_map`` keys are 0-based task ids; report keys are 1-based.
-    The function must shift on lookup."""
+def test_rollup_by_wave_buckets_by_wave() -> None:
+    """``wave_map`` members and report keys are both 0-based HpcTaskId;
+    lookups line up directly (no shift)."""
     report = {
         "tasks": {
-            "1": {"status": "complete"},
-            "2": {"status": "running"},
-            "3": {"status": "complete"},
+            "0": {"status": "complete"},
+            "1": {"status": "running"},
+            "2": {"status": "complete"},
         },
     }
     tasks_data = {"wave_map": {"0": [0, 1], "1": [2]}}  # 0-based tids

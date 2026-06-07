@@ -76,8 +76,8 @@ class _UiState:
     focused_failing: bool = False
     last_report: dict | None = None
     last_per_task_dict: dict | None = None
-    # Task id (string, 1-based, matches report["tasks"] keys) of the currently
-    # focused failing task, or None when focus is off.
+    # Task id (string, 0-based HpcTaskId, matches report["tasks"] keys) of the
+    # currently focused failing task, or None when focus is off.
     focused_task_id: str | None = None
 
 
@@ -236,15 +236,15 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
         for wave_key in sorted(wave_map.keys(), key=lambda k: int(k) if str(k).isdigit() else 0):
             members = wave_map[wave_key] or []
             total = len(members)
-            # wave_map task IDs are stored 0-based — shift
-            # to 1-based to match the report's tasks keys.
+            # wave_map members and the report's tasks keys are both 0-based
+            # HpcTaskId — look up directly, no shift.
             done = 0
             for raw_tid in members:
                 try:
-                    tid_1based = str(int(raw_tid) + 1)
+                    tid_key = str(int(raw_tid))
                 except (TypeError, ValueError):
                     continue
-                if tasks.get(tid_1based, {}).get("status") == "complete":
+                if tasks.get(tid_key, {}).get("status") == "complete":
                     done += 1
             wave_progress.add_task(f"wave {wave_key}", total=total, completed=done)
     else:

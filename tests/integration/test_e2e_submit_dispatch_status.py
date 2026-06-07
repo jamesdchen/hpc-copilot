@@ -144,8 +144,8 @@ class TestPipelineAllComplete:
     def test_every_task_reports_complete(self, pipeline: dict) -> None:
         tasks_data = pipeline["tasks_data"]
         results = check_results_from_tasks(tasks_data, file_glob="*.csv")
-        # check_results_from_tasks returns 1-based task IDs.
-        expected = set(range(1, tasks_data["total_tasks"] + 1))
+        # check_results_from_tasks returns 0-based HpcTaskIds.
+        expected = set(range(tasks_data["total_tasks"]))
         assert set(results) == expected, (
             f"expected complete tids {sorted(expected)}, got {sorted(results)}"
         )
@@ -185,5 +185,5 @@ class TestPoisonedTaskDetected:
         victim.unlink()
 
         after = check_results_from_tasks(tasks_data, file_glob="*.csv")
-        assert 1 not in after, f"task 1 should no longer be complete after poisoning, got {after}"
+        assert 0 not in after, f"task 0 should no longer be complete after poisoning, got {after}"
         assert len(after) == tasks_data["total_tasks"] - 1

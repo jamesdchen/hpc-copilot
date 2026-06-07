@@ -39,10 +39,14 @@ def fetch_task_logs(
     semantics). Returns one dict per task; missing logs surface as
     ``{"task_id": int, "missing": True}``.
 
-    Path conventions (must stay aligned with the job templates):
+    *task_ids* are 0-based ``HpcTaskId`` (the domain space the report keys);
+    ``stderr_log_path`` maps each to its 1-based ``ArrayIndex`` via
+    ``to_array_index`` when building the on-disk filename. Path conventions
+    (must stay aligned with the job templates), where ``<idx>`` is the
+    ``ArrayIndex`` (``task_id + 1``):
 
-    * SGE:    ``<remote_path>/logs/<job_name>.o<job_id>.<task_id + 1>``
-    * SLURM:  ``<remote_path>/logs/<job_name>_<job_id>_<task_id + 1>.err``
+    * SGE:    ``<remote_path>/logs/<job_name>.o<job_id>.<idx>``
+    * SLURM:  ``<remote_path>/logs/<job_name>_<job_id>_<idx>.err``
     """
     if not task_ids:
         return []

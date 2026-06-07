@@ -86,14 +86,14 @@ class TestQuerySacctBatched:
         assert set(out.keys()) == {"tasks", "errors"}
         assert out["errors"] == []
 
-        # States mapped back correctly: tid -> job_id.
+        # States mapped back correctly: HpcTaskId -> job_id. The sacct row
+        # JobId_{idx+1} (1-based ArrayIndex) ingests to 0-based HpcTaskId idx.
         result = out["tasks"]
         for idx, jid in enumerate(job_ids):
-            tid = idx + 1
-            assert tid in result
-            assert result[tid]["state"] == "COMPLETED"
-            assert result[tid]["job_id"] == jid
-            assert result[tid]["exit_code"] == "0:0"
+            assert idx in result
+            assert result[idx]["state"] == "COMPLETED"
+            assert result[idx]["job_id"] == jid
+            assert result[idx]["exit_code"] == "0:0"
 
     def test_sacct_failure_returns_error_dict(self, monkeypatch):
         recorder = _Recorder(lambda cmd: _cp(stdout="", returncode=1, stderr="boom"))
@@ -189,20 +189,23 @@ class TestQuerySgeBatched:
         qacct_jids = [c[c.index("-j") + 1] for c in qacct_calls]
         assert sorted(qacct_jids) == sorted(job_ids)
 
-        # States mapped: qstat-driven tasks for running/pending jobs.
-        assert result[1]["state"] == "RUNNING"
-        assert result[1]["job_id"] == "500"
-        assert result[4]["state"] == "RUNNING"
-        assert result[4]["job_id"] == "501"
-        assert result[7]["state"] == "PENDING"
-        assert result[7]["job_id"] == "502"
+        # States mapped: qstat-driven tasks for running/pending jobs. The
+        # ja-task-IDs (1-based ArrayIndex) ingest to 0-based HpcTaskId, so the
+        # 1-3/4-6/7-9 ranges land at keys 0/3/6.
+        assert result[0]["state"] == "RUNNING"
+        assert result[0]["job_id"] == "500"
+        assert result[3]["state"] == "RUNNING"
+        assert result[3]["job_id"] == "501"
+        assert result[6]["state"] == "PENDING"
+        assert result[6]["job_id"] == "502"
 
-        # qacct-driven tasks for every job (taskid = 100 + int(jid)).
+        # qacct-driven tasks for every job (taskid = 100 + int(jid), an
+        # ArrayIndex → HpcTaskId 100 + int(jid) - 1).
         for jid in job_ids:
-            tid = 100 + int(jid)
-            assert tid in result
-            assert result[tid]["state"] == "COMPLETED"
-            assert result[tid]["job_id"] == jid
+            key = 100 + int(jid) - 1
+            assert key in result
+            assert result[key]["state"] == "COMPLETED"
+            assert result[key]["job_id"] == jid
 
     def test_qacct_dedupes_repeated_job_ids(self, monkeypatch):
         """Repeat IDs within a tick should not trigger repeat qacct calls."""

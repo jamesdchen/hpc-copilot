@@ -55,6 +55,7 @@ import subprocess
 from pathlib import Path
 from typing import get_args
 
+from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent._kernel.lifecycle.lifecycle import TaskStatus
 from hpc_agent._wire._shared import Scheduler
 from hpc_agent.infra.time import utcnow_iso
@@ -80,7 +81,9 @@ def check_results(
     """Scan *result_dir* for completed result files.
 
     Looks for result files matching *file_glob* in per-task subdirectories
-    or directly in *result_dir*.  Returns a dict mapping task id to status info.
+    or directly in *result_dir*.  Returns a dict mapping **0-based**
+    ``HpcTaskId`` to status info (the same domain space the dispatcher's
+    ``HPC_TASK_ID`` and ``result_dir_template`` ``task_{task_id}`` use).
 
     A CSV is considered complete when it exists and is non-zero byte (i.e. at
     least a header has been written).  Pass ``min_rows > 0`` to additionally
@@ -113,8 +116,10 @@ def check_results(
         except OSError:
             return None
 
-    # Strategy 1: check per-task subdirectories (task_1/, task_2/, ...)
-    for tid in range(1, total_tasks + 1):
+    # Strategy 1: check per-task subdirectories (task_0/, task_1/, ...).
+    # Dir index is the 0-based HpcTaskId (the result_dir_template renders
+    # ``task_{task_id}`` against the dispatcher's 0-based HPC_TASK_ID).
+    for tid in range(total_tasks):
         task_dir = rdir / f"task_{tid}"
         if task_dir.is_dir():
             for path_str in sorted(glob.glob(str(task_dir / file_glob))):
@@ -132,14 +137,14 @@ def check_results(
     # Strategy 2: fall back to flat directory scan if no task subdirs found.
     # With no task_N/ subdirs the only signal for task identity is sorted
     # position, so the glob is sorted for determinism across OS /
-    # filesystem implementations. Task ids are assigned by 1-based
-    # position (not ``len(results) + 1``): a file that fails the CSV
+    # filesystem implementations. Task ids are assigned by 0-based
+    # position (not ``len(results)``): a file that fails the CSV
     # check then leaves its task id absent rather than shifting every
     # later file onto an earlier task's id. ``_wip_`` temp files are
     # dropped first so they don't consume a position slot.
     if not results:
         candidates = [p for p in sorted(glob.glob(str(rdir / file_glob))) if "/_wip_" not in p]
-        for tid, path_str in enumerate(candidates[:total_tasks], start=1):
+        for tid, path_str in enumerate(candidates[:total_tasks], start=0):
             if validate and path_str.endswith(".csv"):
                 status = _accept_csv(path_str)
                 if status is None:
@@ -529,6 +534,12 @@ def get_err_log_paths(
 ) -> dict[int, str]:
     """Find the most recent error log path on disk for each task.
 
+    Keyed by **0-based** ``HpcTaskId``. The on-disk filename, however, is
+    indexed by the scheduler's 1-based ``ArrayIndex`` (logs are named by
+    ``%a`` / ``SGE_TASK_ID``), so each id is mapped through
+    :func:`~hpc_agent._kernel.contract.task_id.to_array_index` — the single
+    validated ``±1`` — before building the path.
+
     B5-PR2: per-scheduler base path goes through
     :meth:`HPCBackend.err_log_disk_path`. The SLURM fallback glob (which
     catches submission scripts that override ``--error`` to a non-canonical
@@ -539,15 +550,17 @@ def get_err_log_paths(
 
     backend_cls = get_backend_class(scheduler)
     paths: dict[int, str] = {}
-    for tid in range(1, total_tasks + 1):
+    for tid in range(total_tasks):
+        # Submit edge: the log filename carries the 1-based ArrayIndex.
+        array_idx = int(to_array_index(HpcTaskId(tid)))
         for job_id in reversed(job_ids):
-            p = backend_cls.err_log_disk_path(log_dir, scratch_dir, job_name, job_id, tid)
+            p = backend_cls.err_log_disk_path(log_dir, scratch_dir, job_name, job_id, array_idx)
             if scheduler != "sge" and not os.path.isfile(p):
                 # Anchor the job_id boundary with a non-digit prefix so
                 # the glob can't match a sibling job whose digits happen
-                # to end with the requested ``<job_id>_<tid>.err`` slug
-                # (e.g. tid=1 + job_id=4 matching ``…14_1.err``).
-                matches = glob.glob(os.path.join(log_dir, f"*[!0-9]{job_id}_{tid}.err"))
+                # to end with the requested ``<job_id>_<idx>.err`` slug
+                # (e.g. idx=1 + job_id=4 matching ``…14_1.err``).
+                matches = glob.glob(os.path.join(log_dir, f"*[!0-9]{job_id}_{array_idx}.err"))
                 if matches:
                     p = max(matches, key=os.path.getmtime)
             if os.path.isfile(p):
@@ -619,11 +632,12 @@ def _is_preempted_task(info: dict) -> bool:
 
 
 def _preempted_ids_from_tasks(tasks: dict) -> list[int]:
-    """Sorted *report-space* task ids whose scheduler record reads preempted.
+    """Sorted 0-based ``HpcTaskId`` task ids whose scheduler record reads preempted.
 
-    Ids are in the report's own 1-based scheduler-array space (``report_status*``
-    key tasks ``range(1, N+1)``). Consumers that need 0-based ``HPC_TASK_ID``
-    (e.g. the auto-resume composite, before ``resubmit_flow``) must shift by -1.
+    Ids are in the domain space (``report_status*`` now keys tasks by 0-based
+    ``HPC_TASK_ID``, the conversion having happened at the query ingest edge),
+    so consumers — the auto-resume composite, ``resubmit_flow``, the status
+    CLI — feed them straight through with no compensating shift.
     """
     out: list[int] = []
     for tid_str, info in (tasks or {}).items():
@@ -676,7 +690,9 @@ def report_status(
     tasks: dict[str, dict] = {}
     summary = _empty_summary()
 
-    for tid in range(1, total_tasks + 1):
+    # 0-based HpcTaskId throughout: csv_results, job_info (query ingest edge),
+    # and the keys we emit all speak the domain space.
+    for tid in range(total_tasks):
         if tid in complete_ids:
             tasks[str(tid)] = csv_results[tid]
             summary["complete"] += 1
@@ -690,7 +706,7 @@ def report_status(
             tasks[str(tid)] = {"status": "unknown"}
             summary["unknown"] += 1
 
-    failed_or_unknown = [tid for tid in range(1, total_tasks + 1) if tid not in complete_ids]
+    failed_or_unknown = [tid for tid in range(total_tasks) if tid not in complete_ids]
     all_err = (
         get_err_log_paths(
             job_ids,
@@ -746,8 +762,8 @@ def check_results_from_tasks(
     from a per-run sidecar + ``.hpc/tasks.py`` by
     :func:`_build_per_task_dict_from_sidecar`, or any equivalent
     structure with ``tasks.<tid>.result_dir`` fields.  Task IDs in the
-    input are 0-based; returned dict uses 1-based task IDs to match
-    :func:`report_status`.
+    input are 0-based ``HpcTaskId``; the returned dict keeps the same
+    0-based space to match :func:`report_status`.
 
     Completion semantics: a result file is considered complete when it
     exists and is non-zero byte.  CSVs with only a header (e.g. a
@@ -761,7 +777,7 @@ def check_results_from_tasks(
     results: dict[int, dict] = {}
     for tid_str, entry in tasks_data.get("tasks", {}).items():
         try:
-            tid = int(tid_str) + 1
+            tid = int(tid_str)
         except (TypeError, ValueError):
             continue
         result_dir_raw = entry.get("result_dir")
@@ -854,9 +870,9 @@ def report_status_from_tasks(
     else:
         job_info = {}
 
-    def _cmd_sha_for(one_based_tid: int) -> str | None:
-        """Look up cmd_sha on the task entry for a 1-based task id."""
-        entry = task_entries.get(str(one_based_tid - 1))
+    def _cmd_sha_for(task_id: int) -> str | None:
+        """Look up cmd_sha on the task entry for a 0-based HpcTaskId."""
+        entry = task_entries.get(str(task_id))
         if not entry:
             return None
         sha = entry.get("cmd_sha")
@@ -866,7 +882,9 @@ def report_status_from_tasks(
     tasks: dict[str, dict] = {}
     summary = _empty_summary()
 
-    for tid in range(1, total + 1):
+    # 0-based HpcTaskId throughout (task_entries are keyed str(0..n-1);
+    # completed + job_info already speak the domain space).
+    for tid in range(total):
         cmd_sha = _cmd_sha_for(tid)
         if tid in complete_ids:
             entry = dict(completed[tid])
@@ -883,7 +901,7 @@ def report_status_from_tasks(
             tasks[str(tid)] = {"status": "unknown", "cmd_sha": cmd_sha}
             summary["unknown"] += 1
 
-    failed_or_unknown = [tid for tid in range(1, total + 1) if tid not in complete_ids]
+    failed_or_unknown = [tid for tid in range(total) if tid not in complete_ids]
     all_err = (
         get_err_log_paths(
             job_ids,

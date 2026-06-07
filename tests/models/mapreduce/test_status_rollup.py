@@ -44,11 +44,11 @@ def test_check_results_from_tasks_finds_completed(tmp_path):
 
     results = check_results_from_tasks(tasks_data, file_glob="*.json")
 
-    # Per-task dict IDs are 0-based, results dict is 1-based
-    assert 1 in results
-    assert 3 in results
-    assert 2 not in results
-    assert 4 not in results
+    # Per-task dict IDs and results dict are both 0-based HpcTaskId.
+    assert 0 in results
+    assert 2 in results
+    assert 1 not in results
+    assert 3 not in results
     assert len(results) == 2
 
 
@@ -61,7 +61,7 @@ def test_check_results_ignores_wip(tmp_path):
 
     results = check_results_from_tasks(tasks_data, file_glob="*.json")
 
-    assert 1 not in results
+    assert 0 not in results
 
 
 def test_rollup_groups_by_grid_point(tmp_path):
@@ -69,10 +69,10 @@ def test_rollup_groups_by_grid_point(tmp_path):
     # 4 tasks total (horizon=1 and horizon=5, each x 2 chunks)
     report = {
         "tasks": {
-            "1": {"status": "complete"},  # task 0: horizon=1, chunk a
-            "2": {"status": "complete"},  # task 1: horizon=1, chunk b
-            "3": {"status": "running"},  # task 2: horizon=5, chunk a
-            "4": {"status": "failed"},  # task 3: horizon=5, chunk b
+            "0": {"status": "complete"},  # task 0: horizon=1, chunk a
+            "1": {"status": "complete"},  # task 1: horizon=1, chunk b
+            "2": {"status": "running"},  # task 2: horizon=5, chunk a
+            "3": {"status": "failed"},  # task 3: horizon=5, chunk b
         },
     }
 
@@ -94,7 +94,7 @@ def test_rollup_handles_empty_params():
         "total_tasks": 1,
         "tasks": {"0": {"cmd": "x", "result_dir": "/tmp/x", "params": {}}},
     }
-    report = {"tasks": {"1": {"status": "complete"}}}
+    report = {"tasks": {"0": {"status": "complete"}}}
 
     rollup = rollup_by_grid_point(report, tasks_data)
 
@@ -124,7 +124,7 @@ def test_report_status_from_tasks_integrates(tmp_path):
     assert report["total_tasks"] == 4
     assert report["summary"]["complete"] == 1
     assert report["summary"]["unknown"] == 3
-    assert report["tasks"]["1"]["status"] == "complete"
+    assert report["tasks"]["0"]["status"] == "complete"
 
 
 def test_rollup_by_wave_returns_empty_without_wave_map(tmp_path):
@@ -136,7 +136,7 @@ def test_rollup_by_wave_returns_empty_without_wave_map(tmp_path):
 
 
 def test_rollup_by_wave_groups_tasks_by_wave():
-    """Each wave's bucket counts tasks by status; per-task dict 0-based ↔ report 1-based."""
+    """Each wave's bucket counts tasks by status; wave_map and report both 0-based."""
     tasks_data = {
         "total_tasks": 4,
         "tasks": {
@@ -148,13 +148,13 @@ def test_rollup_by_wave_groups_tasks_by_wave():
         # Wave 0 = tasks 0,1; wave 1 = tasks 2,3
         "wave_map": {"0": ["0", "1"], "1": ["2", "3"]},
     }
-    # Report uses 1-based task ids
+    # Report keys tasks by 0-based HpcTaskId (matches wave_map members).
     report = {
         "tasks": {
-            "1": {"status": "complete"},  # task 0
-            "2": {"status": "complete"},  # task 1
-            "3": {"status": "running"},  # task 2
-            "4": {"status": "failed"},  # task 3
+            "0": {"status": "complete"},  # task 0
+            "1": {"status": "complete"},  # task 1
+            "2": {"status": "running"},  # task 2
+            "3": {"status": "failed"},  # task 3
         }
     }
 

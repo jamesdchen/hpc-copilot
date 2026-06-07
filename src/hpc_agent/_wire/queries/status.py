@@ -42,5 +42,5 @@ class StatusResult(BaseModel):
     )
     preempted_task_ids: list[int] | None = Field(
         default=None,
-        description="Sorted, deduplicated list of preempted task ids. Optional — present only when preempted_count is also present.",
+        description="Sorted, deduplicated list of preempted task ids in the 0-based HPC_TASK_ID domain space (the same space the dispatcher's HPC_TASK_ID, resubmit_flow.failed_task_ids, and /resubmit use — no shift). Optional — present only when preempted_count is also present.",
     )

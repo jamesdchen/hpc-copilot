@@ -98,12 +98,13 @@ class TestSacctResourceUsage:
         )
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
         out = qmod.query_sacct(["100"])
-        t1 = out["tasks"][1]
+        # ArrayIndex 1/2 ingest to HpcTaskId 0/1.
+        t1 = out["tasks"][0]
         assert t1["elapsed_s"] == 3600
         assert t1["cpu_s"] == 3600 * 8
         assert t1["gpu_s"] == 3600 * 1
 
-        t2 = out["tasks"][2]
+        t2 = out["tasks"][1]
         assert t2["elapsed_s"] == 600
         assert t2["cpu_s"] == 600 * 4
         assert t2["gpu_s"] == 0
@@ -113,7 +114,7 @@ class TestSacctResourceUsage:
         stdout = "999_1|COMPLETED|0:0\n"
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
         out = qmod.query_sacct(["999"])
-        t = out["tasks"][1]
+        t = out["tasks"][0]  # ArrayIndex 1 -> HpcTaskId 0
         assert t["elapsed_s"] == 0
         assert t["cpu_s"] == 0
         assert t["gpu_s"] == 0
@@ -142,7 +143,7 @@ class TestSgeResourceUsage:
 
         monkeypatch.setattr(subprocess, "run", responder)
         out = qmod.query_sge(["42"], user="u")
-        t = out["tasks"][1]
+        t = out["tasks"][0]  # taskid 1 (ArrayIndex) -> HpcTaskId 0
         assert t["elapsed_s"] == 900
         assert t["cpu_s"] == 900 * 4
         assert t["gpu_s"] == 0
@@ -165,7 +166,7 @@ class TestSgeResourceUsage:
 
         monkeypatch.setattr(subprocess, "run", responder)
         out = qmod.query_sge(["42"], user="u")
-        t = out["tasks"][7]
+        t = out["tasks"][6]  # taskid 7 (ArrayIndex) -> HpcTaskId 6
         assert t["elapsed_s"] == 1200
         assert t["cpu_s"] == 1200 * 2
         assert t["gpu_s"] == 1200 * 1

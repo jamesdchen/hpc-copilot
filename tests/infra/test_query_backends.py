@@ -50,9 +50,10 @@ class TestSacctErrorShape:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
 
         out = qmod.query_sacct(["999"])
-        # The valid row made it in.
-        assert 1 in out["tasks"]
-        assert out["tasks"][1]["state"] == "COMPLETED"
+        # The valid row made it in. JobId_1 (ArrayIndex 1) ingests to
+        # HpcTaskId 0 via to_task_id.
+        assert 0 in out["tasks"]
+        assert out["tasks"][0]["state"] == "COMPLETED"
         # The malformed row was recorded as an error, not raised.
         codes = [e["code"] for e in out["errors"]]
         assert "malformed_row" in codes
@@ -63,10 +64,11 @@ class TestSacctErrorShape:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
 
         out = qmod.query_sacct(["999"])
-        assert 1 in out["tasks"]
-        assert out["tasks"][1]["job_id"] == "999"
-        # Task id 7 from the unrelated job 888 must NOT appear.
-        assert 7 not in out["tasks"]
+        # ArrayIndex 1 -> HpcTaskId 0.
+        assert 0 in out["tasks"]
+        assert out["tasks"][0]["job_id"] == "999"
+        # ArrayIndex 7 (HpcTaskId 6) from the unrelated job 888 must NOT appear.
+        assert 6 not in out["tasks"]
 
     def test_happy_path_has_empty_errors(self, monkeypatch):
         stdout = "123_1|COMPLETED|0:0\n"
@@ -88,9 +90,9 @@ class TestSacctErrorShape:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
 
         out = qmod.query_sacct(["111", "222"])
-        # Newest (222) wins, not oldest (111).
-        assert out["tasks"][3]["state"] == "RUNNING"
-        assert out["tasks"][3]["job_id"] == "222"
+        # Newest (222) wins, not oldest (111). ArrayIndex 3 -> HpcTaskId 2.
+        assert out["tasks"][2]["state"] == "RUNNING"
+        assert out["tasks"][2]["job_id"] == "222"
 
     def test_resubmit_newest_wins_when_sacct_emits_newest_first(self, monkeypatch):
         # Mirror of the above but with sacct emitting newest-first —
@@ -102,8 +104,9 @@ class TestSacctErrorShape:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
 
         out = qmod.query_sacct(["111", "222"])
-        assert out["tasks"][3]["state"] == "RUNNING"
-        assert out["tasks"][3]["job_id"] == "222"
+        # ArrayIndex 3 -> HpcTaskId 2.
+        assert out["tasks"][2]["state"] == "RUNNING"
+        assert out["tasks"][2]["job_id"] == "222"
 
     def test_main_record_still_beats_batch_step_within_same_array(self, monkeypatch):
         # The pre-existing dedup rule ("main record comes before
@@ -114,7 +117,8 @@ class TestSacctErrorShape:
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
 
         out = qmod.query_sacct(["999"])
-        assert out["tasks"][5]["state"] == "COMPLETED"
+        # ArrayIndex 5 -> HpcTaskId 4.
+        assert out["tasks"][4]["state"] == "COMPLETED"
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +155,9 @@ class TestSgeErrorShape:
 
         monkeypatch.setattr(subprocess, "run", responder)
         out = qmod.query_sge(["42"], user="u")
-        # qacct populated the task map.
-        assert 5 in out["tasks"]
-        assert out["tasks"][5]["state"] == "COMPLETED"
+        # qacct populated the task map. taskid 5 (ArrayIndex) -> HpcTaskId 4.
+        assert 4 in out["tasks"]
+        assert out["tasks"][4]["state"] == "COMPLETED"
         # qstat_failed recorded in errors.
         codes = [e["code"] for e in out["errors"]]
         assert "qstat_failed" in codes

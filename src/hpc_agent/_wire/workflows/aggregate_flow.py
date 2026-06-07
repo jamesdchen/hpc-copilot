@@ -172,7 +172,8 @@ class AggregateFlowResult(BaseModel):
     nonempty_failing_task_ids: list[int] = Field(
         default_factory=list,
         description=(
-            "Task ids (1-based) whose CSV result has fewer than "
+            "Task ids (0-based HPC_TASK_ID — the same domain space as the "
+            "dispatcher and /resubmit) whose CSV result has fewer than "
             "spec.min_rows data rows beyond the header — i.e. tasks that "
             "wrote a file but no real data. Empty when the gate passed or "
             "was skipped. A non-empty list means the aggregate was "

@@ -256,9 +256,10 @@ def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
 def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
     """Sum per-task cpu_s / gpu_s / elapsed_s into a run-level cost rollup.
 
-    Accepts the ``tasks`` map from a status report (string-keyed, 1-based task
-    IDs) or the raw ``tasks`` dict from :func:`query_sacct` / :func:`query_sge`
-    (int-keyed).  Missing keys are treated as 0 so partial/unknown tasks do
+    Accepts the ``tasks`` map from a status report (string-keyed, 0-based
+    HpcTaskId) or the raw ``tasks`` dict from :func:`query_sacct` /
+    :func:`query_sge` (int-keyed, also 0-based after the ingest edge).
+    Missing keys are treated as 0 so partial/unknown tasks do
     not crash the rollup.
 
     Returns a dict with stable keys::

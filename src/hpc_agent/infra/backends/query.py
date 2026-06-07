@@ -13,6 +13,16 @@ Return shape (uniform across happy / error paths)::
         "errors": [{"code": str, "detail": str}, ...],
     }
 
+**Task-id space (ingest edge).** This module is the scheduler-ingest
+membrane: the ``JobId_N`` / ``taskid`` / ``ja-task-ID`` index every tool
+reports back is a **1-based** :data:`~hpc_agent._kernel.contract.task_id.ArrayIndex`
+(jobs submit ``--array=1-N``). Each parser routes it through
+:func:`~hpc_agent._kernel.contract.task_id.to_task_id` so the ``tasks`` map
+is keyed by **0-based** :data:`~hpc_agent._kernel.contract.task_id.HpcTaskId`
+at the source — everything above the scheduler then speaks the same domain
+identity the dispatcher's ``HPC_TASK_ID`` and ``resubmit_flow`` use, with no
+compensating ``±1`` downstream.
+
 The three resource-usage keys (``elapsed_s``, ``cpu_s``, ``gpu_s``) are
 **always present** on every task dict so callers can sum them without
 defensively checking for missing keys.  Values are 0 when the scheduler
@@ -37,6 +47,8 @@ import os
 import re
 import subprocess
 
+from hpc_agent._kernel.contract.task_id import ArrayIndex, to_task_id
+from hpc_agent.errors import SpecInvalid as _SpecInvalid
 from hpc_agent.infra.parsing import parse_sacct_pipe_row
 from hpc_agent.infra.parsing import to_int as _to_int
 
@@ -197,9 +209,11 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
             continue
         # tail may be "7", "7.batch", "7.extern"; take the leading integer.
         tail = tail.split(".", 1)[0]
+        # Ingest edge: the JobId_N index is a 1-based ArrayIndex; convert to
+        # 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
         try:
-            tid = int(tail)
-        except ValueError:
+            tid = int(to_task_id(ArrayIndex(int(tail))))
+        except (ValueError, _SpecInvalid):
             errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
             continue
         # Dedup rule:
@@ -282,7 +296,13 @@ def _process_pbs_block(
     m = re.match(r"^(\d+)\[(\d+)\]", job_id_field)
     if not m:
         return  # array parent ``[]`` / non-array job — no task index
-    base_job, tid = m.group(1), int(m.group(2))
+    # Ingest edge: the PBS subjob ``[idx]`` is a 1-based ArrayIndex; convert
+    # to 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
+    base_job = m.group(1)
+    try:
+        tid = int(to_task_id(ArrayIndex(int(m.group(2)))))
+    except _SpecInvalid:
+        return  # malformed (idx < 1) — skip rather than mis-key
     if tid in task_info:
         return  # first stanza wins
 
@@ -433,9 +453,11 @@ def _process_qacct_block(
     tid_str = block.get("taskid", "")
     if not tid_str or tid_str == "undefined":
         return
+    # Ingest edge: qacct ``taskid`` is a 1-based ArrayIndex; convert to
+    # 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
     try:
-        tid = int(tid_str)
-    except ValueError:
+        tid = int(to_task_id(ArrayIndex(int(tid_str))))
+    except (ValueError, _SpecInvalid):
         errors.append({"code": "malformed_row", "detail": f"qacct non-integer taskid: {tid_str!r}"})
         return
     if tid in task_info:
@@ -598,7 +620,13 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             task_spec = tail[1].strip()  # pending array: slots task
         elif len(tail) >= 3:
             task_spec = tail[2].strip()  # running array: queue slots task
-        for tid in _expand_task_range(task_spec):
+        for array_idx in _expand_task_range(task_spec):
+            # Ingest edge: qstat ja-task-IDs are 1-based ArrayIndexes;
+            # convert to 0-based HpcTaskId so ``task_info`` is domain-keyed.
+            try:
+                tid = int(to_task_id(ArrayIndex(array_idx)))
+            except _SpecInvalid:
+                continue
             task_info[tid] = {
                 "state": normalized,
                 "exit_code": None,
