@@ -645,6 +645,97 @@ def test_check_executor_var_references_unit() -> None:
     )
 
 
+def test_rejects_executor_with_format_placeholders(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """str.format ``{placeholder}`` tokens in the EXECUTOR are result_dir_template
+    syntax the dispatcher never renders in the command (it runs the executor
+    through the shell verbatim). The empirical 2026-06-06 demo shipped
+    ``--output-file results/{run_id}/seed_{seed}/metrics.json`` — refuse at build,
+    pointing at ``$RESULT_DIR``."""
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    (exp / "analyze.py").write_text("print('plain')\n", encoding="utf-8")
+    _write_tasks_py(exp, "{'seed': i}")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            exp,
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={
+                    "EXECUTOR": (
+                        "python3 analyze.py --seed $SEED "
+                        "--output-file results/{run_id}/seed_{seed}/metrics.json"
+                    )
+                },
+            ),
+        )
+    msg = str(excinfo.value)
+    assert "{run_id}" in msg and "{seed}" in msg
+    assert "$RESULT_DIR" in msg
+    assert "result_dir_template" in msg
+
+
+def test_rejects_executor_with_wrong_case_kwarg_ref(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lowercase ``$seed`` for the swept ``seed`` kwarg expands to empty
+    cluster-side (the dispatcher exports ``$SEED``). The 2026-06-06 resubmit
+    regression — refuse at build, naming the correct casing."""
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    (exp / "analyze.py").write_text("print('plain')\n", encoding="utf-8")
+    _write_tasks_py(exp, "{'seed': i}")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            exp,
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": "python3 analyze.py --seed $seed"},
+            ),
+        )
+    msg = str(excinfo.value)
+    assert "$seed" in msg and "$SEED" in msg
+
+
+def test_check_executor_format_placeholders_unit() -> None:
+    """Direct coverage of the {placeholder}-in-executor predicate."""
+    from hpc_agent.incorporation.build.submit_spec import _check_executor_format_placeholders
+
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        _check_executor_format_placeholders(
+            "python3 x.py --seed $SEED --output-file results/{run_id}/seed_{seed}/metrics.json"
+        )
+    msg = str(excinfo.value)
+    assert "{run_id}" in msg and "{seed}" in msg and "$RESULT_DIR" in msg
+    # Shell ``$RESULT_DIR`` / ``${RESULT_DIR}`` param expansion, empty ``{}``
+    # (find -exec), comma lists and numeric ranges are NOT format placeholders.
+    _check_executor_format_placeholders('python3 x.py --out "$RESULT_DIR/metrics.json"')
+    _check_executor_format_placeholders("python3 x.py --out ${RESULT_DIR}/metrics.json")
+    _check_executor_format_placeholders("bash -c 'find . -exec wc -l {} +'")
+    _check_executor_format_placeholders("cp a.{txt,bak} /tmp && echo {1..3}")
+
+
+def test_check_executor_kwarg_casing_unit() -> None:
+    """Direct coverage of the swept-kwarg casing predicate."""
+    from hpc_agent.incorporation.build.submit_spec import _check_executor_kwarg_casing
+
+    # Correct casing (bare + namespaced) → ok.
+    _check_executor_kwarg_casing("p --seed $SEED --k $HPC_KW_SEED", kwargs_keys={"seed"})
+    # Wrong-case bare ref to a real kwarg → refuse.
+    with pytest.raises(errors.SpecInvalid):
+        _check_executor_kwarg_casing("p --seed $seed", kwargs_keys={"seed"})
+    # Wrong-case namespaced ref to a real kwarg → refuse.
+    with pytest.raises(errors.SpecInvalid):
+        _check_executor_kwarg_casing("p --seed $HPC_KW_seed", kwargs_keys={"seed"})
+    # A non-kwarg var ($SCRATCH) is not this check's concern → no raise.
+    _check_executor_kwarg_casing("p --d $SCRATCH/x", kwargs_keys={"seed"})
+    # Unknowable kwarg set → never refuse.
+    _check_executor_kwarg_casing("p --seed $seed", kwargs_keys=None)
+
+
 def test_walltime_sec_stamped_into_job_env_for_checkpoint_deadline() -> None:
     """#294: a submit with a walltime stamps HPC_WALLTIME_SEC so the cluster
     preamble can derive HPC_WALLTIME_END_EPOCH for walltime-margin checkpointing.

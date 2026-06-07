@@ -114,6 +114,52 @@ def test_dispatcher_plain_dispatch_py_refused(tmp_path: Path) -> None:
         write_run_sidecar(experiment_dir=tmp_path, spec=spec)
 
 
+def _write_tasks_py(exp: Path, resolve_body: str = "{'seed': i}") -> None:
+    (exp / ".hpc").mkdir(parents=True, exist_ok=True)
+    (exp / ".hpc" / "tasks.py").write_text(
+        f"def total():\n    return 3\n\n\ndef resolve(i):\n    return {resolve_body}\n",
+        encoding="utf-8",
+    )
+
+
+class TestPerTaskExecutorGuard:
+    """The dispatcher reads ``sidecar.executor`` and runs it per task verbatim,
+    so a broken command fails silently cluster-side. Both shapes below are from
+    the live 2026-06-06 demo (canary `--seed $SEED` correct; resubmit regressed
+    to `--seed $seed` + a `{run_id}/seed_{seed}` --output-file)."""
+
+    def test_format_placeholders_in_executor_refused(self, tmp_path: Path) -> None:
+        spec = _spec(
+            executor=(
+                "python executors/monte_carlo_pi.py --seed $SEED "
+                "--output-file results/{run_id}/seed_{seed}/metrics.json"
+            )
+        )
+        with pytest.raises(errors.SpecInvalid, match="placeholder"):
+            write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+        # Nothing written when the guard fires.
+        target = tmp_path / ".hpc" / "runs" / f"{spec.run_id}.json"
+        assert not target.exists()
+
+    def test_wrong_case_kwarg_ref_refused(self, tmp_path: Path) -> None:
+        _write_tasks_py(tmp_path)  # proves `seed` is a swept kwarg
+        spec = _spec(executor="python executors/monte_carlo_pi.py --seed $seed")
+        with pytest.raises(errors.SpecInvalid, match="SEED"):
+            write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+
+    def test_correct_per_task_executor_accepted(self, tmp_path: Path) -> None:
+        # No false positive on the canonical command: uppercase $SEED + $RESULT_DIR.
+        _write_tasks_py(tmp_path)
+        spec = _spec(
+            executor=(
+                "python executors/monte_carlo_pi.py --seed $SEED "
+                '--output-file "$RESULT_DIR/metrics.json"'
+            )
+        )
+        out = write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+        assert Path(out["path"]).is_file()
+
+
 def test_idempotent_overwrite_produces_same_content(tmp_path: Path) -> None:
     spec = _spec()
     out1 = write_run_sidecar(experiment_dir=tmp_path, spec=spec)

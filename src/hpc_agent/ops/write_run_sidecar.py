@@ -67,8 +67,14 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
     :class:`errors.SpecInvalid`
         ``spec.executor`` is the job-script dispatcher (``dispatch.py``
         in the command), which would let the cluster array self-recurse
-        (#162). The fix is to pass the REAL per-task command — e.g.
-        ``python train.py --seed $SEED``.
+        (#162); OR it carries str.format ``{placeholder}`` tokens (which
+        the dispatcher only renders in result_dir_template, never the
+        executor); OR it references a swept kwarg in the wrong case
+        (``$seed`` for the ``seed`` kwarg — the dispatcher exports the
+        uppercased ``$SEED``). The fix is the REAL per-task command with
+        ``$RESULT_DIR`` for output and ``$<NAME>`` (uppercase) for kwargs
+        — e.g. ``python train.py --seed $SEED --output-file
+        "$RESULT_DIR/metrics.json"``.
     """
     if not _is_runnable_executor(spec.executor):
         raise errors.SpecInvalid(
@@ -78,6 +84,16 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
             "`python train.py --seed $SEED`); the dispatcher path belongs "
             "in the submit-flow spec's job_env['EXECUTOR'], not here (#162)."
         )
+
+    # The cluster dispatcher reads THIS executor and runs it per task verbatim,
+    # so a broken command fails silently cluster-side. Refuse str.format
+    # {placeholder} leakage and wrong-case swept-kwarg $refs at intake (empirical
+    # 2026-06-06 demo: a canary's correct `--seed $SEED` regressed to a broken
+    # `--seed $seed` + `--output-file results/{run_id}/seed_{seed}/metrics.json`
+    # on resubmit). Lazy import keeps module load free of incorporation/build.
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    check_per_task_executor(spec.executor, experiment_dir=Path(experiment_dir))
 
     target = _write_run_sidecar(
         Path(experiment_dir),

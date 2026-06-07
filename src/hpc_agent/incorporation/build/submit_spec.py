@@ -321,6 +321,10 @@ def build_submit_spec(
     # resolve-submit-inputs composite, which already imported tasks.py for
     # cmd_sha) pays no second user-code import.
     _effective_executor = job_env.get("EXECUTOR", "")
+    # str.format {placeholder} leakage is a pure-string check — cheap, no
+    # tasks.py import — so run it unconditionally (the default dispatcher
+    # command has no braces, so the common path no-ops).
+    _check_executor_format_placeholders(_effective_executor)
     if "$" in _effective_executor:
         _check_executor_var_references(
             _effective_executor,
@@ -561,6 +565,11 @@ def _check_executor_var_references(
     No-ops when *kwargs_keys* is None (the kwarg set couldn't be established) —
     the conservative posture that only refuses on a *provable* miss.
     """
+    # A wrong-case reference to a REAL kwarg ($seed for kwarg seed) is its own
+    # provable miss — the dispatcher exports the bare/namespaced form uppercased,
+    # so the lowercase spelling expands to empty. Caught here so the build path
+    # surfaces it alongside the unset-var check below.
+    _check_executor_kwarg_casing(executor, kwargs_keys=kwargs_keys)
     if kwargs_keys is None or "$" not in executor:
         return
     covered = _FRAMEWORK_INJECTED_VARS | set(job_env_keys)
@@ -582,6 +591,105 @@ def _check_executor_var_references(
             "tasks.resolve() returns it (then it's exported), or\n"
             f"  • dropping the ${ref} reference from the EXECUTOR command."
         )
+
+
+# --- str.format {placeholder} leakage into the EXECUTOR --------------------
+#
+# The cluster-side dispatcher str.format()s ONLY result_dir_template (with
+# run_id / task_id / swept kwargs); it runs the EXECUTOR through the shell
+# verbatim (``subprocess.Popen(executor, shell=True)``). A ``{run_id}`` /
+# ``{seed}`` token in the EXECUTOR therefore never expands — it reaches the
+# program LITERALLY (the empirical 2026-06-06 demo:
+# ``--output-file results/{run_id}/seed_{seed}/metrics.json`` would write under
+# a directory named ``{run_id}``). The per-task output dir is ``$RESULT_DIR``;
+# the {placeholders} belong in result_dir_template.
+#
+# Negative lookbehind on ``$`` so shell parameter expansion ``${VAR}`` is not
+# mistaken for a format placeholder. Empty ``{}`` (``find -exec``), comma lists
+# (``{a,b}``) and numeric ranges (``{1..9}``) don't match the named-identifier
+# shape, so they're left alone.
+_FORMAT_PLACEHOLDER_RE = re.compile(r"(?<!\$)\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _check_executor_format_placeholders(executor: str) -> None:
+    """Raise :class:`errors.SpecInvalid` if *executor* carries ``{name}`` tokens.
+
+    Those are result_dir_template syntax; the dispatcher never ``str.format``\\ s
+    the EXECUTOR, so the token reaches the program verbatim.
+    """
+    found = sorted(set(_FORMAT_PLACEHOLDER_RE.findall(executor or "")))
+    if not found:
+        return
+    refs = ", ".join("{" + name + "}" for name in found)
+    raise errors.SpecInvalid(
+        f"EXECUTOR carries str.format placeholder(s) {refs}, but the cluster-side "
+        "dispatcher str.format()s only result_dir_template — it runs the EXECUTOR "
+        "through the shell verbatim, so these tokens reach the program LITERALLY "
+        "(e.g. output written under a directory named '{run_id}'). Resolve by:\n"
+        "  • routing per-task output through $RESULT_DIR (the dispatcher sets it "
+        "per task and promotes metrics.json into the result_dir_template dir), "
+        'e.g. --output-file "$RESULT_DIR/metrics.json"; and\n'
+        "  • moving the {run_id}/{task_id}/{<kwarg>} placeholders into "
+        "result_dir_template, where the dispatcher renders them — reference a swept "
+        "kwarg in the command itself as $<NAME> / $HPC_KW_<NAME> (uppercase)."
+    )
+
+
+def _check_executor_kwarg_casing(executor: str, *, kwargs_keys: set[str] | None) -> None:
+    """Raise :class:`errors.SpecInvalid` for a swept-kwarg ``$ref`` in the wrong case.
+
+    The dispatcher exports each ``tasks.resolve(i)`` kwarg as ``$<KEY.upper()>``
+    AND ``$HPC_KW_<KEY.upper()>`` (dispatch.py does ``env[key.upper()]``). A
+    lowercase/mixed-case reference to a real kwarg (``$seed`` for the ``seed``
+    kwarg) is never set under that spelling and expands to EMPTY — the empirical
+    2026-06-06 demo, where the agent "fixed" a correct ``$SEED`` into a broken
+    ``$seed``. No-ops when the kwarg set is unknowable (only refuse on a provable
+    miss).
+    """
+    if kwargs_keys is None or "$" not in executor:
+        return
+    for ref, defaulted in _iter_var_refs(executor):
+        if defaulted:
+            continue
+        if ref.startswith("HPC_KW_"):
+            kwarg = ref[len("HPC_KW_") :].lower()
+            exported = "HPC_KW_" + kwarg.upper()
+        else:
+            kwarg = ref.lower()
+            exported = kwarg.upper()
+        if kwarg in kwargs_keys and ref != exported:
+            raise errors.SpecInvalid(
+                f"EXECUTOR references ${ref}, but the cluster-side dispatcher exports "
+                f"the {kwarg!r} kwarg only as ${exported} / $HPC_KW_{kwarg.upper()} "
+                f"(it does env[key.upper()]). The lowercase/mixed-case ${ref} is never "
+                "set and expands to EMPTY (the command then fails downstream, e.g. "
+                f"argparse 'expected one argument'). Use ${exported} or "
+                f"$HPC_KW_{kwarg.upper()}."
+            )
+
+
+def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None) -> None:
+    """Boundary guard for the REAL per-task EXECUTOR (the sidecar's ``executor``).
+
+    The cluster dispatcher reads ``sidecar.executor`` and runs it per task, so a
+    structurally broken command here fails silently cluster-side. Catches the two
+    shapes the ``#162`` dispatcher-self-recursion guard does NOT cover:
+
+    1. str.format ``{placeholder}`` tokens — the dispatcher formats only
+       result_dir_template (:func:`_check_executor_format_placeholders`).
+    2. a swept-kwarg ``$ref`` in the wrong case
+       (:func:`_check_executor_kwarg_casing`).
+
+    Deliberately omits the job_env-aware unset-var check
+    (:func:`_check_executor_var_references`): at sidecar-write time the assembled
+    job_env (MODULES / CONDA_* / REPO_DIR / ...) isn't known, and the per-task
+    command legitimately inherits those at runtime, so flagging them would
+    false-positive. ``build-submit-spec`` runs the full check where job_env IS
+    known.
+    """
+    _check_executor_format_placeholders(executor)
+    if "$" in (executor or ""):
+        _check_executor_kwarg_casing(executor, kwargs_keys=_resolve_kwargs_keys(experiment_dir))
 
 
 def _validate(spec: dict[str, Any]) -> None:

@@ -5,6 +5,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.18 — 2026-06-06
+
+### Fixed — refuse a broken per-task EXECUTOR at the sidecar / build boundary
+
+The cluster dispatcher `str.format`s only `result_dir_template`; it runs the per-task `executor` through the shell verbatim and exports each `tasks.resolve(i)` kwarg as `env[key.upper()]` (bare `$SEED` + `$HPC_KW_SEED`). Two silent-failure shapes slipped past every existing guard because the field the dispatcher actually reads — `sidecar.executor` — was only checked for the #162 dispatcher self-recursion:
+
+- **`str.format` `{placeholder}` leakage** — e.g. `--output-file results/{run_id}/seed_{seed}/metrics.json`. The `{run_id}`/`{seed}` tokens never expand in the executor (only in `result_dir_template`) and reach the program literally, writing under a directory named `{run_id}`. New `_check_executor_format_placeholders` refuses them and points at `$RESULT_DIR` for per-task output (`${VAR}` / `{}` / `{a,b}` / `{1..9}` brace forms are excluded).
+- **Wrong-case swept-kwarg `$ref`** — e.g. `--seed $seed` for the `seed` kwarg. The dispatcher exports `$SEED`, so `$seed` expands to empty → argparse error. New `_check_executor_kwarg_casing` refuses it, naming the correct `$SEED` / `$HPC_KW_SEED`; the existing #292 `$VAR` cross-check now also runs it.
+
+Both checks apply to the real per-task command at BOTH boundaries: `build-submit-spec` (the `extra_env["EXECUTOR"]` path) and `write-run-sidecar` (the `sidecar.executor` the dispatcher reads) via the new public `check_per_task_executor` helper. The sidecar boundary deliberately omits the job_env-aware unset-var check (job_env isn't known at write time, and the per-task command legitimately inherits `MODULES`/`CONDA_*`/`REPO_DIR` at runtime). Empirical 2026-06-06 demo: a canary's correct `--seed $SEED` regressed on resubmit to `--seed $seed` + the `{run_id}/seed_{seed}` `--output-file`, and both shipped to qsub unflagged.
+
 ## 0.10.17 — 2026-06-06
 
 Bundles five externally-landed PRs (#297, #300, #302, #303) alongside the #296 `repo_hash` fix — all in the 2026-06-06 window.
