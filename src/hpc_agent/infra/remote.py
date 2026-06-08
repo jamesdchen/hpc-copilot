@@ -38,6 +38,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any, Final
 
+from hpc_agent.infra.retry import RetryPolicy, run_with_retry
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv
 
 if TYPE_CHECKING:
@@ -122,7 +123,49 @@ _SSH_THROTTLE_MARKERS: tuple[str, ...] = (
 # 4 retries with delays 2s/4s/8s/16s — total ~30s of waiting. Long enough
 # to ride through a sshd MaxStartups burst, short enough that a permanent
 # failure surfaces in well under a minute.
+#
+# This tuple is a clean geometric doubling, so it is re-expressed as a
+# :class:`~hpc_agent.infra.retry.RetryPolicy` by :func:`_ssh_backoff_policy`
+# (base = first delay × ``backoff_factor=2``) rather than consumed element by
+# element — the single retry surface #308 consolidates onto. It stays the
+# documented source of truth for the schedule, and ``test_remote`` asserts the
+# derived policy reproduces it exactly so a future edit that broke the doubling
+# would fail loudly instead of silently changing which delays are slept.
 _BACKOFF_DELAYS_SEC: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0)
+
+
+class _ThrottleRetry(Exception):  # noqa: N818 - a retry *signal*, not an error
+    """Internal signal wrapping a throttle-marked CompletedProcess for retry.
+
+    :func:`run_with_retry` drives backoff by retrying on *exceptions*, but a
+    throttle failure is a returned ``CompletedProcess``, not a raised error —
+    and the historical contract is that a throttle failure surviving every
+    retry is **returned** (the caller inspects the cp), never raised. Wrapping
+    the cp in this signal lets the shared runner apply the schedule while
+    :func:`_with_ssh_backoff` unwraps it on exhaustion to return the cp.
+    """
+
+    def __init__(self, cp: subprocess.CompletedProcess[str]) -> None:
+        super().__init__()
+        self.cp = cp
+
+
+def _ssh_backoff_policy() -> RetryPolicy:
+    """The :data:`_BACKOFF_DELAYS_SEC` schedule as a :class:`RetryPolicy`.
+
+    Built from the module-level tuple at call time so tests that pin the
+    schedule (``monkeypatch.setattr(... _BACKOFF_DELAYS_SEC, (0.0,) * 4)``)
+    still drive both the attempt count and the per-attempt delay. ``1 +
+    len(...)`` attempts = one initial try plus one retry per scheduled delay,
+    matching the previous ``enumerate((0.0, *_BACKOFF_DELAYS_SEC))`` loop.
+    """
+    base = _BACKOFF_DELAYS_SEC[0] if _BACKOFF_DELAYS_SEC else 0.0
+    return RetryPolicy(
+        max_attempts=1 + len(_BACKOFF_DELAYS_SEC),
+        base_delay_sec=base,
+        backoff_factor=2.0,
+        retry_on=(TimeoutError, _ThrottleRetry),
+    )
 
 
 def _is_throttle_failure(cp: subprocess.CompletedProcess[str]) -> bool:
@@ -155,38 +198,35 @@ def _with_ssh_backoff(
     Permanent failures (auth refused, host unreachable, command not
     found) return immediately with the failing CompletedProcess.
 
-    *label* is interpolated into the optional log line so the caller's
-    diagnostic identifies which step is being retried (e.g. ``"rsync
-    push"``, ``"scp dispatch.py"``). Disable retries entirely by setting
+    The backoff itself is delegated to the shared :func:`run_with_retry`
+    surface (#308) via :func:`_ssh_backoff_policy`; this wrapper only adapts
+    the two retry triggers to it — ``TimeoutError`` propagates naturally, and a
+    throttle-marked cp is carried through retries by :class:`_ThrottleRetry`
+    and unwrapped on exhaustion so the cp is returned rather than raised.
+
+    *label* identifies the call site (e.g. ``"rsync push"``) and is retained
+    for caller-side diagnostics. Disable retries entirely by setting
     ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
     """
     if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
         return fn()
 
-    last_cp: subprocess.CompletedProcess[str] | None = None
-    last_exc: Exception | None = None
-    for attempt, delay in enumerate((0.0, *_BACKOFF_DELAYS_SEC)):
-        if delay > 0:
-            time.sleep(delay)
-        try:
-            cp = fn()
-        except TimeoutError as exc:
-            last_exc = exc
-            last_cp = None
-            continue
-        last_cp = cp
-        last_exc = None
-        if not _is_throttle_failure(cp):
-            return cp
-        # Throttle marker — retry unless we've exhausted the schedule.
-        if attempt == len(_BACKOFF_DELAYS_SEC):
-            return cp
-    # Exhausted retries on TimeoutError specifically.
-    if last_exc is not None and last_cp is None:
-        raise last_exc
-    # Should be unreachable; mypy needs the guarantee.
-    assert last_cp is not None, f"_with_ssh_backoff exhausted with no result for {label}"
-    return last_cp
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        # TimeoutError raised by fn propagates to run_with_retry as a
+        # retryable exception; a throttle-marked cp is re-raised as the
+        # _ThrottleRetry signal so the same runner retries it.
+        cp = fn()
+        if _is_throttle_failure(cp):
+            raise _ThrottleRetry(cp)
+        return cp
+
+    try:
+        return run_with_retry(_attempt, policy=_ssh_backoff_policy())
+    except _ThrottleRetry as exhausted:
+        # Every retry consumed and still throttled: return the failing cp for
+        # the caller to inspect (an exhausted TimeoutError, by contrast,
+        # propagates out of run_with_retry unchanged).
+        return exhausted.cp
 
 
 # ---------------------------------------------------------------------------

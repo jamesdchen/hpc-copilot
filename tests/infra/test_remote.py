@@ -664,6 +664,23 @@ class TestSshBackoff:
         assert mock_run.call_count == 5  # 1 initial + 4 retries
 
 
+# Module-level (NOT under TestSshBackoff, whose autouse fixture zeroes the
+# schedule): #308 re-expresses the hand-rolled backoff loop as a RetryPolicy.
+# Pin parity against the *real* schedule so a future edit to _BACKOFF_DELAYS_SEC
+# that broke the geometric doubling would surface here rather than silently
+# changing which delays are slept.
+def test_ssh_backoff_policy_reproduces_schedule_exactly():
+    policy = remote._ssh_backoff_policy()
+    # One initial attempt plus one retry per scheduled delay.
+    assert policy.max_attempts == 1 + len(remote._BACKOFF_DELAYS_SEC)
+    # delay_for is 1-based over the *retries*; it must match the tuple term for
+    # term — i.e. 2s/4s/8s/16s for the production schedule.
+    delays = [policy.delay_for(i) for i in range(1, len(remote._BACKOFF_DELAYS_SEC) + 1)]
+    assert tuple(delays) == remote._BACKOFF_DELAYS_SEC
+    # And the throttle signal + TimeoutError are exactly the retry triggers.
+    assert policy.retry_on == (TimeoutError, remote._ThrottleRetry)
+
+
 # ---------------------------------------------------------------------------
 # Close-pipes-on-exit capture reader (#209): real-subprocess behaviour
 # ---------------------------------------------------------------------------

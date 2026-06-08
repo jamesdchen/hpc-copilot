@@ -7,15 +7,19 @@ schedule, which exceptions are retryable) that :func:`run_with_retry`
 applies in plain code. The policy is the data; the runner is the
 mechanism; the model is out of the loop.
 
-Today the same idea lives as hand-rolled loops scattered across the infra
-layer — :func:`hpc_agent.infra.remote._with_ssh_backoff` (delays
-``2s/4s/8s/16s``, i.e. ``base_delay=2.0`` × ``backoff_factor=2.0``) and the
-``_attempt(...)`` retry inside :mod:`hpc_agent.infra.transport`. Those are
-the consolidation **targets** for a follow-up; this module's backoff math
-deliberately matches their exponential schedule so they can later be
-re-expressed as ``RetryPolicy`` values without changing observable timing.
-This file only introduces the surface — it does NOT rewire those call
-sites (that wiring is an explicit follow-up).
+:func:`hpc_agent.infra.remote._with_ssh_backoff` (delays ``2s/4s/8s/16s``,
+i.e. ``base_delay=2.0`` × ``backoff_factor=2.0``) is built on this surface
+(#308): it adapts its two retry triggers — a raised ``TimeoutError`` and a
+throttle-marked ``CompletedProcess`` — onto :func:`run_with_retry` via
+``_ssh_backoff_policy``, so the exponential schedule lives here as data
+rather than as a hand-rolled loop.
+
+Note the ``_attempt(...)`` retry inside :mod:`hpc_agent.infra.transport` is
+**not** a backoff target: it is wrapped by
+:func:`hpc_agent.infra.ssh_options.run_with_named_pipe_retry`, a one-shot,
+condition-specific retry (sticky verdict, no sleep, no exponential schedule)
+for a single Windows named-pipe ``getsockname`` failure. It is a different
+mechanism, not a delay loop, and is intentionally left as-is.
 """
 
 from __future__ import annotations
