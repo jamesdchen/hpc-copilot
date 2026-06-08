@@ -1,8 +1,8 @@
 """CI lint: the sidecar schema-version constants stay in sync.
 
 ``SUPPORTED_SCHEMA_VERSIONS`` is **necessarily duplicated** in the two
-cluster-side dispatchers — ``models/mapreduce/dispatch.py`` and
-``models/mapreduce/combiner.py`` — because both are deployed to compute
+cluster-side dispatchers — ``execution/mapreduce/dispatch.py`` and
+``execution/mapreduce/combiner.py`` — because both are deployed to compute
 nodes *without* the rest of the package (stdlib-only, zero-dependency),
 so they cannot import a shared constant. The sync is documented only by
 a comment today; this lint makes it enforced.
@@ -29,8 +29,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "hpc_agent"
 
-DISPATCH = SRC / "models" / "mapreduce" / "dispatch.py"
-COMBINER = SRC / "models" / "mapreduce" / "combiner.py"
+DISPATCH = SRC / "execution" / "mapreduce" / "dispatch.py"
+COMBINER = SRC / "execution" / "mapreduce" / "combiner.py"
 RUNS = SRC / "state" / "runs.py"
 
 

@@ -20,6 +20,7 @@ from hpc_agent import errors
 DOCUMENTED_ERROR_CODES = frozenset(
     {
         "ssh_unreachable",
+        "model_endpoint_error",
         "scheduler_throttled",
         "spec_invalid",
         "executor_not_found",
@@ -42,6 +43,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
 # no dedicated subclass — it's the catch-all for unclassified failures).
 EXPECTED_SUBCLASSES = {
     "ssh_unreachable": errors.SshUnreachable,
+    "model_endpoint_error": errors.ModelEndpointError,
     "scheduler_throttled": errors.SchedulerThrottled,
     "spec_invalid": errors.SpecInvalid,
     "executor_not_found": errors.ExecutorNotFound,

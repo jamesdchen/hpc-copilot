@@ -15,7 +15,7 @@ the file imports cleanly today and the not-yet-built parts are easy to
 collect and run after integration.
 
 The resolver entrypoint the contract references is:
-    from hpc_agent.models.mapreduce.reduce.status import <resolver>
+    from hpc_agent.execution.mapreduce.reduce.status import <resolver>
 Its concrete name is owned by the spine/Agent C; we probe the likely
 names and skip (not fail) until one exists, so this file is a forward
 contract rather than a hard dependency.
@@ -169,13 +169,13 @@ class TestLabelResolverNoLLM:
         [("slurm", "slurm"), ("sge", "sge"), ("pbspro", "pbspro"), ("torque", "torque")],
     )
     def test_known_label_resolves_to_golden_without_llm(self, label, family):
+        from hpc_agent.execution.mapreduce.reduce.status import resolve_scheduler_profile
         from hpc_agent.infra.backends.profile import (
             PBSPRO_PROFILE,
             SGE_PROFILE,
             SLURM_PROFILE,
             TORQUE_PROFILE,
         )
-        from hpc_agent.models.mapreduce.reduce.status import resolve_scheduler_profile
 
         golden = {
             "slurm": SLURM_PROFILE,
@@ -189,15 +189,15 @@ class TestLabelResolverNoLLM:
         assert resolved == golden
 
     def test_known_label_ignores_case(self):
+        from hpc_agent.execution.mapreduce.reduce.status import resolve_scheduler_profile
         from hpc_agent.infra.backends.profile import SLURM_PROFILE
-        from hpc_agent.models.mapreduce.reduce.status import resolve_scheduler_profile
 
         assert resolve_scheduler_profile("SLURM", cfg={}, llm=_ExplodingLLM()) == SLURM_PROFILE
 
     def test_resolved_known_label_is_registered(self):
         """After resolving "slurm", get_backend_class("slurm") still works
         (resolution is idempotent w.r.t. the pre-populated registry)."""
-        from hpc_agent.models.mapreduce.reduce.status import resolve_scheduler_profile
+        from hpc_agent.execution.mapreduce.reduce.status import resolve_scheduler_profile
 
         resolve_scheduler_profile("slurm", cfg={}, llm=_ExplodingLLM())
         assert get_backend_class("slurm").scheduler_name == "slurm"

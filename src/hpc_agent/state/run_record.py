@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from hpc_agent._kernel.lifecycle.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL
+from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL
 from hpc_agent.infra.io import advisory_flock
 
 __all__ = [
@@ -93,7 +93,7 @@ HPC_HOMEDIR = (
 )
 
 # Re-exported for back-compat. Derived from the canonical
-# hpc_agent._kernel.lifecycle.lifecycle.JournalStatus StrEnum so the literal can
+# hpc_agent._kernel.contract.vocabulary.JournalStatus StrEnum so the literal can
 # no longer drift from the rest of the codebase.
 TERMINAL_STATUSES = _LIFECYCLE_TERMINAL
 

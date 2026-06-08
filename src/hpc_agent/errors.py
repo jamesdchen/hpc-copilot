@@ -30,6 +30,8 @@ __all__ = [
     "AlreadyInFlight",
     "SubmissionIncomplete",
     "SpawnWorkerDied",
+    "StructuredOutputError",
+    "ModelEndpointError",
 ]
 
 
@@ -407,6 +409,55 @@ class SpawnWorkerDied(HpcError):
         if remediation is None:
             remediation = _registry_remediation("spawn_worker_died")
         super().__init__(message, remediation=remediation)
+
+
+class StructuredOutputError(HpcError):
+    """A raw model completion failed to yield a valid structured object.
+
+    Raised by :func:`hpc_agent._kernel.lifecycle.structured.structured`
+    after the parse-validate-repair budget is exhausted: every attempt
+    either emitted no JSON object, failed the target Pydantic model's
+    validation, or was rejected by the caller's ``post_validate`` hook.
+
+    Classed as an internal, retry-safe failure: a malformed completion
+    after the repair budget is the model boundary misbehaving (not the
+    caller's input), and re-running the funnel with a fresh sample is the
+    natural recovery — the same posture as :class:`SpawnWorkerDied` for
+    the spawned-worker floor.
+    """
+
+    error_code = "internal"
+    retry_safe = True
+    category = "internal"
+
+
+class ModelEndpointError(HpcError):
+    """A raw model-call transport / response failure at the ChatModel boundary.
+
+    Raised by the OpenAI-compatible adapter
+    (:mod:`hpc_agent._kernel.lifecycle.chat_models.openai_compat`) when the
+    configured ``HPC_AGENT_MODEL`` endpoint cannot be reached, returns a
+    non-2xx status, or returns a body that is not a usable chat-completions
+    envelope (non-JSON, or no message content to read). Distinct from
+    :class:`StructuredOutputError`, which is a *valid* completion that failed
+    the schema / ``post_validate`` floor — this is a failure to obtain a
+    completion at all, so it propagates out of
+    :func:`hpc_agent._kernel.lifecycle.structured.structured` uncaught (the
+    floor only repairs validation failures).
+
+    Retry-safe, ``network`` category: a transient endpoint blip or outage is
+    the typical cause, and re-running the funnel resamples.
+    """
+
+    error_code = "model_endpoint_error"
+    retry_safe = True
+    category = "network"
+    remediation = (
+        "Verify HPC_AGENT_MODEL_BASE_URL is reachable and HPC_AGENT_MODEL_NAME "
+        "/ the API key are correct for the endpoint. A 4xx is usually a bad key "
+        "or an unsupported response_format; a 5xx or connection error is a "
+        "transient outage — retry."
+    )
 
 
 def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:

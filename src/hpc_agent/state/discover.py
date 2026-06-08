@@ -411,7 +411,7 @@ def _is_main_str(node: ast.expr) -> bool:
 #
 # A reducer is a per-experiment Python file that takes a result_dir (or a
 # directory of metrics.json blobs) and produces an aggregated metric — the
-# user-side counterpart to the framework's :mod:`hpc_agent.models.mapreduce.reduce`
+# user-side counterpart to the framework's :mod:`hpc_agent.execution.mapreduce.reduce`
 # helpers. We detect them via two signals:
 #
 #   1. **Filename stem** matches one of :data:`_REDUCER_NAME_HINTS` (e.g.

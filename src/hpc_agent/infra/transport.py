@@ -582,19 +582,19 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
         items.append(_DeployItem(dst_rel, _sha256_bytes(content.encode("utf-8")), None, content))
 
     # Importable stubs (used inside cluster jobs by user code):
-    #   - ``from hpc_agent.models.mapreduce.metrics_io import write_metrics``
+    #   - ``from hpc_agent.execution.mapreduce.metrics_io import write_metrics``
     #     in user executor scripts (executor_template.py).
     #   - ``from hpc_agent.executor_cli import flag, generic_args, gpu_args``
     #     in user .hpc/tasks.py. Both modules are stdlib-only (AST-scanned)
     #     so they ship without dragging in the rest of the package.
     add_file(
-        pkg_dir / "models" / "mapreduce" / "metrics_io.py",
-        "hpc_agent/models/mapreduce/metrics_io.py",
+        pkg_dir / "execution" / "mapreduce" / "metrics_io.py",
+        "hpc_agent/execution/mapreduce/metrics_io.py",
     )
     add_file(pkg_dir / "executor_cli.py", "hpc_agent/executor_cli.py")
 
     # Framework executor inside .hpc/.
-    add_file(pkg_dir / "models" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+    add_file(pkg_dir / "execution" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Per-scheduler cpu/gpu array scripts, RENDERED from the profile rather
     # than shipped verbatim. Remote paths are preserved exactly
@@ -612,12 +612,12 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
     # Shared preambles sourced by the templates above.
     for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
         add_file(
-            pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
+            pkg_dir / "execution" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
             f".hpc/templates/common/{common_name}",
         )
 
     # Combiner inside .hpc/.
-    add_file(pkg_dir / "models" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
+    add_file(pkg_dir / "execution" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
     return items
 
 
@@ -743,9 +743,9 @@ def deploy_runtime(
 
     Two payloads:
 
-    1. **Importable stubs** in ``{remote_path}/hpc_agent/models/mapreduce/``:
+    1. **Importable stubs** in ``{remote_path}/hpc_agent/execution/mapreduce/``:
        ``metrics_io.py`` so user executors can do
-       ``from hpc_agent.models.mapreduce.metrics_io import write_metrics`` on
+       ``from hpc_agent.execution.mapreduce.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
     2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
        executor (``_hpc_dispatch.py``), the combiner
@@ -798,12 +798,12 @@ def deploy_runtime(
     # ``rm -f`` clears stale ``__init__.py`` files left by pre-fix deploys
     # (rsync's ``--delete`` excludes ``hpc_agent/`` so they would persist).
     mkdir_cmd = (
-        f"mkdir -p {remote_path_q}/hpc_agent/models/mapreduce"
+        f"mkdir -p {remote_path_q}/hpc_agent/execution/mapreduce"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
         f" && rm -f {remote_path_q}/hpc_agent/__init__.py"
-        f" {remote_path_q}/hpc_agent/models/__init__.py"
-        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py"
+        f" {remote_path_q}/hpc_agent/execution/__init__.py"
+        f" {remote_path_q}/hpc_agent/execution/mapreduce/__init__.py"
         # Purge stale compiled artifacts in the deployed tree. A Py2.7
         # ``__init__.pyc`` left *beside* the (now-absent) ``__init__.py`` is
         # imported directly by Py3 as the package init -> ``bad magic

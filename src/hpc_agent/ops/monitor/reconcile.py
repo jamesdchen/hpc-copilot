@@ -24,7 +24,7 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
     The combiner writes ``_combiner/wave_<N>.json`` per successful run
-    (see ``hpc_agent/models/mapreduce/combiner.py``). We use the
+    (see ``hpc_agent/execution/mapreduce/combiner.py``). We use the
     presence of that file as the success marker.
     """
     cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"

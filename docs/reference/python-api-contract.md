@@ -50,7 +50,7 @@ Each `submit-spec` invocation writes a per-run sidecar to `.hpc/runs/<run_id>.js
 - `cmd_sha` is computed by `hpc_agent.state.runs.compute_cmd_sha`: `SHA-256(join("\n", json.dumps(tasks.resolve(i), sort_keys=True) for i in range(tasks.total())))`. Stable across equivalent task lists; changes whenever `.hpc/tasks.py` changes the kwargs returned by `resolve`.
 - The user's task definition lives in `.hpc/tasks.py` (a Python module exposing `total()` and `resolve(task_id)`); the sidecar references it but does not duplicate per-task data.
 - The block from `cluster` through `aggregate_defaults` is the **v2 config snapshot**: every successful `submit-spec` captures the full config it ran under so subsequent primitives read context from the sidecar instead of an external config file. All v2 fields are optional at write time; `read_run_sidecar` backfills missing keys with `None` so callers see a uniform shape regardless of when the sidecar was written.
-- `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`hpc_agent.models.mapreduce.reduce.history.prior`) on prior iterations.
+- `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`hpc_agent.execution.mapreduce.reduce.history.prior`) on prior iterations.
 - Retention: at most `hpc_agent.state.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
 
 When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `hpc_agent.ops.recover.batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
@@ -67,7 +67,7 @@ The Python surface that slash commands and library callers invoke:
 | Record a resubmission | [resubmit-failed](../primitives/resubmit-failed.md) | `hpc_agent.ops.recover.runner.resubmit_failed` |
 | Reconcile journal vs cluster | [reconcile-journal](../primitives/reconcile-journal.md) | `hpc_agent.ops.monitor.reconcile.reconcile` |
 | Mark run terminal | [mark-run-terminal](../primitives/mark-run-terminal.md) | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
-| Read campaign history | [campaign-status](../primitives/campaign-status.md) (Python form) | `hpc_agent.models.mapreduce.reduce.history.prior` |
+| Read campaign history | [campaign-status](../primitives/campaign-status.md) (Python form) | `hpc_agent.execution.mapreduce.reduce.history.prior` |
 | List in-flight runs | [list-in-flight](../primitives/list-in-flight.md) | `hpc_agent.state.index.find_in_flight_runs` |
 | Discover executors | [discover-executors](../primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
 
@@ -84,8 +84,8 @@ remain stable public functions:
 
 The framework also ships three cluster-side Python entry points that downstream primitives invoke over SSH. These are **internal implementation details**, not stable contracts — agents should compose with the primitives above rather than reaching directly into:
 
-- `python -m hpc_agent.models.mapreduce.reduce.status` — backs `poll-run-status`'s remote call. Reads sidecar + queries scheduler, emits per-task JSON.
+- `python -m hpc_agent.execution.mapreduce.reduce.status` — backs `poll-run-status`'s remote call. Reads sidecar + queries scheduler, emits per-task JSON.
 - `python3 .hpc/_hpc_dispatch.py` — backs the array-job execution. Reads `.hpc/tasks.py`, dispatches one task per `SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`.
 - `python3 .hpc/_hpc_combiner.py` — backs `combine-wave`'s remote call. Aggregates per-task partial reduce JSONs into a wave-level partial.
 
-Implementation lives in `hpc_agent/models/mapreduce/reduce/`, `hpc_agent/ops/submit/runner.py` (array-dispatch wiring), and `hpc_agent/ops/aggregate/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.
+Implementation lives in `hpc_agent/execution/mapreduce/reduce/`, `hpc_agent/ops/submit/runner.py` (array-dispatch wiring), and `hpc_agent/ops/aggregate/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.

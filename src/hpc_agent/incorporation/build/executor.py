@@ -72,7 +72,7 @@ def build_executor(
     copied from. Raises :class:`errors.SpecInvalid` for an unknown
     ``type`` or when the destination exists and ``force`` is False.
     """
-    starters = hpc_agent._PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds"
+    starters = hpc_agent._PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds"
     template_map = {
         "plain": starters / "executor_template.py",
     }

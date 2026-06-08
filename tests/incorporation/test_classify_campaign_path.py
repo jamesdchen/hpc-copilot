@@ -25,7 +25,7 @@ def resolve(i):
 
 _STRATEGY_OPTUNA = """
 import optuna
-from hpc_agent.models.mapreduce.reduce.history import prior
+from hpc_agent.execution.mapreduce.reduce.history import prior
 
 def resolve(i):
     study = optuna.create_study(direction="minimize")
@@ -92,7 +92,7 @@ def resolve(i):
 """
 
 _STRATEGY_PRIOR_ONLY = """
-from hpc_agent.models.mapreduce.reduce.history import prior
+from hpc_agent.execution.mapreduce.reduce.history import prior
 
 def resolve(i):
     past = prior(".", "camp")

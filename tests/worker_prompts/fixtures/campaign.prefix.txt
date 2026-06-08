@@ -59,7 +59,7 @@ For one-shot parallel work with no feedback loop, use the submit workflow direct
 
 **Don't infer the path by hand — call [classify-campaign-path](../../docs/primitives/classify-campaign-path.md):** `hpc-agent classify-campaign-path --source-path .hpc/tasks.py` returns `{path, decided_by, signals, supports_async_concurrency, candidates}`. On `decided_by="code"` branch on `path` directly. On `decided_by="judgement"` (`path="unclassifiable"`) decide between `candidates` yourself and record a `path` decision with `chosen`/`rejected`/`why`.
 
-Both paths thread `campaign_id` through `submit-flow` and read history via `campaign-status` (Python form: `hpc_agent.models.mapreduce.reduce.history.prior`).
+Both paths thread `campaign_id` through `submit-flow` and read history via `campaign-status` (Python form: `hpc_agent.execution.mapreduce.reduce.history.prior`).
 
 ## Stochastic-marker gate (Path B only) — MANDATORY before each submit
 

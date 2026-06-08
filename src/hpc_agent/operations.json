@@ -909,7 +909,7 @@
     "output_schema": "prepare_phase2_spec.output.json",
     "python": "hpc_agent.ops.prepare_phase2_spec.prepare_phase2_spec",
     "side_effects": [],
-    "summary": "Derive the Phase-2 main-array submit-flow spec from a Phase-1 two-phase-canary spec by flipping canary=false, canary_only=false, skip_rsync_deploy=true, validated locally against SubmitFlowSpec. Eliminates the spec-rebuild round-trip between verify-canary and the Phase-2 submit.",
+    "summary": "Derive the Phase-2 main-array submit-flow spec from a Phase-1 two-phase-canary spec by flipping canary=false, canary_only=false, validated locally against SubmitFlowSpec. Eliminates the spec-rebuild round-trip between verify-canary and the Phase-2 submit.",
     "verb": "validate"
   },
   {

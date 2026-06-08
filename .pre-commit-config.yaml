@@ -36,7 +36,7 @@ repos:
         entry: python scripts/lint_schema_versions.py
         language: system
         pass_filenames: false
-        files: '^(src/hpc_agent/models/mapreduce/(dispatch|combiner)\.py|src/hpc_agent/state/runs\.py|scripts/lint_schema_versions\.py)$'
+        files: '^(src/hpc_agent/execution/mapreduce/(dispatch|combiner)\.py|src/hpc_agent/state/runs\.py|scripts/lint_schema_versions\.py)$'
 
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter

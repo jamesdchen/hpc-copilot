@@ -96,6 +96,7 @@ GpuType = Annotated[str, Field(min_length=1)]
 # alias so every consumer's enum stays byte-equivalent.
 ErrorCode = Literal[
     "ssh_unreachable",
+    "model_endpoint_error",
     "scheduler_throttled",
     "spec_invalid",
     "executor_not_found",
@@ -115,7 +116,7 @@ ErrorCode = Literal[
 
 # ── failure categories ───────────────────────────────────────────────────────
 
-# Values returned by ``hpc_agent.models.mapreduce.reduce.classify.classify_failure``.
+# Values returned by ``hpc_agent.execution.mapreduce.reduce.classify.classify_failure``.
 # Order mirrors the classifier's specificity ranking (first-match-wins).
 # Re-exported from ``classify.py`` so that module's public ``CATEGORIES``
 # tuple stays in sync with this Literal automatically.

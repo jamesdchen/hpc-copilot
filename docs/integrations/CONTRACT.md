@@ -42,7 +42,7 @@ operation succeeded but a sub-system was degraded
 ```json
 {
   "ok": false,
-  "error_code": "<one of 16>",
+  "error_code": "<one of 17>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -102,6 +102,7 @@ Source of truth: `src/hpc_agent/errors.py`. Full list also in
 | `error_code` | `category` | `retry_safe` | Recommended action |
 |---|---|---|---|
 | `ssh_unreachable` | network | true | **Halt-and-prompt.** Don't loop; the agent socket is missing or the host is unreachable. Re-run `preflight` after operator fix. |
+| `model_endpoint_error` | network | true | **Halt-and-prompt.** The configured `HPC_AGENT_MODEL` endpoint (the raw model-call adapter) is unreachable, returned a non-2xx, or returned an unusable body. Verify `HPC_AGENT_MODEL_BASE_URL` / key / model id; a 5xx or connection error is a transient outage — retry. |
 | `scheduler_throttled` | cluster | true | Backoff (1s → 2s → 4s, max 4 retries). Schedulers cap at ~1/sec. |
 | `cluster_timeout` | cluster | true | Backoff (4s → 8s → 16s, max 3 retries). Likely NFS stall. |
 | `combiner_failed` | cluster | true | Single retry after inspecting `stderr_tail`; if it persists, surface to operator. |
@@ -146,7 +147,7 @@ The **eager-materialization convention** —
 `resolve(i)` indexes — gives free `cmd_sha` derivation, submit-time
 error catching, and laptop-side inspectability. The canonical
 reference at
-[`tasks_example.py`](../../src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py)
+[`tasks_example.py`](../../src/hpc_agent/execution/mapreduce/templates/scaffolds/tasks_example.py)
 shows three usage patterns inline (Cartesian product, chunking by row
 count, date-window backtests). Pick whichever matches your sweep.
 
@@ -162,9 +163,9 @@ Templates copied into experiment repos may import from a narrow
 allowlist of "runtime modules" that `deploy_runtime` stages on the
 compute node alongside the executor. The current allowlist:
 
-- `hpc_agent.models.mapreduce.metrics_io.write_metrics` — per-task sidecar
+- `hpc_agent.execution.mapreduce.metrics_io.write_metrics` — per-task sidecar
   writer. Stdlib-only.
-- `hpc_agent.models.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
+- `hpc_agent.execution.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
   helper for executors that consume the dispatcher's `HPC_KW_*`
   exports.
 - `hpc_agent.executor_cli.flag` — single-flag declaration helper for
@@ -175,7 +176,7 @@ compute node alongside the executor. The current allowlist:
   builder for the auto-generated `.hpc/cli.py`.
 
 Nothing else from `hpc_agent` is importable from
-`hpc_agent/models/mapreduce/templates/**`. The boundary is enforced by
+`hpc_agent/execution/mapreduce/templates/**`. The boundary is enforced by
 `tests/test_boundary_contract.py`. To extend it, the new module must
 (a) be deployed by `deploy_runtime`, (b) be stdlib-only or
 self-contained, and (c) be added to both the allowlist constant in
@@ -194,7 +195,7 @@ must not change across releases:
 | `LOCAL_DATA_DIR` | Optional cluster-side data root. Templates honor it when set; executors that read data files key off it. |
 | `HPC_TASK_ID` | 0-based task index. |
 | `HPC_RUN_ID` | The current run_id. Locates `.hpc/runs/<run_id>.json`. |
-| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
+| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `hpc_agent.execution.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
 | `HPC_RUNTIME` | Optional. When `uv`, the template runs `uv sync` before dispatch. |
 
 Constants are also exposed as Python attributes under

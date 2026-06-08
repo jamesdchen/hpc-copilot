@@ -199,10 +199,12 @@ def test_checkpoint_verification_off_by_default(tmp_path: Path) -> None:
 
 
 def test_phase2_applies_deterministic_flips(tmp_path: Path) -> None:
-    """#279/#185: on a verified canary, the Phase-2 main submit flips canary off
-    and skip_rsync_deploy ON (the canary already deployed the same tree) — and
-    carries NO skip_preflight (removed in #275 Fix 2; preflight is operator-
-    gated via HPC_AGENT_SKIP_PREFLIGHT, never a spec field)."""
+    """#279/#185/#283: on a verified canary, the Phase-2 main submit flips canary
+    off and requests the rsync+deploy skip via the internal ``_skip_rsync_deploy``
+    kwarg (the canary already deployed the same tree) — NOT a spec field (removed
+    in #283; the bypass is operator/internal-only now). It also carries NO
+    skip_preflight (removed in #275 Fix 2; preflight is operator-gated via
+    HPC_AGENT_SKIP_PREFLIGHT, never a spec field)."""
     from hpc_agent.ops.submit_and_verify import submit_and_verify
 
     with (
@@ -219,12 +221,17 @@ def test_phase2_applies_deterministic_flips(tmp_path: Path) -> None:
 
     # Two submit_flow calls: Phase 1 (canary_only) then Phase 2 (main array).
     assert m_submit.call_count == 2
-    phase2_spec = m_submit.call_args_list[1].kwargs["spec"]
+    phase2_call = m_submit.call_args_list[1]
+    phase2_spec = phase2_call.kwargs["spec"]
     assert phase2_spec.canary is False
     assert phase2_spec.canary_only is False
-    assert phase2_spec.skip_rsync_deploy is True
+    # #283: skip_rsync_deploy is no longer a spec field — the skip is requested
+    # via the trusted in-process kwarg instead, so an agent can't assert it.
+    assert not hasattr(phase2_spec, "skip_rsync_deploy")
+    assert phase2_call.kwargs["_skip_rsync_deploy"] is True
     # skip_preflight is no longer a field on SubmitFlowSpec (#275 Fix 2).
     assert not hasattr(phase2_spec, "skip_preflight")
+    assert phase2_call.kwargs["_skip_preflight"] is True
 
 
 def test_surfaces_failure_kind_from_verify(tmp_path: Path) -> None:

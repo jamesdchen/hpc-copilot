@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
+from hpc_agent._kernel.contract.vocabulary import LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef

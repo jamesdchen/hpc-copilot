@@ -2,7 +2,7 @@
 
 hpc-agent is a primitive-based HPC orchestration framework. The package
 is organised as a layered DAG of *roles* (kernel, wire, substrate,
-models, subjects, surfaces) — each layer depends on lower layers but
+execution, subjects, surfaces) — each layer depends on lower layers but
 not the other way round. Inside the subject layer, each top-level
 directory under `ops/` and `meta/` is a self-contained vertical that
 does not reach sideways into its peers. New code finds its destination
@@ -82,9 +82,9 @@ rules.
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Models (domain logic that runs on the cluster, not the laptop)     │
+│  Execution (domain logic that runs on the cluster, not the laptop)  │
 │                                                                     │
-│  models/mapreduce/  combiner + reducer + dispatch                   │
+│  execution/mapreduce/  combiner + reducer + dispatch                │
 │    ├ combiner.py    per-wave on-cluster combiner driver             │
 │    ├ dispatch.py    array-batch task dispatcher                     │
 │    ├ metrics_io.py  per-task metrics sidecar writer                 │

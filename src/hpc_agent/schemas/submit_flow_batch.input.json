@@ -278,12 +278,6 @@
           "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
           "title": "Rsync Excludes"
         },
-        "skip_rsync_deploy": {
-          "default": false,
-          "description": "Skip the shared rsync+deploy prelude. Use ONLY when an earlier submit-flow call to the same (ssh_target, remote_path) has just completed and the local tree hasn't changed since — typical Phase 2 of submit.md's two-phase canary gate. submit-flow trusts the caller: a stale assertion leaves the cluster with whatever code the previous deploy shipped (#185).",
-          "title": "Skip Rsync Deploy",
-          "type": "boolean"
-        },
         "partial_ok": {
           "default": false,
           "description": "When true, the sidecar records partial_ok=True under the `extra` pocket. monitor-flow consults this on terminal classification: a wave with at least one success is reported as `complete` (instead of `failed`) when partial_ok=true, and a `<run_id>.failed.json` ledger lists the failed task IDs. aggregate-flow honors the same ledger by skipping those task IDs and reporting `partial_failures`.",

@@ -17,7 +17,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._kernel.lifecycle.lifecycle import TERMINAL_STATUSES, JournalStatus
+from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES, JournalStatus
 from hpc_agent.state.run_record import (
     _UPDATABLE_FIELDS,
     RunRecord,
@@ -153,7 +153,7 @@ def mark_run(
 ) -> RunRecord:
     """Terminal transition. Updates status (and optionally stage)."""
     # Validate against the canonical JournalStatus StrEnum (B2).
-    from hpc_agent._kernel.lifecycle.lifecycle import JournalStatus
+    from hpc_agent._kernel.contract.vocabulary import JournalStatus
 
     if status not in set(JournalStatus):
         raise ValueError(f"mark_run: invalid status {status!r}")

@@ -1,4 +1,4 @@
-"""Contract test for `python -m hpc_agent.models.mapreduce.reduce.status`.
+"""Contract test for `python -m hpc_agent.execution.mapreduce.reduce.status`.
 
 Asserts stdout JSON has exactly the pinned 4 top-level keys
 (summary, tasks, rollup, errors) with the right types, so the LLM
@@ -60,7 +60,7 @@ def _run_status(cwd: Path, run_id: str = "test_run") -> tuple[int, str, str]:
         [
             sys.executable,
             "-m",
-            "hpc_agent.models.mapreduce.reduce.status",
+            "hpc_agent.execution.mapreduce.reduce.status",
             "--run-id",
             run_id,
             "--scheduler",

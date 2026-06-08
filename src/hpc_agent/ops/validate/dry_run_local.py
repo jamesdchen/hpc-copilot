@@ -25,7 +25,7 @@ This primitive does two things, split so the cheap one is default-on:
 
 2. **Executor smoke-exec (OPT-IN, ``smoke=true``).** Actually runs the
    executor for ONE sampled grid point locally, mirroring
-   ``models/mapreduce/dispatch.py`` semantics (export ``HPC_KW_*`` + bare
+   ``execution/mapreduce/dispatch.py`` semantics (export ``HPC_KW_*`` + bare
    uppercase, run the command under a shell), to catch import / arg-binding
    bugs before any cluster cost. The default command is the executor verbatim;
    a ``smoke_command`` override lets the executor opt into a cheap
@@ -59,7 +59,7 @@ _VALIDATOR = "dry-run-local"
 
 # The kwargs the dispatcher always injects into the template context on top
 # of the user's resolve(i) kwargs. Mirrors ``_format_result_dir`` in
-# ``models/mapreduce/dispatch.py`` (``{"task_id": ..., "run_id": ...}``) so a
+# ``execution/mapreduce/dispatch.py`` (``{"task_id": ..., "run_id": ...}``) so a
 # template that legitimately references {task_id}/{run_id} isn't false-flagged
 # as an unfilled placeholder here.
 _RESERVED_TEMPLATE_KEYS = ("task_id", "run_id")
@@ -91,7 +91,7 @@ def _template_field_names(template: str) -> list[str]:
 def _render_result_dir(template: str, *, task_id: int, run_id: str, kwargs: dict) -> str:
     """Render *template* exactly as the cluster dispatcher's ``_format_result_dir``.
 
-    Kept byte-for-byte consistent with ``models/mapreduce/dispatch.py``: the
+    Kept byte-for-byte consistent with ``execution/mapreduce/dispatch.py``: the
     context is ``{task_id, run_id, **kwargs}`` (kwargs win on collision, the
     documented behaviour — the user's tasks.py controls the namespace), and a
     missing key raises ``KeyError``. We render here so a template that would
@@ -258,7 +258,7 @@ def _check_templates(
 def _dispatch_env(kwargs: dict, *, task_id: int, run_id: str) -> dict[str, str]:
     """Build the per-task env the cluster dispatcher exports, for the smoke run.
 
-    Mirrors the kwarg-export contract in ``models/mapreduce/dispatch.py``:
+    Mirrors the kwarg-export contract in ``execution/mapreduce/dispatch.py``:
     each kwarg ships as ``HPC_KW_<KEY>`` (namespaced, collision-free) and —
     unless ``HPC_KW_NAMESPACE_ONLY=1`` is already in the inherited env — also
     as bare uppercase ``<KEY>`` (the legacy contract). Plus the per-task /
@@ -295,7 +295,7 @@ def _smoke_exec(
     """
     import subprocess
 
-    from hpc_agent.models.mapreduce.dispatch import _executor_reinvokes_dispatcher
+    from hpc_agent.execution.mapreduce.dispatch import _executor_reinvokes_dispatcher
 
     if not spec.executor:
         return [

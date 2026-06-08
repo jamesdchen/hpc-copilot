@@ -159,7 +159,7 @@ def test_core_does_not_import_templates() -> None:
     offenders: list[str] = []
     for path in _walk_python_files(core_root):
         # Skip the templates directory itself — it lives inside the
-        # hpc_agent package now (hpc_agent/models/mapreduce/templates/) but
+        # hpc_agent package now (hpc_agent/execution/mapreduce/templates/) but
         # is data, not framework code.
         if "mapreduce/templates" in str(path):
             continue
@@ -179,7 +179,7 @@ def test_core_does_not_import_templates() -> None:
 # ``docs/reference/boundary-contract.md``.
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
-        "hpc_agent.models.mapreduce.metrics_io",
+        "hpc_agent.execution.mapreduce.metrics_io",
         "hpc_agent.executor_cli",
     }
 )
@@ -189,7 +189,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
     """Return the set of fully-qualified imported module names in ``path``.
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
-    so callers can distinguish ``hpc_agent.models.mapreduce.metrics_io`` (a deployed
+    so callers can distinguish ``hpc_agent.execution.mapreduce.metrics_io`` (a deployed
     runtime module) from ``hpc_agent.state.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
@@ -209,7 +209,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
 
 
 def test_templates_do_not_import_core() -> None:
-    """No deployed file under ``hpc_agent/models/mapreduce/templates/`` may import ``hpc_agent``.
+    """No deployed file under ``hpc_agent/execution/mapreduce/templates/`` may import ``hpc_agent``.
 
     Exception: a small allowlist of runtime modules deployed alongside the
     executor by ``deploy_runtime`` (see
@@ -232,7 +232,7 @@ def test_templates_do_not_import_core() -> None:
     the core package).
     """
     templates_root = (
-        REPO_ROOT / "src" / "hpc_agent" / "models" / "mapreduce" / "templates" / "runtime"
+        REPO_ROOT / "src" / "hpc_agent" / "execution" / "mapreduce" / "templates" / "runtime"
     )
     # ``common`` still ships as static files; ``sge`` / ``slurm`` array
     # scripts are now rendered (see below), so they have no on-disk dir.

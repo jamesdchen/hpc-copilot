@@ -371,7 +371,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
     alive_squeue = "12345678\n"
 
     def fake_ssh(cmd, *, ssh_target):
-        if "python -m hpc_agent.models.mapreduce.reduce.status" in cmd:
+        if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=cluster_waves)
@@ -390,7 +390,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
     status_payload = json.dumps({"summary": {"complete": 0, "running": 0, "failed": 0}})
 
     def fake_ssh(cmd, *, ssh_target):
-        if "python -m hpc_agent.models.mapreduce.reduce.status" in cmd:
+        if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout="")
@@ -409,7 +409,7 @@ def test_reconcile_idempotent(journal_home, experiment):
     alive = "12345678\n"
 
     def fake_ssh(cmd, *, ssh_target):
-        if "python -m hpc_agent.models.mapreduce.reduce.status" in cmd:
+        if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=cluster_waves)
@@ -557,7 +557,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
     alive_squeue = "12345678\n"
 
     def fake_ssh(cmd, *, ssh_target):
-        if "python -m hpc_agent.models.mapreduce.reduce.status" in cmd:
+        if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             raise OSError("ssh: connection reset by peer")
@@ -581,7 +581,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
     status_payload = json.dumps({"summary": {"complete": 0}})
 
     def fake_ssh(cmd, *, ssh_target):
-        if "python -m hpc_agent.models.mapreduce.reduce.status" in cmd:
+        if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout="")

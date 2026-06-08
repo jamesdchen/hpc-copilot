@@ -341,7 +341,7 @@ aggregate worker:
 
 1. `verify-aggregation-complete --run-id <id>` — confirms all waves done
 2. `rsync-pull _combiner/` from cluster scratch → `<experiment>/runs/<id>/`
-3. Runs the reducer (`models/mapreduce/reduce/`) to produce
+3. Runs the reducer (`execution/mapreduce/reduce/`) to produce
    `aggregated.json`
 4. Ingests runtime samples into `runtime_priors/` for future
    walltime predictions

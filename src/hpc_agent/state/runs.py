@@ -243,7 +243,7 @@ def write_run_sidecar(
     produced it (e.g. an Optuna trial number, a PBT ``(member, generation)``
     pair). The framework never interprets them — they are recorded verbatim
     and re-surfaced by
-    :func:`hpc_agent.models.mapreduce.reduce.history.prior_records`.
+    :func:`hpc_agent.execution.mapreduce.reduce.history.prior_records`.
 
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,

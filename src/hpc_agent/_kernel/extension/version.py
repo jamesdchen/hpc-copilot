@@ -6,7 +6,8 @@ say?" check:
 
 * ``hpc_agent/state/run_record.py`` — session journal (``SCHEMA_VERSION = 1``)
 * ``hpc_agent/state/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
-* ``hpc_agent/models/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
+* ``hpc_agent/execution/mapreduce/reduce/status.py`` — status rollup
+  (``schema_version = 2`` literal)
 
 Plus the per-run sidecar (``hpc_agent/state/runs.py``,
 ``SIDECAR_SCHEMA_VERSION = 2``) which has been coordinated with

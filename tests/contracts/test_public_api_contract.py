@@ -64,6 +64,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "ExecutorNotFound",
         "HpcError",
         "JournalCorrupt",
+        "ModelEndpointError",
         "OutputsMissing",
         "PreconditionFailed",
         "Preempted",
@@ -73,6 +74,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "SpawnWorkerDied",
         "SpecInvalid",
         "SshUnreachable",
+        "StructuredOutputError",
         "SubmissionIncomplete",
         # ``from __future__ import annotations`` leaks ``annotations`` into
         # ``dir(module)``. Snapshotted verbatim so a future cleanup (e.g.

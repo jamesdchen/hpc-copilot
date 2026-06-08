@@ -23,7 +23,7 @@ def _build_fixture(workdir: Path, *, run_id: str = "test_run") -> Path:
     from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
 
     repo_root = Path(__file__).resolve().parent.parent.parent
-    combiner_src = repo_root / "src" / "hpc_agent" / "models" / "mapreduce" / "combiner.py"
+    combiner_src = repo_root / "src" / "hpc_agent" / "execution" / "mapreduce" / "combiner.py"
 
     hpc = workdir / ".hpc"
     hpc.mkdir(parents=True, exist_ok=True)

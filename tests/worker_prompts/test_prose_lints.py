@@ -101,3 +101,60 @@ def test_decisions_point_ids_are_in_the_allowlist(workflow: str) -> None:
         "Map each to an allowed point ID with a descriptive `outcome`, and route "
         "free-form detail to `anomalies` (see the Reporting conventions section)."
     )
+
+
+# Agent-facing safety-bypass fields that have been demoted to operator/internal
+# control: an agent must NOT be taught to set any of these true in a spec
+# example. Each silenced or skipped a real cluster-side safety check —
+# ``skip_preflight`` silenced the ``command -v uv`` runtime probe (#275) and
+# ``skip_rsync_deploy`` dropped the rsync+deploy so a stale local tree ran on
+# old cluster code (#185/#283). The fix wasn't a prose warning — it was taking
+# the lever off the wire (operator-only ``HPC_*`` env var + a refused spec
+# field). This lint guards the CLASS going forward: a new bypass field someone
+# adds to a worker-prompt example as ``<field>: true`` fails CI here, the same
+# way #275/#283 refused the field at the wire.
+_BYPASS_FIELDS: tuple[str, ...] = (
+    "skip_preflight",
+    "skip_rsync_deploy",
+)
+
+# Match an EXAMPLE that SETS one of the bypass fields true — i.e. an assignment
+# form (``field: true``, ``"field": true``, ``field=true``), NOT the negative
+# prose the demotion notes use ("there is no longer a `skip_preflight` field",
+# "There is **no `skip_preflight`**"). The assignment shape is what would teach
+# an agent to author the lever; the prose mentions are the documentation of its
+# removal and must stay legal.
+_BYPASS_SET_TRUE_RE = re.compile(
+    r"""["'`]?                       # optional opening quote/backtick
+        (skip_preflight|skip_rsync_deploy)
+        ["'`]?                       # optional closing quote/backtick
+        \s*[:=]\s*                   # JSON ':' or kwarg '='
+        ["'`]?true                   # the value true (optionally quoted)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+@pytest.mark.parametrize("workflow", sorted(WORKFLOW_PROCEDURES))
+def test_procedure_does_not_teach_a_safety_bypass_field(workflow: str) -> None:
+    """No worker-prompt example may instruct setting a preflight/deploy bypass
+    field true (#283). ``skip_preflight`` (#275) and ``skip_rsync_deploy``
+    (#185/#283) each disabled a real cluster-side safety check and were demoted
+    to operator-only ``HPC_*`` env vars / refused at the wire. An agent example
+    that sets one true would re-create the bug surface the demotion closed; this
+    lint catches the whole class — including any new bypass field added to
+    ``_BYPASS_FIELDS`` — before it ships.
+    """
+    text = _procedure_text(workflow)
+    match = _BYPASS_SET_TRUE_RE.search(text)
+    if match is not None:
+        line_no = text[: match.start()].count("\n") + 1
+        field = match.group(1)
+        raise AssertionError(
+            f"{workflow}.md:{line_no} teaches an agent to set the safety-bypass "
+            f"field {field!r} true ({match.group(0)!r}). That lever was demoted "
+            "to operator/internal-only control (an HPC_* env var + a wire-refused "
+            "spec field) precisely because an agent example like this silenced a "
+            "cluster-side safety check (#275 / #185 / #283). Remove the example; "
+            "the skip is the operator's call, not the agent's."
+        )

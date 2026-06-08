@@ -47,7 +47,7 @@ def campaign_replay(
     directories don't exist yet (still in flight) carry an empty
     metrics dict.
     """
-    from hpc_agent.models.mapreduce.reduce.history import find_sidecars_by_campaign, prior
+    from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign, prior
 
     n = int(last_n)
     if n < 0:

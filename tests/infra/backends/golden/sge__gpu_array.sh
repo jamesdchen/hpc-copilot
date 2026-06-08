@@ -86,7 +86,7 @@ echo "============================================"
 # HPC_RUN_ID arrives via qsub -v from the submit-side env; re-exported here
 # so the dispatcher inside $EXECUTOR sees it. HPC_CAMPAIGN_ID is optional —
 # present when the run is part of a closed-loop campaign — and lets the
-# user's tasks.py call hpc_agent.models.mapreduce.reduce.history.prior() to learn what
+# user's tasks.py call hpc_agent.execution.mapreduce.reduce.history.prior() to learn what
 # prior iterations of the same campaign produced.
 export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT HPC_GPU_TYPE
 hpc_run_with_retry

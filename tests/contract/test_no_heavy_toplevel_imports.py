@@ -15,7 +15,7 @@ test locks that in: a future top-level `import pandas` in a CLI-reachable
 module re-grows the per-verb startup tax and trips here, pointing the author
 at the function-local fix.
 
-Scope note: `models/mapreduce/templates/` is excluded — those are scaffold
+Scope note: `execution/mapreduce/templates/` is excluded — those are scaffold
 files emitted into *user* projects (where importing numpy/torch at the top
 is correct), not modules the framework imports.
 """
@@ -49,7 +49,7 @@ _BANNED_ROOTS = frozenset(
 _PKG_ROOT = Path(hpc_agent.__file__).resolve().parent
 # Scaffold templates are emitted into user projects, not imported by the
 # framework — a top-level `import numpy` there is correct, not a tax.
-_EXCLUDED_DIRS = ("models/mapreduce/templates/",)
+_EXCLUDED_DIRS = ("execution/mapreduce/templates/",)
 
 
 def _module_level_import_roots(tree: ast.Module) -> set[str]:

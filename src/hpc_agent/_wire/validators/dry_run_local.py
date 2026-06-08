@@ -23,7 +23,7 @@ expensive one is opt-in:
 
 2. **Executor smoke-exec (OPT-IN, ``smoke=true``).** Actually runs the
    executor command for ONE sampled grid point locally, mirroring
-   ``models/mapreduce/dispatch.py`` semantics (set ``HPC_KW_*`` / bare-upper
+   ``execution/mapreduce/dispatch.py`` semantics (set ``HPC_KW_*`` / bare-upper
    env, run the command under a shell), to catch import errors and
    arg-binding bugs BEFORE any cluster cost. Local exec can't stand in
    for the cluster (modules, GPUs, scale), so the default command is an

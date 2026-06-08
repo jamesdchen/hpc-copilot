@@ -260,7 +260,7 @@ Branch on `data.overall`:
 
 The post-resolution submit spine — canary-gated submit → post-qsub health check → follow-up-spec pre-staging — runs as ONE call to [submit-pipeline](../../docs/primitives/submit-pipeline.md).
 
-The canary is a GATE (#160): the 1-task canary is submitted, verified to land and produce output, and the main array launches ONLY on success — all inside the primitive. The Phase-2 flips (`canary`/`canary_only` off, `skip_rsync_deploy` on — #185/#279) are applied inside it.
+The canary is a GATE (#160): the 1-task canary is submitted, verified to land and produce output, and the main array launches ONLY on success — all inside the primitive. The Phase-2 flips (`canary`/`canary_only` off — #279) are applied inside it; the redundant rsync+deploy is skipped in-process too (Phase 1 just deployed the same tree), which is operator/internal-only and NOT a spec field you set (#283/#185).
 
 The spec embeds the canary-gated submit under `submit` plus an optional `profile` forwarded to follow-up staging. It matches `schemas/submit_pipeline.input.json`:
 

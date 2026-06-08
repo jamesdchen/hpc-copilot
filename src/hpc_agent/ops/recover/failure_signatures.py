@@ -20,7 +20,7 @@ The runner keeps its old ``_categorize`` shape; new callers consume
 ``classify()`` directly.
 
 The ``error_class`` strings align with
-:class:`hpc_agent._kernel.lifecycle.lifecycle.FailureCategory` once that StrEnum is
+:class:`hpc_agent._kernel.contract.vocabulary.FailureCategory` once that StrEnum is
 on the branch (B2).
 """
 

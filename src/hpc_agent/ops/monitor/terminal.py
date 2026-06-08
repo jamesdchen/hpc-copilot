@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
+from hpc_agent._kernel.contract.vocabulary import LifecycleState
 
 __all__ = ["_ingest_runtime_at_terminal", "_is_terminal"]
 

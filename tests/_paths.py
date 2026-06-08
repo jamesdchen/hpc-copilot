@@ -46,8 +46,8 @@ SRC_DIR: Path = REPO_ROOT / "src"
 SCHEMAS_DIR: Path = SRC_DIR / "hpc_agent" / "schemas"
 
 #: Executor / template scaffolds:
-#: ``<repo>/src/hpc_agent/models/mapreduce/templates``.
-TEMPLATES_DIR: Path = SRC_DIR / "hpc_agent" / "models" / "mapreduce" / "templates"
+#: ``<repo>/src/hpc_agent/execution/mapreduce/templates``.
+TEMPLATES_DIR: Path = SRC_DIR / "hpc_agent" / "execution" / "mapreduce" / "templates"
 
 
 def rendered_templates_dir() -> Path:

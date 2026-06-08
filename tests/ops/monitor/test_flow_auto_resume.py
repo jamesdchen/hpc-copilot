@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
+from hpc_agent._kernel.contract.vocabulary import LifecycleState
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops import auto_resume_flow as auto_resume_module
 from hpc_agent.ops import monitor_flow as monitor_flow_module

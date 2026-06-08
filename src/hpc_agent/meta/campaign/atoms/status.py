@@ -37,7 +37,7 @@ def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]
     in-flight count (sidecars whose journal status is still
     ``in_flight``). No SSH, no scheduler — pure local filesystem read.
     """
-    from hpc_agent.models.mapreduce.reduce.history import find_sidecars_by_campaign, prior
+    from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campaign, prior
 
     sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
     history = prior(experiment_dir, campaign_id)

@@ -164,16 +164,19 @@ def submit_and_verify(
     # Phase 1's probe plus the #255 TTL cache already cover the re-check cheaply.
     main_submit = submit_flow(
         experiment_dir,
-        # #185: Phase 1 just deployed, so the main launch skips the redundant
-        # rsync+deploy via ``skip_rsync_deploy``.
-        spec=base.model_copy(
-            update={"canary": False, "canary_only": False, "skip_rsync_deploy": True}
-        ),
+        spec=base.model_copy(update={"canary": False, "canary_only": False}),
         # #275: skip_preflight is no longer a spec field. Phase 1 (the canary
         # submit) already paid the preflight, so the main-array launch skips the
         # redundant probe via the internal operator-trusted kwarg — not an
         # agent-visible spec field an agent could set to silence the runtime probe.
         _skip_preflight=True,
+        # #185/#283: Phase 1 just rsync+deployed the SAME tree moments ago, so
+        # the main launch skips the redundant rsync+deploy. This is the trusted
+        # in-process caller — "Phase 1 just deployed" is a structural fact the
+        # code knows here, not an assertion. It is threaded via the internal
+        # ``_skip_rsync_deploy`` kwarg, NOT a wire spec field an agent could
+        # hand-author against a tree that drifted since the last deploy.
+        _skip_rsync_deploy=True,
     )
     return SubmitAndVerifyResult(
         run_id=main_submit.run_id,

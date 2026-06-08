@@ -60,10 +60,10 @@ a value is a one-place edit (Python alias) followed by
 
 ### `failure_category` enum
 
-Values returned by `hpc_agent.models.mapreduce.reduce.classify.classify_failure`.
+Values returned by `hpc_agent.execution.mapreduce.reduce.classify.classify_failure`.
 Used by `/monitor-hpc` (slash) and any agent that wants to drive auto-retry
 policy. The complete list (`CATEGORIES` constant in
-`hpc_agent/models/mapreduce/reduce/classify.py`):
+`hpc_agent/execution/mapreduce/reduce/classify.py`):
 
 - `gpu_oom`
 - `system_oom`
@@ -177,7 +177,7 @@ graph that used to hold them together is gone.
 | Invariant | Python SoT | Generated artifacts |
 |---|---|---|
 | `error_code` enum | `_wire/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
-| `failure_category` enum | `models/mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
+| `failure_category` enum | `execution/mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
 | Lifecycle states | `state/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_wire/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
 | `run_id` shape | `_wire/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
 | Scheduler / GpuType / Runtime / BackendName | `_wire/_shared.py` aliases | every consumer model |
@@ -205,7 +205,7 @@ When you add a new invariant or change one of the above:
 
 ## Known discrepancies (v0.2.0)
 
-`CATEGORIES` in `hpc_agent/models/mapreduce/reduce/classify.py` is still
+`CATEGORIES` in `hpc_agent/execution/mapreduce/reduce/classify.py` is still
 the hand-authored Python source for failure categories; the
 `ResubmitCategory` Literal in
 `_wire/resubmit.py` mirrors it manually. Adding a new

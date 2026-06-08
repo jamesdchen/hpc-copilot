@@ -263,17 +263,25 @@ class SubmitFlowSpec(BaseModel):
     # internal callers (submit_and_verify's post-canary main launch). Same
     # operator-vs-agent boundary as ``--inline`` / ``HPC_AGENT_INVOKER`` (#155).
     # ``extra="forbid"`` now refuses a stray ``skip_preflight`` outright.
-    skip_rsync_deploy: bool = Field(
-        default=False,
-        description=(
-            "Skip the shared rsync+deploy prelude. Use ONLY when an earlier "
-            "submit-flow call to the same (ssh_target, remote_path) has just "
-            "completed and the local tree hasn't changed since — typical "
-            "Phase 2 of submit.md's two-phase canary gate. submit-flow trusts "
-            "the caller: a stale assertion leaves the cluster with whatever "
-            "code the previous deploy shipped (#185)."
-        ),
-    )
+    # ``skip_rsync_deploy`` was removed from this wire surface (#283, instance
+    # #2). It was an agent-settable field whose ``submit.md`` Phase-2 example
+    # taught agents to set it ``true`` — which dropped submit-flow's
+    # rsync+deploy arm and launched the main array against whatever code the
+    # PREVIOUS deploy shipped. On the legitimate path that is structurally
+    # safe: the two-phase canary gate's in-process main-array launch
+    # (``submit_and_verify``) skips the redundant rsync because Phase 1 just
+    # deployed the SAME tree moments earlier — "Phase 1 just deployed" is a
+    # fact the code knows, not an assertion the agent makes. A hand-authored
+    # ``skip_rsync_deploy: true`` on a raw submit-flow spec is the bug surface:
+    # the agent ASSERTS "nothing changed since the last deploy," and a stale
+    # assertion silently runs the cluster on old code (#185).
+    #
+    # The skip is now operator/internal-only, mirroring ``skip_preflight``
+    # (#275) and ``--inline`` / ``HPC_AGENT_INVOKER`` (#155):
+    # ``HPC_AGENT_SKIP_RSYNC_DEPLOY=1`` in the environment, or a Python-only
+    # ``_skip_rsync_deploy`` kwarg for trusted internal callers
+    # (submit_and_verify's post-canary main launch). ``extra="forbid"`` now
+    # refuses a stray ``skip_rsync_deploy`` outright.
     partial_ok: bool = Field(
         default=False,
         description=(

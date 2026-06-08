@@ -7,7 +7,7 @@ the same remote-side status JSON. Living here means none of those
 subjects reach into another to fetch it.
 
 The function shells out via :func:`hpc_agent.infra.remote.ssh_run`
-to ``python -m hpc_agent.models.mapreduce.reduce.status`` on the
+to ``python -m hpc_agent.execution.mapreduce.reduce.status`` on the
 cluster head node, parses the returned JSON, and raises
 :class:`~hpc_agent.errors.RemoteCommandFailed` on transport or
 parse failure.
@@ -53,7 +53,7 @@ def ssh_status_report(
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
         f"{remote_activation}"
-        f"python -m hpc_agent.models.mapreduce.reduce.status "
+        f"python -m hpc_agent.execution.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "

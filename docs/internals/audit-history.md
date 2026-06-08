@@ -37,9 +37,9 @@ agent confirmed every prior fix is sound with zero regressions.
 - `infra/inspect/sge.py` — wrong `slots` column index for pending SGE jobs.
 - `infra/backends/slurm.py` + `sge.py` — `stderr_log_path` pointed at `_hpc_logs/`
   (never created); real logs land in `logs/`, plus a 1-based array-index off-by-one.
-- `models/mapreduce/combiner.py` + `reduce/metrics.py` — `_weighted_mean` crashed on a
+- `execution/mapreduce/combiner.py` + `reduce/metrics.py` — `_weighted_mean` crashed on a
   non-numeric `n_samples` weight (now coerced).
-- `models/mapreduce/reduce/history.py` — `result_dir_template` format specs (`{task_id:03d}`)
+- `execution/mapreduce/reduce/history.py` — `result_dir_template` format specs (`{task_id:03d}`)
   silently broke campaign-history globbing.
 - `flows/aggregate_flow.py` — `json.JSONDecodeError` not caught despite docstring promise.
 - `runner/logs.py` — SSH transport failure masqueraded as a missing log.
@@ -57,7 +57,7 @@ agent confirmed every prior fix is sound with zero regressions.
   mislabelled internal/exit-3 instead of user-error/exit-1; `submit-flow --dry-run`
   `KeyError` on a missing field.
 - `infra/remote.py` — `_tar_ssh_push` leaked the tar stdout FD + zombie on timeout.
-- `models/mapreduce/templates/scaffolds/cli_dispatcher.py` — missing `spec is None` guard.
+- `execution/mapreduce/templates/scaffolds/cli_dispatcher.py` — missing `spec is None` guard.
 
 ### Packaging / config
 - plugin `pyproject.toml` — `hpc-agent>=0.3,<0.4` excluded the host's 0.4.0.
@@ -71,7 +71,7 @@ agent confirmed every prior fix is sound with zero regressions.
 - `atoms/campaign_converged.py` plateau check compares the recent window against
   the *all-time* prior best. Flagged by two sweeps, but "no new record in N iters"
   is a defensible plateau definition — left as a design call, not a clear bug.
-- `models/mapreduce/dispatch.py` WIP promotion uses flat `os.replace`; an executor that
+- `execution/mapreduce/dispatch.py` WIP promotion uses flat `os.replace`; an executor that
   writes nested result subdirs would fail to promote on retry. A correct fix needs
   recursive merge — deferred rather than risk a wrong change.
 - `runner/logs.py` `ssh_error` is now recorded on entries but `failures.py`

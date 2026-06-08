@@ -434,13 +434,15 @@ class TestSubmitFlowBatch:
     def test_skip_rsync_deploy_skips_push_and_deploy(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
-        """#185: when every fresh spec asserts ``skip_rsync_deploy``, the
-        prelude's rsync+deploy is skipped (Phase 2 of submit.md's two-phase
-        canary gate — Phase 1 just deployed the same target)."""
+        """#185/#283: when the operator/internal ``_skip_rsync_deploy`` is set,
+        the prelude's rsync+deploy is skipped (Phase 2 of submit.md's two-phase
+        canary gate — Phase 1 just deployed the same target). This is a
+        batch-level decision threaded by the trusted in-process caller, NOT a
+        per-spec agent field (#283 took that lever off the wire)."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
 
-        specs = [_spec(f"r{i}", skip_rsync_deploy=True) for i in range(3)]
+        specs = [_spec(f"r{i}") for i in range(3)]
         with (
             mock.patch.object(sf_module, "_preflight_probe") as preflight,
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
@@ -453,25 +455,22 @@ class TestSubmitFlowBatch:
                 deduped=False,
                 canary_done=False,
             )
-            submit_flow_batch(tmp_path, spec=_batch(specs))
+            submit_flow_batch(tmp_path, spec=_batch(specs), _skip_rsync_deploy=True)
 
         # Preflight is governed by its own flag; only the rsync+deploy half
-        # is skipped by skip_rsync_deploy.
+        # is skipped by _skip_rsync_deploy.
         assert preflight.call_count == 1
         assert push_deploy.call_count == 0
         assert submit_one.call_count == 3
 
-    def test_mixed_skip_rsync_deploy_runs_prelude(self, tmp_path: Any, _journal_home: Any) -> None:
-        """#185: a mixed batch (some specs assert skip_rsync_deploy, some
-        don't) runs the prelude — the conservative posture protects whichever
-        spec withheld the assertion."""
+    def test_no_skip_rsync_deploy_runs_prelude(self, tmp_path: Any, _journal_home: Any) -> None:
+        """#283: without the operator/internal ``_skip_rsync_deploy`` request,
+        the rsync+deploy prelude runs — the conservative default. An agent can
+        no longer drop it via a spec field (the lever is off the wire)."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
 
-        specs = [
-            _spec("r0", skip_rsync_deploy=True),
-            _spec("r1", skip_rsync_deploy=False),
-        ]
+        specs = [_spec("r0"), _spec("r1")]
         with (
             mock.patch.object(sf_module, "_preflight_probe"),
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
@@ -984,6 +983,112 @@ class TestSkipPreflightDemotion:
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
         assert preflight.call_args.kwargs["skip"] is False
+
+
+# ---------------------------------------------------------------------------
+# #283 — skip_rsync_deploy demoted from agent spec to operator/internal control
+# ---------------------------------------------------------------------------
+
+
+class TestSkipRsyncDeployDemotion:
+    """skip_rsync_deploy is no longer an agent-settable spec field (#283).
+
+    A hand-authored ``skip_rsync_deploy: true`` on a raw submit-flow spec
+    ASSERTED "Phase 1 already deployed the same tree, nothing changed since" —
+    but a stale assertion silently ran the cluster on whatever code the previous
+    deploy shipped if the local tree drifted (#185). The skip is operator/
+    internal-only now: ``HPC_AGENT_SKIP_RSYNC_DEPLOY=1``, or a Python-only
+    ``_skip_rsync_deploy`` kwarg for trusted internal callers (the two-phase
+    canary gate's in-process main-array launch, where "Phase 1 just deployed" is
+    a structural fact the code knows). Same operator-vs-agent boundary as
+    ``skip_preflight`` (#275) / ``--inline`` (#155).
+    """
+
+    def test_submit_flow_spec_rejects_skip_rsync_deploy(self) -> None:
+        from pydantic import ValidationError
+
+        from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+
+        payload = _spec("r0").model_dump()
+        payload["skip_rsync_deploy"] = True
+        with pytest.raises(ValidationError):
+            SubmitFlowSpec(**payload)
+
+    def test_batch_spec_inner_spec_rejects_skip_rsync_deploy(self) -> None:
+        from pydantic import ValidationError
+
+        from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
+
+        payload = _spec("r0").model_dump()
+        payload["skip_rsync_deploy"] = True
+        with pytest.raises(ValidationError):
+            SubmitFlowBatchSpec(specs=[payload])  # type: ignore[list-item]
+
+    def test_resolver_internal_kwarg_overrides_env(self, monkeypatch: Any) -> None:
+        from hpc_agent.ops import submit_flow as sf
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_RSYNC_DEPLOY", raising=False)
+        assert sf._skip_rsync_deploy_requested(None) is False
+        assert sf._skip_rsync_deploy_requested(True) is True
+        monkeypatch.setenv("HPC_AGENT_SKIP_RSYNC_DEPLOY", "1")
+        assert sf._skip_rsync_deploy_requested(None) is True
+        # An explicit internal verdict wins over the env in both directions.
+        assert sf._skip_rsync_deploy_requested(False) is False
+
+    def test_env_var_skips_the_rsync_deploy(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.setenv("HPC_AGENT_SKIP_RSYNC_DEPLOY", "1")
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert push_deploy.call_count == 0
+
+    def test_internal_kwarg_skips_the_rsync_deploy(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_RSYNC_DEPLOY", raising=False)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_rsync_deploy=True)
+        assert push_deploy.call_count == 0
+
+    def test_default_runs_the_rsync_deploy(
+        self, tmp_path: Any, _journal_home: Any, monkeypatch: Any
+    ) -> None:
+        """No env var, no internal kwarg → the rsync+deploy runs."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        monkeypatch.delenv("HPC_AGENT_SKIP_RSYNC_DEPLOY", raising=False)
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+            )
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
+        assert push_deploy.call_count == 1
 
 
 # ---------------------------------------------------------------------------

@@ -153,7 +153,7 @@ class FailureFeatures(BaseModel):
             "and that DEFAULT_AUTO_RETRY_POLICY keys on) — NOT a parallel "
             "taxonomy. Populated by the existing classifier "
             "('ops/recover/failure_signatures.py:classify' + "
-            "'models/mapreduce/reduce/classify.py:classify_failure') from the raw "
+            "'execution/mapreduce/reduce/classify.py:classify_failure') from the raw "
             "stderr signature in 'error_class_raw', not by a new normalizer. "
             "'unknown' is the escape hatch: the classifier could not categorize "
             "the failure — the well-defined trigger to escalate to a "

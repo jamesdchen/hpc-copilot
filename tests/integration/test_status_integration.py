@@ -1,9 +1,9 @@
-"""Integration tests for ``hpc_agent.models.mapreduce.reduce.status``.
+"""Integration tests for ``hpc_agent.execution.mapreduce.reduce.status``.
 
 Layered approach:
 
 * **Layer 1 — CLI integration.** Exercise the ``python -m
-  hpc_agent.models.mapreduce.reduce.status`` entry point against a real
+  hpc_agent.execution.mapreduce.reduce.status`` entry point against a real
   ``.hpc/`` tree under ``tmp_path``. Catches envelope-shape drift and
   the four documented error envelopes (sidecar_not_found,
   sidecar_parse_error, tasks_py_not_found, tasks_py_import_error).
@@ -36,7 +36,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hpc_agent.models.mapreduce.reduce.status import (
+from hpc_agent.execution.mapreduce.reduce.status import (
     _categorize,
     _empty_summary,
     _grid_point_key,
@@ -101,7 +101,7 @@ def _write_complete_csv(tmp_path: Path, task_id: int) -> None:
 
 def _run_cli(experiment_dir: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-m", "hpc_agent.models.mapreduce.reduce.status", *args],
+        [sys.executable, "-m", "hpc_agent.execution.mapreduce.reduce.status", *args],
         cwd=str(experiment_dir),
         capture_output=True,
         text=True,
@@ -278,7 +278,7 @@ def test_summary_counts_sum_to_total_tasks(
     fake_query = {"tasks": job_info, "errors": []}
     with (
         patch(
-            "hpc_agent.models.mapreduce.reduce.status.detect_scheduler",
+            "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler",
             return_value="slurm",
         ),
         patch(

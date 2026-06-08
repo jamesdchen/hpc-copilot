@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hpc-agent"
-version = "0.10.20"
+version = "0.10.25"
 description = "HPC orchestrator for Claude Code and external agent harnesses"
 readme = "README.md"
 license = { text = "MIT" }
@@ -74,12 +74,12 @@ hpc_agent = [
     "schemas/*.json",
     "schemas/skill_returns/*.json",
     "operations.json",
-    "models/mapreduce/templates/scaffolds/*.py",
+    "execution/mapreduce/templates/scaffolds/*.py",
     "incorporation/build/scaffolds/*",
     # The per-scheduler cpu/gpu array scripts are no longer shipped as
     # files — they are rendered from the scheduler profile at deploy time
     # (Phase 2 / Option C). Only the shared preambles ship statically.
-    "models/mapreduce/templates/runtime/common/*.sh",
+    "execution/mapreduce/templates/runtime/common/*.sh",
     "_kernel/extension/worker_prompts/*.md",
     "py.typed",
 ]
@@ -136,7 +136,7 @@ branch = true
 omit = [
     "src/hpc_agent/schemas/*",  # generated JSON, not Python
     "src/hpc_agent/_wire/*",  # schema models — covered via roundtrip
-    "src/hpc_agent/models/mapreduce/templates/*",  # user-facing template files
+    "src/hpc_agent/execution/mapreduce/templates/*",  # user-facing template files
 ]
 
 [tool.coverage.report]

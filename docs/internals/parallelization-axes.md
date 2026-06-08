@@ -278,7 +278,7 @@ documentation has sometimes treated DataAxis as central. It's not.
 
 The framework already does map-reduce at the task-array level via
 `combine-wave` (see Axis 1 + the map-reduce machinery in
-`models/mapreduce/`). Every submission is shaped as map-reduce — N
+`execution/mapreduce/`). Every submission is shaped as map-reduce — N
 tasks fan out (map); per-wave combiner aggregates per-task metrics
 (reduce). This is the framework's default mode of operation.
 

@@ -157,9 +157,9 @@ from `tasks.py` at module load.
 Both ship as tested, **cluster-safe** scaffolds (the cluster imports
 `tasks.py` and calls `resolve()` on the compute node, so the optimizer must
 not be imported / re-`ask`ed there). See
-[`optuna_strategy.py`](../../src/hpc_agent/models/mapreduce/templates/scaffolds/optuna_strategy.py)
+[`optuna_strategy.py`](../../src/hpc_agent/execution/mapreduce/templates/scaffolds/optuna_strategy.py)
 and
-[`pbt_strategy.py`](../../src/hpc_agent/models/mapreduce/templates/scaffolds/pbt_strategy.py).
+[`pbt_strategy.py`](../../src/hpc_agent/execution/mapreduce/templates/scaffolds/pbt_strategy.py).
 
 ### Optuna (scalar objective lives in a metrics key)
 

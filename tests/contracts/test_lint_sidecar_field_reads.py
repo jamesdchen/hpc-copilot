@@ -4,7 +4,7 @@ The per-run sidecar at ``<exp>/.hpc/runs/<run_id>.json`` is written
 exclusively by :func:`hpc_agent.state.runs.write_run_sidecar` (initial
 write), :func:`hpc_agent.state.runs.update_run_sidecar_job_ids`
 (post-qsub finalize), and the cluster-side dispatcher
-(``models/mapreduce/dispatch.py``) which populates the per-task
+(``execution/mapreduce/dispatch.py``) which populates the per-task
 ``tasks`` block. Run-lifecycle fields (``status``, ``last_status``,
 ``lifecycle_state``, ``ssh_target``, ``job_name``, …) live on the
 journal :class:`RunRecord` at ``~/.claude/hpc/<repo_hash>/runs/<run_id>.json``,
@@ -83,7 +83,7 @@ _RUNTIME_WRITTEN = frozenset(
         "wave_map",
         "extra",
         "job_ids",
-        # ``tasks`` is populated by models/mapreduce/dispatch.py at task
+        # ``tasks`` is populated by execution/mapreduce/dispatch.py at task
         # runtime — the per-task block carrying exit_code/preempt/etc.
         "tasks",
     ]
@@ -104,7 +104,7 @@ _EXCLUDE_FILES = frozenset(
         "src/hpc_agent/state/runs.py",
         # Dispatcher writes the per-task ``tasks`` block; it constructs
         # sidecar entries rather than reading them.
-        "src/hpc_agent/models/mapreduce/dispatch.py",
+        "src/hpc_agent/execution/mapreduce/dispatch.py",
     ]
 )
 

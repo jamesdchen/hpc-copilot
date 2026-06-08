@@ -228,7 +228,7 @@ class TestDeployRuntime:
         assert captured["remote_path"] == "/p"
         rels = set(captured["dst_rels"])
         # Importable stubs into hpc_agent/ (so cluster-side user imports resolve).
-        assert "hpc_agent/models/mapreduce/metrics_io.py" in rels
+        assert "hpc_agent/execution/mapreduce/metrics_io.py" in rels
         assert "hpc_agent/executor_cli.py" in rels
         # Framework executor + combiner into .hpc/
         assert ".hpc/_hpc_dispatch.py" in rels

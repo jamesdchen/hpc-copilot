@@ -22,7 +22,7 @@ class StatusResult(BaseModel):
     run_id: RunIdStrict
     lifecycle_state: LifecycleStateObservableWithTimeout
     last_status: dict[str, Any] = Field(
-        description="Snapshot from the on-cluster status reporter; see hpc_agent.models.mapreduce.reduce.status.",
+        description="Snapshot from the on-cluster status reporter; see hpc_agent.execution.mapreduce.reduce.status.",
     )
     last_status_age_seconds: int | None = Field(
         default=None,

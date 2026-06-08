@@ -43,7 +43,7 @@ def _load_template_module(path: Path):
 
 
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "mock_experiment"
-TEMPLATES_DIR = _PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds"
+TEMPLATES_DIR = _PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds"
 
 
 # ─── discover_executors ───────────────────────────────────────────────────

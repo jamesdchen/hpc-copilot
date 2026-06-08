@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/prepare_phase2_spec.output.json",
   "title": "PreparePhase2SpecReport",
-  "description": "Output ``data`` block for ``prepare-phase2-spec`` (#279).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries the derived Phase-2 main-array submit-flow spec\nplus the three boolean flips that were applied. ``phase2_spec`` is the\nPhase-1 spec with exactly canary=false, canary_only=false,\nskip_rsync_deploy=true and every other field copied verbatim; it has\nalready been validated against SubmitFlowSpec (submit_flow.input.json),\nso a caller can hand it straight to ``hpc-agent submit-flow --spec`` for\nthe Phase-2 main-array launch without a spec-rebuild round-trip.",
+  "description": "Output ``data`` block for ``prepare-phase2-spec`` (#279).\n\nWraps inside the standard SuccessEnvelope's ``data`` field (see\nenvelope.json). Carries the derived Phase-2 main-array submit-flow spec\nplus the two boolean flips that were applied. ``phase2_spec`` is the\nPhase-1 spec with exactly canary=false, canary_only=false and every other\nfield copied verbatim; it has already been validated against SubmitFlowSpec\n(submit_flow.input.json), so a caller can hand it straight to ``hpc-agent\nsubmit-flow --spec`` for the Phase-2 main-array launch without a spec-rebuild\nround-trip. (#283: the former skip_rsync_deploy flip was dropped — that bypass\nis now operator/internal-only and off the wire SubmitFlowSpec, so a wire spec\ncannot carry it.)",
   "type": "object",
   "required": [
     "phase2_spec",
@@ -20,11 +20,10 @@
       "type": "object",
       "additionalProperties": false,
       "title": "Flips Applied",
-      "description": "The three boolean flips applied to the Phase-1 spec, echoed back so the caller can audit exactly what changed.",
+      "description": "The two boolean flips applied to the Phase-1 spec, echoed back so the caller can audit exactly what changed.",
       "required": [
         "canary",
-        "canary_only",
-        "skip_rsync_deploy"
+        "canary_only"
       ],
       "properties": {
         "canary": {
@@ -36,11 +35,6 @@
           "type": "boolean",
           "title": "Canary Only",
           "description": "Always false: Phase 2 IS the main-array launch, not another canary-only gate."
-        },
-        "skip_rsync_deploy": {
-          "type": "boolean",
-          "title": "Skip Rsync Deploy",
-          "description": "Always true: Phase 1 already rsync+deployed the tree to the same (ssh_target, remote_path)."
         }
       }
     }

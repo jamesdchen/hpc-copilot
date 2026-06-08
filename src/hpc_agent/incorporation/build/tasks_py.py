@@ -583,7 +583,7 @@ def build_tasks_py(
     from hpc_agent import _PACKAGE_ROOT
 
     _shutil.copy(
-        _PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py",
+        _PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py",
         target.parent / "cli.py",
     )
 

@@ -55,6 +55,7 @@ except ``in_flight``."""
 ERROR_CODES = frozenset(
     {
         "ssh_unreachable",
+        "model_endpoint_error",
         "scheduler_throttled",
         "cluster_timeout",
         "combiner_failed",
@@ -71,7 +72,7 @@ ERROR_CODES = frozenset(
         "precondition_failed",
     }
 )
-"""The 15 ``error_code`` values an error envelope may carry. The
+"""The 16 ``error_code`` values an error envelope may carry. The
 catch-all ``internal`` code is intentionally NOT included — it
 indicates a framework bug or corrupt state, not a stable wire
 contract integrators should branch on. The full set with retry-policy

@@ -29,7 +29,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 PREAMBLE = (
-    _PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "runtime" / "common" / "hpc_preamble.sh"
+    _PACKAGE_ROOT
+    / "execution"
+    / "mapreduce"
+    / "templates"
+    / "runtime"
+    / "common"
+    / "hpc_preamble.sh"
 )
 
 _BASH = shutil.which("bash")

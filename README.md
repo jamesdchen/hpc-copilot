@@ -82,7 +82,7 @@ for the full contract: the spawn env block,
 
 The canonical reference for `.hpc/tasks.py` is shipped inside the
 package at
-[`src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py`](src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py).
+[`src/hpc_agent/execution/mapreduce/templates/scaffolds/tasks_example.py`](src/hpc_agent/execution/mapreduce/templates/scaffolds/tasks_example.py).
 It demonstrates three patterns (Cartesian product, chunking by row
 count, date-window backtests) inline. Integrators locate it at runtime
 via `from hpc_agent import _PACKAGE_ROOT` or `rglob("tasks_example.py")`.
@@ -166,7 +166,7 @@ The boundary between hpc-agent and your experiment repo is documented in [`docs/
 
 ### Parallelism Model
 
-The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
+The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_agent/execution/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
 
 ### Memory across campaigns
 

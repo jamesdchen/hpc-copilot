@@ -12,8 +12,8 @@ import json
 
 import pytest
 
-from hpc_agent.models.mapreduce import combiner
-from hpc_agent.models.mapreduce.reduce.metrics import reduce_partials
+from hpc_agent.execution.mapreduce import combiner
+from hpc_agent.execution.mapreduce.reduce.metrics import reduce_partials
 
 
 def _write_wave(combiner_dir, wave, grid_points, errors=None):

@@ -123,7 +123,7 @@ def test_confirmed_in_flight_is_not_unable_to_verify(tmp_path, monkeypatch):
 def test_reporter_failure_routes_through_unable_to_verify(tmp_path, monkeypatch):
     """Empirical 2026-06-05 demo failure: reconcile's reporter probe ran
     under bare ``/usr/bin/python`` (no activation prefix threaded through),
-    crashed with ``No module named hpc_agent.models.mapreduce.reduce``, and
+    crashed with ``No module named hpc_agent.execution.mapreduce.reduce``, and
     the pre-0.10.12 verdict logic gated unable_to_verify only on the
     alive-check failure — so an alive-check that successfully reported "no
     jobs alive" + a reporter that died still routed through ``abandoned``.
@@ -141,7 +141,7 @@ def test_reporter_failure_routes_through_unable_to_verify(tmp_path, monkeypatch)
     def _status(**_kw):
         raise errors.RemoteCommandFailed(
             "status reporter failed (rc=1): /usr/bin/python: "
-            "No module named hpc_agent.models.mapreduce.reduce"
+            "No module named hpc_agent.execution.mapreduce.reduce"
         )
 
     monkeypatch.setattr(recon, "_ssh_alive_job_ids", _alive)

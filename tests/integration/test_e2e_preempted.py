@@ -185,8 +185,8 @@ class TestTaskIdSpaceSeam:
     def test_reporter_output_and_resubmit_input_share_hpctaskid_space(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from hpc_agent.execution.mapreduce.reduce.status import report_status
         from hpc_agent.infra.backends import query as qmod
-        from hpc_agent.models.mapreduce.reduce.status import report_status
         from hpc_agent.ops.recover.batching import resubmit_plan
 
         # The scheduler reports array index 2 (1-based ArrayIndex) as a

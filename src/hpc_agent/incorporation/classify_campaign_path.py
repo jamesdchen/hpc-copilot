@@ -58,7 +58,7 @@ _STRATEGY_CALLS: frozenset[str] = frozenset(
 )
 _METHOD_STRATEGY_CALLS: frozenset[str] = frozenset({"ask", "tell"})
 # A module path containing this segment is the framework's history reader
-# (``hpc_agent.models.mapreduce.reduce.history.prior``). Only a ``prior`` bound
+# (``hpc_agent.execution.mapreduce.reduce.history.prior``). Only a ``prior`` bound
 # to / called on such a module is a Path-B signal.
 _HISTORY_MODULE_MARK = "history"
 

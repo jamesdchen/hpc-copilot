@@ -1,1 +1,1 @@
-"""hpc_agent._kernel.contract — schema and layout contracts."""
+"""hpc_agent._kernel.contract — schema, layout, and vocabulary contracts."""

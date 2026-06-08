@@ -21,13 +21,13 @@ lives here. A consumer imports these; it does not re-declare them.
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import json
 from typing import Any
 
 from pydantic import ValidationError
 
+from hpc_agent._kernel.contract.json_extract import last_json_object
 from hpc_agent._kernel.lifecycle.invoke import RenderedPrompt
 from hpc_agent._wire.spawn_contract import (
     DECISION_POINTS,
@@ -222,39 +222,6 @@ def validate_and_render_parts(payload: Any) -> RenderedPrompt:
     )
 
 
-def _last_json_object(text: str) -> dict[str, Any] | None:
-    """Return the last top-level JSON object in *text*, or ``None``.
-
-    Tries a whole-string parse first (the worker is told to emit only
-    the object); falls back to the last balanced ``{...}`` span so a
-    worker that prefixes chatter still parses.
-    """
-    stripped = text.strip()
-    with contextlib.suppress(json.JSONDecodeError):
-        whole = json.loads(stripped)
-        if isinstance(whole, dict):
-            return whole
-    depth = 0
-    start = -1
-    last: str | None = None
-    for i, char in enumerate(stripped):
-        if char == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif char == "}" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                last = stripped[start : i + 1]
-    if last is None:
-        return None
-    with contextlib.suppress(json.JSONDecodeError):
-        obj = json.loads(last)
-        if isinstance(obj, dict):
-            return obj
-    return None
-
-
 def parse_worker_report(output: str, *, workflow: str) -> WorkerReport:
     """Parse a delegated worker's final JSON object into a :class:`WorkerReport`.
 
@@ -262,7 +229,7 @@ def parse_worker_report(output: str, *, workflow: str) -> WorkerReport:
     object fails :class:`WorkerReport` validation, or a decision names a
     ``point`` not enumerated in :data:`DECISION_POINTS` for *workflow*.
     """
-    obj = _last_json_object(output)
+    obj = last_json_object(output)
     if obj is None:
         raise SpawnContractError("no JSON object found in worker output")
     try:

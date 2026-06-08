@@ -15,7 +15,7 @@ backed_by:
 # prepare-phase2-spec
 
 Derive the **Phase 2** (main-array) submit-flow spec from a **Phase 1**
-two-phase-canary spec, by applying three deterministic flips and
+two-phase-canary spec, by applying two deterministic flips and
 validating the result locally against `SubmitFlowSpec`.
 
 ## The two-phase canary gate
@@ -27,23 +27,33 @@ validating the result locally against `SubmitFlowSpec`.
 - **verify-canary** — confirm the 1-task canary actually succeeded.
 - **Phase 2** — launch the main array, but only on a green canary.
 
-The Phase-2 spec is the Phase-1 spec with **exactly three changes**, and
+The Phase-2 spec is the Phase-1 spec with **exactly two changes**, and
 everything else identical:
 
 | field               | Phase 1 | Phase 2 | why                                                        |
 | ------------------- | ------- | ------- | ---------------------------------------------------------- |
 | `canary`            | `true`  | `false` | the canary already ran in Phase 1                          |
 | `canary_only`       | `true`  | `false` | Phase 2 IS the main-array launch, not another canary gate  |
-| `skip_rsync_deploy` | `false` | `true`  | Phase 1 already rsync+deployed the tree to the same target |
+
+> **#283: the former `skip_rsync_deploy: true` flip was dropped.** It was an
+> agent-settable wire field asserting "Phase 1 already deployed the same tree,
+> nothing changed since" — but a stale assertion silently ran the cluster on
+> old code if the local tree drifted between the two phases (#185). The skip is
+> now operator/internal-only (`HPC_AGENT_SKIP_RSYNC_DEPLOY` or a Python-only
+> kwarg) and off the wire `SubmitFlowSpec`, so a spec this verb emits cannot
+> carry it. The production agent flow does NOT use this verb — it uses
+> `submit-pipeline`/`submit-and-verify`, where the in-process main-array launch
+> skips the redundant deploy correctly. A caller that hands `phase2_spec` to a
+> raw `submit-flow` simply pays one redundant (harmless, idempotent) rsync.
 
 ## Why this exists
 
 Before this verb the worker round-tripped to **rebuild** a spec that was
 99% known the moment the canary handoff fired — re-resolving fields it
-already held on the Phase-1 spec just to flip three booleans. That is a
+already held on the Phase-1 spec just to flip two booleans. That is a
 pointless rebuild between `verify-canary` and the Phase-2 submit. This
 primitive collapses it to one deterministic, local transform: build
-`{**phase1, canary: false, canary_only: false, skip_rsync_deploy: true}`
+`{**phase1, canary: false, canary_only: false}`
 and validate it. No SSH, no journal reads, no cluster round-trip — the
 issue calls this "schema validation".
 
@@ -58,11 +68,10 @@ input schema. Output matches
 `hpc_agent/schemas/prepare_phase2_spec.output.json`:
 
 - `phase2_spec` — the derived main-array spec (the Phase-1 spec with the
-  three flips applied, everything else verbatim), already validated
+  two flips applied, everything else verbatim), already validated
   against `SubmitFlowSpec`.
-- `flips_applied` — the three booleans (`canary`, `canary_only`,
-  `skip_rsync_deploy`), echoed back so the caller can audit exactly what
-  changed.
+- `flips_applied` — the two booleans (`canary`, `canary_only`), echoed
+  back so the caller can audit exactly what changed.
 
 ## Validation
 
@@ -76,7 +85,7 @@ required field, or carrying `total_tasks=0`) surfaces as a typed
 ## Invariant (#279)
 
 The Phase-2 spec MUST be derivable from the Phase-1 spec with **no runtime
-state from canary execution** — the three flips are static and every other
+state from canary execution** — the two flips are static and every other
 field is copied verbatim. That is exactly what lets the worker skip the
 rebuild round-trip.
 

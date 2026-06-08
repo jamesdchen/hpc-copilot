@@ -94,21 +94,25 @@ _MOVED: dict[str, str] = {
     "run_combiner": "hpc_agent.infra.transport.run_combiner",
     "run_combiner_checked": "hpc_agent.infra.transport.run_combiner_checked",
     "ssh_run": "hpc_agent.infra.remote.ssh_run",
-    # Job status & results → hpc_agent.models.mapreduce.reduce.status
-    "check_results": "hpc_agent.models.mapreduce.reduce.status.check_results",
-    "check_results_from_tasks": "hpc_agent.models.mapreduce.reduce.status.check_results_from_tasks",
-    "detect_scheduler": "hpc_agent.models.mapreduce.reduce.status.detect_scheduler",
-    "report_status": "hpc_agent.models.mapreduce.reduce.status.report_status",
-    "report_status_from_tasks": "hpc_agent.models.mapreduce.reduce.status.report_status_from_tasks",
-    "rollup_by_grid_point": "hpc_agent.models.mapreduce.reduce.status.rollup_by_grid_point",
+    # Job status & results → hpc_agent.execution.mapreduce.reduce.status
+    "check_results": "hpc_agent.execution.mapreduce.reduce.status.check_results",
+    "check_results_from_tasks": (
+        "hpc_agent.execution.mapreduce.reduce.status.check_results_from_tasks"
+    ),
+    "detect_scheduler": "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler",
+    "report_status": "hpc_agent.execution.mapreduce.reduce.status.report_status",
+    "report_status_from_tasks": (
+        "hpc_agent.execution.mapreduce.reduce.status.report_status_from_tasks"
+    ),
+    "rollup_by_grid_point": "hpc_agent.execution.mapreduce.reduce.status.rollup_by_grid_point",
     # GPU selection
     "pick_gpu": "hpc_agent.infra.gpu.pick_gpu",
     # Reduce
-    "classify_failure": "hpc_agent.models.mapreduce.reduce.classify.classify_failure",
-    "reduce_by_grid_point": "hpc_agent.models.mapreduce.reduce.metrics.reduce_by_grid_point",
-    "reduce_metrics": "hpc_agent.models.mapreduce.reduce.metrics.reduce_metrics",
-    "reduce_partials": "hpc_agent.models.mapreduce.reduce.metrics.reduce_partials",
-    "reduce_resource_usage": "hpc_agent.models.mapreduce.reduce.metrics.reduce_resource_usage",
+    "classify_failure": "hpc_agent.execution.mapreduce.reduce.classify.classify_failure",
+    "reduce_by_grid_point": "hpc_agent.execution.mapreduce.reduce.metrics.reduce_by_grid_point",
+    "reduce_metrics": "hpc_agent.execution.mapreduce.reduce.metrics.reduce_metrics",
+    "reduce_partials": "hpc_agent.execution.mapreduce.reduce.metrics.reduce_partials",
+    "reduce_resource_usage": "hpc_agent.execution.mapreduce.reduce.metrics.reduce_resource_usage",
     # Executor discovery
     "ExecutorInfo": "hpc_agent.state.discover.ExecutorInfo",
     "discover_executors": "hpc_agent.state.discover.discover_executors",
@@ -131,7 +135,7 @@ _MOVED: dict[str, str] = {
     "compact_task_ids": "hpc_agent.ops.recover.batching.compact_task_ids",
     "resubmit_plan": "hpc_agent.ops.recover.batching.resubmit_plan",
     # Per-task metrics sidecar
-    "write_metrics": "hpc_agent.models.mapreduce.metrics_io.write_metrics",
+    "write_metrics": "hpc_agent.execution.mapreduce.metrics_io.write_metrics",
 }
 
 
@@ -216,7 +220,7 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(
             f"{path} must define both total() and resolve(task_id) — "
-            "see hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py"
+            "see hpc_agent/execution/mapreduce/templates/scaffolds/tasks_example.py"
         )
     return module
 

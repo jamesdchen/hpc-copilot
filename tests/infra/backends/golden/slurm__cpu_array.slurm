@@ -57,7 +57,7 @@ echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 
 # --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
-# See hpc_agent/models/mapreduce/templates/common/hpc_preamble.sh — deployed alongside
+# See hpc_agent/execution/mapreduce/templates/common/hpc_preamble.sh — deployed alongside
 # this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
 source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
@@ -82,7 +82,7 @@ echo "============================================"
 # re-exported here so the dispatcher inside $EXECUTOR sees it.
 # HPC_CAMPAIGN_ID is optional — present when the run is part of a
 # closed-loop campaign — and lets the user's tasks.py call
-# hpc_agent.models.mapreduce.reduce.history.prior() for the campaign's history.
+# hpc_agent.execution.mapreduce.reduce.history.prior() for the campaign's history.
 export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR
 hpc_run_with_retry
 

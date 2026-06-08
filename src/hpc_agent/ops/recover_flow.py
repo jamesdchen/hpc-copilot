@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory  # noqa: F401 — re-export
+from hpc_agent._kernel.contract.vocabulary import FailureCategory  # noqa: F401 — re-export
 from hpc_agent._wire._shared import FailureCategoryResubmittable
 from hpc_agent.infra.resource_format import walltime_hms
 from hpc_agent.ops.recover.batching import resubmit_plan

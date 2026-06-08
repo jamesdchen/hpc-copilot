@@ -11,12 +11,12 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
+from hpc_agent.execution.mapreduce.reduce.metrics import reduce_resource_usage
 from hpc_agent.infra.backends import query as qmod
 from hpc_agent.infra.backends.query import (
     parse_gpu_count_from_sge_resources,
     parse_gpu_count_from_tres,
 )
-from hpc_agent.models.mapreduce.reduce.metrics import reduce_resource_usage
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:

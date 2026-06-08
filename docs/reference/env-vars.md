@@ -12,9 +12,93 @@ preamble).
 | `HPC_CLUSTERS_CONFIG` | `<package>/config/clusters.yaml` | Path to a `clusters.yaml` override. Used by `hpc_agent.infra.clusters.load_clusters_config`. |
 | `HPC_JOURNAL_DIR` | `~/.claude/hpc/` | Root of the per-experiment journal tree. External harnesses set this so their state lives outside the user's `~/.claude`. |
 | `HPC_MAX_RUNS` | `500` | Max per-experiment sidecars retained before oldest-by-mtime eviction (`hpc_agent.state.runs`). |
-| `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.models.mapreduce.reduce.history.prior(...)`. |
+| `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.execution.mapreduce.reduce.history.prior(...)`. |
 | `HPC_TELEMETRY_SINK` | `none` | One of `none` / `stderr-jsonl` / `monitor-jsonl`. Routes `hpc_agent._kernel.extension.telemetry.record` events. |
 | `HPC_AGENT_WORKER_JSON_SCHEMA` | (unset) | Set to `1`/`true` to spawn the delegated `claude -p` worker with `--json-schema` (the WorkerReport schema), constraining the worker's final report at **decode time** so malformed JSON can't be emitted — the structural complement to `parse_worker_report`'s cross-field checks (`hpc_agent._kernel.lifecycle.invoke`). Off by default until a live `claude -p --json-schema` run is validated against the `--bare` agent loop; when off, the worker uses the plain text transport. Making it the default is tracked in [#269](https://github.com/jamesdchen/hpc-agent/issues/269). |
+
+## Raw model-call adapter (`structured()`)
+
+The raw model-call seam (`hpc_agent._kernel.lifecycle.structured.structured`)
+resolves a `ChatModel` via `HPC_AGENT_MODEL`, exactly as `HPC_AGENT_INVOKER`
+selects a spawned-worker transport. The one built-in adapter is
+`openai-compat` — an OpenAI-compatible `/chat/completions` client that
+targets DeepSeek-hosted, OpenAI, or a self-hosted vLLM by swapping these vars
+(#304, Phase 2). **Default-off**: nothing is auto-selected; the seam is inert
+until `HPC_AGENT_MODEL=openai-compat` (or an explicit `get_model("openai-compat")`).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HPC_AGENT_MODEL` | (unset) | Selects the `ChatModel` for `structured()` (`get_model`). Set to `openai-compat` to use the built-in OpenAI-compatible adapter. Unset → the seam raises `spec_invalid` (no model selected), the same shape as an unknown `HPC_AGENT_INVOKER`. |
+| `HPC_AGENT_MODEL_BASE_URL` | (unset) | OpenAI-compatible API base URL, e.g. `https://api.deepseek.com/v1`, `https://api.openai.com/v1`, `http://localhost:8000/v1` (vLLM). Required for `openai-compat`; missing → `spec_invalid`. |
+| `HPC_AGENT_MODEL_NAME` | (unset) | Model id to call, e.g. `deepseek-chat`, `gpt-4o`, the vLLM `--served-model-name`. Required for `openai-compat`; missing → `spec_invalid`. |
+| `HPC_AGENT_MODEL_API_KEY` | (unset) | Bearer credential. Falls back to `OPENAI_API_KEY` then `DEEPSEEK_API_KEY` if unset. **Required for any non-loopback `base_url`**; a `localhost`/`127.0.0.1` base_url (a keyless vLLM) may omit it. Missing on a remote endpoint → `spec_invalid`. |
+| `HPC_AGENT_MODEL_RESPONSE_FORMAT` | `json_schema` | Per-endpoint accelerator knob. `json_schema` (default) sends the target schema as a **strict decode constraint** (`response_format.type="json_schema"`, `strict:true`) so the server cannot emit non-conforming tokens — enforced by **OpenAI** and **self-hosted vLLM** (guided decoding). `json_object` requests JSON-valid output only and injects the schema as a prompt hint (the parse-validate-repair floor carries shape) — use this for **DeepSeek-hosted**, whose API historically supports only json_object. `none` sends no constraint and relies entirely on the floor. The floor (`structured()`) is the universal backstop in every mode. |
+
+### Manual live-validation (the #269 discipline)
+
+The `openai-compat` adapter ships **unvalidated against a live endpoint and
+default-off**: the build sandbox has no provider credentials and blocks
+outbound network, so — exactly as `HPC_AGENT_WORKER_JSON_SCHEMA` (#269) is
+gated until a live `claude -p --json-schema` run is confirmed — a human must
+run this smoke once against a real endpoint before relying on it:
+
+1. Export the config for your endpoint. For **guaranteed strict decode** use
+   OpenAI or a self-hosted vLLM:
+
+   ```bash
+   # OpenAI (strict json_schema honoured)
+   export HPC_AGENT_MODEL=openai-compat
+   export HPC_AGENT_MODEL_BASE_URL=https://api.openai.com/v1
+   export HPC_AGENT_MODEL_NAME=gpt-4o
+   export HPC_AGENT_MODEL_API_KEY=sk-...
+   # (HPC_AGENT_MODEL_RESPONSE_FORMAT defaults to json_schema)
+
+   # …or self-hosted vLLM (guided decoding; keyless localhost allowed)
+   #   export HPC_AGENT_MODEL_BASE_URL=http://localhost:8000/v1
+   #   export HPC_AGENT_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+
+   # …or DeepSeek-hosted — json_schema is NOT honoured there, so downgrade:
+   #   export HPC_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
+   #   export HPC_AGENT_MODEL_NAME=deepseek-chat
+   #   export HPC_AGENT_MODEL_API_KEY=sk-...
+   #   export HPC_AGENT_MODEL_RESPONSE_FORMAT=json_object   # JSON-mode + floor
+   ```
+
+2. Run a minimal `structured()` smoke and confirm a validated instance:
+
+   ```bash
+   python - <<'PY'
+   import pydantic
+   from hpc_agent._kernel.lifecycle.structured import (
+       ChatMessage, get_model, structured,
+   )
+
+   class Answer(pydantic.BaseModel):
+       label: str
+       count: int
+
+   model = get_model()  # resolves openai-compat from HPC_AGENT_MODEL
+   result = structured(
+       model, Answer,
+       [ChatMessage(role="user", content="Return label='ok' and count=3.")],
+   )
+   print("validated:", result)        # → Answer(label='ok', count=3)
+   assert isinstance(result, Answer)
+   PY
+   ```
+
+   A printed validated `Answer` confirms the round-trip: request built, the
+   accelerator applied for the mode, the envelope parsed, and the floor
+   validated. A `spec_invalid` means a missing/misnamed env var; an
+   `ssh_unreachable` (the transport error class) means the endpoint was
+   unreachable or returned a bad envelope/HTTP status — re-check base_url, key,
+   model id, and `RESPONSE_FORMAT` against what the provider supports.
+
+**Provider-support reality:** strict `json_schema` decode is enforced by
+**OpenAI** and **self-hosted vLLM** (guided decoding); **DeepSeek's hosted
+API** historically supports only `json_object`. For DeepSeek-hosted set
+`HPC_AGENT_MODEL_RESPONSE_FORMAT=json_object` (JSON-mode + floor, best-effort
+shape); for **guaranteed** strict decode use vLLM or OpenAI.
 
 ## SSH / rsync transport
 

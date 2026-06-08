@@ -10,7 +10,7 @@ only, while ``hpc-aggregate``'s symmetric path was unaware of it).
 See ``docs/proposals/recovery-registry.md`` for design rationale.
 
 The kind vocabulary is deliberately broader than
-:class:`hpc_agent._kernel.lifecycle.lifecycle.FailureCategory` (classifier
+:class:`hpc_agent._kernel.contract.vocabulary.FailureCategory` (classifier
 output) and :data:`hpc_agent._wire._shared.ErrorCode` (envelope output)
 combined — it also includes prose-only kinds like ``already_in_flight``
 and ``submission_incomplete`` that slash-skill recovery menus address
