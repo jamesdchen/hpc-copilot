@@ -386,6 +386,23 @@ def verify_canary(
         raise errors.SpecInvalid("poll_interval_sec must be > 0")
     if int(wait_budget_sec) <= 0:
         raise errors.SpecInvalid("wait_budget_sec must be > 0")
+    if expect_output and canary_run_id not in expect_output:
+        # The canary writes its output under ``results/<canary_run_id>/...``
+        # (the ``-canary`` suffix is part of the run_id). An ``expect_output``
+        # built for the MAIN run_id — or copied from a literal example like
+        # ``results/seed_42/metrics.json`` — can never match, so the check
+        # would report ``missing_output`` for a canary that actually passed
+        # and silently gate the main array. Refuse it at the boundary rather
+        # than let a divined path mint a false negative (the per-task
+        # completion count already verifies the canary produced output).
+        raise errors.SpecInvalid(
+            f"expect_output {expect_output!r} does not reference the canary run_id "
+            f"{canary_run_id!r}: the canary writes under results/{canary_run_id}/... (note "
+            f"the '-canary' suffix), so a path built for the main run_id or a literal example "
+            f"like 'results/seed_42/metrics.json' can never match and would falsely fail a "
+            f"canary that succeeded. Omit expect_output (the completion count already verifies "
+            f"the canary's output) or pass the canary's real result path."
+        )
 
     from hpc_agent.infra.cluster_logs import fetch_task_logs
     from hpc_agent.infra.cluster_status import ssh_status_report

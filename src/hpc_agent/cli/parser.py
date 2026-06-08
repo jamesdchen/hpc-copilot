@@ -10,9 +10,49 @@ registered via :func:`_register_tier3_modules`.
 from __future__ import annotations
 
 import argparse
+import difflib
+import re
+from typing import NoReturn
 
 import hpc_agent
 from hpc_agent.cli._dispatch import CliShape, _leaf_verb, dispatch_primitive
+
+_INVALID_CHOICE_RE = re.compile(r"invalid choice: '([^']*)'")
+
+
+class _HpcArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that answers an unknown verb with a compact
+    "did you mean" line instead of argparse's full subcommand dump.
+
+    Stock argparse prints the usage line — which for a subparsers action
+    lists every one of the ~70 verbs — AND ``invalid choice: 'X' (choose
+    from <all of them again>)``: the whole CLI surface, twice. Read back
+    into a spawned worker's context that is a heavy, content-free tax
+    that also buries the one useful thing — the verb the caller meant.
+    We intercept that single error class; all other argparse errors fall
+    through to the stock handler.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        match = _INVALID_CHOICE_RE.search(message)
+        if match is not None:
+            bad = match.group(1)
+            choices = self._subcommand_choices()
+            close = difflib.get_close_matches(bad, choices, n=3, cutoff=0.5)
+            hint = f" Did you mean: {', '.join(close)}?" if close else ""
+            self.exit(
+                2,
+                f"{self.prog}: error: unknown command {bad!r}.{hint} "
+                f"Run `{self.prog} --help` for the {len(choices)} available commands.\n",
+            )
+        super().error(message)
+
+    def _subcommand_choices(self) -> list[str]:
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return list(action.choices)
+        return []
+
 
 # Help text for parent verb-group parsers. The dispatcher computes the
 # leaf verb name; the parent's help string is hand-curated here because
@@ -117,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     :class:`CliShape`) or a Tier 3 module's ``register(sub)``.
     Plugins register last so they can override / extend core verbs.
     """
-    parser = argparse.ArgumentParser(
+    parser = _HpcArgumentParser(
         prog="hpc-agent",
         description=(
             "Submit, track status of, and aggregate parameter-grid HPC experiments. "

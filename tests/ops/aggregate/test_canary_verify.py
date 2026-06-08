@@ -167,17 +167,34 @@ def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_h
         ),
         mock.patch(
             "hpc_agent.ops.aggregate.runner.verify_combiner_artifact",
-            return_value=(False, "is missing at /x/results/seed_42/metrics.json"),
+            return_value=(False, "is missing at /x/results/r1-canary/seed_0/metrics.json"),
         ),
     ):
         out = verify_canary(
             tmp_path,
             canary_run_id="r1-canary",
-            expect_output="results/seed_42/metrics.json",
+            expect_output="results/r1-canary/seed_0/metrics.json",
             wait_budget_sec=10,
         )
     assert out["ok"] is False
     assert out["failure_kind"] == "missing_output"
+
+
+def test_rejects_expect_output_not_referencing_canary_run_id(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A divined expect_output (main run_id / literal example seed) is refused at
+    the boundary, not turned into a false missing_output for a passing canary."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    with pytest.raises(errors.SpecInvalid, match="does not reference the canary run_id"):
+        verify_canary(
+            tmp_path,
+            canary_run_id="r1-canary",
+            expect_output="results/r1/seed_42/metrics.json",
+            wait_budget_sec=10,
+        )
 
 
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:

@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.19 — 2026-06-07
+
+### Fixed — canary no longer false-fails on a divined `expect_output` (output-side of #287)
+
+A passing canary was gated as `missing_output` because the verification was handed a hand-built per-task metrics path. `verify-canary`'s `expect_output` is checked verbatim against the cluster, but the worker-prompt's submit-pipeline example hard-coded `"expect_output": "results/seed_42/metrics.json"` — no `{run_id}`, a literal `seed_42`, and (for a canary) missing the `-canary` run-id suffix. The agent copied it, and the framework dutifully checked a path that never existed while the real output sat under `results/<run_id>-canary/seed_0/metrics.json`. Two changes: (1) the landmine field is dropped from `worker_prompts/submit.md` — the per-task completion count already verifies the canary's output via the correct run-id; (2) `verify-canary` now refuses at the boundary any `expect_output` that doesn't reference the canary run_id, so a divined path fails loudly with a remediation instead of silently minting a false negative. Empirical 2026-06-07 demo: a clean canary (`pi≈3.141132`, exit 0) blocked the 100-task main array.
+
+### Fixed — unknown CLI verb gives a compact "did you mean" instead of dumping every verb
+
+Stock argparse answered an unknown subcommand by printing the usage line (all ~70 verbs) plus `invalid choice: 'X' (choose from <all of them again>)` — the entire CLI surface twice, a content-free tax on a spawned worker's context that buried the one useful hint. `_HpcArgumentParser.error()` intercepts that one error class and emits a single line (`unknown command 'check-preflight'. Did you mean: preflight…` via `difflib.get_close_matches`). Especially helps the seven primitives whose registry/doc name differs from the CLI verb (`check-preflight`→`preflight`, `discover-executors`→`discover`, …): the agent reads the long name in prose, and the close-match points it at the real verb.
+
 ## 0.10.18 — 2026-06-06
 
 ### Fixed — refuse a broken per-task EXECUTOR at the sidecar / build boundary

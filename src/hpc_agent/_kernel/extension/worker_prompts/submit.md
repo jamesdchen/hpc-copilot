@@ -262,12 +262,13 @@ The spec embeds the canary-gated submit under `submit` plus an optional `profile
       "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
       "pass_env_keys": null,
       "canary": true, "campaign_id": "<slug>"
-    },
-    "expect_output": "results/seed_42/metrics.json"
+    }
   },
   "profile": "<run_name>"
 }
 ```
+
+The canary's output is verified by the per-task completion count inside the primitive — do **not** add an `expect_output` metrics path. The canary writes under the `<run_id>-canary` result dir, so a hand-written path built for the main run can't match and would falsely fail a canary that actually passed.
 
 `submit.submit.job_env["EXECUTOR"]` is **mandatory and non-empty** — it is the dispatcher command (`python3 .hpc/_hpc_dispatch.py`). Never ship `""` or omit it: the cluster would run `time` with no command and exit 0 in milliseconds, the canary would "succeed", and the main array would fire the same no-op qsub (#191). `build-submit-spec` defaults it; if you hand-craft the fields-file, set it explicitly.
 
