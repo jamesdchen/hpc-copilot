@@ -95,6 +95,45 @@ def test_capabilities_exposes_required_env_and_drops_skill_paths() -> None:
     ]
 
 
+def test_capabilities_operations_rows_are_thin() -> None:
+    """#306: the bootstrap envelope carries only the thin per-op row.
+
+    The forensic pointers (`python`, `input_schema`, `output_schema`) and
+    the one-line `summary` are intentionally NOT inlined on every row —
+    they're fetched on demand via `hpc-agent describe <name>` (full
+    contract) or `hpc-agent find "<intent>"` (thin search). Inlining
+    them on all ~90 rows of every bootstrap call was the default-path
+    context leak `find` was built to retire.
+    """
+    from hpc_agent._kernel.registry.operations import BOOTSTRAP_FIELDS
+
+    rc, out, _ = _run_cli("capabilities")
+    assert rc == 0
+    ops = _parse_envelope(out)["data"]["operations"]
+    assert isinstance(ops, list) and ops
+    expected = set(BOOTSTRAP_FIELDS)
+    for row in ops:
+        assert set(row.keys()) == expected, (
+            f"{row.get('name')} carries non-bootstrap keys "
+            f"{sorted(set(row.keys()) - expected)}; fetch those via describe/find"
+        )
+
+
+def test_bootstrap_fields_match_wire_model() -> None:
+    """#306: the thin projection and its wire model are single-sourced.
+
+    `operations.BOOTSTRAP_FIELDS` defines the thin row; the
+    `_OperationCatalogEntry` wire model (extra="forbid") validates it.
+    Pin them together so adding a field to one without the other — the
+    exact drift the named projection was meant to remove — fails here
+    instead of at runtime.
+    """
+    from hpc_agent._kernel.registry.operations import BOOTSTRAP_FIELDS
+    from hpc_agent._wire.queries.capabilities import _OperationCatalogEntry
+
+    assert set(_OperationCatalogEntry.model_fields) == set(BOOTSTRAP_FIELDS)
+
+
 def test_capabilities_exposes_cluster_yaml_keys() -> None:
     """B-M4: capabilities surfaces a declarative manifest of every
     recognised per-cluster yaml key so a campus user learning the

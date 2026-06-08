@@ -1,4 +1,4 @@
-"""Setup-domain primitives — install-commands, setup, describe.
+"""Setup-domain primitives — install-commands, setup, describe, find.
 
 Each verb is wired as an ``@primitive`` whose decorator carries a
 :class:`CliShape` with a ``handler=`` escape hatch. The handlers do
@@ -343,12 +343,102 @@ def describe(*, name: str) -> dict[str, Any]:
     raise ValueError(f"no skill or primitive named {name!r}")
 
 
+def _find_handler(args: argparse.Namespace) -> int:
+    _ok(find(query=args.query, limit=args.limit), name="find")
+    return EXIT_OK
+
+
+@primitive(
+    name="find",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+    cli=CliShape(
+        help=(
+            "Search the operations catalog by intent or half-remembered "
+            "name and return a thin candidate list ({name, verb, cli, "
+            "summary}) — the explore step between the full-catalog dump "
+            "(`capabilities --full`) and a single contract (`describe "
+            "<name>`). Pass a phrase like 'submit a batch'; cap with --limit."
+        ),
+        args=(
+            CliArg(
+                "query",
+                help="Intent phrase or partial primitive name, e.g. 'submit a batch'.",
+            ),
+            CliArg(
+                "--limit",
+                type=int,
+                default=15,
+                help="Maximum candidates to return (default 15).",
+            ),
+        ),
+        handler=_find_handler,
+    ),
+    agent_facing=True,
+)
+def find(*, query: str, limit: int = 15) -> dict[str, Any]:
+    """Search the operations catalog → a thin candidate list.
+
+    The middle discovery tier between dumping the whole catalog
+    (``capabilities --full``) and fetching one contract
+    (``describe <name>``). Returns only ``{name, verb, cli, summary}``
+    per match — no schemas, no doc bodies — so an agent resolves intent
+    to a short list of names cheaply, then ``describe``s the one it wants.
+
+    Matching is stdlib-only (no index, no embeddings): a fuzzy
+    :func:`difflib.get_close_matches` pass over primitive *names* (for a
+    half-remembered name like ``submit-batch`` → ``submit-flow-batch``)
+    unioned with a token / substring scan over ``name + summary`` (for an
+    intent phrase like ``submit a batch``). The union is returned in
+    stable catalog order, capped at *limit*. A blank query matches
+    nothing rather than dumping the catalog — that is what
+    ``capabilities`` is for.
+    """
+    import difflib
+    import re
+
+    from hpc_agent._kernel.registry.operations import operations_catalog
+
+    catalog = operations_catalog()
+    needle = query.strip().lower()
+    # Clamp negatives to 0 so a stray ``--limit -1`` returns nothing rather
+    # than silently lopping the last row off via ``rows[:-1]``.
+    limit = max(limit, 0)
+    if not needle or limit == 0:
+        return {"query": query, "count": 0, "matches": []}
+
+    names = [entry["name"] for entry in catalog]
+    fuzzy = set(difflib.get_close_matches(needle, names, n=limit, cutoff=0.5))
+
+    tokens = [t for t in re.split(r"\W+", needle) if t]
+    keyword: set[str] = set()
+    for entry in catalog:
+        haystack = f"{entry['name']} {entry.get('summary') or ''}".lower()
+        if needle in haystack or (tokens and all(t in haystack for t in tokens)):
+            keyword.add(entry["name"])
+
+    matched = fuzzy | keyword
+    rows = [
+        {
+            "name": entry["name"],
+            "verb": entry["verb"],
+            "cli": entry.get("cli"),
+            "summary": entry.get("summary") or "",
+        }
+        for entry in catalog
+        if entry["name"] in matched
+    ][:limit]
+    return {"query": query, "count": len(rows), "matches": rows}
+
+
 # Back-compat alias: external callers (tests, slash commands) still use
 # the ``cmd_*`` names from when these were Tier-3 hand-written adapters.
 # These re-bind to the new handlers so behaviour is identical.
 cmd_install_commands = _install_commands_handler
 cmd_setup = _setup_handler
 cmd_describe = _describe_handler
+cmd_find = _find_handler
 
 
 def cmd_capabilities(args: argparse.Namespace) -> int:
@@ -372,9 +462,11 @@ def register(sub: argparse._SubParsersAction) -> None:
 __all__ = [
     "cmd_capabilities",
     "cmd_describe",
+    "cmd_find",
     "cmd_install_commands",
     "cmd_setup",
     "describe",
+    "find",
     "install_commands",
     "register",
     "setup",

@@ -168,9 +168,15 @@ shape:
   "ssh_multiplexing": true,
   "required_env": ["SSH_AUTH_SOCK", "HPC_JOURNAL_DIR", "HPC_CLUSTERS_CONFIG"],
   "cluster_yaml_keys": [{"key": "scheduler", "type": "Literal", "required": true, "description": "..."}, ...],
-  "operations": [{"name": "<primitive>", "verb": "...", "idempotent": true, "side_effects": [...], "cli": "...", "input_schema": "<file>", "output_schema": "<file>", "agent_facing": true}, ...]
+  "operations": [{"name": "<primitive>", "verb": "...", "idempotent": true, "side_effects": [...], "cli": "...", "agent_facing": true}, ...]
 }
 ```
+
+Each `operations` row is the thin bootstrap shape: name, verb, idempotency,
+side-effect class, CLI invocation, and the agent-facing flag. The schema-file
+pointers, Python entry point, and one-line summary are not inlined here — fetch
+them with `hpc-agent find "<intent>"` (thin search) or `hpc-agent describe
+<name>` (one full contract), keeping every bootstrap call cheap (#306).
 
 Full schema: `hpc_agent/schemas/capabilities.output.json`.
 

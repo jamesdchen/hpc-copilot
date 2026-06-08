@@ -202,7 +202,7 @@ wheels = [
 
 [[package]]
 name = "hpc-agent"
-version = "0.10.16"
+version = "0.10.20"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },

@@ -109,6 +109,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [discover-runs](discover-runs.md) | yes | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` |
 | [fetch-skill-return](fetch-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` |
+| [find](find.md) | yes | _none_ | `hpc-agent find <query> [--limit <limit>]` |
 | [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` |
 | [inspect-parallel-axes](inspect-parallel-axes.md) | yes | _none_ | `hpc-agent inspect-parallel-axes [--experiment-dir <dir>]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` |

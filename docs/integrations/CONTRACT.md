@@ -241,14 +241,23 @@ knows about the run.
 ## Capabilities introspection
 
 ```bash
-hpc-agent capabilities       # JSON envelope: subcommands, schemas dir, required env, …
-hpc-agent capabilities --full  # multi-section text dump: catalog + every primitive doc + schemas + error remediations
+hpc-agent capabilities          # JSON envelope: subcommands, schemas dir, required env, …
+hpc-agent capabilities --full   # multi-section text dump: catalog + every primitive doc + schemas + error remediations
+hpc-agent find "submit a batch" # thin candidate list {name, verb, cli, summary} — no schemas, no doc bodies
+hpc-agent describe submit-flow-batch  # full contract for one named primitive/skill/procedure
 ```
 
 Use `--full` for one-shot LLM context loading. Use the JSON form to
 gate features programmatically (e.g. "does this install support
 `summarize-submit-plan`?"); the `subcommands` array is the authoritative
 list.
+
+For a headless loop that should not re-dump the whole catalog every
+iteration, the discovery economy is three steps: **`find` (explore) →
+`describe` (read one) → invoke.** `find` searches intent or a
+half-remembered name (stdlib `difflib` over `name` + the new `summary`
+gloss) and returns only thin rows; `describe <name>` then fetches the
+one full contract you picked.
 
 ## See also
 

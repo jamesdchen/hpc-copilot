@@ -86,7 +86,7 @@
         }
       ],
       "default": null,
-      "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
+      "description": "Per-operation catalog — the thin bootstrap row for every primitive: name, verb tier, idempotency, side-effect class, CLI invocation, and whether it's agent-facing. The CLI subcommands listed in `subcommands` are the invocable surface; this block adds the machine-readable flags an orchestrator gates on. Heavier content — schema-file pointers, the Python entry point, the one-line summary, and the full doc body — is intentionally NOT inlined here (#306): fetch it on demand with `hpc-agent find \"<intent>\"` (thin search) or `hpc-agent describe <name>` (one full contract).",
       "title": "Operations"
     },
     "plugins": {
@@ -226,42 +226,6 @@
           ],
           "default": null,
           "title": "Cli"
-        },
-        "python": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Python"
-        },
-        "input_schema": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Input Schema"
-        },
-        "output_schema": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Output Schema"
         },
         "agent_facing": {
           "anyOf": [

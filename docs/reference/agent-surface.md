@@ -54,6 +54,11 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
   [`docs/primitives/`](../primitives/). The catalog (`hpc-agent capabilities`)
   enumerates every tool the agent has, with idempotency, side-effects, and
   error codes inline.
+- **Tiered discovery**: `find` (search intent → a thin candidate list) →
+  `describe <name>` (one full contract) → invoke. A headless loop resolves a
+  name without dumping the whole catalog into context each iteration; the
+  search-returns-pointers / fetch-returns-content split keeps the surface
+  POSIX-native, not an MCP server.
 
 ## What this does NOT mean
 

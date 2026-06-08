@@ -11,6 +11,7 @@
       "ssh",
       "sync-pull"
     ],
+    "summary": "Run the user's reducer on the cluster, pull only its single output JSON. Eliminates the bulk per-task rsync_pull failure mode at /aggregate-hpc + campaign-loop time.",
     "verb": "mutate"
   },
   {
@@ -27,6 +28,7 @@
       "writes-cluster",
       "writes-journal"
     ],
+    "summary": "Run the on-cluster combiner for one wave; records outcome to journal.",
     "verb": "mutate"
   },
   {
@@ -40,6 +42,7 @@
     "side_effects": [
       "filesystem"
     ],
+    "summary": "Validate the staged sub-skill return envelope at <experiment_dir>/.hpc/_returns/<skill>.staged.json against the per-skill schema, then atomically rename to <skill>.json. Use as the sub-skill's FINAL tool call to hand off to the parent skill without firing an end-of-turn chat message.",
     "verb": "mutate"
   },
   {
@@ -53,6 +56,7 @@
     "side_effects": [
       "writes-journal"
     ],
+    "summary": "",
     "verb": "mutate"
   },
   {
@@ -66,6 +70,7 @@
     "side_effects": [
       "removes-files"
     ],
+    "summary": "",
     "verb": "mutate"
   },
   {
@@ -80,6 +85,7 @@
       "ssh",
       "writes-journal"
     ],
+    "summary": "Re-derive ground truth from the cluster (status, waves, alive jobs).",
     "verb": "mutate"
   },
   {
@@ -94,6 +100,7 @@
       "scheduler-submit",
       "writes-journal"
     ],
+    "summary": "Record a resubmission attempt in the journal (caller does the actual qsub).",
     "verb": "mutate"
   },
   {
@@ -107,6 +114,7 @@
     "side_effects": [
       "ssh"
     ],
+    "summary": "",
     "verb": "mutate"
   },
   {
@@ -120,6 +128,7 @@
     "side_effects": [
       "file_write"
     ],
+    "summary": "Write the per-run sidecar JSON at <experiment>/.hpc/runs/<run_id>.json. Use this to satisfy the submit-flow write-first guard via the CLI instead of introspecting the Python helper. Auto-stamps submitted_at and hpc_agent_version.",
     "verb": "mutate"
   },
   {
@@ -131,6 +140,7 @@
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.advance.campaign_advance",
     "side_effects": [],
+    "summary": "Decide the next campaign action (continue / stop_converged / stop_over_budget / wait_in_flight).",
     "verb": "query"
   },
   {
@@ -142,6 +152,7 @@
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.budget.campaign_budget",
     "side_effects": [],
+    "summary": "Roll up campaign-level spend and compare to optional caps.",
     "verb": "query"
   },
   {
@@ -153,6 +164,7 @@
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.converged.campaign_converged",
     "side_effects": [],
+    "summary": "Apply user-supplied stop criteria to a campaign's history.",
     "verb": "query"
   },
   {
@@ -164,6 +176,7 @@
     "output_schema": "campaign_health.output.json",
     "python": "hpc_agent.meta.campaign.atoms.health.campaign_health",
     "side_effects": [],
+    "summary": "Structured run-history aggregation for an LLM agent. Returns walltime cliff rates, failure breakdown, GPU utilization, and a ready-to-feed-LLM suggested_prompt.",
     "verb": "query"
   },
   {
@@ -175,6 +188,7 @@
     "output_schema": null,
     "python": "hpc_agent.meta.campaign.atoms.list_campaigns.campaign_list",
     "side_effects": [],
+    "summary": "List every campaign with at least one sidecar in this experiment.",
     "verb": "query"
   },
   {
@@ -186,6 +200,7 @@
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.replay.campaign_replay",
     "side_effects": [],
+    "summary": "Return the last N iterations of a campaign with reduced metrics.",
     "verb": "query"
   },
   {
@@ -197,6 +212,7 @@
     "output_schema": null,
     "python": "hpc_agent.meta.campaign.atoms.status.campaign_status",
     "side_effects": [],
+    "summary": "Report per-iteration reduced metrics for one campaign. Walks every sidecar tagged with --campaign-id, runs reduce_metrics on each, and emits the history dict-list.",
     "verb": "query"
   },
   {
@@ -208,6 +224,7 @@
     "output_schema": "capabilities.output.json",
     "python": "hpc_agent._kernel.extension.capabilities.capabilities",
     "side_effects": [],
+    "summary": "Machine-readable feature flags: subcommands, schedulers, schema dirs.",
     "verb": "query"
   },
   {
@@ -219,6 +236,7 @@
     "output_schema": null,
     "python": "hpc_agent.incorporation.classify_axis_easy.classify_axis_easy",
     "side_effects": [],
+    "summary": "Stdlib-only AST pattern-match for a @register_run function's DataAxis. Fast path used by the hpc-classify-axis skill: returns {kind, evidence, halo_expr?, tried}. `kind` is one of independent / bounded_halo / sequential / no_loop_detected / unclassifiable / function_not_found. `halo_expr` is populated when kind == bounded_halo. The skill records a confident hit directly — including no_loop_detected as the terminal `cartesian` (no-series) verdict; only unclassifiable / function_not_found fall back to its LLM decision tree.",
     "verb": "query"
   },
   {
@@ -230,6 +248,7 @@
     "output_schema": null,
     "python": "hpc_agent.incorporation.classify_campaign_path.classify_campaign_path",
     "side_effects": [],
+    "summary": "Stdlib-only AST pattern-match for a campaign's tasks.py: is it a manual fixed grid (Path A) or strategy-driven adaptive sampling (Path B)? Returns {path, decided_by, signals, supports_async_concurrency, candidates}. `path` is manual / strategy / unclassifiable. A confident hit is decided_by=code; an unparseable / unrecognized tasks.py escalates (decided_by=judgement) with both candidates for the LLM.",
     "verb": "query"
   },
   {
@@ -241,6 +260,7 @@
     "output_schema": "clusters_describe.output.json",
     "python": "hpc_agent.ops.clusters.describe.describe_cluster",
     "side_effects": [],
+    "summary": "Print one cluster's config.",
     "verb": "query"
   },
   {
@@ -252,6 +272,7 @@
     "output_schema": "clusters_list.output.json",
     "python": "hpc_agent.ops.clusters.list.list_clusters",
     "side_effects": [],
+    "summary": "List all clusters.",
     "verb": "query"
   },
   {
@@ -263,6 +284,7 @@
     "output_schema": null,
     "python": "hpc_agent.incorporation.build.compute_run_id.compute_run_id",
     "side_effects": [],
+    "summary": "Compute the run_id from .hpc/tasks.py cmd_sha (run_id = <run_name>-<sha[:8]>).",
     "verb": "query"
   },
   {
@@ -274,6 +296,7 @@
     "output_schema": null,
     "python": "hpc_agent.meta.campaign.atoms.decide_concurrency.decide_concurrency",
     "side_effects": [],
+    "summary": "Decide campaign iteration concurrency from observable evidence: the strategy's async support (classify-campaign-path's supports_async_concurrency) and budget headroom (campaign-budget's remaining minus in-flight). Resolves sequential deterministically (decided_by=code) when async is unsupported or there's no headroom; otherwise escalates the how-aggressive choice (decided_by=judgement) carrying the computed safe max_in_flight bound.",
     "verb": "query"
   },
   {
@@ -285,6 +308,7 @@
     "output_schema": "decide_monitor_arm.output.json",
     "python": "hpc_agent.ops.monitor.arm.decide_monitor_arm",
     "side_effects": [],
+    "summary": "Pick cron/loop/none + cadence + cron schedule string from the run's current summary. Returns ready-to-pass CronCreate args for scheduling the next monitor tick. Replaces /monitor-hpc Step 5 agent judgment.",
     "verb": "query"
   },
   {
@@ -296,6 +320,7 @@
     "output_schema": null,
     "python": "hpc_agent.ops.aggregate.decide_partial_handling.decide_partial_handling",
     "side_effects": [],
+    "summary": "Decide whether to proceed on incomplete aggregate waves from observable evidence: failed-wave count, combined-wave count, and whether combiner retries are exhausted. Resolves retry deterministically (decided_by=code) while retries remain; once exhausted, escalates the accept-partial-vs-force-retry choice (decided_by=judgement) carrying the computed missing fraction.",
     "verb": "query"
   },
   {
@@ -307,6 +332,7 @@
     "output_schema": "decide_resubmit.output.json",
     "python": "hpc_agent.ops.decide_resubmit.decide_resubmit",
     "side_effects": [],
+    "summary": "Decide complete / resubmit / escalate for a terminal-with-failures wave from observable evidence: failed-task count, total-task count, and the resubmit_failed_threshold. failed_fraction == 0 is actually complete; <= threshold auto-resubmits; > threshold escalates the resubmit/investigate/abandon choice (safe_default investigate) rather than wasting cluster time re-running the same bug. Replaces hpc-status Step 6 prose.",
     "verb": "query"
   },
   {
@@ -318,6 +344,7 @@
     "output_schema": null,
     "python": "hpc_agent.cli.setup.describe",
     "side_effects": [],
+    "summary": "Print a skill's procedure or a primitive's contract from the installed package data. A delegated worker uses this to fetch a cross-reference on the branch it is executing.",
     "verb": "query"
   },
   {
@@ -329,6 +356,7 @@
     "output_schema": "detect_entry_point.output.json",
     "python": "hpc_agent.ops.detect_entry_point.detect_entry_point",
     "side_effects": [],
+    "summary": "Scan an experiment dir for Python entry-point candidates (main.py/train.py/console-scripts/python -m targets/shell scripts), classify each candidate's argv style (argparse / click / typer / hydra / fire / __main__), and locate files carrying @register_run. Collapses the duplicated six-probe shell block in hpc-wrap-entry-point Steps 0 + 1.",
     "verb": "query"
   },
   {
@@ -340,6 +368,7 @@
     "output_schema": "discover.output.json",
     "python": "hpc_agent.state.discover.discover_executors",
     "side_effects": [],
+    "summary": "List executor scripts in --experiment-dir (CLIs with __main__).",
     "verb": "query"
   },
   {
@@ -351,6 +380,7 @@
     "output_schema": null,
     "python": "hpc_agent.state.discover.discover_reducers",
     "side_effects": [],
+    "summary": "List candidate reducer / aggregator scripts in --experiment-dir (matches by filename stem and top-level function names like aggregate / reduce / score). Use at /aggregate-hpc time to find an existing reducer instead of writing a fresh one.",
     "verb": "query"
   },
   {
@@ -362,6 +392,7 @@
     "output_schema": null,
     "python": "hpc_agent.state.discover.discover_runs",
     "side_effects": [],
+    "summary": "List @register_run functions under --experiment-dir (path, name, gpu, sha, flags).",
     "verb": "query"
   },
   {
@@ -375,6 +406,7 @@
     "side_effects": [
       "ssh"
     ],
+    "summary": "Cluster failed tasks by stderr fingerprint for triage.",
     "verb": "query"
   },
   {
@@ -388,6 +420,19 @@
     "side_effects": [
       "filesystem"
     ],
+    "summary": "Read, re-validate, and emit the committed sub-skill return envelope at <experiment_dir>/.hpc/_returns/<skill>.json — the parent skill's seam after the Skill(<sub>) tool call returns. Deletes the file after reading unless --no-clear is set.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent find <query> [--limit <limit>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "find",
+    "output_schema": null,
+    "python": "hpc_agent.cli.setup.find",
+    "side_effects": [],
+    "summary": "Search the operations catalog by intent or half-remembered name and return a thin candidate list ({name, verb, cli, summary}) — the explore step between the full-catalog dump (`capabilities --full`) and a single contract (`describe <name>`). Pass a phrase like 'submit a batch'; cap with --limit.",
     "verb": "query"
   },
   {
@@ -399,6 +444,7 @@
     "output_schema": "find_prior_run.output.json",
     "python": "hpc_agent.cli.setup_actions.find_prior_run",
     "side_effects": [],
+    "summary": "Look up a prior run by cmd_sha for /submit-hpc Step 6c resume detection. Returns {found, run_id, is_orphan, status, age_sec, ...}.",
     "verb": "query"
   },
   {
@@ -410,6 +456,7 @@
     "output_schema": "inspect_parallel_axes.output.json",
     "python": "hpc_agent.ops.inspect_parallel_axes.inspect_parallel_axes",
     "side_effects": [],
+    "summary": "Inspect an experiment's parallel axes in one call: parse .hpc/axes.yaml (axes / homogeneous_axes / classified executors) and surface .hpc/tasks.py's body so the build-executor / axes-init companion can classify dimensions without a multi-Read.",
     "verb": "query"
   },
   {
@@ -421,6 +468,7 @@
     "output_schema": "list_in_flight.output.json",
     "python": "hpc_agent.ops.monitor.list_in_flight.list_in_flight",
     "side_effects": [],
+    "summary": "List runs with status=in_flight in the journal (recovery path).",
     "verb": "query"
   },
   {
@@ -432,6 +480,7 @@
     "output_schema": "load_context.output.json",
     "python": "hpc_agent.meta.campaign.atoms.load_context.load_context",
     "side_effects": [],
+    "summary": "Reconstruct workflow context (latest run + config snapshot, in-flight runs, campaigns) from on-disk state. Run this first in any fresh-context step instead of relying on memory.",
     "verb": "query"
   },
   {
@@ -445,6 +494,7 @@
     "side_effects": [
       "ssh"
     ],
+    "summary": "Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed).",
     "verb": "query"
   },
   {
@@ -456,6 +506,7 @@
     "output_schema": "monitor_summary.output.json",
     "python": "hpc_agent.ops.monitor.summary.monitor_summary",
     "side_effects": [],
+    "summary": "Render the canonical user-facing tick summary for a run. Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal and returns {lifecycle_state, headline, body, armed_hint}. Slash command prints these verbatim.",
     "verb": "query"
   },
   {
@@ -467,6 +518,7 @@
     "output_schema": null,
     "python": "hpc_agent.ops.submit.plan_throughput.plan_throughput",
     "side_effects": [],
+    "summary": "Pack a task grid into batched submission waves. Pure-local: reads the cluster's constraints from clusters.yaml and returns the wave plan + wave_map for the per-run sidecar.",
     "verb": "query"
   },
   {
@@ -481,6 +533,7 @@
       "ssh",
       "writes-journal"
     ],
+    "summary": "Poll cluster status for a run_id; one-shot, returns snapshot.",
     "verb": "query"
   },
   {
@@ -492,6 +545,7 @@
     "output_schema": "recall.output.json",
     "python": "hpc_agent.ops.memory.recall.recall_campaigns",
     "side_effects": [],
+    "summary": "Query past interview.json files under --root. Returns recency-sorted campaign summaries (goal, task_kind, task_count, operator, materialized_at, cmd_sha) for use as context in the next interview.",
     "verb": "query"
   },
   {
@@ -503,6 +557,7 @@
     "output_schema": "recommend_partition.output.json",
     "python": "hpc_agent.ops.submit.recommend_partition.recommend_partition",
     "side_effects": [],
+    "summary": "Recommend a partition for a requested walltime against the cluster's partition list. Returns the partition name + a human-readable rationale (debug priority leverage, debug-overrun refusal, user-preference honoured). Call this before constructing the submit spec when partition choice isn't obvious.",
     "verb": "query"
   },
   {
@@ -514,6 +569,7 @@
     "output_schema": null,
     "python": "hpc_agent.recovery.cli.recoveries_list",
     "side_effects": [],
+    "summary": "List every failure ``kind`` known to the recovery registry. Reports both ported kinds (with menus) and the un-ported punch list, so a SKILL.md author can see what recoveries are available before referencing one.",
     "verb": "query"
   },
   {
@@ -525,6 +581,7 @@
     "output_schema": null,
     "python": "hpc_agent.recovery.cli.recoveries_show",
     "side_effects": [],
+    "summary": "Print the canonical recovery menu for one failure kind. Use this from SKILL.md prose to reference the menu by kind name instead of re-embedding the literal options.",
     "verb": "query"
   },
   {
@@ -536,6 +593,7 @@
     "output_schema": "resolve_resources.output.json",
     "python": "hpc_agent.ops.resolve_resources.resolve_resources",
     "side_effects": [],
+    "summary": "Resolve hpc-submit Step 6 resources in one call: walltime_sec (caller, else read-runtime-prior p95 × safety_mult, else cold-start null), gpu_type (caller, else clusters.<cluster>.gpu_types[0]), and partition (caller, else recommend-partition). A missing/erroring read-runtime-prior is cold-start, not an error.",
     "verb": "query"
   },
   {
@@ -547,6 +605,7 @@
     "output_schema": "scaffold_spec.output.json",
     "python": "hpc_agent.ops.scaffold_spec.scaffold_spec",
     "side_effects": [],
+    "summary": "Emit a populated, schema-valid --spec skeleton for another verb (build-submit-spec / resolve-submit-inputs / validate-campaign / campaign-run / interview), pulling cluster / run_id / context values from clusters.yaml, compute-run-id, and load-context so the agent stops divining the schema one spec_invalid at a time (#287). Read the returned spec, fill its unresolved_fields, then invoke the target verb.",
     "verb": "query"
   },
   {
@@ -558,6 +617,7 @@
     "output_schema": "suggest_setup_action.output.json",
     "python": "hpc_agent.cli.setup_actions.suggest_setup_action",
     "side_effects": [],
+    "summary": "Run the /submit-hpc Setup priority cascade and recommend {action: monitor|reuse|interview|fresh, run_id, candidates}. Replaces the priority-list-walking prose at Step 0.",
     "verb": "query"
   },
   {
@@ -569,6 +629,7 @@
     "output_schema": "summarize_submit_plan.output.json",
     "python": "hpc_agent.ops.submit.plan_summary.summarize_submit_plan",
     "side_effects": [],
+    "summary": "Render the canonical pre-submit confirmation summary for a submit_flow.input.json spec. Returns {headline, body, confirm_prompt} the slash command prints verbatim. Eliminates per-submit wording drift.",
     "verb": "query"
   },
   {
@@ -580,6 +641,7 @@
     "output_schema": "verify_aggregation_complete.output.json",
     "python": "hpc_agent.ops.aggregate.invariants.verify_aggregation_complete",
     "side_effects": [],
+    "summary": "Walk the run sidecar's wave_map + the locally-pulled _combiner/ dir; report all_waves_combined / all_tasks_present / provenance_present invariants. Returns ok plus the missing / unexpected lists.",
     "verb": "query"
   },
   {
@@ -593,6 +655,7 @@
     "side_effects": [
       "ssh"
     ],
+    "summary": "Post-submit health check: map each of a run's submitted job ids to its scheduler state and flag error (SGE Eqw) / held jobs. Returns {ok, states, healthy, error, held, missing, details}. Use it instead of raw `ssh qstat` to confirm an array landed cleanly.",
     "verb": "query"
   },
   {
@@ -606,6 +669,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Write <experiment>/.hpc/axes.yaml with per-axis homogeneity hints used by the cold-start axis_picker. The agent typically calls this once per repo at deploy time after introspecting tasks.py.",
     "verb": "scaffold"
   },
   {
@@ -619,6 +683,7 @@
     "side_effects": [
       "writes-file"
     ],
+    "summary": "Scaffold a new executor from a starter template.",
     "verb": "scaffold"
   },
   {
@@ -630,6 +695,7 @@
     "output_schema": null,
     "python": "hpc_agent.incorporation.build.submit_spec.build_submit_spec",
     "side_effects": [],
+    "summary": "Assemble + validate a submit_flow.input.json spec from resolved interview values (profile/cluster/ssh_target/.../cmd_sha/total_tasks). Emits the spec on stdout. Slash commands pipe the output straight into 'submit-flow --spec'.",
     "verb": "scaffold"
   },
   {
@@ -643,6 +709,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Scaffold <experiment>/.hpc/tasks.py from the canonical cartesian-product template (Pattern 1 of tasks_example.py). Spec file is {axes: [{name, values}], flags_by_executor: {module_path: [{name, type, default?}]}}. Refuses to overwrite an existing tasks.py without --force so hand-edited Pattern 2/3 conversions survive.",
     "verb": "scaffold"
   },
   {
@@ -656,6 +723,7 @@
     "side_effects": [
       "writes-file"
     ],
+    "summary": "Inject the experiment-template scaffold into a repo.",
     "verb": "scaffold"
   },
   {
@@ -669,6 +737,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Write the campaign manifest from CLI args.",
     "verb": "scaffold"
   },
   {
@@ -682,6 +751,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Record a @register_run function's classified DataAxis (independent / associative / bounded_halo / sequential) into <experiment>/.hpc/axes.yaml's `executors` block. Spec file is {run_name, run_signature_sha, data_axis: {kind, halo?, monoid?}, classified_by?}. The agent classifies; this primitive only records.",
     "verb": "scaffold"
   },
   {
@@ -695,6 +765,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Build <experiment>/src/ from the notebooks under notebooks/{pipeline,executors,scripts}/. Convention-driven: the output module name and the exporter (strict-AST for @register_run executors, # export-marker for pipeline libraries) are both derived. Content-hash caches against .hpc/.build-cache.json — a second run with no notebook edits is all cache hits.",
     "verb": "scaffold"
   },
   {
@@ -708,6 +779,7 @@
     "side_effects": [
       "filesystem"
     ],
+    "summary": "Copy the bundled slash commands and skills into ~/.claude/commands/ and ~/.claude/skills/. The pip-install entry point — run once after `pip install hpc-agent` to wire the agent assets into Claude Code. Idempotent (overwrites in place). Pass --claude-dir to target a non-default config dir.",
     "verb": "scaffold"
   },
   {
@@ -721,6 +793,7 @@
     "side_effects": [
       "file_write"
     ],
+    "summary": "Validate an agent-written tasks.py against the structured intent from an interview, then persist intent + cmd_sha + dry-resolve preview to <campaign-dir>/interview.json.",
     "verb": "scaffold"
   },
   {
@@ -734,6 +807,7 @@
     "side_effects": [
       "writes-followup-specs"
     ],
+    "summary": "Pre-stage monitor_spec.json + aggregate_spec.json into the experiment dir from submit-time state, so a later /monitor-hpc and /aggregate-hpc can skip the operator interview. Each spec carries run_id + a cmd_sha staleness gate + a null sentinel for the operator-choice field (monitor wait_terminal; aggregate allow_partial/stage). The consuming skill validates cmd_sha against the journal before honoring the pre-staged spec (#278).",
     "verb": "scaffold"
   },
   {
@@ -748,6 +822,7 @@
       "filesystem",
       "ssh"
     ],
+    "summary": "One-shot setup: copy the bundled slash commands and skills into ~/.claude/. Run this once after `pip install hpc-agent`. Idempotent — safe to re-run.",
     "verb": "scaffold"
   },
   {
@@ -762,6 +837,7 @@
       "scheduler-submit",
       "writes-journal"
     ],
+    "summary": "Record a submission in the journal. Idempotent on run_id: the bundled atomic-ops layer dedups so a retry on transient network errors does not double-submit.",
     "verb": "submit"
   },
   {
@@ -773,6 +849,7 @@
     "output_schema": "aggregate_preflight.output.json",
     "python": "hpc_agent.ops.aggregate_preflight.aggregate_preflight",
     "side_effects": [],
+    "summary": "Composite preflight at the top of aggregate: install-commands ∥ load-context fanned concurrently, then (when the journal says 'monitor' and --reconcile-scheduler is supplied) reconcile.",
     "verb": "validate"
   },
   {
@@ -784,6 +861,7 @@
     "output_schema": "preflight.output.json",
     "python": "hpc_agent.ops.preflight.check.check_preflight",
     "side_effects": [],
+    "summary": "Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses; with --cluster also runs a TCP :22 probe + an actual ssh round-trip; with --spec <built submit-flow spec> also runs the runtime (uv) probe submit-flow would, so a uv-on-a-uv-less-cluster spec is caught here, before qsub (#275).",
     "verb": "validate"
   },
   {
@@ -795,6 +873,7 @@
     "output_schema": "check_task_generator_mismatch.output.json",
     "python": "hpc_agent.ops.check_task_generator_mismatch.check_task_generator_mismatch",
     "side_effects": [],
+    "summary": "Canonical-JSON compare a caller-supplied task_generator against the cached/derived one (hpc-submit Step 3). Returns match=true when their canonical content is identical, else match=false with both shapes + their sha256 so the caller can branch on on_task_generator_mismatch (fail / refresh / prefer-caller).",
     "verb": "validate"
   },
   {
@@ -806,6 +885,7 @@
     "output_schema": "classify_axis_preflight.output.json",
     "python": "hpc_agent.ops.classify_axis_preflight.classify_axis_preflight",
     "side_effects": [],
+    "summary": "Composite preflight at the top of classify-axis: discover-runs + cache-check (axes.yaml reuse) + (when no cache hit and no caller-supplied data_axis) recall, sequenced, returned as one envelope.",
     "verb": "validate"
   },
   {
@@ -817,6 +897,7 @@
     "output_schema": "dry_run_local.output.json",
     "python": "hpc_agent.ops.validate.dry_run_local.dry_run_local",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -828,6 +909,7 @@
     "output_schema": "prepare_phase2_spec.output.json",
     "python": "hpc_agent.ops.prepare_phase2_spec.prepare_phase2_spec",
     "side_effects": [],
+    "summary": "Derive the Phase-2 main-array submit-flow spec from a Phase-1 two-phase-canary spec by flipping canary=false, canary_only=false, skip_rsync_deploy=true, validated locally against SubmitFlowSpec. Eliminates the spec-rebuild round-trip between verify-canary and the Phase-2 submit.",
     "verb": "validate"
   },
   {
@@ -842,6 +924,7 @@
       "filesystem",
       "runs"
     ],
+    "summary": "Smoke-test a scaffolded executor: import its module from a file path and call compute(Namespace(output_file=...)) in a subprocess. Returns {exit_code, stdout_tail, stderr_tail}; non-zero exit_code means fix-then-retry.",
     "verb": "validate"
   },
   {
@@ -853,6 +936,7 @@
     "output_schema": "status_preflight.output.json",
     "python": "hpc_agent.ops.status_preflight.status_preflight",
     "side_effects": [],
+    "summary": "Composite preflight before status: install-commands ∥ load-context, fanned concurrently, returned as one envelope.",
     "verb": "validate"
   },
   {
@@ -864,6 +948,7 @@
     "output_schema": "submit_preflight.output.json",
     "python": "hpc_agent.ops.submit_preflight.submit_preflight",
     "side_effects": [],
+    "summary": "Composite preflight at the top of submit: install-commands + load-context, then (when --cluster is supplied) check-preflight and resolve-resources fanned out concurrently.",
     "verb": "validate"
   },
   {
@@ -875,6 +960,7 @@
     "output_schema": "validate_executor_signatures.output.json",
     "python": "hpc_agent.ops.validate.executor_signatures.validate_executor_signatures",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -886,6 +972,7 @@
     "output_schema": "validate_input_dataset.output.json",
     "python": "hpc_agent.ops.validate.input_dataset.validate_input_dataset",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -897,6 +984,7 @@
     "output_schema": "validate_self_qos_limit.output.json",
     "python": "hpc_agent.ops.validate.self_qos_limit.validate_self_qos_limit",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -908,6 +996,7 @@
     "output_schema": "validate_stochastic_marker.output.json",
     "python": "hpc_agent.ops.validate.stochastic_marker.validate_stochastic_marker",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -919,6 +1008,7 @@
     "output_schema": "validate_walltime_against_history.output.json",
     "python": "hpc_agent.ops.validate.walltime_against_history.validate_walltime_against_history",
     "side_effects": [],
+    "summary": "",
     "verb": "validate"
   },
   {
@@ -934,6 +1024,7 @@
       "sync-pull",
       "writes-journal"
     ],
+    "summary": "Workflow atom: ensure all waves combined on the cluster, rsync the _combiner/ partials locally, reduce_partials over them, optionally pull per-task summaries. Third atom in the submit-flow → monitor-flow → aggregate-flow campaign chain.",
     "verb": "workflow"
   },
   {
@@ -949,6 +1040,7 @@
       "ssh",
       "writes-aggregate-output"
     ],
+    "summary": "One campaign iteration's spine in one call: submit-pipeline → status-pipeline → aggregate-flow. Reports one typed stage_reached outcome; sets needs_decision only on the failure / budget stages. Does NOT advance the campaign cursor — that stays a driver judgement.",
     "verb": "workflow"
   },
   {
@@ -963,6 +1055,7 @@
       "ssh",
       "writes-journal"
     ],
+    "summary": "Workflow atom: poll a run to terminal lifecycle (or wall-clock budget); auto-combine waves as they finish; write the same .monitor.jsonl tick log /monitor-hpc writes. Pairs with submit-flow for the campaign loop composition. MVP does not auto-resubmit failed tasks.",
     "verb": "workflow"
   },
   {
@@ -976,6 +1069,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
+    "summary": "Deterministic submit input-resolution chain in one call: (build-tasks-py if tasks.py absent) → compute-run-id → find-prior-run → build-submit-spec. Returns a ready-to-submit context as one typed stage_reached outcome; sets needs_decision only on a live prior run or a needed scaffold interview.",
     "verb": "workflow"
   },
   {
@@ -990,6 +1084,7 @@
       "ssh",
       "writes-tick-log"
     ],
+    "summary": "Deterministic status spine in one call: monitor-flow (wait to terminal/budget) → lifecycle_state dispatch. Reports one typed stage_reached outcome; sets needs_decision only on failed / abandoned.",
     "verb": "workflow"
   },
   {
@@ -1004,6 +1099,7 @@
       "scheduler-submit",
       "ssh"
     ],
+    "summary": "Submit a run plus its canary, then verify the canary lands before returning. One call instead of /submit-hpc then /verify-canary. Returns {run_id, job_ids, deduped, verified, failure_kind, verify_result}.",
     "verb": "workflow"
   },
   {
@@ -1019,6 +1115,7 @@
       "sync-push",
       "writes-journal"
     ],
+    "summary": "Workflow atom: pre-flight + rsync + deploy + qsub + record in one shot. Auto-dispatches to submit-flow-batch when the spec is a {specs: [...]} object — callers always invoke this one subcommand whether the iteration emits 1 spec or N. Idempotent on run_id (or per-spec run_id when batched).",
     "verb": "workflow"
   },
   {
@@ -1034,6 +1131,7 @@
       "sync-push",
       "writes-journal"
     ],
+    "summary": "Workflow atom: rsync + deploy ONCE, then qsub N specs sharing the same (ssh_target, remote_path). Use whenever a campaign or sweep submits >1 specs to the same cluster — bundles 13×N ssh handshakes into ~3 (rsync + deploy + multiplexed qsubs). Spec file is a JSON list.",
     "verb": "workflow"
   },
   {
@@ -1049,6 +1147,7 @@
       "ssh",
       "writes-followup-specs"
     ],
+    "summary": "Deterministic submit spine in one call: submit-and-verify (the canary gate) → verify-submitted (post-qsub health) → prepare-followup-specs. Reports one typed stage_reached outcome; sets needs_decision only on the genuine gate failures.",
     "verb": "workflow"
   },
   {
@@ -1060,6 +1159,7 @@
     "output_schema": "validate_campaign.output.json",
     "python": "hpc_agent.meta.validate_campaign.validate_campaign",
     "side_effects": [],
+    "summary": "Validate a campaign spec end-to-end (executor signatures, dataset, QoS limits, walltime history, stochastic marker).",
     "verb": "workflow"
   },
   {
@@ -1073,6 +1173,7 @@
     "side_effects": [
       "ssh"
     ],
+    "summary": "Wait + grep + output-check for a 1-task canary submission. Polls until terminal, scans stderr for known failure markers, optionally checks expect_output exists. Returns {ok, failure_kind, details, stderr_tail}.",
     "verb": "workflow"
   }
 ]

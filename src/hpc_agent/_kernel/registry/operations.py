@@ -29,7 +29,30 @@ from hpc_agent._kernel.registry.primitive import get_registry
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["operations_catalog", "render_llms_full", "schema_for"]
+__all__ = [
+    "BOOTSTRAP_FIELDS",
+    "operations_bootstrap",
+    "operations_catalog",
+    "render_llms_full",
+    "schema_for",
+]
+
+# Single source of truth for the thin per-op row the `capabilities`
+# bootstrap envelope carries (#306): only the machine-readable flags an
+# orchestrator gates on at startup. The heavier per-primitive fields —
+# the schema-file pointers, the Python entry point, the one-line summary,
+# the doc body — are deliberately NOT in this set; they're fetched on
+# demand via `find` / `describe` / `--full`. The `_OperationCatalogEntry`
+# wire model is pinned to this tuple by a contract test, so the thin
+# shape is defined once, not re-stated per consumer.
+BOOTSTRAP_FIELDS: tuple[str, ...] = (
+    "name",
+    "verb",
+    "idempotent",
+    "side_effects",
+    "cli",
+    "agent_facing",
+)
 
 _PACKAGE_ROOT = hpc_agent._PACKAGE_ROOT
 
@@ -94,6 +117,23 @@ def operations_catalog() -> list[dict[str, Any]]:
     return sorted(_from_registry(), key=lambda o: (o["verb"], o["name"]))
 
 
+def operations_bootstrap() -> list[dict[str, Any]]:
+    """Project the catalog down to the thin bootstrap row (#306).
+
+    The ``capabilities`` default envelope carries this instead of the
+    full :func:`operations_catalog` row: only the flags an orchestrator
+    gates on at startup (:data:`BOOTSTRAP_FIELDS` — name, verb,
+    idempotency, side-effect class, CLI, agent-facing). The heavier
+    per-primitive fields (schema-file pointers, the Python entry point,
+    the one-line summary, the doc body) are fetched on demand via
+    ``hpc-agent find "<intent>"`` (thin search) or ``hpc-agent describe
+    <name>`` (one full contract). Single-sourcing the field set in
+    :data:`BOOTSTRAP_FIELDS` keeps the envelope from silently re-growing
+    the default-path context leak ``find`` was built to retire.
+    """
+    return [{k: entry[k] for k in BOOTSTRAP_FIELDS} for entry in operations_catalog()]
+
+
 def _from_registry() -> list[dict[str, Any]]:
     """Project the @primitive registry into the operations_catalog shape.
 
@@ -128,6 +168,11 @@ def _from_registry() -> list[dict[str, Any]]:
                 "input_schema": schema_for(meta.name, "input", backed),
                 "output_schema": schema_for(meta.name, "output", backed),
                 "agent_facing": bool(meta.agent_facing),
+                # One-line help (the CliShape help string). Threaded here so
+                # the `find` discovery tier can scan name + summary without
+                # materializing each primitive's doc body, and so the catalog
+                # table / capabilities block carry a human-readable gloss.
+                "summary": meta.cli.help if meta.cli is not None else "",
             }
         )
     return sorted(out, key=lambda o: (o["verb"], o["name"]))
