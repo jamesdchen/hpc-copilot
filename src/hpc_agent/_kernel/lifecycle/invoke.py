@@ -19,8 +19,60 @@ Selection precedence: an explicit name > the ``HPC_AGENT_INVOKER``
 environment variable > auto-selection from the ambient credentials
 (:func:`_auto_select_invoker`): API-key / cloud-provider creds → the
 proven ``--bare`` ``claude-cli`` path; else a Claude Code OAuth
-credentials file on a supported OS → ``claude-cli-oauth``; else
+credentials file on a supported OS → ``claude-cli-oauth``; else, when no
+Claude credential is present, a ``CODEX_API_KEY`` → ``codex-cli`` or a
+``GEMINI_API_KEY`` / ``GOOGLE_API_KEY`` → ``gemini-cli``; else
 ``claude-cli`` so its pre-spawn credential guard fires.
+
+The :class:`WorkerInvoker` contract — what every driver must normalize
+=====================================================================
+
+The Protocol has **two methods**: :meth:`~WorkerInvoker.invoke` and
+:meth:`~WorkerInvoker.missing_credential_remediation` (the pre-spawn
+auth guard ``run_workflow`` calls *before* spawning, so a missing
+credential fails fast with actionable text rather than an opaque "Not
+logged in"). A new harness driver normalizes the same four axes the
+proven ``claude-cli`` driver does — each on its harness's own config
+surface, with its own precedence rules:
+
+1. **Headless transport.** Get the :class:`RenderedPrompt` to the model
+   non-interactively, keeping the (tens-of-KB) prompt OFF argv so it
+   can't overrun Windows' 32 KB command-line limit (#169). Claude:
+   ``claude -p`` with the prefix in ``--append-system-prompt-file`` and
+   the suffix on stdin. Codex: ``codex exec`` with the whole prompt on
+   stdin, final report read back from ``--output-last-message``. Gemini:
+   ``gemini -p`` with the prefix as a full-replacement system prompt via
+   ``GEMINI_SYSTEM_MD`` and the suffix on stdin, output unwrapped from
+   the ``--output-format json`` envelope.
+2. **Sandbox / network posture.** The worker SSHes/rsyncs out
+   unattended, which a sandbox blocks — so each driver forces the
+   sandbox OFF. Claude: ``--settings '{"sandbox":{"enabled":false}}'``.
+   Codex: ``--dangerously-bypass-approvals-and-sandbox`` (it defaults to
+   read-only). Gemini: leave ``GEMINI_SANDBOX`` unset (it names a
+   backend, not a bool — omitting it selects none).
+3. **Tool-authorization fence.** Full network/disk access is NOT
+   unfenced: every driver re-installs the no-``scancel``/no-exfil deny
+   (:data:`_CLUSTER_OP_DENY_COMMANDS`, the #283/#228 invariant) on its
+   own config surface. Claude: ``--allowedTools`` / ``--disallowedTools``
+   (deny beats allow). Codex: an ``execpolicy`` ``.rules`` file
+   (``decision="forbidden"``, strictest-severity-wins → deny overrides
+   allow). Gemini: a Policy Engine TOML installed at the **User/Admin**
+   tier (NOT workspace tier — #18186 silently no-ops it), with deny
+   entries out-ranking allow by ``priority``.
+4. **Decode-schema-vs-floor.** :func:`parse_worker_report` is the always
+   -on floor that validates the worker's final JSON report. A driver MAY
+   add a decode-time schema accelerator on top, but it is optional and
+   off by default. Claude: ``--json-schema`` gated by
+   ``HPC_AGENT_WORKER_JSON_SCHEMA`` (#269). Codex: ``--output-schema``
+   gated by ``HPC_AGENT_WORKER_JSON_SCHEMA`` likewise. Gemini: no CLI
+   decode schema exists (``responseSchema`` is API/SDK-only), so the
+   Gemini path leans entirely on the #304 floor.
+
+Plus :attr:`InvocationResult.cache_stats`: populated only when the
+caller asks (``report_cache_stats=True``) AND the transport surfaces
+billing usage (Claude's ``--output-format json`` usage block). Codex and
+Gemini do not expose a cache-creation/cache-read split at the CLI layer,
+so their ``cache_stats`` is ``None``.
 """
 
 from __future__ import annotations
@@ -59,12 +111,53 @@ _MISSING_CREDENTIAL_REMEDIATION = (
     "CLAUDE_CODE_USE_VERTEX) in the environment before running `hpc-agent run`."
 )
 
+# Codex worker auth. ``CODEX_API_KEY`` is scoped to the invocation and is
+# preferred over ambient ``OPENAI_API_KEY``: a stored ChatGPT login in
+# ``~/.codex/auth.json`` can shadow ``OPENAI_API_KEY`` (#3286), so relying on
+# the ambient key is fragile. The driver requires ``CODEX_API_KEY`` and maps it
+# onto ``OPENAI_API_KEY`` in the child's environment (the var Codex actually
+# reads), so the scoped key authenticates the worker and out-ranks any ambient
+# key or stored ChatGPT login.
+_CODEX_CREDENTIAL_ENV_VAR = "CODEX_API_KEY"
+_CODEX_MISSING_CREDENTIAL_REMEDIATION = (
+    "worker authentication unavailable: the headless `codex exec` worker needs "
+    "an API key scoped to the invocation. Set CODEX_API_KEY in the environment "
+    "before running `hpc-agent run` (preferred over ambient OPENAI_API_KEY, "
+    "which a stored ChatGPT login in ~/.codex/auth.json can shadow)."
+)
+
+# Gemini worker auth: ``GEMINI_API_KEY`` (Gemini API) or ``GOOGLE_API_KEY``
+# (Vertex AI). Either is sufficient; the CLI reads them from the environment.
+_GEMINI_CREDENTIAL_ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+_GEMINI_MISSING_CREDENTIAL_REMEDIATION = (
+    "worker authentication unavailable: the headless `gemini -p` worker needs "
+    "GEMINI_API_KEY (Gemini API) or GOOGLE_API_KEY (Vertex AI) in the "
+    "environment before running `hpc-agent run`."
+)
+
 # The worker runs a deterministic execution sequence (rsync / qsub / canary),
 # not open-ended reasoning, and the spawn scaffold instructs it to escalate
 # (needs_resolution) rather than grind on anything it can't resolve. A small,
 # cheap model is therefore both sufficient and far cheaper per spawn than the
 # caller's interactive model.
 _WORKER_MODEL = "haiku"
+
+# Per-harness cheap-model pins (same rationale as ``_WORKER_MODEL``: the worker
+# runs a deterministic sequence, so the small model is sufficient). Each is the
+# default for its driver and is overridable by an env var for the rare case a
+# pinned id is retired upstream before the constant is bumped here. Concrete ids
+# only — NOT the ``auto`` / ``flash`` / ``pro`` aliases, which now resolve to a
+# preview generation and would silently change the worker's model.
+_CODEX_WORKER_MODEL = "gpt-5.4-mini"
+_CODEX_WORKER_MODEL_ENV = "HPC_AGENT_CODEX_WORKER_MODEL"
+_GEMINI_WORKER_MODEL = "gemini-2.5-flash"
+_GEMINI_WORKER_MODEL_ENV = "HPC_AGENT_GEMINI_WORKER_MODEL"
+
+
+def _worker_model(env_var: str, default: str) -> str:
+    """The worker model id: an env override if set non-empty, else *default*."""
+    return os.environ.get(env_var, "").strip() or default
+
 
 # Worker tool fence. BOTH spawn paths bypass settings.json (`--bare` skips it;
 # the OAuth path runs from an ephemeral CLAUDE_CONFIG_DIR with no project
@@ -89,6 +182,31 @@ _WORKER_ALLOWED_TOOLS = "Bash(hpc-agent:*) Bash(git:*) Read Write Edit Grep Glob
 _WORKER_DISALLOWED_TOOLS = (
     "Bash(scancel:*) Bash(qdel:*) Bash(qmod:*) Bash(qsub:*) Bash(sbatch:*) "
     "Bash(ssh:*) Bash(rsync:*) Bash(scp:*) Bash(curl:*) Bash(wget:*)"
+)
+
+# The bare command names of the cluster-op deny that the Claude fence above
+# expresses as ``Bash(<cmd>:*)`` disallow entries. The Codex execpolicy and
+# Gemini Policy-Engine fences (which match on a command prefix, not a Claude
+# tool pattern) deny the SAME surface, so they derive from one canonical tuple
+# rather than re-typing it three times. This is the #283/#228 no-scancel /
+# no-exfil invariant: scheduler cancel/submit (``scancel`` / ``qdel`` /
+# ``bkill`` / ``qsub`` / ``sbatch`` / ``qmod``), raw cluster transport (``ssh``
+# / ``rsync`` / ``scp`` — the worker reaches the cluster only through
+# ``hpc-agent``, which does its own transport internally), and exfil (``curl``
+# / ``wget``). ``bkill`` (LSF cancel) is included alongside ``scancel`` (Slurm)
+# and ``qdel`` (PBS/SGE) so the cancel deny covers every scheduler family.
+_CLUSTER_OP_DENY_COMMANDS = (
+    "scancel",
+    "qdel",
+    "bkill",
+    "qmod",
+    "qsub",
+    "sbatch",
+    "ssh",
+    "rsync",
+    "scp",
+    "curl",
+    "wget",
 )
 
 # OAuth worker auth is unsupported on macOS: the Claude Code OAuth token lives
@@ -538,9 +656,318 @@ class ClaudeCliOAuthInvoker:
         )
 
 
+def _codex_execpolicy_rules() -> str:
+    """The Codex ``execpolicy`` ``.rules`` body fencing the cluster-op deny.
+
+    Starlark ``prefix_rule`` entries with ``decision="forbidden"``: Codex's
+    execpolicy resolves overlapping rules by strictest-severity-wins, so a
+    ``forbidden`` rule overrides any allow exactly like Claude's deny-beats-allow
+    (the third axis). One rule per command in :data:`_CLUSTER_OP_DENY_COMMANDS`
+    so the bare invocation (``ssh …``, ``scancel …``) is denied; the network
+    deny is covered by the same list (``curl`` / ``wget`` / ``ssh`` / ``rsync``
+    / ``scp``). The worker still reaches the cluster through ``hpc-agent``,
+    which does its own transport internally as a child of the binary — not a
+    top-level command this prefix fence matches.
+    """
+    lines = [
+        "# hpc-agent worker cluster-op fence (execpolicy). Deny scheduler",
+        "# cancel/submit, raw cluster transport, and exfil — the #283/#228",
+        "# invariant. forbidden wins over any allow (strictest-severity-wins).",
+    ]
+    for cmd in _CLUSTER_OP_DENY_COMMANDS:
+        lines.append(f'prefix_rule(pattern=["{cmd}"], decision="forbidden")')
+    return "\n".join(lines) + "\n"
+
+
+class CodexCliInvoker:
+    """Runs the worker as a fresh ``codex exec`` child process.
+
+    Transport (axis 1): the whole rendered prompt (prefix + suffix joined) is
+    fed on stdin — Codex has no append-system-prompt cache, so there is no
+    prefix/suffix split to exploit at the CLI layer, and nothing rides argv
+    (#169). The worker's final report is read back from the file Codex writes
+    via ``--output-last-message`` rather than scraping stdout.
+
+    Sandbox (axis 2): ``--dangerously-bypass-approvals-and-sandbox`` — Codex
+    defaults to ``read-only`` with approval prompts, but the worker must
+    SSH/rsync out unattended, so full disk+network access with zero prompts is
+    required. Full access is NOT unfenced: the execpolicy below re-imposes the
+    cluster-op deny.
+
+    Tool fence (axis 3): an ``execpolicy`` ``.rules`` file
+    (:func:`_codex_execpolicy_rules`) denying the cluster-op surface, pointed at
+    via ``--config execpolicy_file=<path>``. ``forbidden`` overrides allow
+    (strictest-severity-wins), analogous to Claude's deny-beats-allow.
+
+    Decode schema (axis 4): OPTIONAL ``--output-schema`` gated behind
+    ``HPC_AGENT_WORKER_JSON_SCHEMA`` (same posture as Claude's ``--json-schema``,
+    #269) — OFF by default, so the floor :func:`parse_worker_report` is the
+    decode path. ``cache_stats`` is always ``None`` (not surfaced at the CLI).
+    """
+
+    name = "codex-cli"
+
+    def __init__(self, *, executable: str = "codex") -> None:
+        self._executable = executable
+
+    def invoke(
+        self, prompt: RenderedPrompt, *, cwd: Path, report_cache_stats: bool = False
+    ) -> InvocationResult:
+        # report_cache_stats is accepted for Protocol conformance but Codex does
+        # not surface a cache-creation/cache-read split at the CLI layer, so
+        # cache_stats stays None regardless.
+        env = {**os.environ}
+        # Codex authenticates from ``OPENAI_API_KEY`` (or a stored ChatGPT login
+        # in ``~/.codex/auth.json``) — it does NOT read ``CODEX_API_KEY``, which
+        # is an hpc-agent-side name for the invocation-scoped key. Map it onto
+        # ``OPENAI_API_KEY`` in the child so the scoped key actually authenticates
+        # the worker AND out-ranks any ambient ``OPENAI_API_KEY`` / stored
+        # ChatGPT login that would otherwise shadow it (#3286). Without this the
+        # auth guard passes (``CODEX_API_KEY`` present) yet Codex silently falls
+        # back to the very credential the guard exists to bypass.
+        codex_key = os.environ.get(_CODEX_CREDENTIAL_ENV_VAR)
+        if codex_key:
+            env["OPENAI_API_KEY"] = codex_key
+        with tempfile.TemporaryDirectory(prefix="hpc-agent-codex-") as work_dir:
+            rules_file = Path(work_dir) / "cluster_ops.rules"
+            rules_file.write_text(_codex_execpolicy_rules(), encoding="utf-8")
+            last_message_file = Path(work_dir) / "last_message.txt"
+            schema_args = self._output_schema_args(work_dir)
+            proc = subprocess.run(
+                [
+                    self._executable,
+                    "exec",
+                    "-m",
+                    _worker_model(_CODEX_WORKER_MODEL_ENV, _CODEX_WORKER_MODEL),
+                    # Full disk+network, zero approval prompts: the worker
+                    # SSH/rsyncs to a cluster unattended (see class docstring).
+                    # Fenced by the execpolicy below, not left unfenced.
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    # Re-impose the cluster-op deny on top of full access.
+                    "--config",
+                    f"execpolicy_file={rules_file}",
+                    *schema_args,
+                    # The worker's final report goes to this file, read back
+                    # below — not scraped from stdout.
+                    "--output-last-message",
+                    str(last_message_file),
+                    # The whole prompt on stdin keeps it off argv (#169).
+                    "-",
+                ],
+                input=prompt.joined,
+                cwd=str(cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            # The report is the last-message file Codex wrote; if the worker
+            # crashed before writing it, fall back to stdout so the caller's
+            # report-parse still surfaces the worker's last words.
+            try:
+                output = last_message_file.read_text(encoding="utf-8")
+            except OSError:
+                output = proc.stdout
+        return InvocationResult(
+            exit_code=proc.returncode,
+            output=output,
+            stderr=getattr(proc, "stderr", None) or "",
+            cache_stats=None,
+        )
+
+    @staticmethod
+    def _output_schema_args(work_dir: str) -> list[str]:
+        """``--output-schema <file>`` when the gated decode accelerator is on.
+
+        Mirrors Claude's ``HPC_AGENT_WORKER_JSON_SCHEMA`` posture: OFF by
+        default, so the floor ``parse_worker_report`` is the decode path. When
+        on, Codex's ``--output-schema`` takes a JSON-Schema FILE (it must be the
+        API-strict shape: ``additionalProperties:false`` + all props
+        ``required``). ``_worker_output_schema`` currently emits the existing
+        ``worker.output.json`` minified — that schema is NOT yet regenerated in
+        the API-strict shape, so authoring/regenerating the strict file is
+        deferred to #269/#304 rather than hand-maintained here. Until then this
+        binds the available schema text; the floor is the safety net either way.
+        """
+        schema = _worker_output_schema()
+        if schema is None:
+            return []
+        # TODO(#269/#304): emit the API-strict (additionalProperties:false,
+        # all-required) WorkerReport schema file rather than the floor schema.
+        schema_file = Path(work_dir) / "worker_output.schema.json"
+        schema_file.write_text(schema, encoding="utf-8")
+        return ["--output-schema", str(schema_file)]
+
+    def missing_credential_remediation(self) -> str | None:
+        if os.environ.get(_CODEX_CREDENTIAL_ENV_VAR):
+            return None
+        return _CODEX_MISSING_CREDENTIAL_REMEDIATION
+
+
+# Gemini Policy Engine: a deny only beats an allow when it carries a HIGHER
+# ``priority`` (unlike Claude/Codex where deny inherently wins). 1000 is well
+# above any plausible allow tier so the cluster-op deny always out-ranks.
+_GEMINI_DENY_PRIORITY = 1000
+
+
+def _gemini_policy_dir() -> Path:
+    """The USER-tier Gemini Policy Engine directory (``~/.gemini/policies``).
+
+    The policy fence MUST live at the User (or Admin) tier: the workspace tier
+    is currently broken (upstream #18186) — project-local policies silently
+    no-op, so a fence installed there would quietly drop the cluster-safety
+    invariant. ``GEMINI_DIR`` relocates the Gemini home (mirrors how the OAuth
+    Claude driver relocates ``CLAUDE_CONFIG_DIR``); otherwise it is
+    ``~/.gemini``. Returned as a directory so the caller can write the TOML.
+    """
+    base = os.environ.get("GEMINI_DIR")
+    root = Path(base) if base else Path.home() / ".gemini"
+    return root / "policies"
+
+
+def _gemini_policy_toml() -> str:
+    """The User/Admin-tier Policy Engine TOML fencing the cluster-op deny.
+
+    One ``[[rules]]`` entry per command in :data:`_CLUSTER_OP_DENY_COMMANDS`,
+    each ``decision = "deny"`` at :data:`_GEMINI_DENY_PRIORITY` — higher than any
+    allow tier, because the Gemini Policy Engine is priority-ordered, not
+    deny-beats-allow. ``commandPrefix`` matches the bare invocation
+    (``ssh …`` / ``scancel …``); the same list covers the network deny
+    (``curl`` / ``wget`` / ``ssh`` / ``rsync`` / ``scp``). The worker still
+    reaches the cluster through ``hpc-agent`` (its own transport internally),
+    which this top-level prefix fence does not match.
+    """
+    lines = [
+        "# hpc-agent worker cluster-op fence (Gemini Policy Engine, USER tier).",
+        "# Installed at the User/Admin tier, NOT workspace — the workspace tier",
+        "# silently no-ops (upstream #18186). Deny out-ranks allow via priority",
+        "# (the Policy Engine is priority-ordered, not deny-beats-allow). This is",
+        "# the #283/#228 no-scancel / no-exfil invariant.",
+    ]
+    for cmd in _CLUSTER_OP_DENY_COMMANDS:
+        lines.append("")
+        lines.append("[[rules]]")
+        lines.append('toolName = "run_shell_command"')
+        lines.append(f'commandPrefix = "{cmd}"')
+        lines.append('decision = "deny"')
+        lines.append(f"priority = {_GEMINI_DENY_PRIORITY}")
+    return "\n".join(lines) + "\n"
+
+
+def _unwrap_gemini_json(stdout: str) -> str:
+    """Lift the worker's final report text out of Gemini's JSON envelope.
+
+    ``gemini --output-format json`` wraps the reply in a FIXED
+    ``{response, stats, error}`` envelope; the worker's final text (which then
+    feeds :func:`parse_worker_report` upstream) is the ``response`` field. A
+    malformed / non-JSON stdout (a crash before the envelope) is returned
+    verbatim so the caller's report-parse still surfaces the worker's last
+    words. There is no CLI decode schema for Gemini (``responseSchema`` is
+    API/SDK-only), so this path leans entirely on the #304 floor — the path
+    that motivates #304's repair loop.
+    """
+    try:
+        envelope = json.loads(stdout)
+    except json.JSONDecodeError:
+        return stdout
+    if isinstance(envelope, dict):
+        response = envelope.get("response")
+        if isinstance(response, str):
+            return response
+    return stdout
+
+
+class GeminiCliInvoker:
+    """Runs the worker as a fresh ``gemini -p`` child process.
+
+    Transport (axis 1): the cacheable prefix is written to a tempfile referenced
+    by ``GEMINI_SYSTEM_MD`` (a FULL replacement of Gemini's built-in system
+    prompt), and the variable suffix is fed on stdin — both off argv (#169).
+    Output comes from ``--output-format json``, whose fixed
+    ``{response, stats, error}`` envelope is unwrapped to the worker's final
+    text (:func:`_unwrap_gemini_json`), which then feeds ``parse_worker_report``
+    upstream.
+
+    Sandbox (axis 2): ``GEMINI_SANDBOX`` is deliberately left UNSET — it names a
+    backend (``docker`` / ``podman`` / …), not a bool, so omitting it selects no
+    sandbox. The worker must SSH/rsync out unattended.
+
+    Tool fence (axis 3): a Policy Engine TOML (:func:`_gemini_policy_toml`)
+    installed at the User/Admin tier (:func:`_gemini_policy_dir`) — NOT the
+    workspace tier, which silently no-ops (#18186) — with the cluster-op deny at
+    a higher ``priority`` than any allow (the Policy Engine is priority-ordered,
+    not deny-beats-allow).
+
+    Decode schema (axis 4): NONE at the CLI layer (``responseSchema`` is
+    API/SDK-only), so the Gemini path leans entirely on the #304 floor
+    (:func:`parse_worker_report`) — the path that motivates #304's repair loop.
+    ``cache_stats`` is ``None`` (the CLI surfaces no cache-creation/cache-read
+    split).
+    """
+
+    name = "gemini-cli"
+
+    def __init__(self, *, executable: str = "gemini") -> None:
+        self._executable = executable
+
+    def invoke(
+        self, prompt: RenderedPrompt, *, cwd: Path, report_cache_stats: bool = False
+    ) -> InvocationResult:
+        # report_cache_stats is accepted for Protocol conformance; Gemini's CLI
+        # surfaces no cache-creation/cache-read split, so cache_stats stays None.
+        policy_dir = _gemini_policy_dir()
+        policy_dir.mkdir(parents=True, exist_ok=True)
+        (policy_dir / "hpc-agent-worker.toml").write_text(_gemini_policy_toml(), encoding="utf-8")
+        with tempfile.TemporaryDirectory(prefix="hpc-agent-gemini-") as work_dir:
+            system_md = Path(work_dir) / "system.md"
+            system_md.write_text(prompt.cacheable_prefix, encoding="utf-8")
+            # GEMINI_SYSTEM_MD points at the full-replacement system prompt;
+            # GEMINI_SANDBOX is intentionally NOT set (see class docstring).
+            env = {**os.environ, "GEMINI_SYSTEM_MD": str(system_md)}
+            env.pop("GEMINI_SANDBOX", None)
+            proc = subprocess.run(
+                [
+                    self._executable,
+                    "-p",
+                    # Pin the CONCRETE model id, not an alias (aliases now
+                    # resolve to a preview generation).
+                    "--model",
+                    _worker_model(_GEMINI_WORKER_MODEL_ENV, _GEMINI_WORKER_MODEL),
+                    # The fixed {response, stats, error} envelope, unwrapped below.
+                    "--output-format",
+                    "json",
+                ],
+                # The variable suffix is the user prompt on stdin (the prefix is
+                # the GEMINI_SYSTEM_MD system prompt); both stay off argv (#169).
+                input=prompt.variable_suffix,
+                cwd=str(cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        return InvocationResult(
+            exit_code=proc.returncode,
+            output=_unwrap_gemini_json(proc.stdout),
+            stderr=getattr(proc, "stderr", None) or "",
+            cache_stats=None,
+        )
+
+    def missing_credential_remediation(self) -> str | None:
+        if any(os.environ.get(var) for var in _GEMINI_CREDENTIAL_ENV_VARS):
+            return None
+        return _GEMINI_MISSING_CREDENTIAL_REMEDIATION
+
+
 _INVOKERS: dict[str, Callable[..., WorkerInvoker]] = {
     "claude-cli": ClaudeCliInvoker,
     "claude-cli-oauth": ClaudeCliOAuthInvoker,
+    "codex-cli": CodexCliInvoker,
+    "gemini-cli": GeminiCliInvoker,
 }
 DEFAULT_INVOKER = "claude-cli"
 
@@ -558,16 +985,26 @@ def register_invoker(name: str, factory: Callable[..., WorkerInvoker]) -> None:
 def _auto_select_invoker() -> str:
     """Pick a worker invoker from the ambient credential state.
 
-    ``ANTHROPIC_API_KEY`` / cloud-provider creds present → the proven
-    ``--bare`` ``claude-cli`` path. Otherwise a Claude Code OAuth credentials
-    file on a supported OS → ``claude-cli-oauth``. Otherwise fall back to
-    ``claude-cli`` so its pre-spawn credential guard fires with an actionable
-    message rather than silently picking a path that cannot authenticate.
+    Claude credentials always win, unchanged: ``ANTHROPIC_API_KEY`` /
+    cloud-provider creds present → the proven ``--bare`` ``claude-cli`` path;
+    otherwise a Claude Code OAuth credentials file on a supported OS →
+    ``claude-cli-oauth``.
+
+    Only when NO Claude credential is present does selection fall through to the
+    other harnesses: a ``CODEX_API_KEY`` → ``codex-cli``, then a
+    ``GEMINI_API_KEY`` / ``GOOGLE_API_KEY`` → ``gemini-cli``. The final fallback
+    is unchanged: ``claude-cli`` (``DEFAULT_INVOKER``) so its pre-spawn
+    credential guard fires with an actionable message rather than silently
+    picking a path that cannot authenticate.
     """
     if any(os.environ.get(var) for var in _WORKER_CREDENTIAL_ENV_VARS):
         return "claude-cli"
     if _oauth_credentials_available():
         return "claude-cli-oauth"
+    if os.environ.get(_CODEX_CREDENTIAL_ENV_VAR):
+        return "codex-cli"
+    if any(os.environ.get(var) for var in _GEMINI_CREDENTIAL_ENV_VARS):
+        return "gemini-cli"
     return DEFAULT_INVOKER
 
 

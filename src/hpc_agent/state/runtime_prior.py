@@ -45,6 +45,7 @@ __all__ = [
     "ingest_runtime_samples_from_combiner_dir",
     "read_samples",
     "roll_up_quantiles",
+    "cores_used_from_sample",  # effective-core estimate; consumed by campaign spend accounting
 ]
 
 import json
@@ -405,7 +406,7 @@ def roll_up_quantiles(
         mem_mb = _coerce_pos_int(s.get("peak_host_mem_mb"))
         if mem_mb is not None:
             mem_by_gpu.setdefault(gpu, []).append(mem_mb)
-        cpu_used = _cores_used_from_sample(s, elapsed)
+        cpu_used = cores_used_from_sample(s, elapsed)
         if cpu_used is not None:
             cpu_by_gpu.setdefault(gpu, []).append(cpu_used)
 
@@ -463,7 +464,7 @@ def coerce_pos_int(x: Any) -> int | None:
 _coerce_pos_int = coerce_pos_int
 
 
-def _cores_used_from_sample(s: dict[str, Any], elapsed_sec: int) -> int | None:
+def cores_used_from_sample(s: dict[str, Any], elapsed_sec: int) -> int | None:
     """Estimate effective core count from ``cpu_seconds_used / elapsed_sec``.
 
     Rounds up so a workload that averaged 2.3 cores comes back as 3 — we

@@ -8,6 +8,7 @@ error_codes: []
 backed_by:
   cli: hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id>
     [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]
+    [--max-core-hours <max_core_hours>]
   python: hpc_agent.meta.campaign.atoms.budget.campaign_budget
 ---
 # campaign-budget

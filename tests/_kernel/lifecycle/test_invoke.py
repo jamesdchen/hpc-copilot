@@ -12,6 +12,8 @@ from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.invoke import (
     ClaudeCliInvoker,
     ClaudeCliOAuthInvoker,
+    CodexCliInvoker,
+    GeminiCliInvoker,
     InvocationResult,
     RenderedPrompt,
     get_invoker,
@@ -20,7 +22,12 @@ from hpc_agent._kernel.lifecycle.invoke import (
 
 def _clear_worker_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Remove every ambient credential signal so auto-selection is deterministic."""
-    for var in (*invoke_mod._WORKER_CREDENTIAL_ENV_VARS, "HPC_AGENT_INVOKER"):
+    for var in (
+        *invoke_mod._WORKER_CREDENTIAL_ENV_VARS,
+        invoke_mod._CODEX_CREDENTIAL_ENV_VAR,
+        *invoke_mod._GEMINI_CREDENTIAL_ENV_VARS,
+        "HPC_AGENT_INVOKER",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(invoke_mod, "_oauth_credentials_available", lambda: False)
 
@@ -546,3 +553,393 @@ def test_schema_constrained_unwraps_string_result(
         RenderedPrompt(cacheable_prefix="P", variable_suffix="S"), cwd=tmp_path
     )
     assert result.output == inner
+
+
+# ─── Codex CLI invoker ──────────────────────────────────────────────────────
+
+
+def _codex_capture_run(seen: dict[str, object], *, report: str = "codex report"):
+    """A fake ``subprocess.run`` recording argv/cwd/env/stdin and writing the
+    Codex ``--output-last-message`` file (Codex reads the report from there, not
+    stdout). Also captures the execpolicy ``.rules`` body while the temp dir
+    still exists."""
+
+    class _Proc:
+        returncode = 0
+        stdout = "codex stdout (not the report)"
+        stderr = ""
+
+    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
+        seen["argv"] = argv
+        seen["cwd"] = kwargs.get("cwd")
+        seen["env"] = kwargs.get("env")
+        seen["input"] = kwargs.get("input")
+        rules_path = argv[argv.index("--config") + 1].split("=", 1)[1]
+        seen["rules"] = Path(rules_path).read_text(encoding="utf-8")
+        last_idx = argv.index("--output-last-message") + 1
+        Path(argv[last_idx]).write_text(report, encoding="utf-8")
+        return _Proc()
+
+    return _fake_run
+
+
+def test_codex_cli_invoker_builds_the_right_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _codex_capture_run(seen))
+
+    prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
+    result = CodexCliInvoker().invoke(prompt, cwd=tmp_path)
+
+    assert isinstance(result, InvocationResult)
+    assert result.exit_code == 0
+    # The report is the --output-last-message file, NOT stdout.
+    assert result.output == "codex report"
+    # cache_stats not surfaced at the Codex CLI layer.
+    assert result.cache_stats is None
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[0:4] == ["codex", "exec", "-m", "gpt-5.4-mini"]
+    # Autonomy posture: full disk+net, zero prompts (worker SSH/rsyncs out).
+    assert "--dangerously-bypass-approvals-and-sandbox" in argv
+    # Schema accelerator OFF by default → no --output-schema.
+    assert "--output-schema" not in argv
+    # Whole prompt on stdin (no prefix/suffix split for Codex), nothing on argv.
+    assert argv[-1] == "-"
+    assert seen["input"] == prompt.joined
+    assert "PREFIX" not in argv and "SUFFIX" not in argv
+    assert seen["cwd"] == str(tmp_path)
+
+
+def test_codex_execpolicy_rules_carry_the_full_cluster_op_deny(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _codex_capture_run(seen))
+    CodexCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+
+    rules = seen["rules"]
+    assert isinstance(rules, str)
+    # Strictest-severity-wins: every cluster-op command is forbidden.
+    for cmd in invoke_mod._CLUSTER_OP_DENY_COMMANDS:
+        assert f'prefix_rule(pattern=["{cmd}"], decision="forbidden")' in rules
+    # The cluster-op surface the #283/#228 invariant protects.
+    for op in ("scancel", "qdel", "bkill", "ssh", "rsync", "scp", "curl", "wget"):
+        assert op in rules
+
+
+def test_codex_model_pin_overridable_by_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HPC_AGENT_CODEX_WORKER_MODEL", "gpt-5.4-custom")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _codex_capture_run(seen))
+    CodexCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[argv.index("-m") + 1] == "gpt-5.4-custom"
+
+
+def test_codex_output_schema_bound_when_flag_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    seen: dict[str, object] = {}
+
+    captured: dict[str, str] = {}
+
+    base = _codex_capture_run(seen)
+
+    def _fake_run(argv: list[str], **kwargs: object):
+        # Capture the schema file content while the temp dir still exists.
+        idx = argv.index("--output-schema") + 1
+        captured["schema"] = Path(argv[idx]).read_text(encoding="utf-8")
+        return base(argv, **kwargs)
+
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+    CodexCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert "--output-schema" in argv
+    assert "WorkerReport" in captured["schema"]
+
+
+def test_codex_falls_back_to_stdout_when_no_last_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A worker that crashes before writing the last-message file leaves stdout
+    # as the output so the caller's report-parse surfaces its last words.
+    class _Proc:
+        returncode = 1
+        stdout = "Not authenticated. Goodbye."
+        stderr = "boom"
+
+    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
+        return _Proc()  # never writes --output-last-message
+
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+    result = CodexCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    assert result.output == "Not authenticated. Goodbye."
+    assert result.exit_code == 1
+
+
+def test_codex_missing_credential_remediation_none_when_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-x")
+    assert CodexCliInvoker().missing_credential_remediation() is None
+
+
+def test_codex_missing_credential_remediation_message_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    msg = CodexCliInvoker().missing_credential_remediation()
+    assert msg is not None
+    assert "CODEX_API_KEY" in msg
+    # Prefer CODEX_API_KEY over ambient OPENAI_API_KEY (shadow hazard, #3286).
+    assert "OPENAI_API_KEY" in msg
+
+
+def test_codex_scoped_key_authenticates_child_via_openai_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Codex authenticates from OPENAI_API_KEY (or a stored ChatGPT login), NOT
+    # CODEX_API_KEY — which is only an hpc-agent-side name. The driver must map
+    # the scoped CODEX_API_KEY onto the child's OPENAI_API_KEY, and it must WIN
+    # over any ambient OPENAI_API_KEY / stored login the guard exists to bypass
+    # (#3286). Otherwise the guard passes but Codex never sees the scoped key.
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-scoped")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-would-shadow")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _codex_capture_run(seen))
+    CodexCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "sk-codex-scoped"
+
+
+# ─── Gemini CLI invoker ─────────────────────────────────────────────────────
+
+
+def _gemini_capture_run(seen: dict[str, object], *, response: str = "gemini report"):
+    """A fake ``subprocess.run`` recording argv/cwd/env/stdin and the
+    GEMINI_SYSTEM_MD content, returning the fixed {response, stats, error}
+    envelope on stdout."""
+    import json
+
+    class _Proc:
+        returncode = 0
+        stdout = json.dumps({"response": response, "stats": {}, "error": None})
+        stderr = ""
+
+    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
+        seen["argv"] = argv
+        seen["cwd"] = kwargs.get("cwd")
+        seen["env"] = kwargs.get("env")
+        seen["input"] = kwargs.get("input")
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        seen["system_md"] = Path(env["GEMINI_SYSTEM_MD"]).read_text(encoding="utf-8")
+        return _Proc()
+
+    return _fake_run
+
+
+def _redirect_gemini_policy_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point GEMINI_DIR at a temp dir so the policy TOML lands there, not ~/.gemini."""
+    monkeypatch.setenv("GEMINI_DIR", str(tmp_path / "gemini-home"))
+    return tmp_path / "gemini-home" / "policies"
+
+
+def test_gemini_cli_invoker_builds_the_right_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _redirect_gemini_policy_dir(monkeypatch, tmp_path)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _gemini_capture_run(seen))
+
+    prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
+    result = GeminiCliInvoker().invoke(prompt, cwd=tmp_path)
+
+    assert isinstance(result, InvocationResult)
+    assert result.exit_code == 0
+    # Output is the unwrapped `response` field of the JSON envelope.
+    assert result.output == "gemini report"
+    assert result.cache_stats is None
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[0:2] == ["gemini", "-p"]
+    # Concrete model id pin (not an alias).
+    assert argv[argv.index("--model") + 1] == "gemini-2.5-flash"
+    assert "--output-format" in argv and "json" in argv
+    # The cacheable prefix is the full-replacement system prompt; the variable
+    # suffix is the user prompt on stdin. Both off argv (#169).
+    assert seen["system_md"] == "PREFIX"
+    assert seen["input"] == "SUFFIX"
+    assert "PREFIX" not in argv and "SUFFIX" not in argv
+    assert seen["cwd"] == str(tmp_path)
+
+
+def test_gemini_does_not_select_a_sandbox_backend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # GEMINI_SANDBOX names a backend, not a bool — it must be unset so no
+    # sandbox is selected (the worker SSH/rsyncs out).
+    _redirect_gemini_policy_dir(monkeypatch, tmp_path)
+    monkeypatch.setenv("GEMINI_SANDBOX", "docker")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _gemini_capture_run(seen))
+    GeminiCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert "GEMINI_SANDBOX" not in env
+
+
+def test_gemini_policy_toml_installed_at_user_tier_with_full_deny(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    policy_dir = _redirect_gemini_policy_dir(monkeypatch, tmp_path)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _gemini_capture_run(seen))
+    GeminiCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+
+    # The fence lands at the USER tier (~/.gemini/policies via GEMINI_DIR), NOT
+    # the workspace tier (which silently no-ops, #18186).
+    toml_files = list(policy_dir.glob("*.toml"))
+    assert len(toml_files) == 1
+    toml = toml_files[0].read_text(encoding="utf-8")
+    # Every cluster-op command is denied at a priority above any allow tier.
+    for cmd in invoke_mod._CLUSTER_OP_DENY_COMMANDS:
+        assert f'commandPrefix = "{cmd}"' in toml
+    assert 'decision = "deny"' in toml
+    assert f"priority = {invoke_mod._GEMINI_DENY_PRIORITY}" in toml
+    for op in ("scancel", "qdel", "bkill", "ssh", "rsync", "scp", "curl", "wget"):
+        assert op in toml
+
+
+def test_gemini_model_pin_overridable_by_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _redirect_gemini_policy_dir(monkeypatch, tmp_path)
+    monkeypatch.setenv("HPC_AGENT_GEMINI_WORKER_MODEL", "gemini-2.5-custom")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _gemini_capture_run(seen))
+    GeminiCliInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[argv.index("--model") + 1] == "gemini-2.5-custom"
+
+
+def test_gemini_unwraps_response_envelope() -> None:
+    import json
+
+    envelope = json.dumps({"response": "the report", "stats": {"x": 1}, "error": None})
+    assert invoke_mod._unwrap_gemini_json(envelope) == "the report"
+
+
+def test_gemini_non_json_stdout_returned_verbatim() -> None:
+    # A crash before the envelope leaves raw stdout so report-parse sees the
+    # worker's last words (the #304 floor handles it).
+    assert invoke_mod._unwrap_gemini_json("Not authenticated. Bye.") == "Not authenticated. Bye."
+
+
+def test_gemini_missing_credential_remediation_none_when_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert GeminiCliInvoker().missing_credential_remediation() is None
+
+
+def test_gemini_missing_credential_remediation_none_when_google_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "v-key")
+    assert GeminiCliInvoker().missing_credential_remediation() is None
+
+
+def test_gemini_missing_credential_remediation_message_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    msg = GeminiCliInvoker().missing_credential_remediation()
+    assert msg is not None
+    assert "GEMINI_API_KEY" in msg and "GOOGLE_API_KEY" in msg
+
+
+# ─── registry + multi-harness auto-selection ────────────────────────────────
+
+
+def test_codex_and_gemini_registered() -> None:
+    assert get_invoker("codex-cli").name == "codex-cli"
+    assert get_invoker("gemini-cli").name == "gemini-cli"
+
+
+def test_env_override_selects_codex_and_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "codex-cli")
+    assert get_invoker().name == "codex-cli"
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "gemini-cli")
+    assert get_invoker().name == "gemini-cli"
+
+
+def test_auto_select_falls_through_to_codex_when_only_codex_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+    assert get_invoker().name == "codex-cli"
+
+
+def test_auto_select_falls_through_to_gemini_when_only_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert get_invoker().name == "gemini-cli"
+
+
+def test_auto_select_falls_through_to_gemini_when_only_google_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("GOOGLE_API_KEY", "v-key")
+    assert get_invoker().name == "gemini-cli"
+
+
+def test_codex_outranks_gemini_when_both_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert get_invoker().name == "codex-cli"
+
+
+def test_claude_creds_still_win_over_codex_and_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression: adding Codex/Gemini fall-through must NOT change Claude
+    # selection. Claude creds present → claude-cli even when Codex/Gemini keys
+    # are also set.
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert get_invoker().name == "claude-cli"
+
+
+def test_claude_oauth_still_wins_over_codex_and_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No Claude API key, but a Claude OAuth creds file → claude-cli-oauth still
+    # beats Codex/Gemini keys (OAuth tier is checked before the fall-through).
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_available", lambda: True)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert get_invoker().name == "claude-cli-oauth"

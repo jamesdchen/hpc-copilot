@@ -107,6 +107,19 @@ purpose: the driver is the *outer loop*, not a step within one. Making
 it a primitive would invite recursion (driver-invoking-driver) without
 benefit.
 
+The loop *mechanism* is not campaign-owned, though. The generic
+tick-loop — read a `delegate`, plan, dispatch `cli`/`agent`, one step
+per invocation — lives in `_kernel/lifecycle/drive.py` as neutral
+substrate: it knows nothing about campaigns and never imports
+`meta.campaign`. `driver.py` is the campaign *caller* that configures
+it, injecting a `StepTable` (the `monitor`/`aggregate` → flow-verb map)
+and a `JudgementResolver` (the default `claude -p` path) through
+`CampaignLoopConfig`. The mechanism owns the protocol; the caller owns
+the policy — the same seam `_kernel/decision/kernel.py` establishes for
+deterministic routers. That split is what lets a non-campaign sequence
+reuse the loop without inheriting campaign vocabulary, and what scopes a
+future non-Claude resolver (#305) to an injection rather than a fork.
+
 Each tick of the driver:
 
 1. Runs `load-context --experiment-dir .`.
@@ -201,7 +214,11 @@ them is at risk, the new shape is probably re-running an old mistake.
   primitive contract.
 - [`docs/architecture.md`](../architecture.md) — layering rules; the
   driver lives above flows, below the slash-command surface.
-- `src/hpc_agent/meta/campaign/driver.py` — the script. ~200 LOC.
+- `src/hpc_agent/_kernel/lifecycle/drive.py` — the neutral tick-loop
+  mechanism (`load_context`, `plan_action`, the `cli`/`agent` dispatch,
+  the `StepTable`/`JudgementResolver` seam).
+- `src/hpc_agent/meta/campaign/driver.py` — the campaign caller: a thin
+  shim holding `CampaignLoopConfig` + the `hpc-campaign-driver` entry point.
 - `src/hpc_agent/_kernel/extension/worker_prompts/campaign.md` — the
   deterministic worker prompt the driver's `kind: agent` steps inline
   into `cacheable_prefix`.

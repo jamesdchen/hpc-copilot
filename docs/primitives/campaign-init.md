@@ -14,7 +14,8 @@ backed_by:
     [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>]
     [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance
     <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks
-    <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>]
+    <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]
+    [--circuit-breaker-failures <circuit_breaker_failures>] [--strategy-name <strategy_name>]
     [--strategy-params-json <strategy_params_json>]
   python: hpc_agent.meta.campaign.atoms.init.campaign_init
 ---

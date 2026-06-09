@@ -35,6 +35,18 @@ call, or a bare ``if __name__ == "__main__":`` block. A package
 all, else ``"detected"`` — exactly the branch ``hpc-wrap-entry-point``
 takes on the probe output.
 
+Beyond the repo scan, the verb also surfaces the
+``_materialized.entry_point`` block from ``interview.json`` (when a
+wrapper-fallback onboarding already wrote one) as the optional
+``materialized`` field. This lets ONE ``detect-entry-point`` call answer
+submit.md Step 0b — honor a materialized wrapper (``materialized.kind``)
+*and* run the mature-repo fallback probe (``candidates`` /
+``decoration_found``) — so a headless worker on any harness drives the
+decision through a single ``hpc-agent`` verb rather than a native Read /
+Glob / Grep tool. When no ``interview.json`` exists (or it carries no
+materialized entry point), ``materialized`` is absent and the repo-scan
+output is unchanged.
+
 I/O contracts:
 
 * Input: see ``hpc_agent/schemas/detect_entry_point.input.json``.
@@ -43,6 +55,7 @@ I/O contracts:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -288,6 +301,75 @@ def _scan_decoration(root: Path) -> list[str]:
     return sorted(found)
 
 
+# The fields of a ``_materialized.entry_point`` block this verb surfaces, per
+# ``kind``. The interview primitive
+# (``hpc_agent.ops.memory.interview``) writes the full block to
+# ``interview.json``; we re-export only the subset a headless worker branches
+# on at submit.md Step 0b — ``kind`` is always present, the rest are
+# kind-specific and copied through verbatim when the source carries them. We
+# deliberately do NOT surface ``frozen_shas`` (an internal identity detail the
+# worker never reads).
+_MATERIALIZED_FIELDS: tuple[str, ...] = (
+    "run_name",
+    "wrapper_path",
+    "executor_cmd",
+    "module",
+    "function",
+    "data_axis",
+)
+
+
+def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
+    """Surface ``interview.json``'s ``_materialized.entry_point`` block, if any.
+
+    A wrapper-fallback onboarding (``hpc-wrap-entry-point`` /
+    ``/wrap-entry-point-hpc``) persists the chosen entry point to
+    ``<experiment_dir>/interview.json`` under
+    ``_materialized.entry_point`` — a ``{kind, ...}`` block whose ``kind``
+    is ``shell_command`` / ``register_run`` / ``python_module``. Folding it
+    in here lets ONE ``detect-entry-point`` call answer submit.md Step 0b
+    (honor a materialized wrapper) alongside the mature-repo fallback probe,
+    so the headless worker never needs a native Read/Glob tool to inspect
+    the file.
+
+    The canonical location is the campaign-dir root (where the ``interview``
+    primitive writes it); we also accept ``.hpc/interview.json`` defensively.
+    Returns ``None`` — leaving the existing repo-scan output untouched — when
+    no ``interview.json`` exists, when it is malformed, or when it carries no
+    ``_materialized.entry_point`` block. Surfaces only the worker-facing
+    subset of fields (``kind`` plus whichever of
+    ``_MATERIALIZED_FIELDS`` the block declares).
+    """
+    for rel in ("interview.json", ".hpc/interview.json"):
+        path = root / rel
+        if not path.is_file():
+            continue
+        text = _read_text(path)
+        if not text:
+            return None
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            # A half-written / malformed interview.json is treated as absent:
+            # the repo-scan output stands, the worker falls through to the
+            # mature-repo probe rather than crashing the scan.
+            return None
+        if not isinstance(doc, dict):
+            return None
+        entry = (doc.get("_materialized") or {}).get("entry_point")
+        if not isinstance(entry, dict):
+            return None
+        kind = entry.get("kind")
+        if not isinstance(kind, str):
+            return None
+        out: dict[str, Any] = {"kind": kind}
+        for field in _MATERIALIZED_FIELDS:
+            if field in entry:
+                out[field] = entry[field]
+        return out
+    return None
+
+
 @primitive(
     name="detect-entry-point",
     verb="query",
@@ -300,7 +382,11 @@ def _scan_decoration(root: Path) -> list[str]:
             "scripts), classify each candidate's argv style (argparse / "
             "click / typer / hydra / fire / __main__), and locate files "
             "carrying @register_run. Collapses the duplicated six-probe "
-            "shell block in hpc-wrap-entry-point Steps 0 + 1."
+            "shell block in hpc-wrap-entry-point Steps 0 + 1. Also "
+            "surfaces interview.json's materialized entry-point block "
+            "(kind shell_command / register_run / python_module) so one "
+            "call answers submit.md Step 0b's wrapper-honor + mature-repo "
+            "probe."
         ),
         verb="detect-entry-point",
         args=(
@@ -331,6 +417,11 @@ def detect_entry_point(*, experiment_dir: str | Path) -> dict[str, Any]:
     ``ls`` probe, and the ``@register_run`` grep. ``kind`` is
     ``"greenfield"`` only when NO candidate of any kind exists AND no
     ``@register_run`` is already on disk.
+
+    Additionally surfaces ``interview.json``'s
+    ``_materialized.entry_point`` block as the optional ``materialized``
+    field when a wrapper-fallback onboarding already wrote one — absent
+    otherwise, leaving the repo-scan fields untouched.
     """
     root = experiment_dir if isinstance(experiment_dir, Path) else Path(experiment_dir)
 
@@ -346,8 +437,19 @@ def detect_entry_point(*, experiment_dir: str | Path) -> dict[str, Any]:
     # on disk" as a non-greenfield match alongside an entry-point file.
     kind = "detected" if (candidates or decoration_found) else "greenfield"
 
-    return {
+    out: dict[str, Any] = {
         "kind": kind,
         "candidates": candidates,
         "decoration_found": decoration_found,
     }
+
+    # If a wrapper-fallback onboarding already materialized an entry point,
+    # surface its ``_materialized.entry_point`` block so submit.md Step 0b
+    # honors it in the SAME call that runs the mature-repo probe — no native
+    # Read tool needed. ``None`` when no interview.json / no materialized
+    # block, leaving the repo-scan output above unchanged.
+    materialized = _read_materialized_entry_point(root)
+    if materialized is not None:
+        out["materialized"] = materialized
+
+    return out

@@ -1,26 +1,22 @@
-"""Headless campaign driver — advance one workflow step per invocation.
+"""Headless campaign driver — the campaign configuration of the neutral loop.
 
-This is deliberately **not** a ``@primitive``. Primitives are pure
-JSON-in / JSON-out tools that an agent invokes; this script does the
-opposite — it *drives*, and for judgement steps it may spawn an LLM
-(``claude -p``). Keeping that out of the primitive layer preserves the
-primitives' side-effect contract, testability, and cost transparency.
+The generic tick-loop now lives in
+:mod:`hpc_agent._kernel.lifecycle.drive` — neutral substrate that advances
+one ``delegate`` step per invocation and knows nothing about campaigns. This
+module is the campaign *caller* that configures it: it supplies the campaign
+step map (``monitor`` / ``aggregate``) and the default ``claude -p`` judgement
+resolver, then exposes the ``hpc-campaign-driver`` console-script entry point.
 
-It reads the ``delegate`` block emitted by ``hpc-agent load-context``
-and executes the next step:
+This is deliberately **not** a ``@primitive``. Primitives are pure JSON-in /
+JSON-out tools that an agent invokes; the loop does the opposite — it
+*drives*, and for judgement steps it may spawn an LLM (``claude -p``), only
+behind the explicit ``--allow-agent-steps`` opt-in. One step per invocation:
+idempotent and cron-friendly. Wrap it in cron or ``/loop`` to walk a campaign;
+the on-disk state (run sidecars, journal, cursors) is the only thing carried
+between ticks.
 
-- ``kind == "cli"`` — a deterministic step (``monitor`` / ``aggregate``).
-  The driver runs the matching ``hpc-agent`` verb directly; no LLM, no
-  cost.
-- ``kind == "agent"`` — a judgement step (a fresh submission, a campaign
-  ``decide``). The driver shells ``claude -p``, but **only** when
-  ``--allow-agent-steps`` is passed — spawning an LLM is an explicit,
-  opt-in, billable side effect.
-
-One step per invocation: idempotent and cron-friendly. Wrap it in cron
-or ``/loop`` to walk a campaign — each tick advances exactly one step
-and the on-disk state (run sidecars, journal, cursors) is the only
-thing carried between ticks.
+``plan_action`` is re-exported from ``drive`` so existing importers and tests
+keep their import path unchanged.
 
 Usage::
 
@@ -31,173 +27,70 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
-import contextlib
-import json
-import os
-import subprocess
 import sys
-import tempfile
-from pathlib import Path
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
-__all__ = ["load_context", "plan_action", "main"]
+from hpc_agent._kernel.lifecycle.drive import (
+    JudgementResolver,
+    StepTable,
+    default_judgement_resolver,
+    drive,
+    load_context,
+    plan_action,
+)
 
-# delegate.step -> the hpc-agent verb that performs a deterministic step.
-_STEP_VERB: dict[str, str] = {
-    "monitor": "monitor-flow",
-    "aggregate": "aggregate-flow",
-}
+__all__ = [
+    "StepTable",
+    "JudgementResolver",
+    "CampaignLoopConfig",
+    "load_context",
+    "plan_action",
+    "default_judgement_resolver",
+    "main",
+]
+
+# Campaign's deterministic steps. The only campaign-flavored content the loop
+# needs — kept here, in the campaign module, and handed to the neutral
+# mechanism in ``drive`` via ``CampaignLoopConfig``. Wrapped in a
+# ``MappingProxyType`` so the frozen config's default is genuinely immutable:
+# a caller can't mutate ``config.step_table`` and silently pollute this shared
+# module global for every later config.
+_CAMPAIGN_STEP_VERB: Mapping[str, str] = MappingProxyType(
+    {
+        "monitor": "monitor-flow",
+        "aggregate": "aggregate-flow",
+    }
+)
 
 
-def load_context(experiment_dir: Path) -> dict[str, Any]:
-    """Run ``hpc-agent load-context`` and return the envelope's ``data``.
+@dataclass(frozen=True)
+class CampaignLoopConfig:
+    """The campaign-flavored configuration the neutral loop runs under.
 
-    Raises :class:`RuntimeError` when the CLI fails or the envelope is
-    not ``ok`` — the driver cannot plan a step without context.
+    Bundles the two seams the loop injects — *step_table* (which deterministic
+    verb each ``delegate.step`` maps to) and *resolver* (how a judgement step
+    is executed). The defaults reproduce today's ``hpc-campaign-driver``
+    behavior exactly: the monitor/aggregate map and the ``run_workflow``-backed
+    ``claude -p`` resolver.
     """
-    proc = subprocess.run(
-        ["hpc-agent", "load-context", "--experiment-dir", str(experiment_dir)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"load-context failed (exit {proc.returncode}): {proc.stderr.strip()}")
-    envelope = json.loads(proc.stdout)
-    if not envelope.get("ok"):
-        raise RuntimeError(f"load-context returned a non-ok envelope: {envelope}")
-    data: dict[str, Any] = envelope["data"]
-    return data
+
+    step_table: StepTable = field(default_factory=lambda: _CAMPAIGN_STEP_VERB)
+    resolver: JudgementResolver = default_judgement_resolver
 
 
-def plan_action(delegate: dict[str, Any] | None, *, allow_agent_steps: bool) -> dict[str, Any]:
-    """Map a ``delegate`` block to a concrete action intent.
-
-    Pure function (no I/O) so the routing logic is unit-testable.
-    Returns one of:
-
-    - ``{"action": "cli", "verb": ..., "run_id": ..., "step": ...}``
-    - ``{"action": "agent", "spawn_request": ..., "step": ...}``
-    - ``{"action": "skip", "reason": ...}``
-    """
-    if not delegate:
-        return {"action": "skip", "reason": "load-context returned no delegate block"}
-
-    kind = delegate.get("kind")
-    step = delegate.get("step")
-
-    if kind == "cli":
-        verb = _STEP_VERB.get(step) if isinstance(step, str) else None
-        if verb is None:
-            return {"action": "skip", "reason": f"no cli verb mapped for step {step!r}"}
-        run_id = delegate.get("run_id")
-        if not run_id:
-            return {"action": "skip", "reason": f"cli step {step!r} has no run_id"}
-        return {"action": "cli", "verb": verb, "run_id": run_id, "step": step}
-
-    if kind == "agent":
-        if not allow_agent_steps:
-            return {
-                "action": "skip",
-                "reason": (
-                    f"step {step!r} needs an agent; pass --allow-agent-steps to "
-                    "permit the driver to spawn `claude -p` (a billable side effect)"
-                ),
-            }
-        spawn_request = delegate.get("spawn_request")
-        if not spawn_request:
-            return {
-                "action": "skip",
-                "reason": f"agent step {step!r} has no spawn_request",
-            }
-        return {"action": "agent", "spawn_request": spawn_request, "step": step}
-
-    return {"action": "skip", "reason": f"unknown delegate kind {kind!r}"}
-
-
-def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
-    """Run a deterministic ``hpc-agent`` workflow verb for *run_id*.
-
-    Both ``monitor-flow`` and ``aggregate-flow`` only *require* ``run_id``
-    in their input spec, so a minimal ``{"run_id": ...}`` spec is valid.
-    """
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".json", prefix=f"{verb}-spec-", delete=False
-    ) as handle:
-        json.dump({"run_id": run_id}, handle)
-        spec_path = handle.name
-    try:
-        proc = subprocess.run(
-            ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)],
-            check=False,
-        )
-        return proc.returncode
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(spec_path)
-
-
-def _run_agent_step(spawn_request: dict[str, Any], experiment_dir: Path) -> int:
-    """Run a judgement step in a fresh-context worker.
-
-    *spawn_request* is the delegate block's ``spawn_request`` — a
-    ``{workflow, experiment_dir, fields}`` dict. It is handed to
-    :func:`hpc_agent._kernel.lifecycle.run.run_workflow`, the same
-    code-orchestrated entrypoint ``hpc-agent run`` uses: it validates
-    and renders the request into the canonical worker prompt, invokes a
-    fresh-context worker, and parses the worker's report. The parsed
-    report is printed so a cron/`/loop` tick leaves a record of the step.
-    """
-    from hpc_agent._kernel.lifecycle.run import run_workflow
-
-    report, exit_code, _cache_stats = run_workflow(
-        workflow=spawn_request["workflow"],
-        experiment_dir=str(experiment_dir),
-        fields=spawn_request.get("fields", {}),
-    )
-    print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
-    return exit_code
-
-
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, config: CampaignLoopConfig | None = None) -> int:
     """Advance one campaign workflow step. Returns a process exit code."""
-    parser = argparse.ArgumentParser(
+    if config is None:
+        config = CampaignLoopConfig()
+    return drive(
+        argv,
+        step_table=config.step_table,
+        resolver=config.resolver,
         prog="hpc-campaign-driver",
         description="Advance one campaign workflow step from load-context's delegate block.",
     )
-    parser.add_argument(
-        "--experiment-dir",
-        type=Path,
-        default=Path.cwd(),
-        help="Experiment repo root (default: cwd).",
-    )
-    parser.add_argument(
-        "--allow-agent-steps",
-        action="store_true",
-        help="Permit the driver to spawn `claude -p` for judgement steps (billable).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the planned action and exit without executing it.",
-    )
-    args = parser.parse_args(argv)
-
-    data = load_context(args.experiment_dir)
-    delegate = data.get("delegate")
-    plan = plan_action(delegate, allow_agent_steps=args.allow_agent_steps)
-
-    print(json.dumps({"delegate": delegate, "plan": plan}, indent=2, sort_keys=True))
-
-    if args.dry_run or plan["action"] == "skip":
-        return 0
-    if plan["action"] == "cli":
-        return _run_cli_step(plan["verb"], plan["run_id"], args.experiment_dir)
-    if plan["action"] == "agent":
-        return _run_agent_step(plan["spawn_request"], args.experiment_dir)
-    return 0
 
 
 if __name__ == "__main__":

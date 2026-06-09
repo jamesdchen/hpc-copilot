@@ -122,6 +122,19 @@
           ],
           "default": null,
           "title": "Max Walltime Sec"
+        },
+        "max_core_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Core Hours"
         }
       },
       "title": "_CampaignBudget",
@@ -225,6 +238,20 @@
           "default": null,
           "description": "Plateau baseline. ``all_time_best`` (default): fires when the recent window failed to beat the all-time prior best — 'no new record in N iters'. ``prior_window``: fires when the recent window failed to beat the prior window of equal size — 'improvements have stalled'. See campaign_converged for the data-requirement and use-case trade-offs.",
           "title": "Plateau Mode"
+        },
+        "circuit_breaker_failures": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Loop-safety circuit breaker. ``campaign-advance`` emits ``stop_circuit_breaker`` when this many of the most recent iterations failed consecutively (terminal failed/abandoned runs, in submit order). No framework default — omitted means no breaker.",
+          "title": "Circuit Breaker Failures"
         }
       },
       "title": "_StopCriteria",

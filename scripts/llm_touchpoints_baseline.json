@@ -31,10 +31,10 @@
     "total_touchpoints": 19
   },
   "submit": {
-    "branches": 16,
+    "branches": 15,
     "escalation_points": 3,
     "retry_loops": 8,
     "stop_gates": 6,
-    "total_touchpoints": 30
+    "total_touchpoints": 29
   }
 }

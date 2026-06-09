@@ -14,6 +14,18 @@ invocation), and the cursor/dirs/manifest support modules that back
 them. Campaigns are operations *about* operations, so this subject
 lives under `meta/` rather than `ops/`.
 
+The tick-loop itself is **not** campaign-owned. The generic mechanism —
+read a `delegate` block, plan the next action, dispatch a `cli` verb or
+an `agent` judgement step, one step per invocation — lives in
+`_kernel/lifecycle/drive.py` as neutral substrate. The mechanism owns
+the protocol; the caller owns the policy. `driver.py` is the campaign
+*caller* that configures it: it injects a `StepTable` (the campaign
+`monitor`/`aggregate` → flow-verb map) and a `JudgementResolver` (the
+default `claude -p` path) via `CampaignLoopConfig`, then exposes the
+`hpc-campaign-driver` entry point. `driver.py` re-exports `plan_action`
+from `drive` so importers' paths are unchanged. The dependency points
+`meta/campaign` → `_kernel/lifecycle/drive`, never the reverse.
+
 ## Invariant
 
 `meta/campaign/` promises: on-disk state (run sidecars, journal,
@@ -33,7 +45,10 @@ driver is intentionally not a `@primitive`.
   (the name avoids shadowing the `list` builtin),
   `atoms/replay.py`, `atoms/status.py`, `atoms/load_context.py`.
 - **Public non-primitive entry point**: `driver.py:main` —
-  the `hpc-campaign-driver` console script.
+  the `hpc-campaign-driver` console script. A thin shim over the neutral
+  loop in `_kernel/lifecycle/drive.py`; it holds `CampaignLoopConfig`
+  (the campaign step map + default resolver) and the entry point, and
+  re-exports `plan_action` from `drive`.
 - **Support modules** (internal to the subject, imported by the atoms
   above): `cursor.py`, `dirs.py`, `manifest.py`. External callers go
   through the primitive CLI, not these helpers.

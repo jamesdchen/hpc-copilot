@@ -133,19 +133,19 @@
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]",
+    "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-advance",
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.advance.campaign_advance",
     "side_effects": [],
-    "summary": "Decide the next campaign action (continue / stop_converged / stop_over_budget / wait_in_flight).",
+    "summary": "Decide the next campaign action (continue / stop_converged / stop_over_budget / stop_circuit_breaker / wait_in_flight).",
     "verb": "query"
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]",
+    "cli": "hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-budget",
@@ -356,7 +356,7 @@
     "output_schema": "detect_entry_point.output.json",
     "python": "hpc_agent.ops.detect_entry_point.detect_entry_point",
     "side_effects": [],
-    "summary": "Scan an experiment dir for Python entry-point candidates (main.py/train.py/console-scripts/python -m targets/shell scripts), classify each candidate's argv style (argparse / click / typer / hydra / fire / __main__), and locate files carrying @register_run. Collapses the duplicated six-probe shell block in hpc-wrap-entry-point Steps 0 + 1.",
+    "summary": "Scan an experiment dir for Python entry-point candidates (main.py/train.py/console-scripts/python -m targets/shell scripts), classify each candidate's argv style (argparse / click / typer / hydra / fire / __main__), and locate files carrying @register_run. Collapses the duplicated six-probe shell block in hpc-wrap-entry-point Steps 0 + 1. Also surfaces interview.json's materialized entry-point block (kind shell_command / register_run / python_module) so one call answers submit.md Step 0b's wrapper-honor + mature-repo probe.",
     "verb": "query"
   },
   {
@@ -728,7 +728,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]",
+    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-init",

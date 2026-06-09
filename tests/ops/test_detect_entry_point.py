@@ -11,6 +11,7 @@ emit.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from hpc_agent.ops import detect_entry_point as dep
@@ -234,3 +235,136 @@ class TestMultipleCandidates:
         assert {"main.py", "train.py"} <= paths
         assert _argv_kind_for(result["candidates"], "main.py") == "argparse"
         assert _argv_kind_for(result["candidates"], "train.py") == "click"
+
+
+def _write_interview(root: Path, entry_point: dict | None, *, rel: str = "interview.json") -> None:
+    """Write a minimal ``interview.json`` with the given materialized entry point."""
+    materialized: dict = {"at": "2026-06-08T00:00:00", "cmd_sha": "deadbeef", "total_tasks": 1}
+    if entry_point is not None:
+        materialized["entry_point"] = entry_point
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"goal": "g", "task_count": 1, "_materialized": materialized}))
+
+
+class TestMaterializedEntryPoint:
+    """The optional ``materialized`` field surfaced from interview.json."""
+
+    def test_shell_command_block_surfaced(self, tmp_path: Path) -> None:
+        # The fallback path: a wrapper was materialized. The worker honors it
+        # at Step 0b. ``frozen_shas`` is an internal detail and must NOT leak.
+        _write_interview(
+            tmp_path,
+            {
+                "kind": "shell_command",
+                "run_name": "myrun",
+                "wrapper_path": ".hpc/wrappers/myrun.py",
+                "executor_cmd": "python3 .hpc/wrappers/myrun.py",
+                "frozen_shas": {"exp.yaml": "abc123"},
+                "data_axis": {"kind": "independent"},
+            },
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        mat = result["materialized"]
+        assert mat["kind"] == "shell_command"
+        assert mat["run_name"] == "myrun"
+        assert mat["wrapper_path"] == ".hpc/wrappers/myrun.py"
+        assert mat["executor_cmd"] == "python3 .hpc/wrappers/myrun.py"
+        assert mat["data_axis"] == {"kind": "independent"}
+        # Internal identity detail is intentionally dropped.
+        assert "frozen_shas" not in mat
+
+    def test_register_run_block_surfaced(self, tmp_path: Path) -> None:
+        _write_interview(
+            tmp_path,
+            {
+                "kind": "register_run",
+                "run_name": "train",
+                "executor_cmd": "python3 -c '...'",
+            },
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        mat = result["materialized"]
+        assert mat == {
+            "kind": "register_run",
+            "run_name": "train",
+            "executor_cmd": "python3 -c '...'",
+        }
+
+    def test_python_module_block_surfaced(self, tmp_path: Path) -> None:
+        _write_interview(
+            tmp_path,
+            {"kind": "python_module", "module": "my_pkg.train", "function": "main"},
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["materialized"] == {
+            "kind": "python_module",
+            "module": "my_pkg.train",
+            "function": "main",
+        }
+
+    def test_hpc_dir_interview_fallback(self, tmp_path: Path) -> None:
+        # A ``.hpc/interview.json`` is accepted as a fallback location.
+        _write_interview(
+            tmp_path,
+            {"kind": "register_run", "run_name": "r", "executor_cmd": "cmd"},
+            rel=".hpc/interview.json",
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["materialized"]["kind"] == "register_run"
+
+    def test_root_interview_preferred_over_hpc(self, tmp_path: Path) -> None:
+        # When both exist, the canonical campaign-dir-root file wins.
+        _write_interview(
+            tmp_path,
+            {"kind": "register_run", "run_name": "root", "executor_cmd": "c"},
+        )
+        _write_interview(
+            tmp_path,
+            {"kind": "register_run", "run_name": "hpc", "executor_cmd": "c"},
+            rel=".hpc/interview.json",
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["materialized"]["run_name"] == "root"
+
+    def test_absent_interview_no_materialized_key(self, tmp_path: Path) -> None:
+        # No interview.json → field absent, repo scan stands.
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert "materialized" not in result
+
+    def test_interview_without_materialized_entry_point(self, tmp_path: Path) -> None:
+        # interview.json present but no _materialized.entry_point → absent.
+        _write_interview(tmp_path, None)
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert "materialized" not in result
+
+    def test_malformed_interview_is_absent(self, tmp_path: Path) -> None:
+        # A half-written / malformed interview.json is treated as absent —
+        # the repo scan stands rather than crashing.
+        (tmp_path / "interview.json").write_text("{ this is not valid json")
+        (tmp_path / "train.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert "materialized" not in result
+        # Repo-scan path is unchanged.
+        assert _argv_kind_for(result["candidates"], "train.py") == "argparse"
+
+    def test_repo_scan_unchanged_when_interview_absent(self, tmp_path: Path) -> None:
+        # The existing repo-scan output is byte-identical with no interview.json.
+        (tmp_path / "main.py").write_text("import click\n@click.command()\ndef r():\n    ...\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result == {
+            "kind": "detected",
+            "candidates": [{"path": "main.py", "argv_kind": "click"}],
+            "decoration_found": [],
+        }
+
+    def test_materialized_alongside_repo_scan(self, tmp_path: Path) -> None:
+        # A materialized block coexists with repo-scan candidates — both surface.
+        (tmp_path / "main.py").write_text("import argparse\nargparse.ArgumentParser()\n")
+        _write_interview(
+            tmp_path,
+            {"kind": "register_run", "run_name": "main", "executor_cmd": "c"},
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        assert result["materialized"]["kind"] == "register_run"
+        assert _argv_kind_for(result["candidates"], "main.py") == "argparse"

@@ -35,9 +35,65 @@
       "items": {
         "type": "string"
       }
+    },
+    "materialized": {
+      "$ref": "#/$defs/MaterializedEntryPoint",
+      "title": "Materialized",
+      "description": "The ``_materialized.entry_point`` block from ``interview.json`` when a wrapper-fallback onboarding (``hpc-wrap-entry-point``) already chose an entry point — ``null``/absent otherwise. Lets one ``detect-entry-point`` call answer submit.md Step 0b: branch on ``materialized.kind`` to honor a materialized wrapper, falling back to the ``candidates`` / ``decoration_found`` mature-repo probe when it is absent."
     }
   },
   "$defs": {
+    "MaterializedEntryPoint": {
+      "additionalProperties": false,
+      "title": "MaterializedEntryPoint",
+      "type": "object",
+      "description": "The worker-facing subset of ``interview.json``'s ``_materialized.entry_point`` block. ``kind`` selects the Step 0b procedure: ``shell_command`` short-circuits Step 1's discover scan (honor the wrapper at ``wrapper_path``, use ``executor_cmd`` as the EXECUTOR, feed ``data_axis`` into axes.yaml if present); ``register_run`` / ``python_module`` are pointers that fall through to normal discovery. Only the fields the source block declares are present (the internal ``frozen_shas`` identity detail is intentionally omitted).",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "shell_command",
+            "register_run",
+            "python_module"
+          ],
+          "type": "string",
+          "title": "Kind",
+          "description": "The materialized entry-point shape. ``shell_command``: a thin ``@register_run`` wrapper was materialized (the fallback path) — skip Step 1's discover scan. ``register_run`` / ``python_module``: pointers to a function the worker resolves through normal Step 1 discovery (no wrapper to honor)."
+        },
+        "run_name": {
+          "type": "string",
+          "title": "Run Name",
+          "description": "The wrapper / run function name (``shell_command`` and ``register_run`` kinds). For ``shell_command`` this is the materialized ``.hpc/wrappers/<run_name>.py``; treat it as the picked run."
+        },
+        "wrapper_path": {
+          "type": "string",
+          "title": "Wrapper Path",
+          "description": "POSIX-relative path to the materialized ``@register_run`` wrapper (``shell_command`` kind only), e.g. ``.hpc/wrappers/<run_name>.py``."
+        },
+        "executor_cmd": {
+          "type": "string",
+          "title": "Executor Cmd",
+          "description": "The per-task EXECUTOR command for this entry point (``shell_command`` and ``register_run`` kinds). Use it as the Step 6 ``job_env`` EXECUTOR instead of synthesizing one from ``discover-executors``."
+        },
+        "module": {
+          "type": "string",
+          "title": "Module",
+          "description": "Dotted importable module path (``python_module`` kind only), e.g. ``my_pkg.train``."
+        },
+        "function": {
+          "type": "string",
+          "title": "Function",
+          "description": "The function inside ``module`` to target (``python_module`` kind only)."
+        },
+        "data_axis": {
+          "type": "object",
+          "title": "Data Axis",
+          "description": "Pre-declared series-axis classification (``shell_command`` kind, when the experimenter declared ``data_axis_hint``). When present, skip the Step 3b classification interview and feed this block into the axes.yaml write classify-axis would have done."
+        }
+      }
+    },
     "Candidate": {
       "additionalProperties": false,
       "title": "Candidate",

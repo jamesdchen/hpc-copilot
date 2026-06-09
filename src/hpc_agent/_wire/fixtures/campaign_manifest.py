@@ -21,6 +21,7 @@ class _CampaignBudget(BaseModel):
     max_jobs: int | None = Field(default=None, ge=0)
     max_tasks: int | None = Field(default=None, ge=0)
     max_walltime_sec: int | None = Field(default=None, ge=0)
+    max_core_hours: float | None = Field(default=None, ge=0)
 
 
 class _StopCriteria(BaseModel):
@@ -41,6 +42,17 @@ class _StopCriteria(BaseModel):
             "recent window failed to beat the prior window of equal size "
             "— 'improvements have stalled'. See campaign_converged for "
             "the data-requirement and use-case trade-offs."
+        ),
+    )
+    circuit_breaker_failures: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Loop-safety circuit breaker. ``campaign-advance`` emits "
+            "``stop_circuit_breaker`` when this many of the most recent "
+            "iterations failed consecutively (terminal failed/abandoned "
+            "runs, in submit order). No framework default — omitted means "
+            "no breaker."
         ),
     )
 

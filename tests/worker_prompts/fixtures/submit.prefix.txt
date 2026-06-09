@@ -84,24 +84,30 @@ Exports `notebooks/{pipeline,executors,scripts}/*.ipynb` → `src/<module>.py`, 
 
 **The default mature-repo path is `@register_run` on the user's function** — Step 1's `discover_runs` finds it in `notebooks/`, `train.py`, or `main.py`. No special branch needed.
 
-This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), `/wrap-entry-point-hpc` materializes a wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` with a `shell_command` `_materialized.entry_point`. **Read `interview.json` with the Read tool** (do not shell `python -c`).
+This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), the entry-point wrap workflow materializes a wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` with a `shell_command` `_materialized.entry_point`.
 
-If that block is present, branch on its `kind`:
+**Run ONE call to get both the materialized block and the mature-repo probe** — never inspect files yourself (no Read/Glob/Grep tool, no shell `grep`/`cat`/`test`/`python`):
+
+```bash
+hpc-agent detect-entry-point --experiment-dir .
+```
+
+Its `data` carries the repo scan (`kind`, `candidates`, `decoration_found`) **and** the optional `materialized` block — the `_materialized.entry_point` from `interview.json` when the wrap workflow already chose an entry point. If `data.materialized` is present, branch on `data.materialized.kind`:
 
 | `kind` | Procedure behavior |
 |---|---|
-| `shell_command` | **The fallback path.** A wrapper has been materialized at `<wrapper_path>` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract for an entry point the framework can't decorate directly. **Skip Step 1's discover scan**; treat `<run_name>` as the picked run. **Use `<executor_cmd>` as the `EXECUTOR` in Step 6's `job_env`** instead of synthesizing one from `discover_executors`. If `data_axis` is on the block, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6's reuse branch (omit `build_tasks`) picks it up. |
-| `register_run` | A pointer to a `@register_run`-decorated function the user has on disk — the canonical Python path. No wrapper to honor; fall through to Step 1's discovery, optionally scoped to `<run_name>` rather than enumerating. |
-| `python_module` | A pointer to an importable Python module. No wrapper to honor; fall through to Step 1's discovery, scoped to `<module>:<function>`. The `EXECUTOR` at Step 6 is `python3 -m <module>` (or a one-liner that imports `<function>`) if Step 1 doesn't otherwise resolve it. |
+| `shell_command` | **The fallback path.** A wrapper has been materialized at `data.materialized.wrapper_path` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract for an entry point the framework can't decorate directly. **Skip Step 1's discover scan**; treat `data.materialized.run_name` as the picked run. **Use `data.materialized.executor_cmd` as the `EXECUTOR` in Step 6's `job_env`** instead of synthesizing one from `discover_executors`. If `data.materialized.data_axis` is present, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6's reuse branch (omit `build_tasks`) picks it up. |
+| `register_run` | A pointer to a `@register_run`-decorated function the user has on disk — the canonical Python path. No wrapper to honor; fall through to Step 1's discovery, optionally scoped to `data.materialized.run_name` rather than enumerating. |
+| `python_module` | A pointer to an importable Python module. No wrapper to honor; fall through to Step 1's discovery, scoped to `data.materialized.module`:`data.materialized.function`. The `EXECUTOR` at Step 6 is `python3 -m <module>` (or a one-liner that imports `<function>`) if Step 1 doesn't otherwise resolve it. |
 
 Both `register_run` and `python_module` are **pointers, not wrappers** — they declare which function the worker should target but don't materialize anything. They get resolved through the normal Step 1 discovery flow; only `shell_command` short-circuits it.
 
-If `interview.json` doesn't exist, or `_materialized.entry_point` is absent, **probe whether this is a mature-repo case** that needs an interview the headless worker can't conduct, using the Read/Glob/Grep tools (not shell `grep`/`test`):
+If `data.materialized` is absent (no `interview.json`, or no `_materialized.entry_point`), **read the same envelope's repo scan to decide whether this is a mature-repo case** that needs an interview the headless worker can't conduct:
 
-- `HAS_MAIN`: use **Glob** for `main.py` and `src/main.py`.
-- `HAS_REGISTER_RUN`: use **Grep** for `@register_run` across `notebooks/` and `src/`.
+- `HAS_MAIN`: a `candidates` entry whose `path` is `main.py` or `src/main.py`.
+- `HAS_REGISTER_RUN`: a non-empty `decoration_found` (or any `candidates` entry already decorated).
 
-If `main.py` is present and `@register_run` is found nowhere: record in `anomalies` (prefix `mature_repo_needs_interview: main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke`) and stop.
+If `HAS_MAIN` holds and `decoration_found` is empty: record in `anomalies` (prefix `mature_repo_needs_interview: main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run the entry-point wrap workflow for guided setup, then re-invoke`) and stop.
 
 Otherwise (no mature-repo signals): the rest of the procedure runs unchanged.
 
@@ -115,8 +121,8 @@ hpc-agent discover-runs --experiment-dir .
 
 The envelope's `data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`.
 
-- **Bare `/submit-hpc`** (the default) — list every `@register_run` and let the user pick one.
-- **`/submit-hpc <file>`** — scope discovery to that one file (a notebook or a script).
+- **Unscoped submit** (the default) — list every `@register_run` and let the user pick one.
+- **Submit scoped to one file** (a file path arrived in the invocation `fields`) — scope discovery to that one file (a notebook or a script).
 
 Record the picked run's `name`, `gpu`, `flags`, and `run_signature_sha` — the signature hash is the cache key for Step 3's classification lookup.
 
@@ -230,7 +236,7 @@ hpc-agent resolve-submit-inputs --spec spec.json --experiment-dir .
 
 Branch on `stage_reached` (read `needs_decision`):
 
-- `needs_scaffold_interview` (`needs_decision=true`) → `.hpc/tasks.py` is absent and no `build_tasks` scaffold spec was supplied — scaffolding needs an executor-discovery + axes interview the headless worker can't run. Record it in `anomalies` (prefix `mature_repo_needs_interview:`) and stop; the user adds `@register_run` / runs `/wrap-entry-point-hpc`, or resolves the axes upstream, then re-invokes.
+- `needs_scaffold_interview` (`needs_decision=true`) → `.hpc/tasks.py` is absent and no `build_tasks` scaffold spec was supplied — scaffolding needs an executor-discovery + axes interview the headless worker can't run. Record it in `anomalies` (prefix `mature_repo_needs_interview:`) and stop; the user adds `@register_run` / runs the entry-point wrap workflow, or resolves the axes upstream, then re-invokes.
 - `prior_run_found` (`needs_decision=true`) → a live prior run (`complete` / `in_flight`) matches this `cmd_sha`. Record a `prior_run` decision with outcome `found` (`data.prior_run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh. (A terminal-but-not-`complete` prior — `failed` / `abandoned`, #276 — is forensic, not live; the composite proceeds to `resolved` and re-submits over it, the canary refiring rather than reusing the dead one.)
 - `resolved` (`needs_decision=false`) → inputs resolved: `data.submit_spec` is the built + validated submit-flow spec, `data.sidecar_path` confirms the per-run sidecar is written (#171), and `data.run_id` / `data.cmd_sha` are set. Carry `data.submit_spec` into the submit-pipeline spec's inner `submit.submit` block (Step 7-10) and continue to Step 6b.
 - Error envelopes: branch by `error_code` per the primitive's contract.
@@ -298,12 +304,12 @@ Branch on the single envelope's `stage_reached` (`needs_decision` tells you whet
 - `deduped` (`needs_decision=false`) → the main run already ran; original jobs are live. Record `deduped: <run_id>` in `anomalies`; switch to the status workflow. Do NOT re-submit.
 - `canary_failed` (`needs_decision=true`) → the canary failed the gate. Record a `canary` decision with outcome = `data.failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put the stderr tail verbatim in `anomalies`, then **stop. The main array never launched** — `data.job_ids` is empty.
 - `verify_submitted_failed` (`needs_decision=true`) → the array launched but did not all land queued/running — an SGE array can land in `Eqw`, a SLURM job can be held, both of which a plain alive-check reports as "present." Record the offending job ids + states from `data.verify_submitted_result` verbatim in `anomalies`, then stop. (See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state to its fix.)
-- `complete` (`needs_decision=false`) → the canary passed, the main array is live and healthy, and the follow-up specs are pre-staged (`data.monitor_spec_path` / `data.aggregate_spec_path`, #278 — so `/monitor-hpc` and `/aggregate-hpc` skip their interview round-trip, each `cmd_sha`-gated against the journal). Capture `data.run_id` / `data.job_ids` and report.
+- `complete` (`needs_decision=false`) → the canary passed, the main array is live and healthy, and the follow-up specs are pre-staged (`data.monitor_spec_path` / `data.aggregate_spec_path`, #278 — so the status and aggregate workflows skip their interview round-trip, each `cmd_sha`-gated against the journal). Capture `data.run_id` / `data.job_ids` and report.
 - Error envelopes: branch by `error_code` per the primitive's contract.
 
 Do not cache run config in conversational memory. `submit-flow` persists the full v2 config snapshot (executor, cluster, remote_path, env, resources) to the run sidecar; any later step recovers it with `hpc-agent load-context`. Conversational memory is lost on context compaction or a session restart — the sidecar is not.
 
-Report after a `complete` stage: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. The caller suggests `/monitor-hpc` to track progress.
+Report after a `complete` stage: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. The caller switches to the status workflow to track progress.
 
 The journal write happens inside `submit-flow` (which `submit-pipeline` calls) via `runner.submit_and_record`. For multi-executor submissions (one sidecar per executor), invoke `submit-pipeline` once per submitted job — each call writes its own sidecar.
 

@@ -14,7 +14,26 @@ preamble).
 | `HPC_MAX_RUNS` | `500` | Max per-experiment sidecars retained before oldest-by-mtime eviction (`hpc_agent.state.runs`). |
 | `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.execution.mapreduce.reduce.history.prior(...)`. |
 | `HPC_TELEMETRY_SINK` | `none` | One of `none` / `stderr-jsonl` / `monitor-jsonl`. Routes `hpc_agent._kernel.extension.telemetry.record` events. |
-| `HPC_AGENT_WORKER_JSON_SCHEMA` | (unset) | Set to `1`/`true` to spawn the delegated `claude -p` worker with `--json-schema` (the WorkerReport schema), constraining the worker's final report at **decode time** so malformed JSON can't be emitted — the structural complement to `parse_worker_report`'s cross-field checks (`hpc_agent._kernel.lifecycle.invoke`). Off by default until a live `claude -p --json-schema` run is validated against the `--bare` agent loop; when off, the worker uses the plain text transport. Making it the default is tracked in [#269](https://github.com/jamesdchen/hpc-agent/issues/269). |
+| `HPC_AGENT_WORKER_JSON_SCHEMA` | (unset) | Set to `1`/`true` to spawn the delegated worker with a decode-time output schema, constraining the worker's final report so malformed JSON can't be emitted — the structural complement to `parse_worker_report`'s cross-field checks (`hpc_agent._kernel.lifecycle.invoke`). Maps per harness: `claude-cli` → `--json-schema`; `codex-cli` → `--output-schema`. `gemini-cli` has no CLI decode schema (`responseSchema` is API/SDK-only), so it always leans on the `parse_worker_report` floor regardless of this flag. Off by default; when off, every driver uses the plain transport + floor. Making it the default is tracked in [#269](https://github.com/jamesdchen/hpc-agent/issues/269). |
+
+## Worker invoker (multi-harness)
+
+The delegated headless worker can run under different agent harnesses
+(`WorkerInvoker` drivers in `hpc_agent._kernel.lifecycle.invoke`). Each
+driver normalizes four axes — headless transport, sandbox/network
+posture off, the cluster-op tool-authorization fence, and
+decode-schema-vs-`parse_worker_report` floor — plus the
+`missing_credential_remediation()` pre-spawn auth guard and the
+`cache_stats=None` fallback when the transport surfaces no billing usage.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HPC_AGENT_INVOKER` | (auto) | Explicit worker-invoker override, beating the ambient-credential auto-selection. Spawning transports: `claude-cli` (`claude -p --bare`, API key), `claude-cli-oauth` (Claude Code OAuth login), `codex-cli` (`codex exec`, `CODEX_API_KEY`), `gemini-cli` (`gemini -p`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`). The reserved non-spawning value `inline` runs the procedure in the caller's own context and is honored only by `hpc-agent run` (operator opt-in, #155). Auto-selection: Claude creds → `claude-cli`; else a Claude OAuth file → `claude-cli-oauth`; else `CODEX_API_KEY` → `codex-cli`; else Gemini creds → `gemini-cli`; else `claude-cli` (so its credential guard fires). |
+| `CODEX_API_KEY` | (unset) | Auth for the `codex-cli` worker, scoped to the invocation. Preferred over ambient `OPENAI_API_KEY`, which a stored ChatGPT login in `~/.codex/auth.json` can shadow ([codex #3286](https://github.com/openai/codex/issues/3286)). |
+| `GEMINI_API_KEY` | (unset) | Auth for the `gemini-cli` worker via the Gemini API. |
+| `GOOGLE_API_KEY` | (unset) | Auth for the `gemini-cli` worker via Vertex AI (alternative to `GEMINI_API_KEY`). |
+| `HPC_AGENT_CODEX_WORKER_MODEL` | `gpt-5.4-mini` | Overrides the `codex-cli` worker's pinned cheap model id (for when the default id is retired upstream before the constant is bumped). |
+| `HPC_AGENT_GEMINI_WORKER_MODEL` | `gemini-2.5-flash` | Overrides the `gemini-cli` worker's pinned cheap model id. The default is a concrete id, not the `auto`/`flash`/`pro` aliases (which resolve to a preview generation). |
 
 ## Raw model-call adapter (`structured()`)
 
