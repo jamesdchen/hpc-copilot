@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/resolve_resources.input.json",
   "title": "ResolveResourcesSpec",
-  "description": "Input spec for the ``resolve-resources`` composite primitive (WS5 #5).\n\nCollapses ``hpc-submit`` SKILL.md Step 6's silent multi-step resource\nresolution — runtime-prior walltime + cluster gpu default + partition —\ninto one CLI call. Each of ``walltime_sec`` / ``gpu_type`` / ``partition``\nresolves from a caller override first, then an auto-resolution rule.\n\nThe ``walltime_sec`` auto-path probes the OPTIONAL ``read-runtime-prior``\nverb (p95 × safety_mult). That verb is plugin-only: on a core install it\nis not registered, and the first submit has no prior. A missing/erroring\nverb, or one reporting ``needs_canary``, is cold-start — ``walltime_sec``\nstays null (the caller falls back to the cluster cold-start walltime),\nNOT an error. Partition resolution delegates to the existing\n``recommend-partition`` primitive; partition logic is not reimplemented.",
+  "description": "Input spec for the ``resolve-resources`` composite primitive (WS5 #5).\n\nCollapses ``hpc-submit`` SKILL.md Step 6's silent multi-step resource\nresolution \u2014 runtime-prior walltime + cluster gpu default + partition \u2014\ninto one CLI call. Each of ``walltime_sec`` / ``gpu_type`` / ``partition``\nresolves from a caller override first, then an auto-resolution rule.\n\nThe ``walltime_sec`` auto-path probes the OPTIONAL ``read-runtime-prior``\nverb (p95 \u00d7 safety_mult). That verb is plugin-only: on a core install it\nis not registered, and the first submit has no prior. A missing/erroring\nverb, or one reporting ``needs_canary``, is cold-start \u2014 ``walltime_sec``\nstays null (the caller falls back to the cluster cold-start walltime),\nNOT an error. Partition resolution delegates to the existing\n``recommend-partition`` primitive; partition logic is not reimplemented.",
   "type": "object",
   "required": [
     "cluster"
@@ -34,7 +34,7 @@
       ],
       "default": null,
       "title": "Profile",
-      "description": "Run profile (run_name) — the read-runtime-prior lookup key. When null, the walltime probe is skipped and walltime resolves cold-start (``cold_start_no_profile``)."
+      "description": "Run profile (run_name) \u2014 the read-runtime-prior lookup key. When null, the walltime probe is skipped and walltime resolves cold-start (``cold_start_no_profile``)."
     },
     "cmd_sha": {
       "anyOf": [
@@ -112,6 +112,34 @@
       "default": null,
       "title": "User Preferred Partition",
       "description": "Soft partition preference forwarded to recommend-partition (honoured verbatim when it names a declared partition). Distinct from ``partition``, which is a hard override that skips recommend-partition."
+    },
+    "mpi_pe": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mpi Pe",
+      "description": "Caller override for the SGE parallel environment (#293); skips recommend-pe."
+    },
+    "mpi_ranks": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mpi Ranks",
+      "description": "Total MPI ranks for a multi-rank submit (#293); when set, mpi_pe is auto-derived from the cluster's parallel_environments."
     }
   }
 }

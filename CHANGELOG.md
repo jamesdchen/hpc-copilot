@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.43 — 2026-06-09
+
+### Added — `resolve-resources` auto-derives the SGE parallel environment (#293)
+
+Closes the one remaining in-scope item from the multi-rank workstream: an SGE MPI submit no longer needs the caller to hard-code `mpi.pe_name`. PR1 already enumerates each cluster's `parallel_environments` (SGE PEs / SLURM partitions / PBS queues, tagged `kind: mpi|smp|other`); this wires that into `resolve-resources` so the PE is selected from the cluster's own enumeration.
+
+- **New pure selector `ops/recommend_pe.recommend_pe(parallel_environments, ranks)`** — considers only `source="pe"` + `kind="mpi"` entries (SLURM/PBS size from `--ntasks`/`select=` and need no `-pe` name), and among those with sufficient slot capacity (`raw.slots >= ranks`, or unknown capacity assumed usable) picks the **tightest fit** (smallest sufficient PE, deterministic on ties). Returns `(pe_name, rationale)`; `None` with a diagnostic rationale (`no_mpi_pe` / `no_pe_fits_ranks:…`) when nothing qualifies.
+- **`resolve-resources` grows an MPI-aware path** mirroring its `recommend-partition` delegation: new `--mpi-ranks` / `--mpi-pe` args (+ programmatic `parallel_environments`, like `partitions`), a resolved `mpi_pe` output field, and a `provenance.mpi_pe` entry (`caller` / `not_mpi` / `no_parallel_environments_supplied` / `recommend_pe:<rationale>`). Caller override wins; absent `mpi_ranks` ⇒ `null` (not an MPI submit). The existing `build-submit-spec` SGE `pe_name` guard still backstops a missing PE.
+- Tests: `tests/ops/test_recommend_pe.py` (tightest-fit, capacity filtering, smp/partition exclusion, unknown-slots, determinism) and a `TestMpiPe` class in `test_resolve_resources.py` (auto-derive / override / not-mpi / no-enumeration / ranks-exceed-capacity). Hand-authored input+output schemas, `operations.json`, and generated docs regenerated.
+
 ## 0.10.42 — 2026-06-09
 
 ### Added — MPI failure signatures + multi-rank canary (#293 PR4)

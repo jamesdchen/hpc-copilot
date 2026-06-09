@@ -294,8 +294,58 @@ class TestOutputShape:
             "walltime_sec",
             "gpu_type",
             "partition",
+            "mpi_pe",
             "provenance",
             "elapsed_total_sec",
         }
-        assert set(out["provenance"]) == {"walltime_sec", "gpu_type", "partition"}
+        assert set(out["provenance"]) == {"walltime_sec", "gpu_type", "partition", "mpi_pe"}
         assert out["elapsed_total_sec"] >= 0
+        # Non-MPI call (no mpi_ranks): mpi_pe is null with the not_mpi provenance.
+        assert out["mpi_pe"] is None
+        assert out["provenance"]["mpi_pe"] == "not_mpi"
+
+
+# ── mpi_pe resolution (#293) ─────────────────────────────────────────────────
+
+
+class TestMpiPe:
+    """The MPI-aware path: caller override, auto-derivation from the cluster's
+    parallel_environments, and the null cases (not an MPI submit / no enum)."""
+
+    _PES = [
+        {"name": "smp", "source": "pe", "kind": "smp", "raw": {"slots": 16}},
+        {"name": "mpi", "source": "pe", "kind": "mpi", "raw": {"slots": 256}},
+        {"name": "mpi_small", "source": "pe", "kind": "mpi", "raw": {"slots": 32}},
+    ]
+
+    def test_not_mpi_when_no_ranks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_clusters(monkeypatch, {"c": {}})
+        out = rr.resolve_resources(cluster="c", parallel_environments=self._PES)
+        assert out["mpi_pe"] is None
+        assert out["provenance"]["mpi_pe"] == "not_mpi"
+
+    def test_auto_derives_tightest_pe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_clusters(monkeypatch, {"c": {}})
+        out = rr.resolve_resources(cluster="c", mpi_ranks=16, parallel_environments=self._PES)
+        assert out["mpi_pe"] == "mpi_small"
+        assert out["provenance"]["mpi_pe"].startswith("recommend_pe:tightest_fit")
+
+    def test_caller_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_clusters(monkeypatch, {"c": {}})
+        out = rr.resolve_resources(
+            cluster="c", mpi_pe="orte", mpi_ranks=16, parallel_environments=self._PES
+        )
+        assert out["mpi_pe"] == "orte"
+        assert out["provenance"]["mpi_pe"] == "caller"
+
+    def test_no_enumeration_supplied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_clusters(monkeypatch, {"c": {}})
+        out = rr.resolve_resources(cluster="c", mpi_ranks=16)
+        assert out["mpi_pe"] is None
+        assert out["provenance"]["mpi_pe"] == "no_parallel_environments_supplied"
+
+    def test_ranks_exceed_all_pes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_clusters(monkeypatch, {"c": {}})
+        out = rr.resolve_resources(cluster="c", mpi_ranks=10000, parallel_environments=self._PES)
+        assert out["mpi_pe"] is None
+        assert "no_pe_fits_ranks" in out["provenance"]["mpi_pe"]

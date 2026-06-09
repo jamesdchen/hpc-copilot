@@ -586,14 +586,14 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]",
+    "cli": "hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>] [--mpi-pe <mpi_pe>] [--mpi-ranks <mpi_ranks>]",
     "idempotent": true,
     "input_schema": "resolve_resources.input.json",
     "name": "resolve-resources",
     "output_schema": "resolve_resources.output.json",
     "python": "hpc_agent.ops.resolve_resources.resolve_resources",
     "side_effects": [],
-    "summary": "Resolve hpc-submit Step 6 resources in one call: walltime_sec (caller, else read-runtime-prior p95 × safety_mult, else cold-start null), gpu_type (caller, else clusters.<cluster>.gpu_types[0]), and partition (caller, else recommend-partition). A missing/erroring read-runtime-prior is cold-start, not an error.",
+    "summary": "Resolve hpc-submit Step 6 resources in one call: walltime_sec (caller, else read-runtime-prior p95 × safety_mult, else cold-start null), gpu_type (caller, else clusters.<cluster>.gpu_types[0]), partition (caller, else recommend-partition), and mpi_pe (caller, else recommend-pe from parallel_environments when mpi_ranks is set). A missing/erroring read-runtime-prior is cold-start, not an error.",
     "verb": "query"
   },
   {

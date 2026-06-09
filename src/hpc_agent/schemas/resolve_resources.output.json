@@ -8,6 +8,7 @@
     "walltime_sec",
     "gpu_type",
     "partition",
+    "mpi_pe",
     "provenance",
     "elapsed_total_sec"
   ],
@@ -24,7 +25,7 @@
         }
       ],
       "title": "Walltime Sec",
-      "description": "Resolved walltime (seconds), or ``null`` on cold-start (no runtime prior — the caller falls back to clusters.<cluster>.default_walltime_sec via get_default_walltime_sec)."
+      "description": "Resolved walltime (seconds), or ``null`` on cold-start (no runtime prior \u2014 the caller falls back to clusters.<cluster>.default_walltime_sec via get_default_walltime_sec)."
     },
     "gpu_type": {
       "anyOf": [
@@ -52,6 +53,19 @@
       "title": "Partition",
       "description": "Resolved partition, or ``null`` when no partition config was available (``no_partitions_supplied``) or recommend-partition found no safe partition."
     },
+    "mpi_pe": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Mpi Pe",
+      "description": "Resolved SGE parallel environment for a multi-rank job (#293), or ``null`` when not an MPI submit (``mpi_ranks`` unset), no ``parallel_environments`` were supplied, or no ``kind=mpi`` PE has the slot capacity for the rank count."
+    },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
@@ -60,7 +74,8 @@
       "required": [
         "walltime_sec",
         "gpu_type",
-        "partition"
+        "partition",
+        "mpi_pe"
       ],
       "properties": {
         "walltime_sec": {
@@ -73,7 +88,7 @@
           ],
           "type": "string",
           "title": "Walltime Provenance",
-          "description": "``caller`` (override), ``prior_p95`` (read-runtime-prior p95 × safety_mult), or a ``cold_start_*`` reason (no profile key, verb present but no samples, or verb absent/erroring)."
+          "description": "``caller`` (override), ``prior_p95`` (read-runtime-prior p95 \u00d7 safety_mult), or a ``cold_start_*`` reason (no profile key, verb present but no samples, or verb absent/erroring)."
         },
         "gpu_type": {
           "enum": [
@@ -89,6 +104,11 @@
           "type": "string",
           "title": "Partition Provenance",
           "description": "``caller`` (override), ``no_partitions_supplied`` (no partition config), or ``recommend_partition:<rationale>`` (delegated to recommend-partition, carrying its rationale e.g. ``debug_short_walltime``)."
+        },
+        "mpi_pe": {
+          "type": "string",
+          "title": "Mpi Pe Provenance",
+          "description": "``caller`` (override), ``not_mpi`` (no mpi_ranks), ``no_parallel_environments_supplied``, or ``recommend_pe:<rationale>`` (delegated to recommend-pe, e.g. ``tightest_fit:...`` or ``no_pe_fits_ranks:...``)."
         }
       }
     },

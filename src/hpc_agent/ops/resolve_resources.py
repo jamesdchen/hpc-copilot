@@ -50,6 +50,7 @@ from hpc_agent._wire.queries.recommend_partition import (
 )
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.ops.recommend_pe import recommend_pe
 from hpc_agent.ops.submit.recommend_partition import recommend_partition
 
 __all__ = [
@@ -188,6 +189,31 @@ def _resolve_partition(
     return result.recommended_partition or None, f"recommend_partition:{result.rationale}"
 
 
+def _resolve_mpi_pe(
+    *,
+    caller_mpi_pe: str | None,
+    parallel_environments: list[dict[str, Any]] | None,
+    mpi_ranks: int | None,
+) -> tuple[str | None, str]:
+    """Resolve the SGE parallel environment for a multi-rank job (#293).
+
+    Caller override wins. Otherwise, when this is an MPI submit (``mpi_ranks``
+    set) and the caller supplied the cluster's ``parallel_environments`` (from
+    ``inspect-cluster``), delegate to :func:`recommend_pe` to pick a ``kind=mpi``
+    PE with the slot capacity for ``mpi_ranks``. ``mpi_ranks`` absent ⇒ not an
+    MPI submit ⇒ ``None`` (no PE). No enumeration supplied ⇒ ``None`` rather than
+    inventing a name — the build-submit-spec SGE guard then asks for one.
+    """
+    if mpi_ranks is None:
+        return None, "not_mpi"
+    if caller_mpi_pe is not None:
+        return caller_mpi_pe, "caller"
+    if not parallel_environments:
+        return None, "no_parallel_environments_supplied"
+    pe, rationale = recommend_pe(parallel_environments, int(mpi_ranks))
+    return pe, f"recommend_pe:{rationale}"
+
+
 @primitive(
     name="resolve-resources",
     verb="query",
@@ -198,8 +224,10 @@ def _resolve_partition(
             "Resolve hpc-submit Step 6 resources in one call: walltime_sec "
             "(caller, else read-runtime-prior p95 × safety_mult, else "
             "cold-start null), gpu_type (caller, else clusters.<cluster>."
-            "gpu_types[0]), and partition (caller, else recommend-partition). "
-            "A missing/erroring read-runtime-prior is cold-start, not an error."
+            "gpu_types[0]), partition (caller, else recommend-partition), and "
+            "mpi_pe (caller, else recommend-pe from parallel_environments when "
+            "mpi_ranks is set). A missing/erroring read-runtime-prior is "
+            "cold-start, not an error."
         ),
         verb="resolve-resources",
         args=(
@@ -257,6 +285,21 @@ def _resolve_partition(
                 default=None,
                 help="Soft partition preference forwarded to recommend-partition.",
             ),
+            CliArg(
+                "--mpi-pe",
+                type=str,
+                default=None,
+                help="Caller override for the SGE parallel environment (#293); skips recommend-pe.",
+            ),
+            CliArg(
+                "--mpi-ranks",
+                type=int,
+                default=None,
+                help=(
+                    "Total MPI ranks for a multi-rank submit (#293). When set, "
+                    "mpi_pe is auto-derived from the cluster's parallel_environments."
+                ),
+            ),
         ),
         # Local-only: the read-runtime-prior probe reads the on-disk
         # runtime-prior store and clusters.yaml is a local file. No SSH.
@@ -276,10 +319,18 @@ def resolve_resources(
     partition: str | None = None,
     user_preferred_partition: str | None = None,
     partitions: list[dict[str, Any]] | None = None,
+    mpi_pe: str | None = None,
+    mpi_ranks: int | None = None,
+    parallel_environments: list[dict[str, Any]] | None = None,
     clusters_path: str | None = None,
     timeout_sec: float = 30.0,
 ) -> dict[str, Any]:
-    """Resolve ``{walltime_sec, gpu_type, partition}`` with provenance.
+    """Resolve ``{walltime_sec, gpu_type, partition, mpi_pe}`` with provenance.
+
+    ``mpi_pe`` (#293) is the SGE parallel environment for a multi-rank submit:
+    caller override, else auto-derived by :func:`recommend_pe` from the
+    cluster's ``parallel_environments`` when ``mpi_ranks`` is set, else ``null``
+    (not an MPI submit / no enumeration supplied).
 
     Returns a dict matching ``schemas/resolve_resources.output.json``;
     the CLI dispatcher wraps it in a SuccessEnvelope. ``provenance`` maps
@@ -324,14 +375,22 @@ def resolve_resources(
         experiment_dir=experiment_dir,
     )
 
+    resolved_mpi_pe, mpi_pe_prov = _resolve_mpi_pe(
+        caller_mpi_pe=mpi_pe,
+        parallel_environments=parallel_environments,
+        mpi_ranks=mpi_ranks,
+    )
+
     return {
         "walltime_sec": resolved_walltime,
         "gpu_type": resolved_gpu,
         "partition": resolved_partition,
+        "mpi_pe": resolved_mpi_pe,
         "provenance": {
             "walltime_sec": walltime_prov,
             "gpu_type": gpu_prov,
             "partition": partition_prov,
+            "mpi_pe": mpi_pe_prov,
         },
         "elapsed_total_sec": time.monotonic() - started,
     }

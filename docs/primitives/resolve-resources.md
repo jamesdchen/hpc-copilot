@@ -9,7 +9,7 @@ backed_by:
   cli: hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>]
     [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type
     <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition
-    <user_preferred_partition>]
+    <user_preferred_partition>] [--mpi-pe <mpi_pe>] [--mpi-ranks <mpi_ranks>]
   python: hpc_agent.ops.resolve_resources.resolve_resources
 ---
 # resolve-resources
