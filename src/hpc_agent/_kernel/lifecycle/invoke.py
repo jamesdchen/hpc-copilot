@@ -61,12 +61,14 @@ surface, with its own precedence rules:
    entries out-ranking allow by ``priority``.
 4. **Decode-schema-vs-floor.** :func:`parse_worker_report` is the always
    -on floor that validates the worker's final JSON report. A driver MAY
-   add a decode-time schema accelerator on top, but it is optional and
-   off by default. Claude: ``--json-schema`` gated by
-   ``HPC_AGENT_WORKER_JSON_SCHEMA`` (#269). Codex: ``--output-schema``
-   gated by ``HPC_AGENT_WORKER_JSON_SCHEMA`` likewise. Gemini: no CLI
-   decode schema exists (``responseSchema`` is API/SDK-only), so the
-   Gemini path leans entirely on the #304 floor.
+   add a decode-time schema accelerator on top, but it is optional, off by
+   default, and gated PER HARNESS (turning it on is gated on a per-harness
+   live-validation run, #269). Claude: ``--json-schema`` gated by
+   ``HPC_AGENT_WORKER_JSON_SCHEMA`` (lenient ``worker.output.json``).
+   Codex: ``--output-schema`` gated by ``HPC_AGENT_CODEX_OUTPUT_SCHEMA``
+   (API-strict ``worker.strict.output.json``). Gemini: no CLI decode
+   schema exists (``responseSchema`` is API/SDK-only), so the Gemini path
+   leans entirely on the #304 floor.
 
 Plus :attr:`InvocationResult.cache_stats`: populated only when the
 caller asks (``report_cache_stats=True``) AND the transport surfaces
@@ -378,37 +380,77 @@ def _extract_cache_stats(envelope: dict[str, object]) -> dict[str, int] | None:
     return stats or None
 
 
-# Decode-time output constraint. When enabled (``HPC_AGENT_WORKER_JSON_SCHEMA``
-# truthy), the worker is spawned with claude's ``--json-schema`` so the CLI
-# constrains the agent's FINAL report to the WorkerReport schema at decode time
-# — the agent still runs its rsync / qsub / canary tool loop; only the terminal
-# message is schema-forced. This is the *structural* half of the contract;
-# ``parse_worker_report`` still enforces the cross-field invariants a schema
-# cannot express (a non-empty ``why`` at judgement points), so the two are
-# complementary, not substitutes. Off by default until a live ``claude -p
-# --json-schema`` run is validated against the ``--bare`` agent loop — flip the
-# env var to enable; the plain text transport is otherwise untouched. Making
-# this the default once validated is tracked in issue #269.
+# Decode-time output constraint. When enabled, the worker is spawned with the
+# harness's decode-schema flag so the CLI constrains the agent's FINAL report
+# to the WorkerReport schema at decode time — the agent still runs its rsync /
+# qsub / canary tool loop; only the terminal message is schema-forced. This is
+# the *structural* half of the contract; ``parse_worker_report`` still enforces
+# the cross-field invariants a schema cannot express (a non-empty ``why`` at
+# judgement points), so the two are complementary, not substitutes.
+#
+# The gate is split PER HARNESS, because turning the accelerator on is gated on
+# a LIVE validation run and that validation is per-harness: "does the
+# decode-schema compose with the agent loop" and "does this CLI accept this
+# schema shape" are separate empirical questions for each CLI (different flags,
+# different strictness requirements). A single shared gate would flip an
+# unvalidated harness on as a side effect of validating another.
+#
+#   * Claude ``--json-schema`` → ``HPC_AGENT_WORKER_JSON_SCHEMA``. Emits the
+#     *lenient* ``worker.output.json``: whether claude's mode requires a strict
+#     schema is the open #269 question, unanswerable offline, so the lenient
+#     shape stays until the live ``claude -p --json-schema`` run confirms.
+#   * Codex ``--output-schema`` → ``HPC_AGENT_CODEX_OUTPUT_SCHEMA``. Emits the
+#     *API-strict* ``worker.strict.output.json``: Codex's ``--output-schema``
+#     documents that it requires the strict shape (``additionalProperties:false``
+#     + all-required), so binding the lenient floor schema was a latent bug.
+#
+# Both are OFF by default; the plain text transport is otherwise untouched.
+# Making either the default once live-validated is tracked in issue #269.
 _WORKER_JSON_SCHEMA_ENV = "HPC_AGENT_WORKER_JSON_SCHEMA"
+_CODEX_OUTPUT_SCHEMA_ENV = "HPC_AGENT_CODEX_OUTPUT_SCHEMA"
 
 
-def _worker_output_schema() -> str | None:
-    """The WorkerReport JSON Schema (minified) for ``--json-schema``, or ``None``.
+def _decode_schema_enabled(env_var: str) -> bool:
+    """Whether the decode-schema gate named by *env_var* is turned on."""
+    return os.environ.get(env_var, "").strip().lower() in {"1", "true", "yes", "on"}
 
-    ``None`` when the decode-time constraint is disabled (the default) or the
-    schema resource can't be read — the worker then runs on the plain transport
-    and report validation falls back to :func:`parse_worker_report` alone.
+
+def _load_schema_resource(resource: str) -> str | None:
+    """Return a packaged ``hpc_agent.schemas`` JSON file minified, or ``None``.
+
+    ``None`` when the resource can't be read — the caller then runs on the
+    plain transport and report validation falls back to
+    :func:`parse_worker_report` alone.
     """
-    flag = os.environ.get(_WORKER_JSON_SCHEMA_ENV, "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
-        return None
     try:
         from importlib.resources import files as _files
 
-        text = (_files("hpc_agent.schemas") / "worker.output.json").read_text(encoding="utf-8")
+        text = (_files("hpc_agent.schemas") / resource).read_text(encoding="utf-8")
         return json.dumps(json.loads(text), separators=(",", ":"))
     except (FileNotFoundError, ModuleNotFoundError, OSError, json.JSONDecodeError):
         return None
+
+
+def _worker_output_schema() -> str | None:
+    """The lenient WorkerReport schema (minified) for Claude ``--json-schema``.
+
+    ``None`` when ``HPC_AGENT_WORKER_JSON_SCHEMA`` is off (the default).
+    """
+    if not _decode_schema_enabled(_WORKER_JSON_SCHEMA_ENV):
+        return None
+    return _load_schema_resource("worker.output.json")
+
+
+def _codex_output_schema() -> str | None:
+    """The API-strict WorkerReport schema (minified) for Codex ``--output-schema``.
+
+    ``None`` when ``HPC_AGENT_CODEX_OUTPUT_SCHEMA`` is off (the default). Unlike
+    Claude's gate this emits ``worker.strict.output.json`` — Codex's
+    ``--output-schema`` requires ``additionalProperties:false`` + all-required.
+    """
+    if not _decode_schema_enabled(_CODEX_OUTPUT_SCHEMA_ENV):
+        return None
+    return _load_schema_resource("worker.strict.output.json")
 
 
 def _run_claude_worker(
@@ -700,9 +742,11 @@ class CodexCliInvoker:
     (strictest-severity-wins), analogous to Claude's deny-beats-allow.
 
     Decode schema (axis 4): OPTIONAL ``--output-schema`` gated behind
-    ``HPC_AGENT_WORKER_JSON_SCHEMA`` (same posture as Claude's ``--json-schema``,
+    ``HPC_AGENT_CODEX_OUTPUT_SCHEMA`` (its own gate, split from Claude's
+    ``--json-schema`` so each harness flips only on its own live validation,
     #269) — OFF by default, so the floor :func:`parse_worker_report` is the
-    decode path. ``cache_stats`` is always ``None`` (not surfaced at the CLI).
+    decode path. When on it binds the API-strict ``worker.strict.output.json``.
+    ``cache_stats`` is always ``None`` (not surfaced at the CLI).
     """
 
     name = "codex-cli"
@@ -779,23 +823,18 @@ class CodexCliInvoker:
 
     @staticmethod
     def _output_schema_args(work_dir: str) -> list[str]:
-        """``--output-schema <file>`` when the gated decode accelerator is on.
+        """``--output-schema <file>`` when ``HPC_AGENT_CODEX_OUTPUT_SCHEMA`` is on.
 
-        Mirrors Claude's ``HPC_AGENT_WORKER_JSON_SCHEMA`` posture: OFF by
-        default, so the floor ``parse_worker_report`` is the decode path. When
-        on, Codex's ``--output-schema`` takes a JSON-Schema FILE (it must be the
-        API-strict shape: ``additionalProperties:false`` + all props
-        ``required``). ``_worker_output_schema`` currently emits the existing
-        ``worker.output.json`` minified — that schema is NOT yet regenerated in
-        the API-strict shape, so authoring/regenerating the strict file is
-        deferred to #269/#304 rather than hand-maintained here. Until then this
-        binds the available schema text; the floor is the safety net either way.
+        OFF by default, so the floor ``parse_worker_report`` is the decode path.
+        When on, Codex's ``--output-schema`` takes a JSON-Schema FILE in the
+        API-strict shape (``additionalProperties:false`` + all props
+        ``required``); :func:`_codex_output_schema` supplies the checked-in
+        ``worker.strict.output.json`` (generated from ``WorkerReport`` by
+        ``scripts/build_schemas.py``). The floor is the safety net either way.
         """
-        schema = _worker_output_schema()
+        schema = _codex_output_schema()
         if schema is None:
             return []
-        # TODO(#269/#304): emit the API-strict (additionalProperties:false,
-        # all-required) WorkerReport schema file rather than the floor schema.
         schema_file = Path(work_dir) / "worker_output.schema.json"
         schema_file.write_text(schema, encoding="utf-8")
         return ["--output-schema", str(schema_file)]

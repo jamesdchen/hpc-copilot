@@ -54,6 +54,7 @@ import json
 import pkgutil
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 import hpc_agent._wire  # noqa: E402
+from hpc_agent._kernel.contract.strict_schema import to_strict_schema  # noqa: E402
+from hpc_agent._wire.spawn_contract import WorkerReport  # noqa: E402
 
 # Authoring package and the directory its emitted JSON schemas land in.
 # The package is walked for models; discovered names must be unique.
@@ -194,6 +197,22 @@ SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str, Path]] = [
     for model, fname in _build_schema_registry_for(pkg)
 ]
 
+# Derived schemas: a *transform* of a model's emitted schema rather than a 1:1
+# model→file emission. The strict WorkerReport variant is the API-strict decode
+# constraint the Codex ``--output-schema`` worker binds (see
+# ``invoke._codex_output_schema``); the lenient ``worker.output.json`` (emitted
+# from the same model via SCHEMA_REGISTRY) stays the validate-after floor.
+# Kept OUT of SCHEMA_REGISTRY on purpose: a strict schema forces every field
+# ``required``, so it does NOT accept a model's own *minimal* dump — the
+# self-validating-dump invariant the roundtrip test asserts over SCHEMA_REGISTRY
+# does not hold here. Drift is pinned by a dedicated test instead.
+_SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
+DERIVED_REGISTRY: list[
+    tuple[type[BaseModel], str, Path, Callable[[dict[str, Any]], dict[str, Any]]]
+] = [
+    (WorkerReport, "worker.strict.output.json", _SCHEMAS_DIR, to_strict_schema),
+]
+
 
 def _emit_schema(model_or_adapter: Any) -> dict[str, Any]:
     """Call the right schema-emit method for either a BaseModel or a TypeAdapter."""
@@ -263,8 +282,14 @@ def _normalize(schema: dict, schema_id: str) -> dict:
     return ordered
 
 
-def _emit(model_or_adapter: Any, fname: str) -> str:
+def _emit(
+    model_or_adapter: Any,
+    fname: str,
+    transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> str:
     schema = _emit_schema(model_or_adapter)
+    if transform is not None:
+        schema = transform(schema)
     schema = _normalize(schema, f"{_ID_BASE}/{fname}")
     return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
 
@@ -273,11 +298,17 @@ def main() -> int:
     write = "--write" in sys.argv
     check = "--check" in sys.argv
 
+    # SCHEMA_REGISTRY entries emit verbatim (transform=None); DERIVED_REGISTRY
+    # entries apply a schema→schema transform (e.g. the strict variant).
+    targets: list[tuple[Any, str, Path, Callable[[dict[str, Any]], dict[str, Any]] | None]] = [
+        (src, fname, schemas_dir, None) for src, fname, schemas_dir in SCHEMA_REGISTRY
+    ] + list(DERIVED_REGISTRY)
+
     drift: list[tuple[Path, str, str]] = []  # (path, old, new)
-    for src, fname, schemas_dir in SCHEMA_REGISTRY:
+    for src, fname, schemas_dir, transform in targets:
         path = schemas_dir / fname
         try:
-            new = _emit(src, fname)
+            new = _emit(src, fname, transform)
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: emitting {fname}: {exc!r}", file=sys.stderr)
             return 2
@@ -286,7 +317,7 @@ def main() -> int:
             drift.append((path, old, new))
 
     if not drift:
-        print(f"schemas up to date ({len(SCHEMA_REGISTRY)} models)")
+        print(f"schemas up to date ({len(targets)} models)")
         return 0
 
     if check:

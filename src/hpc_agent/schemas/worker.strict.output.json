@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/worker.strict.output.json",
+  "title": "WorkerReport",
+  "description": "The structured object a delegated worker returns as its final message.\n\n``extra=\"ignore\"`` — lenient on a worker's *output* (an LLM may add a\nstray key), unlike the strict ``extra=\"forbid\"`` on the\n:class:`SpawnRequest` *input* contract.",
+  "type": "object",
+  "required": [
+    "result",
+    "decisions",
+    "anomalies"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "result": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Result",
+      "type": "object"
+    },
+    "decisions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkerDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "anomalies": {
+      "default": "",
+      "title": "Anomalies",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "WorkerDecision": {
+      "description": "One decision a delegated worker reports making.\n\n``point`` must be a :class:`DecisionPoint` id for the worker's\nworkflow — cross-checked by ``parse_worker_report``.\n\nAt a ``decided_by=\"judgement\"`` point — a genuine break in the control\nflow, not a parameter the deterministic layer computed — the rationale\nis the thing worth capturing (see :class:`DecisionPoint`): ``why`` is\n**required** (``parse_worker_report`` rejects an empty one at a\njudgement point), ``chosen`` names the branch taken, and ``rejected``\nlists the alternatives weighed and discarded — so the record is the\n*choice*, not merely an outcome tag. At a deterministic point these\nstay optional; the backing primitive's envelope is the authoritative\nrecord there.",
+      "properties": {
+        "point": {
+          "title": "Point",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "title": "Why",
+          "type": "string"
+        },
+        "chosen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chosen"
+        },
+        "rejected": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected",
+          "type": "array"
+        }
+      },
+      "required": [
+        "point",
+        "outcome",
+        "why",
+        "chosen",
+        "rejected"
+      ],
+      "title": "WorkerDecision",
+      "type": "object",
+      "additionalProperties": false
+    }
+  }
+}

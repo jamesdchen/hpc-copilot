@@ -5,6 +5,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.36 — 2026-06-09
+
+### Changed — split the per-harness decode-schema gate; pre-author the strict WorkerReport variant (#269)
+
+The decode-time output-schema accelerator was gated by a single env var, `HPC_AGENT_WORKER_JSON_SCHEMA`, shared by both the Claude (`--json-schema`) and Codex (`--output-schema`) workers. That coupling is a latent hazard for the #269 flip: turning the accelerator on by default is gated on a **live validation run, and that validation is per-harness** (whether the decode-schema composes with the agent loop and whether the CLI accepts the schema shape are separate empirical questions for each CLI). A shared gate would flip an unvalidated harness on as a side effect of validating the other. The gate is now split: `HPC_AGENT_WORKER_JSON_SCHEMA` governs Claude only; a new `HPC_AGENT_CODEX_OUTPUT_SCHEMA` governs Codex. Both remain **off by default** — no production behavior changes today; this lets #269 flip each harness independently once its own live run confirms.
+
+The split also fixes a documented latent bug. Codex's `--output-schema` requires an **API-strict** schema (`additionalProperties:false` + all-required), but the shared path bound the lenient `worker.output.json` floor schema (a standing `TODO(#269/#304)` in `CodexCliInvoker._output_schema_args`). The Codex gate now binds a new checked-in `worker.strict.output.json`, **generated from the `WorkerReport` Pydantic model** by `scripts/build_schemas.py` (a new `DERIVED_REGISTRY` of schema→schema transforms, kept out of `SCHEMA_REGISTRY` because a strict schema doesn't accept a model's own minimal dump). The strictifier is the single canonical `to_strict_schema`, extracted to `hpc_agent._kernel.contract.strict_schema` and now shared by both the build script and the `openai-compat` runtime accelerator (`#304`) — one transform, not two that can diverge. Claude continues to bind the lenient `worker.output.json` (whether claude's mode needs strict is the open #269 question, unanswerable offline). `result` stays free-form in the strict variant (`additionalProperties: true`) — inherent to the model's free-form payload field; the floor validates it regardless. A drift test pins `worker.strict.output.json` to its generator, a strictness-invariant test pins the all-required/no-extras shape, and a gate-independence test pins that neither env var enables the other harness. `env-vars.md` documents both gates.
+
 ## 0.10.35 — 2026-06-09
 
 ### Added — wire the resolve-and-recover composite into the live monitor tick (#240, #234)

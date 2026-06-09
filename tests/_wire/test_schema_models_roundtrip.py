@@ -64,6 +64,24 @@ def _load_registry() -> list[tuple[Any, str, Path]]:
 REGISTRY = _load_registry()
 
 
+def _load_derived_registry() -> list[tuple[Any, str, Path, Any]]:
+    """Import ``scripts/build_schemas.py:DERIVED_REGISTRY`` (transformed schemas).
+
+    Entries are ``(model, output_filename, schemas_dir, transform)`` — a
+    schema→schema transform (e.g. the strict variant) applied before emission.
+    """
+    spec = importlib.util.spec_from_file_location("_build_schemas_for_test", BUILD_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = sys.modules.get(spec.name) or importlib.util.module_from_spec(spec)
+    if spec.name not in sys.modules:
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return list(module.DERIVED_REGISTRY)
+
+
+DERIVED_REGISTRY = _load_derived_registry()
+
+
 @pytest.mark.parametrize(
     "src,fname,schemas_dir",
     REGISTRY,
@@ -89,6 +107,53 @@ def test_emitted_schema_matches_checked_in(src: Any, fname: str, schemas_dir: Pa
         f"{fname}: Pydantic emission drifted from checked-in JSON. "
         "Run scripts/build_schemas.py --write to regenerate."
     )
+
+
+@pytest.mark.parametrize(
+    "src,fname,schemas_dir,transform",
+    DERIVED_REGISTRY,
+    ids=[fname for _, fname, _, _ in DERIVED_REGISTRY],
+)
+def test_derived_schema_matches_checked_in(
+    src: Any, fname: str, schemas_dir: Path, transform: Any
+) -> None:
+    """A derived (transformed) schema is byte-equal to its checked-in file.
+
+    Same drift gate as the registry test, for the transform-derived schemas
+    (e.g. ``worker.strict.output.json``) that aren't a 1:1 model emission.
+    """
+    spec = importlib.util.spec_from_file_location("_build_schemas_for_test", BUILD_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = sys.modules.get(spec.name) or importlib.util.module_from_spec(spec)
+    if spec.name not in sys.modules:
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+    emitted = module._emit(src, fname, transform)
+    on_disk = (schemas_dir / fname).read_text(encoding="utf-8")
+    assert emitted == on_disk, (
+        f"{fname}: derived schema drifted from checked-in JSON. "
+        "Run scripts/build_schemas.py --write to regenerate."
+    )
+
+
+def test_strict_worker_schema_is_actually_strict() -> None:
+    """The derived WorkerReport strict variant is the API-strict shape Codex
+    ``--output-schema`` requires: a valid JSON Schema that forbids extras and
+    requires every field at each object node (root + ``WorkerDecision``).
+
+    ``result`` stays free-form (``additionalProperties: true``, no declared
+    properties) — that is inherent to the model's free-form payload field and
+    is the one part strict mode cannot further constrain; the floor validates
+    it either way.
+    """
+    schema = json.loads((SCHEMAS_DIR / "worker.strict.output.json").read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(schema)
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    decision = schema["$defs"]["WorkerDecision"]
+    assert decision["additionalProperties"] is False
+    assert set(decision["required"]) == set(decision["properties"])
 
 
 # ---------------------------------------------------------------------------

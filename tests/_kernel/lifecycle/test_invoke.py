@@ -508,6 +508,9 @@ def test_worker_output_schema_on_returns_minified_schema(
     assert schema is not None
     assert "WorkerReport" in schema and '"decisions"' in schema
     assert "\n" not in schema  # minified for argv
+    # Claude binds the LENIENT worker.output.json, not the strict variant — the
+    # deliberate #269 asymmetry (claude's strictness requirement is unconfirmed).
+    assert '"additionalProperties":false' not in schema
 
 
 def test_off_value_disables_schema(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -586,7 +589,7 @@ def _codex_capture_run(seen: dict[str, object], *, report: str = "codex report")
 def test_codex_cli_invoker_builds_the_right_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    monkeypatch.delenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", raising=False)
     seen: dict[str, object] = {}
     monkeypatch.setattr(invoke_mod.subprocess, "run", _codex_capture_run(seen))
 
@@ -646,7 +649,7 @@ def test_codex_model_pin_overridable_by_env(
 def test_codex_output_schema_bound_when_flag_on(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    monkeypatch.setenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", "1")
     seen: dict[str, object] = {}
 
     captured: dict[str, str] = {}
@@ -665,6 +668,46 @@ def test_codex_output_schema_bound_when_flag_on(
     assert isinstance(argv, list)
     assert "--output-schema" in argv
     assert "WorkerReport" in captured["schema"]
+    # Codex binds the API-STRICT variant, not the lenient floor schema.
+    assert '"additionalProperties":false' in captured["schema"]
+    assert '"required":["point","outcome","why","chosen","rejected"]' in captured["schema"]
+
+
+def test_codex_output_schema_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", raising=False)
+    assert invoke_mod._codex_output_schema() is None
+
+
+def test_codex_output_schema_on_returns_strict_minified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", "1")
+    schema = invoke_mod._codex_output_schema()
+    assert schema is not None
+    assert "WorkerReport" in schema
+    assert "\n" not in schema  # minified
+    # The strict variant: object roots forbid extras and require every field.
+    assert '"additionalProperties":false' in schema
+    assert '"required":["result","decisions","anomalies"]' in schema
+
+
+def test_decode_schema_gates_are_independent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The split gate (#269): Claude's var must not turn Codex on, or vice versa.
+
+    A single shared gate would flip an unvalidated harness on as a side effect
+    of validating the other — the whole reason the gate was split.
+    """
+    # Claude on, Codex unset → only Claude's schema is bound.
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "1")
+    monkeypatch.delenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", raising=False)
+    assert invoke_mod._worker_output_schema() is not None
+    assert invoke_mod._codex_output_schema() is None
+
+    # Codex on, Claude unset → only Codex's schema is bound.
+    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    monkeypatch.setenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", "1")
+    assert invoke_mod._worker_output_schema() is None
+    assert invoke_mod._codex_output_schema() is not None
 
 
 def test_codex_falls_back_to_stdout_when_no_last_message(
