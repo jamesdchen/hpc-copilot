@@ -61,6 +61,7 @@ from hpc_agent.ops.monitor.terminal import (
 )
 from hpc_agent.ops.monitor.tick_log import _append_tick, _status_fingerprint
 from hpc_agent.ops.monitor.waves import _newly_complete_waves, _read_partial_ok
+from hpc_agent.ops.resolve_and_recover_flow import maybe_resolve_and_recover
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -441,6 +442,78 @@ def monitor_flow(
                     _sleep(effective_interval)
                     continue
                 esc_reason = outcome.reason
+
+            # #240 live wiring of the #234 deterministic resolver — the
+            # resolve-and-recover composite, mirrored on the auto-resume hook
+            # above (#315 stacks this on that composite). Auto-resume owns
+            # ``preempted`` clusters (and on a "resume" verdict ``continue``s the
+            # loop before reaching here); this composite deliberately SKIPS
+            # ``preempted`` (its ``_DETERMINISTIC`` set excludes it), so the two
+            # never double-handle a cluster — they partition the FAILED tick:
+            # preempted → auto-resume, everything else → resolve-and-recover.
+            # Opt-in OFF by default (``auto_recover_on_failure``): a run that did
+            # not opt in computes the verdict-as-data and takes NO side effect
+            # (no resubmit, no park), so this wiring is behavior-neutral until a
+            # run opts in.
+            recover_outcome = maybe_resolve_and_recover(
+                experiment_dir,
+                run_id,
+                record=record,
+            )
+            if recover_outcome.clusters:
+                actions.append(
+                    {
+                        "kind": "resolve_and_recover",
+                        "run_id": recover_outcome.run_id,
+                        "clusters": [
+                            {
+                                "fingerprint": c.fingerprint,
+                                "error_class": c.error_class,
+                                "task_ids": list(c.task_ids),
+                                "disposition": c.disposition,
+                                "decided_by": c.decided_by,
+                                "reason": c.reason,
+                            }
+                            for c in recover_outcome.clusters
+                        ],
+                        "auto_recover_count": recover_outcome.auto_recover_count,
+                    }
+                )
+            # When the composite actually resubmitted a cluster (opt-in ON +
+            # code verdict under cap) the run is live again — reload the record
+            # (extended job_ids + bumped count) and keep polling, exactly as the
+            # auto-resume "resume" branch does, rather than surfacing FAILED.
+            if recover_outcome.resubmitted:
+                unchanged_count = 0
+                last_fingerprint = None
+                effective_interval = float(poll_interval_seconds)
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=last_status,
+                    diff_from_prev=diff,
+                    actions=actions,
+                    lifecycle_state="in_flight",
+                    next_tick_seconds=effective_interval,
+                )
+                refreshed = load_run(experiment_dir, run_id)
+                if refreshed is not None:
+                    record = refreshed
+                _sleep(effective_interval)
+                continue
+            # Otherwise (held / verdict-only / nothing resolvable) fall through
+            # to the FAILED surface. Enrich the escalation reason the same way
+            # auto-resume does, so the escalation-as-data path (#234) carries
+            # why the held clusters were parked.
+            if recover_outcome.held:
+                held_reason = "; ".join(
+                    f"{c.error_class or c.fingerprint}: {c.reason}" for c in recover_outcome.held
+                )
+                esc_reason = (
+                    f"{esc_reason}; auto_recover_held: {held_reason}"
+                    if esc_reason
+                    else f"auto_recover_held: {held_reason}"
+                )
             mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
             _append_tick(
                 experiment_dir,

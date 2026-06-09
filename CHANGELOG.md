@@ -5,6 +5,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.35 — 2026-06-09
+
+### Added — wire the resolve-and-recover composite into the live monitor tick (#240, #234)
+
+`maybe_resolve_and_recover` (the #240 live wiring of the #234 deterministic resolver) was built and tested but never called from any live site — it was inert. It is now invoked from `monitor_flow`'s `FAILED` seam, mirroring the blessed #299 `maybe_auto_resume` hook beside it. The two composites **partition** a FAILED tick without double-handling: auto-resume owns `preempted` clusters (and on a `"resume"` verdict `continue`s the loop before resolve-and-recover runs), while resolve-and-recover deliberately **skips** `preempted` (its `_DETERMINISTIC` set excludes it) and handles everything else. The wiring is **behavior-neutral until a run opts in**: `RunRecord.auto_recover_on_failure` defaults `False`, so a non-opted-in run computes the verdict-as-data and takes **no** side effect (no resubmit, no park), falling through to the existing `FAILED` surface. On a `decided_by="code"` verdict under cap (opt-in ON) the composite resubmits and the loop reloads the record and keeps polling, exactly as the auto-resume `"resume"` branch does; a `held` (judgement / over-cap) verdict enriches `escalation_reason` via the escalation-as-data path (#234). Every consulted tick surfaces the per-cluster dispositions into the monitor tick's `actions` log under `kind="resolve_and_recover"`. Injection seams (`resubmit`, `failures_fetcher`) pass through to the composite's existing defaults. Control-plane only; no wire surface changed.
+
 ## 0.10.34 — 2026-06-09
 
 ### Fixed — Codex worker authenticates with the scoped key (#305)
