@@ -47,6 +47,7 @@ __all__ = [
     "register_run",
     "RunSpec",
     "save_artifact",
+    "mpi_rank_world",
 ]
 
 
@@ -168,6 +169,7 @@ class RunSpec:
     func: Callable[..., Any]
     name: str
     gpu: bool
+    mpi: bool = False
 
 
 _artifact_dir: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
@@ -175,7 +177,45 @@ _artifact_dir: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
 )
 
 
-def register_run(func: Any = None, *, gpu: bool = False) -> Any:
+# Launcher environment variables that carry an MPI rank's identity, in
+# detection-preference order: OpenMPI (mpirun), MPICH / Intel MPI via Hydra
+# (mpirun), then SLURM (srun). Each pair is (rank_var, size_var); a size_var
+# of None means "no world-size companion" and world falls back to 1.
+_MPI_RANK_ENV: tuple[tuple[str, str | None], ...] = (
+    ("OMPI_COMM_WORLD_RANK", "OMPI_COMM_WORLD_SIZE"),
+    ("PMI_RANK", "PMI_SIZE"),
+    ("SLURM_PROCID", "SLURM_NTASKS"),
+)
+
+
+def mpi_rank_world() -> tuple[int, int]:
+    """Return ``(rank, world_size)`` from the launcher env; ``(0, 1)`` if none.
+
+    A non-MPI task runs its executor directly (no launcher), so none of the
+    rank vars are set and this returns ``(0, 1)`` — making the rank-0 output
+    gate in :func:`_make_compute` a no-op for ordinary single-process runs.
+    Under ``srun`` / ``mpirun`` / ``aprun`` each rank's process inherits its
+    own rank var, so the same ``compute`` body discovers its identity.
+    """
+    for rank_var, size_var in _MPI_RANK_ENV:
+        raw = os.environ.get(rank_var)
+        if raw is None or raw == "":
+            continue
+        try:
+            rank = int(raw)
+        except ValueError:
+            continue
+        world = 1
+        if size_var:
+            try:
+                world = int(os.environ.get(size_var, "") or 1)
+            except ValueError:
+                world = 1
+        return rank, world
+    return 0, 1
+
+
+def register_run(func: Any = None, *, gpu: bool = False, mpi: bool = False) -> Any:
     """Mark the experiment entry point. Works bare or as ``@register_run(gpu=True)``.
 
     At import time it records the run in a module-level ``_RUNS``
@@ -183,10 +223,17 @@ def register_run(func: Any = None, *, gpu: bool = False) -> Any:
     module — satisfying the hpc-agent executor contract without the
     researcher writing any CLI glue. One ``@register_run`` per module is
     the expected shape.
+
+    ``mpi=True`` (#293) marks a multi-rank entry point: the function may
+    declare ``rank`` / ``world_size`` parameters, which the injected
+    ``compute`` fills from the launcher env (:func:`mpi_rank_world`) rather
+    than from CLI flags, and only rank 0 writes the per-task output. A
+    non-mpi run is unaffected — its ``compute`` never injects those params
+    and its single process is always rank 0.
     """
 
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
-        spec = RunSpec(func=fn, name=fn.__name__, gpu=gpu)
+        spec = RunSpec(func=fn, name=fn.__name__, gpu=gpu, mpi=mpi)
         fn.__dict__["_hpc_run"] = spec
         module_ns = fn.__globals__
         runs: dict[str, RunSpec] = module_ns.setdefault("_RUNS", {})
@@ -239,11 +286,22 @@ def _make_compute(spec: RunSpec) -> Callable[[Any], None]:
         # (so existing executors are unaffected).
         ns.setdefault("resume_from", os.environ.get("HPC_RESUME_FROM") or None)
         ns.setdefault("checkpoint_dir", os.environ.get("HPC_CHECKPOINT_DIR") or None)
+        # #293: a multi-rank run learns its identity from the launcher env. Inject
+        # rank / world_size for mpi runs only — the ``accepted`` filter then hands
+        # them to a func that declares them. ``rank`` is also the output gate
+        # below; for a non-mpi run it stays 0 so the gate is a no-op.
+        rank, world_size = mpi_rank_world()
+        if spec.mpi:
+            ns.setdefault("rank", rank)
+            ns.setdefault("world_size", world_size)
         kwargs = {k: ns[k] for k in accepted if k in ns}
         output_file = ns.get("output_file")
         with _run_context(ns):
             result = spec.func(**kwargs)
-        if isinstance(result, dict) and output_file:
+        # Only rank 0 writes the per-task output. Non-mpi runs are single-process
+        # (rank 0), so this is unchanged for them; an MPI job's N ranks would
+        # otherwise race to write the same metrics.json (the reducer expects one).
+        if isinstance(result, dict) and output_file and rank == 0:
             target = Path(output_file)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(

@@ -780,3 +780,88 @@ def test_assembled_spec_passes_submit_flow_input_schema() -> None:
         "job_env",
     ):
         assert k in spec
+
+
+class TestMpiBlock:
+    """MPI / multi-rank spec wiring (#293): template selection, HPC_MPI_*
+    env stamping, resources emission, and the SGE pe_name guard."""
+
+    def _slurm_mpi(self, **mpi) -> dict:
+        # SLURM needs no pe_name; one task = one multi-rank unit of work.
+        base = _required() | {"backend": "slurm", "profile": "solver", "total_tasks": 1}
+        base["mpi"] = {"ranks": 8, "ranks_per_node": 4, "launcher": "srun", **mpi}
+        return base
+
+    def test_mpi_selects_single_multi_rank_template(self) -> None:
+        out = build_submit_spec(spec=BuildSubmitSpecInput.model_validate(self._slurm_mpi()))
+        assert out["script"] == ".hpc/templates/mpi.slurm"
+
+    def test_mpi_template_wins_over_is_gpu(self) -> None:
+        # A multi-rank solve is one unit of work — the mpi template is picked
+        # even when is_gpu is set (it is NOT a gpu_array fan-out).
+        spec = BuildSubmitSpecInput.model_validate(self._slurm_mpi() | {"is_gpu": True})
+        out = build_submit_spec(spec=spec)
+        assert out["script"] == ".hpc/templates/mpi.slurm"
+
+    def test_mpi_stamps_launcher_env(self) -> None:
+        out = build_submit_spec(
+            spec=BuildSubmitSpecInput.model_validate(self._slurm_mpi(threads_per_rank=2))
+        )
+        env = out["job_env"]
+        assert env["HPC_MPI_RANKS"] == "8"
+        assert env["HPC_MPI_LAUNCHER"] == "srun"
+        assert env["HPC_MPI_THREADS_PER_RANK"] == "2"
+
+    def test_mpi_block_emitted_onto_resources(self) -> None:
+        out = build_submit_spec(spec=BuildSubmitSpecInput.model_validate(self._slurm_mpi()))
+        assert out["resources"]["mpi"] == {
+            "ranks": 8,
+            "ranks_per_node": 4,
+            "threads_per_rank": 1,
+            "launcher": "srun",
+        }
+
+    def test_sge_mpi_requires_pe_name(self) -> None:
+        with pytest.raises(ValueError, match="requires mpi.pe_name"):
+            BuildSubmitSpecInput.model_validate(
+                _required() | {"total_tasks": 1, "mpi": {"ranks": 4, "launcher": "mpirun"}}
+            )
+
+    def test_sge_mpi_with_pe_name_selects_template(self) -> None:
+        spec = BuildSubmitSpecInput.model_validate(
+            _required()
+            | {"total_tasks": 1, "mpi": {"ranks": 4, "launcher": "mpirun", "pe_name": "orte"}}
+        )
+        out = build_submit_spec(spec=spec)
+        assert out["script"] == ".hpc/templates/mpi.sh"
+        assert out["job_env"]["HPC_MPI_LAUNCHER"] == "mpirun"
+
+    def test_no_mpi_block_keeps_array_template(self) -> None:
+        # Regression: a plain submit is untouched by the mpi path.
+        out = build_submit_spec(spec=BuildSubmitSpecInput.model_validate(_required()))
+        assert out["script"] == ".hpc/templates/cpu_array.sh"
+        assert not any(k.startswith("HPC_MPI") for k in out["job_env"])
+        assert "mpi" not in out.get("resources", {})
+
+
+class TestMpiSingleUnitGuard:
+    """#293 finding B: mpi + total_tasks>1 (array-of-MPI) is refused — the mpi
+    template runs as task 0, so an array would clobber output."""
+
+    def test_mpi_with_multi_task_refused(self) -> None:
+        with pytest.raises(ValueError, match="unit of work"):
+            BuildSubmitSpecInput.model_validate(
+                _required()
+                | {
+                    "backend": "slurm",
+                    "total_tasks": 4,
+                    "mpi": {"ranks": 8, "launcher": "srun"},
+                }
+            )
+
+    def test_mpi_with_single_task_accepted(self) -> None:
+        spec = BuildSubmitSpecInput.model_validate(
+            _required()
+            | {"backend": "slurm", "total_tasks": 1, "mpi": {"ranks": 8, "launcher": "srun"}}
+        )
+        assert spec.mpi is not None and spec.total_tasks == 1

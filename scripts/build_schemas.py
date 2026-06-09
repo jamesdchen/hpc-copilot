@@ -102,8 +102,11 @@ _SUFFIX_RULES: tuple[tuple[str, str], ...] = (
     ("Envelope", "output"),
 )
 
-# Pydantic helpers we never want as standalone schemas.
-_HELPER_NAMES: frozenset[str] = frozenset({"SuccessEnvelope", "ErrorEnvelope"})
+# Pydantic helpers we never want as standalone schemas. ``MpiSpec`` (#293) ends
+# in ``Spec`` but is a sub-model embedded in SubmitResources / BuildSubmitSpecInput
+# (inlined into their schemas), not a primitive input — so it has no CLI verb and
+# would trip the no-orphan-input-schemas contract.
+_HELPER_NAMES: frozenset[str] = frozenset({"SuccessEnvelope", "ErrorEnvelope", "MpiSpec"})
 
 
 _PASCAL_RE_1 = re.compile(r"(.)([A-Z][a-z]+)")

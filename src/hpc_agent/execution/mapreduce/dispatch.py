@@ -284,6 +284,48 @@ def _executor_reinvokes_dispatcher(executor, *, dispatcher_path):
     return any(name in executor for name in candidates)
 
 
+# Launcher templates for a multi-rank job (#293), keyed by HPC_MPI_LAUNCHER.
+# ``{n}`` is the rank count from HPC_MPI_RANKS. Kept in lock-step with the
+# ``case`` arms documented on the mpi template (infra/backends/_scripts.py).
+_MPI_LAUNCHERS = {
+    "srun": "srun --ntasks={n}",
+    "mpirun": "mpirun -np {n}",
+    "aprun": "aprun -n {n}",
+}
+
+
+def _mpi_launch_prefix(env):
+    """Return the launcher prefix for a multi-rank job, or ``""`` if not MPI.
+
+    Reads ``HPC_MPI_RANKS`` / ``HPC_MPI_LAUNCHER`` (stamped into the job env by
+    build-submit-spec from the spec's ``mpi`` block). Prefixing the per-task
+    command — rather than wrapping the whole template in ``srun`` — keeps the
+    dispatcher's bookkeeping (sidecar, WIP dir, failure capture, SIGTERM
+    forwarding) a single process while only the compute fans out to N ranks.
+    The reducer still sees one ``metrics.json`` (rank 0 writes it).
+    """
+    ranks = (env.get("HPC_MPI_RANKS") or "").strip()
+    if not ranks:
+        return ""
+    try:
+        n = int(ranks)
+    except ValueError:
+        print(f"[dispatch] WARN: ignoring non-integer HPC_MPI_RANKS={ranks!r}", file=sys.stderr)
+        return ""
+    if n <= 1:
+        return ""  # a single rank needs no launcher
+    launcher = (env.get("HPC_MPI_LAUNCHER") or "srun").strip()
+    template = _MPI_LAUNCHERS.get(launcher)
+    if template is None:
+        print(
+            f"[dispatch] WARN: unknown HPC_MPI_LAUNCHER={launcher!r}; "
+            f"expected one of {sorted(_MPI_LAUNCHERS)}; running un-launched",
+            file=sys.stderr,
+        )
+        return ""
+    return template.format(n=n)
+
+
 # Match ``$HPC_KW_FOO`` and ``${HPC_KW_FOO}`` references in a shell command.
 # Restricted to the HPC_KW_ namespace on purpose: the bare-uppercase legacy
 # exports collide with real environment vars ($HOME, $PATH, ...), so a bare
@@ -769,6 +811,13 @@ def main() -> None:
         else:
             if isinstance(service_env, dict):
                 inject_service_env(env, service_env)
+
+    # #293: a multi-rank job prefixes the per-task command with the launcher
+    # (srun/mpirun/aprun) so this single dispatcher spawns N coordinated ranks
+    # of the compute. No-op (empty prefix) for an ordinary single-process task.
+    launch_prefix = _mpi_launch_prefix(env)
+    if launch_prefix:
+        executor = f"{launch_prefix} {executor}"
 
     # Defense-in-depth for #195: warn if the command references an HPC_KW_* var
     # the kwargs never produced (would expand to empty and fail the task). The

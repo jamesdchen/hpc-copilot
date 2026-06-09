@@ -251,6 +251,80 @@ CATALOG: list[FailureSignature] = [
         # signature wins when both match.
         priority=85,
     ),
+    # ── multi-rank (MPI) signatures (#293 PR4) ──────────────────────────
+    # Each carries a specific remediation so the canary verifier / recover
+    # path can act without re-running. Priority above the bare traceback
+    # fallback so an MPI launch failure that also prints a Python traceback
+    # still classifies as the structural MPI error.
+    FailureSignature(
+        error_class="mpi_launcher_missing",
+        # The launcher binary (srun/mpirun/aprun) the dispatcher prefixes the
+        # per-task command with isn't on PATH — usually a missing MPI module.
+        stderr_pattern=re.compile(
+            r"(srun|mpirun|mpiexec|aprun):\s*command not found|"
+            r"command not found:\s*(srun|mpirun|mpiexec|aprun)|"
+            r"(srun|mpirun|mpiexec|aprun):\s*not found",
+            re.I,
+        ),
+        exit_code=127,
+        suggested_fix={
+            "action": "fix-mpi-launcher",
+            "hint": (
+                "The MPI launcher (srun/mpirun/aprun) isn't on PATH cluster-side. "
+                "Load the MPI module in the spec's `modules` (e.g. 'openmpi' / "
+                "'intel-mpi'), or set the spec's mpi.launcher to one the cluster "
+                "provides (SLURM clusters always have srun)."
+            ),
+        },
+        priority=95,
+    ),
+    FailureSignature(
+        error_class="mpi_pe_invalid",
+        # SGE rejects the `-pe <name> <n>` request because the parallel
+        # environment doesn't exist (wrong/stale pe_name) or its slot range
+        # excludes the requested rank count.
+        stderr_pattern=re.compile(
+            r'parallel environment ".*" does not exist|'
+            r"no parallel environment|"
+            r"invalid parallel environment|"
+            r"job .* does not (fit|use) the parallel environment",
+            re.I,
+        ),
+        exit_code=None,
+        suggested_fix={
+            "action": "fix-mpi-pe-name",
+            "hint": (
+                "SGE rejected the parallel environment. Pick a PE with kind='mpi' "
+                "from inspect-cluster's parallel_environments and set it as the "
+                "spec's mpi.pe_name; verify the requested ranks fit the PE's slot range."
+            ),
+        },
+        priority=95,
+    ),
+    FailureSignature(
+        error_class="mpi_init_failed",
+        # The MPI runtime itself failed to start the ranks — too few slots for
+        # the requested ranks (the runtime surfacing a ranks>capacity ask),
+        # an MPI_Init/MPI_ABORT abort, or an ORTE/PMIx wire-up error.
+        stderr_pattern=re.compile(
+            r"There are not enough slots available|not enough slots|"
+            r"MPI_(?:Init|ABORT)|PMPI_Init|mpirun (?:detected|noticed) that|"
+            r"\bORTE\b.*(?:fail|error|abort)|PMIx?.*(?:error|failed)|"
+            r"error initializing.*MPI",
+            re.I,
+        ),
+        exit_code=None,
+        suggested_fix={
+            "action": "check-mpi-topology",
+            "hint": (
+                "The MPI runtime couldn't launch the ranks. Common causes: ranks "
+                "exceed the allocation's slots (lower mpi.ranks or raise the "
+                "node/slot ask), an MPI library mismatch between build and runtime, "
+                "or a rank/topology mismatch. Re-run the ranks=2 canary to isolate."
+            ),
+        },
+        priority=95,
+    ),
     FailureSignature(
         error_class="undefined_var_expansion",
         # argparse rejects an empty value because an env-var reference in the

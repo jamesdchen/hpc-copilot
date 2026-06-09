@@ -207,13 +207,18 @@ class HPCBackend(abc.ABC):
     @abc.abstractmethod
     def _build_command(
         self,
-        task_range: str,
+        task_range: str | None,
         job_name: str,
         job_env: dict[str, str],
         *,
         extra_flags: list[str] | None = None,
+        array: bool = True,
     ) -> list[str]:
-        """Return the scheduler command for the given task range."""
+        """Return the scheduler command for the given task range.
+
+        *array* selects the array shape (``task_range`` elements); a single
+        multi-rank MPI job (#293) passes ``array=False`` with ``task_range=None``.
+        """
         ...
 
     def resource_flags(self, resources: Any) -> list[str]:

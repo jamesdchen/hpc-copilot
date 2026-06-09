@@ -284,6 +284,69 @@
     }
   },
   "$defs": {
+    "MpiSpec": {
+      "additionalProperties": false,
+      "description": "Multi-rank job shape: N ranks across M nodes as ONE unit of work (#293).\n\nhpc-agent's default axis is independent-task fan-out (one task = one\nprocess). An MPI solve breaks that shape — a single computation spans\n``ranks`` processes that coordinate via the MPI library, and the whole\nmulti-rank job is one unit of work. This block, hung on\n:class:`SubmitResources`, carries the rank/topology controls; the\nbackend's ``resource_flags`` translates them into scheduler directives\n(``--ntasks`` / ``-pe`` / ``select=``) and the ``mpi`` job template wraps\nthe executor in the chosen ``launcher``.\n\nEvery field but ``ranks`` is optional. ``ranks_per_node`` left null lets\nthe scheduler pack ranks onto nodes; set it to pin the decomposition\n(then ``nodes = ranks / ranks_per_node`` and the divisibility guard\nbelow fires on an incoherent combo).",
+      "properties": {
+        "ranks": {
+          "description": "Total MPI ranks (processes) for the job. SLURM --ntasks / SGE -pe <pe> N.",
+          "minimum": 1,
+          "title": "Ranks",
+          "type": "integer"
+        },
+        "ranks_per_node": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ranks packed onto each node. Null lets the scheduler decide. When set, must divide ``ranks`` evenly so node count is integral.",
+          "title": "Ranks Per Node"
+        },
+        "threads_per_rank": {
+          "default": 1,
+          "description": "OpenMP threads per rank (hybrid MPI+OpenMP). SLURM --cpus-per-task.",
+          "minimum": 1,
+          "title": "Threads Per Rank",
+          "type": "integer"
+        },
+        "launcher": {
+          "description": "How the job template launches the ranks: srun / mpirun / aprun.",
+          "enum": [
+            "srun",
+            "mpirun",
+            "aprun"
+          ],
+          "title": "Launcher",
+          "type": "string"
+        },
+        "pe_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SGE parallel environment to request (``-pe <pe_name> <ranks>``). Resolved from inspect-cluster's parallel_environments (kind=mpi). Required for SGE; ignored by SLURM/PBS.",
+          "title": "Pe Name"
+        }
+      },
+      "required": [
+        "ranks",
+        "launcher"
+      ],
+      "title": "mpi spec",
+      "type": "object"
+    },
     "SubmitResources": {
       "additionalProperties": false,
       "description": "Scheduler resource asks emitted as qsub/sbatch flags.\n\nFirst-class in the submit spec (#146): the planning/validation layer\nalready resolves and validates walltime against history + cluster\nceilings, but before this the submission layer had nowhere to put the\nresult, so the resolved walltime was silently dropped and the job ran\non the cluster default. Every field is optional and opt-in — an\nomitted/empty ``resources`` block emits NO new scheduler flags, so the\ntemplate directives (and the cluster default) apply exactly as before.\n\nThe backend translates each set field into its scheduler's flag:\n\n* ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``\n* ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``\n* ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``\n\nThese override the corresponding directive baked into the job\ntemplate (a command-line flag beats a ``#$``/``#SBATCH`` line), which\nis the only way to vary a per-submission resource since SGE ``#$``\ndirectives cannot read env vars.",
@@ -329,6 +392,18 @@
           "default": null,
           "description": "CPU cores. SGE -pe shared <n> / SLURM --cpus-per-task.",
           "title": "Cpus"
+        },
+        "mpi": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MpiSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Multi-rank (MPI) job shape (#293). When set, the job is ONE multi-rank unit of work rather than a fan-out of single-process tasks: the backend emits multi-node directives (--ntasks / -pe / select=) and the mpi template wraps the executor in the launcher. Null = ordinary single-process task (cpus/mem/walltime apply as before)."
         }
       },
       "title": "submit resources",

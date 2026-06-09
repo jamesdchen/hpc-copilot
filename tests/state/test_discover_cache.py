@@ -30,6 +30,7 @@ def _infos(exp: Path, *, flag_type=int):
             path=exp / "run.py",
             name="estimate_pi",
             gpu=False,
+            mpi=False,
             flags=(Flag(name="seed", type=flag_type, default=0, help="seed"),),
             run_signature_sha="a" * 64,
         )

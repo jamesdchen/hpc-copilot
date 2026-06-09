@@ -792,6 +792,23 @@ def _augment_job_env(
     return out
 
 
+def _mpi_canary_resources(resources: object) -> tuple[object, int | None]:
+    """Shrink a multi-rank ``resources`` to the smallest meaningful canary (#293 PR4).
+
+    A full MPI run might ask for hundreds of ranks across many nodes; the
+    canary only needs to prove the launcher resolves and the MPI library loads,
+    so it runs ``ranks=2`` on a single node (``ranks_per_node=2`` → nodes=1).
+    Returns ``(canary_resources, canary_ranks)``; ``canary_ranks`` is ``None``
+    for a non-MPI submit, signalling the caller to leave the canary env alone.
+    """
+    mpi = getattr(resources, "mpi", None)
+    if mpi is None or not hasattr(resources, "model_copy"):
+        return resources, None
+    canary_ranks = min(2, int(mpi.ranks))
+    new_mpi = mpi.model_copy(update={"ranks": canary_ranks, "ranks_per_node": canary_ranks})
+    return resources.model_copy(update={"mpi": new_mpi}), canary_ranks
+
+
 def _make_single_array_submission(
     backend: HPCBackend,
     *,
@@ -816,9 +833,21 @@ def _make_single_array_submission(
     """
     backend._setup_log_dir()  # type: ignore[attr-defined]
     flags = backend.resource_flags(resources) + list(extra_flags or [])
-    cmd = backend._build_command(  # type: ignore[attr-defined]
-        f"1-{total_tasks}", job_name, job_env, extra_flags=flags
-    )
+    # #293: a single multi-rank MPI job is ONE job whose parallelism is the
+    # rank count, not a scheduler array — submit it non-array (no --array/-t).
+    # build-submit-spec refuses an mpi block with total_tasks > 1 (array-of-MPI
+    # is deferred), so an mpi run always has total_tasks == 1 here; the
+    # ``and total_tasks == 1`` is defense-in-depth against a hand-rolled spec.
+    mpi = getattr(resources, "mpi", None) if resources is not None else None
+    single_mpi_job = mpi is not None and total_tasks == 1
+    if single_mpi_job:
+        cmd = backend._build_command(  # type: ignore[attr-defined]
+            None, job_name, job_env, extra_flags=flags, array=False
+        )
+    else:
+        cmd = backend._build_command(  # type: ignore[attr-defined]
+            f"1-{total_tasks}", job_name, job_env, extra_flags=flags
+        )
     result = backend._execute_command(cmd, job_env, cwd)  # type: ignore[attr-defined]
     if result.returncode != 0:
         stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
@@ -1060,13 +1089,20 @@ def _submit_one_spec(
             # run_iterations, so a non-checkpoint run is unaffected.
             if spec.auto_resume_on_kill:
                 canary_env["HPC_CHECKPOINT_CANARY"] = "1"
+            # #293 PR4: an MPI canary runs the smallest meaningful job — ranks=2,
+            # one node — so it validates the launcher + MPI library without
+            # queueing for the full multi-node allocation. The reduced rank count
+            # must reach the in-job launcher too, so override HPC_MPI_RANKS.
+            canary_resources, canary_mpi_ranks = _mpi_canary_resources(spec.resources)
+            if canary_mpi_ranks is not None:
+                canary_env["HPC_MPI_RANKS"] = str(canary_mpi_ranks)
             canary_job_ids = _make_single_array_submission(
                 backend_obj,
                 job_name=f"{spec.job_name}_canary",
                 total_tasks=1,
                 job_env=canary_env,
                 cwd=experiment_dir,
-                resources=spec.resources,
+                resources=canary_resources,
             )
             from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 

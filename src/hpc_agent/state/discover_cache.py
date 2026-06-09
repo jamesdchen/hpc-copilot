@@ -102,6 +102,9 @@ def _run_info_to_dict(ri: Any) -> dict[str, Any]:
         "path": str(ri.path),
         "name": ri.name,
         "gpu": ri.gpu,
+        # #293: multi-rank marker. ``getattr`` default keeps an older in-memory
+        # RunInfo (pre-field) serialising cleanly; the read side defaults too.
+        "mpi": getattr(ri, "mpi", False),
         "run_signature_sha": ri.run_signature_sha,
         "flags": [_flag_to_dict(f) for f in ri.flags],
     }
@@ -128,6 +131,9 @@ def _dict_to_run_info(d: dict[str, Any]) -> RunInfo:
         path=Path(d["path"]),
         name=d["name"],
         gpu=d["gpu"],
+        # Default False for a cache written before the mpi field existed (#293);
+        # a stale entry stays readable rather than forcing a full re-scan.
+        mpi=d.get("mpi", False),
         flags=flags,
         run_signature_sha=d["run_signature_sha"],
     )

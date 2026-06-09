@@ -33,12 +33,16 @@ from hpc_agent import errors
 from hpc_agent.infra.backends._scripts import (
     PBSPRO_CPU,
     PBSPRO_GPU,
+    PBSPRO_MPI,
     SGE_CPU,
     SGE_GPU,
+    SGE_MPI,
     SLURM_CPU,
     SLURM_GPU,
+    SLURM_MPI,
     TORQUE_CPU,
     TORQUE_GPU,
+    TORQUE_MPI,
 )
 
 # Known structural families the engine can assemble commands for. A
@@ -83,8 +87,9 @@ class SchedulerProfile:
         ``slurm``-family exact-match classifier; the ``sge`` family uses a
         substring rule and leaves this empty).
     scripts:
-        ``kind -> script body`` for the runtime array job (keys
-        ``"cpu"`` / ``"gpu"``). Rendered verbatim by :func:`render_script`.
+        ``kind -> script body`` for the runtime job (keys ``"cpu"`` /
+        ``"gpu"`` for the array shape, ``"mpi"`` for a single multi-rank
+        job, #293). Rendered verbatim by :func:`render_script`.
     """
 
     name: str
@@ -150,7 +155,7 @@ class SchedulerProfile:
 
 
 def render_script(profile: SchedulerProfile, *, kind: str) -> str:
-    """Return the runtime array-job script body for *kind* (``cpu``/``gpu``).
+    """Return the runtime job script body for *kind* (``cpu``/``gpu``/``mpi``).
 
     Phase 2 (Option C): the script is *rendered from the profile* rather
     than read from a static file shipped on disk. For the golden profiles
@@ -193,7 +198,7 @@ SLURM_PROFILE = SchedulerProfile(
             "REVOKED",
         }
     ),
-    scripts={"cpu": SLURM_CPU, "gpu": SLURM_GPU},
+    scripts={"cpu": SLURM_CPU, "gpu": SLURM_GPU, "mpi": SLURM_MPI},
 )
 
 SGE_PROFILE = SchedulerProfile(
@@ -208,7 +213,7 @@ SGE_PROFILE = SchedulerProfile(
     # SGE classifies by substring (``E`` -> error, ``h`` -> held), so the
     # exact-token set is intentionally empty for this family.
     error_states=frozenset(),
-    scripts={"cpu": SGE_CPU, "gpu": SGE_GPU},
+    scripts={"cpu": SGE_CPU, "gpu": SGE_GPU, "mpi": SGE_MPI},
 )
 
 # PBS family. Job ids are ``<seq>.<server>`` (arrays ``<seq>[].<server>``) —
@@ -225,7 +230,7 @@ PBSPRO_PROFILE = SchedulerProfile(
     template_ext=".pbs",
     supports_test_only_eta=False,
     error_states=frozenset(),
-    scripts={"cpu": PBSPRO_CPU, "gpu": PBSPRO_GPU},
+    scripts={"cpu": PBSPRO_CPU, "gpu": PBSPRO_GPU, "mpi": PBSPRO_MPI},
 )
 
 TORQUE_PROFILE = SchedulerProfile(
@@ -236,5 +241,5 @@ TORQUE_PROFILE = SchedulerProfile(
     template_ext=".pbs",
     supports_test_only_eta=False,
     error_states=frozenset(),
-    scripts={"cpu": TORQUE_CPU, "gpu": TORQUE_GPU},
+    scripts={"cpu": TORQUE_CPU, "gpu": TORQUE_GPU, "mpi": TORQUE_MPI},
 )

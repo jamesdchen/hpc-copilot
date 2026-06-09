@@ -51,6 +51,17 @@ _DEFAULT_SCRIPTS: dict[tuple[str, bool], str] = {
     ("torque", True): ".hpc/templates/gpu_array.pbs",
 }
 
+# Cluster-side path to the single multi-rank (MPI) template per backend (#293).
+# An ``mpi`` block on the spec selects this over the cpu/gpu array script
+# regardless of ``is_gpu`` — a multi-rank solve is one unit of work, not a
+# fan-out. deploy_runtime ships ``.hpc/templates/mpi.{sh,slurm,pbs}``.
+_MPI_SCRIPTS: dict[str, str] = {
+    "sge": ".hpc/templates/mpi.sh",
+    "slurm": ".hpc/templates/mpi.slurm",
+    "pbspro": ".hpc/templates/mpi.pbs",
+    "torque": ".hpc/templates/mpi.pbs",
+}
+
 # Job-env keys the cluster-side dispatcher / template ALWAYS need. The
 # slash-command prose used to enumerate these by hand; we synthesize
 # them here from the resolved arguments. Anything else the caller wants
@@ -269,7 +280,12 @@ def build_submit_spec(
 
     job_name = job_name or profile
     if script is None:
-        script = _DEFAULT_SCRIPTS[(backend, bool(is_gpu))]
+        # #293: an mpi block routes to the single multi-rank template (one unit
+        # of work), independent of is_gpu; otherwise the cpu/gpu array script.
+        if spec.mpi is not None:
+            script = _MPI_SCRIPTS[backend]
+        else:
+            script = _DEFAULT_SCRIPTS[(backend, bool(is_gpu))]
 
     # Framework-default job_env. Caller's extra_env wins via dict merge
     # order (spread caller last).
@@ -287,6 +303,13 @@ def build_submit_spec(
         job_env["HPC_RUNTIME"] = "uv"
     if campaign_id:
         job_env["HPC_CAMPAIGN_ID"] = campaign_id
+    if spec.mpi is not None:
+        # #293: the mpi template reads these to fold the launcher + rank count
+        # into $EXECUTOR. The scheduler-side allocation (ntasks/select/-pe) is
+        # the resource_flags' job; these tell the in-job launcher what to spawn.
+        job_env["HPC_MPI_RANKS"] = str(int(spec.mpi.ranks))
+        job_env["HPC_MPI_LAUNCHER"] = spec.mpi.launcher
+        job_env["HPC_MPI_THREADS_PER_RANK"] = str(int(spec.mpi.threads_per_rank))
     if spec.walltime_sec:
         # #294: surface the walltime to the cluster preamble so it can stamp
         # HPC_WALLTIME_END_EPOCH (job start + walltime) for checkpoint-aware
@@ -348,7 +371,7 @@ def build_submit_spec(
     }
     if spec.result_dir_template is not None:
         out["result_dir_template"] = spec.result_dir_template
-    resources = {
+    resources: dict[str, Any] = {
         k: v
         for k, v in (
             ("walltime_sec", spec.walltime_sec),
@@ -357,6 +380,11 @@ def build_submit_spec(
         )
         if v is not None
     }
+    if spec.mpi is not None:
+        # #293: emit the mpi block onto resources so the backend's resource_flags
+        # sizes the job from ranks/topology. model_dump drops the null optionals,
+        # keeping the spec minimal.
+        resources["mpi"] = spec.mpi.model_dump(exclude_none=True)
     if resources:
         out["resources"] = resources
     if pass_env_keys is not None:

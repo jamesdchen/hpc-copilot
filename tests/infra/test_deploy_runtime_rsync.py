@@ -31,7 +31,7 @@ def _prelude_ok():
 
 def test_deploy_issues_a_single_rsync_invocation():
     n_files = len(transport._build_deploy_items(scheduler="sge"))
-    assert n_files == 8  # 2 stubs + dispatch + combiner + 2 templates + 2 preambles
+    assert n_files == 9  # 2 stubs + dispatch + combiner + 3 templates (cpu/gpu/mpi) + 2 preambles
 
     calls: list[list[str]] = []
 

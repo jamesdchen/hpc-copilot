@@ -222,8 +222,8 @@ class TestDeployRuntime:
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
         # One batched transfer to the project root carrying every file plus the
-        # cache-manifest write. Ten files (no scheduler arg → sge + slurm
-        # templates) + manifest = 11 dst_rels.
+        # cache-manifest write. Twelve files (no scheduler arg → sge + slurm
+        # cpu/gpu/mpi templates) + manifest = 13 dst_rels.
         assert captured["ssh_target"] == "u@c"
         assert captured["remote_path"] == "/p"
         rels = set(captured["dst_rels"])
@@ -233,17 +233,19 @@ class TestDeployRuntime:
         # Framework executor + combiner into .hpc/
         assert ".hpc/_hpc_dispatch.py" in rels
         assert ".hpc/_hpc_combiner.py" in rels
-        # Four templates into .hpc/templates/
+        # Six templates into .hpc/templates/ (cpu/gpu/mpi × sge/slurm).
         assert ".hpc/templates/cpu_array.sh" in rels
         assert ".hpc/templates/gpu_array.sh" in rels
+        assert ".hpc/templates/mpi.sh" in rels
         assert ".hpc/templates/cpu_array.slurm" in rels
         assert ".hpc/templates/gpu_array.slurm" in rels
+        assert ".hpc/templates/mpi.slurm" in rels
         # Two shared preambles into .hpc/templates/common/
         assert ".hpc/templates/common/hpc_preamble.sh" in rels
         assert ".hpc/templates/common/gpu_preamble.sh" in rels
         # Cache manifest write (#242), riding the same transfer.
         assert ".hpc/.deploy_state.json" in rels
-        assert len(rels) == 11, sorted(rels)
+        assert len(rels) == 13, sorted(rels)
 
 
 # ---------------------------------------------------------------------------

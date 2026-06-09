@@ -154,3 +154,8 @@ class FailureCategory(StrEnum):
     OUTPUT_FILE_REQUIRED = "output_file_required"
     MODULE_NOT_FOUND_HPC_AGENT = "module_not_found_hpc_agent"
     UNDEFINED_VAR_EXPANSION = "undefined_var_expansion"
+    # Multi-rank (MPI) failure modes (#293 PR4). Each names a concrete
+    # remediation the canary verifier / recover path can act on.
+    MPI_LAUNCHER_MISSING = "mpi_launcher_missing"
+    MPI_PE_INVALID = "mpi_pe_invalid"
+    MPI_INIT_FAILED = "mpi_init_failed"

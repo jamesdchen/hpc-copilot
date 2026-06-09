@@ -6,14 +6,16 @@ from hpc_agent.ops.recover.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
-    """The catalog covers the 15 documented failure modes (segv was
+    """The catalog covers the 18 documented failure modes (segv was
     removed when the SEGV blacklist feature was deleted; preempted was
     added when dispatch.py learned to trap SIGTERM; five empirical canary
     signatures — ``uv_not_on_path`` / ``conda_command_not_found`` /
     ``output_file_required`` / ``module_not_found_hpc_agent`` /
     ``undefined_var_expansion`` — were added so the verifier surfaces a
-    structured remediation instead of a bare ``dispatcher_failed``)."""
-    assert len(CATALOG) == 15
+    structured remediation instead of a bare ``dispatcher_failed``; and
+    three multi-rank signatures — ``mpi_launcher_missing`` /
+    ``mpi_pe_invalid`` / ``mpi_init_failed`` — for #293)."""
+    assert len(CATALOG) == 18
 
 
 def test_preempted_matches_exit_130() -> None:
@@ -200,3 +202,35 @@ def test_uv_not_on_path_beats_python_traceback() -> None:
     )
     out = classify(stderr, 2)
     assert out["error_class"] == "uv_not_on_path"
+
+
+# ── multi-rank (MPI) signatures (#293 PR4) ──────────────────────────────────
+
+
+def test_classify_mpi_launcher_missing() -> None:
+    out = classify("srun: command not found", 127)
+    assert out["error_class"] == "mpi_launcher_missing"
+    assert out["suggested_fix"]["action"] == "fix-mpi-launcher"
+
+
+def test_classify_mpi_pe_invalid() -> None:
+    out = classify('error: parallel environment "mpi" does not exist', None)
+    assert out["error_class"] == "mpi_pe_invalid"
+    assert out["suggested_fix"]["action"] == "fix-mpi-pe-name"
+
+
+def test_classify_mpi_not_enough_slots() -> None:
+    # OpenMPI's ranks>capacity error surfaces as mpi_init_failed.
+    out = classify(
+        "There are not enough slots available in the system to satisfy the 8 slots",
+        None,
+    )
+    assert out["error_class"] == "mpi_init_failed"
+    assert out["suggested_fix"]["action"] == "check-mpi-topology"
+
+
+def test_classify_mpi_init_wins_over_traceback() -> None:
+    # A launch failure that also dumps a Python traceback still classifies as
+    # the structural MPI error (priority above the bare-traceback fallback).
+    stderr = "Traceback (most recent call last):\n  ...\nMPI_Init failed: PMIx error"
+    assert classify(stderr, 1)["error_class"] == "mpi_init_failed"

@@ -137,3 +137,42 @@ def test_phase2_canary_false_launches_main(tmp_path, _journal_home) -> None:
     assert res.job_ids == ["main_job"]
     assert res.canary_done is False
     assert mk.call_count == 1  # the main array
+
+
+# ── MPI canary downsizing (#293 PR4) ────────────────────────────────────────
+
+
+def test_mpi_canary_resources_shrinks_to_two_ranks_one_node() -> None:
+    from hpc_agent._wire.workflows.submit_flow import MpiSpec, SubmitResources
+    from hpc_agent.ops.submit_flow import _mpi_canary_resources
+
+    full = SubmitResources(
+        mpi=MpiSpec(ranks=128, ranks_per_node=32, threads_per_rank=4, launcher="srun"),
+        walltime_sec=3600,
+    )
+    canary, ranks = _mpi_canary_resources(full)
+    assert ranks == 2
+    # ranks=2, ranks_per_node=2 → one node; threads/launcher/walltime preserved.
+    assert canary.mpi.ranks == 2
+    assert canary.mpi.ranks_per_node == 2
+    assert canary.mpi.threads_per_rank == 4
+    assert canary.mpi.launcher == "srun"
+    assert canary.walltime_sec == 3600
+    # The full spec is not mutated (model_copy, not in-place).
+    assert full.mpi.ranks == 128
+
+
+def test_mpi_canary_resources_noop_for_non_mpi() -> None:
+    from hpc_agent._wire.workflows.submit_flow import SubmitResources
+    from hpc_agent.ops.submit_flow import _mpi_canary_resources
+
+    res = SubmitResources(cpus=4, walltime_sec=600)
+    canary, ranks = _mpi_canary_resources(res)
+    assert ranks is None
+    assert canary is res  # unchanged
+
+
+def test_mpi_canary_resources_handles_none() -> None:
+    from hpc_agent.ops.submit_flow import _mpi_canary_resources
+
+    assert _mpi_canary_resources(None) == (None, None)

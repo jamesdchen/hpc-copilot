@@ -53,6 +53,28 @@ def _fmt_hms(total_seconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+# Per-family walltime / memory flag emitters. Shared by the single-node
+# ``resource_flags`` path and the MPI path (#293) so the two never drift on
+# how a walltime or a memory ask is spelled for a given scheduler.
+def _slurm_time_flags(walltime_sec: int | None) -> list[str]:
+    if not walltime_sec:
+        return []
+    minutes = -(-int(walltime_sec) // 60)  # ceil division
+    return ["--time", str(minutes)]
+
+
+def _slurm_mem_flags(mem_mb: int | None) -> list[str]:
+    return ["--mem", f"{int(mem_mb)}M"] if mem_mb else []
+
+
+def _sge_time_flags(walltime_sec: int | None) -> list[str]:
+    return ["-l", f"h_rt={_fmt_hms(int(walltime_sec))}"] if walltime_sec else []
+
+
+def _sge_mem_flags(mem_mb: int | None) -> list[str]:
+    return ["-l", f"h_data={int(mem_mb)}M"] if mem_mb else []
+
+
 class ProfileBackend(HPCBackend):
     """Scheduler-agnostic submission engine parameterised by a profile."""
 
@@ -150,12 +172,15 @@ class ProfileBackend(HPCBackend):
         walltime_sec = getattr(resources, "walltime_sec", None)
         mem_mb = getattr(resources, "mem_mb", None)
         cpus = getattr(resources, "cpus", None)
+        # #293: a multi-rank job sizes from the MPI block (ranks / topology),
+        # not the per-task cpus axis. The MPI emitter reuses the same
+        # walltime/mem helpers so only the slot grammar differs.
+        mpi = getattr(resources, "mpi", None)
+        if mpi is not None:
+            return self._mpi_resource_flags(mpi, walltime_sec=walltime_sec, mem_mb=mem_mb)
         if self.profile.family == "slurm":
-            if walltime_sec:
-                minutes = -(-int(walltime_sec) // 60)  # ceil division
-                flags += ["--time", str(minutes)]
-            if mem_mb:
-                flags += ["--mem", f"{int(mem_mb)}M"]
+            flags += _slurm_time_flags(walltime_sec)
+            flags += _slurm_mem_flags(mem_mb)
             if cpus:
                 flags += ["--cpus-per-task", str(int(cpus))]
         elif self.profile.family == "pbspro":
@@ -182,12 +207,69 @@ class ProfileBackend(HPCBackend):
             if cpus or mem_mb or walltime_sec:
                 flags += ["-l", ",".join(parts)]
         else:  # sge
-            if walltime_sec:
-                flags += ["-l", f"h_rt={_fmt_hms(int(walltime_sec))}"]
-            if mem_mb:
-                flags += ["-l", f"h_data={int(mem_mb)}M"]
+            flags += _sge_time_flags(walltime_sec)
+            flags += _sge_mem_flags(mem_mb)
             if cpus:
                 flags += ["-pe", "shared", str(int(cpus))]
+        return flags
+
+    def _mpi_resource_flags(
+        self, mpi: Any, *, walltime_sec: int | None, mem_mb: int | None
+    ) -> list[str]:
+        """Scheduler flags for a multi-rank job (#293).
+
+        *mpi* is a ``SubmitResources.MpiSpec`` (or any object exposing
+        ``ranks`` / ``ranks_per_node`` / ``threads_per_rank`` / ``pe_name``).
+        ``ranks_per_node`` is guaranteed by the wire validator to divide
+        ``ranks`` evenly, so ``nodes`` is integral when it is set; left null
+        the scheduler packs ranks and the node-pinning flags are omitted.
+
+        Walltime / memory reuse the same family helpers as the single-node
+        path — only the *slot* grammar (how N ranks across M nodes are
+        requested) is MPI-specific.
+        """
+        ranks = int(mpi.ranks)
+        rpn_raw = getattr(mpi, "ranks_per_node", None)
+        rpn = int(rpn_raw) if rpn_raw else None
+        threads = int(getattr(mpi, "threads_per_rank", 1) or 1)
+        nodes = ranks // rpn if rpn else None
+        flags: list[str] = []
+        fam = self.profile.family
+        if fam == "slurm":
+            if nodes:
+                flags += ["--nodes", str(nodes)]
+            flags += ["--ntasks", str(ranks)]
+            if rpn:
+                flags += ["--ntasks-per-node", str(rpn)]
+            if threads > 1:
+                flags += ["--cpus-per-task", str(threads)]
+            flags += _slurm_time_flags(walltime_sec)
+            flags += _slurm_mem_flags(mem_mb)
+        elif fam in ("pbspro", "torque"):
+            # PBS chunk: N nodes × (ranks_per_node procs × threads cpus each).
+            # When ranks_per_node is null, fall back to a single chunk holding
+            # every rank (mpiprocs=ranks) — the scheduler then places them.
+            chunk_nodes = nodes or 1
+            procs = rpn if rpn else ranks
+            ncpus = procs * threads
+            sel = f"select={chunk_nodes}:ncpus={ncpus}:mpiprocs={procs}"
+            if threads > 1:
+                sel += f":ompthreads={threads}"
+            if mem_mb:
+                sel += f":mem={int(mem_mb)}mb"
+            flags += ["-l", sel]
+            if walltime_sec:
+                flags += ["-l", f"walltime={_fmt_hms(int(walltime_sec))}"]
+        else:  # sge
+            # SGE routes multi-rank work through a parallel environment. The
+            # wire guard (build_submit_spec) guarantees pe_name is present for
+            # sge+mpi, so a missing one here is a non-sge-path caller; emit no
+            # slot request rather than a malformed ``-pe`` with no name.
+            pe_name = getattr(mpi, "pe_name", None)
+            if pe_name:
+                flags += ["-pe", str(pe_name), str(ranks)]
+            flags += _sge_time_flags(walltime_sec)
+            flags += _sge_mem_flags(mem_mb)
         return flags
 
     # ------------------------------------------------------------------
@@ -196,34 +278,49 @@ class ProfileBackend(HPCBackend):
 
     def _build_command(
         self,
-        task_range: str,
+        task_range: str | None,
         job_name: str,
         job_env: dict[str, str],
         *,
         extra_flags: list[str] | None = None,
+        array: bool = True,
     ) -> list[str]:
+        """Assemble the submit command.
+
+        *array* defaults True (the fan-out shape: one array of ``task_range``
+        elements). A single multi-rank MPI job (#293) is submitted with
+        ``array=False`` and ``task_range=None`` — one job whose internal
+        parallelism is the rank count, not a scheduler array.
+        """
         if self.profile.family == "slurm":
-            return self._build_slurm_command(task_range, job_name, job_env, extra_flags=extra_flags)
+            return self._build_slurm_command(
+                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+            )
         if self.profile.family in ("pbspro", "torque"):
-            return self._build_pbs_command(task_range, job_name, job_env, extra_flags=extra_flags)
-        return self._build_sge_command(task_range, job_name, job_env, extra_flags=extra_flags)
+            return self._build_pbs_command(
+                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+            )
+        return self._build_sge_command(
+            task_range, job_name, job_env, extra_flags=extra_flags, array=array
+        )
 
     def _build_pbs_command(
         self,
-        task_range: str,
+        task_range: str | None,
         job_name: str,
         job_env: dict[str, str],
         *,
         extra_flags: list[str] | None = None,
+        array: bool = True,
     ) -> list[str]:
         # PBS Pro array flag is ``-J``; TORQUE uses ``-t`` (like SGE). Streams
         # joined with ``-j oe`` (PBS) cf. SGE's ``-j y``. Otherwise the qsub
         # shape + the ``-v`` comma hazard mirror the SGE branch.
         array_flag = "-J" if self.profile.family == "pbspro" else "-t"
-        cmd = [
-            self.profile.submit_bin,
-            array_flag,
-            task_range,
+        cmd = [self.profile.submit_bin]
+        if array:
+            cmd += [array_flag, str(task_range)]
+        cmd += [
             "-N",
             job_name,
             "-o",
@@ -249,23 +346,34 @@ class ProfileBackend(HPCBackend):
 
     def _build_slurm_command(
         self,
-        task_range: str,
+        task_range: str | None,
         job_name: str,
         job_env: dict[str, str],
         *,
         extra_flags: list[str] | None = None,
+        array: bool = True,
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if getattr(self, "cluster", ""):
             cmd.append(f"--clusters={self.cluster}")
-        cmd += ["--array", task_range, "--job-name", job_name]
+        if array:
+            cmd += ["--array", str(task_range)]
+        cmd += ["--job-name", job_name]
         if getattr(self, "account", ""):
             cmd += ["--account", self.account]
+        # Array jobs interpolate %A (array job id) + %a (array index). A single
+        # MPI job (#293) is task 0, so it pins %j (job id) + the literal ``_1``
+        # — task 0's 1-based ArrayIndex — so the on-disk name MATCHES what the
+        # diagnostic layer resolves via ``stderr_log_path(task_id=0)`` /
+        # ``err_log_disk_path``. Without the ``_1`` the canary + status log
+        # fetch would look for ``<name>_<jobid>_1.err`` and miss the real log,
+        # silently blanking MPI failure classification.
+        log_pattern = "%x_%A_%a" if array else "%x_%j_1"
         cmd += [
             "--output",
-            f"{self.log_dir}/%x_%A_%a.out",
+            f"{self.log_dir}/{log_pattern}.out",
             "--error",
-            f"{self.log_dir}/%x_%A_%a.err",
+            f"{self.log_dir}/{log_pattern}.err",
         ]
         if job_env:
             # --export uses comma to separate K=V pairs, so a value with a
@@ -287,16 +395,17 @@ class ProfileBackend(HPCBackend):
 
     def _build_sge_command(
         self,
-        task_range: str,
+        task_range: str | None,
         job_name: str,
         job_env: dict[str, str],
         *,
         extra_flags: list[str] | None = None,
+        array: bool = True,
     ) -> list[str]:
-        cmd = [
-            self.profile.submit_bin,
-            "-t",
-            task_range,
+        cmd = [self.profile.submit_bin]
+        if array:
+            cmd += ["-t", str(task_range)]
+        cmd += [
             "-N",
             job_name,
             "-o",

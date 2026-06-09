@@ -10,7 +10,7 @@ follow-up to this canary.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,6 +21,83 @@ from hpc_agent._wire._shared import (
     Runtime,
     SshTarget,
 )
+
+# Launchers the MPI template knows how to wrap an executor with. ``srun``
+# (SLURM-native), ``mpirun`` (OpenMPI / Intel MPI / MPICH), ``aprun`` (Cray
+# ALPS). The set is closed on purpose — a launcher the template has no
+# ``case`` arm for would silently run the bare executor on one rank.
+MpiLauncher = Literal["srun", "mpirun", "aprun"]
+
+
+class MpiSpec(BaseModel):
+    """Multi-rank job shape: N ranks across M nodes as ONE unit of work (#293).
+
+    hpc-agent's default axis is independent-task fan-out (one task = one
+    process). An MPI solve breaks that shape — a single computation spans
+    ``ranks`` processes that coordinate via the MPI library, and the whole
+    multi-rank job is one unit of work. This block, hung on
+    :class:`SubmitResources`, carries the rank/topology controls; the
+    backend's ``resource_flags`` translates them into scheduler directives
+    (``--ntasks`` / ``-pe`` / ``select=``) and the ``mpi`` job template wraps
+    the executor in the chosen ``launcher``.
+
+    Every field but ``ranks`` is optional. ``ranks_per_node`` left null lets
+    the scheduler pack ranks onto nodes; set it to pin the decomposition
+    (then ``nodes = ranks / ranks_per_node`` and the divisibility guard
+    below fires on an incoherent combo).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="mpi spec")
+
+    ranks: int = Field(
+        ge=1,
+        description="Total MPI ranks (processes) for the job. SLURM --ntasks / SGE -pe <pe> N.",
+    )
+    ranks_per_node: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Ranks packed onto each node. Null lets the scheduler decide. When "
+            "set, must divide ``ranks`` evenly so node count is integral."
+        ),
+    )
+    threads_per_rank: int = Field(
+        default=1,
+        ge=1,
+        description="OpenMP threads per rank (hybrid MPI+OpenMP). SLURM --cpus-per-task.",
+    )
+    launcher: MpiLauncher = Field(
+        description="How the job template launches the ranks: srun / mpirun / aprun.",
+    )
+    pe_name: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "SGE parallel environment to request (``-pe <pe_name> <ranks>``). "
+            "Resolved from inspect-cluster's parallel_environments (kind=mpi). "
+            "Required for SGE; ignored by SLURM/PBS."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _ranks_per_node_divides_ranks(self) -> MpiSpec:
+        """Refuse ``ranks_per_node`` that does not evenly divide ``ranks``.
+
+        The #293 coherence guard: ``ranks_per_node × nodes`` must equal
+        ``ranks``. A non-dividing pair (e.g. 6 ranks, 4 per node) has no
+        integral node count — the scheduler would either reject it or
+        silently round, stranding ranks. Caught here so build-submit-spec
+        refuses it before qsub rather than after a wasted submission.
+        """
+        rpn = self.ranks_per_node
+        if rpn is not None and self.ranks % rpn != 0:
+            raise ValueError(
+                f"ranks_per_node={rpn} does not evenly divide ranks={self.ranks}: "
+                f"node count {self.ranks / rpn} is not integral. Pick a "
+                f"ranks_per_node that divides {self.ranks} (e.g. a factor of it), "
+                "or leave it null to let the scheduler pack ranks onto nodes."
+            )
+        return self
 
 
 class SubmitResources(BaseModel):
@@ -62,6 +139,17 @@ class SubmitResources(BaseModel):
         default=None,
         ge=1,
         description="CPU cores. SGE -pe shared <n> / SLURM --cpus-per-task.",
+    )
+    mpi: MpiSpec | None = Field(
+        default=None,
+        description=(
+            "Multi-rank (MPI) job shape (#293). When set, the job is ONE "
+            "multi-rank unit of work rather than a fan-out of single-process "
+            "tasks: the backend emits multi-node directives (--ntasks / -pe / "
+            "select=) and the mpi template wraps the executor in the launcher. "
+            "Null = ordinary single-process task (cpus/mem/walltime apply as "
+            "before)."
+        ),
     )
 
 

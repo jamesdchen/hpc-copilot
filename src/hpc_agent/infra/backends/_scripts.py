@@ -17,6 +17,161 @@ byte-for-byte golden test passes, including trailing newline.
 
 from __future__ import annotations
 
+
+def _mpi_script(family: str) -> str:
+    """Build the runtime body for a single multi-rank (MPI) job (#293).
+
+    Unlike the ``*_CPU`` / ``*_GPU`` array bodies above, an MPI job is ONE
+    unit of work spanning N ranks — there is no scheduler array index, so the
+    body sets ``HPC_TASK_ID=0`` directly and reuses the shared preamble +
+    ``hpc_run_with_retry`` machinery unchanged. The launcher itself
+    (``srun`` / ``mpirun`` / ``aprun``) is applied by the dispatcher, which
+    prefixes the *per-task* command so its bookkeeping stays a single process
+    while the compute fans out to N ranks (see
+    ``hpc_agent.execution.mapreduce.dispatch._mpi_launch_prefix``). The
+    template therefore just runs the dispatcher once; the per-family resource
+    directives below are defaults the submit-side ``resource_flags``
+    (``--ntasks`` / ``-pe`` / ``select=``) overrides.
+
+    A builder rather than four literal constants because the bodies differ
+    only in their directive block and PBS work-dir/log redirect — the run
+    tail is identical, so duplicating it four times would be the kind of
+    drift-prone copy the array templates already suffer.
+    """
+    if family == "slurm":
+        directives = (
+            "# --- SLURM directives (defaults; the submit command overrides) ---\n"
+            "#SBATCH --job-name=mpi_job\n"
+            # ``_1`` is task 0's ArrayIndex — keeps the standalone log name
+            # aligned with stderr_log_path(task 0) even though the framework's
+            # submit command sets --output/--error explicitly.
+            "#SBATCH --output=logs/%x_%j_1.out\n"
+            "#SBATCH --error=logs/%x_%j_1.err\n"
+            "#SBATCH --nodes=1\n"
+            "#SBATCH --ntasks=2\n"
+            "#SBATCH --time=6:00:00\n"
+        )
+        workdir = ""
+        label = "SLURM"
+    elif family == "sge":
+        directives = (
+            "# --- SGE directives (defaults; resource_flags overrides) ---\n"
+            "#$ -cwd\n"
+            "#$ -j y\n"
+            "#$ -o logs/\n"
+            "#$ -pe mpi 2\n"
+        )
+        # A single MPI job is task 0; pin its merged log to the task-0 name
+        # (<job_name>.o<job_id>.1) that stderr_log_path / err_log_disk_path
+        # resolve, so the canary + status log fetch finds it. SGE's native
+        # ``-o logs/`` names a non-array job ``<job_name>.o<job_id>`` (no index),
+        # so redirect explicitly — the ``.1`` is task 0's 1-based ArrayIndex.
+        workdir = '\nmkdir -p logs\nexec >"logs/${JOB_NAME}.o${JOB_ID}.1" 2>&1\n'
+        label = "SGE"
+    else:  # pbspro / torque — same qsub-family body, PBS work-dir + log redirect
+        if family == "pbspro":
+            directives = (
+                "# --- PBS Pro directives (defaults; resource_flags overrides) ---\n"
+                "#PBS -N mpi_job\n"
+                "#PBS -l select=1:ncpus=2:mpiprocs=2\n"
+                "#PBS -l walltime=06:00:00\n"
+                "#PBS -j oe\n"
+                "#PBS -o logs/\n"
+            )
+            label = "PBS Pro"
+        else:
+            directives = (
+                "# --- Torque/PBS directives (defaults; resource_flags overrides) ---\n"
+                "#PBS -N mpi_job\n"
+                "#PBS -l nodes=1:ppn=2,walltime=06:00:00\n"
+                "#PBS -j oe\n"
+                "#PBS -o logs/\n"
+            )
+            label = "Torque/PBS"
+        # PBS jobs start in $HOME; cd back to the submit dir and pin the log to
+        # the task-0 name (<job_name>.o<seq>.1) that stderr_log_path /
+        # err_log_disk_path resolve — the ``.1`` is task 0's 1-based ArrayIndex,
+        # so the canary + status log fetch finds the single MPI job's log.
+        workdir = (
+            "\n# PBS jobs start in $HOME, not the submit dir — cd to where qsub ran.\n"
+            'cd "$PBS_O_WORKDIR"\n'
+            "mkdir -p logs\n"
+            'PBS_SEQ="${PBS_JOBID%%[!0-9]*}"\n'
+            'exec >"logs/${PBS_JOBNAME}.o${PBS_SEQ}.1" 2>&1\n'
+        )
+
+    return (
+        "#!/bin/bash\n"
+        "# Fail loudly: -e exits on error, -o pipefail propagates pipeline\n"
+        "# failures. -u is intentionally NOT set (the sourced preamble guards\n"
+        '# optional vars with `if [ -n "$VAR" ]`). The EXECUTOR guard catches\n'
+        '# the "ran `time` with no command and exited 0 silently" failure mode.\n'
+        "set -eo pipefail\n"
+        ': "${EXECUTOR:?EXECUTOR is not set; refusing to dispatch (would run \\`time\\` '
+        'with no command and exit 0 silently — see hpc-agent #191/#192)}"\n'
+        "\n"
+        "# ==============================================================\n"
+        f"# {label} MPI (multi-rank) Job Template (hpc-agent, #293)\n"
+        "#\n"
+        "# A single multi-rank job is ONE unit of work: the launcher fans the\n"
+        "# executor out across $HPC_MPI_RANKS ranks and the whole job records\n"
+        "# as task 0. Resource sizing (ranks / nodes / topology) comes from the\n"
+        "# submit spec's `mpi` block via resource_flags, not a sweep axis.\n"
+        "#\n"
+        "# Extra env vars (beyond the array templates' set):\n"
+        "#   $HPC_MPI_RANKS            — total ranks to launch (default 2)\n"
+        "#   $HPC_MPI_LAUNCHER         — srun | mpirun | aprun (default srun)\n"
+        "#   $HPC_MPI_THREADS_PER_RANK — OpenMP threads per rank (default 1)\n"
+        "# ==============================================================\n"
+        "\n" + directives + workdir + "\n# --- Defaults ---\n"
+        'RESULT_DIR="${RESULT_DIR:-.}"\n'
+        'REPO_DIR="${REPO_DIR:-.}"\n'
+        "\n"
+        "# Single multi-rank unit of work — no scheduler array index. The\n"
+        "# dispatcher keys per-task identity off HPC_TASK_ID; an MPI job is task 0.\n"
+        'HPC_TASK_ID="${HPC_TASK_ID:-0}"\n'
+        'TASK_ID="$HPC_TASK_ID"\n'
+        "\n"
+        "# --- Diagnostics ---\n"
+        'echo "============================================"\n'
+        'echo "Hostname:     $(hostname)"\n'
+        'echo "MPI ranks:    ${HPC_MPI_RANKS:-2} (launcher=${HPC_MPI_LAUNCHER:-srun})"\n'
+        'echo "Run ID:       ${HPC_RUN_ID:-<unset>}"\n'
+        'echo "============================================"\n'
+        "\n"
+        "# --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---\n"
+        "# See hpc_agent/execution/mapreduce/templates/common/hpc_preamble.sh — deployed\n"
+        "# alongside this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.\n"
+        'source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"\n'
+        "\n"
+        "# Hybrid MPI+OpenMP: give each rank its OpenMP thread budget. The\n"
+        "# preamble defaults OMP/MKL threads to 1; a hybrid job raises them to\n"
+        "# threads-per-rank so each rank's BLAS/OpenMP uses its allocated cores.\n"
+        'export OMP_NUM_THREADS="${HPC_MPI_THREADS_PER_RANK:-${OMP_NUM_THREADS:-1}}"\n'
+        'export MKL_NUM_THREADS="$OMP_NUM_THREADS"\n'
+        "\n"
+        "# --- Prepare Output ---\n"
+        'mkdir -p "$RESULT_DIR"\n'
+        'echo "Executor:     $EXECUTOR"\n'
+        'echo "============================================"\n'
+        "\n"
+        "# --- Execute ---\n"
+        "# Run the dispatcher once; it prefixes the per-task command with the\n"
+        "# launcher (HPC_MPI_LAUNCHER + HPC_MPI_RANKS) so a single bookkeeping\n"
+        "# process fans the compute out to N ranks. hpc_run_with_retry keeps the\n"
+        "# bounded retry + terminal-failure marker, identical to the array path.\n"
+        "export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR HPC_MPI_RANKS HPC_MPI_LAUNCHER\n"
+        "hpc_run_with_retry\n"
+        "\n"
+        'echo "Job finished."\n'
+    )
+
+
+SLURM_MPI = _mpi_script("slurm")
+SGE_MPI = _mpi_script("sge")
+PBSPRO_MPI = _mpi_script("pbspro")
+TORQUE_MPI = _mpi_script("torque")
+
 SLURM_CPU = '#!/bin/bash\n# Fail loudly: -e exits on error, -o pipefail propagates failures\n# through pipelines. -u is intentionally NOT set because the sourced\n# preambles use `if [ -n "$VAR" ]` on optional vars. Explicit guard\n# on the scheduler\'s task-id var below catches the "task -1" failure\n# mode.\nset -eo pipefail\n: "${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is not set; refusing to dispatch task -1}"\n: "${EXECUTOR:?EXECUTOR is not set; refusing to dispatch (would run \\`time\\` with no command and exit 0 silently — see hpc-agent #191/#192)}"\n\n# ==============================================================\n# SLURM CPU Array Job Template (hpc-agent)\n#\n# Environment variables (injected by hpc-agent from clusters.yaml\n# and project.yaml before submission):\n#\n#   $CONDA_SOURCE  — path to conda.sh (e.g. /apps/conda/miniforge3/.../conda.sh)\n#   $CONDA_ENV     — conda environment name\n#   $MODULES       — space-separated modules to load\n#   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.run")\n#   $RESULT_DIR    — output directory for results\n#   $REPO_DIR      — repository root to cd into\n#   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR\n#   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before\n#                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)\n#\n# Submit with:\n#   sbatch --array=1-100 --export=TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,... cpu_array.slurm\n# ==============================================================\n\n# --- SLURM directives ---\n#SBATCH --job-name=cpu_array\n#SBATCH --output=logs/%x_%A_%a.out\n#SBATCH --error=logs/%x_%A_%a.err\n#SBATCH --nodes=1\n#SBATCH --ntasks=1\n#SBATCH --cpus-per-task=4\n#SBATCH --mem=16G\n#SBATCH --time=6:00:00\n\n# --- Defaults ---\nRESULT_DIR="${RESULT_DIR:-.}"\nREPO_DIR="${REPO_DIR:-.}"\n\n# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission\nTASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))\nHPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py\n\n# --- Diagnostics ---\necho "============================================"\necho "Job ID:       $SLURM_JOB_ID"\necho "Array Task:   $SLURM_ARRAY_TASK_ID"\necho "Hostname:     $(hostname)"\necho "CPUs:         $SLURM_CPUS_PER_TASK"\necho "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"\necho "Run ID:       ${HPC_RUN_ID:-<unset>}"\necho "============================================"\n\n# --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---\n# See hpc_agent/execution/mapreduce/templates/common/hpc_preamble.sh — deployed alongside\n# this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.\nsource "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"\n\n# Bind CPU threads to allocated cores ($SLURM_CPUS_PER_TASK — SLURM-specific).\n# Honors the campus user\'s HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env\n# override before falling back to the scheduler-allocated core count;\n# without this precedence, a user\'s HPC_OMP_NUM_THREADS=4 would be\n# silently overridden by SLURM_CPUS_PER_TASK on multi-threaded array\n# jobs and the run would oversubscribe its cgroup until OOM-killed.\nexport OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"\nexport MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"\n\n# --- Prepare Output ---\nmkdir -p "$RESULT_DIR"\n\necho "Result dir:   $RESULT_DIR"\necho "Executor:     $EXECUTOR"\necho "============================================"\n\n# --- Execute ---\n# HPC_RUN_ID arrives via sbatch --export from the submit-side env;\n# re-exported here so the dispatcher inside $EXECUTOR sees it.\n# HPC_CAMPAIGN_ID is optional — present when the run is part of a\n# closed-loop campaign — and lets the user\'s tasks.py call\n# hpc_agent.execution.mapreduce.reduce.history.prior() for the campaign\'s history.\nexport TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR\nhpc_run_with_retry\n\necho "Job finished."\n'
 
 SLURM_GPU = '#!/bin/bash\n# Fail loudly: -e exits on error, -o pipefail propagates failures\n# through pipelines. -u is intentionally NOT set because the sourced\n# preambles use `if [ -n "$VAR" ]` on optional vars. Explicit guard\n# on the scheduler\'s task-id var below catches the "task -1" failure\n# mode.\nset -eo pipefail\n: "${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is not set; refusing to dispatch task -1}"\n: "${EXECUTOR:?EXECUTOR is not set; refusing to dispatch (would run \\`time\\` with no command and exit 0 silently — see hpc-agent #191/#192)}"\n\n# ==============================================================\n# SLURM GPU Array Job Template (hpc-agent)\n#\n# Environment variables (injected by hpc-agent from clusters.yaml\n# and project.yaml before submission):\n#\n#   $CONDA_SOURCE  — path to conda.sh (e.g. /apps/conda/miniforge3/.../conda.sh)\n#   $CONDA_ENV     — conda environment name\n#   $MODULES       — space-separated modules to load (e.g. "cuda/12.3")\n#   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.gpu_run")\n#   $RESULT_DIR    — output directory for results\n#   $REPO_DIR      — repository root to cd into\n#   $GPU_COUNT     — number of GPUs per task (default: 2)\n#   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR\n#   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before\n#                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)\n#\n# Submit with:\n#   sbatch --array=1-10 --export=CONDA_SOURCE=...,CONDA_ENV=...,... gpu_array.slurm\n#   sbatch --array=1-10 --gres=gpu:4 --export=GPU_COUNT=4,... gpu_array.slurm\n# ==============================================================\n\n# --- SLURM directives ---\n#SBATCH --job-name=gpu_array\n#SBATCH --output=logs/%x_%A_%a.out\n#SBATCH --error=logs/%x_%A_%a.err\n#SBATCH --nodes=1\n#SBATCH --ntasks=1\n#SBATCH --cpus-per-task=8\n#SBATCH --mem=128G\n#SBATCH --gres=gpu:2\n#SBATCH --partition=gpu\n#SBATCH --time=6:00:00\n\n# --- Defaults ---\nGPU_COUNT="${GPU_COUNT:-2}"\nRESULT_DIR="${RESULT_DIR:-.}"\nREPO_DIR="${REPO_DIR:-.}"\n\n# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission\nTASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))\nHPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py\n\n# --- Diagnostics ---\necho "============================================"\necho "Job ID:       $SLURM_JOB_ID"\necho "Array Task:   $SLURM_ARRAY_TASK_ID"\necho "Hostname:     $(hostname)"\necho "GPUs:         $GPU_COUNT"\necho "CPUs:         $SLURM_CPUS_PER_TASK"\necho "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"\necho "Run ID:       ${HPC_RUN_ID:-<unset>}"\necho "============================================"\n\n# --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---\nsource "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"\n\n# --- Shared GPU preamble (CUDA_VISIBLE_DEVICES warn + PYTORCH_CUDA_ALLOC_CONF) ---\nsource "$REPO_DIR/.hpc/templates/common/gpu_preamble.sh"\n\n# Bind CPU threads to allocated cores ($SLURM_CPUS_PER_TASK — SLURM-specific).\n# Honors the campus user\'s HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env\n# override before falling back to the scheduler-allocated core count;\n# without this precedence, a user\'s HPC_OMP_NUM_THREADS=4 would be\n# silently overridden by SLURM_CPUS_PER_TASK on multi-threaded array\n# jobs and the run would oversubscribe its cgroup until OOM-killed.\nexport OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"\nexport MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"\n\n# --- Prepare Output ---\nmkdir -p "$RESULT_DIR"\n\necho "Result dir:   $RESULT_DIR"\necho "Executor:     $EXECUTOR"\necho "============================================"\n\n# --- Execute ---\n# HPC_RUN_ID arrives via sbatch --export from the submit-side env;\n# re-exported here so the dispatcher inside $EXECUTOR sees it.\n# HPC_CAMPAIGN_ID is optional — present when the run is part of a\n# closed-loop campaign — and lets the user\'s tasks.py call\n# hpc_agent.execution.mapreduce.reduce.history.prior() for the campaign\'s history.\nexport TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT HPC_GPU_TYPE\nhpc_run_with_retry\n\necho "Job finished."\n'

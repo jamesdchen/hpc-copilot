@@ -167,6 +167,10 @@ FailureCategoryResubmittable = Literal[
     "output_file_required",
     "module_not_found_hpc_agent",
     "undefined_var_expansion",
+    # Multi-rank (MPI) failure modes (#293 PR4).
+    "mpi_launcher_missing",
+    "mpi_pe_invalid",
+    "mpi_init_failed",
 ]
 
 # ── campaign optimization ─────────────────────────────────────────────────────

@@ -55,6 +55,10 @@ class RunInfo:
         The decorated function's name.
     gpu:
         Whether the decorator was ``@register_run(gpu=True)``.
+    mpi:
+        Whether the decorator was ``@register_run(mpi=True)`` (#293) — a
+        multi-rank entry point whose ``rank`` / ``world_size`` params the
+        launcher fills, so they are excluded from :attr:`flags`.
     flags:
         The CLI :class:`~hpc_agent.executor_cli.Flag` list synthesised
         from the function signature (see
@@ -71,6 +75,7 @@ class RunInfo:
     path: Path
     name: str
     gpu: bool
+    mpi: bool
     flags: tuple[Flag, ...]
     run_signature_sha: str
 
@@ -104,15 +109,17 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
             if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             for dec in node.decorator_list:
-                gpu = _decorator_gpu(dec, bare, modules)
-                if gpu is None:
+                decoded = _decorator_flags(dec, bare, modules)
+                if decoded is None:
                     continue
-                flags = tuple(flags_from_ast(node))
+                gpu, mpi = decoded
+                flags = tuple(flags_from_ast(node, mpi=mpi))
                 found.append(
                     RunInfo(
                         path=path.resolve(),
                         name=node.name,
                         gpu=gpu,
+                        mpi=mpi,
                         flags=flags,
                         run_signature_sha=run_signature_sha(flags),
                     )
@@ -200,20 +207,27 @@ def _decorator_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
     return bare, modules
 
 
-def _decorator_gpu(dec: ast.expr, bare: set[str], modules: set[str]) -> bool | None:
-    """Return the ``gpu`` flag if *dec* is a ``register_run`` decorator, else ``None``."""
+def _decorator_flags(dec: ast.expr, bare: set[str], modules: set[str]) -> tuple[bool, bool] | None:
+    """Return ``(gpu, mpi)`` if *dec* is a ``register_run`` decorator, else ``None``.
+
+    Reads the ``@register_run(gpu=..., mpi=...)`` keyword constants; a bare
+    ``@register_run`` yields ``(False, False)``.
+    """
     gpu = False
+    mpi = False
     target = dec
     if isinstance(dec, ast.Call):
         target = dec.func
         for kw in dec.keywords:
             if kw.arg == "gpu" and isinstance(kw.value, ast.Constant):
                 gpu = bool(kw.value.value)
+            elif kw.arg == "mpi" and isinstance(kw.value, ast.Constant):
+                mpi = bool(kw.value.value)
 
     if isinstance(target, ast.Name):
-        return gpu if target.id in bare else None
+        return (gpu, mpi) if target.id in bare else None
     if isinstance(target, ast.Attribute) and target.attr == _DECORATOR_NAME:
-        return gpu if _dotted(target.value) in modules else None
+        return (gpu, mpi) if _dotted(target.value) in modules else None
     return None
 
 

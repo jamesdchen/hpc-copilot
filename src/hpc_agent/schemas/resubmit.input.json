@@ -38,7 +38,10 @@
         "conda_command_not_found",
         "output_file_required",
         "module_not_found_hpc_agent",
-        "undefined_var_expansion"
+        "undefined_var_expansion",
+        "mpi_launcher_missing",
+        "mpi_pe_invalid",
+        "mpi_init_failed"
       ],
       "title": "Category",
       "type": "string"

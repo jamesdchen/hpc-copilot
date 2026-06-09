@@ -29,6 +29,11 @@ _GOLDEN = [
     ("PBSPRO_PROFILE", "gpu", "pbspro__gpu_array.pbs"),
     ("TORQUE_PROFILE", "cpu", "torque__cpu_array.pbs"),
     ("TORQUE_PROFILE", "gpu", "torque__gpu_array.pbs"),
+    # Single multi-rank (MPI) job template (#293).
+    ("SLURM_PROFILE", "mpi", "slurm__mpi.slurm"),
+    ("SGE_PROFILE", "mpi", "sge__mpi.sh"),
+    ("PBSPRO_PROFILE", "mpi", "pbspro__mpi.pbs"),
+    ("TORQUE_PROFILE", "mpi", "torque__mpi.pbs"),
 ]
 
 

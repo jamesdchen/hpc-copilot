@@ -39,18 +39,31 @@ from typing import Any
 
 from hpc_agent.executor_cli import Flag, flag, generic_args, gpu_args
 
-__all__ = ["flags_from_signature", "flags_from_ast", "flags_for_run"]
+__all__ = ["flags_from_signature", "flags_from_ast", "flags_for_run", "MPI_INJECTED_PARAMS"]
 
 # Annotations we know how to turn into an argparse ``type=`` callable.
 _SCALARS: dict[Any, type] = {str: str, int: int, float: float}
 _SCALAR_NAMES: dict[str, type] = {"str": str, "int": int, "float": float}
 
+# Parameters the framework injects into an ``@register_run(mpi=True)`` run from
+# the launcher's environment (#293) — NOT CLI flags. ``mpi_compute`` reads the
+# rank/world from SLURM_PROCID / OMPI_COMM_WORLD_* / PMI_* and passes them in,
+# so synthesising ``--rank`` / ``--world-size`` flags (and marking them
+# required) would break the dispatch the framework drives. Skipped from flag
+# synthesis for mpi runs exactly as ``self`` / ``cls`` are always skipped.
+MPI_INJECTED_PARAMS: frozenset[str] = frozenset({"rank", "world_size"})
+
 
 # ─── runtime (inspect-based) ────────────────────────────────────────────────
 
 
-def flags_from_signature(func: Any) -> list[Flag]:
-    """Return the per-parameter :class:`Flag` list for *func*'s signature."""
+def flags_from_signature(func: Any, *, mpi: bool = False) -> list[Flag]:
+    """Return the per-parameter :class:`Flag` list for *func*'s signature.
+
+    *mpi* skips the framework-injected ``rank`` / ``world_size`` params (see
+    :data:`MPI_INJECTED_PARAMS`) so a ``@register_run(mpi=True)`` run's
+    rank/world arrive from the launcher env, not as CLI flags.
+    """
     try:
         # ``eval_str`` resolves the string annotations left behind by a
         # ``from __future__ import annotations`` in the experiment module.
@@ -63,20 +76,23 @@ def flags_from_signature(func: Any) -> list[Flag]:
             continue
         if p.name in ("self", "cls"):
             continue
+        if mpi and p.name in MPI_INJECTED_PARAMS:
+            continue
         has_default = p.default is not inspect.Parameter.empty
         default = p.default if has_default else None
         out.append(_runtime_flag(p.name, p.annotation, has_default, default))
     return out
 
 
-def flags_for_run(func: Any, *, gpu: bool = False) -> list[Flag]:
+def flags_for_run(func: Any, *, gpu: bool = False, mpi: bool = False) -> list[Flag]:
     """Full FLAGS list for an executor wrapping *func*.
 
     Combines :func:`generic_args` (and :func:`gpu_args` when *gpu*), the
     planner's ``--halo`` flag, and the signature-derived flags. On a name
-    collision the signature wins — the framework flag is dropped.
+    collision the signature wins — the framework flag is dropped. *mpi*
+    excludes the launcher-injected rank/world params from the flag list.
     """
-    sig_flags = flags_from_signature(func)
+    sig_flags = flags_from_signature(func, mpi=mpi)
     sig_names = {f.name for f in sig_flags}
     base = [f for f in generic_args() if f.name not in sig_names]
     if gpu:
@@ -182,11 +198,14 @@ def _choice_type(args: tuple[Any, ...]) -> type:
 # ─── AST (no-import) ────────────────────────────────────────────────────────
 
 
-def flags_from_ast(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Flag]:
+def flags_from_ast(
+    funcdef: ast.FunctionDef | ast.AsyncFunctionDef, *, mpi: bool = False
+) -> list[Flag]:
     """Return the per-parameter :class:`Flag` list for an AST function def.
 
     Mirrors :func:`flags_from_signature` but reads :class:`ast.arg`
-    nodes, so it never imports the experiment module.
+    nodes, so it never imports the experiment module. *mpi* skips the
+    launcher-injected rank/world params (see :data:`MPI_INJECTED_PARAMS`).
     """
     a = funcdef.args
     posargs = list(a.posonlyargs) + list(a.args)
@@ -197,6 +216,8 @@ def flags_from_ast(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Flag
     for i, arg in enumerate(posargs):
         if arg.arg in ("self", "cls"):
             continue
+        if mpi and arg.arg in MPI_INJECTED_PARAMS:
+            continue
         if i >= n_required:
             out.append(
                 _ast_flag(arg.arg, arg.annotation, True, _literal(pos_defaults[i - n_required]))
@@ -204,6 +225,8 @@ def flags_from_ast(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Flag
         else:
             out.append(_ast_flag(arg.arg, arg.annotation, False, None))
     for arg, dflt in zip(a.kwonlyargs, a.kw_defaults, strict=False):
+        if mpi and arg.arg in MPI_INJECTED_PARAMS:
+            continue
         has_default = dflt is not None
         # ``_literal(dflt) if dflt`` (truthy check) used to convert
         # falsy literal defaults — 0, 0.0, "", False, [] — to ``None``,

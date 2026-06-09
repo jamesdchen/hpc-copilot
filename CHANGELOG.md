@@ -5,6 +5,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.42 — 2026-06-09
+
+### Added — MPI failure signatures + multi-rank canary (#293 PR4)
+
+Fourth slice of the multi-rank workstream (#293) — the guardrails. PR2/PR3 made a multi-rank job submit and run; this PR makes its failure modes classifiable and proves the launch with a cheap canary before the full allocation queues.
+
+- **Three multi-rank failure signatures** added to `failure_signatures.CATALOG`, each with a concrete remediation: `mpi_launcher_missing` (srun/mpirun/aprun not on PATH → load the MPI module / pick a provided launcher), `mpi_pe_invalid` (SGE rejected the parallel environment → pick a `kind=mpi` PE from inspect-cluster), `mpi_init_failed` (the MPI runtime couldn't start the ranks — *not enough slots*, `MPI_Init`/`MPI_ABORT`, ORTE/PMIx wire-up → lower ranks or fix the library/topology). Threaded through the full vocabulary chain so resubmit accepts them: the `FailureCategory` StrEnum, the `FailureCategoryResubmittable` wire Literal (and its regenerated `resubmit.input.json`), and `CLASSIFIER_CATEGORIES`. Priority 95 so a launch failure that also dumps a Python traceback still classifies structurally.
+- **The MPI canary runs the smallest meaningful job** — `ranks=2` on one node (`ranks_per_node=2`), launcher/threads/walltime preserved — via `_mpi_canary_resources`, which `model_copy`-shrinks the spec rather than mutating it and overrides `HPC_MPI_RANKS` so the in-job launcher spawns 2 ranks too. This validates the launcher resolves and the MPI library loads before the full multi-node allocation queues; a non-MPI submit is untouched (returns the resources unchanged).
+- The #293 coherence guards (`ranks_per_node` must divide `ranks`; SGE requires `pe_name`) landed with PR2's wire model; this PR completes the guard surface with runtime classification + the pre-flight canary.
+- Tests: MPI classify cases (launcher/PE/slots/init, plus the traceback-precedence case) in `test_failure_signatures.py` (catalog size 15→18), and `_mpi_canary_resources` downsizing / non-MPI no-op / None-handling in `test_canary_gate.py`.
+
+## 0.10.41 — 2026-06-09
+
+### Added — multi-rank executor convention + dispatcher launcher (#293 PR3)
+
+Third slice of the multi-rank workstream (#293). PR2 let a submit *request* a multi-rank job; this PR makes the executor and dispatcher actually run one, where the same single-process `compute` body becomes rank-aware without breaking any existing executor.
+
+- **`@register_run(mpi=True)`** marks a multi-rank entry point. Its injected `compute` fills `rank` / `world_size` from the launcher environment (`mpi_rank_world()` reads `OMPI_COMM_WORLD_*` / `PMI_*` / `SLURM_PROCID`+`SLURM_NTASKS`, falling back to `(0, 1)` off-launcher) and **only rank 0 writes the per-task output** — the reducer still sees exactly one `metrics.json`. A plain `@register_run` is unchanged: it never injects those params and, being single-process rank 0, always writes. Reuses the existing `_make_compute` wrapper + `accepted`-kwarg filter — the rank/world injection rides the same `setdefault` seam as `resume_from`/`checkpoint_dir`.
+- **`rank` / `world_size` are reserved framework-injected params** (`MPI_INJECTED_PARAMS`), excluded from synthesised CLI flags for mpi runs in both `flags_from_signature` and `flags_from_ast` — so they arrive from the launcher, not as `--rank` flags the dispatcher would have to supply. `discover_runs` reads `mpi=True` from the decorator (mirroring the existing `gpu=` AST detection) and threads it through `RunInfo` + the discover cache.
+- **The dispatcher applies the launcher** (`execution/mapreduce/dispatch.py`): `_mpi_launch_prefix` reads `HPC_MPI_RANKS` / `HPC_MPI_LAUNCHER` and prefixes the *per-task* command with `srun --ntasks=N` / `mpirun -np N` / `aprun -n N`. Prefixing the inner command (not wrapping the whole template in `srun`) keeps the dispatcher's bookkeeping — sidecar, WIP dir, failure capture, SIGTERM forwarding — a single process while only the compute fans out to N ranks. The `mpi` template is correspondingly simplified to run the dispatcher once (no in-template `srun`).
+- Tests: `tests/experiment_kit/test_mpi.py` (rank/world injection, rank-0 output gate, non-mpi unaffected, `mpi_rank_world` env matrix, flag exclusion, discover detection) and `tests/execution/mapreduce/test_mpi_launch.py` (`_mpi_launch_prefix` per launcher, empty/single-rank/unknown-launcher no-ops). MPI golden fixtures regenerated for the simplified template.
+
+## 0.10.40 — 2026-06-09
+
+### Added — MPI / multi-rank submit spec, resource flags, and single-job template (#293 PR2)
+
+Second slice of the multi-rank workstream (#293). PR1 already taught `inspect-cluster` to enumerate `parallel_environments` (SGE PEs / SLURM partitions / PBS queues, tagged `kind=mpi|smp|other`); this PR lets a submit actually *request* a multi-rank job, where N ranks across M nodes are ONE unit of work rather than a fan-out of single-process tasks.
+
+- **New optional `mpi` block on the submit spec.** `SubmitResources.mpi` (`MpiSpec`) carries `{ranks, ranks_per_node?, threads_per_rank, launcher (srun|mpirun|aprun), pe_name?}`. The same model is reused verbatim on `build-submit-spec`'s input. A wire validator refuses a `ranks_per_node` that does not evenly divide `ranks` (no integral node count — the #293 coherence guard), and `build-submit-spec` refuses an SGE mpi block without a `pe_name` (SGE routes multi-rank work through a parallel environment, not a generic flag).
+- **`resource_flags` grows an MPI slot grammar**, reusing the existing per-family walltime/mem emitters so the two paths can't drift: SLURM `--nodes/--ntasks/--ntasks-per-node/--cpus-per-task`, SGE `-pe <pe_name> <ranks>`, PBS `select=<nodes>:ncpus=…:mpiprocs=…:ompthreads=…`. The single-node cpu/mem/cpus path is unchanged.
+- **A single multi-rank job is submitted non-array.** `_build_command` gained an `array=False` path (no `--array`/`-t`, SLURM logs switch `%A_%a`→`%j`); a submit with an `mpi` block and `total_tasks == 1` takes it. An `mpi` block with `total_tasks > 1` stays the array-of-MPI power-user shape.
+- **New `mpi` job template** per family (`render_script(kind="mpi")`, shipped as `.hpc/templates/mpi.{sh,slurm,pbs}`), built from one shared builder rather than four literals. It reuses the existing `hpc_preamble.sh` + `hpc_run_with_retry` unchanged — the only MPI-specific step folds the launcher + `$HPC_MPI_RANKS` into `$EXECUTOR`, so bounded retry / terminal-failure markers work identically. `build-submit-spec` selects it (over cpu/gpu array, independent of `is_gpu`) and stamps `HPC_MPI_RANKS` / `HPC_MPI_LAUNCHER` / `HPC_MPI_THREADS_PER_RANK`.
+- Tests: `tests/infra/backends/test_mpi.py` (per-family resource flags, non-array command path, `MpiSpec` guards), MPI golden fixtures in `test_render_script_golden.py`, and `TestMpiBlock` in `test_submit_spec.py` (template selection, env stamping, resources emission, SGE pe_name guard). Deploy-manifest counts updated for the third template.
+
 ## 0.10.39 — 2026-06-09
 
 ### Added — budget-halt acknowledgement + campaign-level per-task resubmit cap (#224)

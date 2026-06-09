@@ -606,7 +606,9 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
     for sched in schedulers:
         backend_cls = get_backend_class(sched)
         ext = template_ext_for(sched).lstrip(".")
-        for basename, kind in (("cpu_array", "cpu"), ("gpu_array", "gpu")):
+        # ``mpi`` (single multi-rank job, #293) ships alongside the cpu/gpu
+        # array bodies so a submit with an ``mpi`` block finds its template.
+        for basename, kind in (("cpu_array", "cpu"), ("gpu_array", "gpu"), ("mpi", "mpi")):
             add_text(backend_cls.render_script(kind=kind), f".hpc/templates/{basename}.{ext}")
 
     # Shared preambles sourced by the templates above.
