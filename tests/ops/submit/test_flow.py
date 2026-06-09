@@ -766,6 +766,173 @@ class TestSidecarGuarantee:
         assert sc["result_dir_template"] == "custom/{task_id}"
 
 
+# ---------------------------------------------------------------------------
+# extra.spec_kwargs stamping (#234/#240): the synthesized sidecar carries the
+# run-constant task kwargs (entry_point.fixed_params from interview.json) so a
+# later gpu_oom is discriminated by parallelism/width instead of getting the
+# flat fix. A swept axis value must NEVER leak into the pocket.
+# ---------------------------------------------------------------------------
+
+
+def _write_interview(campaign_dir: Path, *, task_generator: dict, entry_point: dict) -> None:
+    """Materialize a real generator-mode interview.json via record_interview.
+
+    Goes through the production writer (``ops.memory.interview.record_interview``)
+    rather than hand-writing JSON, so the test pins the ACTUAL on-disk shape the
+    reader keys on — if the persisted location of ``fixed_params`` ever moves,
+    this breaks loudly instead of passing against a stale stub.
+    """
+    from hpc_agent._wire.actions.interview import InterviewSpec
+    from hpc_agent.ops.memory.interview import record_interview
+
+    intent = {
+        "goal": "spec_kwargs test",
+        "task_count": 3,
+        "produced_by": {"kind": "human", "operator": "test"},
+        "task_generator": task_generator,
+        "entry_point": entry_point,
+    }
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=campaign_dir)
+
+
+class TestSpecKwargsStamping:
+    def test_generator_mode_stamps_fixed_params(self, tmp_path: Any, _journal_home: Any) -> None:
+        """A generator-mode run with declared fixed_params → the synthesized
+        sidecar's ``extra.spec_kwargs`` contains exactly those constant kwargs."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        _write_interview(
+            tmp_path,
+            task_generator={
+                "kind": "cartesian_product",
+                "params": {"axes": {"seed": [0, 1, 2]}},
+            },
+            entry_point={
+                "kind": "shell_command",
+                "run_name": "train",
+                "argv": ["python3", "t.py", "--seed", "{seed}", "--tp", "{tp_size}"],
+                "signature": {"seed": "int", "tp_size": "int"},
+                "fixed_params": {"tp_size": 2},
+            },
+        )
+        spec = _spec("rGen", total_tasks=3)
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rGen")
+        assert sc["extra"]["spec_kwargs"] == {"tp_size": 2}
+
+    def test_no_interview_no_spec_kwargs_no_error(self, tmp_path: Any, _journal_home: Any) -> None:
+        """A hand-written tasks.py run (no interview.json) → no spec_kwargs, no
+        error. The documented limitation: only declared fixed_params can be
+        stamped; absence is a clean no-op, never a failure."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        assert not (tmp_path / "interview.json").exists()
+        spec = _spec("rHand")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rHand")
+        assert "extra" not in sc
+
+    def test_swept_axis_value_does_not_leak_into_spec_kwargs(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """SOUNDNESS GUARD: a per-task SWEPT axis (here ``seed``) is NOT
+        run-constant, so a single value would misrepresent the cluster and could
+        route a wrong fix. It MUST NOT appear in spec_kwargs — only the declared
+        fixed_params do."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        _write_interview(
+            tmp_path,
+            task_generator={
+                "kind": "cartesian_product",
+                "params": {"axes": {"seed": [0, 1, 2]}},
+            },
+            entry_point={
+                "kind": "shell_command",
+                "run_name": "train",
+                "argv": ["python3", "t.py", "--seed", "{seed}", "--samples", "{samples}"],
+                "signature": {"seed": "int", "samples": "int"},
+                "fixed_params": {"samples": 10000},
+            },
+        )
+        spec = _spec("rSwept", total_tasks=3)
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rSwept")
+        spec_kwargs = sc["extra"]["spec_kwargs"]
+        assert spec_kwargs == {"samples": 10000}
+        # The swept axis is absent — never stamped as a run-constant.
+        assert "seed" not in spec_kwargs
+
+    def test_resolve_uses_stamped_tp_size_for_increase_parallelism(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """End-to-end-ish: a sidecar stamped via submit-flow flows through
+        ``build_failure_features`` → ``resource_spec`` carries ``tp_size``, so
+        ``resolve()`` on a gpu_oom returns the ``increase-parallelism`` fix
+        instead of the flat ``increase-mem-per-gpu`` — proving the pocket the
+        whole change exists for actually fires. No cluster needed."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.recover.features_glue import build_failure_features
+        from hpc_agent.ops.recover.resolve import resolve
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.run_record import RunRecord
+        from hpc_agent.state.runs import read_run_sidecar
+
+        _write_interview(
+            tmp_path,
+            task_generator={
+                "kind": "cartesian_product",
+                "params": {"axes": {"seed": [0, 1, 2]}},
+            },
+            entry_point={
+                "kind": "shell_command",
+                "run_name": "train",
+                "argv": ["python3", "t.py", "--seed", "{seed}", "--tp", "{tp_size}"],
+                "signature": {"seed": "int", "tp_size": "int"},
+                "fixed_params": {"tp_size": 2},
+            },
+        )
+        spec = _spec("rE2E", total_tasks=3)
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rE2E")
+
+        cluster = {"error_class": "gpu_oom", "fingerprint": "fp", "task_ids": [0]}
+        record = RunRecord(
+            run_id="rE2E",
+            profile="p",
+            cluster="c",
+            ssh_target="user@host",
+            remote_path="/r",
+            job_name="rE2E",
+            job_ids=["9001"],
+            total_tasks=3,
+            submitted_at="2026-06-06T12:00:00+00:00",
+            experiment_dir=str(tmp_path),
+        )
+        features = build_failure_features(cluster, record=record, sidecar=sc)
+        assert features.resource_spec is not None
+        assert features.resource_spec.get("tp_size") == 2
+
+        resolution = resolve(features)
+        assert resolution.decided_by == "code"
+        assert resolution.action is not None
+        assert resolution.action["action"] == "increase-parallelism"
+
+
 class TestResourceFlagPlumbing:
     def test_resource_flags_reach_build_command(self, tmp_path: Any) -> None:
         import re
@@ -845,6 +1012,48 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     csc = read_run_sidecar(tmp_path, "rC-canary")
     assert csc["task_count"] == 1
     assert csc["executor"] == "python run.py"
+
+
+def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -> None:
+    """The canary mirror copies ``extra.spec_kwargs`` from the main sidecar so a
+    canary gpu_oom is discriminated by the same parallelism/width knobs as the
+    main run, rather than silently falling back to the flat fix."""
+    from hpc_agent.ops import submit_flow as sf_module
+    from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+    from hpc_agent.state.runs import read_run_sidecar
+
+    _write_interview(
+        tmp_path,
+        task_generator={
+            "kind": "cartesian_product",
+            "params": {"axes": {"seed": [0, 1, 2]}},
+        },
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "train",
+            "argv": ["python3", "t.py", "--seed", "{seed}", "--tp", "{tp_size}"],
+            "signature": {"seed": "int", "tp_size": "int"},
+            "fixed_params": {"tp_size": 2},
+        },
+    )
+    spec = _spec("rCmk", canary=True, total_tasks=3)
+
+    with (
+        mock.patch.object(sf_module, "_preflight_probe"),
+        mock.patch.object(sf_module, "_push_and_deploy"),
+        mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+    ):
+        submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            run_id=spec.run_id,
+            job_ids=["j"],
+            total_tasks=spec.total_tasks,
+            deduped=False,
+            canary_done=True,
+        )
+        submit_flow_batch(tmp_path, spec=_batch([spec]))
+
+    assert read_run_sidecar(tmp_path, "rCmk")["extra"]["spec_kwargs"] == {"tp_size": 2}
+    assert read_run_sidecar(tmp_path, "rCmk-canary")["extra"]["spec_kwargs"] == {"tp_size": 2}
 
 
 class TestCheckpointCanaryEnv:

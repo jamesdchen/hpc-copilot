@@ -468,6 +468,48 @@ def _write_first_error(run_id: str, *, detail: str) -> errors.SpecInvalid:
     )
 
 
+def _run_constant_spec_kwargs(experiment_dir: Path) -> dict[str, Any]:
+    """Read the run's declared run-constant task kwargs from ``interview.json``.
+
+    The resolver's context discriminator (``ops.recover.resolve``) routes a
+    ``gpu_oom`` on a parallelism/width knob (``tp_size`` / ``batch_size`` / …)
+    to the *right* fix, but it only sees those knobs through the sidecar's
+    ``extra.spec_kwargs`` pocket (``ops.recover.features_glue``). The only knobs
+    we can SOUNDLY stamp there are the ones that are constant across the run:
+    ``entry_point.fixed_params`` (#195 — the non-axis params the interview bakes
+    into every task's ``resolve()`` kwargs). A run-constant knob is unambiguous
+    at the failure-cluster level; a *swept* axis value is NOT run-constant and
+    must never be stamped, so we deliberately read ONLY ``fixed_params`` and
+    never the ``task_generator`` axes.
+
+    ``interview.json`` is written at the campaign workdir root, which is the
+    same directory the sidecar/``.hpc`` tree hangs off (see
+    ``ops.memory.interview`` + ``_kernel.contract.layout.RepoLayout``), so it
+    lives at ``experiment_dir / "interview.json"``. Defensive by design:
+    absent / unreadable / no ``entry_point`` / no ``fixed_params`` (a
+    hand-written ``tasks.py`` run, which legitimately has none — an accepted,
+    documented limitation) all yield ``{}`` — a clean no-op, never an error.
+    """
+    import json
+
+    interview_path = experiment_dir / "interview.json"
+    try:
+        doc = json.loads(interview_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    entry_point = doc.get("entry_point")
+    if not isinstance(entry_point, dict):
+        return {}
+    fixed_params = entry_point.get("fixed_params")
+    if not isinstance(fixed_params, dict) or not fixed_params:
+        return {}
+    # Return a fresh dict (string keys, values verbatim) — never a live ref into
+    # the parsed doc, and never the swept axes under ``task_generator``.
+    return {str(k): v for k, v in fixed_params.items()}
+
+
 def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     """Guarantee the cluster-required per-run sidecar exists before rsync.
 
@@ -601,9 +643,17 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
 
     resources = spec.resources.model_dump(exclude_none=True) if spec.resources else None
 
+    # Stamp the run-constant task kwargs into ``extra.spec_kwargs`` so a later
+    # gpu_oom can be discriminated by parallelism/width (see
+    # ``_run_constant_spec_kwargs`` / ``ops.recover.features_glue``). Only the
+    # declared ``fixed_params`` are sound to stamp; swept axes are never read.
+    spec_kwargs = _run_constant_spec_kwargs(experiment_dir)
+    extra = {"spec_kwargs": spec_kwargs} if spec_kwargs else None
+
     write_run_sidecar(
         experiment_dir,
         run_id=spec.run_id,
+        extra=extra,
         cmd_sha=cmd_sha,
         hpc_agent_version=_pkg_version or "",
         submitted_at=utcnow_iso(),
@@ -645,9 +695,14 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
     result_dir_template = main.get("result_dir_template")
     if not executor or not result_dir_template:
         return  # main sidecar lacks the dispatch essentials; nothing to mirror
+    # Mirror the run-constant spec_kwargs pocket so a canary gpu_oom is
+    # discriminated by the same parallelism/width knobs as the main run.
+    main_extra = main.get("extra")
+    canary_extra = main_extra if isinstance(main_extra, dict) and main_extra else None
     write_run_sidecar(
         experiment_dir,
         run_id=canary_run_id,
+        extra=canary_extra,
         cmd_sha=str(main.get("cmd_sha", "")),
         hpc_agent_version=str(main.get("hpc_agent_version", "")),
         submitted_at=utcnow_iso(),

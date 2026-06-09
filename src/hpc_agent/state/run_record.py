@@ -116,6 +116,9 @@ _UPDATABLE_FIELDS = frozenset(
         # Bumped by the auto-resume composite after each fired resubmit so the
         # gate's "count < cap" backstop tightens with every attempt (#299).
         "auto_resume_count",
+        # Bumped by the resolve-and-recover composite after each auto-acted
+        # code-verdict resubmit so its "count < cap" backstop tightens (#240).
+        "auto_recover_count",
     }
 )
 
@@ -209,6 +212,26 @@ class RunRecord:
     # the auto-resume composite each time it fires.
     max_auto_resumes: int = 2
     auto_resume_count: int = 0
+    # ── #240 resolve-and-recover auto-act (realizes #234's buildable wiring) ──
+    # Opt-in, default OFF, mirroring the auto-resume posture above: a run that
+    # did not set this is NEVER auto-recovered (zero blast radius). When True,
+    # the resolve-and-recover composite may auto-resubmit a ``decided_by="code"``
+    # verdict with the resolver's refined overrides; a ``decided_by="judgement"``
+    # verdict is always parked (``mark_pending_verdict``), never auto-acted.
+    # This is the broader-than-preempted general-resolver counterpart to
+    # ``auto_resume_on_kill`` (which stays preempted-only); the two opt-ins are
+    # independent so enabling general auto-recovery is a deliberate separate
+    # choice. Held to the #283 motto: no agent-facing field bypasses a safety
+    # step — when OFF the composite still computes and surfaces the verdict, it
+    # just takes no side effect.
+    auto_recover_on_failure: bool = False
+    # Hard cap + running counter — the ultimate backstop for code-verdict
+    # auto-resubmits. Even total misclassification can waste at most
+    # ``max_auto_recovers`` resubmits before the composite refuses with "cap
+    # reached". ``auto_recover_count`` is bumped each time a code-verdict
+    # resubmit actually fires.
+    max_auto_recovers: int = 2
+    auto_recover_count: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
