@@ -62,6 +62,7 @@ from typing import Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.experiment_kit.solver_adapters import detect_petsc_solver
 
 __all__ = [
     "detect_entry_point",
@@ -154,12 +155,17 @@ def _scan_python_candidates(root: Path) -> list[dict[str, str]]:
             return
         seen.add(rel)
         source = _read_text(root / rel)
-        candidates.append(
-            {
-                "path": rel,
-                "argv_kind": _classify_python_argv(source, is_package_main=is_package_main),
-            }
-        )
+        candidate = {
+            "path": rel,
+            "argv_kind": _classify_python_argv(source, is_package_main=is_package_main),
+        }
+        # Solver-library detection (petsc4py TS/SNES): surfaced so the
+        # onboarding agent can offer the checkpoint-instrumented wrapper
+        # (entry_point.solver) instead of the plain subprocess shim. Optional
+        # field — absent means no known solver library was recognized.
+        if detect_petsc_solver(source) is not None:
+            candidate["solver"] = "petsc"
+        candidates.append(candidate)
 
     for name in (*_ROOT_CANDIDATES, *_SRC_CANDIDATES):
         if (root / name).is_file():

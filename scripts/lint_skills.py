@@ -2,8 +2,8 @@
 """Lint SKILL.md prose for free-form decision content (WS4).
 
 hpc-agent's design philosophy is to convert prose-driven LLM judgment
-into CLI-driven enumerated choice (see ``CLAUDE.md`` and the
-0.10.0→0.10.6 patch sequence). Every demo-failure cycle has retroactively
+into CLI-driven enumerated choice (see ``docs/internals/skill-policy.md``
+and the 0.10.0→0.10.6 patch sequence). Every demo-failure cycle has retroactively
 patched the relevant SKILL.md after the fact; this lint catches the
 common drift modes at author time so regressions don't slip through PR
 review.

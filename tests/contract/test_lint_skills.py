@@ -37,9 +37,9 @@ import lint_skills  # noqa: E402
 # author-facing knobs, not policy: lower them whenever the count drops
 # and you want the lint to ratchet down.
 #
-# Verify-a-guard-can-fire (CLAUDE.md): every rule above is tested in
-# ``test_lint_rule_fires_on_synthetic_input`` to confirm the lint
-# actually catches the pattern it claims to.
+# Verify-a-guard-can-fire (docs/internals/engineering-principles.md):
+# every rule above is tested in ``test_lint_rule_fires_on_synthetic_input``
+# to confirm the lint actually catches the pattern it claims to.
 MAX_PER_RULE: dict[str, int] = {
     "prose-decide": 0,
     "embedded-recovery-menu": 0,
@@ -113,8 +113,9 @@ def test_lint_rule_fires_on_synthetic_input(tmp_path: Path) -> None:
     """Every rule fires at least once against synthetic input that
     contains a deliberate violation of each pattern.
 
-    This is the CLAUDE.md "verify a guard can actually fire" check: a
-    lint rule with no fire path is inertia, not enforcement. Building
+    This is the "verify a guard can actually fire" check
+    (docs/internals/engineering-principles.md): a lint rule with no fire
+    path is inertia, not enforcement. Building
     the synthetic skill from the rule definitions and asserting each
     rule_id appears in the findings catches the case where a regex was
     silently broken by an edit.

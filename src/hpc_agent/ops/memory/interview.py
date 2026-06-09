@@ -175,6 +175,7 @@ def record_interview(
                 argv=ep["argv"],
                 signature=ep.get("signature", {}),
                 frozen_configs=ep.get("frozen_configs", []),
+                solver=ep.get("solver"),
             )
             frozen_shas = dict(result.frozen_shas)
             # Cluster-bound path: it's rsynced to and resolved on the Linux
@@ -194,6 +195,11 @@ def record_interview(
             }
             if "data_axis_hint" in ep:
                 entry_point_materialized["data_axis"] = ep["data_axis_hint"]
+            # Persist the solver hint so downstream consumers (resubmit
+            # --from-checkpoint, the canary verifier) can see the wrapper is
+            # checkpoint-instrumented and which option family it exports.
+            if ep.get("solver") is not None:
+                entry_point_materialized["solver"] = dict(ep["solver"])
         elif kind == "python_module":
             # Validate the module/function imports; surface the same spec_invalid
             # the rest of the interview uses so a typo is loud at intake.

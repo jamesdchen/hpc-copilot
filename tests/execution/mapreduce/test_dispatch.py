@@ -579,3 +579,20 @@ def test_latest_checkpoint_picks_highest_nonempty(tmp_path: Path) -> None:
     assert dispatch._latest_checkpoint(str(ckdir)) == str(ckdir / "checkpoint-5.pkl")
     # Missing dir → no resume point, no raise.
     assert dispatch._latest_checkpoint(str(tmp_path / "absent")) == ""
+
+
+def test_latest_checkpoint_sees_petsc_binary_steps(tmp_path: Path) -> None:
+    """#294 + solver adapters: the stdlib resume-point finder is widened to
+    step-indexed PETSc binary dumps, so a resumed petsc4py executor also gets
+    HPC_RESUME_FROM. Wrapper-path dumps (petsc-solution.bin) stay invisible —
+    the instrumented wrapper rotates/consumes those itself."""
+    ckdir = tmp_path / "_checkpoints"
+    ckdir.mkdir()
+    (ckdir / "checkpoint-2.pkl").write_bytes(b"a")
+    (ckdir / "checkpoint-6.petscbin").write_bytes(b"b")
+    (ckdir / "petsc-solution.bin").write_bytes(b"c")
+    assert dispatch._latest_checkpoint(str(ckdir)) == str(ckdir / "checkpoint-6.petscbin")
+    # Equal iteration across formats: pickle wins, deterministically
+    # (pre-petsc behavior preserved for runs that only ever write pickles).
+    (ckdir / "checkpoint-6.pkl").write_bytes(b"d")
+    assert dispatch._latest_checkpoint(str(ckdir)) == str(ckdir / "checkpoint-6.pkl")

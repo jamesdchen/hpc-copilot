@@ -361,6 +361,52 @@ class _DataAxisHint(BaseModel):
         return self
 
 
+class _PetscSolverHint(BaseModel):
+    """Checkpoint-instrumentation hint for a PETSc-based shell_command entry point.
+
+    A PETSc app owns its solve loop (``TSSolve``/``SNESSolve`` are library
+    code), so the executor-side checkpoint helpers can't be called from a
+    loop body the way ``run_iterations`` assumes. PETSc's options database is
+    the injection channel instead: any app that calls ``setFromOptions()``
+    honors ``PETSC_OPTIONS`` from the environment. Declaring this hint makes
+    the interview materialize a checkpoint-instrumented wrapper that exports
+    the per-step solution-dump option (into the stable per-task checkpoint
+    dir), caps the solve at 2 steps under the checkpoint-canary probe, and —
+    when ``resume_flag`` is declared — hands a previous attempt's dump back
+    to the app on resume. The entry point itself stays opaque and untouched.
+
+    ``resume_flag`` is deliberately explicit: writing checkpoints is generic,
+    but *loading* one is app-specific (there is no universal PETSc restart
+    option). Omit it and the wrapper still writes checkpoints; resume just
+    never feeds them back.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["petsc"]
+    solver_object: Literal["ts", "snes"] = Field(
+        default="ts",
+        description=(
+            "Which PETSc object owns the solve loop: 'ts' (time stepper — the "
+            "usual shape for a transient PDE solve) or 'snes' (nonlinear "
+            "solver). Selects the option family the wrapper exports "
+            "(-ts_monitor_solution / -snes_monitor_solution and the canary's "
+            "-ts_max_steps 2 / -snes_max_it 2)."
+        ),
+    )
+    resume_flag: str | None = Field(
+        default=None,
+        pattern=r"^-{1,2}[A-Za-z0-9_][A-Za-z0-9_\-]*$",
+        description=(
+            "The app's own restart flag (e.g. '-restart_file' or "
+            "'--resume-from'). When declared, the wrapper appends "
+            "``<resume_flag> <path-to-previous-attempt-dump>`` to argv on a "
+            "resumed attempt. The app must interpret the file (a PETSc binary "
+            "viewer dump). Omit when the app has no restart surface."
+        ),
+    )
+
+
 class _ShellCommandEntry(BaseModel):
     """Fallback entry point: a shell command (compiled binary, decorator-conflicting CLI, ...).
 
@@ -447,6 +493,16 @@ class _ShellCommandEntry(BaseModel):
             "``interview.json._materialized.entry_point.data_axis`` so "
             "classify-axis records it directly. Omit when you want the "
             "interactive classification interview."
+        ),
+    )
+    solver: _PetscSolverHint | None = Field(
+        default=None,
+        description=(
+            "Optional checkpoint-instrumentation hint for a known solver "
+            "library. When present, the materialized wrapper injects the "
+            "library's checkpoint hooks around the argv (see "
+            "``_PetscSolverHint``) so a long solve becomes preemption-safe "
+            "without touching the entry point. One adapter today: 'petsc'."
         ),
     )
     fixed_params: dict[str, Any] = Field(default_factory=dict, description=_FIXED_PARAMS_DESC)

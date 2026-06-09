@@ -107,6 +107,69 @@ def test_lint_subject_imports_allows_infra(tmp_path: Path) -> None:
     )
 
 
+def test_lint_subject_imports_rejects_relative_climb(tmp_path: Path) -> None:
+    """A relative import that climbs parents (``from ...meta.r import x``)
+    crosses subjects exactly like its absolute spelling — resolved, not
+    skipped (the old code skipped all relative imports)."""
+    ops_a = tmp_path / "ops" / "a"
+    meta_r = tmp_path / "meta" / "r"
+    ops_a.mkdir(parents=True)
+    meta_r.mkdir(parents=True)
+    (ops_a / "__init__.py").write_text("", encoding="utf-8")
+    (meta_r / "__init__.py").write_text("", encoding="utf-8")
+    (ops_a / "climbs.py").write_text(
+        "from ...meta.r import thing\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _driver(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode != 0, (
+        f"lint_subject_imports missed a relative-import subject crossing:\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert "cross-subject import: ops/a imports meta/r" in proc.stdout, (
+        f"expected relative-climb diagnostic missing:\nstdout={proc.stdout}"
+    )
+
+
+def test_lint_subject_imports_rejects_alias_form(tmp_path: Path) -> None:
+    """``from hpc_agent.ops import b`` binds subject ``b`` without its dotted
+    path appearing in the ``from`` clause — must still fire. A non-subject
+    alias (``from hpc_agent.ops import helper_fn``) must NOT fire."""
+    ops_a = tmp_path / "ops" / "a"
+    ops_b = tmp_path / "ops" / "b"
+    ops_a.mkdir(parents=True)
+    ops_b.mkdir(parents=True)
+    (ops_a / "__init__.py").write_text("", encoding="utf-8")
+    (ops_b / "__init__.py").write_text("", encoding="utf-8")
+    (ops_a / "aliases.py").write_text(
+        "from hpc_agent.ops import b\nfrom hpc_agent.ops import helper_fn\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _driver(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode != 0, (
+        f"lint_subject_imports missed an alias-form subject crossing:\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert "cross-subject import: ops/a imports ops/b" in proc.stdout, (
+        f"expected alias-form diagnostic missing:\nstdout={proc.stdout}"
+    )
+    assert "helper_fn" not in proc.stdout, (
+        f"re-exported helper alias wrongly flagged as a subject:\nstdout={proc.stdout}"
+    )
+
+
 def test_lint_subject_imports_rejects_meta_to_ops(tmp_path: Path) -> None:
     """A file in ``meta/<x>/`` importing from any ``ops.<y>`` subject is
     also a cross-subject violation (different role still counts)."""

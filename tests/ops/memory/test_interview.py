@@ -1121,3 +1121,135 @@ def test_interview_permissions_write_is_idempotent(tmp_path: Path) -> None:
     assert settings["permissions"]["allow"].count("Bash(hpc-agent:*)") == 1
     # Second run was a no-op for the allow rule → not re-listed as an artifact.
     assert ".claude/settings.json" not in data2["artifacts"]
+
+
+# ─── entry_point.solver: PETSc checkpoint-instrumented wrapper ─────────────
+
+
+def _petsc_intent(resume_flag: str | None = "-restart_file") -> dict:
+    solver: dict = {"kind": "petsc", "solver_object": "ts"}
+    if resume_flag is not None:
+        solver["resume_flag"] = resume_flag
+    return _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "heat_solve",
+            "argv": ["./heat_solver", "-nu", "{nu}"],
+            "signature": {"nu": "float"},
+            "frozen_configs": [],
+            "solver": solver,
+        },
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"nu": 0.1}, {"nu": 0.5}]},
+        },
+    )
+
+
+def test_entry_point_petsc_solver_materializes_instrumented_wrapper(
+    tmp_path: Path,
+) -> None:
+    """A shell_command entry_point with a petsc solver hint materializes the
+    checkpoint-instrumented wrapper: PETSC_OPTIONS export around the
+    subprocess, canary cap clause, and the restart rotation (resume_flag
+    declared). The hint is persisted on _materialized.entry_point."""
+    result = record_interview(InterviewSpec.model_validate(_petsc_intent()), campaign_dir=tmp_path)
+
+    body = (tmp_path / ".hpc" / "wrappers" / "heat_solve.py").read_text()
+    assert "@register_run" in body
+    assert "from hpc_agent.experiment_kit.solver_adapters import petsc as _petsc" in body
+    assert "_petsc.checkpoint_options(" in body and "solver_kind='ts'" in body
+    assert "HPC_CHECKPOINT_CANARY" in body and "_petsc.canary_options('ts')" in body
+    assert "_petsc.promote_restart()" in body
+    assert "_petsc.resume_args('-restart_file', _restart)" in body
+    # The subprocess launches with the extended environment.
+    assert "subprocess.check_call(argv, env=env)" in body
+
+    assert ".hpc/wrappers/heat_solve.py" in result["artifacts"]
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    materialized = doc["_materialized"]["entry_point"]
+    assert materialized["solver"] == {
+        "kind": "petsc",
+        "solver_object": "ts",
+        "resume_flag": "-restart_file",
+    }
+
+
+def test_entry_point_petsc_wrapper_injects_env_and_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: import the instrumented wrapper and call it. It must export
+    the solution-dump option (plus the canary cap under the probe env) and,
+    after a previous attempt left a dump, append the declared restart flag."""
+    import importlib.util
+
+    from hpc_agent.experiment_kit.solver_adapters import petsc as petsc_adapter
+
+    record_interview(InterviewSpec.model_validate(_petsc_intent()), campaign_dir=tmp_path)
+    wrapper = tmp_path / ".hpc" / "wrappers" / "heat_solve.py"
+    spec = importlib.util.spec_from_file_location("hpc_petsc_wrapper_under_test", wrapper)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    ckpt_dir = tmp_path / "ckpts"
+    monkeypatch.setenv("HPC_CHECKPOINT_DIR", str(ckpt_dir))
+    monkeypatch.setenv("HPC_CHECKPOINT_CANARY", "1")
+    monkeypatch.setenv("PETSC_OPTIONS", "-log_view")
+    calls: list[tuple[list, dict]] = []
+    monkeypatch.setattr(mod.subprocess, "check_call", lambda argv, **kw: calls.append((argv, kw)))
+
+    # Fresh run: dump option + canary cap exported; no restart args appended.
+    mod.heat_solve(nu=0.1)
+    argv, kw = calls[0]
+    assert argv == ["./heat_solver", "-nu", "0.1"]
+    opts = kw["env"]["PETSC_OPTIONS"]
+    # Caller-supplied options are preserved, framework fragments appended.
+    assert opts.startswith("-log_view ")
+    assert f"-ts_monitor_solution binary:{ckpt_dir / 'petsc-solution.bin'}" in opts
+    assert "-ts_max_steps 2" in opts
+
+    # A previous attempt's dump exists → rotated and fed back via the flag.
+    petsc_adapter.wrapper_solution_path().parent.mkdir(parents=True, exist_ok=True)
+    petsc_adapter.wrapper_solution_path().write_bytes(b"vec")
+    mod.heat_solve(nu=0.1)
+    argv2, _ = calls[1]
+    assert argv2[-2:] == ["-restart_file", str(ckpt_dir / "petsc-restart.bin")]
+
+
+def test_entry_point_petsc_solver_without_resume_flag_never_appends_argv(
+    tmp_path: Path,
+) -> None:
+    """resume_flag omitted → the wrapper still instruments checkpoint writes
+    but never touches argv (loading is app-specific; we don't guess a flag)."""
+    record_interview(
+        InterviewSpec.model_validate(_petsc_intent(resume_flag=None)),
+        campaign_dir=tmp_path,
+    )
+    body = (tmp_path / ".hpc" / "wrappers" / "heat_solve.py").read_text()
+    assert "_petsc.checkpoint_options(" in body
+    assert "promote_restart" not in body and "resume_args" not in body
+
+
+def test_entry_point_petsc_solver_rejects_malformed_hint(tmp_path: Path) -> None:
+    """Wire-level: a non-flag resume_flag fails Pydantic validation. Ops-level:
+    an unknown solver kind fails SpecInvalid before any file is written."""
+    import pydantic
+
+    from hpc_agent.incorporation.wrap_entry_point import materialize_shell_wrapper
+
+    bad = _petsc_intent(resume_flag="; rm -rf /")
+    with pytest.raises(pydantic.ValidationError):
+        InterviewSpec.model_validate(bad)
+
+    with pytest.raises(errors.SpecInvalid, match="not a known solver adapter"):
+        materialize_shell_wrapper(
+            campaign_dir=tmp_path,
+            run_name="r",
+            argv=["./x"],
+            signature={},
+            frozen_configs=[],
+            solver={"kind": "fenics"},
+        )
+    assert not (tmp_path / ".hpc" / "wrappers").exists()

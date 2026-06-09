@@ -436,36 +436,57 @@ def _write_failure_capture(wip_dir, *, task_id, returncode, executor, stderr_tai
         )
 
 
-# #294: checkpoint filename shape, mirrored from
-# ``hpc_agent.experiment_kit.checkpoint`` (this module is stdlib-only and
-# cannot import the package).
-_CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)\.pkl$")
+# #294: step-indexed checkpoint filename shapes, mirrored from
+# ``hpc_agent.experiment_kit.checkpoint`` (.pkl) and
+# ``...solver_adapters.petsc`` (.petscbin) — this module ships to the cluster
+# as a standalone file (deploy_runtime) and cannot import the package, so the
+# patterns are duplicated here by design. Order matters only on an
+# equal-iteration tie: earlier pattern (pickle) wins, preserving the
+# pre-petsc behavior for the runs that only ever write pickles.
+_CHECKPOINT_RES = (
+    re.compile(r"^checkpoint-(\d+)\.pkl$"),
+    re.compile(r"^checkpoint-(\d+)\.petscbin$"),
+)
 
 
 def _latest_checkpoint(checkpoint_dir):
     """Absolute path to the highest-iteration non-empty checkpoint, or "" if none.
 
-    Stdlib-only twin of ``experiment_kit.checkpoint.latest_checkpoint``: on
-    ``resubmit --from-checkpoint`` the dispatcher uses this to hand the executor
-    a resume point. Skips 0-byte files (a crash mid-write, pre-atomic) and never
-    raises — a missing/unreadable dir just means "no checkpoint, start fresh".
+    Stdlib-only twin of ``experiment_kit.checkpoint.latest_checkpoint`` —
+    widened to every step-indexed format (#294: pickle; solver-adapter PETSc
+    binary dumps) so a resumed petsc4py executor also gets a concrete
+    ``HPC_RESUME_FROM``. On ``resubmit --from-checkpoint`` the dispatcher uses
+    this to hand the executor a resume point. Skips 0-byte files (a crash
+    mid-write, pre-atomic) and never raises — a missing/unreadable dir just
+    means "no checkpoint, start fresh". Wrapper-path PETSc dumps
+    (``petsc-solution.bin``) are deliberately NOT scanned: the instrumented
+    wrapper rotates and consumes those itself (``promote_restart``) and never
+    reads ``HPC_RESUME_FROM``.
     """
     best = ""
-    best_it = -1
+    # (iteration, pattern_priority) — higher wins; priority breaks an
+    # equal-iteration tie deterministically (listdir order is arbitrary).
+    best_key = (-1, -1)
     try:
         names = os.listdir(checkpoint_dir)
     except OSError:
         return ""
     for name in names:
-        m = _CHECKPOINT_RE.match(name)
+        m = None
+        priority = -1
+        for idx, pattern in enumerate(_CHECKPOINT_RES):
+            m = pattern.match(name)
+            if m:
+                priority = len(_CHECKPOINT_RES) - idx
+                break
         if not m:
             continue
         path = os.path.join(checkpoint_dir, name)
         try:
             if os.path.isfile(path) and os.path.getsize(path) > 0:
-                iteration = int(m.group(1))
-                if iteration > best_it:
-                    best_it, best = iteration, path
+                key = (int(m.group(1)), priority)
+                if key > best_key:
+                    best_key, best = key, path
         except OSError:
             continue
     return best

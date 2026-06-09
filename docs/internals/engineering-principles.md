@@ -1,0 +1,117 @@
+# Engineering principles
+
+Cross-cutting judgment rules for maintainers (human or agent). This page is
+**descriptive**: wherever a principle here is mechanizable, the normative copy
+is the lint or test linked next to it, and CI — not this prose — is what holds
+the line. The prose exists for the parts a linter cannot decide, and to record
+*why* the enforcement looks the way it does.
+
+This page replaced the repo's prose `CLAUDE.md` (now a one-line pointer
+here). The deciding incident: of the three "current facts" that file
+asserted, two had silently rotted (see the drift log below) while every
+mechanized check stayed true. Lessons that can fire live in CI; only the
+irreducible judgment calls stay prose.
+
+## Verify a guard can actually fire before classifying it as "intentional"
+
+When you hit a constraint, a defensive default, an apparent duplication, or
+anything that *looks* deliberate, do not default to "leave it, it's by
+design." Establish **which** it is: check whether the protection can actually
+fire, and whether changing it alters behavior a real path or a test would
+notice. A guard that can never fire is inertia, not design — and a comment
+asserting a reason ("so legacy X validates", "cluster-side baseline") is a
+claim to verify, not evidence.
+
+This cuts both ways — apply it before you *preserve* something **and** before
+you *remove* it. Case history:
+
+- **Looked intentional, was inert.** Output schemas typed `run_id` as a loose
+  `str` "so legacy sidecars validate." But `run_sidecar_path` already
+  validates every run_id against the strict `^[A-Za-z0-9._\-]+$` pattern at
+  the filesystem layer, so the loose-output guard could never accept anything
+  the strict one wouldn't — and the one case it *could* fire (the framework
+  emitting a malformed id) is a bug it would hide rather than catch. Tightened
+  to `RunIdStrict` on output.
+- **Looked intentional, was misattributed.** `infra/parsing.py` was assumed to
+  be a "cluster-side baseline" that couldn't import the package. Verified
+  false: `deploy_runtime` ships only what `transport._build_deploy_items`
+  enumerates — `dispatch.py`, `combiner.py`, `metrics_io.py`,
+  `executor_cli.py`, and the rendered shell templates plus preambles — and
+  every importer of `parsing.py` is control-plane. The module's stdlib-only
+  rule stands on its own merits; its docstring now says so.
+- **Looked like dead duplication, was load-bearing — then earned its
+  collapse.** `runner_failures._FAILURE_CATEGORY_PATTERNS` looked like a
+  removable duplicate of `failure_signatures.CATALOG`, but contract tests
+  iterated it as the canonical set of classifier categories — removing it
+  outright would have silently re-pointed a contract. The *correct* removal
+  happened later, deliberately: the contract was re-pointed to
+  `failure_signatures.CLASSIFIER_CATEGORIES` (derived from the catalog, one
+  source of truth) and only then was the duplicate deleted. "Load-bearing"
+  is a reason to re-point first, not a reason to keep forever.
+
+The cheap, repeatable check: *can this protection actually fire, and does
+changing it alter behavior a test or a real code path would notice?* Answer
+that before classifying — for both keep and remove decisions.
+
+The repo applies the same standard to its own enforcement: every lint rule
+must demonstrate its fire path in a test (see
+`tests/contract/test_lint_skills.py::test_lint_rule_fires_on_synthetic_input`
+and `tests/scripts/test_lint_library_knowledge.py` — each rule is exercised
+against a synthetic violation).
+
+## Library knowledge in core: the four-question boundary test
+
+hpc-agent's core is *experiment*-agnostic, not *software*-agnostic: it never
+encodes what a user's parameters mean, but it legitimately knows scheduler
+dialects, MPI launchers, pandas rolling idioms, and PETSc checkpoint hooks.
+"It's already in core" is not the justification — passing this test is.
+Knowledge of a specific third-party library may live in core only when ALL
+four hold:
+
+1. **Substrate, not semantics.** The knowledge is about how to run / persist /
+   schedule / classify / verify computation — never about what an experiment's
+   parameters or search space mean (those stay caller-owned: `tasks.py`,
+   free-text `task_kind`, no typed search spaces).
+2. **Core dispatches, never branches.** Library names appear in core only at
+   *declared assembly points*. Everywhere else, core calls a library-agnostic
+   contract (e.g. `checkpoint_formats.CheckpointFormat`, the axis-matcher
+   dispatcher). Adding an assembly point is a reviewed edit to the lint's
+   `KNOWLEDGE_PACKAGES` list, not an incidental import.
+3. **Import-safe on every runtime surface it reaches.** There are three
+   surfaces with different import budgets: the installed control plane
+   (anything), the run's cluster env (installed package; stdlib-only modules
+   preferred), and the standalone-shipped files (everything
+   `transport._build_deploy_items` enumerates — they cannot import the
+   package at all; duplication there is by design, see `_CHECKPOINT_RES`).
+   Check the surface, not the repo.
+4. **Core CI verifies it without the library installed.** Crafted fixtures
+   (AST snippets, golden bytes like the PETSc Vec blocks) — if correctness is
+   only testable with the real library, the knowledge belongs in a plugin
+   whose CI carries the dependency, not in core.
+
+When a knowledge family grows (a second solver adapter, a new matcher), the
+rule is: collapse any inline library-name branching into the family's
+registry/dispatcher, and add the new module behind it — do not add a second
+inline branch.
+
+### Enforcement map
+
+| Rule | Enforced by | Fires when |
+|---|---|---|
+| Q2: declared assembly points only | `scripts/lint_library_knowledge.py` (CI + pre-commit) | any import binding a knowledge package — absolute, relative, lazy, or alias-form — outside the package or its declared list; also when a declared entry goes stale |
+| Growth trigger: registry collapse at member #2 | same lint, "growth trigger" rule | a knowledge package reaches ≥ 2 member modules while a non-registry assembly point still binds a member module by name |
+| Q3: control-plane startup budget | `tests/contract/test_no_heavy_toplevel_imports.py` | a CLI-reachable module imports a heavy/solver library at module level |
+| Q3: standalone files don't import the package | `tests/contracts/test_boundary_contract.py` (templates-don't-import-core) | a shipped template/standalone file references the core package. Adjacent but distinct: `scripts/lint_schema_versions.py` only syncs the cluster-side schema-version constants, and `_guard.py` is a runtime shadowed-import detector — neither statically enforces this row |
+| Q4: core deps exclude the libraries themselves | `tests/contract/test_no_heavy_toplevel_imports.py::test_core_dependencies_exclude_heavy_libraries` | a banned library appears in `pyproject.toml` dependencies or any extra |
+| Q1: substrate, not semantics | **judgment — review only** | a PR makes core interpret experiment parameters or search-space meaning; nothing mechanical catches this, which is why it leads the list |
+
+### Drift log (why prose alone failed)
+
+Recorded so the next "let's just document it" proposal has the base rate:
+the `CLAUDE.md` predecessor of this page asserted three present-tense facts.
+By 2026-06, `_FAILURE_CATEGORY_PATTERNS` no longer existed (collapsed into
+`CLASSIFIER_CATEGORIES`; the prose still said "three tests iterate it") and
+the deploy-ship list it cited omitted `executor_cli.py`. The lints and tests
+from the same era all still held. Facts belong where they are checked; this
+page cites sources of truth (`transport._build_deploy_items`, the lint's
+`KNOWLEDGE_PACKAGES`) instead of restating their contents.

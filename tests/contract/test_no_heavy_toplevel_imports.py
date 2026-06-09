@@ -23,28 +23,41 @@ is correct), not modules the framework imports.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import hpc_agent
 
-# Root module names that must never be imported at module load by a
-# CLI-reachable hpc_agent module. Each is a multi-hundred-millisecond
-# import (native extensions, large package init) that submit/monitor-side
-# verbs do not need — they belong inside the function that uses them.
-_BANNED_ROOTS = frozenset(
-    {
-        "pandas",
-        "numpy",
-        "scipy",
-        "sklearn",
-        "pyarrow",
-        "torch",
-        "matplotlib",
-        "tensorflow",
-        "jax",
-        "polars",
-    }
-)
+# Libraries that must never be imported at module load by a CLI-reachable
+# hpc_agent module (each a multi-hundred-millisecond import — native
+# extensions, large package init — that submit/monitor-side verbs do not
+# need; they belong inside the function that uses them), NOR appear in
+# core's pyproject dependencies. The solver/MPI roots are additionally the
+# libraries whose *knowledge* lives in core (solver adapters, axis
+# matchers): core may know their idioms, but core CI must verify that
+# knowledge without the library installed
+# (docs/internals/engineering-principles.md).
+#
+# One table, two derived checks: keys are import roots (module-level import
+# ban), values are PyPI distribution names (pyproject dependency ban) —
+# adding a library here arms both, so a root/dist name mismatch (sklearn vs
+# scikit-learn) can't silently slip the dependency check.
+_BANNED_LIBRARIES: dict[str, str] = {
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "scipy": "scipy",
+    "sklearn": "scikit-learn",
+    "pyarrow": "pyarrow",
+    "torch": "torch",
+    "matplotlib": "matplotlib",
+    "tensorflow": "tensorflow",
+    "jax": "jax",
+    "polars": "polars",
+    "petsc4py": "petsc4py",
+    "mpi4py": "mpi4py",
+}
+_BANNED_ROOTS = frozenset(_BANNED_LIBRARIES)
+_BANNED_DISTS = frozenset(_BANNED_LIBRARIES.values())
 
 _PKG_ROOT = Path(hpc_agent.__file__).resolve().parent
 # Scaffold templates are emitted into user projects, not imported by the
@@ -91,6 +104,13 @@ def _module_level_import_roots(tree: ast.Module) -> set[str]:
     return roots
 
 
+def _dist_name(requirement: str) -> str:
+    """PEP 503-normalized name part of a PEP 508 requirement string."""
+    name = re.match(r"[A-Za-z0-9._-]+", requirement.strip())
+    assert name is not None, f"unparseable requirement: {requirement!r}"
+    return re.sub(r"[-_.]+", "-", name.group()).lower()
+
+
 def _is_excluded(path: Path) -> bool:
     rel = path.relative_to(_PKG_ROOT).as_posix()
     return any(rel.startswith(d) for d in _EXCLUDED_DIRS)
@@ -112,4 +132,40 @@ def test_no_heavy_dependency_imported_at_module_level() -> None:
         "verb's startup — #288). Move the import inside the function that uses "
         "it (the `pyarrow.parquet` pattern in ops/validate/input_dataset.py):\n  "
         + "\n  ".join(offenders)
+    )
+
+
+def test_core_dependencies_exclude_heavy_libraries() -> None:
+    """Core's dependency set must never grow a banned root — knowledge of a
+    library may live in core (AST patterns, golden bytes), the library itself
+    may not (docs/internals/engineering-principles.md: core CI verifies
+    library knowledge WITHOUT the library installed; if correctness needs the
+    real library, the knowledge belongs in a plugin whose CI carries it).
+
+    Checks ``[project.dependencies]`` and every ``[project.optional-dependencies]``
+    extra: the dev/test extras are what core CI installs, and a hypothetical
+    ``solver`` extra here would still put the dependency in core's pyproject —
+    a plugin ships its own.
+    """
+    import pytest
+
+    # ``tomllib`` is stdlib from 3.11; the repo floor is 3.10. The contract
+    # checks a static file, so the 3.11+ CI matrix legs enforcing it is
+    # sufficient — skip (don't fail) on 3.10.
+    tomllib = pytest.importorskip("tomllib")
+
+    from tests._paths import REPO_ROOT
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as fh:
+        project = tomllib.load(fh)["project"]
+
+    declared = list(project.get("dependencies", []))
+    for extra in project.get("optional-dependencies", {}).values():
+        declared.extend(extra)
+
+    offenders = sorted(d for d in map(_dist_name, declared) if d in _BANNED_DISTS)
+    assert not offenders, (
+        "Banned library in core pyproject dependencies — core encodes library "
+        "*knowledge* via crafted fixtures and must verify it without the library "
+        f"installed; ship a plugin instead: {offenders}"
     )

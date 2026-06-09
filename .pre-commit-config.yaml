@@ -108,6 +108,12 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: lint-library-knowledge
+        name: library-knowledge packages imported only at declared assembly points
+        entry: python scripts/lint_library_knowledge.py
+        language: python
+        pass_filenames: false
+
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality
         entry: python scripts/lint_plugin_manifests.py

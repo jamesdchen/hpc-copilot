@@ -550,6 +550,46 @@
       "title": "_NumericLogspaceParams",
       "type": "object"
     },
+    "_PetscSolverHint": {
+      "additionalProperties": false,
+      "description": "Checkpoint-instrumentation hint for a PETSc-based shell_command entry point.\n\nA PETSc app owns its solve loop (``TSSolve``/``SNESSolve`` are library\ncode), so the executor-side checkpoint helpers can't be called from a\nloop body the way ``run_iterations`` assumes. PETSc's options database is\nthe injection channel instead: any app that calls ``setFromOptions()``\nhonors ``PETSC_OPTIONS`` from the environment. Declaring this hint makes\nthe interview materialize a checkpoint-instrumented wrapper that exports\nthe per-step solution-dump option (into the stable per-task checkpoint\ndir), caps the solve at 2 steps under the checkpoint-canary probe, and —\nwhen ``resume_flag`` is declared — hands a previous attempt's dump back\nto the app on resume. The entry point itself stays opaque and untouched.\n\n``resume_flag`` is deliberately explicit: writing checkpoints is generic,\nbut *loading* one is app-specific (there is no universal PETSc restart\noption). Omit it and the wrapper still writes checkpoints; resume just\nnever feeds them back.",
+      "properties": {
+        "kind": {
+          "const": "petsc",
+          "title": "Kind",
+          "type": "string"
+        },
+        "solver_object": {
+          "default": "ts",
+          "description": "Which PETSc object owns the solve loop: 'ts' (time stepper — the usual shape for a transient PDE solve) or 'snes' (nonlinear solver). Selects the option family the wrapper exports (-ts_monitor_solution / -snes_monitor_solution and the canary's -ts_max_steps 2 / -snes_max_it 2).",
+          "enum": [
+            "ts",
+            "snes"
+          ],
+          "title": "Solver Object",
+          "type": "string"
+        },
+        "resume_flag": {
+          "anyOf": [
+            {
+              "pattern": "^-{1,2}[A-Za-z0-9_][A-Za-z0-9_\\-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The app's own restart flag (e.g. '-restart_file' or '--resume-from'). When declared, the wrapper appends ``<resume_flag> <path-to-previous-attempt-dump>`` to argv on a resumed attempt. The app must interpret the file (a PETSc binary viewer dump). Omit when the app has no restart surface.",
+          "title": "Resume Flag"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_PetscSolverHint",
+      "type": "object"
+    },
     "_Provenance": {
       "additionalProperties": false,
       "properties": {
@@ -724,6 +764,18 @@
           ],
           "default": null,
           "description": "Pre-declared series-axis classification. classify-axis cannot introspect a shell-out body, so when the experimenter knows the classification they declare it here. The interview persists it to ``interview.json._materialized.entry_point.data_axis`` so classify-axis records it directly. Omit when you want the interactive classification interview."
+        },
+        "solver": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_PetscSolverHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional checkpoint-instrumentation hint for a known solver library. When present, the materialized wrapper injects the library's checkpoint hooks around the argv (see ``_PetscSolverHint``) so a long solve becomes preemption-safe without touching the entry point. One adapter today: 'petsc'."
         },
         "fixed_params": {
           "additionalProperties": true,

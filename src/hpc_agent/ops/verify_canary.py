@@ -91,13 +91,20 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
 # Remote snippet that round-trips the canary's latest checkpoint ON THE CLUSTER
 # — where ``hpc_agent`` is importable in the run's own env and where a resume
 # would actually reload it. Emits a single JSON line on stdout:
-#   {"status": "missing"}                              → no checkpoint written
-#   {"status": "unloadable", "path": ...}              → file present, won't load
-#   {"status": "ok", "path": ..., "next_iteration": N} → loadable; resumes at N
-# ``read_latest_checkpoint`` returns next_iteration>0 only when a checkpoint
-# actually LOADED (it walks newest→oldest and skips corrupt files), so a present
-# file with next_iteration<=0 is the "wrong format" signal — distinct from a
-# legitimately checkpointed ``None`` state, which still yields next_iteration>0.
+#   {"status": "missing"}                                → no checkpoint written
+#   {"status": "unloadable", "path", "format", ...}      → present, won't restore
+#   {"status": "ok", "path", "format", "level", ...}     → restorable
+# Format-aware via ``checkpoint_formats.describe_latest_checkpoint``: the
+# pickle format actually deserializes (level "loadable", with next_iteration —
+# ``read_latest_checkpoint`` walks newest→oldest and skips corrupt files, so a
+# present-but-unloadable verdict really means NO checkpoint deserializes);
+# adapter formats like petsc_binary verify structurally (level "structural" —
+# loading would need the solver library, which this probe env may lack).
+#
+# Version skew: the run's cluster env may carry an OLDER hpc-agent without
+# ``checkpoint_formats``. The except-ImportError arm reproduces the historical
+# pickle-only probe verbatim so a new control plane still verifies runs on an
+# old cluster env (pickle checkpoints only — exactly what that env supports).
 #
 # After reading, it REMOVES the canary's _checkpoints/ dir: the canary checkpoint
 # is a throwaway probe, and a result_dir_template WITHOUT {run_id} (e.g.
@@ -110,15 +117,19 @@ _REMOTE_CHECKPOINT_SNIPPET = (
     "from hpc_agent.experiment_kit.checkpoint import "
     "latest_checkpoint, read_latest_checkpoint, checkpoint_dir\n"
     "d=sys.argv[1]\n"
-    "p=latest_checkpoint(d)\n"
-    "if p is None:\n"
-    "    print(json.dumps({'status':'missing'}))\n"
-    "else:\n"
-    "    _,nxt=read_latest_checkpoint(d)\n"
-    "    if int(nxt)<=0:\n"
-    "        print(json.dumps({'status':'unloadable','path':str(p)}))\n"
+    "try:\n"
+    "    from hpc_agent.experiment_kit.checkpoint_formats import describe_latest_checkpoint\n"
+    "    print(json.dumps(describe_latest_checkpoint(d)))\n"
+    "except ImportError:\n"
+    "    p=latest_checkpoint(d)\n"
+    "    if p is None:\n"
+    "        print(json.dumps({'status':'missing'}))\n"
     "    else:\n"
-    "        print(json.dumps({'status':'ok','path':str(p),'next_iteration':int(nxt)}))\n"
+    "        _,nxt=read_latest_checkpoint(d)\n"
+    "        if int(nxt)<=0:\n"
+    "            print(json.dumps({'status':'unloadable','path':str(p)}))\n"
+    "        else:\n"
+    "            print(json.dumps({'status':'ok','path':str(p),'next_iteration':int(nxt)}))\n"
     "shutil.rmtree(str(checkpoint_dir(d)), ignore_errors=True)\n"
 )
 
@@ -264,10 +275,12 @@ def _resolve_canary_checkpoint_dir(
                 action="store_true",
                 help=(
                     "Checkpoint canary (#294 PR4): the canary wrote a checkpoint then "
-                    "killed itself; assert a loadable checkpoint survived under the "
-                    "stable _checkpoints/ dir (read_latest_checkpoint succeeds on the "
-                    "cluster). Replaces the exit-0/output success criteria — a "
-                    "preempted canary is EXPECTED. Use for auto_resume_on_kill runs."
+                    "killed itself; assert a restorable checkpoint survived under the "
+                    "stable _checkpoints/ dir. Format-aware: pickle checkpoints are "
+                    "fully reloaded on the cluster; adapter formats (petsc_binary) are "
+                    "verified structurally. Replaces the exit-0/output success "
+                    "criteria — a preempted canary is EXPECTED. Use for "
+                    "auto_resume_on_kill runs."
                 ),
             ),
             CliArg(
@@ -335,9 +348,13 @@ def verify_canary(
         ``HPC_CHECKPOINT_CANARY=1`` so it wrote a checkpoint at iteration 1 then
         killed itself at iteration 2 via the dispatcher's SIGTERM path. This
         SWAPS the success criteria: instead of "exit 0 + output present" (a
-        preempted canary never completes), the gate passes iff a *loadable*
+        preempted canary never completes), the gate passes iff a *restorable*
         checkpoint survived under the canary's ``_checkpoints/`` dir — proven by
-        running ``read_latest_checkpoint`` on the cluster. Fails the gate with
+        running ``checkpoint_formats.describe_latest_checkpoint`` on the
+        cluster. Format-aware: a pickle checkpoint is fully deserialized
+        (level ``loadable``); an adapter format like ``petsc_binary`` is
+        verified structurally (level ``structural`` — the Vec class-id/block
+        walk, since loading would need the solver library). Fails the gate with
         ``checkpoint_missing`` (no checkpoint written) or ``checkpoint_unloadable``
         (a wrong/non-portable checkpoint format) so the "my checkpoint can't be
         reloaded" class is caught BEFORE the long main array launches. The
@@ -607,13 +624,23 @@ def verify_canary(
         )
         status = probe.get("status")
         if status == "ok":
+            # Format-aware detail: the pickle format proves a full reload
+            # (next_iteration present); adapter formats (e.g. petsc_binary)
+            # verify structurally — say which proof the verdict rests on.
+            fmt = probe.get("format") or "pickle"
+            nxt = probe.get("next_iteration")
+            proof = (
+                f"resumes at iteration {nxt}"
+                if nxt is not None
+                else f"verified {probe.get('level') or 'structurally'}: {probe.get('detail')}"
+            )
             return {
                 "ok": True,
                 "failure_kind": None,
                 "details": (
-                    f"canary {canary_run_id!r} checkpoint round-trip verified: a loadable "
-                    f"checkpoint survived the preemption kill under {ckpt_dir}/_checkpoints "
-                    f"(resumes at iteration {probe.get('next_iteration')})."
+                    f"canary {canary_run_id!r} checkpoint round-trip verified: a restorable "
+                    f"{fmt} checkpoint survived the preemption kill under "
+                    f"{ckpt_dir}/_checkpoints ({proof})."
                 ),
                 "stderr_tail": stderr_tail,
                 "metrics_fingerprint": None,
@@ -635,14 +662,18 @@ def verify_canary(
                 "failure_features": _failure_features(stderr_tail, log_path),
             }
         if status == "unloadable":
+            fmt = probe.get("format") or "pickle"
+            why = probe.get("detail") or (
+                "the checkpoint does not round-trip (e.g. a pickle that needs a "
+                "class/lib absent at resume time)"
+            )
             return {
                 "ok": False,
                 "failure_kind": "checkpoint_unloadable",
                 "details": (
-                    f"canary {canary_run_id!r} wrote a checkpoint ({probe.get('path')}) but "
-                    "read_latest_checkpoint could NOT reload it — the checkpoint format does not "
-                    "round-trip (e.g. a pickle that needs a class/lib absent at resume time). A "
-                    "long auto_resume_on_kill run would discover this only at resume, hours in. "
+                    f"canary {canary_run_id!r} wrote a checkpoint ({probe.get('path')}, "
+                    f"format {fmt}) but it could NOT be restored: {why}. A long "
+                    "auto_resume_on_kill run would discover this only at resume, hours in. "
                     "Fix the checkpoint format before launching the main array."
                 ),
                 "stderr_tail": stderr_tail,

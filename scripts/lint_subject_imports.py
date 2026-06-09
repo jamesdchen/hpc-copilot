@@ -10,7 +10,14 @@ reach sideways into each other's internals.
 This lint enforces that rule by AST-scanning every ``.py`` file under
 ``src/hpc_agent/ops/<subject>/`` and ``src/hpc_agent/meta/<subject>/``
 and rejecting any ``from hpc_agent.<role>.<other_subject>...`` import
-where ``<other_subject>`` differs from the file's own subject.
+where ``<other_subject>`` differs from the file's own subject. The
+evasive spellings are covered too: relative imports are resolved against
+the importing file's package (``from ...meta.registry import x`` climbs
+parents and crosses subjects like its absolute spelling), and
+``from hpc_agent.<role> import <subject>`` binds the subject through an
+alias without its dotted path ever appearing in the ``from`` clause —
+alias-derived candidates are checked against the real subject
+directories so re-exported functions don't false-positive.
 
 Allowed cross-cutting roots (these aren't subjects, they're substrate):
 
@@ -89,28 +96,50 @@ def _is_allowed_non_subject(module: str) -> bool:
     return False
 
 
-def _iter_imports(tree: ast.AST) -> list[tuple[int, str]]:
-    """Yield ``(lineno, module_name)`` for every absolute import
-    statement in ``tree``. Relative imports are excluded — they can't
-    name a different subject by definition."""
-    out: list[tuple[int, str]] = []
+def _iter_imports(tree: ast.AST, module_package: str) -> list[tuple[int, str, bool]]:
+    """Yield ``(lineno, module_name, alias_derived)`` for every module an
+    import statement in ``tree`` could bind.
+
+    Relative imports are resolved against *module_package* — a
+    ``from ...meta.registry import x`` climbs parents and crosses subjects
+    exactly like its absolute spelling, so it must not be skipped. For
+    ``from pkg import name``, ``pkg.name`` is additionally yielded per alias
+    with ``alias_derived=True``: when ``name`` is a subject package, that
+    form binds it just like ``import pkg.name`` — but the caller must check
+    alias-derived names against the real subject directories, because the
+    alias may equally be a re-exported function.
+    """
+    out: list[tuple[int, str, bool]] = []
+    pkg_parts = module_package.split(".")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                out.append((node.lineno, alias.name))
+            out.extend((node.lineno, alias.name, False) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.level and node.level > 0:
-                # ``from . import X`` / ``from ..foo import Y`` — same
-                # package, can't cross subjects unless someone climbs
-                # back up to ``hpc_agent.*``, which would be a more
-                # serious lint failure caught elsewhere.
+            if node.level:
+                if node.level > len(pkg_parts):
+                    continue  # climbs above the distribution root — broken import
+                base = ".".join(pkg_parts[: len(pkg_parts) - (node.level - 1)])
+                module = f"{base}.{node.module}" if node.module else base
+            else:
+                module = node.module
+            if not module:
                 continue
-            if node.module:
-                out.append((node.lineno, node.module))
+            out.append((node.lineno, module, False))
+            out.extend(
+                (node.lineno, f"{module}.{alias.name}", True)
+                for alias in node.names
+                if alias.name != "*"
+            )
     return out
 
 
-def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, str]]:
+def lint_file(
+    path: Path,
+    own_role: str,
+    own_subject: str,
+    module_package: str,
+    subjects_by_role: dict[str, set[str]],
+) -> list[tuple[int, str]]:
     """Return ``(lineno, message)`` per cross-subject import violation."""
     try:
         source = path.read_text(encoding="utf-8")
@@ -121,7 +150,10 @@ def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, st
     except SyntaxError:
         return []
     findings: list[tuple[int, str]] = []
-    for lineno, module in _iter_imports(tree):
+    # ``from pkg.sub import name`` yields both ``pkg.sub`` and
+    # ``pkg.sub.name`` candidates for one line — report each crossing once.
+    seen: set[tuple[int, str, str]] = set()
+    for lineno, module, alias_derived in _iter_imports(tree, module_package):
         if _is_allowed_non_subject(module):
             continue
         # Check both roles — a file in ``ops/foo`` may not import from
@@ -134,6 +166,14 @@ def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, st
             if role == own_role and other == own_subject:
                 # Same subject as ourselves — allowed.
                 continue
+            if alias_derived and other not in subjects_by_role.get(role, set()):
+                # ``from hpc_agent.<role> import <name>`` where <name> is a
+                # re-exported helper, not a subject directory — not a
+                # subject crossing.
+                continue
+            if (lineno, role, other) in seen:
+                continue
+            seen.add((lineno, role, other))
             findings.append(
                 (
                     lineno,
@@ -162,11 +202,30 @@ def iter_targets(scan_root: Path) -> list[tuple[Path, str, str]]:
     return targets
 
 
+def _subjects_by_role(scan_root: Path) -> dict[str, set[str]]:
+    """The real subject directories per role — the reference set for
+    deciding whether an alias-derived import names a subject."""
+    return {
+        role: {p.name for p in (scan_root / role).iterdir() if p.is_dir()}
+        for role in SUBJECT_ROLES
+        if (scan_root / role).exists()
+    }
+
+
+def _module_package(path: Path, scan_root: Path) -> str:
+    """Dotted package containing the module at *path* — anchors
+    relative-import resolution (the scan root corresponds to ``hpc_agent``)."""
+    rel = path.resolve().relative_to(scan_root.resolve())
+    return ".".join(["hpc_agent", *rel.parts[:-1]])
+
+
 def main(scan_root: Path | None = None) -> int:
     root = scan_root if scan_root is not None else SCAN_ROOT
+    subjects = _subjects_by_role(root)
     failures = 0
     for path, role, subject in iter_targets(root):
-        for lineno, hint in lint_file(path, role, subject):
+        package = _module_package(path, root)
+        for lineno, hint in lint_file(path, role, subject, package, subjects):
             try:
                 rel: str = str(path.resolve().relative_to(REPO))
             except ValueError:

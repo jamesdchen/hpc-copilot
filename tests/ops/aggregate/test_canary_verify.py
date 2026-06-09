@@ -891,3 +891,65 @@ def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_ho
     assert captured["remote_activation"] == expected
     assert captured["remote_activation"]  # non-empty — the #176 regression
     assert "conda activate hpc-pi" in captured["remote_activation"]
+
+
+def test_checkpoint_canary_petsc_structural_ok(tmp_path: Path, journal_home: Path) -> None:
+    """A petsc_binary artifact verified structurally → ok=True, with the
+    format and proof level surfaced (no next_iteration claim is made — the
+    probe did not reload the Vec)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    probe_out = (
+        '{"status": "ok", "path": "/x/results/r1-canary/task_0/_checkpoints/'
+        'petsc-solution.bin", "format": "petsc_binary", "level": "structural", '
+        '"detail": "1 complete Vec block(s), 8-byte scalars, no trailing garbage"}'
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+    assert "petsc_binary" in out["details"]
+    assert "structural" in out["details"]
+    assert "resumes at iteration" not in out["details"]
+
+
+def test_checkpoint_canary_petsc_unloadable_names_format(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A garbage petsc artifact fails the gate with the format + the
+    structural reason in the details."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar(tmp_path)
+    probe_out = (
+        '{"status": "unloadable", "path": "/x/results/r1-canary/task_0/_checkpoints/'
+        'checkpoint-0.petscbin", "format": "petsc_binary", "level": "structural", '
+        '"detail": "no PETSc Vec block found"}'
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_PREEMPTED_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_PREEMPT_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run", return_value=_fake_ssh_completed(stdout=probe_out)
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", verify_checkpoint=True, wait_budget_sec=10
+        )
+    assert out["ok"] is False
+    assert out["failure_kind"] == "checkpoint_unloadable"
+    assert "petsc_binary" in out["details"]
+    assert "no PETSc Vec block found" in out["details"]

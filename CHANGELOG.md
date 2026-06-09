@@ -5,6 +5,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.49 — 2026-06-09
+
+### Fixed — CI green on Python 3.10
+
+The 0.10.47 dependency-ban contract test imported `tomllib` unconditionally, failing the `test (3.10)` CI leg (`tomllib` is stdlib from 3.11; the repo floor is 3.10). The test now `pytest.importorskip`s it — the contract checks a static file, so the 3.11+ matrix legs enforcing it is sufficient.
+
+## 0.10.48 — 2026-06-09
+
+### Fixed — review findings on the 0.10.47 hardening
+
+A seven-angle review of 0.10.47 surfaced one real parity gap and three accuracy/robustness nits, all fixed with firing tests:
+
+- **`scripts/lint_subject_imports.py` had both evasion holes that 0.10.47 closed in the knowledge lint** — it skipped all relative imports (the comment claimed climbs would be "caught elsewhere"; nothing catches them), and the `from hpc_agent.<role> import <subject>` alias form mapped to no subject at all. Both spellings are now resolved/expanded; alias-derived candidates are checked against the real subject directories so re-exported helpers don't false-positive.
+- **Growth trigger counts only public members**: a shared `_common.py` — the natural shape of the collapse refactor itself — no longer arms the trigger.
+- **One banned-libraries table**: import roots and PyPI dist names are now paired in `_BANNED_LIBRARIES`, so a future sklearn/scikit-learn-style name mismatch cannot silently slip the pyproject dependency check.
+- Enforcement map's Q3 row no longer over-credits `lint_schema_versions.py`/`_guard.py` (adjacent mechanisms, not static enforcers of that row); the new lint test imports `tests._paths.REPO_ROOT` instead of a depth-fragile parent climb.
+
+## 0.10.47 — 2026-06-09
+
+### Changed — CLAUDE.md retired: lessons solidified into infrastructure
+
+The repo's `CLAUDE.md` asserted three present-tense facts; an audit found two had silently rotted (`_FAILURE_CATEGORY_PATTERNS` was long gone — collapsed into `CLASSIFIER_CATEGORIES` — and the deploy-ship list omitted `executor_cli.py`), while every mechanized check from the same era still held. Conclusion applied: lessons that can fire live in CI; only irreducible judgment stays prose — and not in an auto-loaded file that restates checkable facts.
+
+- **`scripts/lint_library_knowledge.py` hardened** — three gaps closed, each with a firing test:
+  - the `from parent import package` alias form (`from hpc_agent.experiment_kit import solver_adapters`) bound the knowledge package invisibly to the lint, which only examined the `from` clause;
+  - relative imports were skipped wholesale on the false premise that they "stay inside their own package" — `from ..experiment_kit.solver_adapters import petsc` climbs parents; they are now resolved against the importing file's package;
+  - the **growth trigger is enforced, not remembered**: each knowledge package declares its registry assembly point; the moment the family has ≥ 2 member modules, any *other* assembly point still binding a member module by name fails with the collapse remediation. Inert at one member (today), fires the day adapter #2 lands.
+- **Question 4 enforced** (`tests/contract/test_no_heavy_toplevel_imports.py`): `petsc4py`/`mpi4py` join the banned module-level roots, and a new contract test asserts no banned library ever enters `pyproject.toml` dependencies or extras — core encodes library *knowledge* via crafted fixtures and must verify it without the library installed.
+- **Irreducible prose** (the "verify a guard can fire" heuristic, question 1, the case history) moved to `docs/internals/engineering-principles.md` with an enforcement map naming the lint/test holding each line, corrected facts (the standalone-ship list now cites its source of truth, `transport._build_deploy_items`, and includes `executor_cli.py` — also fixed in `infra/parsing.py`'s docstring), and a drift log recording why prose alone failed.
+- `CLAUDE.md` references in `scripts/lint_skills.py` and `tests/contract/test_lint_skills.py` re-pointed at the docs.
+
+## 0.10.46 — 2026-06-09
+
+### Added — the library-knowledge boundary: principle, enforcement lint, and a corrected misattribution
+
+Codifies the standard that 0.10.44/0.10.45 were built to, applies it to the pre-existing code, and makes it enforceable rather than remembered:
+
+- **CLAUDE.md gains the four-question boundary test** for third-party-library knowledge in core: (1) substrate, not semantics; (2) core dispatches, never branches — library names only at declared assembly points; (3) import-safe per runtime surface (control plane / cluster env / standalone-shipped files have different budgets); (4) core CI verifies it without the library installed. Includes the growth trigger: a knowledge family's second member collapses inline branching into the family's registry/dispatcher.
+- **New `scripts/lint_library_knowledge.py`** (pre-commit + CI) enforces question 2: any import of a knowledge package (`experiment_kit/solver_adapters`, `experiment_kit/axis_matcher/matchers` — root or submodule, top-level or lazy) outside the package itself must be a declared assembly point in the lint's `KNOWLEDGE_PACKAGES` list; violations carry the remediation. List hygiene is enforced both ways: an assembly point that vanished or no longer imports its package also fails, so the list cannot rot into fiction. Current assembly points: `checkpoint_formats.py`, `wrap_entry_point.py`, `detect_entry_point.py` (solver adapters); `_classifier.py` (matchers).
+- **`infra/parsing.py`'s false rationale corrected at the source.** CLAUDE.md has long recorded that this module was misattributed as "cluster-side", yet the module docstring still claimed its helpers "ship to the cluster". Verified against `deploy_runtime` (ships only `dispatch.py`, `combiner.py`, `metrics_io.py`, and the shell templates) and the module's actual importers (all control-plane): the stdlib-only rule now stands on its true merits, and the CLAUDE.md example records the meta-lesson — a recorded lesson whose source still asserts the false claim leaves the trap armed.
+- Audit outcome for the existing tree under the new standard: the pandas/EMA/window/stencil matchers PASS all four questions (AST-only pattern knowledge, single `_classifier.py` dispatch point, fixture-tested with no pandas import anywhere in src or tests) — they are now lint-locked rather than precedent-justified. The solver adapters' two inline `"petsc"` branches are declared (not incidental) assembly points, with the registry collapse scheduled for adapter #2 per the CLAUDE.md trigger.
+- Tests: `tests/scripts/test_lint_library_knowledge.py` — real tree clean, undeclared/lazy imports fire with remediation, intra-package imports free, both stale-entry modes fire.
+
+## 0.10.45 — 2026-06-09
+
+### Added — format-aware checkpoint verification + resume (petsc_binary round-trips end to end)
+
+0.10.44's PETSc adapter introduced a second on-disk checkpoint format; the canary verifier and the dispatcher's resume-point finder were still pickle-only, so a petsc run's checkpoints were invisible to both. This closes that gap with a format seam:
+
+- **New `experiment_kit/checkpoint_formats.py`** — the format-agnostic contract (`CheckpointFormat`: discover newest artifact + verify one) and the assembly of known formats. `describe_latest_checkpoint()` finds the newest artifact across formats (mtime, ties to format order) and returns the probe verdict: `{status, path, format, level, ...}`. The `pickle` entry preserves the historical probe semantics verbatim (newest file reported; loading walks newest→oldest, so one corrupt file doesn't fail the verdict; `level: "loadable"`, `next_iteration` present). The `petsc_binary` entry delegates to the adapter. Boundary: this assembly list is the ONE core location that names adapter formats; everything PETSc-specific stays in `solver_adapters/petsc.py`.
+- **Adapter-owned structural verifier** — `verify_petsc_binary()` walks the PETSc binary Vec block structure (`VEC_FILE_CLASSID` + row count + per-flavor scalar sizes: double/single/complex) without importing petsc4py. Honesty contract: `level: "structural"` — it proves "a well-formed PETSc dump", not a reload (which would need the solver library the probe env may lack). A truncated trailing block after ≥1 complete block is still `ok` (preemption kill mid-append; the complete prefix is restorable). `latest_petsc_artifact()` discovers across both instrumentation paths (stepped monitor dumps, then wrapper `petsc-solution.bin`/`petsc-restart.bin`).
+- **`verify-canary --verify-checkpoint` is format-aware** — the remote probe snippet now calls `describe_latest_checkpoint` (with a verbatim pickle-only fallback under `except ImportError`, so a new control plane still verifies runs on an older cluster-env hpc-agent), and the ok/unloadable verdicts surface the format and proof level (`resumes at iteration N` for pickle; `verified structurally: <detail>` for petsc_binary).
+- **Cluster-side dispatcher resume widened** — `_hpc_dispatch.py`'s stdlib `_latest_checkpoint` now also scans `checkpoint-<n>.petscbin`, so a resumed petsc4py executor gets a concrete `HPC_RESUME_FROM` on `resubmit --from-checkpoint`. Equal-iteration ties resolve to pickle deterministically (listdir order is arbitrary; pre-petsc behavior preserved). Wrapper-path dumps are deliberately NOT scanned — the instrumented wrapper rotates and consumes those itself and never reads `HPC_RESUME_FROM`.
+- Tests: the format seam (`test_checkpoint_formats.py`: per-format verdicts, mtime tie-break, JSON-serializable output, stable format names), structural-verifier rules (multi-block, truncated tail, scalar flavors, garbage rejection), dispatcher petscbin scan + tie determinism, and petsc-format canary verdicts.
+
+## 0.10.44 — 2026-06-09
+
+### Added — PETSc solver adapter: checkpoint injection for library-owned loops (#294 follow-up)
+
+The checkpoint helpers assume the executor owns its iteration loop; a PETSc solve does not (``TSSolve``/``SNESSolve`` are C code), so there is no loop body to call ``should_checkpoint()`` from. New ``experiment_kit/solver_adapters/`` maps the checkpoint contract onto the hooks PETSc does expose — monitor callbacks and the ``PETSC_OPTIONS`` database — mirroring the two ``@register_run`` injection paths:
+
+- **petsc4py (direct instrumentation)**: ``make_checkpoint_monitor()`` builds a TS/SNES monitor whose body is the existing ``should_checkpoint()`` cadence (walltime_margin / interval) plus an atomic PETSc-binary solution dump — ``ts.setMonitor(make_checkpoint_monitor())`` is the whole instrumentation. Dumps land as ``checkpoint-<step>.petscbin`` under the stable ``HPC_CHECKPOINT_DIR`` (the ``.petscbin`` suffix keeps them invisible to the pickle helpers); ``latest_petsc_checkpoint()`` is their discovery counterpart.
+- **Opaque binaries (materialized wrapper)**: ``entry_point.solver`` (``{"kind": "petsc", "solver_object": "ts"|"snes", "resume_flag": ...}``) on a ``shell_command`` intent makes ``materialize_shell_wrapper`` render a checkpoint-instrumented wrapper that extends ``PETSC_OPTIONS`` with the per-step solution dump (``-ts_monitor_solution binary:<stable dir>/petsc-solution.bin``), caps the solve at 2 steps under ``HPC_CHECKPOINT_CANARY=1`` (``-ts_max_steps 2`` / ``-snes_max_it 2``), and — only when the app declared its restart flag — rotates the previous attempt's dump to ``petsc-restart.bin`` (``promote_restart()``) and appends ``<resume_flag> <path>`` to argv. The entry point stays opaque and untouched; resume is deliberately opt-in because loading a checkpoint is app-specific (there is no universal PETSc restart option).
+- **Detection**: ``detect_petsc_solver()`` AST-matches a petsc4py import + ``PETSc.TS()``/``PETSc.SNES()`` construction + ``.solve()`` call (same matcher style as the stencil axis matcher), recording whether the script calls ``setFromOptions()`` (the options-injection capability gate). ``detect-entry-point`` surfaces a hit as an optional per-candidate ``solver: "petsc"`` field so onboarding can offer the instrumented wrapper.
+- Honesty notes baked into the contract: the options-database path checkpoints per step (PETSc has no walltime awareness) — only the petsc4py monitor path gets walltime-margin semantics; ``PETSC_OPTIONS`` cannot carry whitespace paths (rejected loudly); the wire ``resume_flag`` is pattern-constrained to a CLI-flag shape (no argv injection).
+- Tests: adapter detection/options/rotation/monitor seams (``tests/experiment_kit/solver_adapters/test_petsc.py``), instrumented-wrapper materialization + end-to-end env/argv injection (``test_interview.py``), candidate flagging (``test_detect_entry_point.py``). ``interview.input.json`` regenerated; ``detect_entry_point.output.json`` (hand-authored) gains the optional ``solver`` field.
+
 ## 0.10.43 — 2026-06-09
 
 ### Added — `resolve-resources` auto-derives the SGE parallel environment (#293)

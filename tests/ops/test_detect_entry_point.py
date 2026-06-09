@@ -368,3 +368,32 @@ class TestMaterializedEntryPoint:
         result = dep.detect_entry_point(experiment_dir=tmp_path)
         assert result["materialized"]["kind"] == "register_run"
         assert _argv_kind_for(result["candidates"], "main.py") == "argparse"
+
+
+class TestSolverDetection:
+    """A candidate whose source contains a recognizable solver-library solve
+    loop carries the optional ``solver`` field, so onboarding can offer the
+    checkpoint-instrumented wrapper for it."""
+
+    def test_petsc_ts_candidate_flagged(self, tmp_path: Path) -> None:
+        (tmp_path / "main.py").write_text(
+            "import argparse\n"
+            "from petsc4py import PETSc\n"
+            "def main():\n"
+            "    ts = PETSc.TS().create()\n"
+            "    ts.setFromOptions()\n"
+            "    ts.solve(u)\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        (candidate,) = [c for c in result["candidates"] if c["path"] == "main.py"]
+        # Solver detection is orthogonal to argv classification.
+        assert candidate["argv_kind"] == "argparse"
+        assert candidate["solver"] == "petsc"
+
+    def test_non_solver_candidate_omits_field(self, tmp_path: Path) -> None:
+        (tmp_path / "train.py").write_text("import argparse\nprint('no solver here')\n")
+        result = dep.detect_entry_point(experiment_dir=tmp_path)
+        (candidate,) = [c for c in result["candidates"] if c["path"] == "train.py"]
+        assert "solver" not in candidate

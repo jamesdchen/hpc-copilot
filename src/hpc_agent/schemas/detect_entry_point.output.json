@@ -98,7 +98,7 @@
       "additionalProperties": false,
       "title": "Candidate",
       "type": "object",
-      "description": "One entry-point candidate: its path (relative to the experiment dir, or the registered command name for a console script) plus the classified argv style.",
+      "description": "One entry-point candidate: its path (relative to the experiment dir, or the registered command name for a console script) plus the classified argv style, plus — when a known solver library was recognized in the source — the solver adapter that can checkpoint-instrument it.",
       "required": [
         "path",
         "argv_kind"
@@ -123,6 +123,14 @@
           "type": "string",
           "title": "Argv Kind",
           "description": "The candidate's CLI surface. Python files: ``argparse`` / ``click`` / ``typer`` / ``hydra`` / ``fire`` (by import + decorator), or ``__main__`` for a bare ``if __name__`` block or a package ``__main__.py`` with no recognized library. ``console_script`` for a ``[project.scripts]`` entry; ``shell`` for a non-Python ``run.sh`` / ``launch.sh`` / binary."
+        },
+        "solver": {
+          "enum": [
+            "petsc"
+          ],
+          "type": "string",
+          "title": "Solver",
+          "description": "Present when a known solver library's solve loop was detected in the candidate's source (AST match: petsc4py import + a PETSc.TS()/PETSc.SNES() construction + a .solve() call). Signals that the checkpoint-instrumented wrapper (``entry_point.solver`` on the interview intent) is available for this candidate — the library owns the iteration loop, so checkpointing injects via its monitor/options hooks rather than the executor loop helpers."
         }
       }
     }
