@@ -11,7 +11,7 @@ backed_by:
     <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>]
     [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>]
     [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures
-    <circuit_breaker_failures>]
+    <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>]
   python: hpc_agent.meta.campaign.atoms.advance.campaign_advance
 ---
 # campaign-advance
@@ -22,10 +22,17 @@ backed_by:
 > is for debugging and bespoke campaign loops.
 
 Recommend the next action for a running campaign by composing
-`campaign-status`, `campaign-converged`, and `campaign-budget`
-into a single decision. Returns one of `continue`,
-`stop_converged`, `stop_over_budget`, or `wait_in_flight` plus a
-human-readable `reason`.
+`campaign-status`, `campaign-converged`, `campaign-budget`, the
+loop-safety circuit breaker, and the per-task resubmit cap into a
+single decision. Returns one of `continue`, `stop_converged`,
+`stop_over_budget`, `stop_circuit_breaker`, `stop_resubmit_cap`, or
+`wait_in_flight` plus a human-readable `reason`.
+
+`stop_over_budget` is a halt the loop **cannot** silently pass: it
+stays armed (with `needs_acknowledgement: true` on the return) until
+the realised spend is explicitly acknowledged via
+[`campaign-acknowledge-budget`](campaign-acknowledge-budget.md). See
+that primitive for the snapshot/stale-ack semantics.
 
 ## Composers
 
@@ -48,9 +55,11 @@ primitive.
   campaign manifest (`<campaign_dir>/manifest.json`) is the
   durable home for these values, but `campaign-advance` re-reads
   them on every invocation.
-- **First-match-wins ordering.** When multiple decisions could
-  fire (converged AND over budget), `stop_converged` wins over
-  `stop_over_budget` over `wait_in_flight` over `continue`.
+- **First-match-wins ordering.** The decision ladder is
+  `stop_over_budget` → `wait_in_flight` → `stop_circuit_breaker` →
+  `stop_resubmit_cap` → `stop_converged` → `continue`. The
+  loop-safety halts sit *after* `wait_in_flight` so an in-flight
+  retry gets the chance to succeed before they fire.
 
 ## Coupling
 
@@ -58,8 +67,8 @@ primitive.
   semantics in `campaign-budget`. Adding a new criterion means
   adding it to the composing primitive AND threading the new
   kwarg through `campaign-advance`.
-- The four `decision` enum values are the public contract. Adding
-  one is a wire-breaking change; downstream agents key on the set.
+- The `decision` enum values are the public contract. Adding one is
+  a wire-breaking change; downstream agents key on the set.
 
 ## Failure modes
 

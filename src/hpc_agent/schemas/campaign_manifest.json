@@ -252,6 +252,20 @@
           "default": null,
           "description": "Loop-safety circuit breaker. ``campaign-advance`` emits ``stop_circuit_breaker`` when this many of the most recent iterations failed consecutively (terminal failed/abandoned runs, in submit order). No framework default — omitted means no breaker.",
           "title": "Circuit Breaker Failures"
+        },
+        "max_task_resubmits": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Loop-safety resubmit cap. ``campaign-advance`` emits ``stop_resubmit_cap`` when any single task slot has accrued this many resubmit attempts summed across all the campaign's runs — the campaign-level extension of the within-run auto-retry cap. No framework default — omitted means no cap.",
+          "title": "Max Task Resubmits"
         }
       },
       "title": "_StopCriteria",

@@ -186,6 +186,14 @@ A single iteration's failure shows up in the `/submit-hpc` envelope and as a `fa
 
 The framework deliberately ships no automatic retry policy at the campaign level. `cmd_failures`'s per-task auto-retry (with caps from `runner.DEFAULT_AUTO_RETRY_POLICY`) operates within a single run sidecar and is orthogonal.
 
+### Loop-safety governors (#224)
+
+For unattended campaigns, `campaign-advance` exposes halts the loop cannot run away past — all opt-in (no framework default), durable in the manifest, and surfaced as `stop_*` decisions:
+
+- **`--circuit-breaker-failures N`** — halt (`stop_circuit_breaker`) after N consecutive failed/abandoned iterations.
+- **`--max-task-resubmits N`** — halt (`stop_resubmit_cap`) when any single task slot has accrued N resubmit attempts summed across the campaign's runs. This is the campaign-level extension of the within-run auto-retry cap, which resets every fresh run.
+- **Budget caps** (`--max-core-hours`, `--max-walltime-sec`, …) — halt (`stop_over_budget`) once realised spend meets the cap. This halt is *sticky*: `campaign-advance` returns `needs_acknowledgement: true` and keeps halting until the spend is explicitly acknowledged via [`campaign-acknowledge-budget`](../primitives/campaign-acknowledge-budget.md). A bare acknowledgement snapshots spend and buys one more leg (it goes stale as soon as more compute is burned); pass raised caps to the same primitive for durable headroom.
+
 ## Patterns out of scope
 
 | Pattern | Why deferred |

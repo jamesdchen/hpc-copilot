@@ -133,14 +133,14 @@
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>]",
+    "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-advance",
     "output_schema": "campaign.output.json",
     "python": "hpc_agent.meta.campaign.atoms.advance.campaign_advance",
     "side_effects": [],
-    "summary": "Decide the next campaign action (continue / stop_converged / stop_over_budget / stop_circuit_breaker / wait_in_flight).",
+    "summary": "Decide the next campaign action (continue / stop_converged / stop_over_budget / stop_circuit_breaker / stop_resubmit_cap / wait_in_flight).",
     "verb": "query"
   },
   {
@@ -728,7 +728,21 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]",
+    "cli": "hpc-agent campaign acknowledge-budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--note <note>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-acknowledge-budget",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.meta.campaign.atoms.acknowledge_budget.campaign_acknowledge_budget",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "summary": "Acknowledge a campaign budget halt so the loop may continue. Snapshots current spend; optionally raises caps (written through to the manifest).",
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-init",

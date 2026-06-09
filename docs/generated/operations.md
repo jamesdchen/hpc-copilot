@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**90 operations total**: 79 primitive atoms + 11 workflow atoms.
+**91 operations total**: 80 primitive atoms + 11 workflow atoms.
 
 ## How to read this page
 
@@ -20,7 +20,7 @@ Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`campaign-advance`](../primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>]` | `_(none)_` | — | — |
+| [`campaign-advance`](../primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>]` | `_(none)_` | — | — |
 | [`campaign-budget`](../primitives/campaign-budget.md) | ✓ | _none_ | `hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]` | `_(none)_` | — | — |
 | [`campaign-converged`](../primitives/campaign-converged.md) | ✓ | _none_ | `hpc-agent campaign converged [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>]` | `_(none)_` | — | — |
 | [`campaign-health`](../primitives/campaign-health.md) | ✓ | _none_ | `hpc-agent campaign health [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--since-iso <since_iso>] [--profile <profile>] [--cluster <cluster>]` | `_(none)_` | — | — |
@@ -109,7 +109,7 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](../primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `_(none)_` | — | — |
 
-## `scaffold` (12)
+## `scaffold` (13)
 
 Creates new files (e.g. starter executor templates).
 
@@ -120,7 +120,8 @@ Creates new files (e.g. starter executor templates).
 | [`build-submit-spec`](../primitives/build-submit-spec.md) | ✓ | _none_ | `hpc-agent build-submit-spec --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`build-tasks-py`](../primitives/build-tasks-py.md) | ✓ | writes-sidecar | `hpc-agent build-tasks-py [--experiment-dir <dir>] --spec <spec> [--force]` | `_(none)_` | — | — |
 | [`build-template`](../primitives/build-template.md) | ✓ | writes-file | `hpc-agent build-template [--repo-dir <repo_dir>] [--force] [--shape <shape>]` | `_(none)_` | — | — |
-| [`campaign-init`](../primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]` | `_(none)_` | — | — |
+| [`campaign-acknowledge-budget`](../primitives/campaign-acknowledge-budget.md) | ✓ | writes-sidecar | `hpc-agent campaign acknowledge-budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--note <note>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]` | `_(none)_` | — | — |
+| [`campaign-init`](../primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]` | `_(none)_` | — | — |
 | [`classify-axis`](../primitives/classify-axis.md) | ✓ | writes-sidecar | `hpc-agent classify-axis --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`export-package`](../primitives/export-package.md) | ✓ | writes-sidecar | `hpc-agent export-package [--experiment-dir <dir>] [--force]` | `_(none)_` | — | — |
 | [`install-commands`](../primitives/install-commands.md) | ✓ | filesystem | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` | `_(none)_` | — | — |

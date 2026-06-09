@@ -44,6 +44,7 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
     "campaign-converged": "campaign converged",
     "campaign-budget": "campaign budget",
     "campaign-advance": "campaign advance",
+    "campaign-acknowledge-budget": "campaign acknowledge-budget",
     "campaign-health": "campaign health",
     "clusters-list": "clusters list",
     "clusters-describe": "clusters describe",

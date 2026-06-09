@@ -5,6 +5,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.39 — 2026-06-09
+
+### Added — budget-halt acknowledgement + campaign-level per-task resubmit cap (#224)
+
+Closes the two remaining gaps in the budget governor / loop-safety work (#224). The accounting, the hard `stop_over_budget` ceiling, the consecutive-failure circuit breaker, and durable manifest caps already landed; what was missing was (1) an explicit-acknowledgement-to-resume mode after a budget halt, and (2) a per-task resubmit cap at the *campaign* level (the within-run `DEFAULT_AUTO_RETRY_POLICY` cap resets every fresh run).
+
+- **`stop_over_budget` is now a halt the loop cannot silently pass.** `campaign-advance`'s budget rule consults a durable acknowledgement at `<campaign_dir>/budget_ack.json`: once a cap is met it keeps returning `stop_over_budget` with `needs_acknowledgement: true` until the spend is explicitly acknowledged. The new **`campaign-acknowledge-budget`** primitive writes that ack as a **snapshot of realised spend**. Because spend is monotonic, the ack authorises continuing only while spend stays at the snapshot — the next task that burns compute makes it stale and re-arms the halt, so a bare ack buys exactly one more leg (self-limiting, no infinite-bypass foot-gun). Passing raised caps (`--max-core-hours` etc.) enlarges the budget in the same audited gesture, written through to the manifest (other sections preserved) for durable headroom. Ack reads are conservative: a malformed/missing ack reads as "no acknowledgement" and can never relax the halt.
+- **New `stop_resubmit_cap` decision.** A new `resubmit_cap` atom sums `RunRecord.retries[tid]["attempts"]` per task slot across all the campaign's runs (derived from existing journal state — no new persistence); `campaign-advance` emits `stop_resubmit_cap` when the worst slot meets the supplied cap. Like the circuit breaker it sits *after* `wait_in_flight` so an in-flight retry gets its chance first. Surfaced as `--max-task-resubmits` on `campaign-advance` / `campaign-init`, durable in the manifest under `stop_criteria.max_task_resubmits`, and defaulting from there when the arg is omitted — matching the existing caps.
+- The decision ladder is now `stop_over_budget` → `wait_in_flight` → `stop_circuit_breaker` → `stop_resubmit_cap` → `stop_converged` → `continue`; the `DeterministicCampaignResolver` already treats any non-`continue` decision as a decided clean terminal, so both new halts flow through unchanged.
+- Tests: `tests/meta/campaign/atoms/test_resubmit_cap.py` (per-slot accounting, manifest defaulting, in-flight precedence, init persistence) and `test_budget_ack.py` (halt-until-acked, acknowledge-then-continue, ack-goes-stale-on-more-spend, raise-cap-clears-halt + preserves other manifest sections).
+
 ## 0.10.38 — 2026-06-09
 
 ### Added — a deterministic, LLM-free campaign judgement resolver (#220 Phase 1)

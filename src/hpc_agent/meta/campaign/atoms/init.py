@@ -76,6 +76,17 @@ if TYPE_CHECKING:
                     "read by campaign-advance. No framework default."
                 ),
             ),
+            CliArg(
+                "--max-task-resubmits",
+                type=int,
+                default=None,
+                help=(
+                    "Loop-safety halt: stop when any task slot accrues this "
+                    "many resubmit attempts across the campaign's runs. "
+                    "Persisted into stop_criteria; read by campaign-advance. "
+                    "No framework default."
+                ),
+            ),
             CliArg("--strategy-name", type=str, default=None),
             CliArg(
                 "--strategy-params-json",
@@ -105,6 +116,7 @@ def campaign_init(
     max_walltime_sec: int | None = None,
     max_core_hours: float | None = None,
     circuit_breaker_failures: int | None = None,
+    max_task_resubmits: int | None = None,
     strategy_name: str | None = None,
     strategy_params_json: str | None = None,
 ) -> dict[str, Any]:
@@ -138,6 +150,7 @@ def campaign_init(
             plateau_tolerance,
             plateau_mode,
             circuit_breaker_failures,
+            max_task_resubmits,
         )
     ):
         stop_criteria = {}
@@ -157,6 +170,8 @@ def campaign_init(
             stop_criteria["plateau_mode"] = plateau_mode
         if circuit_breaker_failures is not None:
             stop_criteria["circuit_breaker_failures"] = circuit_breaker_failures
+        if max_task_resubmits is not None:
+            stop_criteria["max_task_resubmits"] = max_task_resubmits
 
     strategy: dict[str, Any] | None = None
     if strategy_name is not None:

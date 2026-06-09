@@ -55,6 +55,17 @@ class _StopCriteria(BaseModel):
             "no breaker."
         ),
     )
+    max_task_resubmits: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Loop-safety resubmit cap. ``campaign-advance`` emits "
+            "``stop_resubmit_cap`` when any single task slot has accrued this "
+            "many resubmit attempts summed across all the campaign's runs — "
+            "the campaign-level extension of the within-run auto-retry cap. "
+            "No framework default — omitted means no cap."
+        ),
+    )
 
 
 class _Strategy(BaseModel):
