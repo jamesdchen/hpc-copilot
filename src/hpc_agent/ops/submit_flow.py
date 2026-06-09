@@ -1166,6 +1166,12 @@ def _submit_one_spec(
         job_env=job_env_full,
         auto_resume_on_kill=spec.auto_resume_on_kill,
         max_auto_resumes=spec.max_auto_resumes,
+        # #240 resolve-and-recover opt-in — persist the general-resolver
+        # auto-act policy + cap alongside the #299 auto-resume keystone. Same
+        # default-OFF zero-blast-radius posture: a spec that didn't set
+        # auto_recover_on_failure is never auto-recovered.
+        auto_recover_on_failure=spec.auto_recover_on_failure,
+        max_auto_recovers=spec.max_auto_recovers,
     )
 
     if spec.partial_ok:

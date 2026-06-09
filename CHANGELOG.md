@@ -5,6 +5,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.38 — 2026-06-09
+
+### Added — a deterministic, LLM-free campaign judgement resolver (#220 Phase 1)
+
+The headless campaign driver advances a judgement (`kind="agent"`) step through an injected `JudgementResolver`; the default (`default_judgement_resolver`) spawns a fresh-context LLM worker (`claude -p` via `run_workflow`). #220's goal is to decouple the driver from Claude so any agent — or no agent — can drive it. This lands Phase 1: a **`DeterministicCampaignResolver`** that executes the campaign `decide` / cold-`submit` judgement steps **in code** by chaining the existing deterministic primitives, with **zero worker/LLM spawn** on the common `decided_by="code"` path.
+
+- **New, injectable artifact — the default resolver is untouched (that's Phase 2).** A caller opts in by injecting it into `CampaignLoopConfig(resolver=...)`; the new `deterministic_campaign_config()` helper builds that config (default monitor/aggregate step table intact). It lives in `meta.campaign` because the dependency points campaign → drive (`drive.py` must not import campaign), mirroring how `driver.py` already supplies the loop's policy.
+- **The chain (verified against the on-disk primitives, not assumed).** For `decide`: `classify-campaign-path` (manual grid vs strategy) → `campaign-advance` (the deterministic stop/continue ladder) → on `continue`, reconstruct the next iteration's submit context from the prior run's journal record (`ssh_target`/cluster/profile/remote_path) + sidecar config snapshot (executor/result_dir_template/env-activation/resources/runtime), run `resolve-submit-inputs` to build + validate the submit-flow spec and write the per-run sidecar, submit via an injected cluster-I/O seam, then `advance_cursor`. The `prepare-followup-specs` hypothesis in the issue was wrong (it pre-stages *monitor/aggregate* specs at submit time, not the next-iteration submit); the actual bridge is `resolve-submit-inputs` → submit.
+- **Residue policy: halt-and-park, never guess (#231/#234/#240 posture).** When a backing primitive escalates — `classify-campaign-path` returns `unclassifiable` (`decided_by="judgement"`), `resolve-submit-inputs` returns `needs_decision` (live prior run / scaffold interview), or a cold submit has no prior run to rebuild from — the resolver surfaces the escalation as data in the synthesized `WorkerReport` and returns a non-zero exit so the neutral loop stops cleanly rather than blind-submitting. A non-`continue` `campaign-advance` decision (`stop_*`/`wait_in_flight`) is a *decided* clean terminal (exit 0), not residue.
+- **The synthesized `WorkerReport` is contract-valid:** it round-trips through `parse_worker_report`, reporting only `code`-decided points (no `why` required) — the same validation the LLM path's reports pass.
+- Tests: a new end-to-end suite (`tests/meta/campaign/test_deterministic_resolver_e2e.py`) drives the resolver over a seeded strategy-driven campaign and asserts the `continue`→next-submit path (cluster I/O stubbed, zero LLM spawn, cursor advanced), the unclassifiable-path and cold-submit residue cases (non-zero exit, escalation surfaced, no blind submit), the decided-stop clean terminal, and the report round-trip.
+
+## 0.10.37 — 2026-06-09
+
+### Added — surface the resolve-and-recover opt-in through the submit spec (#240, #234)
+
+0.10.35 wired `maybe_resolve_and_recover` into the monitor's `FAILED` tick but left it "behavior-neutral until a run opts in" — and there was no way to opt in. The gate it reads, `RunRecord.auto_recover_on_failure`, had **no producer**: neither `SubmitFlowSpec` nor the `submit_and_record` sink carried the field, so it could only ever be its default `False` and the freshly-wired hook could never fire. This adds the missing producer so the seam is reachable, mirroring the blessed #299 `auto_resume_on_kill` keystone end to end:
+
+- **`SubmitFlowSpec` gains `auto_recover_on_failure` (default `False`) + `max_auto_recovers` (default 2).** Same default-OFF zero-blast-radius posture as `auto_resume_on_kill`, and independent of it — `auto_resume_on_kill` stays preempt-only; enabling the general deterministic resolver is a deliberate separate choice. The five `*.input.json` schemas that embed the submit spec are regenerated.
+- **`submit_flow` threads `spec.auto_recover_on_failure` / `spec.max_auto_recovers` into `submit_and_record`,** which persists them onto the journal `RunRecord` on both the fresh-submit and the journal-wiped reconstruction paths (so a cross-machine resubmit keeps the opt-in alive instead of silently reverting to default-OFF), exactly as the auto-resume keystone is carried.
+- **No new behavior for existing runs:** a spec that does not set the opt-in writes `False`, and the monitor's resolve-and-recover hook stays computed-and-surfaced-only (no resubmit, no park) — the #283 posture is unchanged.
+- Tests: a new end-to-end suite (`tests/ops/test_resolve_and_recover_opt_in_e2e.py`) drives the opt-in through the *real* submit plumbing into the persisted record and then through the *real* composite (only the failure fetch + `resubmit_flow` injected) to an actual code-verdict resubmit with the translated mem override; plus the default-OFF path proven side-effect-free through the same plumbing. This closes the gap the composite tests (which seed the record directly) and the monitor tests (which fake the composite) left open.
 ## 0.10.36 — 2026-06-09
 
 ### Changed — split the per-harness decode-schema gate; pre-author the strict WorkerReport variant (#269)

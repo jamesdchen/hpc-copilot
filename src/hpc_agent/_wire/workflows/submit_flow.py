@@ -230,6 +230,32 @@ class SubmitFlowSpec(BaseModel):
             "'cap reached'. Ignored when auto_resume_on_kill is false."
         ),
     )
+    auto_recover_on_failure: bool = Field(
+        default=False,
+        description=(
+            "Opt-in automatic deterministic recovery on a non-preempt FAILED "
+            "tick (#240 / #234). Default OFF: a run that does not set this is "
+            "NEVER auto-recovered — the monitor's resolve-and-recover hook still "
+            "computes and surfaces the verdict-as-data (#283) but takes no side "
+            'effect. When ON, a ``decided_by="code"`` verdict under the cap is '
+            "auto-resubmitted with the resolver's refined overrides; a "
+            '``decided_by="judgement"`` verdict is always parked, never '
+            "auto-acted. Independent of auto_resume_on_kill (which stays "
+            "preempt-only) — enabling general auto-recovery is a deliberate "
+            "separate choice."
+        ),
+    )
+    max_auto_recovers: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Hard cap on automatic code-verdict resubmits for this run when "
+            "auto_recover_on_failure is set (#240). The ultimate backstop: even "
+            "total misclassification can waste at most this many resubmits before "
+            "the composite parks with 'cap reached'. Ignored when "
+            "auto_recover_on_failure is false."
+        ),
+    )
     resources: SubmitResources | None = Field(
         default=None,
         description=(
