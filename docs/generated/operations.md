@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**92 operations total**: 81 primitive atoms + 11 workflow atoms.
+**93 operations total**: 82 primitive atoms + 11 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (43)
+## `query` (44)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -33,6 +33,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`clusters-describe`](../primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `_(none)_` | — | — |
 | [`clusters-list`](../primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `_(none)_` | — | — |
 | [`compute-run-id`](../primitives/compute-run-id.md) | ✓ | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` | `_(none)_` | — | — |
+| [`dag-frontier`](../primitives/dag-frontier.md) | ✓ | _none_ | `hpc-agent dag-frontier [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`decide-concurrency`](../primitives/decide-concurrency.md) | ✓ | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` | `_(none)_` | — | — |
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `_(none)_` | — | — |
 | [`decide-partial-handling`](../primitives/decide-partial-handling.md) | ✓ | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` | `_(none)_` | — | — |

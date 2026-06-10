@@ -14,6 +14,7 @@
     "stage_reached": {
       "description": "Which stage the pipeline reached / stopped at.",
       "enum": [
+        "parents_not_ready",
         "deduped",
         "canary_failed",
         "verify_submitted_failed",
@@ -129,6 +130,121 @@
       "default": null,
       "description": "The verify-submitted ``data`` on a ``verify_submitted_failed`` stage (the error/held/missing job ids + states the caller surfaces).",
       "title": "Verify Submitted Result"
+    },
+    "parent_states": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-parent observed state on a ``parents_not_ready`` stage (run_id → complete/in_flight/failed/abandoned/missing/unknown), so the caller can render the whole dependency frontier; None when the gate did not fire.",
+      "title": "Parent States"
+    },
+    "parents_ready_findings": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/ValidatorFinding"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "validate-parents-ready findings on a ``parents_not_ready`` stage — one per not-ready parent, each carrying a state-specific suggested_fix; None otherwise.",
+      "title": "Parents Ready Findings"
+    }
+  },
+  "$defs": {
+    "ValidatorFinding": {
+      "additionalProperties": false,
+      "description": "One actionable finding emitted by a single atomic validator.\n\nShared across every validator so the agent loop can branch on\n``code`` uniformly. Fields:\n\n* ``validator`` — name of the validator that emitted the finding\n  (e.g. ``\"validate-executor-signatures\"``); the workflow report\n  collects findings from every atom and prefixes by validator so\n  the agent knows where each came from.\n* ``severity`` — ``\"error\"`` blocks submission, ``\"warning\"`` is\n  informational, ``\"info\"`` is purely advisory.\n* ``code`` — machine-readable enum the agent branches on (e.g.\n  ``\"missing_parameter\"``, ``\"row_index_oob\"``,\n  ``\"walltime_below_p95\"``).\n* ``message`` — human-readable summary surfaced in the report.\n* ``suggested_fix`` — optional hint for the agent (\"increase\n  walltime to >= 7200s\" / \"use --gpu a100\"). Lets the agent loop\n  apply a fix without LLM-reasoning the recovery path.\n* ``evidence`` — validator-specific raw values (the ``p95_sec``,\n  the ``requested_walltime_sec``, the missing ``param_name``).\n* ``file`` / ``line`` — when the finding is sourced from a code\n  location (executor module, tasks.py), surface it for line-level\n  evidence.",
+      "properties": {
+        "validator": {
+          "minLength": 1,
+          "title": "Validator",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "suggested_fix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Fix"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        }
+      },
+      "required": [
+        "validator",
+        "severity",
+        "code",
+        "message"
+      ],
+      "title": "ValidatorFinding",
+      "type": "object"
     }
   }
 }

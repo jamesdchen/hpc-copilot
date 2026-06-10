@@ -51,11 +51,12 @@ result. No SSH, no qsub.
 
 ## Notes
 
-- **Compose BEFORE a parented `submit-flow`.** The submit path deliberately
-  does not enforce readiness (same stance as `validate-stochastic-marker` vs
-  the campaign loop): the workflow stays mechanical, the gate is an
-  independently-skippable validator. Skip it only when the caller has just
-  watched the parents complete.
+- **Composed mechanically by `submit-pipeline`** when the embedded submit
+  spec declares `parents` (self-skipping otherwise — a 0-parent spec never
+  reaches it); the pipeline returns a typed `parents_not_ready` refusal on
+  findings. The bare `submit-flow` verb stays unenforced: callers who
+  hand-walk the verbs compose this one themselves, BEFORE a parented
+  submit.
 - **`unknown` is conservative.** A sidecar without a journal record can mean
   the run is in flight on another machine or that the journal was wiped — the
   validator cannot prove terminal, so it refuses. If the run is known

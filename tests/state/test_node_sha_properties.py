@@ -1,12 +1,12 @@
 """Property-based tests for ``compose_node_sha``.
 
-The function is the recursive-identity step of the DAG-kernel proposal
+The function is the recursive-identity step of the DAG kernel
 (``docs/design/dag-kernel.md``): a run that consumes another run's
 outputs must change identity whenever its ancestor does, or memoized
-resume over a run graph silently reuses stale subgraphs. The properties
-pinned here are the entire contract — the function is not yet wired into
-``find_run_by_cmd_sha`` / sidecars, so these tests are what hold the
-invariant until it is.
+resume over a run graph silently reuses stale subgraphs. These
+properties are the algebra's contract; the submit-side wiring around it
+(``resolve_node_sha`` → sidecar → effective-identity dedup) is pinned
+separately in ``test_node_sha_wiring.py``.
 
 Properties pinned here:
 

@@ -289,6 +289,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent dag-frontier [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "dag-frontier",
+    "output_schema": null,
+    "python": "hpc_agent.ops.dag_frontier.dag_frontier",
+    "side_effects": [],
+    "summary": "Read-only view of the recorded run graph: per-node lifecycle state + parent edges (from sidecar parent_run_ids), the frontier of complete runs eligible to serve as parents, and per-node blocking ancestors. Pure local read; the walker's observation instrument — it computes, never submits.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]",
     "idempotent": true,
     "input_schema": null,

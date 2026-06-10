@@ -5,6 +5,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.57 — 2026-06-10
+
+### Added — the DAG walker's mechanical halves: readiness gate in submit-pipeline + dag-frontier
+
+Two pieces of caller-side topology walking ([`docs/design/dag-kernel.md`](docs/design/dag-kernel.md) step 5) pass the prove-mechanical test by inspection — neither is a loop, neither embeds policy — so they convert to code now rather than waiting for walk history:
+
+- **`submit-pipeline` composes `validate-parents-ready`.** When the embedded submit spec declares `parents`, the pipeline runs the readiness gate first and returns a typed `stage_reached: "parents_not_ready"` refusal (with `parent_states` + per-parent `parents_ready_findings`) before anything touches the cluster — previously the gate was composed only by skill prose, so nothing mechanical stopped a child from being submitted over a half-written parent. A 0-parent spec never reaches the gate (the pipeline-level degeneracy: pre-DAG behavior byte-for-byte unchanged, validator not even called — pinned by test). It is a gate, not a loop: wait/fix/drop-the-edge stays caller judgment. Same-subject composition (`ops`), so the `validate-campaign` exclusion rationale doesn't apply.
+- **`dag-frontier`** (new query verb, `hpc-agent dag-frontier`): read-only reconstruction of the recorded run graph from sidecar `parent_run_ids` — per-node lifecycle state, the complete-runs frontier (eligible parents for the next submits), transitive `blocking_ancestors`, dangling-edge (`missing`, pruned parent) and forged-cycle safety. The ∀-nodes lift of `validate-parents-ready`; both share the new public `observe_run_state` so the surfaces cannot disagree. Deliberately NOT a walker — it computes and stops; it also instruments hand-walks, producing the uniform evidence the earn-it rule needs before any advance-tick/graph-runner composite is considered.
+
+The advance tick and the full graph runner stay caller-side per the earn-it rule (zero recorded walks; mid-graph failure policy and concurrency are unsettled judgment).
+
+Drive-by: `test_node_sha_properties.py`'s header still claimed `compose_node_sha` was "not yet wired into `find_run_by_cmd_sha` / sidecars" — false since 0.10.51; it now points at `test_node_sha_wiring.py` as the wiring contract.
+
 ## 0.10.56 — 2026-06-10
 
 ### Changed — submit canvass asks once: persisted submit policy + no speculative `data_axis`

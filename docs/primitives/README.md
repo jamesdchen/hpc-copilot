@@ -98,6 +98,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [compute-run-id](compute-run-id.md) | yes | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` |
+| [dag-frontier](dag-frontier.md) | yes | _none_ | `hpc-agent dag-frontier [--experiment-dir <dir>]` |
 | [decide-concurrency](decide-concurrency.md) | yes | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
 | [decide-partial-handling](decide-partial-handling.md) | yes | _none_ | `hpc-agent decide-partial-handling --failed-count <failed_count> --combined-count <combined_count> [--retries-exhausted]` |

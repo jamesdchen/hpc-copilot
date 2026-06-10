@@ -10,7 +10,14 @@ hand-walking (and hand-branching) the four verbs.
 
 Composition (all ``ops``-subject verbs, so no cross-subject import):
 
-    submit-and-verify  →  verify-submitted  →  prepare-followup-specs
+    [validate-parents-ready]  →  submit-and-verify  →  verify-submitted  →  prepare-followup-specs
+
+The DAG readiness gate runs only when the embedded submit spec declares
+``parents`` (docs/design/dag-kernel.md) — a 0-parent spec never reaches it,
+so the pre-DAG pipeline is byte-for-byte unchanged. It is a *gate*, not a
+loop: on a not-ready parent the pipeline returns a typed
+``parents_not_ready`` refusal; whether to wait, fix, or drop the edge stays
+the caller's decision.
 
 The genuine judgement points (axis classification, entry-point, env
 selection) stay UPSTREAM of this spine as escalations — this composite is
@@ -27,6 +34,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
+from hpc_agent._wire.workflows.validate_campaign import (
+    ValidatorFinding,  # noqa: TC001 — Pydantic resolves the annotation at runtime
+)
 
 
 class SubmitPipelineSpec(BaseModel):
@@ -62,6 +72,7 @@ class SubmitPipelineResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="submit-pipeline output data")
 
     stage_reached: Literal[
+        "parents_not_ready",
         "deduped",
         "canary_failed",
         "verify_submitted_failed",
@@ -107,5 +118,20 @@ class SubmitPipelineResult(BaseModel):
         description=(
             "The verify-submitted ``data`` on a ``verify_submitted_failed`` stage "
             "(the error/held/missing job ids + states the caller surfaces)."
+        ),
+    )
+    parent_states: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Per-parent observed state on a ``parents_not_ready`` stage (run_id → "
+            "complete/in_flight/failed/abandoned/missing/unknown), so the caller can "
+            "render the whole dependency frontier; None when the gate did not fire."
+        ),
+    )
+    parents_ready_findings: list[ValidatorFinding] | None = Field(
+        default=None,
+        description=(
+            "validate-parents-ready findings on a ``parents_not_ready`` stage — one per "
+            "not-ready parent, each carrying a state-specific suggested_fix; None otherwise."
         ),
     )

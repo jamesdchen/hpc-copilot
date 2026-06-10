@@ -307,10 +307,11 @@ class SubmitFlowSpec(BaseModel):
             "never silently replay this child's stale results. Opaque "
             "lineage only: the framework hands paths across the edge "
             "(parent_records()), never interprets them. Readiness is NOT "
-            "checked here — compose validate-parents-ready first. Callers "
-            "that need the lineage cluster-side forward it themselves via "
-            "job_env (HPC_PARENT_RUN_IDS), same convention as "
-            "HPC_CAMPAIGN_ID."
+            "checked by submit-flow itself — submit-pipeline composes "
+            "validate-parents-ready mechanically when parents is set; bare "
+            "submit-flow callers compose it themselves. Callers that need "
+            "the lineage cluster-side forward it via job_env "
+            "(HPC_PARENT_RUN_IDS), same convention as HPC_CAMPAIGN_ID."
         ),
     )
     runtime: Runtime | None = Field(default=None)

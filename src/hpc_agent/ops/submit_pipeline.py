@@ -10,16 +10,22 @@ the agent stops hand-walking (and hand-branching) the verbs.
 This is the control-flow-out-of-the-LLM pattern ``submit-and-verify`` started,
 extended one ring outward: where ``submit-and-verify`` absorbed the
 submit→verify→submit canary sub-loop, ``submit-pipeline`` absorbs the
-validate-gate-free spine around it.
+spine around it.
 
 Composition (all ``ops``-subject, so no cross-subject import):
 
-    submit-and-verify  →  verify-submitted  →  prepare-followup-specs
+    [validate-parents-ready]  →  submit-and-verify  →  verify-submitted  →  prepare-followup-specs
+
+The DAG readiness gate (docs/design/dag-kernel.md) runs only when the
+embedded submit spec declares ``parents`` — a 0-parent spec never reaches
+it. It is a gate, not a loop: on a not-ready parent the pipeline returns a
+typed ``parents_not_ready`` refusal before anything touches the cluster;
+wait/fix/drop-the-edge stays the caller's decision.
 
 Escalation-as-data (#231): the only outcomes that set ``needs_decision=True``
-are the genuine gate failures — a canary that failed verification, or
-submitted jobs that did not land clean. Everything else (``deduped`` /
-``complete``) is a terminal the agent just reports. The upstream judgement
+are the genuine gate failures — a not-ready declared parent, a canary that
+failed verification, or submitted jobs that did not land clean. Everything
+else (``deduped`` / ``complete``) is a terminal the agent just reports. The upstream judgement
 points (axis classification, entry-point, env) are NOT in this spine; they
 escalate before it runs.
 
@@ -39,6 +45,7 @@ from typing import TYPE_CHECKING
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent._wire.validators.validate_parents_ready import ValidateParentsReadySpec
 from hpc_agent._wire.workflows.submit_pipeline import (
     SubmitPipelineResult,
     SubmitPipelineSpec,
@@ -46,6 +53,7 @@ from hpc_agent._wire.workflows.submit_pipeline import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.prepare_followup_specs import prepare_followup_specs
 from hpc_agent.ops.submit_and_verify import submit_and_verify
+from hpc_agent.ops.validate.parents_ready import validate_parents_ready
 from hpc_agent.ops.verify_submitted import verify_submitted
 
 if TYPE_CHECKING:
@@ -57,7 +65,12 @@ __all__ = ["submit_pipeline"]
 @primitive(
     name="submit-pipeline",
     verb="workflow",
-    composes=["submit-and-verify", "verify-submitted", "prepare-followup-specs"],
+    composes=[
+        "validate-parents-ready",
+        "submit-and-verify",
+        "verify-submitted",
+        "prepare-followup-specs",
+    ],
     side_effects=[
         SideEffect("scheduler-submit", "<cluster>"),
         SideEffect("ssh", "<cluster> (canary poll + post-qsub state)"),
@@ -96,6 +109,34 @@ def submit_pipeline(experiment_dir: Path, *, spec: SubmitPipelineSpec) -> Submit
     never launched (#160) — and a failed post-qsub health check returns the
     offending job states under ``verify_submitted_result``.
     """
+    # 0. DAG readiness gate (docs/design/dag-kernel.md): fires only when the
+    # embedded submit spec declares parents, so a 0-parent spec is unchanged.
+    # A not-ready parent is a typed refusal BEFORE anything touches the
+    # cluster — a child submitted early would materialize its tasks from
+    # partial or absent parent outputs, silently. The escape hatch is
+    # inherent: a child that genuinely shouldn't wait doesn't declare the
+    # edge.
+    parents = spec.submit.submit.parents
+    if parents:
+        pr = validate_parents_ready(
+            experiment_dir, spec=ValidateParentsReadySpec(parent_run_ids=list(parents))
+        )
+        if pr.findings:
+            not_ready = [rid for rid, st in pr.parent_states.items() if st != "complete"]
+            return SubmitPipelineResult(
+                stage_reached="parents_not_ready",
+                needs_decision=True,
+                reason=(
+                    f"declared parent(s) not at terminal-success: {', '.join(not_ready)}. "
+                    "The submit did not run. Wait for / re-run the parents, or drop the "
+                    "edge if the child no longer consumes them (see findings for "
+                    "per-parent fixes)."
+                ),
+                run_id=spec.submit.submit.run_id,
+                parent_states=dict(pr.parent_states),
+                parents_ready_findings=list(pr.findings),
+            )
+
     # 1. Canary-gated submit (the #160 two-phase gate, run in code).
     sv = submit_and_verify(experiment_dir, spec=spec.submit)
 

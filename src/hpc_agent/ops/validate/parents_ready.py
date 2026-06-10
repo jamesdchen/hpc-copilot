@@ -7,10 +7,12 @@ The readiness piece of the DAG kernel (``docs/design/dag-kernel.md``):
 before a parent is ``complete`` materializes its tasks from partial or
 absent parent outputs, silently.
 
-Compose this BEFORE a parented ``submit-flow``; the submit path itself
-deliberately does not enforce readiness (same stance as
-``validate-stochastic-marker`` vs the campaign loop: the workflow stays
-mechanical, the gate is an independently-skippable validator).
+``submit-pipeline`` composes this mechanically when the embedded submit
+spec declares ``parents`` (self-skipping otherwise — a 0-parent spec
+never reaches it), returning a typed ``parents_not_ready`` refusal on
+findings. The bare ``submit-flow`` verb stays unenforced: callers who
+hand-walk the verbs compose this one themselves, BEFORE a parented
+submit.
 
 Pure local: sidecar reads + journal ``load_run``. No SSH.
 """
@@ -38,9 +40,13 @@ _VALIDATOR = "validate-parents-ready"
 _READY = {str(JournalStatus.COMPLETE)}
 
 
-def _observe_parent(experiment_dir: Path, run_id: str) -> str:
-    """Return the parent's observed state: a JournalStatus value,
-    ``missing`` (no sidecar), or ``unknown`` (sidecar, no journal record)."""
+def observe_run_state(experiment_dir: Path, run_id: str) -> str:
+    """Return a run's observed lineage state: a JournalStatus value,
+    ``missing`` (no sidecar), or ``unknown`` (sidecar, no journal record).
+
+    Shared by this validator (per declared parent) and ``dag-frontier``
+    (per recorded node) so the two surfaces can never disagree about what
+    a state means."""
     import json
 
     from hpc_agent.state.journal import load_run
@@ -85,7 +91,7 @@ def validate_parents_ready(
     parent_states: dict[str, str] = {}
 
     for run_id in dict.fromkeys(spec.parent_run_ids):  # de-dupe, keep order
-        state = _observe_parent(experiment_dir, run_id)
+        state = observe_run_state(experiment_dir, run_id)
         parent_states[run_id] = state
         if state in _READY:
             continue

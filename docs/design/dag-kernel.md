@@ -113,9 +113,11 @@ structure, there a linear iteration order, here an ancestry.
 3. **Landed.** `validate-parents-ready` (`ops.validate.parents_ready`):
    the ∀-parents quantifier over sidecar presence + journal lifecycle;
    ok iff every parent is `complete`. A pure-local `validate`-verb
-   primitive, composed before a parented submit the way
-   `validate-stochastic-marker` sits before a campaign submit —
-   independently skippable when no parents are declared.
+   primitive. `submit-pipeline` composes it mechanically when the
+   embedded spec declares `parents` (self-skipping otherwise), returning
+   a typed `parents_not_ready` refusal on findings — a gate, not a loop:
+   wait/fix/drop-the-edge stays caller judgment. Bare `submit-flow`
+   callers compose it themselves.
 4. **Landed.** `parent_records(experiment_dir, parent_run_ids)` in
    `reduce.history` — same record shape as `prior_records` but resolved
    from an explicit dependency set (ordered, deduped, fails loud on a
@@ -128,7 +130,14 @@ structure, there a linear iteration order, here an ancestry.
    with the campaign driver's on-disk-state-only design. A framework-side
    graph *runner* is out of scope until repeated mechanical agent walks
    justify a composite, per the `submit-pipeline`/`campaign-run`
-   precedent.
+   precedent. The walk's *observation* half is code, though:
+   `dag-frontier` reconstructs the recorded graph from sidecar
+   `parent_run_ids` (per-node lifecycle state, the complete-runs
+   frontier, transitive blocking ancestors — pure local read, shares
+   `observe_run_state` with the gate). It computes and stops; it also
+   instruments hand-walks, producing the uniform evidence "prove
+   mechanical" needs before any advance-tick/runner composite is
+   considered.
 
 ## Non-goals
 

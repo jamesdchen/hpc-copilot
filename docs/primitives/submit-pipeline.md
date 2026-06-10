@@ -48,11 +48,17 @@ out: `submit-and-verify` absorbed the submit→verify→submit canary sub-loop;
 ## Composition
 
 ```
-submit-and-verify  →  verify-submitted  →  prepare-followup-specs
+[validate-parents-ready]  →  submit-and-verify  →  verify-submitted  →  prepare-followup-specs
 ```
 
-All three are `ops`-subject verbs, so the composite needs no cross-subject
-import. The campaign-only `validate-campaign` gate is deliberately left out
+All four are `ops`-subject verbs, so the composite needs no cross-subject
+import. The DAG readiness gate (first, bracketed) fires only when the
+embedded submit spec declares `parents`
+([`docs/design/dag-kernel.md`](../design/dag-kernel.md)) — a 0-parent spec
+never reaches it, keeping the pre-DAG pipeline byte-for-byte unchanged. On a
+not-ready parent it returns a typed `parents_not_ready` refusal before
+anything touches the cluster; wait/fix/drop-the-edge stays the caller's
+decision. The campaign-only `validate-campaign` gate is deliberately left out
 (it lives in the `meta` subject and is campaign-specific).
 
 ## Inputs / outputs
