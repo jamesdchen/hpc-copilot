@@ -3,6 +3,8 @@
 Encodes hpc-status Step 6: 0 failures → complete; failed_fraction <=
 threshold → resubmit (boundary inclusive); failed_fraction > threshold →
 escalate with safe_default "investigate"; total_tasks < 1 → SpecInvalid.
+The default threshold is 0.0 — every failure escalates unless the caller
+opts into auto-resubmit by passing a threshold > 0.
 """
 
 from __future__ import annotations
@@ -20,16 +22,25 @@ def test_no_failures_is_complete() -> None:
     assert out["safe_default"] is None
 
 
-def test_below_threshold_resubmits() -> None:
-    # 5 / 100 = 0.05, below the default 0.10 threshold.
-    out = decide_resubmit(failed_count=5, total_tasks=100)
+def test_any_failure_escalates_under_default_threshold() -> None:
+    # Default threshold is 0.0: a single failure already escalates —
+    # auto-resubmit is an explicit caller opt-in, never the default.
+    out = decide_resubmit(failed_count=1, total_tasks=100)
+    assert out["action"] == "escalate"
+    assert out["threshold"] == 0.0
+    assert out["safe_default"] == "investigate"
+
+
+def test_below_opted_in_threshold_resubmits() -> None:
+    # 5 / 100 = 0.05, below the caller's explicit 0.10 threshold.
+    out = decide_resubmit(failed_count=5, total_tasks=100, resubmit_failed_threshold=0.10)
     assert out["action"] == "resubmit"
     assert out["safe_default"] is None
 
 
 def test_at_threshold_resubmits_boundary_inclusive() -> None:
     # failed_fraction == threshold (10 / 100 == 0.10) must still resubmit.
-    out = decide_resubmit(failed_count=10, total_tasks=100)
+    out = decide_resubmit(failed_count=10, total_tasks=100, resubmit_failed_threshold=0.10)
     assert out["failed_fraction"] == 0.10
     assert out["failed_fraction"] == out["threshold"]
     assert out["action"] == "resubmit"
@@ -37,8 +48,8 @@ def test_at_threshold_resubmits_boundary_inclusive() -> None:
 
 
 def test_above_threshold_escalates_with_investigate_default() -> None:
-    # 11 / 100 = 0.11, above the default 0.10 threshold.
-    out = decide_resubmit(failed_count=11, total_tasks=100)
+    # 11 / 100 = 0.11, above the caller's explicit 0.10 threshold.
+    out = decide_resubmit(failed_count=11, total_tasks=100, resubmit_failed_threshold=0.10)
     assert out["action"] == "escalate"
     assert out["safe_default"] == "investigate"
 

@@ -31,12 +31,13 @@ The split is part deterministic, part decision-as-data:
 
 - `failed_fraction == 0` → nothing failed; the lifecycle is actually
   `complete`.
-- `failed_fraction <= threshold` (default 10%) → `resubmit`. Low enough
-  loss that an automatic re-run is the right call.
-- `failed_fraction > threshold` → `escalate`. At a high failure rate,
-  auto-resubmitting usually wastes more cluster time re-running the same
-  bug. Rather than resubmit silently, the primitive surfaces the choice as
-  data, carrying `safe_default: "investigate"`.
+- `failed_fraction <= threshold` → `resubmit`. Only reachable when the
+  caller opted in by passing a threshold > 0 — they declared how much loss
+  an automatic re-run may absorb.
+- `failed_fraction > threshold` → `escalate`. Under the default threshold
+  of `0.0` this is every failure: auto-resubmitting can silently re-run
+  the same bug. Rather than resubmit silently, the primitive surfaces the
+  choice as data, carrying `safe_default: "investigate"`.
 
 The threshold boundary is **inclusive**: `failed_fraction == threshold`
 resubmits.

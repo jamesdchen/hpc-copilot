@@ -32,7 +32,7 @@ before comparison) or as already-parsed dicts on the in-process path.
 - `true` → the cached interview is authoritative (or there was nothing to
   diverge from); Step 3 continues.
 - `false` → the seam where `hpc-submit` branches on
-  `on_task_generator_mismatch` (`fail` / `refresh` / `prefer-caller`).
+  `on_task_generator_mismatch` (`fail` / `refresh`).
 
 On a mismatch, both canonical forms and their `sha256` are returned under
 `caller` / `cached` so the caller can surface BOTH shapes in a

@@ -6,8 +6,8 @@ WS5 #9. Canonical-JSON compare between a caller-supplied
 Returns a structured match/mismatch so the caller can short-circuit
 early: a match means the cached interview is authoritative and Step 3
 continues; a mismatch is the seam where ``hpc-submit`` must branch on
-``on_task_generator_mismatch`` (fail / refresh / prefer-caller) rather
-than silently letting a stale 8-seed generator shrink a 100-seed request.
+``on_task_generator_mismatch`` (fail / refresh) rather than silently
+letting a stale 8-seed generator shrink a 100-seed request.
 
 The comparison is by **canonical content**, not Python ``==``: both
 generators are normalized with ``json.dumps(..., sort_keys=True,
@@ -68,7 +68,7 @@ def _sha256(canonical: str) -> str:
             "the cached/derived one (hpc-submit Step 3). Returns match=true "
             "when their canonical content is identical, else match=false with "
             "both shapes + their sha256 so the caller can branch on "
-            "on_task_generator_mismatch (fail / refresh / prefer-caller)."
+            "on_task_generator_mismatch (fail / refresh)."
         ),
         verb="check-task-generator-mismatch",
         args=(

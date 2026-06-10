@@ -7,7 +7,7 @@ This is the layer **above** the in-worker pipeline parallelism of #277–#280 (w
 ## The flow
 
 1. **Parse `$ARGUMENTS`** into an initial spec (whatever the user pre-stated).
-2. **Fork.** In one message: (a) dispatch the `hpc-submit` skill in the **background** on the initial spec, running **autonomously** (apply each ambiguity's `safe_default`; do not pause for the user); (b) in the foreground, canvass the predictable runtime-behaviour questions and run the local config probes (see *Parallel startup*).
+2. **Fork.** In one message: (a) dispatch the `hpc-submit` skill in the **background** on the initial spec, running **autonomously** (apply each ambiguity's `safe_default`; do not pause for the user — with ONE exception: an unclassifiable `data_axis` must come back as `needs_resolution`, not a speculative `Sequential`; see *Background dispatch*); (b) in the foreground, read the persisted submit policy, canvass only the runtime-behaviour questions it doesn't already answer, and run the local config probes (see *Parallel startup*).
 3. **Join.** When canvassing + probes finish, await the background dispatch. The fast paths (preflight cached, deploy cache hit, nothing to rsync) usually return before you finish canvassing — the await is immediate. Reconcile the user's answers against what the dispatch used.
 4. **Cascade.** If a field is still unresolved (the autonomous path couldn't `safe_default` it — a greenfield `entry_point`, a missing `task_generator`), walk the matching dialog and re-invoke. Bounded by the dependency DAG depth (~3 rounds, typically one).
 5. On a successful envelope, surface the worker's result.
@@ -21,7 +21,7 @@ This is the layer **above** the in-worker pipeline parallelism of #277–#280 (w
 
 ### Background dispatch (the worker side)
 
-Invoke the `hpc-submit` skill in the **background** — Claude Code's `Agent` tool supports `run_in_background: true`; dispatch the skill invocation as a background task and keep its task id. Instruct it to run **autonomously**: apply each ambiguity's `safe_default` rather than returning `needs_resolution`, exactly as a non-interactive caller (a MARs experiment-runner) would. It runs the slow startup — preflight, rsync deploy, canary — while you canvass.
+Invoke the `hpc-submit` skill in the **background** — Claude Code's `Agent` tool supports `run_in_background: true`; dispatch the skill invocation as a background task and keep its task id. Instruct it to run **autonomously**: apply each ambiguity's `safe_default` rather than returning `needs_resolution`, exactly as a non-interactive caller (a MARs experiment-runner) would — **except `data_axis`**. An unclassifiable `data_axis` is a spec-build input (it changes the array decomposition), so the dispatch must NOT speculate `Sequential` and deploy against the guess: instruct it to return `needs_resolution` for that one field instead. Guess-then-confirm paid twice — the speculative deploy *and* the confirmation dialog, plus a cancel + re-dispatch whenever the user picked a different kind. One blocking question before cluster work beats a deploy you may throw away. It runs the slow startup — preflight, rsync deploy, canary — while you canvass.
 
 This is a *speculative* dispatch: it builds the spec and starts the deploy from the safe defaults, betting that the user's answers won't contradict what it builds. **Most canvassed questions are runtime-behaviour knobs, not spec-build inputs** (whether to overwrite a prior run, how to handle a task-generator mismatch, how many tasks to keep in flight) — so in the common case the background work is exactly reusable and the join is a no-op merge.
 
@@ -29,7 +29,7 @@ This is a *speculative* dispatch: it builds the spec and starts the deploy from 
 
 While the background dispatch runs, do the work that needs no worker output:
 
-- **Canvass the predictable runtime questions** — `overwrite_prior_run`, `on_task_generator_mismatch`, the `data_axis` confirmation when the classifier returns `unclassifiable`, `k_in_flight` (the dialogs under *Runtime-behaviour canvass*). These are the questions the worker would otherwise surface one-by-one *after* it fails or hits a `needs_decision`; pulling them forward overlaps the user's thinking time with the deploy.
+- **Read the submit policy, then canvass only the unanswered runtime questions** — `Read` `.hpc/submit_policy.json` first (see *Submit policy* under the canvass); any of `on_task_generator_mismatch`, `k_in_flight` (and a fresh-signature `data_axis`) it answers is folded in silently, never re-asked. Canvass the rest (the dialogs under *Runtime-behaviour canvass*; `overwrite_prior_run` is always asked fresh — it's about a specific run's state). These are the questions the worker would otherwise surface one-by-one *after* it fails or hits a `needs_decision`; pulling them forward overlaps the user's thinking time with the deploy. (`data_axis` is not canvassed speculatively — an unclassifiable axis comes back from the dispatch as `needs_resolution` and is walked on the cascade path.)
 - **Validate local config** (no worker dependency — use `Read`/`Grep`, never shell): `clusters.yaml` coherence (the modules block; `conda_source` present when `conda_env` is set — the #281 shape, caught laptop-side before the deploy rather than at the cluster preamble); `.hpc/axes.yaml` freshness against the current `@register_run` signature; a working-tree dirtiness check.
 - **Surface recent history** for context: the last few journal entries for this `cmd_sha` family, or the prior `metrics.json` summary on a continuation run.
 
@@ -37,12 +37,12 @@ While the background dispatch runs, do the work that needs no worker output:
 
 Await the background task, then reconcile:
 
-- **No conflict (the common case)** — the user's answers are runtime-behaviour knobs the built spec doesn't depend on, or they match the safe defaults the dispatch used. Accept the dispatch's envelope; fold the runtime answers into the surfaced result. Done.
-- **Conflict (rare)** — an answer changes the spec the dispatch built: `on_task_generator_mismatch=refresh` (rewrites `tasks.py`), the user overrides the classifier's `data_axis` safe_default with a different kind, or `overwrite_prior_run=no` when the dispatch assumed it could claim the `cmd_sha`. Cancel the background task and re-invoke the skill (foreground) with the corrected, now-fully-resolved spec. The cost is low: a cancelled dispatch has done preflight + maybe started rsync, **not** the main-array `qsub`.
+- **No conflict (the common case)** — the user's answers are runtime-behaviour knobs the built spec doesn't depend on, or they match the safe defaults the dispatch used. Accept the dispatch's envelope; fold the runtime answers into the surfaced result. Persist this session's explicit answers to `.hpc/submit_policy.json` (see *Submit policy*). Done.
+- **Conflict (rare)** — an answer changes the spec the dispatch built: `on_task_generator_mismatch=refresh` (rewrites `tasks.py`), or `overwrite_prior_run=no` when the dispatch assumed it could claim the `cmd_sha`. Cancel the background task and re-invoke the skill (foreground) with the corrected, now-fully-resolved spec, then persist the answers. The cost is low: a cancelled dispatch has done preflight + maybe started rsync, **not** the main-array `qsub`.
 
 ### When to skip the parallel path
 
-The overlap only pays when worker startup is actually slow. **Run the simple synchronous path** — invoke the skill in the foreground, walk dialogs on `needs_resolution` — when there is nothing to overlap: no questions to ask (the user pre-stated everything) **and** a warm fast path (preflight cached, deploy cache hit). Backgrounding a sub-second dispatch just adds a join.
+The overlap only pays when worker startup is actually slow. **Run the simple synchronous path** — invoke the skill in the foreground, walk dialogs on `needs_resolution` — when there is nothing to overlap: no questions to ask (the user pre-stated everything, or the submit policy already answers the rest) **and** a warm fast path (preflight cached, deploy cache hit). Backgrounding a sub-second dispatch just adds a join.
 
 ## Invocation
 
@@ -188,7 +188,29 @@ Walk the user through the params for their choice.
 
 ## Runtime-behaviour canvass
 
-These are the questions canvassed **in parallel** with the background dispatch (the *Parallel startup* fork). They are mostly runtime-behaviour knobs the built spec does not depend on, so the answer rides the join rather than blocking the deploy. Ask only the ones in play for this invocation.
+These are the questions canvassed **in parallel** with the background dispatch (the *Parallel startup* fork). They are mostly runtime-behaviour knobs the built spec does not depend on, so the answer rides the join rather than blocking the deploy. Ask only the ones in play for this invocation — **and never one the submit policy already answers**.
+
+### Submit policy — ask once, persist, enforce
+
+Each runtime-behaviour answer is persisted to `<experiment_dir>/.hpc/submit_policy.json` so a question is asked **once per experiment**, not once per submit. A repeat submit with a saturated policy asks zero questions.
+
+- **Before canvassing**: `Read` the file. For every question below whose key is present, fold the recorded answer in at the join exactly as if the user had just given it — do not re-ask, do not announce the skip.
+- **At the join**: `Write` the file back with any answers given this session merged in (preserve keys you didn't touch). Only persist *explicit* answers — never a default the user didn't confirm (an accepted-by-silence default stays unrecorded so the question can be asked again).
+- **To change a recorded answer**: the user restates it in `$ARGUMENTS` (caller-supplied is authoritative and overwrites the recorded value at the join).
+
+Shape (all keys optional):
+
+```json
+{
+  "on_task_generator_mismatch": "fail" | "refresh",
+  "k_in_flight": <int>,
+  "data_axis": {"run_signature_sha": "<sha>", "kind": "<kind>"}
+}
+```
+
+`data_axis` is keyed by `run_signature_sha`: it short-circuits the dialog only while the entry-point signature is unchanged. On signature drift the recorded entry is stale — re-ask, then overwrite.
+
+`overwrite_prior_run` is deliberately **never** persisted: it answers a question about one specific prior run's state, not an experiment-wide preference. A sticky `keep` would silently route every future submit of the same config away from resubmitting; a sticky `overwrite` would silently reclaim runs the user never looked at. Ask it fresh each time it fires.
 
 ### Dialog: `overwrite_prior_run`
 
@@ -208,16 +230,15 @@ A cached `interview.json` encodes a *different* `task_generator` than the one pa
 
 ```
 The cached interview implies <N_cached> tasks; your request implies <N_caller>.
-  [fail]          (default) — stop; don't silently submit the wrong count.
-  [refresh]       — rewrite the interview + tasks.py from your request, then submit.
-  [prefer-caller] — submit your task_generator without rewriting the interview.
+  [fail]    (default) — stop; don't silently submit the wrong count.
+  [refresh] — rewrite the interview + tasks.py from your request, then submit.
 ```
 
-`refresh` rewrites `tasks.py` → it changes the built spec → it's a *spec conflict* with a dispatch that assumed the cached generator: cancel + re-dispatch with `on_task_generator_mismatch=refresh`. `prefer-caller` is reusable as-is.
+`refresh` rewrites `tasks.py` → it changes the built spec → it's a *spec conflict* with a dispatch that assumed the cached generator: cancel + re-dispatch with `on_task_generator_mismatch=refresh`. (There is no submit-without-rewriting option: leaving the stale interview in place would re-fire this dialog on every subsequent submit.)
 
-### Dialog: `data_axis` confirmation (`unclassifiable`)
+### Dialog: `data_axis` resolution (`unclassifiable`)
 
-When the autonomous classifier returns `unclassifiable`, the background dispatch falls back to the `Sequential` safe_default (slow, not wrong). Confirm in parallel via the **`data_axis` dialog above** — if the user picks a non-`Sequential` kind, that overrides the safe_default and is a *spec conflict* (cancel + re-dispatch); if they accept Sequential (or are unsure), the dispatch's work stands.
+When the autonomous classifier returns `unclassifiable`, the background dispatch does **not** speculate `Sequential` — it returns `needs_resolution` for `data_axis` (see *Background dispatch*). Walk the **`data_axis` dialog above** and re-invoke with the resolved kind; this is the cascade path, not a confirmation of work already done. An explicit kind (including an explicit `Sequential`) is recorded in the submit policy keyed by `run_signature_sha`, so the question never recurs while the signature is unchanged. On **unsure**, proceed with `Sequential` for this submit but do NOT persist it — an unconfirmed guess must stay re-askable.
 
 ### Dialog: `k_in_flight` (concurrency cap)
 

@@ -25,7 +25,7 @@ Agent-facing decision layer over the **[monitor-flow](../../../../docs/primitive
 | `experiment_dir` | Required |
 | `run_id` | Caller, or auto-resolve from `load-context.data.in_flight` |
 | `wait_terminal` | Caller (default `false` for snapshot; `true` for blocking poll) |
-| `resubmit_failed_threshold` | Caller (default `0.10`) |
+| `resubmit_failed_threshold` | Caller (default `0.0` — every failure escalates; pass a value > 0 to opt into auto-resubmit) |
 
 ## The resolution contract
 
@@ -110,9 +110,11 @@ Branch on the envelope's `data.lifecycle_state` (or `data.report.result.lifecycl
 
 `failed_fraction = failed_task_ids.length / total_tasks`
 
+Compute the decision with the `decide-resubmit` verb, not by hand. The default threshold is `0.0` — **auto-resubmit is an explicit caller opt-in**, never the default: a caller that wants silent re-runs declares how much loss it may absorb by passing `resubmit_failed_threshold > 0`.
+
 - `failed_fraction == 0` → lifecycle is actually `complete`.
-- `failed_fraction ≤ resubmit_failed_threshold` (default 10%) → auto-invoke `hpc-agent resubmit --run-id <id> --task-ids <failed-list>`. Record in decisions; return the new resubmit run_id.
-- `failed_fraction > resubmit_failed_threshold` → add to ambiguities (decision needs caller resolution):
+- `failed_fraction ≤ resubmit_failed_threshold` (only reachable when the caller opted in) → auto-invoke `hpc-agent resubmit --run-id <id> --task-ids <failed-list>`. Record in decisions; return the new resubmit run_id.
+- `failed_fraction > resubmit_failed_threshold` (under the default, any failure) → add to ambiguities (decision needs caller resolution):
   ```json
   {
     "field": "high_failure_rate_action",
@@ -122,7 +124,7 @@ Branch on the envelope's `data.lifecycle_state` (or `data.report.result.lifecycl
     "context": {"failed_count": N, "total": M, "sample_errors": [...]}
   }
   ```
-  At >10% failure, auto-resubmitting usually wastes more cluster time on the same bug. The safe_default is `investigate` — don't auto-resubmit.
+  Auto-resubmitting can silently re-run the same bug. The safe_default is `investigate` — don't auto-resubmit.
 
 ### 7. Emit the return envelope (final tool call)
 

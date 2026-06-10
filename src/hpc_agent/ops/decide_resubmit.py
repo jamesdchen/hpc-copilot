@@ -9,18 +9,20 @@ arithmetic-plus-branch by hand, the classic prose-discipline failure mode.
 
 Given a terminal-with-failures wave (``failed_count`` out of
 ``total_tasks``) and the caller's ``resubmit_failed_threshold`` (default
-``0.10``), the decision splits three ways:
+``0.0`` — auto-resubmit is an explicit opt-in), the decision splits three
+ways:
 
 * ``failed_fraction == 0`` → the lifecycle is actually ``complete`` — there
   is nothing to resubmit.
-* ``failed_fraction <= threshold`` → ``resubmit`` the failed tasks. Low
-  enough loss that an automatic re-run is the right call (``safe_default``
-  ``None`` — no judgement needed).
-* ``failed_fraction > threshold`` → ``escalate``. At a high failure rate,
-  auto-resubmitting usually wastes more cluster time re-running the same
-  bug, so this is **decision-as-data**: the primitive surfaces the choice
-  with a ``safe_default`` of ``"investigate"`` rather than silently
-  resubmitting.
+* ``failed_fraction <= threshold`` → ``resubmit`` the failed tasks. Only
+  reachable when the caller opted into a threshold > 0 — they declared how
+  much loss an automatic re-run may absorb (``safe_default`` ``None`` — no
+  judgement needed).
+* ``failed_fraction > threshold`` → ``escalate``. Under the default
+  threshold this is every failure: auto-resubmitting can silently re-run
+  the same bug, so this is **decision-as-data** — the primitive surfaces
+  the choice with a ``safe_default`` of ``"investigate"`` rather than
+  silently resubmitting.
 
 Pure function over supplied evidence — no I/O. The only error is
 ``SpecInvalid`` when ``total_tasks < 1`` (a fraction over zero tasks is
@@ -52,7 +54,10 @@ __all__ = ["decide_resubmit"]
             "failed_fraction == 0 is actually complete; <= threshold auto-"
             "resubmits; > threshold escalates the resubmit/investigate/abandon "
             "choice (safe_default investigate) rather than wasting cluster "
-            "time re-running the same bug. Replaces hpc-status Step 6 prose."
+            "time re-running the same bug. The default threshold is 0.0 — "
+            "every failure escalates unless the caller opts into auto-"
+            "resubmit by passing a threshold > 0. Replaces hpc-status "
+            "Step 6 prose."
         ),
         requires_ssh=False,
         args=(
@@ -71,8 +76,12 @@ __all__ = ["decide_resubmit"]
             CliArg(
                 "--resubmit-failed-threshold",
                 type=float,
-                default=0.10,
-                help="Auto-resubmit at or below this failed fraction (default 0.10).",
+                default=0.0,
+                help=(
+                    "Auto-resubmit at or below this failed fraction. Default 0.0: "
+                    "every failure escalates; pass a value > 0 to opt into "
+                    "automatic resubmission."
+                ),
             ),
         ),
     ),
@@ -82,7 +91,7 @@ def decide_resubmit(
     *,
     failed_count: int,
     total_tasks: int,
-    resubmit_failed_threshold: float = 0.10,
+    resubmit_failed_threshold: float = 0.0,
 ) -> dict[str, Any]:
     """Decide complete / resubmit / escalate from failure evidence.
 
@@ -97,7 +106,8 @@ def decide_resubmit(
     resubmit_failed_threshold:
         The fraction at or below which a failure is auto-resubmitted. The
         boundary is **inclusive** — ``failed_fraction == threshold`` still
-        resubmits.
+        resubmits. Defaults to ``0.0``: every failure escalates; a caller
+        opts into auto-resubmit by declaring how much loss it may absorb.
 
     Returns
     -------
@@ -107,11 +117,11 @@ def decide_resubmit(
     human-readable ``rationale``.
 
     * ``failed_count == 0`` → ``complete`` — nothing failed.
-    * ``failed_fraction <= threshold`` → ``resubmit`` — low enough loss to
-      auto re-run; ``safe_default`` ``None``.
-    * ``failed_fraction > threshold`` → ``escalate`` — high failure rate;
-      auto-resubmitting usually re-runs the same bug, so surface the choice
-      with ``safe_default`` ``"investigate"``.
+    * ``failed_fraction <= threshold`` → ``resubmit`` — the caller opted
+      into absorbing this much loss; ``safe_default`` ``None``.
+    * ``failed_fraction > threshold`` → ``escalate`` — every failure under
+      the default threshold; auto-resubmitting can silently re-run the same
+      bug, so surface the choice with ``safe_default`` ``"investigate"``.
     """
     if total_tasks < 1:
         raise errors.SpecInvalid(

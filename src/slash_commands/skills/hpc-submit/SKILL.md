@@ -31,7 +31,7 @@ The slash `/submit-hpc` is the human-interview wrapper; external autonomous agen
 | `homogeneous_axes` | Caller, or invoke `hpc-build-executor` (axes-init companion) if no `.hpc/axes.yaml` |
 | `frozen_configs` | Caller, or detect from `configs/*.yaml` |
 | `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented) |
-| `on_task_generator_mismatch` | Caller (default `fail`; `refresh` / `prefer-caller` are explicit opt-ins — see Step 3) |
+| `on_task_generator_mismatch` | Caller (default `fail`; `refresh` is the explicit opt-in — see Step 3) |
 | `walltime_sec` | Caller, or auto-resolve from runtime priors (p95 × safety_mult) |
 | `gpu_type` | Caller, or first GPU in `clusters.<cluster>.gpu_types` |
 | `no_canary` | Caller (default `false`) |
@@ -112,11 +112,10 @@ Check for `@register_run` on disk and for `interview.json`. If either, the entry
    The verb canonicalizes both (key-sorted, whitespace-free) and returns `data.match` plus both shapes' `canonical` + `sha256`. When the caller has no cached generator to compare against, omit `--cached-task-generator` (the verb returns `match: true`, `reason: no_cached_generator`).
    - **`data.match: true`** (`reason: identical`) → short-circuit as before; continue.
    - **`data.match: false`** (`reason: divergent`) → do NOT silently use the cached one. Branch on `on_task_generator_mismatch`:
-     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (the verb's `data.cached` from `interview.json`, `data.caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh` or `=prefer-caller`, or clear `.hpc/` to start fresh.
+     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (the verb's `data.cached` from `interview.json`, `data.caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh`, or clear `.hpc/` to start fresh.
      - `refresh` → rewrite `interview.json` (and regenerate `.hpc/tasks.py`) from the caller's `task_generator` via `hpc-wrap-entry-point`, then continue with the caller's.
-     - `prefer-caller` → use the caller's `task_generator` for this submission without rewriting the interview (the previous unconditional behavior, now an explicit opt-in).
 
-   The silent "cached wins" behavior is removed — a divergent count must be surfaced, not dropped on the floor.
+   The silent "cached wins" behavior is removed — a divergent count must be surfaced, not dropped on the floor. There is deliberately no submit-without-rewriting mode: it would leave the stale `interview.json` in place, so the same divergence would re-fire on every subsequent submit. Either the interview is wrong (→ `refresh` it) or the caller is (→ `fail` and fix the request).
 
 Otherwise (no `@register_run` and no `interview.json`), invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generator, experiment_dir}`. The sub-skill itself follows the same contract — if it can't resolve (e.g., multiple entry-point candidates), it returns its own ambiguities. Propagate them into this skill's list:
 

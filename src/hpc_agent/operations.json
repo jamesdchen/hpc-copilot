@@ -332,7 +332,7 @@
     "output_schema": "decide_resubmit.output.json",
     "python": "hpc_agent.ops.decide_resubmit.decide_resubmit",
     "side_effects": [],
-    "summary": "Decide complete / resubmit / escalate for a terminal-with-failures wave from observable evidence: failed-task count, total-task count, and the resubmit_failed_threshold. failed_fraction == 0 is actually complete; <= threshold auto-resubmits; > threshold escalates the resubmit/investigate/abandon choice (safe_default investigate) rather than wasting cluster time re-running the same bug. Replaces hpc-status Step 6 prose.",
+    "summary": "Decide complete / resubmit / escalate for a terminal-with-failures wave from observable evidence: failed-task count, total-task count, and the resubmit_failed_threshold. failed_fraction == 0 is actually complete; <= threshold auto-resubmits; > threshold escalates the resubmit/investigate/abandon choice (safe_default investigate) rather than wasting cluster time re-running the same bug. The default threshold is 0.0 — every failure escalates unless the caller opts into auto-resubmit by passing a threshold > 0. Replaces hpc-status Step 6 prose.",
     "verb": "query"
   },
   {
@@ -887,7 +887,7 @@
     "output_schema": "check_task_generator_mismatch.output.json",
     "python": "hpc_agent.ops.check_task_generator_mismatch.check_task_generator_mismatch",
     "side_effects": [],
-    "summary": "Canonical-JSON compare a caller-supplied task_generator against the cached/derived one (hpc-submit Step 3). Returns match=true when their canonical content is identical, else match=false with both shapes + their sha256 so the caller can branch on on_task_generator_mismatch (fail / refresh / prefer-caller).",
+    "summary": "Canonical-JSON compare a caller-supplied task_generator against the cached/derived one (hpc-submit Step 3). Returns match=true when their canonical content is identical, else match=false with both shapes + their sha256 so the caller can branch on on_task_generator_mismatch (fail / refresh).",
     "verb": "validate"
   },
   {

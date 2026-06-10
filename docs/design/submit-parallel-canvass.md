@@ -18,8 +18,7 @@ The main thread has no work that *reads* worker output during that window,
 but it does have work that runs **ahead of** any worker output:
 
 - **User-facing canvassing.** The runtime-behaviour questions
-  (`overwrite_prior_run`, `on_task_generator_mismatch`, the `data_axis`
-  confirmation when the classifier is `unclassifiable`, `k_in_flight`) are
+  (`overwrite_prior_run`, `on_task_generator_mismatch`, `k_in_flight`) are
   *predictable* — you know you'll likely ask them before the skill runs.
 - **Local config validation.** `clusters.yaml` coherence, `.hpc/axes.yaml`
   freshness, working-tree dirtiness — all laptop-only.
@@ -62,11 +61,29 @@ questions are runtime-behaviour knobs, not spec-build inputs**:
 |---|---|---|
 | `k_in_flight` (concurrency cap) | no — scheduler throttle, not the task set | fold in |
 | `overwrite_prior_run=overwrite` | no — the dispatch already assumed it could claim the `cmd_sha` | fold in |
-| `on_task_generator_mismatch=prefer-caller` | no — submits the caller generator as-is | fold in |
-| `data_axis` = the classifier's `Sequential` safe_default | no — already what the dispatch used | fold in |
 | `on_task_generator_mismatch=refresh` | **yes** — rewrites `tasks.py` | **conflict** → cancel + re-dispatch |
-| `data_axis` overridden to a non-`Sequential` kind | **yes** — changes the array decomposition | **conflict** → cancel + re-dispatch |
 | `overwrite_prior_run=keep` | **yes** — no submit at all | **conflict** → cancel + route to monitor/aggregate |
+
+`data_axis` is deliberately **not** in this table: an unclassifiable axis is a
+spec-build input (it changes the array decomposition), so the dispatch never
+speculates `Sequential` for it. It returns `needs_resolution` and the slash
+resolves it on the cascade path — guess-then-confirm paid for the speculative
+deploy *and* the dialog, plus a cancel + re-dispatch whenever the user picked
+a different kind.
+
+## Ask once: the persisted submit policy
+
+Explicit answers to the *experiment-wide* canvass questions
+(`on_task_generator_mismatch`, `k_in_flight`, the resolved `data_axis` keyed
+by `run_signature_sha`) are persisted to
+`<experiment_dir>/.hpc/submit_policy.json` (see the *Submit policy* section of
+`submit-hpc.md`). The slash reads it before canvassing and skips any question
+it answers, so those dialogs fire once per experiment, not once per submit — a
+repeat submit with a saturated policy asks nothing. Only explicit answers are
+recorded (a default accepted by silence stays re-askable), and a restated
+value in `$ARGUMENTS` overwrites the recorded one. `overwrite_prior_run` is
+deliberately not persisted: it answers for one specific prior run's state, so
+a sticky answer would silently mis-route future submits.
 
 On a conflict the slash cancels the background task and re-invokes the skill
 (foreground) with the corrected, now-fully-resolved spec. **The cancel is

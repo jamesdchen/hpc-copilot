@@ -123,11 +123,17 @@ def test_submit_skill_guards_task_generator_mismatch():
     text = _read("hpc-submit")
     assert "task_generator_mismatch" in text, "submit skill must surface task_generator_mismatch"
     assert "on_task_generator_mismatch" in text, "submit skill must document the mismatch field"
-    # All three documented behaviours must be named.
-    for behaviour in ("fail", "refresh", "prefer-caller"):
+    # Both documented behaviours must be named.
+    for behaviour in ("fail", "refresh"):
         assert behaviour in text, (
             f"submit skill must document on_task_generator_mismatch={behaviour}"
         )
+    # `prefer-caller` was removed: it submitted the caller's generator
+    # WITHOUT rewriting interview.json, so the divergence re-fired on every
+    # subsequent submit — leniency that manufactured recurring dialogs.
+    assert "prefer-caller" not in text, (
+        "on_task_generator_mismatch=prefer-caller was removed; do not reintroduce it"
+    )
     # The guard sits at the interview.json short-circuit.
     assert "interview.json" in text
     # `fail` is the default (loud), not silent.

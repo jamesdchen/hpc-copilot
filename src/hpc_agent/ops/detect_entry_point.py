@@ -45,7 +45,9 @@ submit.md Step 0b — honor a materialized wrapper (``materialized.kind``)
 decision through a single ``hpc-agent`` verb rather than a native Read /
 Glob / Grep tool. When no ``interview.json`` exists (or it carries no
 materialized entry point), ``materialized`` is absent and the repo-scan
-output is unchanged.
+output is unchanged. A *malformed* ``interview.json`` is a loud
+``SpecInvalid`` — never a silent fallthrough to the repo scan, which
+would let a corrupt file change which entry point the worker targets.
 
 I/O contracts:
 
@@ -60,6 +62,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.experiment_kit.solver_adapters import detect_petsc_solver
@@ -341,10 +344,17 @@ def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
     The canonical location is the campaign-dir root (where the ``interview``
     primitive writes it); we also accept ``.hpc/interview.json`` defensively.
     Returns ``None`` — leaving the existing repo-scan output untouched — when
-    no ``interview.json`` exists, when it is malformed, or when it carries no
+    no ``interview.json`` exists or when it carries no
     ``_materialized.entry_point`` block. Surfaces only the worker-facing
     subset of fields (``kind`` plus whichever of
     ``_MATERIALIZED_FIELDS`` the block declares).
+
+    A *malformed* ``interview.json`` (unparseable JSON, or a non-object top
+    level) raises ``SpecInvalid`` instead of being treated as absent: silent
+    fallthrough to the mature-repo probe would let a corrupt file change
+    which entry point the worker targets without anyone noticing. The user
+    fixes or deletes the file and re-runs — loud and immediate beats a
+    quietly divergent submit.
     """
     for rel in ("interview.json", ".hpc/interview.json"):
         path = root / rel
@@ -355,13 +365,23 @@ def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
             return None
         try:
             doc = json.loads(text)
-        except ValueError:
-            # A half-written / malformed interview.json is treated as absent:
-            # the repo-scan output stands, the worker falls through to the
-            # mature-repo probe rather than crashing the scan.
-            return None
+        except ValueError as exc:
+            raise errors.SpecInvalid(
+                f"{path} is not valid JSON: {exc}",
+                remediation=(
+                    "interview.json is corrupt (half-written or hand-edited). "
+                    "Fix the JSON, or delete the file and re-run "
+                    "`hpc-agent interview` to regenerate it."
+                ),
+            ) from exc
         if not isinstance(doc, dict):
-            return None
+            raise errors.SpecInvalid(
+                f"{path} must contain a JSON object at the top level; got {type(doc).__name__}",
+                remediation=(
+                    "interview.json is corrupt. Fix the JSON, or delete the "
+                    "file and re-run `hpc-agent interview` to regenerate it."
+                ),
+            )
         entry = (doc.get("_materialized") or {}).get("entry_point")
         if not isinstance(entry, dict):
             return None
@@ -380,6 +400,7 @@ def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
     name="detect-entry-point",
     verb="query",
     side_effects=[],
+    error_codes=[errors.SpecInvalid],
     idempotent=True,
     cli=CliShape(
         help=(

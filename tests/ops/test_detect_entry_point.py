@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from hpc_agent import errors
 from hpc_agent.ops import detect_entry_point as dep
 
 
@@ -338,15 +341,20 @@ class TestMaterializedEntryPoint:
         result = dep.detect_entry_point(experiment_dir=tmp_path)
         assert "materialized" not in result
 
-    def test_malformed_interview_is_absent(self, tmp_path: Path) -> None:
-        # A half-written / malformed interview.json is treated as absent —
-        # the repo scan stands rather than crashing.
+    def test_malformed_interview_raises_spec_invalid(self, tmp_path: Path) -> None:
+        # A half-written / malformed interview.json is a loud SpecInvalid,
+        # never a silent fallthrough to the repo scan — a corrupt file must
+        # not change which entry point the worker targets unnoticed.
         (tmp_path / "interview.json").write_text("{ this is not valid json")
         (tmp_path / "train.py").write_text("import argparse\nargparse.ArgumentParser()\n")
-        result = dep.detect_entry_point(experiment_dir=tmp_path)
-        assert "materialized" not in result
-        # Repo-scan path is unchanged.
-        assert _argv_kind_for(result["candidates"], "train.py") == "argparse"
+        with pytest.raises(errors.SpecInvalid, match="not valid JSON"):
+            dep.detect_entry_point(experiment_dir=tmp_path)
+
+    def test_non_object_interview_raises_spec_invalid(self, tmp_path: Path) -> None:
+        # Parseable JSON with a non-object top level is just as corrupt.
+        (tmp_path / "interview.json").write_text("[1, 2, 3]")
+        with pytest.raises(errors.SpecInvalid, match="JSON object at the top level"):
+            dep.detect_entry_point(experiment_dir=tmp_path)
 
     def test_repo_scan_unchanged_when_interview_absent(self, tmp_path: Path) -> None:
         # The existing repo-scan output is byte-identical with no interview.json.

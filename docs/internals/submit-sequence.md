@@ -330,8 +330,11 @@ sidecars + scheduler state instead of submitting. The worker reports
 lifecycle state.
 
 If the run completes with failures (>0 failed tasks), the worker
-applies the resubmit policy (<10% → auto-resubmit; >10% → escalate to
-the user).
+applies the resubmit policy via `decide-resubmit`. The default
+threshold is 0: every failure escalates to the user; auto-resubmit
+only happens when the caller opted in with
+`resubmit_failed_threshold > 0` and the failed fraction is at or
+below it.
 
 ## Step 8: User aggregates
 
@@ -361,18 +364,21 @@ the main thread's *user-facing and local* work:
 - The `Skill(hpc-submit, …)` of Step 1 is dispatched in the **background**
   (`Agent` tool `run_in_background: true`) in **autonomous mode** — it
   applies each ambiguity's `safe_default` instead of pausing for the user
-  (the same resolution the "Autonomous caller (MARs)" variant below uses).
-- In the foreground the slash **canvasses** the predictable
-  runtime-behaviour questions (`overwrite_prior_run`,
-  `on_task_generator_mismatch`, the `data_axis` confirmation when the
-  classifier is `unclassifiable`, `k_in_flight`) and **validates** local
-  config (`clusters.yaml` coherence, `.hpc/axes.yaml` freshness,
-  working-tree dirtiness).
+  (the same resolution the "Autonomous caller (MARs)" variant below uses),
+  except an unclassifiable `data_axis`, which comes back as
+  `needs_resolution` rather than a speculative `Sequential` deploy.
+- In the foreground the slash reads the persisted submit policy
+  (`.hpc/submit_policy.json`) and **canvasses** only the predictable
+  runtime-behaviour questions it doesn't already answer
+  (`overwrite_prior_run`, `on_task_generator_mismatch`, `k_in_flight`),
+  and **validates** local config (`clusters.yaml` coherence,
+  `.hpc/axes.yaml` freshness, working-tree dirtiness).
 - At the **join** it reconciles: most answers are runtime knobs the built
   spec doesn't depend on (fold in), so the background work is reused; a
-  rare *spec conflict* (`refresh`, a non-`Sequential` axis override,
-  `keep`) cancels the background task — cheaply, before the main-array
-  `qsub` — and re-dispatches with the corrected spec.
+  rare *spec conflict* (`refresh`, `keep`) cancels the background task —
+  cheaply, before the main-array `qsub` — and re-dispatches with the
+  corrected spec. Explicit answers are persisted back to the policy file
+  so a repeat submit asks nothing.
 
 Steps 2–5 are unchanged: this variant moves *when* the slash asks, not
 *what* the worker is handed. See
@@ -394,7 +400,9 @@ A `/campaign-hpc` invocation:
 ### Resubmit
 
 A resubmit doesn't go through `/submit-hpc`. It's invoked from within
-the `monitor-flow` worker when `<10%` failure rate is detected:
+the `monitor-flow` worker when the failed fraction is at or below the
+caller's opted-in `resubmit_failed_threshold` (default 0 — without the
+opt-in, failures escalate instead):
 
 ```bash
 hpc-agent resubmit --run-id <id> --task-ids <failed-list>

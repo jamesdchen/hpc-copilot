@@ -5,6 +5,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.56 — 2026-06-10
+
+### Changed — submit canvass asks once: persisted submit policy + no speculative `data_axis`
+
+`/submit-hpc`'s runtime-behaviour canvass now persists each explicit experiment-wide answer (`on_task_generator_mismatch`, `k_in_flight`, the resolved `data_axis` keyed by `run_signature_sha`) to `<experiment_dir>/.hpc/submit_policy.json` and skips any question the file already answers — those dialogs fire once per experiment, not once per submit; a repeat submit with a saturated policy asks nothing. Only explicit answers are recorded (a default accepted by silence stays re-askable), and a value restated in `$ARGUMENTS` overwrites the recorded one. `overwrite_prior_run` is deliberately never persisted — it answers for one specific prior run's state, so a sticky answer would silently mis-route future submits. The background dispatch also no longer speculates `Sequential` for an unclassifiable `data_axis`: the axis is a spec-build input (it changes the array decomposition), so guess-then-confirm paid for the speculative deploy *and* the confirmation dialog, plus a cancel + re-dispatch whenever the user picked a different kind — it now returns `needs_resolution` and the slash walks one dialog before any cluster work, recording the resolved kind in the policy keyed by `run_signature_sha`. Slash-side only: the `hpc-submit` skill contract for autonomous callers (`safe_default` resolution) is unchanged.
+
+### Changed — `on_task_generator_mismatch=prefer-caller` removed
+
+`prefer-caller` submitted the caller's `task_generator` WITHOUT rewriting `interview.json`, so the stale cached generator re-fired the mismatch on every subsequent submit — leniency that manufactured recurring dialogs. The mode is gone: either the interview is wrong (`refresh` rewrites it) or the caller is (`fail`, the default, stops the submit). Callers passing `prefer-caller` should pass `refresh` instead — it submits the same caller generator and heals the divergence at the source.
+
+### Changed — `decide-resubmit` default threshold is `0.0`: auto-resubmit is an explicit opt-in
+
+`resubmit_failed_threshold` defaulted to `0.10`, silently re-running failed tasks at up to 10% failure — a systematic bug under the line was re-run (and re-failed) without anyone deciding that. The default is now `0.0`: every failure escalates the resubmit/investigate/abandon choice (`safe_default: investigate`); a caller that wants automatic resubmission declares how much loss it may absorb by passing a threshold > 0. `hpc-status` Step 6, `/monitor-hpc`, and the input schema updated to match.
+
+### Changed — malformed `interview.json` is a loud `spec_invalid`, not a silent fallthrough
+
+`detect-entry-point` treated an unparseable (or non-object) `interview.json` as absent and fell through to the mature-repo probe — a corrupt file could silently change which entry point the worker targets. It now raises `spec_invalid` naming the parse error, with remediation: fix the JSON, or delete the file and re-run `hpc-agent interview`. The bulk `recall` scan still skips malformed files (one corrupt campaign must not kill a multi-root rollup); the per-experiment scan is where silence hides corruption.
+
 ## 0.10.55 — 2026-06-10
 
 ### Fixed — re-submit pre-clean wiped the scheduler `logs/` dir, demoting it to a file

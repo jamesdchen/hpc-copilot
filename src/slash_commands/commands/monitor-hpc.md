@@ -46,14 +46,14 @@ Which run?
 ### Dialog: `high_failure_rate_action`
 
 ```
-Run <id> finished with N of M tasks failed (>10%). Options:
+Run <id> finished with N of M tasks failed. Options:
   [1] investigate (default) — inspect the failure pattern; don't auto-resubmit
   [2] resubmit — re-submit just the failed tasks
   [3] abandon — mark terminal; move on
 Which?
 ```
 
-The default is `investigate` because >10% failure usually means a real bug, and auto-resubmitting wastes more cluster time.
+The default is `investigate` because a failure usually means a real bug, and auto-resubmitting wastes more cluster time. (This dialog fires for any failure under the default `resubmit_failed_threshold` of 0; a caller that opted into a threshold > 0 only sees it above that fraction.)
 
 ## On final envelope
 

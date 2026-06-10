@@ -25,8 +25,8 @@
     "resubmit_failed_threshold": {
       "minimum": 0,
       "maximum": 1,
-      "default": 0.1,
-      "description": "Auto-resubmit at or below this failed fraction. The boundary is inclusive — failed_fraction == threshold still resubmits.",
+      "default": 0.0,
+      "description": "Auto-resubmit at or below this failed fraction. The boundary is inclusive \u2014 failed_fraction == threshold still resubmits. Default 0.0: every failure escalates; pass a value > 0 to opt into automatic resubmission.",
       "title": "Resubmit Failed Threshold",
       "type": "number"
     }
