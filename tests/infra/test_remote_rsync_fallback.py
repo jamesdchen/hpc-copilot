@@ -126,7 +126,16 @@ def test_mandatory_excludes_cannot_be_dropped_by_caller() -> None:
     """A caller-supplied exclude list cannot re-expose clusters.yaml, and always
     carries the protected output dirs (#173)."""
     eff = transport._effective_excludes(["only_this/"])
-    assert eff == ["only_this/", "clusters.yaml", "results/", "_combiner/"]
+    assert eff == [
+        "only_this/",
+        "clusters.yaml",
+        "results/",
+        "_combiner/",
+        "hpc_agent/",
+        ".hpc/_hpc_dispatch.py",
+        ".hpc/_hpc_combiner.py",
+        ".hpc/templates/",
+    ]
     # None selects the defaults, still with the credential exclude appended.
     assert "clusters.yaml" in transport._effective_excludes(None)
 
@@ -145,6 +154,31 @@ def test_effective_excludes_always_protects_output_dirs() -> None:
     assert eff2.count("results/") == 1
     # The packaged defaults path also carries them.
     assert "results/" in transport._effective_excludes(None)
+
+
+def test_effective_excludes_always_protects_runtime_files() -> None:
+    """A caller-supplied exclude must NOT drop the deploy_runtime-placed
+    framework files (.hpc/templates/ etc.). Regression (2026-06-08): a custom
+    rsync_excludes replaced DEFAULT_RSYNC_EXCLUDES, so .hpc/templates/ lost its
+    --delete protection and the remote pre-clean wiped the cluster preamble —
+    every array task then died with `hpc_preamble.sh: No such file or directory`
+    (~26ms exit 1 on SGE) while the canary that ran before the wipe passed."""
+    assert transport.PROTECTED_RUNTIME_FILES == [
+        "hpc_agent/",
+        ".hpc/_hpc_dispatch.py",
+        ".hpc/_hpc_combiner.py",
+        ".hpc/templates/",
+    ]
+    # A custom exclude that names none of them still carries them all.
+    eff = transport._effective_excludes(["only_this/"])
+    for pat in transport.PROTECTED_RUNTIME_FILES:
+        assert pat in eff, f"{pat} dropped when a custom exclude is supplied"
+    # And the remote pre-clean prunes .hpc/templates/ given that set, so the
+    # deployed preamble survives the --delete pass.
+    clean_cmd = transport._remote_clean_cmd("/scratch/run", eff)
+    assert "/scratch/run/.hpc/templates" in clean_cmd
+    # The packaged-defaults path carries them too (de-duplicated, not doubled).
+    assert transport._effective_excludes(None).count(".hpc/templates/") == 1
 
 
 def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
@@ -354,12 +388,14 @@ def test_remote_clean_cmd_anchors_excludes() -> None:
 
 
 def test_remote_clean_cmd_protects_framework_files() -> None:
-    """The framework files in DEFAULT_RSYNC_EXCLUDES land in prune clauses,
-    so the pre-clean preserves them; a non-excluded stale file is not
-    pruned and therefore gets deleted by the trailing rm -rf."""
-    cmd = transport._remote_clean_cmd("/r", transport.DEFAULT_RSYNC_EXCLUDES)
+    """The deploy_runtime framework files (PROTECTED_RUNTIME_FILES, always
+    unioned into the effective exclude set) land in prune clauses, so the
+    pre-clean preserves them; a non-excluded stale file is not pruned and
+    therefore gets deleted by the trailing rm -rf."""
+    cmd = transport._remote_clean_cmd("/r", transport._effective_excludes(None))
     assert "-path /r/.hpc/_hpc_dispatch.py" in cmd
     assert "-path /r/.hpc/_hpc_combiner.py" in cmd
+    assert "-path /r/.hpc/templates" in cmd  # the preamble's home
     assert "-name hpc_agent" in cmd  # deployed runtime stubs
     assert cmd.endswith("-print0 | xargs -0 -r rm -rf --")
 

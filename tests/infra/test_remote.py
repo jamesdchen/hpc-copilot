@@ -84,6 +84,7 @@ class TestRsyncPush:
             transport.DEFAULT_RSYNC_EXCLUDES
             + transport.MANDATORY_RSYNC_EXCLUDES
             + transport.PROTECTED_OUTPUT_DIRS
+            + transport.PROTECTED_RUNTIME_FILES
         )
         # Source has trailing slash
         src = argv[-2]
@@ -117,9 +118,18 @@ class TestRsyncPush:
         argv = mock_run.call_args[0][0]
         patterns = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--exclude"]
         # Caller excludes preserved in order; mandatory credential excludes
-        # (clusters.yaml) and protected output dirs (results/, _combiner/ —
-        # #173) are always unioned in and cannot be dropped.
-        assert patterns == ["a/", "b/", "c/", "clusters.yaml", "results/", "_combiner/"]
+        # (clusters.yaml), protected output dirs (results/, _combiner/ — #173),
+        # and the deploy_runtime framework files (PROTECTED_RUNTIME_FILES) are
+        # always unioned in and cannot be dropped by a custom exclude.
+        assert patterns == [
+            "a/",
+            "b/",
+            "c/",
+            "clusters.yaml",
+            "results/",
+            "_combiner/",
+            *transport.PROTECTED_RUNTIME_FILES,
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.54 — 2026-06-09
+
+### Fixed — deploy `--delete` / pre-clean could wipe the cluster runtime under a custom `rsync_excludes`
+
+The `deploy_runtime`-placed framework files (`.hpc/templates/`, `_hpc_dispatch.py`, `_hpc_combiner.py`, `hpc_agent/`) were protected from a push's `--delete` / remote pre-clean **only** via `DEFAULT_RSYNC_EXCLUDES`, which a caller-supplied `exclude` (the `rsync_excludes` spec field, or any non-`None` list) *replaces*. A push whose exclude set lacked them — or a re-submit pre-cleaning an in-flight run — `find -delete`d `.hpc/templates/`; every array task then died at preamble-source time with `hpc_preamble.sh: No such file or directory` (a ~26ms exit-1 on SGE) while the canary that ran before the wipe passed. New `PROTECTED_RUNTIME_FILES` is force-unioned into every push's effective exclude set — exactly like the `clusters.yaml` credential guard and `PROTECTED_OUTPUT_DIRS` — so no caller exclude can drop the runtime protection.
+
+### Fixed — sub-skill `Then stop` ended the agent's turn at every composition boundary
+
+Each composed sub-skill (`hpc-classify-axis`, `hpc-build-executor`, `hpc-aggregate`, `hpc-wrap-entry-point`, `hpc-status`) ended its emit step with `Then **stop**`, which the model reads as *end the turn* — so `/submit-hpc` yielded control back to the user after every `Skill(<sub>)` return and needed a manual "keep going" nudge (the 0.10.5 / 0.10.11 prose fixes targeted narration, not this literal `stop`). Reworded to **hand control back to the parent without ending your turn**, preserving the documented manual `fetch-skill-return` as the parent's next action — the autofetch hook stays the additive safety net it was designed to be.
+
 ## 0.10.53 — 2026-06-10
 
 ### Fixed — Windows CI: parent_records test asserted POSIX path separators

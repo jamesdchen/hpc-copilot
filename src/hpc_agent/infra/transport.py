@@ -39,6 +39,7 @@ __all__ = [
     "DEFAULT_RSYNC_EXCLUDES",
     "MANDATORY_RSYNC_EXCLUDES",
     "PROTECTED_OUTPUT_DIRS",
+    "PROTECTED_RUNTIME_FILES",
     "deploy_runtime",
     "rsync_pull",
     "rsync_push",
@@ -66,14 +67,6 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     ".venv/",
     "venv/",
     "node_modules/",
-    "hpc_agent/",  # protect deployed runtime stubs from --delete
-    # Protect framework files scp'd into the cluster-side .hpc/ from the
-    # local rsync's --delete pass.  The local .hpc/ contains only
-    # tasks.py + runs/<id>.json; the cluster also holds _hpc_dispatch.py,
-    # _hpc_combiner.py, and templates/ placed there by deploy_runtime.
-    ".hpc/_hpc_dispatch.py",
-    ".hpc/_hpc_combiner.py",
-    ".hpc/templates/",
 ]
 
 # Patterns that must NEVER ship to the cluster, regardless of what
@@ -106,6 +99,26 @@ PROTECTED_OUTPUT_DIRS: list[str] = [
     "_combiner/",
 ]
 
+# Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd
+# into ``.hpc/`` separately from the user-repo push): the per-scheduler job
+# scripts + shared preamble under ``.hpc/templates/``, the dispatcher, the
+# combiner, and the ``hpc_agent/`` runtime stub. The local deploy tree does NOT
+# contain them, so a push's ``--delete`` / pre-clean would wipe them — and
+# protecting them only via :data:`DEFAULT_RSYNC_EXCLUDES` is not enough,
+# because an explicit caller ``exclude`` (the ``rsync_excludes`` spec field)
+# *replaces* that default. Empirically (2026-06-08 Windows demo) a push whose
+# exclude set lacked these deleted ``.hpc/templates/`` on the cluster; every
+# array task then died at preamble-source time with ``hpc_preamble.sh: No such
+# file or directory`` — a ~26ms exit-1 on SGE — while the canary that ran
+# before the wipe passed. Unioned into every push's exclude set, exactly like
+# MANDATORY / PROTECTED_OUTPUT, so no caller can drop the protection.
+PROTECTED_RUNTIME_FILES: list[str] = [
+    "hpc_agent/",
+    ".hpc/_hpc_dispatch.py",
+    ".hpc/_hpc_combiner.py",
+    ".hpc/templates/",
+]
+
 # The remote ``--delete`` pre-clean (tar fallback) gets its OWN timeout,
 # distinct from — and shorter than — the (30-min) transfer timeout, so a
 # pathological clean fails loud fast instead of silently eating the transfer
@@ -116,15 +129,17 @@ PRECLEAN_TIMEOUT_SEC: Final[int] = _env_int("HPC_PRECLEAN_TIMEOUT_SEC", 300)
 def _effective_excludes(exclude: list[str] | None) -> list[str]:
     """Resolve the exclude list, always enforcing the mandatory patterns.
 
-    ``None`` selects :data:`DEFAULT_RSYNC_EXCLUDES`. Two mandatory groups are
+    ``None`` selects :data:`DEFAULT_RSYNC_EXCLUDES`. Three mandatory groups are
     then appended (de-duplicated) so a caller-supplied list can never drop
     them: :data:`MANDATORY_RSYNC_EXCLUDES` (the credential file
-    ``clusters.yaml`` — never ship) and :data:`PROTECTED_OUTPUT_DIRS` (cluster
-    run output — never ``--delete``/pre-clean; see #173).
+    ``clusters.yaml`` — never ship), :data:`PROTECTED_OUTPUT_DIRS` (cluster
+    run output — never ``--delete``/pre-clean; see #173), and
+    :data:`PROTECTED_RUNTIME_FILES` (the ``deploy_runtime``-placed framework
+    files — never ``--delete``, or every array task loses its preamble).
     """
     base = DEFAULT_RSYNC_EXCLUDES if exclude is None else list(exclude)
     out = list(base)
-    for pat in (*MANDATORY_RSYNC_EXCLUDES, *PROTECTED_OUTPUT_DIRS):
+    for pat in (*MANDATORY_RSYNC_EXCLUDES, *PROTECTED_OUTPUT_DIRS, *PROTECTED_RUNTIME_FILES):
         if pat not in out:
             out.append(pat)
     return out

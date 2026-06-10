@@ -80,7 +80,7 @@ The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/
    hpc-agent emit-skill-return --skill hpc-build-executor --experiment-dir <experiment_dir>
    ```
 
-   The verb validates against `hpc_agent/schemas/skill_returns/hpc-build-executor.json` and atomically renames `.staged.json` → `.json`. Then **stop** — do not write a closing chat message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-build-executor`.
+   The verb validates against `hpc_agent/schemas/skill_returns/hpc-build-executor.json` and atomically renames `.staged.json` → `.json`. Then **hand control back to the parent without ending your turn** — emit no summary or closing message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-build-executor`.
 
 ## Notes
 
