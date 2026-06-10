@@ -121,15 +121,12 @@ class TestRsyncPush:
         # (clusters.yaml), protected output dirs (results/, _combiner/ — #173),
         # and the deploy_runtime framework files (PROTECTED_RUNTIME_FILES) are
         # always unioned in and cannot be dropped by a custom exclude.
-        assert patterns == [
-            "a/",
-            "b/",
-            "c/",
-            "clusters.yaml",
-            "results/",
-            "_combiner/",
-            *transport.PROTECTED_RUNTIME_FILES,
-        ]
+        assert patterns == (
+            ["a/", "b/", "c/"]
+            + transport.MANDATORY_RSYNC_EXCLUDES
+            + transport.PROTECTED_OUTPUT_DIRS
+            + transport.PROTECTED_RUNTIME_FILES
+        )
 
 
 # ---------------------------------------------------------------------------

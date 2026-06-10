@@ -5,6 +5,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.55 — 2026-06-10
+
+### Fixed — re-submit pre-clean wiped the scheduler `logs/` dir, demoting it to a file
+
+The scheduler's per-task stdout/stderr directory (`qsub`/`sbatch -o <remote>/logs`) was not in `PROTECTED_OUTPUT_DIRS`, so a re-submit's `--delete` / remote pre-clean `find -delete`d `logs/` along with the rest of the local-absent tree. The next array job's `-o <remote>/logs` then had no directory present and the scheduler created `logs` as a *single file* — every task's stream concatenated into one 24KB blob instead of `*.o<job>.<task>` per-task entries, breaking `cluster-logs` tailing. Added `logs/` to `PROTECTED_OUTPUT_DIRS` (force-unioned into every push's effective excludes), alongside `results/` and `_combiner/`.
+
 ## 0.10.54 — 2026-06-09
 
 ### Fixed — deploy `--delete` / pre-clean could wipe the cluster runtime under a custom `rsync_excludes`

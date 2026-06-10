@@ -97,6 +97,14 @@ MANDATORY_RSYNC_EXCLUDES: list[str] = [
 PROTECTED_OUTPUT_DIRS: list[str] = [
     "results/",
     "_combiner/",
+    # The scheduler's per-task stdout/stderr dir (qsub/sbatch ``-o <remote>/logs``,
+    # default name ``logs``). Written by the job on the compute nodes, NOT part of
+    # the local deploy tree — so a re-submit's ``--delete`` pre-clean would wipe it,
+    # and the scheduler then recreates ``logs`` as a *file* (its ``-o`` target with
+    # no directory present), losing per-task log separation. Protect it like the
+    # other run-output dirs. Empirical 2026-06-09 demo: a re-deploy left ``logs`` a
+    # 24KB file instead of a dir of ``*.o<job>.<task>`` entries.
+    "logs/",
 ]
 
 # Framework runtime files placed on the cluster by ``deploy_runtime`` (scp'd

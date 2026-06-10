@@ -126,29 +126,26 @@ def test_mandatory_excludes_cannot_be_dropped_by_caller() -> None:
     """A caller-supplied exclude list cannot re-expose clusters.yaml, and always
     carries the protected output dirs (#173)."""
     eff = transport._effective_excludes(["only_this/"])
-    assert eff == [
-        "only_this/",
-        "clusters.yaml",
-        "results/",
-        "_combiner/",
-        "hpc_agent/",
-        ".hpc/_hpc_dispatch.py",
-        ".hpc/_hpc_combiner.py",
-        ".hpc/templates/",
-    ]
+    assert eff == (
+        ["only_this/"]
+        + transport.MANDATORY_RSYNC_EXCLUDES
+        + transport.PROTECTED_OUTPUT_DIRS
+        + transport.PROTECTED_RUNTIME_FILES
+    )
     # None selects the defaults, still with the credential exclude appended.
     assert "clusters.yaml" in transport._effective_excludes(None)
 
 
 def test_effective_excludes_always_protects_output_dirs() -> None:
-    """#173: cluster run-output dirs (results/, _combiner/) are unioned into
-    every push's exclude set so a caller's incomplete list can't expose them to
-    --delete / the tar pre-clean. De-duplicated when already present."""
-    assert transport.PROTECTED_OUTPUT_DIRS == ["results/", "_combiner/"]
+    """#173: cluster run-output dirs (results/, _combiner/, logs/) are unioned
+    into every push's exclude set so a caller's incomplete list can't expose them
+    to --delete / the tar pre-clean. De-duplicated when already present."""
+    assert transport.PROTECTED_OUTPUT_DIRS == ["results/", "_combiner/", "logs/"]
     # Absent from the caller list -> appended.
     eff = transport._effective_excludes(["only_this/"])
     assert "results/" in eff
     assert "_combiner/" in eff
+    assert "logs/" in eff  # scheduler log dir — never --delete'd (else it becomes a file)
     # Already present -> not duplicated.
     eff2 = transport._effective_excludes(["results/", "x/"])
     assert eff2.count("results/") == 1
