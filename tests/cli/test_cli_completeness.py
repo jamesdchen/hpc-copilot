@@ -70,6 +70,10 @@ _INTENTIONALLY_NO_CLI: set[str] = {
     "validate-self-qos-limit",
     "validate-stochastic-marker",
     "validate-walltime-against-history",
+    # DAG readiness gate (docs/design/dag-kernel.md) — composed at the
+    # skill/workflow layer before a parented ``submit-flow``, like its
+    # validate-* siblings above; no standalone agent use case yet.
+    "validate-parents-ready",
     # Helpers composed by ``submit-flow``'s batch path; the agent
     # surface for the same effect is just re-running ``submit-flow``.
     "prune-orphan-sidecars",

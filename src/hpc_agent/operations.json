@@ -993,6 +993,18 @@
     "agent_facing": true,
     "cli": null,
     "idempotent": true,
+    "input_schema": "validate_parents_ready.input.json",
+    "name": "validate-parents-ready",
+    "output_schema": "validate_parents_ready.output.json",
+    "python": "hpc_agent.ops.validate.parents_ready.validate_parents_ready",
+    "side_effects": [],
+    "summary": "",
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
     "input_schema": "validate_self_qos_limit.input.json",
     "name": "validate-self-qos-limit",
     "output_schema": "validate_self_qos_limit.output.json",

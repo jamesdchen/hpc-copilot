@@ -37,6 +37,7 @@ __all__ = [
     "prune_old_runs",
     "prune_orphan_sidecars",
     "read_run_sidecar",
+    "resolve_node_sha",
     "run_sidecar_path",
     "update_run_sidecar_job_ids",
     "write_run_sidecar",
@@ -114,6 +115,8 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
+    "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
+    "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -151,6 +154,8 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "aggregate_defaults": None,
     "results": None,
     "trial_tokens": None,
+    "parent_run_ids": None,
+    "node_sha": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -216,6 +221,8 @@ def write_run_sidecar(
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
     trial_tokens: list[Any] | None = None,
+    parent_run_ids: list[str] | None = None,
+    node_sha: str | None = None,
     job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
@@ -290,6 +297,8 @@ def write_run_sidecar(
         "aggregate_defaults": aggregate_defaults,
         "results": results,
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
+        "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
+        "node_sha": node_sha,
         "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():
@@ -433,6 +442,68 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     return [p for _, _, p in keyed]
 
 
+def resolve_node_sha(
+    experiment_dir: Path,
+    *,
+    cmd_sha: str,
+    parent_run_ids: list[str] | None,
+) -> str | None:
+    """Compose this run's DAG-node identity from its parents' sidecars.
+
+    The submit-side half of the recursive-identity invariant
+    (``docs/design/dag-kernel.md``): a run that declares
+    *parent_run_ids* gets identity
+    ``compose_node_sha(cmd_sha, [parent identities...])``, where each
+    parent's identity is its sidecar's recorded ``node_sha`` — or its
+    bare ``cmd_sha`` for a parentless parent (the 0-parent degeneracy).
+    Identity is always DERIVED here from on-disk sidecars, never
+    asserted by the caller — a caller-supplied node_sha could decouple
+    a child from its real ancestry.
+
+    Returns ``None`` when *parent_run_ids* is empty/None: a parentless
+    run's identity is its ``cmd_sha`` and the sidecar stays compact
+    (no redundant ``node_sha`` key).
+
+    Raises :class:`errors.SpecInvalid` when a parent sidecar is missing
+    (the declared dependency does not exist locally — submit the parent
+    first, or fix the run_id), when a parent sidecar carries no usable
+    identity, or when any identity is not a full 64-hex digest
+    (``compose_node_sha`` composes full digests only; 8-char prefixes
+    that satisfy some wire patterns cannot participate in a DAG node).
+    """
+    if not parent_run_ids:
+        return None
+    from hpc_agent.state.run_sha import compose_node_sha
+
+    parent_identities: list[str] = []
+    for parent_id in parent_run_ids:
+        try:
+            sidecar = read_run_sidecar(experiment_dir, parent_id)
+        except FileNotFoundError:
+            raise errors.SpecInvalid(
+                f"parent run {parent_id!r} has no sidecar under "
+                f"{experiment_dir}/.hpc/runs/ — a declared parent must have "
+                "been submitted (and its sidecar written) before a child can "
+                "compose its identity. Submit the parent first, or remove it "
+                "from `parents`."
+            ) from None
+        identity = sidecar.get("node_sha") or sidecar.get("cmd_sha")
+        if not identity:
+            raise errors.SpecInvalid(
+                f"parent run {parent_id!r}'s sidecar carries neither node_sha "
+                "nor cmd_sha — it cannot participate as a DAG parent."
+            )
+        parent_identities.append(str(identity))
+    try:
+        return compose_node_sha(cmd_sha, parent_identities)
+    except ValueError as exc:
+        raise errors.SpecInvalid(
+            f"cannot compose node identity for a parented run: {exc}. "
+            "DAG identity requires full 64-hex sha256 digests for the run's "
+            "cmd_sha and every parent identity."
+        ) from exc
+
+
 def find_run_by_cmd_sha(
     experiment_dir: Path,
     cmd_sha: str,
@@ -441,6 +512,7 @@ def find_run_by_cmd_sha(
     tasks_py_sha: str | None = None,
     invalidate_on_code_change: bool = False,
     campaign_id: str | None = None,
+    node_sha: str | None = None,
 ) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
@@ -505,15 +577,32 @@ def find_run_by_cmd_sha(
     campaign-iteration repeat and a code edit are decided independently.
     A same-machine resume of the in-progress iteration is handled earlier
     by the journal ``run_id`` path, not here.
+
+    *node_sha* is the DAG-lineage identity lever
+    (``docs/design/dag-kernel.md``). Both sides of the comparison use
+    the run's EFFECTIVE identity — its recorded ``node_sha`` when it
+    declared parents, its bare ``cmd_sha`` otherwise (the 0-parent
+    degeneracy makes these the same thing for parentless runs):
+
+    * ``node_sha=None`` (default) queries by bare ``cmd_sha`` —
+      byte-for-byte the historical behaviour for every sidecar that
+      predates DAG lineage. A sidecar that DID record a ``node_sha``
+      no longer matches a bare-cmd_sha query: same params consuming
+      different inputs are different experiments.
+    * ``node_sha=<composed>`` (from :func:`resolve_node_sha`) queries by
+      the composed identity, so a parented re-submit dedups only against
+      a prior run with the same params AND the same ancestry — never
+      against a stale run computed from a since-changed parent.
     """
     if not cmd_sha:
         return None
+    query_identity = node_sha or cmd_sha
     for path in find_existing_runs(experiment_dir):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
-        if data.get("cmd_sha") != cmd_sha:
+        if (data.get("node_sha") or data.get("cmd_sha")) != query_identity:
             continue
         if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
             continue

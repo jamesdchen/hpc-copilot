@@ -543,7 +543,7 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     """
     import json
 
-    from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
+    from hpc_agent.state.runs import resolve_node_sha, run_sidecar_path, write_run_sidecar
 
     target = run_sidecar_path(experiment_dir, spec.run_id)
     if target.is_file() and target.stat().st_size > 0:
@@ -667,6 +667,13 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         campaign_id=spec.campaign_id or None,
         runtime=spec.runtime,
         resources=resources or None,
+        parent_run_ids=spec.parents or None,
+        # Derived from the parents' on-disk sidecars (recursive identity,
+        # docs/design/dag-kernel.md). SpecInvalid on a missing parent or a
+        # non-64-hex cmd_sha — a parented run needs full parameter identity.
+        node_sha=resolve_node_sha(
+            experiment_dir, cmd_sha=cmd_sha, parent_run_ids=spec.parents or None
+        ),
     )
 
 
@@ -722,6 +729,10 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         # the activation verify-canary derives from this sidecar (#176).
         env=main.get("env") or None,
         env_group=main.get("env_group") or None,
+        # Mirror lineage verbatim: the canary IS the main run's first task,
+        # so it shares the main run's ancestry and composed identity.
+        parent_run_ids=main.get("parent_run_ids") or None,
+        node_sha=main.get("node_sha") or None,
     )
 
 
@@ -1175,6 +1186,20 @@ def _submit_one_spec(
     dedup_cmd_sha = (
         (spec.job_env.get("HPC_CMD_SHA") or None) if spec.invalidate_on_code_change else None
     )
+    # DAG lineage rides the same opt-in gate: when the cross-machine cmd_sha
+    # dedup engages AND this spec declared parents, the lookup keys on the
+    # composed node identity (params + ancestry) so a stale child computed
+    # from a since-changed parent is never replayed. resolve_node_sha
+    # re-reads the parents' sidecars here (cheap local reads) rather than
+    # trusting earlier flow state — same recompute-don't-trust stance as
+    # the sidecar write.
+    dedup_node_sha = None
+    if dedup_cmd_sha and spec.parents:
+        from hpc_agent.state.runs import resolve_node_sha as _resolve_node_sha
+
+        dedup_node_sha = _resolve_node_sha(
+            experiment_dir, cmd_sha=dedup_cmd_sha, parent_run_ids=spec.parents
+        )
     submit_and_record(
         experiment_dir,
         spec=_SubmitSpec(
@@ -1190,6 +1215,7 @@ def _submit_one_spec(
             invalidate_on_code_change=spec.invalidate_on_code_change,
         ),
         cmd_sha=dedup_cmd_sha,
+        node_sha=dedup_node_sha,
         invalidate_on_code_change=spec.invalidate_on_code_change,
         # #299 auto-resume keystone — persist what a monitor-side auto-resume
         # would re-submit *with* (the actual augmented env that shipped to the

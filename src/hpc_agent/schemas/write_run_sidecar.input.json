@@ -280,6 +280,23 @@
       "default": null,
       "title": "Trial Tokens"
     },
+    "parent_run_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Run Ids"
+    },
     "job_ids": {
       "anyOf": [
         {

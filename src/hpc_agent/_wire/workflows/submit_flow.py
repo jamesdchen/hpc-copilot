@@ -294,6 +294,25 @@ class SubmitFlowSpec(BaseModel):
         ),
     )
     campaign_id: CampaignId | None = Field(default=None)
+    parents: list[RunIdStrict] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Run_ids whose outputs this run consumes (DAG lineage, "
+            "docs/design/dag-kernel.md). Each must have a local sidecar "
+            "under .hpc/runs/. The framework records them as "
+            "parent_run_ids on this run's sidecar and derives node_sha = "
+            "compose_node_sha(cmd_sha, parent identities) so dedup keys on "
+            "params AND ancestry — a parent re-run with changed params can "
+            "never silently replay this child's stale results. Opaque "
+            "lineage only: the framework hands paths across the edge "
+            "(parent_records()), never interprets them. Readiness is NOT "
+            "checked here — compose validate-parents-ready first. Callers "
+            "that need the lineage cluster-side forward it themselves via "
+            "job_env (HPC_PARENT_RUN_IDS), same convention as "
+            "HPC_CAMPAIGN_ID."
+        ),
+    )
     runtime: Runtime | None = Field(default=None)
     auto_resume_on_kill: bool = Field(
         default=False,

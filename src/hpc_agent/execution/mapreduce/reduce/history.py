@@ -30,6 +30,7 @@ from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
 __all__ = [
     "find_sidecars_by_campaign",
+    "parent_records",
     "prior",
     "prior_records",
     "result_dirs_for_sidecar",
@@ -221,6 +222,51 @@ def prior_records(
         records.append(
             {
                 "run_id": sidecar.get("run_id", ""),
+                "campaign_id": sidecar.get("campaign_id"),
+                "trial_tokens": sidecar.get("trial_tokens"),
+                "result_dirs": [str(d) for d in dirs],
+                "metrics": reduce_metrics(dirs),
+                "complete": bool(dirs),
+            }
+        )
+    return records
+
+
+def parent_records(
+    experiment_dir: Path,
+    parent_run_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Per-parent records for an explicitly-declared dependency set.
+
+    The lineage accessor of the DAG kernel
+    (``docs/design/dag-kernel.md``): where :func:`prior_records` walks
+    a campaign's iterations (an implicit linear order), this resolves the
+    exact runs a child declared as ``parents`` on its submit spec —
+    typically read by the child's ``tasks.py`` at module load to locate
+    its inputs. Records carry the same keys as :func:`prior_records`
+    (``run_id`` / ``campaign_id`` / ``trial_tokens`` / ``result_dirs`` /
+    ``metrics`` / ``complete``), in *parent_run_ids* order, one per
+    distinct run_id (duplicates collapse — parents are a set).
+
+    Opacity is the contract: the framework hands back paths and reduced
+    metrics; what crosses the edge — which files, what format, whether
+    the contents are usable — is the caller's to decide.
+
+    Unlike ``prior_records`` (which tolerates unreadable sidecars because
+    a campaign walk is best-effort), a missing parent sidecar raises
+    :class:`FileNotFoundError`: the caller named this exact dependency,
+    so its absence is an error to surface, not a record to skip. Pure
+    sidecar+filesystem read (no SSH, no journal) — safe at ``tasks.py``
+    module load; for *readiness* (did the parent finish?), compose the
+    ``validate-parents-ready`` primitive, which consults the journal.
+    """
+    records: list[dict[str, Any]] = []
+    for run_id in dict.fromkeys(parent_run_ids):
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
+        records.append(
+            {
+                "run_id": sidecar.get("run_id", run_id),
                 "campaign_id": sidecar.get("campaign_id"),
                 "trial_tokens": sidecar.get("trial_tokens"),
                 "result_dirs": [str(d) for d in dirs],

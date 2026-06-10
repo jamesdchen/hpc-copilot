@@ -75,6 +75,7 @@ def submit_and_record(
     *,
     spec: SubmitSpec,
     cmd_sha: str | None = None,
+    node_sha: str | None = None,
     tasks_py_sha: str | None = None,
     invalidate_on_code_change: bool = False,
     script: str = "",
@@ -105,7 +106,11 @@ def submit_and_record(
     returned ``deduped`` flag before issuing them.
 
     *cmd_sha* / *tasks_py_sha* / *invalidate_on_code_change* drive the
-    cross-machine (journal-wiped) dedup fallback below. ``cmd_sha`` is
+    cross-machine (journal-wiped) dedup fallback below. *node_sha* is the
+    DAG-lineage refinement of that key: when the run declared parents,
+    the caller passes the composed identity from
+    :func:`hpc_agent.state.runs.resolve_node_sha` and the fallback keys
+    on params AND ancestry instead of bare params. ``cmd_sha`` is
     PARAMETER identity (#207): an executor-body edit with unchanged swept
     params keeps the same ``cmd_sha`` and dedups against the prior run by
     design. Supplying *invalidate_on_code_change* (the opt-in
@@ -173,6 +178,13 @@ def submit_and_record(
         sidecar_path = find_run_by_cmd_sha(
             experiment_dir,
             cmd_sha,
+            # DAG lineage (docs/design/dag-kernel.md): when the caller
+            # composed a node_sha (params + ancestry), the lookup keys on
+            # the effective identity so a parented submit never dedups
+            # against a run computed from different/changed parents. None
+            # (the default, and every pre-DAG caller) keeps the historical
+            # bare-cmd_sha key.
+            node_sha=node_sha,
             tasks_py_sha=current_tasks_py_sha,
             invalidate_on_code_change=invalidate_on_code_change,
             # Campaign iterations deliberately re-run (a stochastic strategy

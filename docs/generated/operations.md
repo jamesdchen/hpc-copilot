@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**91 operations total**: 80 primitive atoms + 11 workflow atoms.
+**92 operations total**: 81 primitive atoms + 11 workflow atoms.
 
 ## How to read this page
 
@@ -64,7 +64,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`verify-aggregation-complete`](../primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` | `_(none)_` | — | — |
 | [`verify-submitted`](../primitives/verify-submitted.md) | ✓ | ssh | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
 
-## `validate` (14)
+## `validate` (15)
 
 Read + binary health check. Same composability as `query`.
 
@@ -81,6 +81,7 @@ Read + binary health check. Same composability as `query`.
 | [`submit-preflight`](../primitives/submit-preflight.md) | ✓ | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]` | `_(none)_` | — | — |
 | [`validate-executor-signatures`](../primitives/validate-executor-signatures.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-input-dataset`](../primitives/validate-input-dataset.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
+| [`validate-parents-ready`](../primitives/validate-parents-ready.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-self-qos-limit`](../primitives/validate-self-qos-limit.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |

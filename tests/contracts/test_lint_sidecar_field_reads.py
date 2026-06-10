@@ -76,6 +76,8 @@ _V2_CONFIG = frozenset(
         "aggregate_defaults",
         "results",
         "trial_tokens",
+        "parent_run_ids",
+        "node_sha",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

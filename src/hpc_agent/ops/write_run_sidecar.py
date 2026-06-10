@@ -31,6 +31,7 @@ from hpc_agent._wire.actions.write_run_sidecar import WriteRunSidecarInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.submit_flow import _is_runnable_executor
+from hpc_agent.state.runs import resolve_node_sha
 from hpc_agent.state.runs import write_run_sidecar as _write_run_sidecar
 
 
@@ -123,6 +124,16 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         aggregate_defaults=spec.aggregate_defaults,
         results=spec.results,
         trial_tokens=spec.trial_tokens,
+        parent_run_ids=spec.parent_run_ids,
+        # Derived, never caller-asserted: a supplied node_sha could decouple
+        # the child from its real ancestry. resolve_node_sha raises
+        # SpecInvalid on a missing parent sidecar or a non-64-hex identity
+        # (the wire model admits 8-char cmd_sha prefixes; DAG nodes don't).
+        node_sha=resolve_node_sha(
+            Path(experiment_dir),
+            cmd_sha=spec.cmd_sha,
+            parent_run_ids=spec.parent_run_ids,
+        ),
         job_ids=spec.job_ids,
     )
     return {"path": str(target)}

@@ -399,6 +399,7 @@ def test_no_orphan_input_schemas() -> None:
         "validate-self-qos-limit",
         "validate-stochastic-marker",
         "validate-walltime-against-history",
+        "validate-parents-ready",
     }
     unexpected = sorted(set(orphans) - documented_composed_only)
     assert not unexpected, (

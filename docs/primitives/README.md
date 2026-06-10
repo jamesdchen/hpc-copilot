@@ -144,6 +144,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [submit-preflight](submit-preflight.md) | yes | _none_ | `hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>]` |
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [validate-parents-ready](validate-parents-ready.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-stochastic-marker](validate-stochastic-marker.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `(none — Python-only primitive)` |

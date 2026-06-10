@@ -9,6 +9,7 @@ Validators (all primitives keep their existing ``validate-*`` wire name):
 
 * :mod:`hpc_agent.ops.validate.executor_signatures`
 * :mod:`hpc_agent.ops.validate.input_dataset`
+* :mod:`hpc_agent.ops.validate.parents_ready`
 * :mod:`hpc_agent.ops.validate.self_qos_limit`
 * :mod:`hpc_agent.ops.validate.stochastic_marker`
 * :mod:`hpc_agent.ops.validate.walltime_against_history`

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_parents_ready.input.json",
+  "title": "ValidateParentsReadySpec",
+  "type": "object",
+  "required": [
+    "parent_run_ids"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "parent_run_ids": {
+      "description": "The run_ids the about-to-submit spec declares as `parents`. Order is irrelevant (parents are a set); duplicates are checked once.",
+      "items": {
+        "pattern": "^[A-Za-z0-9._\\-]+$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Parent Run Ids",
+      "type": "array"
+    }
+  }
+}

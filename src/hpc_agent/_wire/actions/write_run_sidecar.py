@@ -122,4 +122,8 @@ class WriteRunSidecarInput(BaseModel):
     # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
     # and re-surfaced by prior_records(); never interpreted by the framework.
     trial_tokens: list[Any] | None = None
+    # Run_ids whose outputs this run consumes (DAG lineage). The primitive
+    # derives node_sha from these via resolve_node_sha — identity is computed
+    # from the parents' on-disk sidecars, never asserted by the caller.
+    parent_run_ids: list[RunIdStrict] | None = Field(default=None, min_length=1)
     job_ids: list[str] | None = None
