@@ -299,6 +299,8 @@ There is **no `skip_preflight`** field (#275 Fix 2): preflight runs inside `subm
 hpc-agent submit-pipeline --spec spec.json --experiment-dir .
 ```
 
+Run this call **foreground with an explicit Bash `timeout: 600000`** — the pipeline waits out the canary in-process (minutes by design), and an un-timeouted call is auto-backgrounded by the harness at 2 minutes. If it is backgrounded or times out anyway: poll the task's output until the single JSON envelope appears, and branch on that envelope. **Never end your run while the pipeline is still executing** — your exit kills it (empirical 2026-06-11: killed between the main-array qsub and the journal write; the job id was lost and the run became untrackable). **Never report success from side-state**: a canary journal entry or `load-context` showing the canary in flight proves only that the canary fired — the pipeline envelope is the only result.
+
 Branch on the single envelope's `stage_reached` (`needs_decision` tells you whether a genuine decision is handed back):
 
 - `deduped` (`needs_decision=false`) → the main run already ran; original jobs are live. Record `deduped: <run_id>` in `anomalies`; switch to the status workflow. Do NOT re-submit.

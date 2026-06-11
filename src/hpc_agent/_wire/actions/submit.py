@@ -8,6 +8,7 @@ from hpc_agent._wire._shared import (
     CampaignId,
     RunIdStrict,
     Runtime,
+    SchedulerJobId,
     SshTarget,
 )
 
@@ -23,7 +24,10 @@ class SubmitSpec(BaseModel):
     remote_path: str = Field(min_length=1)
     job_name: str = Field(min_length=1)
     run_id: RunIdStrict
-    job_ids: list[str] = Field(min_length=1)
+    # SchedulerJobId (digit-leading) refuses fabricated placeholder ids at the
+    # journal boundary — recording prose like "purged-completed" poisons every
+    # downstream alive-check/qacct probe (empirical 2026-06-11 demo).
+    job_ids: list[SchedulerJobId] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     runtime: Runtime | None = None
     campaign_id: CampaignId | None = None

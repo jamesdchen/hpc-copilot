@@ -256,7 +256,24 @@ def _reconcile_one(
 
     record = load_run(experiment_dir, run_id)
     if record is None:
-        raise errors.JournalCorrupt(f"no run record for {run_id!r}")
+        # The sidecar may carry job_ids the journal never got (the post-qsub
+        # pre-stamp in submit-flow lands them even when the process dies
+        # before submit_and_record — empirical 2026-06-11 demo). Name the real
+        # ids in the remediation so the caller mints the record from THEM via
+        # `hpc-agent submit-spec --spec <file>`, never an invented placeholder
+        # (submit-spec refuses non-scheduler-shaped ids at intake).
+        try:
+            _stranded = list(read_run_sidecar(experiment_dir, run_id).get("job_ids") or [])
+        except (OSError, json.JSONDecodeError):
+            _stranded = []
+        hint = (
+            f" Sidecar .hpc/runs/{run_id}.json carries job_ids {_stranded} from the "
+            "post-qsub pre-stamp; mint the journal record with `hpc-agent submit-spec "
+            "--spec <file>` using those ids, then re-run."
+            if _stranded
+            else ""
+        )
+        raise errors.JournalCorrupt(f"no run record for {run_id!r}.{hint}")
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)

@@ -6,7 +6,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from hpc_agent._wire._shared import BackendName, FailureCategoryResubmittable
+from hpc_agent._wire._shared import (
+    BackendName,
+    FailureCategoryResubmittable,
+    SchedulerJobId,
+)
 
 
 class ResubmitSpec(BaseModel):
@@ -24,7 +28,9 @@ class ResubmitSpec(BaseModel):
         default=None,
         description="Resource overrides for retry (mem, walltime, gpus, ...).",
     )
-    new_job_ids: list[str] | None = None
+    # SchedulerJobId: a recorded resubmission must carry real scheduler ids,
+    # never fabricated placeholders (see _shared.SchedulerJobId rationale).
+    new_job_ids: list[SchedulerJobId] | None = None
     request_id: str | None = Field(
         default=None,
         description=(

@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.63 — 2026-06-11
+
+### Fixed — lost main-array job id: post-qsub sidecar pre-stamp + fabricated-id guard + worker wait discipline
+
+The 2026-06-11 demo's main array (job 13610902) ran to 100/100 but was untrackable: the worker exited while its auto-backgrounded `submit-pipeline` was still executing, the harness killed the pipeline ~1s after the main qsub — before `submit_and_record` — so the scheduler id existed nowhere on disk (journal, local sidecar, remote sidecar all empty). The orchestrator's "recovery" was to mint the journal record with fabricated `job_ids: ["purged-completed"]`, poisoning every downstream alive-check/qacct probe. Three-layer fix:
+
+- **Crash-safety pre-stamp** — `submit-flow` now persists the just-parsed job ids to the run sidecar IMMEDIATELY after each qsub (canary and main), before any other work. A process death in the qsub → record window leaves the real ids recoverable through every existing sidecar-reading path. Best-effort and idempotent under the canonical stamp inside `submit_and_record`.
+- **`SchedulerJobId` boundary guard** — `SubmitSpec.job_ids`, `ResubmitSpec.new_job_ids`, and `WriteRunSidecarInput.job_ids` now require digit-leading scheduler-issued ids (SGE `13610902`, SLURM `8570940_3`, PBS `1234.pbs01`); prose placeholders like `purged-completed` fail `spec_invalid` at intake. Schemas regenerated. `reconcile`'s `no run record` remediation now names the sidecar's pre-stamped ids and the `submit-spec` mint path instead of leaving the agent to invent.
+- **Worker wait discipline** — `worker_prompts/submit.md`: run `submit-pipeline` foreground with an explicit `timeout: 600000` (an un-timeouted call is auto-backgrounded at 2 min); if backgrounded anyway, poll the task output for the envelope; never end the run while the pipeline executes; never report success from canary side-state. `agents/hpc-worker.md` gains the generic your-exit-kills-your-background-tasks rule.
+
 ## 0.10.62 — 2026-06-11
 
 ### Fixed — review findings on the 0.10.59–0.10.61 work

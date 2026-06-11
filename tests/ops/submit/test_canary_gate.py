@@ -101,7 +101,7 @@ def test_canary_only_submits_canary_not_main(tmp_path, _journal_home) -> None:
             sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
         ),
         mock.patch.object(sf, "build_remote_backend", return_value=mock.MagicMock()),
-        mock.patch.object(sf, "_make_single_array_submission", return_value=["canary_job"]) as mk,
+        mock.patch.object(sf, "_make_single_array_submission", return_value=["100"]) as mk,
         mock.patch.object(sf, "submit_and_record"),
     ):
         res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec)
@@ -110,7 +110,7 @@ def test_canary_only_submits_canary_not_main(tmp_path, _journal_home) -> None:
     assert res.main_launched is False
     assert res.job_ids == []
     assert res.canary_run_id == "rX-canary"
-    assert res.canary_job_ids == ["canary_job"]
+    assert res.canary_job_ids == ["100"]
     assert mk.call_count == 1  # only the canary array; the main qsub never fired
 
     # The canary sidecar was mirrored from the main (real executor, 1 task).
@@ -128,13 +128,13 @@ def test_phase2_canary_false_launches_main(tmp_path, _journal_home) -> None:
     with (
         mock.patch.object(sf, "_augment_job_env", return_value={"EXECUTOR": "x"}),
         mock.patch.object(sf, "build_remote_backend", return_value=mock.MagicMock()),
-        mock.patch.object(sf, "_make_single_array_submission", return_value=["main_job"]) as mk,
+        mock.patch.object(sf, "_make_single_array_submission", return_value=["200"]) as mk,
         mock.patch.object(sf, "submit_and_record"),
     ):
         res = sf._submit_one_spec(experiment_dir=tmp_path, spec=spec)
 
     assert res.main_launched is True
-    assert res.job_ids == ["main_job"]
+    assert res.job_ids == ["200"]
     assert res.canary_done is False
     assert mk.call_count == 1  # the main array
 

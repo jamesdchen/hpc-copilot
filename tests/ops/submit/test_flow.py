@@ -345,7 +345,7 @@ class TestSubmitFlowBatch:
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
                 run_id=spec.run_id,
-                job_ids=["job_r0"],
+                job_ids=["900"],
                 total_tasks=spec.total_tasks,
                 deduped=False,
                 canary_done=False,
@@ -542,7 +542,7 @@ class TestSubmitFlowBatch:
                 ssh_target="user@host",
                 remote_path="/r",
                 job_name="r0",
-                job_ids=["already"],
+                job_ids=["901"],
                 total_tasks=4,
                 submitted_at="2026-01-01T00:00:00+00:00",
                 experiment_dir=str(tmp_path.resolve()),
@@ -566,7 +566,7 @@ class TestSubmitFlowBatch:
         assert push_deploy.call_count == 1  # still ONE rsync+deploy for the fresh subset
         assert submit_one.call_count == 2  # only r1 + r2 get qsubbed
         assert results[0].deduped is True
-        assert results[0].job_ids == ["already"]
+        assert results[0].job_ids == ["901"]
         assert results[1].deduped is False and results[1].job_ids == ["new_r1"]
         assert results[2].deduped is False and results[2].job_ids == ["new_r2"]
 
@@ -1068,7 +1068,7 @@ def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any)
     ):
         submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
             run_id=spec.run_id,
-            job_ids=["j"],
+            job_ids=["1"],
             total_tasks=spec.total_tasks,
             deduped=False,
             canary_done=True,
@@ -1113,7 +1113,7 @@ def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -
     ):
         submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
             run_id=spec.run_id,
-            job_ids=["j"],
+            job_ids=["1"],
             total_tasks=spec.total_tasks,
             deduped=False,
             canary_done=True,
@@ -1137,7 +1137,7 @@ class TestCheckpointCanaryEnv:
 
         def _fake_submit(backend, *, job_name, total_tasks, job_env, cwd, **_kw):
             captured[job_name] = dict(job_env)
-            return ["job_1"]
+            return ["101"]
 
         with (
             mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
@@ -1219,7 +1219,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
         assert preflight.call_args.kwargs["skip"] is True
@@ -1237,7 +1237,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_preflight=True)
         assert preflight.call_args.kwargs["skip"] is True
@@ -1256,7 +1256,7 @@ class TestSkipPreflightDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
         assert preflight.call_args.kwargs["skip"] is False
@@ -1325,7 +1325,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
         assert push_deploy.call_count == 0
@@ -1343,7 +1343,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]), _skip_rsync_deploy=True)
         assert push_deploy.call_count == 0
@@ -1362,7 +1362,7 @@ class TestSkipRsyncDeployDemotion:
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
-                run_id=spec.run_id, job_ids=["j"], total_tasks=4, deduped=False, canary_done=False
+                run_id=spec.run_id, job_ids=["1"], total_tasks=4, deduped=False, canary_done=False
             )
             submit_flow_batch(tmp_path, spec=_batch([_spec("r0")]))
         assert push_deploy.call_count == 1
@@ -1470,7 +1470,7 @@ class TestTerminalNotBlocking:
         ):
             submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
                 run_id=spec.run_id,
-                job_ids=["fresh"],
+                job_ids=["77"],
                 total_tasks=4,
                 deduped=False,
                 canary_done=False,
@@ -1479,7 +1479,7 @@ class TestTerminalNotBlocking:
         # It proceeded to a real submission rather than short-circuiting deduped.
         assert submit_one.call_count == 1
         assert results[0].deduped is False
-        assert results[0].job_ids == ["fresh"]
+        assert results[0].job_ids == ["77"]
 
     def test_complete_record_still_dedups(self, tmp_path: Any, _journal_home: Any) -> None:
         """Idempotency preserved: a `complete` run with the same run_id still dedups."""
@@ -1507,7 +1507,7 @@ class TestTerminalNotBlocking:
         from hpc_agent._wire.actions.submit import SubmitSpec
         from hpc_agent.ops.submit.runner import submit_and_record
 
-        _seed_record(tmp_path, "r0", status, job_ids=["old"])
+        _seed_record(tmp_path, "r0", status, job_ids=["70"])
         spec = SubmitSpec(
             profile="p",
             cluster="c",
@@ -1515,7 +1515,7 @@ class TestTerminalNotBlocking:
             remote_path="/r",
             job_name="r0",
             run_id="r0",
-            job_ids=["new"],
+            job_ids=["71"],
             total_tasks=4,
         )
         with warnings.catch_warnings():
@@ -1523,7 +1523,7 @@ class TestTerminalNotBlocking:
             warnings.simplefilter("ignore")
             record, deduped = submit_and_record(tmp_path, spec=spec)
         assert deduped is False  # terminal-not-complete → fresh record, not a replay
-        assert record.job_ids == ["new"]
+        assert record.job_ids == ["71"]
 
     def test_backfills_provenance_onto_prewritten_sidecar(
         self, tmp_path: Any, _journal_home: Any
@@ -1586,3 +1586,105 @@ class TestTerminalNotBlocking:
         sc = read_run_sidecar(tmp_path, "rKeep")
         assert sc["data_sha"] == "e" * 64
         assert sc["env_hash"] == "f" * 64
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 — post-qsub sidecar pre-stamp (crash-safety in the qsub→record gap)
+# ---------------------------------------------------------------------------
+
+
+class TestPostQsubSidecarPreStamp:
+    """The 2026-06-11 demo lost main-array job id 13610902: the worker exited
+    with the pipeline auto-backgrounded and the harness killed it ~1s after
+    qsub — before ``submit_and_record`` — so the id existed nowhere on disk
+    and the orchestrator "recovered" by fabricating ``["purged-completed"]``.
+    The pre-stamp persists the parsed ids to the sidecar IMMEDIATELY after
+    qsub, so a crash in that window leaves the real ids recoverable through
+    every sidecar-reading path (reconcile remediation, cross-machine
+    reconstruction, load-context)."""
+
+    def _seed_sidecar(self, tmp_path: Any, run_id: str) -> None:
+        from hpc_agent.state.runs import write_run_sidecar
+
+        write_run_sidecar(
+            tmp_path,
+            run_id=run_id,
+            cmd_sha="0" * 64,
+            hpc_agent_version="0.0.0",
+            submitted_at="2026-06-11T00:00:00Z",
+            executor="python3 run.py",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="1" * 64,
+        )
+
+    def test_main_job_ids_stamped_even_when_record_never_runs(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import _submit_one_spec
+        from hpc_agent.state.runs import read_run_sidecar
+
+        self._seed_sidecar(tmp_path, "rStamp")
+        spec = _spec("rStamp")
+
+        def _killed(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("process died between qsub and record")
+
+        with (
+            mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
+            mock.patch.object(
+                sf_module, "_make_single_array_submission", return_value=["13610902"]
+            ),
+            mock.patch.object(sf_module, "submit_and_record", side_effect=_killed),
+            mock.patch.object(sf_module, "load_run", return_value=None),
+            pytest.raises(RuntimeError, match="between qsub and record"),
+        ):
+            _submit_one_spec(experiment_dir=tmp_path, spec=spec)
+
+        # The whole point: the id survived even though the journal write didn't.
+        assert read_run_sidecar(tmp_path, "rStamp")["job_ids"] == ["13610902"]
+
+    def test_canary_job_ids_stamped_before_record(self, tmp_path: Any, _journal_home: Any) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import _submit_one_spec
+        from hpc_agent.state.runs import read_run_sidecar
+
+        self._seed_sidecar(tmp_path, "rStampC")
+        spec = _spec("rStampC", canary=True, force_canary=True, canary_only=True)
+
+        def _killed(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("died before canary record")
+
+        with (
+            mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
+            mock.patch.object(
+                sf_module, "_make_single_array_submission", return_value=["13610900"]
+            ),
+            mock.patch.object(sf_module, "submit_and_record", side_effect=_killed),
+            mock.patch.object(sf_module, "load_run", return_value=None),
+            pytest.raises(RuntimeError, match="before canary record"),
+        ):
+            _submit_one_spec(experiment_dir=tmp_path, spec=spec)
+
+        # _mirror_canary_sidecar ran for real, so the canary sidecar exists and
+        # carries the pre-stamped id.
+        assert read_run_sidecar(tmp_path, "rStampC-canary")["job_ids"] == ["13610900"]
+
+    def test_missing_sidecar_does_not_fail_the_submission(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """The stamp is best-effort: no sidecar on disk (legacy caller) must
+        not turn a landed qsub into a submit-flow error."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import _submit_one_spec
+
+        spec = _spec("rNoSc")
+        with (
+            mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
+            mock.patch.object(sf_module, "_make_single_array_submission", return_value=["4242"]),
+            mock.patch.object(sf_module, "submit_and_record"),
+            mock.patch.object(sf_module, "load_run", return_value=None),
+        ):
+            result = _submit_one_spec(experiment_dir=tmp_path, spec=spec)
+        assert result.job_ids == ["4242"]

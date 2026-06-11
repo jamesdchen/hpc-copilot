@@ -173,6 +173,7 @@ _PATTERN_FIXTURES: dict[str, str] = {
     r"^[^@]+@[^@]+$": "u@h",  # SshTarget
     r"^[0-9a-fA-F]{64}$": "a" * 64,  # cmd_sha (build_submit_spec)
     r"^[0-9a-f]{8,64}$": "a" * 8,  # cmd_sha (interview)
+    r"^\d[A-Za-z0-9._+\-]*$": "1",  # SchedulerJobId
 }
 
 

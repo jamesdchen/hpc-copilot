@@ -18,6 +18,7 @@ from hpc_agent._wire._shared import (
     CampaignId,
     RunIdStrict,
     Runtime,
+    SchedulerJobId,
 )
 
 # Placeholders that are CONSTANT across all tasks in a run — using only
@@ -131,4 +132,6 @@ class WriteRunSidecarInput(BaseModel):
     # Both are bare sha256 hex; an empty/absent value means "not captured".
     data_sha: str | None = Field(default=None, pattern=r"^([0-9a-f]{64})?$")
     env_hash: str | None = Field(default=None, pattern=r"^([0-9a-f]{64})?$")
-    job_ids: list[str] | None = None
+    # SchedulerJobId: a sidecar's job_ids feed every alive-check/qacct probe —
+    # refuse fabricated placeholders (see _shared.SchedulerJobId rationale).
+    job_ids: list[SchedulerJobId] | None = None

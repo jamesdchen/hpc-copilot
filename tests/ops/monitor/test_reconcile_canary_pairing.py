@@ -201,3 +201,44 @@ def test_reconcile_threads_remote_activation_to_reporter(tmp_path, monkeypatch):
     assert captured.get("remote_activation"), (
         "reporter was called without an activation prefix — bare-python path will fail"
     )
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 — no-run-record remediation names the sidecar's pre-stamped ids
+# ---------------------------------------------------------------------------
+
+
+def test_no_record_hint_names_sidecar_job_ids(tmp_path, monkeypatch):
+    """When the journal has no record but the sidecar carries pre-stamped
+    job_ids (submit-flow's post-qsub crash-safety stamp), the JournalCorrupt
+    remediation must name the REAL ids + the submit-spec mint path — the
+    2026-06-11 demo's dead-end here is what pushed the orchestrator into
+    fabricating ``["purged-completed"]``."""
+    from hpc_agent.state.runs import update_run_sidecar_job_ids, write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id="rLost",
+        cmd_sha="0" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-06-11T00:00:00Z",
+        executor="python3 run.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=100,
+        tasks_py_sha="1" * 64,
+    )
+    update_run_sidecar_job_ids(tmp_path, "rLost", ["13610902"])
+
+    with pytest.raises(errors.JournalCorrupt) as exc:
+        recon._reconcile_one(tmp_path, "rLost", scheduler="sge")
+    msg = str(exc.value)
+    assert "13610902" in msg
+    assert "submit-spec" in msg
+
+
+def test_no_record_no_sidecar_keeps_bare_message(tmp_path, monkeypatch):
+    with pytest.raises(errors.JournalCorrupt) as exc:
+        recon._reconcile_one(tmp_path, "rGone", scheduler="sge")
+    msg = str(exc.value)
+    assert "no run record" in msg
+    assert "submit-spec" not in msg

@@ -1185,6 +1185,19 @@ def _submit_one_spec(
                 cwd=experiment_dir,
                 resources=canary_resources,
             )
+            # Crash-safety pre-stamp: persist the just-parsed job ids to the
+            # sidecar IMMEDIATELY. If this process dies before
+            # submit_and_record lands the journal entry (empirical 2026-06-11
+            # demo: the worker exited with the pipeline auto-backgrounded, the
+            # harness killed it ~1s after the main qsub), the scheduler id is
+            # otherwise lost with zero trace on disk and the run becomes
+            # unrecoverable bookkeeping-wise. Best-effort — the canonical
+            # stamp inside submit_and_record is idempotent over this one, and
+            # a stamp failure must never fail a submission that already landed.
+            from hpc_agent.state.runs import update_run_sidecar_job_ids
+
+            with contextlib.suppress(Exception):
+                update_run_sidecar_job_ids(experiment_dir, canary_run_id, canary_job_ids)
             from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
             submit_and_record(
@@ -1241,6 +1254,17 @@ def _submit_one_spec(
         resources=spec.resources,
         extra_flags=afterok_flags,
     )
+    # Crash-safety pre-stamp — same rationale as the canary stamp above: the
+    # 2026-06-11 demo lost main-array job id 13610902 to a process kill in
+    # exactly this qsub → submit_and_record window, and the orchestrator's
+    # only "recovery" was fabricating a placeholder id. With the sidecar
+    # stamped here, every existing sidecar-reading recovery path (reconcile,
+    # submit_and_record's cross-machine reconstruction, load-context) can see
+    # the real ids even when the journal write below never happens.
+    from hpc_agent.state.runs import update_run_sidecar_job_ids
+
+    with contextlib.suppress(Exception):
+        update_run_sidecar_job_ids(experiment_dir, spec.run_id, job_ids)
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
     # #207 opt-in code-iteration lever. Default (flag off): pass NO cmd_sha

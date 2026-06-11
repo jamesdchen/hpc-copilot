@@ -48,6 +48,7 @@
     },
     "job_ids": {
       "items": {
+        "pattern": "^\\d[A-Za-z0-9._+\\-]*$",
         "type": "string"
       },
       "minItems": 1,
