@@ -3,9 +3,9 @@
 This is *harness-mediated*, not a CLI ``@primitive``: Claude Code runs it as a
 ``command`` hook wired into ``~/.claude/settings.json``'s ``hooks.PostToolUse``
 array (see :func:`hpc_agent.agent_assets.install_agent_assets`). It is invoked
-by the harness after every tool call, receives the PostToolUse payload as JSON
-on **stdin**, and may emit a JSON object on **stdout** to inject context into
-the agent's next observation.
+by the harness after every matched tool call, receives the PostToolUse payload
+as JSON on **stdin**, and may emit a JSON object on **stdout** to inject
+context into the agent's next observation.
 
 Why it exists
 -------------
@@ -13,36 +13,56 @@ A parent skill that composes ``Skill(<sub>)`` must, by prose discipline, chain
 ``hpc-agent fetch-skill-return --skill <sub>`` to read the sub-skill's return
 envelope from ``<experiment_dir>/.hpc/_returns/<skill>.json`` (see
 :mod:`hpc_agent.cli.skill_returns`). That manual follow-up is one of two seams
-where the parent's prose-discipline still matters. This hook removes it: after a
-composed ``Skill(<sub>)`` for a *known* sub-skill returns, it reads the committed
-return envelope and injects it as ``additionalContext`` so the envelope is in the
-agent's next observation whether or not the parent remembered to fetch it.
+where the parent's prose-discipline still matters. This hook removes it: the
+moment the sub-skill's final ``hpc-agent emit-skill-return`` Bash call commits
+the envelope, the hook reads it back and injects it as ``additionalContext`` so
+the envelope is in the agent's next observation whether or not the parent
+remembers to fetch it.
+
+Why it fires on ``Bash``/``emit-skill-return``, not on ``Skill``
+----------------------------------------------------------------
+The pre-0.10.58 version matched the ``Skill`` tool, on the assumption that
+"the ``Skill(<sub>)`` call returned" meant "the sub-skill finished". It does
+not: Claude Code's ``Skill`` tool returns *immediately* — its tool result is
+the injected skill instructions, and the sub-skill's steps (including the
+final ``emit-skill-return``) run **afterwards** as ordinary tool calls in the
+same conversation. At ``PostToolUse(Skill)`` time the envelope cannot exist
+yet, so the hook was a structural no-op on every fresh run (and could only
+ever inject a *stale* envelope left over from a prior run). The corrected
+trigger is the one event that coincides with the envelope existing: the
+``Bash`` call whose command invokes ``emit-skill-return`` for a known skill.
+(Empirical: 2026-06-10 demo, ``hpc-wrap-entry-point`` emitted its return and
+the turn still ended with the envelope unfetched — the "net" never fired.)
 
 Contract & defensiveness
 ------------------------
 The hook is a **pure, additive, fail-open** observer:
 
-* It only acts when the just-completed tool is ``Skill`` and the resolved
-  sub-skill name is in :data:`hpc_agent.cli.skill_returns._KNOWN_SKILLS`.
+* It only acts when the just-completed tool is ``Bash``, its command invokes
+  ``emit-skill-return`` with a ``--skill`` in
+  :data:`hpc_agent.cli.skill_returns._KNOWN_SKILLS`.
 * For any other tool, an unknown/unresolvable skill, a missing or malformed
   return file, or a malformed payload, it is a **clean no-op** — it prints
   nothing and exits ``0``. It never raises and never exits non-zero, so it can
-  never block a tool call or crash the harness.
+  never block a tool call or crash the harness. A failed emit (validation
+  refusal) leaves no committed file, so it degrades to the same no-op.
 * It does **not** delete the return file (unlike the manual
   ``fetch-skill-return``, which clears by default). Leaving the file on disk
   keeps the existing parent-side ``fetch-skill-return`` prose working
   unchanged — the injection is purely additive context, not a replacement for
   the documented seam.
 
-The ``experiment_dir`` is taken from the payload's ``cwd`` (the directory the
-harness ran the tool in), which is the experiment directory skills operate
-from. If ``cwd`` is absent we fall back to :func:`os.getcwd`.
+The ``experiment_dir`` is taken from the emit command's own
+``--experiment-dir`` flag when present (the authoritative location the emitter
+wrote to), falling back to the payload's ``cwd`` and finally
+:func:`os.getcwd`.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -51,39 +71,54 @@ from typing import Any
 # Re-exported from the CLI primitive so this hook and the verbs can never drift.
 from hpc_agent.cli.skill_returns import _KNOWN_SKILLS, _committed_path
 
-__all__ = ["build_hook_output", "extract_skill_name", "main"]
+__all__ = ["build_hook_output", "extract_emit_invocation", "main"]
+
+# ``--skill <name>`` / ``--skill=<name>`` (optionally quoted) inside the Bash
+# command. The name charset mirrors skill_returns._SKILL_NAME_RE.
+_SKILL_FLAG_RE = re.compile(r"--skill(?:=|\s+)['\"]?([a-z][a-z0-9-]*)")
+# ``--experiment-dir <path>`` — double-quoted, single-quoted, or a bare token
+# (stopping at whitespace and shell metacharacters so a chained ``&& next``
+# or a closing paren is not swallowed into the path).
+_EXPERIMENT_DIR_FLAG_RE = re.compile(
+    r"--experiment-dir(?:=|\s+)(?:\"([^\"]+)\"|'([^']+)'|([^\s;&|)]+))"
+)
 
 
-def extract_skill_name(tool_input: Any) -> str | None:
-    """Resolve the invoked sub-skill name from a ``Skill`` tool's ``tool_input``.
+def extract_emit_invocation(command: Any) -> tuple[str, str | None] | None:
+    """Pull ``(skill, experiment_dir)`` out of a Bash ``emit-skill-return`` command.
 
-    Claude Code's ``Skill`` tool carries the target skill in its input. The
-    field name has historically been ``command`` (the slash/skill name) but a
-    few payload shapes use ``skill`` or ``name``; we accept any of them so a
-    harness field rename doesn't silently disable the hook. Returns the trimmed
-    string, or ``None`` if *tool_input* is not a mapping or carries no
-    recognisable skill field.
+    Returns ``None`` unless *command* is a string invoking ``emit-skill-return``
+    with a parseable ``--skill`` value. ``experiment_dir`` is the
+    ``--experiment-dir`` value when the command carries one (quoted or bare),
+    else ``None`` — the caller falls back to the payload's ``cwd``. The skill
+    name is *not* checked against :data:`_KNOWN_SKILLS` here; that policy
+    check stays in :func:`build_hook_output`.
     """
-    if not isinstance(tool_input, dict):
+    if not isinstance(command, str) or "emit-skill-return" not in command:
         return None
-    for key in ("command", "skill", "name"):
-        value = tool_input.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    skill_match = _SKILL_FLAG_RE.search(command)
+    if skill_match is None:
+        return None
+    dir_match = _EXPERIMENT_DIR_FLAG_RE.search(command)
+    experiment_dir = None
+    if dir_match is not None:
+        experiment_dir = next((g for g in dir_match.groups() if g), None)
+    return skill_match.group(1), experiment_dir
 
 
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
     """Pure core: map a PostToolUse *payload* to the hook-output dict, or ``None``.
 
     Returns ``None`` (→ caller prints nothing, a clean no-op) for every case
-    that is not "a known sub-skill's ``Skill`` call just returned and its
-    committed envelope is readable":
+    that is not "a known sub-skill's ``emit-skill-return`` Bash call just ran
+    and its committed envelope is readable":
 
     * *payload* is not a mapping.
-    * the just-completed tool is not ``Skill``.
-    * the resolved skill name is absent or not in :data:`_KNOWN_SKILLS`.
-    * the committed return file is missing or not valid JSON.
+    * the just-completed tool is not ``Bash``.
+    * the command does not invoke ``emit-skill-return`` with a resolvable
+      ``--skill``, or the skill is not in :data:`_KNOWN_SKILLS`.
+    * the committed return file is missing (e.g. the emit itself failed
+      validation) or not valid JSON.
 
     On the happy path it returns the Claude Code PostToolUse hook-output shape::
 
@@ -96,17 +131,27 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
 
-    if payload.get("tool_name") != "Skill":
+    if payload.get("tool_name") != "Bash":
         return None
 
-    skill = extract_skill_name(payload.get("tool_input"))
-    if skill is None or skill not in _KNOWN_SKILLS:
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    invocation = extract_emit_invocation(command)
+    if invocation is None:
+        return None
+    skill, flag_dir = invocation
+    if skill not in _KNOWN_SKILLS:
         return None
 
-    # ``cwd`` is the directory the harness ran the tool in — the experiment
-    # directory skills operate from. Fall back to the process cwd if absent.
+    # Prefer the emit command's own --experiment-dir (the authoritative target
+    # the emitter wrote to); fall back to the harness cwd, then process cwd.
     cwd = payload.get("cwd")
-    experiment_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
+    if flag_dir:
+        experiment_dir = Path(flag_dir)
+    elif isinstance(cwd, str) and cwd:
+        experiment_dir = Path(cwd)
+    else:
+        experiment_dir = Path(os.getcwd())
 
     committed = _committed_path(experiment_dir, skill)
     try:

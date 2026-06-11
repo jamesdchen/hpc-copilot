@@ -175,37 +175,62 @@ stalls the parent mid-procedure. The set of skills that emit a return is
 the single list `_KNOWN_SKILLS` in
 [`hpc_agent/cli/skill_returns.py`](../../src/hpc_agent/cli/skill_returns.py).
 
-There are two seams where the parent's *prose discipline* still matters:
-remembering to `Skill(<sub>)`, and remembering the follow-up
-`fetch-skill-return`. The second seam is removed by a harness hook:
+There are three seams where the parent's *prose discipline* still matters:
+remembering to `Skill(<sub>)`, remembering the follow-up
+`fetch-skill-return`, and not ending the turn at the composition boundary.
+The second and third are covered by harness hooks:
 
-- **`skill-return autofetch` — a `PostToolUse` hook.**
+- **`skill-return autofetch` — a `PostToolUse` hook, matcher `Bash`.**
   [`hpc_agent/_kernel/hooks/skill_return_autofetch.py`](../../src/hpc_agent/_kernel/hooks/skill_return_autofetch.py)
-  runs after every tool call. When the just-completed tool is `Skill` and
-  the sub-skill is in `_KNOWN_SKILLS`, it reads
-  `<cwd>/.hpc/_returns/<skill>.json` and injects the envelope as
-  `additionalContext`, so the return value lands in the agent's next
-  observation whether or not the parent remembered to fetch it. It is
+  fires on the sub-skill's final `emit-skill-return` Bash call — the one
+  event that coincides with the envelope existing. (It must NOT match the
+  `Skill` tool: Claude Code's Skill tool returns *immediately* — its result
+  is the injected instructions — so the sub-skill body, including the emit,
+  runs *after* `PostToolUse(Skill)` fires; a Skill-matched hook can only
+  ever see a stale envelope. The pre-0.10.58 version had exactly that bug
+  and was a structural no-op.) When the command invokes `emit-skill-return`
+  for a skill in `_KNOWN_SKILLS`, it reads the committed envelope
+  (`--experiment-dir` from the command, falling back to `cwd`) and injects
+  it as `additionalContext`, so the return value lands in the agent's next
+  observation whether or not the parent remembers to fetch it. It is
   **additive and fail-open**: it never deletes the file (the manual
-  `fetch-skill-return` prose keeps working), and any non-`Skill` tool,
-  unknown skill, missing/malformed file, or malformed payload is a clean
-  no-op — it can never block a tool call or crash the harness.
+  `fetch-skill-return` prose keeps working), and any non-`Bash` tool,
+  non-emit command, unknown skill, missing/malformed file, or malformed
+  payload is a clean no-op — it can never block a tool call or crash the
+  harness. The installed command wraps the Python entry in a bash `case`
+  pre-filter so the every-Bash-call common path costs a bash builtin, not a
+  ~300-500ms Windows interpreter start.
 
-  *Harness-mediated, not a `@primitive`.* The agent never invokes it; the
-  harness does. `experiment_dir` is taken from the payload's `cwd` (the
-  directory skills operate from).
+- **`skill-return stop guard` — a `Stop` hook.**
+  [`hpc_agent/_kernel/hooks/skill_return_stop_guard.py`](../../src/hpc_agent/_kernel/hooks/skill_return_stop_guard.py)
+  fires when the agent is about to end its turn. If a committed envelope
+  for any `_KNOWN_SKILLS` skill sits unfetched under `<cwd>/.hpc/_returns/`,
+  it blocks the stop with `{"decision": "block", "reason": …}` instructing
+  the agent to `fetch-skill-return` and continue the parent's next step.
+  This is the deterministic backstop for the advisory hand-back prose at
+  sub-skill boundaries (empirical 2026-06-10: the sub-skill emitted its
+  return and the turn ended anyway, stalling until a human typed "keep
+  going"). Self-healing: the fetch deletes the envelope, so the guard has
+  nothing left to block on; loop-safe: a payload carrying
+  `stop_hook_active` (a stop that is already a hook-forced continuation)
+  passes through.
+
+  *Both are harness-mediated, not `@primitive`s.* The agent never invokes
+  them; the harness does.
 
 **Install / disable.** `hpc-agent install-commands` (and `setup`) merge
-the hook into `~/.claude/settings.json`'s `hooks.PostToolUse` array —
-**additively and idempotently** (a re-run does not duplicate it, matched
-by the module path so a moved venv is still recognised; an existing
+both hooks into `~/.claude/settings.json` (`hooks.PostToolUse` +
+`hooks.Stop`) — **additively and idempotently** (a re-run does not
+duplicate them, matched by module path so a moved venv — or a stale
+pre-0.10.58 `matcher: "Skill"` entry — is healed in place; an existing
 unparseable `settings.json` is left untouched and reported as
 `skipped-unparseable`). The merge is
-[`hpc_agent.agent_assets._merge_skill_return_hook`](../../src/hpc_agent/agent_assets.py);
-its result is surfaced under the install envelope's
-`data.settings_hook`. To **disable** the hook, delete the entry whose
-`hooks[].command` contains `hpc_agent._kernel.hooks.skill_return_autofetch`
-from `~/.claude/settings.json`'s `hooks.PostToolUse` array (a re-run of
+[`hpc_agent.agent_assets._merge_hook_entry`](../../src/hpc_agent/agent_assets.py);
+its results are surfaced under the install envelope's
+`data.settings_hook` (autofetch) and `data.settings_stop_hook` (guard). To
+**disable** either hook, delete the entry whose `hooks[].command` contains
+`hpc_agent._kernel.hooks.skill_return_autofetch` /
+`…skill_return_stop_guard` from the corresponding array (a re-run of
 `install-commands` will re-add it).
 
 ## See also

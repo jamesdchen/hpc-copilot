@@ -30,11 +30,11 @@ from typing import Any
 __all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
 
 
-def _build_hook_command() -> str:
-    """Build a bash-safe hook command targeting the current Python interpreter.
+def _hook_python() -> str:
+    """Bash-safe path to the current Python interpreter for hook commands.
 
-    Claude Code runs ``PostToolUse`` hooks via ``bash -c '<command>'``. Two
-    Windows pitfalls the raw ``sys.executable`` walks into:
+    Claude Code runs hooks via ``bash -c '<command>'``. Two Windows pitfalls
+    the raw ``sys.executable`` walks into:
 
     * **Backslashes.** ``sys.executable`` is a native backslash path on Windows
       (e.g. ``C:\\Users\\james\\.venv\\Scripts\\python.exe``). Bash treats
@@ -47,24 +47,69 @@ def _build_hook_command() -> str:
       Without quoting bash splits on the space and tries to run a non-existent
       first token. ``shlex.quote`` wraps the path in single quotes when needed.
     """
-    executable = sys.executable.replace("\\", "/")
-    return f"{shlex.quote(executable)} -m hpc_agent._kernel.hooks.skill_return_autofetch"
+    return shlex.quote(sys.executable.replace("\\", "/"))
 
 
-# The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope after
-# a composed ``Skill(<sub>)`` returns (see
-# :mod:`hpc_agent._kernel.hooks.skill_return_autofetch`). install-commands merges
-# this entry into ``~/.claude/settings.json``'s ``hooks.PostToolUse`` array,
-# additively, idempotently, and self-healing on a stale prior install.
-# ``matcher: "Skill"`` scopes it to the Skill tool; the command pipes the
-# PostToolUse payload on stdin into the module's ``main``.
+def _build_hook_command() -> str:
+    """The autofetch ``PostToolUse`` hook command, with a bash-level pre-filter.
+
+    ``matcher: "Bash"`` fires this hook after **every** Bash call, and a
+    Python interpreter start costs ~300-500ms on Windows (#288). The ``case``
+    pre-filter keeps the non-emit common path at bash-builtin cost: only a
+    payload mentioning ``emit-skill-return`` reaches Python. (The substring
+    scan over the whole payload can false-positive on e.g. an unrelated
+    command echoing the verb name — that costs one no-op interpreter start,
+    nothing more.)
+    """
+    return (
+        'input=$(cat); case "$input" in *emit-skill-return*) '
+        f"printf '%s' \"$input\" | {_hook_python()} "
+        "-m hpc_agent._kernel.hooks.skill_return_autofetch;; esac"
+    )
+
+
+def _build_stop_hook_command() -> str:
+    """The stop-guard ``Stop`` hook command — no pre-filter.
+
+    Stop fires once per turn (not per tool call), so the interpreter start is
+    paid rarely; the guard itself needs the filesystem probe either way.
+    """
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.skill_return_stop_guard"
+
+
+# The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope the
+# moment the sub-skill's ``emit-skill-return`` Bash call commits it (see
+# :mod:`hpc_agent._kernel.hooks.skill_return_autofetch` for why the trigger is
+# the emit Bash call and not the Skill tool — the Skill tool returns *before*
+# the sub-skill body runs, so a Skill-matched hook can never see a fresh
+# envelope). install-commands merges this entry into
+# ``~/.claude/settings.json``'s ``hooks.PostToolUse`` array, additively,
+# idempotently, and self-healing on a stale prior install (including the
+# pre-0.10.58 ``matcher: "Skill"`` shape).
 _HOOK_COMMAND = _build_hook_command()
+_AUTOFETCH_NEEDLE = "hpc_agent._kernel.hooks.skill_return_autofetch"
 _SKILL_RETURN_HOOK_ENTRY: dict[str, Any] = {
-    "matcher": "Skill",
+    "matcher": "Bash",
     "hooks": [
         {
             "type": "command",
             "command": _HOOK_COMMAND,
+        }
+    ],
+}
+
+# The ``Stop`` hook that blocks ending the turn while a committed sub-skill
+# return envelope sits unfetched (see
+# :mod:`hpc_agent._kernel.hooks.skill_return_stop_guard`). Deterministic
+# backstop for the advisory hand-back prose at sub-skill composition
+# boundaries. Stop entries take no matcher (there is no tool to match).
+_STOP_HOOK_COMMAND = _build_stop_hook_command()
+_STOP_GUARD_NEEDLE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
+_SKILL_RETURN_STOP_ENTRY: dict[str, Any] = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": _STOP_HOOK_COMMAND,
         }
     ],
 }
@@ -75,18 +120,17 @@ def DEFAULT_CLAUDE_DIR() -> Path:
     return Path.home() / ".claude"
 
 
-def _find_hook_entry_index(post_tool_use: list[Any]) -> int | None:
-    """Return the index of the existing autofetch entry, or ``None`` if absent.
+def _find_hook_entry_index(entries: list[Any], needle: str) -> int | None:
+    """Return the index of the existing entry matching *needle*, or ``None``.
 
-    Match key: any ``PostToolUse`` entry whose ``hooks`` list contains a
-    ``command`` hook invoking ``hpc_agent._kernel.hooks.skill_return_autofetch``.
-    We match on the module path (not the full command string) so a re-run from
-    a different ``sys.executable`` — moved venv, **or an upgrade that fixes
-    the command encoding** — still finds the existing entry instead of
-    appending a duplicate.
+    Match key: any hook entry whose ``hooks`` list contains a ``command`` hook
+    whose command mentions *needle* (a hook module path). We match on the
+    module path (not the full command string) so a re-run from a different
+    ``sys.executable`` — moved venv, **an upgrade that fixes the command
+    encoding**, or one that changes the matcher/pre-filter shape — still finds
+    the existing entry instead of appending a duplicate.
     """
-    needle = "hpc_agent._kernel.hooks.skill_return_autofetch"
-    for i, entry in enumerate(post_tool_use):
+    for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         hooks = entry.get("hooks")
@@ -103,20 +147,23 @@ def _find_hook_entry_index(post_tool_use: list[Any]) -> int | None:
     return None
 
 
-def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
-    """Additively, idempotently wire the autofetch hook into ``settings.json``.
+def _merge_hook_entry(
+    claude_dir: Path, *, event: str, entry: dict[str, Any], needle: str, dry_run: bool
+) -> dict[str, Any]:
+    """Additively, idempotently wire one hook *entry* into ``settings.json``.
 
     Reads ``<claude_dir>/settings.json`` (creating an empty ``{}`` model when it
-    is absent or unreadable), appends :data:`_SKILL_RETURN_HOOK_ENTRY` to
-    ``hooks.PostToolUse`` unless an equivalent entry is already present, and
-    writes the merged settings back (pretty-printed, trailing newline). Every
-    other key and every other PostToolUse entry is preserved verbatim — the
-    merge only ever *adds* our one entry.
+    is absent or unreadable), appends *entry* to ``hooks.<event>`` unless an
+    equivalent entry (matched by *needle*, the hook's module path) is already
+    present, and writes the merged settings back (pretty-printed, trailing
+    newline). Every other key and every other entry under *event* is preserved
+    verbatim — the merge only ever *adds* (or in-place heals) our one entry.
 
     Returns a small report ``{settings_path, action, wrote}`` where ``action``
     is one of ``"added"`` (appended), ``"updated"`` (a stale entry from an
-    earlier install — e.g. a moved venv, or the pre-0.10.10 backslash-encoded
-    Windows path that bash mis-interpreted as escapes — replaced in place),
+    earlier install — e.g. a moved venv, the pre-0.10.10 backslash-encoded
+    Windows path that bash mis-interpreted as escapes, or the pre-0.10.58
+    ``matcher: "Skill"`` autofetch shape — replaced in place),
     ``"already-present"`` (byte-equal to the canonical entry; idempotent
     no-op), ``"skipped-unparseable"`` (existing settings.json is not a JSON
     object — we refuse to clobber it), ``"dry-run-would-add"``, or
@@ -156,12 +203,12 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
         # ``hooks`` would itself be malformed Claude config; replacing it is the
         # only way to wire our entry, and we only do so when adding.)
         hooks = {}
-    post_tool_use = hooks.get("PostToolUse")
-    if not isinstance(post_tool_use, list):
-        post_tool_use = []
+    event_entries = hooks.get(event)
+    if not isinstance(event_entries, list):
+        event_entries = []
 
-    existing_idx = _find_hook_entry_index(post_tool_use)
-    if existing_idx is not None and post_tool_use[existing_idx] == _SKILL_RETURN_HOOK_ENTRY:
+    existing_idx = _find_hook_entry_index(event_entries, needle)
+    if existing_idx is not None and event_entries[existing_idx] == entry:
         return {
             "settings_path": str(settings_path),
             "action": "already-present",
@@ -175,14 +222,14 @@ def _merge_skill_return_hook(claude_dir: Path, *, dry_run: bool) -> dict[str, An
             "wrote": False,
         }
 
-    post_tool_use = list(post_tool_use)
+    event_entries = list(event_entries)
     if existing_idx is not None:
-        post_tool_use[existing_idx] = _SKILL_RETURN_HOOK_ENTRY
+        event_entries[existing_idx] = entry
         action = "updated"
     else:
-        post_tool_use.append(_SKILL_RETURN_HOOK_ENTRY)
+        event_entries.append(entry)
         action = "added"
-    hooks["PostToolUse"] = post_tool_use
+    hooks[event] = event_entries
     settings["hooks"] = hooks
 
     claude_dir.mkdir(parents=True, exist_ok=True)
@@ -221,7 +268,7 @@ def _merge_skill_permissions(
     mode classifier`` despite ``skipAutoPermissionPrompt: true`` — the flag
     only suppresses the explicit prompt, the classifier still gates).
 
-    Sibling of :func:`_merge_skill_return_hook`: same additive + idempotent
+    Sibling of :func:`_merge_hook_entry`: same additive + idempotent
     + skip-unparseable + dry-run semantics, but targets
     ``permissions.allow`` rather than ``hooks.PostToolUse``. User-global
     scope here (the bundled skills are user-global; the orchestrator can
@@ -441,6 +488,7 @@ def install_agent_assets(
             "agents_installed": ["hpc-worker", ...],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
+            "settings_stop_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "wrote": <bool>,
@@ -453,7 +501,8 @@ def install_agent_assets(
 
     ``settings_hook`` reports the additive, idempotent merge of the
     skill-return autofetch ``PostToolUse`` hook into
-    ``<claude>/settings.json`` — see :func:`_merge_skill_return_hook`. Its
+    ``<claude>/settings.json``, and ``settings_stop_hook`` the same for the
+    skill-return ``Stop`` guard — see :func:`_merge_hook_entry`. Each
     ``action`` is ``"added"`` / ``"already-present"`` / ``"updated"`` /
     ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
 
@@ -494,9 +543,25 @@ def install_agent_assets(
         agents.update(plugin_agents)
         cleared.extend(plugin_cleared)
 
-    # Wire the skill-return autofetch PostToolUse hook into settings.json —
-    # additive + idempotent, never clobbering existing hooks/keys.
-    settings_hook = _merge_skill_return_hook(target, dry_run=dry_run)
+    # Wire the skill-return hooks into settings.json — additive + idempotent,
+    # never clobbering existing hooks/keys. Two entries: the PostToolUse
+    # autofetch (injects the envelope the moment emit-skill-return commits it)
+    # and the Stop guard (blocks ending the turn while an envelope sits
+    # unfetched — the deterministic backstop for the advisory hand-back prose).
+    settings_hook = _merge_hook_entry(
+        target,
+        event="PostToolUse",
+        entry=_SKILL_RETURN_HOOK_ENTRY,
+        needle=_AUTOFETCH_NEEDLE,
+        dry_run=dry_run,
+    )
+    settings_stop_hook = _merge_hook_entry(
+        target,
+        event="Stop",
+        entry=_SKILL_RETURN_STOP_ENTRY,
+        needle=_STOP_GUARD_NEEDLE,
+        dry_run=dry_run,
+    )
 
     # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
     # classifier stops silently denying the first /submit-hpc → Skill(hpc-submit)
@@ -511,6 +576,7 @@ def install_agent_assets(
         "agents_installed": sorted(agents),
         "cleared_collisions": cleared,
         "settings_hook": settings_hook,
+        "settings_stop_hook": settings_stop_hook,
         "settings_permissions": settings_permissions,
         "wrote": not dry_run,
     }

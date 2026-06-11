@@ -1,13 +1,18 @@
-"""Tests for the ``skill_return_autofetch`` PostToolUse hook (WS5 PR4).
+"""Tests for the ``skill_return_autofetch`` PostToolUse hook.
 
-The hook is harness-mediated: Claude Code runs it after every tool call,
-feeding the PostToolUse payload on stdin. It is a pure, additive, fail-open
-observer — on the happy path (a *known* sub-skill's ``Skill`` call just
-returned and its committed return envelope is readable) it injects the
+The hook is harness-mediated: Claude Code runs it after every matched tool
+call, feeding the PostToolUse payload on stdin. It is a pure, additive,
+fail-open observer — on the happy path (a known sub-skill's
+``emit-skill-return`` Bash call just committed its envelope) it injects the
 envelope as ``additionalContext``; for everything else it is a clean no-op.
 
-These pin both the pure core (:func:`build_hook_output`) and the stdin/stdout
-``main`` wrapper, including every defensive no-op branch (non-Skill tool,
+The trigger is the ``Bash`` call that runs ``emit-skill-return`` — NOT the
+``Skill`` tool. Claude Code's Skill tool returns immediately (its result is
+the injected instructions), *before* the sub-skill body runs, so a
+Skill-matched hook can never observe a fresh envelope (pre-0.10.58 bug: the
+hook was a structural no-op on every fresh run). These tests pin both the
+pure core (:func:`build_hook_output`) and the stdin/stdout ``main`` wrapper,
+including every defensive no-op branch (non-Bash tool, non-emit command,
 unknown skill, missing file, malformed envelope JSON, malformed payload).
 """
 
@@ -40,21 +45,28 @@ def _commit(exp: Path, skill: str, envelope: dict) -> Path:
     return committed
 
 
-def _payload(exp: Path, skill: str, *, tool_name: str = "Skill") -> dict:
-    """A minimal PostToolUse payload for a ``Skill`` tool call."""
+def _emit_command(skill: str, exp: Path | None = None) -> str:
+    cmd = f"hpc-agent emit-skill-return --skill {skill}"
+    if exp is not None:
+        cmd += f" --experiment-dir {exp.as_posix()}"
+    return cmd
+
+
+def _payload(exp: Path, skill: str, *, tool_name: str = "Bash", command: str | None = None) -> dict:
+    """A minimal PostToolUse payload for an ``emit-skill-return`` Bash call."""
     return {
         "hook_event_name": "PostToolUse",
         "tool_name": tool_name,
-        "tool_input": {"command": skill},
+        "tool_input": {"command": command if command is not None else _emit_command(skill, exp)},
         "tool_response": {},
         "cwd": str(exp),
     }
 
 
-# ─── happy path: known skill → reads & injects ──────────────────────────────
+# ─── happy path: emit for a known skill → reads & injects ───────────────────
 
 
-def test_known_skill_injects_envelope(tmp_path: Path) -> None:
+def test_emit_for_known_skill_injects_envelope(tmp_path: Path) -> None:
     _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
 
     out = hook.build_hook_output(_payload(tmp_path, _KNOWN_SKILL))
@@ -85,33 +97,105 @@ def test_every_known_skill_resolves(tmp_path: Path, skill: str) -> None:
     assert json.loads(out["hookSpecificOutput"]["additionalContext"])["skill"] == skill
 
 
-@pytest.mark.parametrize("key", ["command", "skill", "name"])
-def test_skill_name_resolved_from_alternate_keys(tmp_path: Path, key: str) -> None:
-    """A harness field rename across {command, skill, name} still fires."""
+def test_experiment_dir_flag_wins_over_cwd(tmp_path: Path) -> None:
+    """``--experiment-dir`` names the dir the emitter wrote to — it must win."""
+    exp = tmp_path / "exp"
+    other_cwd = tmp_path / "elsewhere"
+    other_cwd.mkdir()
+    _commit(exp, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+
+    payload = _payload(exp, _KNOWN_SKILL)
+    payload["cwd"] = str(other_cwd)  # cwd points away; the flag must still hit
+    assert hook.build_hook_output(payload) is not None
+
+
+def test_command_without_experiment_dir_falls_back_to_cwd(tmp_path: Path) -> None:
     _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
-    payload = _payload(tmp_path, _KNOWN_SKILL)
-    payload["tool_input"] = {key: _KNOWN_SKILL}
+    payload = _payload(tmp_path, _KNOWN_SKILL, command=_emit_command(_KNOWN_SKILL))
+    assert hook.build_hook_output(payload) is not None
+
+
+def test_chained_command_still_resolves(tmp_path: Path) -> None:
+    """The emit chained with `&&` (the chaining discipline) must still fire."""
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    command = f"{_emit_command(_KNOWN_SKILL, tmp_path)} && echo done"
+    payload = _payload(tmp_path, _KNOWN_SKILL, command=command)
+    assert hook.build_hook_output(payload) is not None
+
+
+def test_flag_equals_form_resolves(tmp_path: Path) -> None:
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    command = (
+        f"hpc-agent emit-skill-return --skill={_KNOWN_SKILL} --experiment-dir={tmp_path.as_posix()}"
+    )
+    payload = _payload(tmp_path, _KNOWN_SKILL, command=command)
+    assert hook.build_hook_output(payload) is not None
+
+
+def test_quoted_experiment_dir_resolves(tmp_path: Path) -> None:
+    """A double-quoted --experiment-dir (spaces in path) resolves."""
+    exp = tmp_path / "dir with spaces"
+    _commit(exp, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    command = (
+        f'hpc-agent emit-skill-return --skill {_KNOWN_SKILL} --experiment-dir "{exp.as_posix()}"'
+    )
+    payload = _payload(exp, _KNOWN_SKILL, command=command)
+    payload["cwd"] = str(tmp_path)  # cwd would miss; the quoted flag must hit
     assert hook.build_hook_output(payload) is not None
 
 
 # ─── defensive no-ops ───────────────────────────────────────────────────────
 
 
-def test_non_skill_tool_is_noop(tmp_path: Path) -> None:
+def test_non_bash_tool_is_noop(tmp_path: Path) -> None:
     _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
-    payload = _payload(tmp_path, _KNOWN_SKILL, tool_name="Bash")
+    payload = _payload(tmp_path, _KNOWN_SKILL, tool_name="Skill")
+    assert hook.build_hook_output(payload) is None
+
+
+def test_skill_tool_invocation_is_noop(tmp_path: Path) -> None:
+    """The pre-0.10.58 trigger shape (Skill tool, skill name in command) is dead.
+
+    At PostToolUse(Skill) time the sub-skill body has not run — any envelope
+    on disk is stale by construction, so injecting it would be harmful.
+    """
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Skill",
+        "tool_input": {"command": _KNOWN_SKILL},
+        "tool_response": {},
+        "cwd": str(tmp_path),
+    }
+    assert hook.build_hook_output(payload) is None
+
+
+def test_non_emit_bash_command_is_noop(tmp_path: Path) -> None:
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    payload = _payload(tmp_path, _KNOWN_SKILL, command="hpc-agent discover")
     assert hook.build_hook_output(payload) is None
 
 
 def test_unknown_skill_is_noop(tmp_path: Path) -> None:
-    # File present, but the skill is not registered → no injection.
+    # File present, but the emitted skill is not registered → no injection.
     _commit(tmp_path, "hpc-aggregate", _SAMPLE_ENVELOPE)
-    payload = _payload(tmp_path, "totally-unknown-skill")
+    payload = _payload(
+        tmp_path,
+        _KNOWN_SKILL,
+        command="hpc-agent emit-skill-return --skill totally-unknown-skill",
+    )
+    assert hook.build_hook_output(payload) is None
+
+
+def test_emit_without_skill_flag_is_noop(tmp_path: Path) -> None:
+    _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    payload = _payload(tmp_path, _KNOWN_SKILL, command="hpc-agent emit-skill-return --help")
     assert hook.build_hook_output(payload) is None
 
 
 def test_missing_return_file_is_noop(tmp_path: Path) -> None:
-    # Known skill, well-formed payload, but no committed envelope on disk.
+    # Known skill, well-formed payload, but no committed envelope on disk
+    # (e.g. the emit itself failed schema validation).
     assert hook.build_hook_output(_payload(tmp_path, _KNOWN_SKILL)) is None
 
 
@@ -123,48 +207,58 @@ def test_malformed_envelope_json_is_noop(tmp_path: Path) -> None:
 
 
 def test_malformed_payload_is_noop() -> None:
-    for bad in (None, [], "string", 42, {"tool_name": "Skill"}):
+    for bad in (None, [], "string", 42, {"tool_name": "Bash"}):
         assert hook.build_hook_output(bad) is None
 
 
 def test_missing_tool_input_is_noop(tmp_path: Path) -> None:
-    payload = {"tool_name": "Skill", "cwd": str(tmp_path)}
+    payload = {"tool_name": "Bash", "cwd": str(tmp_path)}
     assert hook.build_hook_output(payload) is None
 
 
-def test_tool_input_without_skill_field_is_noop(tmp_path: Path) -> None:
+def test_non_string_command_is_noop(tmp_path: Path) -> None:
     payload = _payload(tmp_path, _KNOWN_SKILL)
-    payload["tool_input"] = {"unrelated": "value"}
-    assert hook.build_hook_output(payload) is None
-
-
-def test_blank_skill_name_is_noop(tmp_path: Path) -> None:
-    payload = _payload(tmp_path, _KNOWN_SKILL)
-    payload["tool_input"] = {"command": "   "}
+    payload["tool_input"] = {"command": 7}
     assert hook.build_hook_output(payload) is None
 
 
 def test_absent_cwd_falls_back_to_process_cwd(tmp_path: Path, monkeypatch) -> None:
-    """No ``cwd`` in payload → resolve against the process working directory."""
+    """No ``cwd`` in payload, no flag → resolve against the process cwd."""
     _commit(tmp_path, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
     monkeypatch.chdir(tmp_path)
-    payload = _payload(tmp_path, _KNOWN_SKILL)
+    payload = _payload(tmp_path, _KNOWN_SKILL, command=_emit_command(_KNOWN_SKILL))
     del payload["cwd"]
     out = hook.build_hook_output(payload)
     assert out is not None
 
 
-# ─── extract_skill_name unit ────────────────────────────────────────────────
+# ─── extract_emit_invocation unit ───────────────────────────────────────────
 
 
-def test_extract_skill_name_variants() -> None:
-    assert hook.extract_skill_name({"command": "hpc-aggregate"}) == "hpc-aggregate"
-    assert hook.extract_skill_name({"skill": " hpc-status "}) == "hpc-status"
-    assert hook.extract_skill_name({"name": "hpc-status"}) == "hpc-status"
-    assert hook.extract_skill_name({"other": "x"}) is None
-    assert hook.extract_skill_name("not-a-dict") is None
-    assert hook.extract_skill_name({"command": ""}) is None
-    assert hook.extract_skill_name({"command": 7}) is None
+def test_extract_emit_invocation_variants() -> None:
+    extract = hook.extract_emit_invocation
+    assert extract("hpc-agent emit-skill-return --skill hpc-aggregate") == (
+        "hpc-aggregate",
+        None,
+    )
+    assert extract(
+        "hpc-agent emit-skill-return --skill hpc-status --experiment-dir C:/Users/x/demo"
+    ) == ("hpc-status", "C:/Users/x/demo")
+    assert extract(
+        "hpc-agent emit-skill-return --skill=hpc-status --experiment-dir='/tmp/a b'"
+    ) == ("hpc-status", "/tmp/a b")
+    assert extract(
+        'hpc-agent emit-skill-return --skill "hpc-status" --experiment-dir "/tmp/a b"'
+    ) == ("hpc-status", "/tmp/a b")
+    # Chained command: the bare dir token stops at the shell metacharacter.
+    assert extract(
+        "hpc-agent emit-skill-return --skill hpc-status --experiment-dir /tmp/x && echo ok"
+    ) == ("hpc-status", "/tmp/x")
+    assert extract("hpc-agent fetch-skill-return --skill hpc-status") is None
+    assert extract("hpc-agent emit-skill-return --no-such-flag") is None
+    assert extract("echo hello") is None
+    assert extract(7) is None
+    assert extract(None) is None
 
 
 # ─── main() stdin/stdout wrapper ────────────────────────────────────────────
@@ -189,8 +283,8 @@ def test_main_known_skill_prints_hook_output(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_main_noop_prints_nothing(tmp_path: Path, monkeypatch) -> None:
-    """Non-Skill tool → main exits 0 and emits no stdout (clean no-op)."""
-    payload = _payload(tmp_path, _KNOWN_SKILL, tool_name="Bash")
+    """Non-emit Bash command → main exits 0 and emits no stdout (clean no-op)."""
+    payload = _payload(tmp_path, _KNOWN_SKILL, command="git status")
     rc, out = _run_main(monkeypatch, json.dumps(payload))
     assert rc == 0
     assert out == ""

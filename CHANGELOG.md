@@ -5,6 +5,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.58 — 2026-06-11
+
+### Fixed — the skill-return "additive net" never fired: autofetch re-triggered onto the emit Bash call + new Stop guard
+
+The 2026-06-10 demo re-surfaced the sub-skill boundary stall the 0.10.54 prose fix was supposed to mitigate: `hpc-wrap-entry-point` committed its return via `emit-skill-return`, the orchestrator ended its turn anyway, and the parent `/submit-hpc` procedure stalled until a human typed "keep going". Diagnosis: the prose is advisory, and the harness-side safety net — the `PostToolUse` autofetch hook — was a **structural no-op**. It matched the `Skill` tool, but Claude Code's Skill tool returns *immediately* (its tool result is the injected instructions); the sub-skill body, including the final `emit-skill-return`, runs **afterwards** as ordinary Bash calls. At `PostToolUse(Skill)` time the envelope cannot exist yet, so the hook never injected anything on a fresh run — and could only ever have injected a *stale* envelope from a prior run. Two-tier fix:
+
+- **Tier 1 (retrigger)** — `skill_return_autofetch` now matches `Bash` and fires on the `emit-skill-return` command itself, the one event that coincides with the envelope existing. The skill name and `--experiment-dir` are parsed from the command (quoted/`=`/chained `&&` forms covered), falling back to the payload `cwd`. The installed command wraps the Python entry in a bash `case "$input" in *emit-skill-return*)` pre-filter so the every-Bash-call common path costs a bash builtin, not a ~300-500ms Windows interpreter start (#288 class).
+- **Tier 2 (deterministic backstop)** — new `Stop` hook `skill_return_stop_guard`: when the agent is about to end its turn with a committed-but-unfetched envelope under `<cwd>/.hpc/_returns/`, it blocks the stop with a reason instructing `fetch-skill-return` + continue the parent's next step. `PostToolUse` hooks can't catch this failure mode (it is precisely "no further tool call happens"); `Stop` fires at the exact failure point. Self-healing (the fetch deletes the envelope) and loop-safe (`stop_hook_active` passes through).
+
+`install-commands` wires both: `_merge_skill_return_hook` generalised to `_merge_hook_entry(event, entry, needle)`, reporting `settings_hook` (autofetch) + new `settings_stop_hook` (guard) — and heals a pre-0.10.58 `matcher: "Skill"` entry in place rather than appending a duplicate beside the dead one. Docs: the `skill-policy.md` seam section now records the Skill-tool timing lesson.
+
 ## 0.10.57 — 2026-06-10
 
 ### Added — the DAG walker's mechanical halves: readiness gate in submit-pipeline + dag-frontier
