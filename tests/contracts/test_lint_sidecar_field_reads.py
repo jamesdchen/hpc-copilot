@@ -78,6 +78,8 @@ _V2_CONFIG = frozenset(
         "trial_tokens",
         "parent_run_ids",
         "node_sha",
+        "data_sha",
+        "env_hash",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

@@ -171,7 +171,8 @@ class DeterministicCampaignResolver:
                     outcome="missing_campaign_id",
                     detail="decide spawn_request carried no campaign_id; cannot advance.",
                 )
-            return self._resolve_decide(experiment_dir, campaign_id)
+            resolved = fields.get("resolved") if isinstance(fields.get("resolved"), dict) else {}
+            return self._resolve_decide(experiment_dir, campaign_id, resolved=resolved or {})
 
         if workflow == "submit":
             return self._resolve_cold_submit(experiment_dir)
@@ -189,25 +190,47 @@ class DeterministicCampaignResolver:
 
     # -- decide chain ------------------------------------------------------
 
-    def _resolve_decide(self, experiment_dir: Path, campaign_id: str) -> tuple[WorkerReport, int]:
+    def _resolve_decide(
+        self,
+        experiment_dir: Path,
+        campaign_id: str,
+        *,
+        resolved: dict[str, Any] | None = None,
+    ) -> tuple[WorkerReport, int]:
         """``classify-campaign-path`` -> ``campaign-advance`` -> (continue) submit."""
         from hpc_agent.incorporation.classify_campaign_path import classify_campaign_path
         from hpc_agent.meta.campaign.atoms.advance import campaign_advance
 
-        # 1. Classify the path. An unclassifiable tasks.py escalates -> residue.
+        # 1. Classify the path. An unclassifiable tasks.py escalates -> residue,
+        #    UNLESS the caller pre-resolved the judgement via the
+        #    ``fields.resolved`` channel (an LlmJudgementResolver adjudication,
+        #    or any orchestrator that answered the park). The code
+        #    classification always wins when it is confident — the hint exists
+        #    only to break the tie the AST scan could not.
+        resolved = resolved or {}
         source_path = str(experiment_dir / ".hpc" / "tasks.py")
         path_res = classify_campaign_path(source_path=source_path)
         if path_res["decided_by"] == "judgement":
-            return self._residue(
-                "campaign",
-                point="path",
-                outcome="unclassifiable",
-                detail=(
-                    f"classify-campaign-path could not resolve {source_path}: "
-                    f"{path_res['reason']}; candidates={path_res['candidates']}. "
-                    "Manual grid vs strategy is genuine judgement — parked."
-                ),
-            )
+            hint = resolved.get("path")
+            if hint in ("manual", "strategy"):
+                path_res = {
+                    "path": hint,
+                    "reason": (
+                        f"classify-campaign-path escalated ({path_res['reason']}); "
+                        f"resolved {hint!r} by the caller's fields.resolved adjudication."
+                    ),
+                }
+            else:
+                return self._residue(
+                    "campaign",
+                    point="path",
+                    outcome="unclassifiable",
+                    detail=(
+                        f"classify-campaign-path could not resolve {source_path}: "
+                        f"{path_res['reason']}; candidates={path_res['candidates']}. "
+                        "Manual grid vs strategy is genuine judgement — parked."
+                    ),
+                )
 
         path_decision = WorkerDecision(
             point="path",

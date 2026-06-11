@@ -19,7 +19,7 @@ set of env vars from its own shell:
 | `HPC_JOURNAL_DIR` | Per-harness journal root (defaults to `~/.claude/hpc/`). Set to an isolated path (e.g. `~/.<harness>/hpc/<run_id>/`) so concurrent harness runs don't share state, and so the integrator's journal doesn't collide with an interactive Claude Code session against the same repo. |
 | `HPC_CLUSTERS_CONFIG` | Optional override of `clusters.yaml`. Useful when the harness ships its own cluster catalog rather than the package default. |
 | `HPC_SSH_TIMEOUT_SEC` | Optional override of the per-call SSH/scp timeout. Raise on slow login nodes. |
-| `HPC_TELEMETRY_SINK` | Optional. One of `none` / `stderr-jsonl` / `monitor-jsonl`. |
+| `HPC_TELEMETRY_SINK` | Optional. One of `none` / `stderr-jsonl` / `monitor-jsonl` / `otel` (alias `otlp`). `otel` exports every recorded event (submit, state transition, resubmit, canary result, campaign decision — including the structured reason and `trial_token`) as an OpenTelemetry span so a long unattended campaign can be watched in Grafana / any OTLP backend. Needs the optional `hpc-agent[otel]` extra; selecting it without the SDK installed fails fast with `config_invalid`. Configure the collector via the standard `OTEL_EXPORTER_OTLP_ENDPOINT` env vars. |
 
 Spawn-helper APIs (`Bun.spawn`, Python `subprocess.run(env=...)`,
 Rust `Command::env_clear`) typically start with an empty env unless

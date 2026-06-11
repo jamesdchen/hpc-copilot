@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/provenance_manifest.input.json",
+  "title": "provenance-manifest input spec",
+  "description": "Wire input for ``provenance-manifest``.",
+  "type": "object",
+  "required": [
+    "campaign_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "Campaign tag whose runs the manifest covers — the same campaign_id stamped on each run sidecar at submit time (HPC_CAMPAIGN_ID convention). Path separators are sanitized for the output filename; an unknown campaign yields a well-formed empty manifest (run_count=0), not an error.",
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    }
+  }
+}

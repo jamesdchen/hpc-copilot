@@ -126,4 +126,9 @@ class WriteRunSidecarInput(BaseModel):
     # derives node_sha from these via resolve_node_sha — identity is computed
     # from the parents' on-disk sidecars, never asserted by the caller.
     parent_run_ids: list[RunIdStrict] | None = Field(default=None, min_length=1)
+    # Provenance: DATA + ENVIRONMENT identity to complement cmd_sha (params)
+    # and tasks_py_sha (code) — see compute_data_sha / compute_env_hash (#222).
+    # Both are bare sha256 hex; an empty/absent value means "not captured".
+    data_sha: str | None = Field(default=None, pattern=r"^([0-9a-f]{64})?$")
+    env_hash: str | None = Field(default=None, pattern=r"^([0-9a-f]{64})?$")
     job_ids: list[str] | None = None

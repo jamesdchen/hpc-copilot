@@ -14,10 +14,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-__all__ = ["RESERVED_TASK_KEYS", "compose_node_sha", "compute_cmd_sha", "compute_tasks_py_sha"]
+__all__ = [
+    "RESERVED_TASK_KEYS",
+    "compose_node_sha",
+    "compute_cmd_sha",
+    "compute_data_sha",
+    "compute_env_hash",
+    "compute_tasks_py_sha",
+]
 
 # Per-task keys that ``resolve(i)`` may return but that are EXCLUDED from
 # the cmd_sha hash. These carry strategy bookkeeping — an opaque
@@ -146,3 +154,157 @@ def compose_node_sha(cmd_sha: str, parent_node_shas: list[str]) -> str:
         {"node": cmd_sha, "parents": parents}, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(envelope.encode()).hexdigest()
+# Chunk size for streaming a file's bytes through the digest. 1 MiB keeps a
+# large parquet/csv input off the heap (we never materialize the whole file)
+# while staying well above the per-read syscall floor.
+_DATA_HASH_CHUNK = 1 << 20
+
+
+def _dvc_pointer_md5(dvc_path: Path) -> str | None:
+    """Return the recorded md5 from a ``<file>.dvc`` pointer, or ``None``.
+
+    A DVC-tracked input ``data/train.parquet`` is committed to git as a
+    small YAML pointer ``data/train.parquet.dvc`` whose ``outs[0].md5`` is
+    the content hash DVC already computed at ``dvc add`` time. Reading that
+    pointer is the cheap, exact data-identity DVC was designed to give us —
+    no need to re-hash a multi-GB file (and the real bytes may live only in
+    the DVC cache / remote, not on disk). Best-effort: any malformed /
+    unreadable pointer returns ``None`` so the caller falls back to a
+    content-hash of the path itself.
+
+    DVC is an OPTIONAL dependency — we never import it. The ``.dvc`` file is
+    plain YAML, so we read it with the ``yaml`` lib the package already
+    depends on. ``md5`` is DVC's default; for a directory output DVC stores
+    a ``<hash>.dir`` md5 over the directory manifest, which is equally
+    stable, so we surface whatever ``md5`` the pointer carries verbatim.
+    """
+    try:
+        import yaml  # type: ignore[import-untyped]  # noqa: PLC0415 — pkg dep, lazy
+    except ImportError:  # pragma: no cover — yaml is a hard package dep
+        return None
+    try:
+        loaded = yaml.safe_load(dvc_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    if not isinstance(loaded, Mapping):
+        return None
+    outs = loaded.get("outs")
+    if not isinstance(outs, list) or not outs:
+        return None
+    first = outs[0]
+    if not isinstance(first, Mapping):
+        return None
+    md5 = first.get("md5")
+    return str(md5) if md5 else None
+
+
+def _content_hash_file(path: Path) -> str:
+    """Stream a single file's bytes through SHA-256. Caller guarantees it
+    is a regular file."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(_DATA_HASH_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_data_sha(input_paths: Iterable[str | Path], *, base_dir: Path | None = None) -> str:
+    """Return a deterministic SHA-256 over a run's declared input dataset(s).
+
+    ``cmd_sha``/``tasks_py_sha`` capture parameter and code identity; this
+    captures DATA identity — the third leg of "reconstruct exactly what
+    produced this result" (#222). For each declared input path, in the order
+    the caller passes them:
+
+    * If a sibling DVC pointer ``<path>.dvc`` exists, its recorded
+      ``outs[0].md5`` is used — DVC already content-hashed the data at
+      ``dvc add`` time, and the real bytes may live only in the DVC cache,
+      so re-hashing the working-tree file would be wrong or impossible.
+    * Otherwise the file's raw bytes are streamed through SHA-256.
+    * A path that is neither a file nor a DVC pointer (missing, or a bare
+      directory with no ``.dvc``) contributes the sentinel ``"absent"`` — we
+      record that the declared input was not resolvable rather than raising,
+      so a provenance manifest can still be emitted (the absence IS the
+      provenance fact). Directories are intentionally NOT walked: a stable
+      directory hash is DVC's job, and silently hashing a tree's first level
+      would be a misleading half-measure.
+
+    Each path contributes a line ``<relpath>\\t<per-path-hash>`` (relpath is
+    relative to *base_dir* when given, else the path verbatim, so the digest
+    is stable across machines that mount the experiment at different roots),
+    the lines are sorted-by-relpath and ``\\n``-joined, and the join is
+    hashed. Sorting makes the digest independent of declaration order;
+    embedding the relpath makes ``{a: H, b: K}`` distinguishable from
+    ``{a: K, b: H}``.
+
+    Returns a 64-char hex string. An empty *input_paths* returns the SHA-256
+    of the empty string (the well-defined "no declared data" identity).
+    """
+    lines: list[str] = []
+    for raw in input_paths:
+        p = Path(raw)
+        resolved = p if p.is_absolute() else ((base_dir / p) if base_dir else p)
+        # Key the line on the path AS DECLARED (relative when possible) so
+        # the digest doesn't drift with the absolute mount point.
+        if base_dir is not None and resolved.is_absolute():
+            try:
+                rel = str(resolved.relative_to(Path(base_dir).resolve()))
+            except ValueError:
+                rel = str(p)
+        else:
+            rel = str(p)
+        dvc_pointer = resolved.with_name(resolved.name + ".dvc")
+        per_path: str
+        dvc_md5 = _dvc_pointer_md5(dvc_pointer) if dvc_pointer.is_file() else None
+        if dvc_md5 is not None:
+            per_path = f"dvc:{dvc_md5}"
+        elif resolved.is_file():
+            per_path = f"sha256:{_content_hash_file(resolved)}"
+        else:
+            per_path = "absent"
+        lines.append(f"{rel}\t{per_path}")
+    lines.sort()
+    joined = "\n".join(lines).encode()
+    return hashlib.sha256(joined).hexdigest()
+
+
+def compute_env_hash(
+    *,
+    modules: Iterable[str] | None = None,
+    conda_source: str | None = None,
+    conda_envs: Iterable[str] | None = None,
+    runtime: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> str:
+    """Return a deterministic SHA-256 over the resolved execution environment.
+
+    Captures ENVIRONMENT identity — the modules / conda source / conda envs
+    a result was actually produced under, plus the ``HPC_RUNTIME`` selector
+    (``uv`` or unset). Pairs with ``cmd_sha`` (params), ``tasks_py_sha``
+    (code), and ``compute_data_sha`` (data) to make a result fully
+    reconstructible (#222).
+
+    The hashed material is a canonical sorted-keys JSON object of exactly the
+    activation inputs the cluster preamble consumes (``$MODULES`` /
+    ``$CONDA_SOURCE`` / ``$CONDA_ENV`` — see
+    :class:`hpc_agent.infra.clusters.Activation`) plus ``runtime``. ``modules``
+    and ``conda_envs`` are ORDER-SENSITIVE (``module load`` / ``conda
+    activate`` apply in sequence and order changes the resolved env), so they
+    are NOT sorted. ``extra`` is an open escape hatch for additional resolved
+    facts a caller wants to fold in (e.g. a measured python/cuda version);
+    its keys ARE sorted. Empty / unset fields are normalized to ``""`` / ``[]``
+    so an all-unset env still hashes to a stable, recognizable value rather
+    than raising.
+
+    Returns a 64-char hex string.
+    """
+    payload: dict[str, Any] = {
+        "modules": [str(m) for m in (modules or [])],
+        "conda_source": str(conda_source or ""),
+        "conda_envs": [str(e) for e in (conda_envs or [])],
+        "runtime": str(runtime or ""),
+    }
+    if extra:
+        payload["extra"] = {str(k): extra[k] for k in sorted(extra)}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()

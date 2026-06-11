@@ -315,6 +315,24 @@ class SubmitFlowSpec(BaseModel):
         ),
     )
     runtime: Runtime | None = Field(default=None)
+    input_datasets: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Declared input-dataset path(s) for DATA provenance (#222/#312) — "
+            "the same path(s) a validate-input-dataset gate names as "
+            "dataset_path. When set, submit-flow auto-captures data_sha = "
+            "compute_data_sha(input_datasets) on this run's sidecar at "
+            "sidecar-write time, exactly as env_hash is auto-captured — no "
+            "manual write-run-sidecar step. Relative paths resolve against "
+            "the experiment dir; a DVC-tracked path uses the .dvc pointer's "
+            "recorded md5; a declared-but-missing path contributes the "
+            "'absent' sentinel (the absence IS the provenance fact). When "
+            "unset, data_sha stays null — 'not captured' is distinguishable "
+            "from any real digest. Provenance only: never part of the dedup "
+            "identity."
+        ),
+    )
     auto_resume_on_kill: bool = Field(
         default=False,
         description=(

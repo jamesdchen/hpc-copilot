@@ -730,6 +730,74 @@ class TestSidecarGuarantee:
             "mem_mb": 8192,
         }
 
+    def test_records_env_hash_on_synthesized_sidecar(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        # #222: Step 6d captures ENVIRONMENT identity from the resolved
+        # activation in job_env, alongside the param/code shas.
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.run_sha import compute_env_hash
+        from hpc_agent.state.runs import read_run_sidecar
+
+        spec = _spec(
+            "rEnv",
+            job_env={
+                "EXECUTOR": "python run.py --task $HPC_TASK_ID",
+                "HPC_CMD_SHA": "abcd1234",
+                "MODULES": "python/3.11.9 cuda/12.1",
+                "CONDA_SOURCE": "/opt/conda/etc/profile.d/conda.sh",
+                "CONDA_ENV": "ml",
+            },
+        )
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rEnv")
+        assert sc["env_hash"] == compute_env_hash(
+            modules=["python/3.11.9", "cuda/12.1"],
+            conda_source="/opt/conda/etc/profile.d/conda.sh",
+            conda_envs=["ml"],
+            runtime=None,
+        )
+
+    def test_records_data_sha_on_synthesized_sidecar(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        # #312: a spec that declares input_datasets gets data_sha captured at
+        # sidecar-write time with no manual step, symmetric with env_hash.
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.run_sha import compute_data_sha
+        from hpc_agent.state.runs import read_run_sidecar
+
+        dataset = tmp_path / "data" / "train.csv"
+        dataset.parent.mkdir(parents=True, exist_ok=True)
+        dataset.write_text("a,b\n1,2\n", encoding="utf-8")
+
+        spec = _spec("rData", input_datasets=["data/train.csv"])
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rData")
+        assert sc["data_sha"] == compute_data_sha(["data/train.csv"], base_dir=tmp_path)
+        assert sc["data_sha"] is not None
+
+    def test_data_sha_stays_null_when_no_dataset_declared(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        # Undeclared → null ("not captured"), distinguishable from the real
+        # digest of an empty declaration — the #312 Gap 1 decision.
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        spec = _spec("rNoData")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        assert read_run_sidecar(tmp_path, "rNoData")["data_sha"] is None
+
     def test_raises_when_missing_and_no_result_dir_template(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
@@ -1456,3 +1524,65 @@ class TestTerminalNotBlocking:
             record, deduped = submit_and_record(tmp_path, spec=spec)
         assert deduped is False  # terminal-not-complete → fresh record, not a replay
         assert record.job_ids == ["new"]
+
+    def test_backfills_provenance_onto_prewritten_sidecar(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        # #312: a Step 6d-style pre-written sidecar (real executor, no
+        # provenance) gets null data_sha/env_hash backfilled at submit time;
+        # an explicitly recorded value is never overwritten.
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.run_sha import compute_data_sha
+        from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+        dataset = tmp_path / "data" / "train.csv"
+        dataset.parent.mkdir(parents=True, exist_ok=True)
+        dataset.write_text("a,b\n1,2\n", encoding="utf-8")
+        write_run_sidecar(
+            tmp_path,
+            run_id="rPre",
+            cmd_sha="0" * 12,
+            hpc_agent_version="0.0.0",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="python run.py --task $HPC_TASK_ID",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+        )
+        spec = _spec("rPre", input_datasets=["data/train.csv"])
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rPre")
+        assert sc["data_sha"] == compute_data_sha(["data/train.csv"], base_dir=tmp_path)
+        assert sc["env_hash"] is not None
+        assert sc["executor"] == "python run.py --task $HPC_TASK_ID"  # untouched
+
+    def test_backfill_never_overwrites_recorded_provenance(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+        write_run_sidecar(
+            tmp_path,
+            run_id="rKeep",
+            cmd_sha="0" * 12,
+            hpc_agent_version="0.0.0",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="python run.py --task $HPC_TASK_ID",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+            data_sha="e" * 64,
+            env_hash="f" * 64,
+        )
+        spec = _spec("rKeep")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rKeep")
+        assert sc["data_sha"] == "e" * 64
+        assert sc["env_hash"] == "f" * 64

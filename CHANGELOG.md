@@ -5,6 +5,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.10.62 — 2026-06-11
+
+### Fixed — review findings on the 0.10.59–0.10.61 work
+
+A seven-angle review of the branch surfaced one real gap and two hardenings, all fixed with firing tests, plus two cleanups:
+
+- **Provenance capture now covers pre-written sidecars.** `data_sha`/`env_hash` were computed only on `_ensure_run_sidecar`'s synthesize path — the normal flows (Step 6d / `resolve-submit-inputs` pre-write the sidecar) never captured them. New `backfill_run_sidecar_provenance` (`state/runs.py`, same post-write-update precedent and lock seam as `update_run_sidecar_job_ids`) fills **only null** fields at submit time — an explicitly recorded value is never overwritten and the write-first invariant is untouched. The capture itself extracted to `_spec_provenance`, shared by both paths.
+- **The #269 flip's old-CLI failure now names its off-switch.** A `claude` CLI predating `--json-schema` rejects the flag; `_run_claude_worker` detects the unknown-option stderr shape and appends remediation naming `HPC_AGENT_WORKER_JSON_SCHEMA=0`.
+- **`LlmJudgementResolver` never raises.** A third-party inner emitting a contract-invalid residue report (or a menu keyed on a point invalid for the workflow) made `parse_worker_report` raise out of the resolver, crashing the tick loop. The violation is now annotated on the returned report (`WORKER-REPORT CONTRACT VIOLATION`) and the park stands — a resolver's contract is to return, not raise.
+- Cleanups: boolean env-flag parsing extracted to `infra/env_flags.py:env_flag` (the decode-schema gates and `HPC_AGENT_ALWAYS_CANARY` previously each inlined it); `write_provenance_manifest` returns `(path, written_object)` so the primitive no longer re-reads the file it just wrote.
+
+Considered and deliberately kept: `ResidueAdjudication` stays a separate shape from the `CandidateAction` family (adjudication verdict vs candidate offer — different roles); a repo-wide canonical-JSON helper sweep is its own change.
+
+## 0.10.61 — 2026-06-10
+
+### Added — `LlmJudgementResolver`: code drives, an LLM adjudicates the parks
+
+The middle resolver between the two extremes the headless tick-loop shipped with (spawn-a-whole-worker vs all-code halt-and-park). `hpc_agent._kernel.lifecycle.llm_resolver.LlmJudgementResolver` wraps any inner code `JudgementResolver`; when the inner parks (the exit-3 residue convention), it makes **one bounded `structured()` call** to adjudicate the residue against a caller-authored **closed menu** of candidate outcomes, records the verdict as a contract-valid judgement `WorkerDecision` (non-empty `why`, rejected alternatives — `parse_worker_report` validates the merged report), feeds the choice back through the `fields.resolved` channel, and retries the inner. Protocol guarantees, each pinned by a test: success/non-residue passes through with zero LLM calls; an un-menued residue parks with zero LLM calls (genuine interviews are not menu-shaped); off-menu choices are rejected by `post_validate` and repaired; a no-progress guard parks instead of spinning when the inner re-emits the residue; `"park"` is always offered and always honored; an exhausted `structured()` budget parks gracefully.
+
+`DeterministicCampaignResolver` now honors `fields.resolved["path"]` — only when `classify-campaign-path` itself escalated (deterministic evidence always wins; the hint exists to break the tie code could not), recording the adjudication provenance in the decision's `why`. The e2e test drives the full bridge: classify escalates → one fake-model adjudication → the decide chain continues to the (stubbed) submit seam and advances the cursor — exactly one model call, zero worker spawns.
+
+New guide [`docs/workflows/code-driven-orchestration.md`](docs/workflows/code-driven-orchestration.md) documents the third consumption style end-to-end: the `drive_once` + `StepTable` + `JudgementResolver` loop seam, the bridge, the pure-CLI escalation-as-data recipe (`DECISION_POINTS`, `candidate_actions`, `needs_decision`), DAG-frontier composition (and that recorded walks of that shape are the dag-kernel earn-it evidence), and the per-tick cost model.
+
+## 0.10.60 — 2026-06-10
+
+### Added — operator always-canary override (#283, last acceptance item)
+
+`HPC_AGENT_ALWAYS_CANARY=1` fires a canary on **every** submit, winning over the agent-supplied `canary: false` opt-out and both auto-skips (the #263 tiny-batch threshold and the #249 cached-`cmd_sha` TTL). The #155/#275 operator-vs-agent boundary applied in the strengthening direction: the documented agent opt-out stays, but the override exists only as an env var — no spec field can express it, so an unattended loop cannot talk itself out of an operator's canary policy. This was #283's one remaining (optional) acceptance item.
+
+### Added — Codex `--output-schema` live-validation mirror (#269 residual half)
+
+`scripts/validate_worker_json_schema.py --harness codex` drives the production `CodexCliInvoker` end-to-end (execpolicy fence, strict `worker.strict.output.json` via `--output-schema`, `--output-last-message` report) with the gate forced on — the same two-question protocol (loop composition + schema acceptance) that validated Claude's flip in 0.10.59, ready to run wherever a `codex` CLI and credentials exist. Codex's `HPC_AGENT_CODEX_OUTPUT_SCHEMA` stays off by default until that run passes.
+
+### Added — OTel metrics alongside spans (#313), on the merged #223 `otel` sink
+
+The `claude/issue-223-otel-telemetry-sink` foundation branch is merged (the `otel`/`otlp` value for `HPC_TELEMETRY_SINK`, span export with `hpc.*` attributes), and the deferred metrics half lands on top: the same single `telemetry.record()` producer now also emits the `hpc.events` counter (per-event-kind, dimensioned by a bounded-enum label allowlist — `decision` / `error_class` / `disposition` / `lifecycle_state` / `ok`) and the `hpc.event.value` histogram (every numeric payload field, dimensioned by event + field). High-cardinality identifiers (`trial_token`, `run_id`, job ids, fingerprints) deliberately never become metric dimensions — they stay span attributes. Same deferred-import + fail-fast-on-missing-SDK pattern; the existing `hpc-agent[otel]` extra covers the metric exporter; an embedding host's global meter provider is respected.
+
+### Added — provenance closed end-to-end (#312), on the merged #222 foundations
+
+The `claude/issue-222-provenance-data-env` foundation branch is merged (`compute_data_sha` with DVC-pointer support, `compute_env_hash`, the sidecar v2 `data_sha`/`env_hash` fields, `build_provenance_manifest`/`write_provenance_manifest`, auto-captured `env_hash` at Step 6d) — with union conflict resolution against the DAG-kernel fields and the `models`→`execution` rename it predated. Both deferred gaps then close on top:
+
+- **Gap 1 — `data_sha` auto-capture.** `SubmitFlowSpec` gains `input_datasets` (the same path(s) a `validate-input-dataset` gate names); when declared, the sidecar-synthesis step computes `data_sha = compute_data_sha(input_datasets, base_dir=experiment_dir)` exactly where `env_hash` is captured — no manual `write-run-sidecar` step. The undeclared-dataset decision: `data_sha` stays `null` ("not captured" must remain distinguishable from the real digest of an empty declaration); a declared-but-missing path contributes `compute_data_sha`'s existing `absent` sentinel *inside* the hash. Provenance only — never part of the dedup identity.
+- **Gap 2 — agent-facing manifest surface.** New `provenance-manifest` primitive (`hpc-agent provenance-manifest --spec '{"campaign_id": ...}'`, verb `mutate`, idempotent by construction since the manifest is derived state recomputed from sidecars): wraps `write_provenance_manifest`, returns `{path, campaign_id, run_count, signature}` — the self-attesting digest a caller records to attest "these results came from exactly these {code, data, env, params}". An unknown campaign yields a well-formed `run_count: 0` manifest, not an error. Registry count: 94.
+
+## 0.10.59 — 2026-06-10
+
+### Changed — `--json-schema` worker output constraint is the default for Claude workers (#269)
+
+The decode-time output constraint shipped opt-in because two questions were unanswerable offline (no worker credentials in the build sandbox). A live `claude -p` validation run (2026-06-10, Claude CLI 2.1.170) answered both, on the first attempt, twice:
+
+- **Composition** — `--json-schema` constrains only the worker's *final* message: the worker executed a deterministic 3-step tool sequence (write file / read back / write transform — observable side effects on disk) and then emitted the schema-shaped report, with a token round-trip binding the constrained decode to work actually done in the loop.
+- **Schema acceptance** — the CLI accepted the **lenient** `worker.output.json` (`additionalProperties: true`, no `required`) directly; the pre-authored strict variant was never needed for Claude (it remains Codex's shape, where `--output-schema` documents the strict requirement).
+
+The harness is committed as `scripts/validate_worker_json_schema.py`: it exercises the production spawn path (`_run_claude_worker` argv assembly, temp-file + stdin prompt transport, JSON result-envelope unwrap) with the production schema loader, gives the worker a multi-step task with observable side effects, and verifies exit code, both side-effect files, schema validity of the final message (`WorkerReport.model_validate`), and the token round-trip — rerunnable for future CLI upgrades (`--mode bare|ambient` for API-key vs environment-managed auth).
+
+The flip itself, per the #269 spec: `_worker_output_schema()` treats unset as **enabled** (`_decode_schema_enabled` gained a per-gate `default`), keeping `HPC_AGENT_WORKER_JSON_SCHEMA=0` as the documented off-switch back to the plain transport. `parse_worker_report`'s cross-field floor is unchanged — structural complement, not substitute. Per the per-harness discipline the gate split exists for, **Codex's `HPC_AGENT_CODEX_OUTPUT_SCHEMA` stays off by default** — it has had no live run; that residual half stays tracked in #269. Exact-argv tests now pin `--output-format json --json-schema <minified schema>` on the default Claude spawn (both the `--bare` and OAuth paths); the plain-transport test pins the off-switch; the #169 large-prompt argv guard exempts only the fixed ~2KB schema constant. `docs/reference/env-vars.md` updated to match.
 ## 0.10.58 — 2026-06-11
 
 ### Fixed — the skill-return "additive net" never fired: autofetch re-triggered onto the emit Bash call + new Stop guard

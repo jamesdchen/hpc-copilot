@@ -61,6 +61,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "provenance_manifest.input.json",
+    "name": "provenance-manifest",
+    "output_schema": null,
+    "python": "hpc_agent.ops.provenance_manifest.provenance_manifest",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Build and write the per-campaign provenance manifest at <experiment>/.hpc/provenance/<campaign_id>.json — one signable record pairing every run_id/trial_token of the campaign with its full {code, data, env, params, cluster} fingerprint, recomputed from the run sidecars on demand.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": null,
     "idempotent": true,
     "input_schema": null,

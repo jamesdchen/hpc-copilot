@@ -134,6 +134,8 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
             cmd_sha=spec.cmd_sha,
             parent_run_ids=spec.parent_run_ids,
         ),
+        data_sha=spec.data_sha,
+        env_hash=spec.env_hash,
         job_ids=spec.job_ids,
     )
     return {"path": str(target)}

@@ -78,6 +78,7 @@ def _capture_run(seen: dict[str, object]):
 def test_claude_cli_invoker_builds_the_right_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
     seen: dict[str, object] = {}
     monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
 
@@ -92,7 +93,8 @@ def test_claude_cli_invoker_builds_the_right_call(
     # user prompt. Both are kept OFF argv so the rendered prompt can't overrun
     # Windows' 32K command-length limit (#169). The worker forces the sandbox off
     # (it SSH/rsyncs to a cluster — network the sandbox blocks, and native
-    # Windows can't sandbox at all).
+    # Windows can't sandbox at all). The decode-time --json-schema constraint
+    # rides the default spawn since the #269 flip.
     argv = seen["argv"]
     assert isinstance(argv, list)
     assert argv[:-1] == [
@@ -107,6 +109,10 @@ def test_claude_cli_invoker_builds_the_right_call(
         invoke_mod._WORKER_ALLOWED_TOOLS,
         "--disallowedTools",
         invoke_mod._WORKER_DISALLOWED_TOOLS,
+        "--output-format",
+        "json",
+        "--json-schema",
+        invoke_mod._worker_output_schema(),
         "--append-system-prompt-file",
     ]
     assert seen["system_prompt"] == "PREFIX"
@@ -114,11 +120,14 @@ def test_claude_cli_invoker_builds_the_right_call(
     assert seen["cwd"] == str(tmp_path)
 
 
-def test_report_cache_stats_off_by_default_keeps_plain_transport(
+def test_plain_transport_when_schema_gate_opted_off(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Without report_cache_stats the call carries NO --output-format json and
-    # surfaces no cache_stats — the existing text transport is untouched.
+    # With the decode-schema gate opted off (HPC_AGENT_WORKER_JSON_SCHEMA=0,
+    # the documented fallback) and no report_cache_stats, the call carries NO
+    # --output-format json and surfaces no cache_stats — the original text
+    # transport is preserved.
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "0")
     seen: dict[str, object] = {}
     monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
     result = ClaudeCliInvoker().invoke(
@@ -229,8 +238,11 @@ def test_invoker_keeps_large_prompt_off_the_command_line(
 
     argv = seen["argv"]
     assert isinstance(argv, list)
-    # Every argv element stays tiny — nothing approaches the 32K limit.
-    assert max(len(a) for a in argv) < 1_000
+    # Every argv element stays small — the one sizeable element is the fixed
+    # ~2KB minified WorkerReport schema (a constant, nowhere near the 32K
+    # limit); the unbounded prompt halves must never ride argv.
+    schema = invoke_mod._worker_output_schema()
+    assert max(len(a) for a in argv if a != schema) < 1_000
     assert big_prefix not in argv
     assert big_suffix not in argv
     # The content still reaches the worker, just off-argv.
@@ -362,6 +374,10 @@ def test_oauth_invoker_builds_the_right_call(
         invoke_mod._WORKER_ALLOWED_TOOLS,
         "--disallowedTools",
         invoke_mod._WORKER_DISALLOWED_TOOLS,
+        "--output-format",
+        "json",
+        "--json-schema",
+        invoke_mod._worker_output_schema(),
         "--append-system-prompt-file",
     ]
     assert seen["system_prompt"] == "PREFIX"
@@ -495,9 +511,14 @@ def test_link_credentials_prefers_symlink(tmp_path: Path) -> None:
 # ─── decode-time output constraint (--json-schema) ──────────────────────────
 
 
-def test_worker_output_schema_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_output_schema_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Default flipped after the #269 live validation run
+    # (scripts/validate_worker_json_schema.py): unset means ON, binding the
+    # lenient shape the run confirmed claude accepts.
     monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
-    assert invoke_mod._worker_output_schema() is None
+    schema = invoke_mod._worker_output_schema()
+    assert schema is not None
+    assert '"additionalProperties":false' not in schema
 
 
 def test_worker_output_schema_on_returns_minified_schema(
@@ -514,7 +535,10 @@ def test_worker_output_schema_on_returns_minified_schema(
 
 
 def test_off_value_disables_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The documented off-switch on the default-on gate (#269).
     monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "0")
+    assert invoke_mod._worker_output_schema() is None
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "false")
     assert invoke_mod._worker_output_schema() is None
 
 
@@ -703,8 +727,10 @@ def test_decode_schema_gates_are_independent(monkeypatch: pytest.MonkeyPatch) ->
     assert invoke_mod._worker_output_schema() is not None
     assert invoke_mod._codex_output_schema() is None
 
-    # Codex on, Claude unset → only Codex's schema is bound.
-    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    # Codex on, Claude opted off → only Codex's schema is bound. (Claude's
+    # gate defaults ON post-flip, so the independence probe uses the explicit
+    # off-switch.)
+    monkeypatch.setenv("HPC_AGENT_WORKER_JSON_SCHEMA", "0")
     monkeypatch.setenv("HPC_AGENT_CODEX_OUTPUT_SCHEMA", "1")
     assert invoke_mod._worker_output_schema() is None
     assert invoke_mod._codex_output_schema() is not None
@@ -986,3 +1012,27 @@ def test_claude_oauth_still_wins_over_codex_and_gemini(
     monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
     monkeypatch.setenv("GEMINI_API_KEY", "g-key")
     assert get_invoker().name == "claude-cli-oauth"
+
+
+def test_old_cli_json_schema_failure_names_the_off_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A `claude` CLI predating --json-schema rejects the flag; with the
+    # constraint on by default the failure must carry its own remediation.
+    class _Proc:
+        returncode = 2
+        stdout = ""
+        stderr = "error: unknown option '--json-schema'"
+
+    def _fake_run(argv, **kwargs):
+        idx = argv.index("--append-system-prompt-file") + 1
+        Path(argv[idx]).read_text(encoding="utf-8")
+        return _Proc()
+
+    monkeypatch.delenv("HPC_AGENT_WORKER_JSON_SCHEMA", raising=False)
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+    result = ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix="P", variable_suffix="S"), cwd=tmp_path
+    )
+    assert result.exit_code == 2
+    assert "HPC_AGENT_WORKER_JSON_SCHEMA=0" in result.stderr

@@ -253,6 +253,124 @@ def test_unclassifiable_path_halts_and_parks(journal_home: Path, experiment: Pat
     assert read_cursor(experiment, _CAMPAIGN_ID) is None
 
 
+def _escalating_classify(**_kwargs: Any) -> dict[str, Any]:
+    """A classify-campaign-path verdict that escalates (the judgement tail)."""
+    return {
+        "decided_by": "judgement",
+        "path": None,
+        "reason": "ambiguous markers: both a manual grid and a strategy import found",
+        "candidates": ["manual", "strategy"],
+    }
+
+
+def test_resolved_path_hint_unparks_classify_escalation(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``fields.resolved.path`` breaks the tie classify-campaign-path couldn't.
+
+    The pre-resolved-values channel an LlmJudgementResolver (or any
+    orchestrator answering a park) writes into: with classify escalating,
+    a resolved 'strategy' hint lets the decide chain continue all the way
+    to the submit seam instead of parking. The recorded path decision
+    carries the adjudication provenance in its why.
+    """
+    _write_tasks_py(experiment, _STRATEGY_TASKS_PY)
+    _seed_prior_iteration(experiment, run_id="iter0", loss=0.9)
+    monkeypatch.setattr(
+        "hpc_agent.incorporation.classify_campaign_path.classify_campaign_path",
+        _escalating_classify,
+    )
+
+    submit = _SubmitStub()
+    resolver = DeterministicCampaignResolver(submit_fn=submit)
+    request = _decide_spawn_request(experiment)
+    request["fields"]["resolved"] = {"path": "strategy"}
+
+    report, exit_code = resolver(request, experiment)
+
+    assert exit_code == 0
+    assert len(submit.calls) == 1
+    points = {d.point: d for d in report.decisions}
+    assert points["path"].outcome == "strategy"
+    assert "fields.resolved" in points["path"].why
+    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1
+
+
+def test_resolved_hint_never_overrides_confident_classification(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The hint only breaks ties: a confident code classification wins even
+    when the caller pre-resolved a contradictory value."""
+    _write_tasks_py(experiment, _STRATEGY_TASKS_PY)  # classifies 'strategy' by code
+    _seed_prior_iteration(experiment, run_id="iter0", loss=0.9)
+
+    submit = _SubmitStub()
+    resolver = DeterministicCampaignResolver(submit_fn=submit)
+    request = _decide_spawn_request(experiment)
+    request["fields"]["resolved"] = {"path": "manual"}  # contradicts the AST scan
+
+    report, exit_code = resolver(request, experiment)
+
+    assert exit_code == 0
+    points = {d.point: d for d in report.decisions}
+    assert points["path"].outcome == "strategy"  # code evidence won
+    assert "fields.resolved" not in points["path"].why
+
+
+def test_llm_resolver_bridge_continues_campaign_end_to_end(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full bridge: code parks → one structured() adjudication → continue.
+
+    LlmJudgementResolver wraps DeterministicCampaignResolver; classify
+    escalates; the (fake) model picks 'strategy' from the closed menu; the
+    decision feeds back through fields.resolved; the retried decide chain
+    runs to the submit seam and advances the cursor. Exactly ONE model
+    call, zero worker spawns — the granular-control consumption mode.
+    """
+    from hpc_agent._kernel.lifecycle.llm_resolver import LlmJudgementResolver
+
+    _write_tasks_py(experiment, _STRATEGY_TASKS_PY)
+    _seed_prior_iteration(experiment, run_id="iter0", loss=0.9)
+    monkeypatch.setattr(
+        "hpc_agent.incorporation.classify_campaign_path.classify_campaign_path",
+        _escalating_classify,
+    )
+
+    class _Model:
+        name = "fake"
+        calls = 0
+
+        def complete(self, messages: list[Any], *, schema: dict | None = None) -> str:
+            type(self).calls += 1
+            return json.dumps(
+                {"chosen": "strategy", "why": "tasks.py consumes prior-iteration history"}
+            )
+
+    submit = _SubmitStub()
+    resolver = LlmJudgementResolver(
+        inner=DeterministicCampaignResolver(submit_fn=submit),
+        model=_Model(),
+        menu={"path": ["manual", "strategy"]},
+    )
+
+    report, exit_code = resolver(_decide_spawn_request(experiment), experiment)
+
+    assert exit_code == 0
+    assert _Model.calls == 1
+    assert len(submit.calls) == 1
+    assert report.result["submitted"] is True
+    # Audit trail: the adjudication (model's why) AND the resolved path
+    # decision (caller-resolved provenance) both ride the final report,
+    # and it round-trips the worker-report contract.
+    path_decisions = [d for d in report.decisions if d.point == "path"]
+    whys = " | ".join(d.why for d in path_decisions)
+    assert "consumes prior-iteration history" in whys
+    assert "fields.resolved" in whys
+    assert parse_worker_report(json.dumps(report.model_dump(mode="json")), workflow="campaign")
+    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1
+
+
 def test_decide_stop_decision_is_clean_terminal_not_residue(
     journal_home: Path, experiment: Path
 ) -> None:

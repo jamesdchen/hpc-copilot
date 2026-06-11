@@ -61,12 +61,13 @@ surface, with its own precedence rules:
    entries out-ranking allow by ``priority``.
 4. **Decode-schema-vs-floor.** :func:`parse_worker_report` is the always
    -on floor that validates the worker's final JSON report. A driver MAY
-   add a decode-time schema accelerator on top, but it is optional, off by
-   default, and gated PER HARNESS (turning it on is gated on a per-harness
-   live-validation run, #269). Claude: ``--json-schema`` gated by
-   ``HPC_AGENT_WORKER_JSON_SCHEMA`` (lenient ``worker.output.json``).
+   add a decode-time schema accelerator on top, gated PER HARNESS on a
+   live-validation run (#269). Claude: ``--json-schema``, **on by
+   default** since its run (0.10.59), opt-out via
+   ``HPC_AGENT_WORKER_JSON_SCHEMA=0`` (lenient ``worker.output.json``).
    Codex: ``--output-schema`` gated by ``HPC_AGENT_CODEX_OUTPUT_SCHEMA``
-   (API-strict ``worker.strict.output.json``). Gemini: no CLI decode
+   (API-strict ``worker.strict.output.json``), still off by default
+   pending its own run. Gemini: no CLI decode
    schema exists (``responseSchema`` is API/SDK-only), so the Gemini path
    leans entirely on the #304 floor.
 
@@ -396,23 +397,32 @@ def _extract_cache_stats(envelope: dict[str, object]) -> dict[str, int] | None:
 # unvalidated harness on as a side effect of validating another.
 #
 #   * Claude ``--json-schema`` → ``HPC_AGENT_WORKER_JSON_SCHEMA``. Emits the
-#     *lenient* ``worker.output.json``: whether claude's mode requires a strict
-#     schema is the open #269 question, unanswerable offline, so the lenient
-#     shape stays until the live ``claude -p --json-schema`` run confirms.
+#     *lenient* ``worker.output.json``. **ON by default** since the #269 live
+#     validation run (2026-06-10, ``scripts/validate_worker_json_schema.py``):
+#     ``--json-schema`` composes with the multi-step agent tool loop (only the
+#     final message is decode-constrained) and the CLI accepts the lenient
+#     shape (``additionalProperties: true``, no ``required``). Set
+#     ``HPC_AGENT_WORKER_JSON_SCHEMA=0`` to fall back to the plain transport.
 #   * Codex ``--output-schema`` → ``HPC_AGENT_CODEX_OUTPUT_SCHEMA``. Emits the
 #     *API-strict* ``worker.strict.output.json``: Codex's ``--output-schema``
 #     documents that it requires the strict shape (``additionalProperties:false``
 #     + all-required), so binding the lenient floor schema was a latent bug.
-#
-# Both are OFF by default; the plain text transport is otherwise untouched.
-# Making either the default once live-validated is tracked in issue #269.
+#     Still OFF by default — the validation is per-harness and Codex has had no
+#     live run; making it the default stays tracked in issue #269.
 _WORKER_JSON_SCHEMA_ENV = "HPC_AGENT_WORKER_JSON_SCHEMA"
 _CODEX_OUTPUT_SCHEMA_ENV = "HPC_AGENT_CODEX_OUTPUT_SCHEMA"
 
 
-def _decode_schema_enabled(env_var: str) -> bool:
-    """Whether the decode-schema gate named by *env_var* is turned on."""
-    return os.environ.get(env_var, "").strip().lower() in {"1", "true", "yes", "on"}
+def _decode_schema_enabled(env_var: str, *, default: bool = False) -> bool:
+    """Whether the decode-schema gate named by *env_var* is turned on.
+
+    Unset (or blank) means *default*; any explicit value is parsed strictly —
+    only ``1``/``true``/``yes``/``on`` enable, everything else (``0``, ``false``,
+    …) disables, so the documented off-switch works on a default-on gate.
+    """
+    from hpc_agent.infra.env_flags import env_flag
+
+    return env_flag(env_var, default=default)
 
 
 def _load_schema_resource(resource: str) -> str | None:
@@ -434,9 +444,10 @@ def _load_schema_resource(resource: str) -> str | None:
 def _worker_output_schema() -> str | None:
     """The lenient WorkerReport schema (minified) for Claude ``--json-schema``.
 
-    ``None`` when ``HPC_AGENT_WORKER_JSON_SCHEMA`` is off (the default).
+    On by default (live-validated, #269); ``None`` when
+    ``HPC_AGENT_WORKER_JSON_SCHEMA=0`` opts back into the plain transport.
     """
-    if not _decode_schema_enabled(_WORKER_JSON_SCHEMA_ENV):
+    if not _decode_schema_enabled(_WORKER_JSON_SCHEMA_ENV, default=True):
         return None
     return _load_schema_resource("worker.output.json")
 
@@ -518,6 +529,22 @@ def _run_claude_worker(
             check=False,
         )
     output = proc.stdout
+    stderr = getattr(proc, "stderr", None) or ""
+    # The decode constraint is on by default since 0.10.59; a `claude` CLI
+    # predating --json-schema rejects the flag with an opaque unknown-option
+    # error. Name the off-switch so the failure carries its own remediation.
+    if (
+        proc.returncode != 0
+        and output_schema is not None
+        and "--json-schema" in stderr
+        and ("unknown" in stderr.lower() or "unrecognized" in stderr.lower())
+    ):
+        stderr += (
+            "\nhpc-agent: this `claude` CLI does not support --json-schema (the "
+            "decode-time worker output constraint, on by default). Upgrade the "
+            "claude CLI, or set HPC_AGENT_WORKER_JSON_SCHEMA=0 to fall back to "
+            "the plain transport."
+        )
     cache_stats: dict[str, int] | None = None
     if use_json:
         # Unwrap the JSON result envelope: the worker's report is the inner
@@ -543,7 +570,7 @@ def _run_claude_worker(
     return InvocationResult(
         exit_code=proc.returncode,
         output=output,
-        stderr=getattr(proc, "stderr", None) or "",
+        stderr=stderr,
         cache_stats=cache_stats,
     )
 

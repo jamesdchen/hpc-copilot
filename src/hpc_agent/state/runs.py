@@ -117,6 +117,8 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
     "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
+    "data_sha",  # str — data identity of the declared input dataset(s) (#222)
+    "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -156,6 +158,8 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "trial_tokens": None,
     "parent_run_ids": None,
     "node_sha": None,
+    "data_sha": None,
+    "env_hash": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -223,6 +227,8 @@ def write_run_sidecar(
     trial_tokens: list[Any] | None = None,
     parent_run_ids: list[str] | None = None,
     node_sha: str | None = None,
+    data_sha: str | None = None,
+    env_hash: str | None = None,
     job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
@@ -251,6 +257,18 @@ def write_run_sidecar(
     pair). The framework never interprets them — they are recorded verbatim
     and re-surfaced by
     :func:`hpc_agent.execution.mapreduce.reduce.history.prior_records`.
+
+    *data_sha* / *env_hash* extend provenance past parameter (``cmd_sha``)
+    and code (``tasks_py_sha``) identity to the DATA and ENVIRONMENT a run
+    was produced under (#222). Compute them with
+    :func:`hpc_agent.state.run_sha.compute_data_sha` (DVC pointer when
+    present, else a content-hash of the declared input paths) and
+    :func:`hpc_agent.state.run_sha.compute_env_hash` (resolved
+    modules/conda_source/conda_envs + ``HPC_RUNTIME``). Both are optional;
+    the per-campaign provenance manifest
+    (:func:`hpc_agent.ops.provenance_manifest.build_provenance_manifest`)
+    reads them back off the sidecars to pair every run with its full
+    {code, data, env, params, cluster} fingerprint.
 
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
@@ -299,6 +317,8 @@ def write_run_sidecar(
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
         "node_sha": node_sha,
+        "data_sha": data_sha,
+        "env_hash": env_hash,
         "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():
@@ -726,6 +746,43 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
             # preserve the documented FileNotFoundError contract.
             raise FileNotFoundError(f"run sidecar not found: {target}")
         existing["job_ids"] = new_job_ids
+        return existing
+
+    atomic_locked_update(target, _mutate)
+    return target
+
+
+def backfill_run_sidecar_provenance(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    data_sha: str | None,
+    env_hash: str | None,
+) -> Path:
+    """Fill *null* provenance fields on an existing sidecar; return its path.
+
+    The #312 capture seam for sidecars that were pre-written (Step 6d /
+    ``resolve-submit-inputs``) before submit-flow could compute ``data_sha``
+    / ``env_hash``: strictly **additive** — a field is written only when the
+    sidecar's current value is null/absent AND the supplied value is
+    non-null, so an explicitly recorded provenance value is never
+    overwritten and the write-first invariant (#148/#150: never clobber a
+    pre-written sidecar's config) is untouched. Same post-write-update
+    precedent as :func:`update_run_sidecar_job_ids`, same lock seam.
+
+    Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*.
+    """
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        raise FileNotFoundError(f"run sidecar not found: {target}")
+    from hpc_agent.infra.io import atomic_locked_update
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        for field, value in (("data_sha", data_sha), ("env_hash", env_hash)):
+            if value is not None and existing.get(field) is None:
+                existing[field] = value
         return existing
 
     atomic_locked_update(target, _mutate)

@@ -155,11 +155,29 @@ def _canary_skip_threshold(spec: SubmitFlowSpec) -> int:
     return int(getattr(spec, "canary_skip_threshold", 4))
 
 
+_ALWAYS_CANARY_ENV = "HPC_AGENT_ALWAYS_CANARY"
+
+
+def _always_canary() -> bool:
+    """Operator always-canary override (#283), env-only by design.
+
+    The #155/#275 motto in the strengthening direction: the agent-supplied
+    ``canary=false`` opt-out stays documented, but an operator can pin a canary
+    on every submit — winning over the opt-out AND both auto-skips — without
+    any agent-reachable field existing for the override.
+    """
+    from hpc_agent.infra.env_flags import env_flag
+
+    return env_flag(_ALWAYS_CANARY_ENV)
+
+
 def _should_run_canary(spec: SubmitFlowSpec) -> bool:
     """Decide whether to fire a canary for *spec* (#263 + #249).
 
     Order:
 
+    * ``HPC_AGENT_ALWAYS_CANARY`` (operator env, #283) → ALWAYS canary — wins
+      over the agent-supplied ``canary=false`` opt-out and both auto-skips.
     * ``canary=false`` → no canary (the caller's explicit opt-out).
     * ``canary_only=true`` → ALWAYS canary — the two-phase gate is an explicit
       request to validate before main; neither optimization applies.
@@ -172,6 +190,8 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
 
     Otherwise → canary.
     """
+    if _always_canary():
+        return True
     if not spec.canary:
         return False
     if spec.canary_only or getattr(spec, "force_canary", False):
@@ -510,6 +530,36 @@ def _run_constant_spec_kwargs(experiment_dir: Path) -> dict[str, Any]:
     return {str(k): v for k, v in fixed_params.items()}
 
 
+def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | None, str]:
+    """The (data_sha, env_hash) pair the spec's provenance capture records (#222/#312).
+
+    ``env_hash`` folds the resolved activation the cluster preamble consumes
+    ($MODULES / $CONDA_SOURCE / $CONDA_ENV in job_env) plus the runtime
+    selector — exactly what this run executes under. ``data_sha`` is computed
+    only when the spec declares ``input_datasets``; undeclared stays ``None``
+    ("not captured" must stay distinguishable from the real digest of an
+    empty declaration), and a declared-but-missing path contributes
+    ``compute_data_sha``'s "absent" sentinel inside the hash.
+    """
+    from hpc_agent.state.run_sha import compute_data_sha, compute_env_hash
+
+    job_env = spec.job_env or {}
+    modules_str = (job_env.get("MODULES") or "").strip()
+    conda_env_str = (job_env.get("CONDA_ENV") or "").strip()
+    env_hash = compute_env_hash(
+        modules=modules_str.split() if modules_str else [],
+        conda_source=(job_env.get("CONDA_SOURCE") or "").strip() or None,
+        conda_envs=[conda_env_str] if conda_env_str else [],
+        runtime=job_env.get("HPC_RUNTIME") or spec.runtime or None,
+    )
+    data_sha = (
+        compute_data_sha(spec.input_datasets, base_dir=experiment_dir)
+        if spec.input_datasets
+        else None
+    )
+    return data_sha, env_hash
+
+
 def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     """Guarantee the cluster-required per-run sidecar exists before rsync.
 
@@ -560,6 +610,17 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         except (OSError, ValueError, AttributeError):
             existing_executor = None
         if _is_runnable_executor(existing_executor):
+            # #312: the pre-written sidecar (Step 6d / resolve-submit-inputs)
+            # was authored before submit-flow could compute provenance —
+            # backfill ONLY null data_sha / env_hash (additive; an explicitly
+            # recorded value is never overwritten, see
+            # backfill_run_sidecar_provenance).
+            from hpc_agent.state.runs import backfill_run_sidecar_provenance
+
+            data_sha, env_hash = _spec_provenance(experiment_dir, spec)
+            backfill_run_sidecar_provenance(
+                experiment_dir, spec.run_id, data_sha=data_sha, env_hash=env_hash
+            )
             return
         raise _write_first_error(
             spec.run_id,
@@ -649,6 +710,13 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # declared ``fixed_params`` are sound to stamp; swept axes are never read.
     spec_kwargs = _run_constant_spec_kwargs(experiment_dir)
     extra = {"spec_kwargs": spec_kwargs} if spec_kwargs else None
+    # #222: capture ENVIRONMENT identity alongside the param (cmd_sha) and
+    # code (tasks_py_sha) identities. ``job_env`` carries the resolved
+    # activation the cluster preamble consumes ($MODULES / $CONDA_SOURCE /
+    # $CONDA_ENV) and the $HPC_RUNTIME selector — i.e. exactly what this run
+    # executes under. ``$MODULES`` is a space-joined string in job_env; split
+    # it back to the ordered list compute_env_hash expects.
+    data_sha, env_hash = _spec_provenance(experiment_dir, spec)
 
     write_run_sidecar(
         experiment_dir,
@@ -674,6 +742,8 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         node_sha=resolve_node_sha(
             experiment_dir, cmd_sha=cmd_sha, parent_run_ids=spec.parents or None
         ),
+        data_sha=data_sha,
+        env_hash=env_hash,
     )
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hpc-agent"
-version = "0.10.58"
+version = "0.10.62"
 description = "HPC orchestrator for Claude Code and external agent harnesses"
 readme = "README.md"
 license = { text = "MIT" }
@@ -53,6 +53,15 @@ dev = [
 ]
 tui = [
     "rich>=13.0",
+]
+# OpenTelemetry export for HPC_TELEMETRY_SINK=otel. Optional: the
+# telemetry module imports these lazily and only when the sink is
+# selected, so the base install stays dependency-light. The OTLP/HTTP
+# exporter is the most portable backend (any collector, Grafana Alloy,
+# Tempo, etc.); point it with OTEL_EXPORTER_OTLP_ENDPOINT.
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
 
 [project.urls]

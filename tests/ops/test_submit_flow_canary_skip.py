@@ -14,7 +14,12 @@ from hpc_agent.state import canary_cache
 @pytest.fixture(autouse=True)
 def _clean(tmp_path, monkeypatch):
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path))
-    for var in ("HPC_CANARY_SKIP_THRESHOLD", "HPC_NO_CANARY_SKIP", "HPC_CANARY_TTL_SEC"):
+    for var in (
+        "HPC_CANARY_SKIP_THRESHOLD",
+        "HPC_NO_CANARY_SKIP",
+        "HPC_CANARY_TTL_SEC",
+        "HPC_AGENT_ALWAYS_CANARY",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -71,6 +76,38 @@ def test_force_canary_overrides_tiny_batch():
 def test_canary_only_always_runs_even_tiny():
     # The explicit two-phase gate is never auto-skipped.
     assert sf._should_run_canary(_spec(total_tasks=1, canary_only=True)) is True
+
+
+# --- #283 operator always-canary override ------------------------------------
+
+
+def test_always_canary_env_wins_over_agent_opt_out(monkeypatch):
+    # The operator override beats the agent-supplied canary=false — and there
+    # is no spec field that can express it (env-only by the #155/#275 motto).
+    monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "1")
+    assert sf._should_run_canary(_spec(canary=False, total_tasks=1000)) is True
+    assert "always_canary" not in SubmitFlowSpec.model_fields
+
+
+def test_always_canary_env_wins_over_tiny_batch_skip(monkeypatch):
+    monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "true")
+    assert sf._should_run_canary(_spec(total_tasks=1)) is True
+
+
+def test_always_canary_env_wins_over_cached_cmd_sha(monkeypatch):
+    from hpc_agent import __version__ as ver
+
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+    )
+    monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "1")
+    assert sf._should_run_canary(_spec(total_tasks=100)) is True
+
+
+def test_always_canary_off_value_changes_nothing(monkeypatch):
+    monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "0")
+    assert sf._should_run_canary(_spec(canary=False, total_tasks=1000)) is False
+    assert sf._should_run_canary(_spec(total_tasks=4)) is False
 
 
 # --- #249 cached cmd_sha TTL ------------------------------------------------

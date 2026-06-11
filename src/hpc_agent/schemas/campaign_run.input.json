@@ -543,6 +543,23 @@
           "default": null,
           "title": "Runtime"
         },
+        "input_datasets": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Declared input-dataset path(s) for DATA provenance (#222/#312) — the same path(s) a validate-input-dataset gate names as dataset_path. When set, submit-flow auto-captures data_sha = compute_data_sha(input_datasets) on this run's sidecar at sidecar-write time, exactly as env_hash is auto-captured — no manual write-run-sidecar step. Relative paths resolve against the experiment dir; a DVC-tracked path uses the .dvc pointer's recorded md5; a declared-but-missing path contributes the 'absent' sentinel (the absence IS the provenance fact). When unset, data_sha stays null — 'not captured' is distinguishable from any real digest. Provenance only: never part of the dedup identity.",
+          "title": "Input Datasets"
+        },
         "auto_resume_on_kill": {
           "default": false,
           "description": "Opt-in automatic checkpoint-resume on a preemption/walltime kill (#294 Layer 2 / #299). Default OFF: a run that does not set this is NEVER auto-resubmitted. When ON, the monitor's terminal-FAILED hook consults the auto-resume gate — and ONLY on an explicit per-task preempt mark (the dispatcher's SIGTERM signal; exit 130). OOM (137) and executor errors carry no mark and always escalate instead of looping. Requires checkpoint-writing executors to make progress; a task with no checkpoint just restarts from scratch on resume.",

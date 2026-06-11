@@ -788,6 +788,32 @@
           "default": null,
           "title": "Parent Run Ids"
         },
+        "data_sha": {
+          "anyOf": [
+            {
+              "pattern": "^([0-9a-f]{64})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Sha"
+        },
+        "env_hash": {
+          "anyOf": [
+            {
+              "pattern": "^([0-9a-f]{64})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Hash"
+        },
         "job_ids": {
           "anyOf": [
             {
