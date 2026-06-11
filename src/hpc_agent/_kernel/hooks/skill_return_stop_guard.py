@@ -105,7 +105,10 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     if not pending:
         return None
 
-    quoted_dir = shlex.quote(str(experiment_dir))
+    # Forward-slash form: the agent will paste this into a Git Bash command,
+    # where a bare backslash path invites the \U-escape-collapse bug class
+    # (agent_assets._hook_python). shlex.quote still covers spaces.
+    quoted_dir = shlex.quote(experiment_dir.as_posix())
     fetches = " && ".join(
         f"hpc-agent fetch-skill-return --skill {skill} --experiment-dir {quoted_dir}"
         for skill in pending
