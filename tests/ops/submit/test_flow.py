@@ -1688,3 +1688,45 @@ class TestPostQsubSidecarPreStamp:
         ):
             result = _submit_one_spec(experiment_dir=tmp_path, spec=spec)
         assert result.job_ids == ["4242"]
+
+    def test_production_flow_seeds_sidecar_so_the_stamp_actually_lands(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """The pre-stamp's protection is silent if its precondition is unmet:
+        ``update_run_sidecar_job_ids`` no-ops (FileNotFoundError, swallowed)
+        when no sidecar exists. The whole Tier-1 guarantee therefore rides on
+        ``_ensure_run_sidecar`` running BEFORE the qsub in the real batch flow.
+
+        Drive the real ``submit_flow_batch`` entry point WITHOUT pre-seeding a
+        sidecar (only the cluster I/O + the record write are mocked), kill
+        ``submit_and_record``, and assert the stamped id is on disk anyway.
+        This pins the production ordering: if a refactor moved or dropped the
+        ``_ensure_run_sidecar`` prelude, the stamp would silently skip — exactly
+        the failure it guards against — and this test would fail on the
+        FileNotFoundError from ``read_run_sidecar``."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+
+        spec = _spec("rProd")
+        # Precondition for the test's meaning: no sidecar exists up front, so a
+        # landed stamp can only come from the real _ensure_run_sidecar prelude.
+        assert not run_sidecar_path(tmp_path, "rProd").exists()
+
+        def _killed(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("process died between qsub and record")
+
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "build_remote_backend", return_value=object()),
+            mock.patch.object(
+                sf_module, "_make_single_array_submission", return_value=["13610902"]
+            ),
+            mock.patch.object(sf_module, "submit_and_record", side_effect=_killed),
+            mock.patch.object(sf_module, "load_run", return_value=None),
+            pytest.raises(RuntimeError, match="between qsub and record"),
+        ):
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+
+        assert read_run_sidecar(tmp_path, "rProd")["job_ids"] == ["13610902"]

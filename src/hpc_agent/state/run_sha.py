@@ -154,6 +154,8 @@ def compose_node_sha(cmd_sha: str, parent_node_shas: list[str]) -> str:
         {"node": cmd_sha, "parents": parents}, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(envelope.encode()).hexdigest()
+
+
 # Chunk size for streaming a file's bytes through the digest. 1 MiB keeps a
 # large parquet/csv input off the heap (we never materialize the whole file)
 # while staying well above the per-read syscall floor.

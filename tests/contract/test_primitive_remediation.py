@@ -378,9 +378,9 @@ def test_primitive_emits_spec_invalid_on_bad_input(
             f"`spec_invalid`. Spec-validate is missing from this verb's "
             f"entry path. Envelope: {envelope!r}"
         )
-    assert (
-        envelope.get("ok") is False
-    ), f"{verb}: empty spec should be rejected, got ok={envelope.get('ok')}: {envelope!r}"
+    assert envelope.get("ok") is False, (
+        f"{verb}: empty spec should be rejected, got ok={envelope.get('ok')}: {envelope!r}"
+    )
     assert envelope.get("error_code") == "spec_invalid", (
         f"{verb}: empty spec should produce error_code=spec_invalid; got "
         f"{envelope.get('error_code')!r}. Envelope: {envelope!r}"
@@ -408,9 +408,9 @@ def test_primitive_emits_failure_features_on_spec_invalid(
     envelope = _run_verb_with_bad_spec(verb, spec, tmp_path)
     assert envelope.get("ok") is False
     failure_features = envelope.get("failure_features")
-    assert (
-        failure_features is not None
-    ), f"{verb}: spec_invalid envelope missing failure_features. Envelope: {envelope!r}"
+    assert failure_features is not None, (
+        f"{verb}: spec_invalid envelope missing failure_features. Envelope: {envelope!r}"
+    )
     error_class = failure_features.get("error_class")
     assert error_class, (
         f"{verb}: failure_features.error_class is empty / null. The whole "

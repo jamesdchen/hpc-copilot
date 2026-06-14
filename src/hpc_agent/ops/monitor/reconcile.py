@@ -262,9 +262,13 @@ def _reconcile_one(
         # ids in the remediation so the caller mints the record from THEM via
         # `hpc-agent submit-spec --spec <file>`, never an invented placeholder
         # (submit-spec refuses non-scheduler-shaped ids at intake).
+        # Best-effort hint decoration only — it must NEVER mask the
+        # JournalCorrupt below. read_run_sidecar can also raise SchemaIncompat
+        # (a too-new sidecar) on top of OSError/JSONDecodeError, so swallow
+        # broadly: a failed read just means "no hint", not a different error.
         try:
             _stranded = list(read_run_sidecar(experiment_dir, run_id).get("job_ids") or [])
-        except (OSError, json.JSONDecodeError):
+        except Exception:
             _stranded = []
         hint = (
             f" Sidecar .hpc/runs/{run_id}.json carries job_ids {_stranded} from the "

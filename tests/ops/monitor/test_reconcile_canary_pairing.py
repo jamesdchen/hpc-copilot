@@ -242,3 +242,25 @@ def test_no_record_no_sidecar_keeps_bare_message(tmp_path, monkeypatch):
     msg = str(exc.value)
     assert "no run record" in msg
     assert "submit-spec" not in msg
+
+
+def test_no_record_unreadable_sidecar_keeps_bare_message(tmp_path, monkeypatch):
+    """The hint read is best-effort: a sidecar that fails to decode — here a
+    too-new ``sidecar_schema_version`` (SchemaIncompat, which is NOT an
+    OSError/JSONDecodeError) — must degrade to the bare JournalCorrupt, never
+    leak the read error in place of the actionable 'no run record' message."""
+    import json
+
+    from hpc_agent.state.runs import run_sidecar_path
+
+    target = run_sidecar_path(tmp_path, "rFuture")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"sidecar_schema_version": 999, "job_ids": ["13610902"]}))
+
+    with pytest.raises(errors.JournalCorrupt) as exc:
+        recon._reconcile_one(tmp_path, "rFuture", scheduler="sge")
+    msg = str(exc.value)
+    assert "no run record" in msg
+    # The unreadable sidecar yields no hint, and the SchemaIncompat never surfaces.
+    assert "submit-spec" not in msg
+    assert "schema_version" not in msg
