@@ -40,6 +40,31 @@ class TestKnownSchedulerFamilies:
         with pytest.raises(errors.SpecInvalid, match="not a known family"):
             ClusterConfig.model_validate({"scheduler": "moab"})
 
+    def test_plugin_registered_backend_needs_no_pin(self):
+        # The crowd-compute seam: a backend name registered by a plugin
+        # (here: registered directly, the same @register call a plugin's
+        # primitive_modules import runs) validates without a pinned
+        # scheduler_profile — see docs/proposals/crowd-compute-backend.md.
+        from hpc_agent.infra.backends import _REGISTRY, HPCBackend, register
+
+        @register("fakecrowd")
+        class _FakeCrowdBackend(HPCBackend):
+            scheduler_name = "fakecrowd"
+
+            def _build_command(self, *a, **k):  # pragma: no cover - never called
+                raise NotImplementedError
+
+        try:
+            cfg = ClusterConfig.model_validate({"scheduler": "fakecrowd"})
+            assert cfg.scheduler == "fakecrowd"
+            assert cfg.scheduler_profile is None
+        finally:
+            _REGISTRY.pop("fakecrowd", None)
+        # And once unregistered, the same entry is rejected again — the
+        # acceptance really came from the registry, not from a cache.
+        with pytest.raises(errors.SpecInvalid, match="not a known family"):
+            ClusterConfig.model_validate({"scheduler": "fakecrowd"})
+
 
 # ─── get_walltime_arbitrage ─────────────────────────────────────────────────
 

@@ -23,8 +23,9 @@ from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
 
 # Scheduler families the framework ships golden profiles for. A
-# ``scheduler`` value outside this set is permitted ONLY when the entry
-# also carries a pinned ``scheduler_profile`` (see the validators below).
+# ``scheduler`` value outside this set is permitted only when the entry
+# also carries a pinned ``scheduler_profile``, OR when a loaded plugin
+# has registered a backend under that name (see the validators below).
 _KNOWN_SCHEDULER_FAMILIES = frozenset({"slurm", "sge", "pbspro", "torque"})
 
 # ---------------------------------------------------------------------------
@@ -58,8 +59,9 @@ class ClusterConfig(BaseModel):
     scheduler: str = Field(
         description=(
             "Scheduler family. Routes the submission to the right backend. "
-            "A known family (``slurm``/``sge``/``pbspro``/``torque``) needs "
-            "nothing else; an unknown family is permitted ONLY when "
+            "A known family (``slurm``/``sge``/``pbspro``/``torque``) or a "
+            "backend name registered by an installed plugin needs nothing "
+            "else; any other value is permitted ONLY when "
             "``scheduler_profile`` pins a concrete SchedulerProfile dict."
         )
     )
@@ -70,8 +72,9 @@ class ClusterConfig(BaseModel):
             "augments the golden family profile and is the profile that "
             "gets registered for this cluster. Round-trips through "
             "``SchedulerProfile.from_dict`` at load time so a malformed "
-            "pin fails loudly. Required when ``scheduler`` is not a known "
-            "family (``slurm``/``sge``/``pbspro``/``torque``)."
+            "pin fails loudly. Required when ``scheduler`` is neither a "
+            "known family (``slurm``/``sge``/``pbspro``/``torque``) nor a "
+            "plugin-registered backend name."
         ),
     )
     host: str | None = Field(
@@ -236,34 +239,44 @@ class ClusterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_pin_for_unknown_family(self) -> ClusterConfig:
-        """Enforce: an unknown scheduler family must carry a pinned profile.
+        """Enforce: an unresolvable scheduler name must carry a pinned profile.
 
-        A known family (``slurm``/``sge``/``pbspro``/``torque``) ships a
-        golden profile, so the pin is optional there. Any other
-        ``scheduler`` value has no golden
-        seed, so the entry is only resolvable when it also pins a concrete
-        ``scheduler_profile`` dict — otherwise the submit path would have
-        nothing to register. This is a model (cross-field) validator
-        rather than a ``scheduler_profile`` field validator because the
-        field defaults to ``None`` and field validators don't fire for an
-        omitted field — the check must run even when ``scheduler_profile``
-        is absent entirely.
+        Three ways a ``scheduler`` value is resolvable, checked cheapest
+        first: a known family (``slurm``/``sge``/``pbspro``/``torque``)
+        ships a golden profile; a pinned ``scheduler_profile`` dict is its
+        own seed; and a name some loaded plugin registered via
+        ``@register`` resolves through the backend registry (the
+        crowd-compute seam — ``docs/proposals/crowd-compute-backend.md``).
+        Anything else would leave the submit path with nothing to
+        register, so it is rejected here at config-load time. The
+        registry lookup is deliberately last: it imports backend (and
+        plugin) modules, which the two cheap checks usually avoid.
 
-        Schema validation: rejects an unknown ``scheduler`` family that
-        lacks a ``scheduler_profile`` pin.
+        This is a model (cross-field) validator rather than a
+        ``scheduler_profile`` field validator because the field defaults
+        to ``None`` and field validators don't fire for an omitted field —
+        the check must run even when ``scheduler_profile`` is absent
+        entirely.
+
+        Schema validation: rejects an unknown ``scheduler`` value that
+        lacks both a ``scheduler_profile`` pin and a registered backend.
         """
-        if (
-            isinstance(self.scheduler, str)
-            and self.scheduler.strip().lower() not in _KNOWN_SCHEDULER_FAMILIES
-            and self.scheduler_profile is None
-        ):
-            raise errors.SpecInvalid(
-                f"scheduler {self.scheduler!r} is not a known family "
-                f"({sorted(_KNOWN_SCHEDULER_FAMILIES)}); such an entry must "
-                f"also set 'scheduler_profile' to pin a concrete "
-                f"SchedulerProfile dict."
-            )
-        return self
+        if not isinstance(self.scheduler, str):
+            return self
+        name = self.scheduler.strip().lower()
+        if name in _KNOWN_SCHEDULER_FAMILIES or self.scheduler_profile is not None:
+            return self
+        from hpc_agent.infra.backends import registered_backend_names
+
+        if name in registered_backend_names():
+            return self
+        raise errors.SpecInvalid(
+            f"scheduler {self.scheduler!r} is not a known family "
+            f"({sorted(_KNOWN_SCHEDULER_FAMILIES)}) or a registered backend; "
+            f"such an entry must either set 'scheduler_profile' to pin a "
+            f"concrete SchedulerProfile dict, or install the plugin that "
+            f"registers backend {name!r}."
+        )
 
 
 def _allowed_cluster_keys() -> frozenset[str]:

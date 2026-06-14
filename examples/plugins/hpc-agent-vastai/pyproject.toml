@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpc-agent-vastai"
+version = "0.0.1"
+description = "Skeleton hpc-agent backend plugin for the Vast.ai GPU marketplace (not functional)"
+requires-python = ">=3.10"
+dependencies = [
+    "hpc-agent",
+]
+
+# The real implementation adds its platform SDK here — NOT to hpc-agent
+# core (engineering-principles Q4: knowledge testable only against the
+# real library lives in the plugin whose CI carries the dependency).
+[project.optional-dependencies]
+api = [
+    # "vastai",  # uncomment when the API layer is implemented
+]
+
+# The entire opt-in: installing this distribution makes the host's
+# entry-point scan (hpc_agent._kernel.registry.plugins.load_plugins)
+# discover the package object below.
+[project.entry-points."hpc_agent.plugins"]
+vastai = "hpc_agent_vastai"
+
+[tool.setuptools.packages.find]
+where = ["src"]

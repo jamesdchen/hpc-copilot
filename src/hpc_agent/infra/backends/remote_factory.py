@@ -56,6 +56,12 @@ def build_remote_backend(
     overrides the golden default. This is how a non-default cluster's
     customised scheduler reaches the engine. Without it, the golden
     ``slurm`` / ``sge`` backends are used exactly as before.
+
+    A *backend_name* outside the built-in families resolves through the
+    backend registry: a plugin-registered backend constructs itself via
+    :meth:`HPCBackend.from_build_context` (the SSH-on-a-login-node
+    assumption above applies only to the built-in ladder; a plugin
+    backend owns its own transport decisions).
     """
 
     def ssh(cmd: str):
@@ -131,4 +137,34 @@ def build_remote_backend(
             remote_repo=remote_path,
             pass_env_keys=tuple(keys),
         )
+
+    # Construction seam for plugin-registered backends
+    # (docs/proposals/crowd-compute-backend.md, core edit #2). A name the
+    # ladder above doesn't know but the registry does — a plugin's
+    # ``@register`` ran — constructs itself from the whole build context:
+    # the backend, not this factory, decides which fields it needs (a
+    # pure-API backend ignores the SSH pair; an SSH-shaped one reuses
+    # ``ctx.ssh_run``). ``registered_backend_names`` also imports plugin
+    # modules, so the check is registration-order independent. A backend
+    # that hasn't overridden ``from_build_context`` raises
+    # NotImplementedError loudly, per the capability-hook convention.
+    from hpc_agent.infra.backends import (
+        BackendBuildContext,
+        get_backend_class,
+        registered_backend_names,
+    )
+
+    if backend_name in registered_backend_names():
+        ctx = BackendBuildContext(
+            backend_name=backend_name,
+            script=script,
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            pass_env_keys=pass_env_keys,
+            job_env_keys=job_env_keys,
+            slurm_account=slurm_account,
+            slurm_cluster=slurm_cluster,
+            ssh_run=ssh,
+        )
+        return get_backend_class(backend_name).from_build_context(ctx)
     raise errors.SpecInvalid(f"unknown backend: {backend_name!r}")

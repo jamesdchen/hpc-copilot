@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 __all__ = [
+    "BackendBuildContext",
     "HPCBackend",
     "ProfileBackend",
     "RemoteProfileBackend",
@@ -22,22 +23,24 @@ __all__ = [
     "get_backend_class",
     "register",
     "register_profile",
+    "registered_backend_names",
     "template_ext_for",
 ]
 
 import abc
+import importlib
 import os
 import re
 import subprocess
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
 
 
@@ -53,6 +56,35 @@ _DEFAULT_JOB_ID_REGEX = re.compile(r"(\d+)")
 # block the agent indefinitely; we surface ``TimeoutExpired`` so callers
 # can map it to a cluster-category error.
 SUBMIT_TIMEOUT_SEC = 120
+
+
+@dataclass(frozen=True)
+class BackendBuildContext:
+    """Everything the submit/recover flows know when constructing a backend.
+
+    The construction seam for plugin-registered backends
+    (``docs/proposals/crowd-compute-backend.md``):
+    ``remote_factory.build_remote_backend``'s inline ladder knows the
+    SSH-shaped constructor kwargs of the built-in families; any other
+    registered backend receives this whole context via
+    :meth:`HPCBackend.from_build_context` and decides for itself which
+    fields it needs. The SSH-shaped fields are populated but a backend
+    is free to ignore them — a pure-API (crowd-compute) backend reads
+    its own configuration from the environment instead.
+    """
+
+    backend_name: str
+    script: str
+    ssh_target: str
+    remote_path: str
+    pass_env_keys: tuple[str, ...] | None
+    job_env_keys: tuple[str, ...]
+    slurm_account: str | None = None
+    slurm_cluster: str | None = None
+    # Bound transport: ``(cmd) -> CompletedProcess`` against ssh_target.
+    # An SSH-shaped plugin backend (e.g. a marketplace renting SSH-able
+    # instances) can reuse it; API-driven backends ignore it.
+    ssh_run: Callable[[str], subprocess.CompletedProcess[str]] | None = None
 
 
 class HPCBackend(abc.ABC):
@@ -203,6 +235,24 @@ class HPCBackend(abc.ABC):
     ) -> Any:
         """Return a ``ClusterSnapshot`` for *cluster_name* (B5-PR2)."""
         raise NotImplementedError("backend does not implement inspect_cluster")
+
+    @classmethod
+    def from_build_context(cls, ctx: BackendBuildContext) -> HPCBackend:
+        """Construct this backend from the submit-flow build context.
+
+        The construction seam for plugin-registered backends
+        (``docs/proposals/crowd-compute-backend.md``):
+        ``remote_factory.build_remote_backend`` constructs the built-in
+        families through its inline ladder (their SSH-shaped kwargs are
+        its business); any *other* registered backend is handed the
+        whole :class:`BackendBuildContext` here and owns the decision of
+        which fields matter — a crowd-compute backend typically ignores
+        the SSH pair and reads its API key / image from the environment.
+        Default raises so a plugin backend that hasn't opted into flow
+        construction fails loud at submit time, matching the other
+        capability-hook defaults.
+        """
+        raise NotImplementedError(f"{cls.__name__} does not implement from_build_context")
 
     @abc.abstractmethod
     def _build_command(
@@ -475,6 +525,45 @@ def get_backend_class(name: str) -> type[HPCBackend]:
 def template_ext_for(scheduler: str) -> str:
     """Convenience accessor for ``get_backend_class(scheduler).template_ext``."""
     return get_backend_class(scheduler).template_ext
+
+
+def registered_backend_names() -> frozenset[str]:
+    """Every backend name currently registered, plugin backends included.
+
+    Populates the built-in registry, then imports any installed plugin's
+    ``primitive_modules`` — the same side-effect import the primitive
+    registry performs at CLI startup — so a plugin's ``@register`` call
+    has fired before the names are read. Callers (the clusters.yaml
+    ``scheduler`` validator) must not depend on whether primitive
+    registration already ran in this process.
+
+    A plugin module that fails to import is *skipped, not fatal* — an
+    optional plugin must never take down config validation — but the
+    failure is surfaced via :func:`warnings.warn` so the operator
+    notices. :func:`hpc_agent._kernel.registry.primitive` emits its own
+    warning for the same module, but only on the CLI registration path;
+    this call site is reached during config validation, which a
+    library consumer can drive without ever touching CLI dispatch, so
+    it warns here too rather than relying on that path having run. The
+    consequence of a skip is the conservative one — the plugin's
+    backend name stays unregistered and a clusters.yaml entry naming it
+    fails validation with the names that ARE available.
+    """
+    import warnings
+
+    _populate_registry()
+    from hpc_agent._kernel.registry.plugins import plugin_primitive_modules
+
+    for modname in plugin_primitive_modules():
+        try:
+            importlib.import_module(modname)
+        except Exception as exc:  # noqa: BLE001 — broken plugin must not crash the host
+            warnings.warn(
+                f"hpc-agent plugin backend module {modname!r} failed to import; "
+                f"its backends are unavailable: {exc}",
+                stacklevel=2,
+            )
+    return frozenset(_REGISTRY)
 
 
 # Re-export the profile-driven engine at the package root. Imported at the
