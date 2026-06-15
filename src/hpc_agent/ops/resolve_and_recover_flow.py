@@ -178,7 +178,7 @@ def _read_sidecar(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
         return None
     try:
         return read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, ValueError):
+    except (FileNotFoundError, OSError, ValueError, errors.HpcError):
         return None
 
 

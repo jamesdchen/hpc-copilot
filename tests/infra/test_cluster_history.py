@@ -117,9 +117,14 @@ class TestEdgeCases:
         assert len(snaps) == 1
 
     def test_persist_via_inspect_cluster_kwarg(self, tmp_path, monkeypatch):
-        # inspect_cluster returns a synthetic snapshot when persist_dir
-        # is set; we patch the SLURM path to short-circuit external IO.
+        # inspect_cluster returns a synthetic snapshot when persist_dir is set;
+        # we patch the SLURM driver to short-circuit external IO. The dispatch
+        # (_engine.inspect_cluster) imports ``_slurm_inspect`` FRESH from the
+        # ``.slurm`` submodule, so the patch MUST target that module — patching
+        # the ``infra.inspect`` package re-export is a dead no-op that lets the
+        # test fall through to a live SSH against a bogus host.
         from hpc_agent.infra import inspect as inspect_mod
+        from hpc_agent.infra.inspect import slurm as slurm_mod
 
         captured = {}
 
@@ -133,7 +138,7 @@ class TestEdgeCases:
             captured["snap"] = snap
             return snap
 
-        monkeypatch.setattr(inspect_mod, "_slurm_inspect", fake_slurm)
+        monkeypatch.setattr(slurm_mod, "_slurm_inspect", fake_slurm)
         monkeypatch.setattr(
             inspect_mod,
             "load_clusters_config",
@@ -142,6 +147,11 @@ class TestEdgeCases:
         # Disable the in-process cache so we actually call _slurm_inspect.
         inspect_mod._CACHE.clear_all() if hasattr(inspect_mod._CACHE, "clear_all") else None
         snap = inspect_mod.inspect_cluster("discovery", persist_dir=tmp_path, use_cache=False)
+        # The fake actually ran (no live SSH fallthrough) and its snapshot is
+        # what came back and got persisted.
+        assert captured.get("snap") is snap, "patched _slurm_inspect did not run"
         assert snap.cluster == "discovery"
+        assert snap.now_iso == "2026-04-30T12:00:00"
         snaps = list(ic.read_cluster_history(tmp_path, "discovery"))
         assert len(snaps) == 1
+        assert snaps[0].now_iso == "2026-04-30T12:00:00"

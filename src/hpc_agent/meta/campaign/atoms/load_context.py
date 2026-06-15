@@ -268,6 +268,7 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
     """
     from pathlib import Path as _Path
 
+    from hpc_agent import errors
     from hpc_agent.infra.time import status_age_seconds as _last_status_age_seconds
     from hpc_agent.meta.campaign.atoms.list_campaigns import campaign_list
     from hpc_agent.meta.campaign.cursor import read_cursor
@@ -291,7 +292,7 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
         run_id = runs[0].stem
         try:
             sidecar = read_run_sidecar(experiment_dir, run_id)
-        except (FileNotFoundError, OSError, ValueError):
+        except (FileNotFoundError, OSError, ValueError, errors.HpcError):
             sidecar = None
         if sidecar is not None:
             latest_run = {

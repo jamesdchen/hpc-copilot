@@ -111,7 +111,11 @@ def record_status(
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, json.JSONDecodeError):  # missing/bad sidecar → bare python; a bug propagates
+    except (
+        OSError,
+        json.JSONDecodeError,
+        errors.HpcError,
+    ):  # missing/bad sidecar → bare python; a bug propagates
         _sidecar = {}
 
     report = _ssh_status_report(

@@ -32,13 +32,20 @@ def campaign_list(*, experiment_dir: Path) -> dict[str, Any]:
     are missing, unreadable, or carry no ``campaign_id``; counts the
     rest by campaign id. Returns the campaigns sorted alphabetically.
     """
+    from hpc_agent import errors
     from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
     counts: Counter[str] = Counter()
     for path in find_existing_runs(experiment_dir):
         try:
             data = read_run_sidecar(experiment_dir, path.stem)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
+        except (
+            FileNotFoundError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            errors.HpcError,
+        ):
             continue
         cid = data.get("campaign_id")
         if isinstance(cid, str) and cid:

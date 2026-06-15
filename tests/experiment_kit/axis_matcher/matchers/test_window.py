@@ -74,3 +74,29 @@ def run(data, N):
     result = classify_axis_easy(src, "run")
     assert result.kind == "bounded_halo"
     assert result.halo_expr == "10"
+
+
+def test_deque_rebuilt_inside_loop_is_not_bounded_window(tmp_path: Path) -> None:
+    """A ``deque(maxlen=W)`` constructed INSIDE the loop is re-created every
+    iteration and carries no cross-iteration window, so it must NOT be matched
+    as a bounded-window halo. The per-iteration ``buf`` reassignment is still
+    seen as carried state with no proven bounded pattern, so the matcher
+    conservatively reports ``sequential`` (the safe direction) — never
+    ``bounded_halo``."""
+    src = _write(
+        tmp_path,
+        """
+from collections import deque
+
+def run(data, W, N):
+    out = []
+    for t in range(N):
+        buf = deque(maxlen=W)
+        buf.append(data[t])
+        out.append(sum(buf))
+    return out
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind != "bounded_halo", result
+    assert result.kind == "sequential", result

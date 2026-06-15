@@ -22,11 +22,16 @@ a deterministic continuation.
 
 Behaviour
 ---------
-On a Stop event, the guard scans ``<cwd>/.hpc/_returns/`` for a committed
-envelope of any skill in :data:`hpc_agent.cli.skill_returns._KNOWN_SKILLS`.
-If one or more exist, it blocks the stop with a reason instructing the agent
-to ``fetch-skill-return`` each pending skill and continue the parent skill's
-next step.
+On a Stop event, the guard scans ``<cwd>/.hpc/_returns/`` AND every directory
+the emitter recorded in its breadcrumb (see
+:func:`hpc_agent.cli.skill_returns.known_return_dirs`) for a committed envelope
+of any skill in :data:`hpc_agent.cli.skill_returns._KNOWN_SKILLS`. Scanning the
+breadcrumb is what lets the guard fire when the emit ran with an
+``--experiment-dir`` other than the harness cwd — a Stop payload carries no
+command, so unlike the autofetch sibling the guard cannot recover that dir by
+parsing. If one or more envelopes exist, it blocks the stop with a reason
+instructing the agent to ``fetch-skill-return`` each pending skill (from the
+directory its envelope was found in) and continue the parent skill's next step.
 
 The condition is **self-healing**: ``fetch-skill-return`` deletes the
 committed file by default, so after the agent follows the reason the guard has
@@ -56,7 +61,7 @@ from typing import Any
 
 # Single source of truth for the set of sub-skills that emit a return envelope.
 # Re-exported from the CLI primitive so this hook and the verbs can never drift.
-from hpc_agent.cli.skill_returns import _KNOWN_SKILLS, _committed_path
+from hpc_agent.cli.skill_returns import _KNOWN_SKILLS, _committed_path, known_return_dirs
 
 __all__ = ["build_hook_output", "main", "pending_skill_returns"]
 
@@ -99,23 +104,43 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         return None
 
     cwd = payload.get("cwd")
-    experiment_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
+    cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
 
-    pending = pending_skill_returns(experiment_dir)
-    if not pending:
+    # Scan ``cwd`` first, then every directory the emitter recorded committing a
+    # return to (the breadcrumb). The emit command's ``--experiment-dir`` may
+    # differ from the harness cwd — exactly the case the autofetch sibling
+    # handles by parsing the command, which a Stop payload (no command) cannot.
+    # Scanning the breadcrumb closes that gap so the guard cannot miss a pending
+    # return committed under a non-cwd experiment dir.
+    candidate_dirs: list[Path] = [cwd_dir]
+    seen = {cwd_dir.expanduser().resolve()}
+    for d in known_return_dirs():
+        resolved = d.expanduser().resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            candidate_dirs.append(d)
+
+    # First dir that has each pending skill wins, so a skill is fetched once
+    # from the location its envelope actually lives in.
+    pending_by_skill: dict[str, Path] = {}
+    for cand in candidate_dirs:
+        for skill in pending_skill_returns(cand):
+            pending_by_skill.setdefault(skill, cand)
+    if not pending_by_skill:
         return None
 
     # Forward-slash form: the agent will paste this into a Git Bash command,
     # where a bare backslash path invites the \U-escape-collapse bug class
-    # (agent_assets._hook_python). shlex.quote still covers spaces.
-    quoted_dir = shlex.quote(experiment_dir.as_posix())
+    # (agent_assets._hook_python). shlex.quote still covers spaces. Each skill
+    # carries the --experiment-dir of the directory its envelope was found in.
     fetches = " && ".join(
-        f"hpc-agent fetch-skill-return --skill {skill} --experiment-dir {quoted_dir}"
-        for skill in pending
+        f"hpc-agent fetch-skill-return --skill {skill} "
+        f"--experiment-dir {shlex.quote(found_dir.as_posix())}"
+        for skill, found_dir in pending_by_skill.items()
     )
     reason = (
         f"Sub-skill return envelope(s) committed but not fetched: "
-        f"{', '.join(pending)}. Run `{fetches}`, then continue the parent "
+        f"{', '.join(pending_by_skill)}. Run `{fetches}`, then continue the parent "
         "skill's next step — a sub-skill composition boundary is not the end "
         "of the turn."
     )

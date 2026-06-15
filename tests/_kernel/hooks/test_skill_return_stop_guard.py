@@ -28,6 +28,17 @@ _KNOWN_SKILL = "hpc-wrap-entry-point"
 _SAMPLE_ENVELOPE = {"ok": True, "skill": _KNOWN_SKILL, "entry_point_kind": "register_run"}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_breadcrumb_home(tmp_path, monkeypatch):
+    """Isolate the skill-return breadcrumb (``<home>/_skill_return_dirs.json``)
+    per test. The breadcrumb lives under ``_current_homedir()`` (``~/.claude/hpc``,
+    HPC_JOURNAL_DIR-overridable); without isolation a sibling emit test on
+    another xdist worker leaks a committed-return dir into these no-op
+    assertions. Tests that set HPC_JOURNAL_DIR themselves override this default.
+    """
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "_bc_home"))
+
+
 def _commit(exp: Path, skill: str, envelope: dict) -> Path:
     committed = _committed_path(exp, skill)
     committed.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +93,50 @@ def test_every_known_skill_triggers_the_guard(tmp_path: Path, skill: str) -> Non
     _commit(tmp_path, skill, {"ok": True, "skill": skill})
     out = guard.build_hook_output(_payload(tmp_path))
     assert out is not None and skill in out["reason"]
+
+
+# ─── experiment_dir != cwd: breadcrumb scan ─────────────────────────────────
+
+
+def test_blocks_on_return_under_noncwd_experiment_dir(tmp_path: Path, monkeypatch) -> None:
+    """The emit ran with --experiment-dir != cwd; the Stop payload has only
+    cwd. The guard must still fire by scanning the emitter's breadcrumb, and
+    point the fetch at the experiment dir the envelope actually lives in."""
+    from hpc_agent.cli.skill_returns import record_return_dir
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "home"))
+    exp = tmp_path / "experiments" / "run-a"
+    launch_cwd = tmp_path / "elsewhere"
+    launch_cwd.mkdir(parents=True, exist_ok=True)
+    _commit(exp, _KNOWN_SKILL, _SAMPLE_ENVELOPE)
+    record_return_dir(exp)
+
+    out = guard.build_hook_output(_payload(launch_cwd))
+
+    assert out is not None
+    assert out["decision"] == "block"
+    assert _KNOWN_SKILL in out["reason"]
+    # The fetch must target the experiment dir, not the (empty) launch cwd.
+    assert exp.resolve().as_posix() in out["reason"]
+
+
+def test_breadcrumb_roundtrip_prunes_missing_dirs(tmp_path: Path, monkeypatch) -> None:
+    from hpc_agent.cli.skill_returns import known_return_dirs, record_return_dir
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "home"))
+    real = tmp_path / "exp-real"
+    real.mkdir()
+    gone = tmp_path / "exp-gone"
+    gone.mkdir()
+    record_return_dir(gone)
+    record_return_dir(real)  # most-recent-first
+    gone.rmdir()
+
+    dirs = [d.resolve() for d in known_return_dirs()]
+    assert real.resolve() in dirs
+    assert gone.resolve() not in dirs  # pruned: no longer exists
+    # Most-recent-first ordering preserved for surviving dirs.
+    assert dirs[0] == real.resolve()
 
 
 # ─── loop safety ────────────────────────────────────────────────────────────

@@ -28,6 +28,16 @@ def _match_stencil(
     # For each carried name, find:
     #  - Stores of the form `name[<i>] = ...`
     #  - Loads of the form `name[i - K]` for literal K
+    #
+    # Match on the array with the single largest lookback read offset and
+    # require that SAME array to be indexed-Stored. This is deliberately
+    # conservative: when the largest-lookback carried array is NOT indexed-
+    # stored, it is being updated whole-array (a bare-name store of an array is
+    # a per-iteration whole-array reassignment, i.e. a genuine sequential
+    # dependency across iterations), so bailing to `sequential` is the SAFE
+    # direction — declaring `bounded_halo` off a different, smaller-lookback
+    # array would risk masking that sequential dependency (the dangerous
+    # direction the module guards against).
     max_offset: int | None = None
     matched_name: str | None = None
 

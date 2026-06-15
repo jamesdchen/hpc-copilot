@@ -21,6 +21,15 @@ import pytest
 
 from tests.cli._helpers import parse_envelope, run_cli
 
+
+@pytest.fixture(autouse=True)
+def _isolate_breadcrumb_home(tmp_path, monkeypatch):
+    """Isolate the committed-return breadcrumb per test so emit-skill-return
+    doesn't write to the real ``~/.claude/hpc/_skill_return_dirs.json`` and leak
+    a committed-return dir into the Stop-guard tests under xdist."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "_bc_home"))
+
+
 # A minimal valid Success envelope for each known skill — keyed by skill
 # name so the round-trip / negative tests can parametrize over them. Each
 # matches its per-skill schema's required-fields exactly.

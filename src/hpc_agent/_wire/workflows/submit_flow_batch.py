@@ -56,12 +56,18 @@ class _SubmitFlowResultEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: RunIdStrict
-    job_ids: list[str] = Field(min_length=1)
+    # Mirror submit_flow.output.json exactly: ``job_ids`` is empty (not absent)
+    # on the canary-only gating phase, and ``main_launched`` is always emitted
+    # by SubmitFlowResult.to_envelope_data(). A non-empty constraint / missing
+    # field here rejects the legitimate canary-only batch entry under output
+    # validation.
+    job_ids: list[str] = Field(default_factory=list)
     total_tasks: int = Field(ge=1)
     deduped: bool
     canary_done: bool
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
+    main_launched: bool = True
 
 
 class SubmitFlowBatchResult(BaseModel):

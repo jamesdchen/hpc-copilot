@@ -60,10 +60,10 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
 ## Resubmit decision flow
 
-When `lifecycle_state == "failed"` with `failed_task_ids` non-empty:
+When `lifecycle_state == "failed"` (`failed_waves` non-empty):
 
-1. Read failed tasks' stderr tails via `poll-run-status` (`data.tasks[<id>].err_log_path` for `failed`/`unknown`).
-2. Classify via [failures](../../docs/primitives/failures.md).
+1. Invoke [failures](../../docs/primitives/failures.md) with the `run_id`. It re-polls run status, enumerates the failed task ids, and fetches each one's stderr tail for you — `poll-run-status` itself only reports `failed_waves` / `preempted_task_ids`, not per-task stderr paths.
+2. Read the clustered failure categories from the `failures` result.
    - Recoverable (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the category; record `resubmit` decision, outcome `resubmitted`.
    - Non-recoverable (`spec_invalid`, `executor_crash`) → record `resubmit` decision, outcome `non_recoverable` (category + stderr in `why`/`anomalies`); stop.
 3. [resubmit-failed](../../docs/primitives/resubmit-failed.md)'s auto-retry resolver reads the sidecar's `auto_retry` block (per-category `max_attempts`) to gate the resubmit.

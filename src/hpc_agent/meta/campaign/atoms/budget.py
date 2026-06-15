@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+import jsonschema
+
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
@@ -83,7 +85,7 @@ def campaign_budget(
     manifest_budget: dict[str, Any] = {}
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
         # A malformed manifest shouldn't crash budget reads, but a bare
         # `except Exception` would also swallow KeyboardInterrupt /
         # SystemExit. Narrow to the IO + parse errors we expect here.

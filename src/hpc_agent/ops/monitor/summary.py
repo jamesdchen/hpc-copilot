@@ -159,7 +159,14 @@ def monitor_summary(
         summary = {}
     diff = (last_tick or {}).get("diff_from_prev") or {}
     actions = (last_tick or {}).get("actions") or []
+    # ``lifecycle_state`` is read verbatim from the on-disk tick jsonl, whose
+    # writer types it as a bare str. The output schema constrains it to the
+    # observable-with-timeout enum, so coerce any out-of-enum value (legacy /
+    # hand-edited / foreign / future-schema tick) to ``in_flight`` rather than
+    # emit a value that fails output validation.
     lifecycle = (last_tick or {}).get("lifecycle_state") or "in_flight"
+    if lifecycle not in (_TERMINAL_LIFECYCLE_STATES | {"in_flight"}):
+        lifecycle = "in_flight"
 
     counts = _format_counts(summary, int(record.total_tasks))
     diff_str = _format_diff(diff) if isinstance(diff, dict) else None

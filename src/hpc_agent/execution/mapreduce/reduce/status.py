@@ -1037,6 +1037,7 @@ def _main() -> int:
     # task-keyed dict the reporting code consumes. Use the canonical
     # hardened reader so wave_map / task_count / result_dir_template are
     # guaranteed to be present.
+    from hpc_agent import errors as _errors  # noqa: PLC0415 — lazy
     from hpc_agent.state.runs import read_run_sidecar  # noqa: PLC0415 — lazy
 
     try:
@@ -1045,7 +1046,7 @@ def _main() -> int:
         sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
         return _emit_err("sidecar_not_found", str(sidecar_path))  # noqa: B904
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, _errors.HpcError) as exc:
         sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 

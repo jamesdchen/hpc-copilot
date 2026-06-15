@@ -346,12 +346,19 @@ def score_gpus(
     """
     cfg = gpu_config or _DEFAULT_GPU_CONFIG
     exclude = {e.upper() for e in (exclude or set())}
+    # When the caller supplies a preferred list it also *filters* live
+    # results (per the public docstring): a GPU type the caller did not ask
+    # for must never be recommended just because it scored highest. An empty
+    # / absent list means "no preference" → consider every configured type.
+    preferred_names = {p.upper() for p in (preferred_order or [])}
     errors: list[dict] = []
 
     scored: list[dict] = []
     for key, gpu_cfg in cfg.items():
         gpu_name = gpu_cfg["name"]
         if gpu_name.upper() in exclude:
+            continue
+        if preferred_names and gpu_name.upper() not in preferred_names:
             continue
         stats = agg.get(key)
         if not stats or stats["total"] == 0 or stats.get("active_nodes", 0) == 0:
@@ -387,6 +394,8 @@ def score_gpus(
     for key, gpu_cfg in cfg.items():
         gpu_name = gpu_cfg["name"]
         if gpu_name.upper() in exclude:
+            continue
+        if preferred_names and gpu_name.upper() not in preferred_names:
             continue
         stats = agg.get(key)
         if not stats or stats["total"] == 0:

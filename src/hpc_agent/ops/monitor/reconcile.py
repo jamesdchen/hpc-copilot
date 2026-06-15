@@ -281,7 +281,7 @@ def _reconcile_one(
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, errors.HpcError):
         # Missing/malformed sidecar → bare-python reporter call → the
         # reporter-failed routing below will catch the resulting error and
         # surface unable_to_verify rather than silent abandon.

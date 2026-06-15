@@ -67,12 +67,20 @@ def test_one_bad_id_poisons_the_list() -> None:
 def test_resubmit_new_job_ids_guarded() -> None:
     from hpc_agent._wire.actions.resubmit import ResubmitSpec
 
-    fields = {f for f in ResubmitSpec.model_fields}
-    assert "new_job_ids" in fields
+    # An OTHERWISE-VALID spec (all required fields present, correct types) so the
+    # ONLY thing under test is the new_job_ids guard — an earlier version passed
+    # a payload with a forbidden `run_id` and a missing `category`, so it raised
+    # regardless of new_job_ids and would have passed even with the guard removed.
+    base = {"failed_task_ids": [1], "category": "node_failure"}
+
+    # Sanity: the base validates, and a real scheduler id is accepted.
+    assert ResubmitSpec.model_validate({**base, "new_job_ids": ["13610902"]}).new_job_ids == [
+        "13610902"
+    ]
+
+    # The guard specifically rejects a fabricated placeholder in new_job_ids.
     with pytest.raises(ValidationError):
-        ResubmitSpec.model_validate(
-            {"run_id": "r1", "failed_task_ids": [1], "new_job_ids": ["purged-completed"]}
-        )
+        ResubmitSpec.model_validate({**base, "new_job_ids": ["purged-completed"]})
 
 
 def test_write_run_sidecar_job_ids_guarded() -> None:

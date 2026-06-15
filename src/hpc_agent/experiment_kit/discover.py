@@ -37,7 +37,13 @@ from hpc_agent.experiment_kit.signature import flags_from_ast
 
 __all__ = ["RunInfo", "discover_runs", "run_signature_sha"]
 
-_SKIP_DIRS = frozenset({".hpc", ".git", "__pycache__", ".mypy_cache"})
+# Vendored / VCS / cache dirs never holding user run-source. Kept in lock-step
+# with ``state.discover._SKIP_DIRS`` and the ``state.discover_cache`` fingerprint
+# skip set (a run vendored inside one of these is not discoverable, so the cache
+# may prune it).
+_SKIP_DIRS = frozenset(
+    {".hpc", ".git", "__pycache__", ".mypy_cache", ".venv", "venv", "node_modules", ".claude"}
+)
 _DECORATOR_NAME = "register_run"
 # Module paths a `register_run` import may come from.
 _SOURCE_MODULES = ("hpc_agent.experiment_kit", "hpc_agent.experiment_kit.register")

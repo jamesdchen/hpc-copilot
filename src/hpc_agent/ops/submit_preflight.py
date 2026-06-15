@@ -17,26 +17,32 @@ parallelised without flow restructuring. The repurposed verb is the
 genuinely-composable boilerplate the audit's ``<skill>-preflight`` row
 described.
 
-Internal composition (#277): ``install-commands`` → ``load-context`` run
-SEQUENTIALLY first — install must succeed before ``load-context`` can
-resolve framework paths reliably. Then ``check-preflight`` and
-``resolve-resources`` fan out CONCURRENTLY on a thread pool. The two share
-no data dependency: ``check-preflight`` is a cluster ssh round-trip (1-2s
-on the slow path), ``resolve-resources`` is local journal + clusters.yaml
-file I/O (read runtime priors, compute walltime). Sequencing them stacks
-the wait; fanning them out bounds it by the slower of the two, so the
-resource resolution that ``hpc-submit`` Step 6 needs comes back "for free"
-under the cluster ssh probe. ``resolve-resources`` only joins the fan-out
-when a ``--cluster`` is supplied (it is that verb's one required argument);
-without a cluster only the sequential prelude + the local-env
-``check-preflight`` checks run.
+Internal composition (#277, #289): all four sub-calls fan out
+CONCURRENTLY on a thread pool — they share no data dependency, so the
+composite's wall-clock is bounded by the slowest arm (the cluster ssh
+probe), not their sum. The earlier "``install-commands`` must succeed
+first so ``load-context`` can resolve framework paths" prelude was based
+on a claim #289's source-walk DISPROVED (mirrored from
+:mod:`status_preflight`): ``load-context`` reads only
+``$EXPERIMENT/.hpc/{runs,journal,campaigns}``, never ``~/.claude`` (the
+only thing ``install-commands`` writes). The independence holds across all
+four: ``install-commands`` writes ``~/.claude/{commands,skills,agents,settings.json}``;
+``load-context`` reads ``.hpc/``; ``check-preflight`` probes
+``SSH_AUTH_SOCK`` / the ssh|rsync|scp binaries / ``clusters.yaml`` / TCP
+reachability (1-2s ssh round-trip on the slow path); ``resolve-resources``
+reads runtime priors + ``clusters.yaml`` (local journal I/O). No arm reads
+what another writes, so running them on a pool is race-free and the
+resource resolution ``hpc-submit`` Step 6 needs comes back "for free" under
+the cluster ssh probe. ``resolve-resources`` only joins the fan-out when a
+``--cluster`` is supplied (it is that verb's one required argument).
 
-**Invariant (#277).** ``resolve-resources`` must stay independent of
-``check-preflight``'s outcome for the concurrency to be correct — it reads
-runtime priors + clusters.yaml, never cluster-connectivity state. If a
-future change makes resource resolution depend on a live cluster probe
-(e.g. cluster-specific spot pricing), this fan-out breaks silently;
-sequence it after ``check-preflight`` then.
+**Invariant (#277, #289).** The fan-out is correct only while the arms stay
+mutually independent: ``resolve-resources`` reads runtime priors +
+clusters.yaml (never cluster-connectivity state), and ``load-context``
+never reads ``~/.claude``. If a future change makes resource resolution
+depend on a live cluster probe (e.g. cluster-specific spot pricing), or
+makes ``load-context`` read what ``install-commands`` writes, sequence the
+dependent arm after its producer then.
 
 I/O contracts:
 
@@ -62,12 +68,18 @@ __all__ = [
     "submit_preflight",
 ]
 
-# install-commands → load-context run in this order, sequentially: install
-# must register the framework paths load-context resolves.
-_SEQUENTIAL_SUBCALLS = ("install-commands", "load-context")
-# check-preflight (cluster ssh) and resolve-resources (local file I/O) share
-# no data dependency, so they fan out concurrently after the prelude (#277).
-_PARALLEL_SUBCALLS = ("check-preflight", "resolve-resources")
+# All four sub-calls are mutually independent (#277, #289): install-commands
+# writes ~/.claude/*, load-context reads .hpc/* (verified to never read
+# ~/.claude), check-preflight probes ssh/binaries/clusters.yaml/TCP, and
+# resolve-resources reads runtime priors + clusters.yaml. No arm reads what
+# another writes, so they all fan out concurrently and nothing is sequenced.
+_SEQUENTIAL_SUBCALLS: tuple[str, ...] = ()
+_PARALLEL_SUBCALLS = (
+    "install-commands",
+    "load-context",
+    "check-preflight",
+    "resolve-resources",
+)
 
 
 @dataclass(frozen=True)
@@ -131,13 +143,14 @@ def _build_subcalls(
 ) -> list[SubCall]:
     """Construct one :class:`SubCall` per non-skipped sub-step.
 
-    Order is install-commands → load-context → check-preflight →
-    resolve-resources. install must succeed first; check-preflight +
-    resolve-resources are listed last because they are the two that fan out
-    concurrently (:func:`submit_preflight`). ``resolve-resources`` is only
-    built when ``cluster`` is supplied — it is the verb's one required
-    argument — and ``resolve_kwargs`` forwards the optional Step-6 overrides
-    (profile / walltime / gpu_type / partition …).
+    Builds in the stable list order install-commands → load-context →
+    check-preflight → resolve-resources (the output-field order), but all four
+    fan out concurrently at run time (:func:`_run_subcalls`) — they are
+    mutually independent (#277, #289), so the build order is cosmetic, not an
+    execution dependency. ``resolve-resources`` is only built when ``cluster``
+    is supplied — it is the verb's one required argument — and
+    ``resolve_kwargs`` forwards the optional Step-6 overrides (profile /
+    walltime / gpu_type / partition …).
     """
     exp_str = str(experiment_dir)
     calls: list[SubCall] = []
@@ -258,14 +271,15 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
 
 
 def _run_subcalls(calls: list[SubCall], *, timeout_sec: float) -> dict[str, dict[str, Any]]:
-    """Run *calls*: the sequential prelude in order, the rest concurrently.
+    """Run *calls* concurrently on a thread pool (#277, #289).
 
-    install-commands → load-context run sequentially (install registers the
-    paths load-context resolves). check-preflight + resolve-resources then
-    fan out on a thread pool so the cluster ssh round-trip overlaps the
-    local resource resolution (#277). Returns ``{name: SubResult}``; a
-    sub-call failure surfaces inside its ``SubResult.envelope`` rather than
-    raising, so the cheaper sub-calls' work is preserved.
+    All sub-calls are mutually independent, so they fan out on a thread pool
+    and the composite's wall-clock is bounded by the slowest arm (the cluster
+    ssh round-trip) rather than the sum. (``_SEQUENTIAL_SUBCALLS`` is empty;
+    the split is retained so a future data dependency can be re-sequenced by
+    moving a name back into it.) Returns ``{name: SubResult}``; a sub-call
+    failure surfaces inside its ``SubResult.envelope`` rather than raising, so
+    the other sub-calls' work is preserved.
     """
     results: dict[str, dict[str, Any]] = {}
 

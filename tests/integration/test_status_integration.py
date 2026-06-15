@@ -261,10 +261,12 @@ def test_summary_counts_sum_to_total_tasks(
         }
         next_tid += 1
 
-    # Fake job_info for the running/pending/failed buckets — 1-based tids
-    # in scheduler output, matching report_status's key convention.
+    # Fake job_info for the running/pending/failed buckets. report_status keys
+    # job_info by 0-based HpcTaskId (see status.py:693 "0-based ... throughout"),
+    # so these must use the SAME 0-based ids the per-task dict assigned, picking
+    # up right after the complete block.
     job_info: dict[int, dict] = {}
-    cursor = n_complete + 1  # 1-based, after the complete block
+    cursor = n_complete  # 0-based, after the complete block
     for _ in range(n_running):
         job_info[cursor] = {"state": "RUNNING"}
         cursor += 1
@@ -288,10 +290,18 @@ def test_summary_counts_sum_to_total_tasks(
     ):
         report = report_status_from_tasks(tasks_data, ["1"], scheduler="slurm")
 
-    counted = sum(
-        report["summary"][k] for k in ("complete", "running", "pending", "failed", "unknown")
-    )
-    assert counted == total, (counted, total, report["summary"])
+    summary = report["summary"]
+    counted = sum(summary[k] for k in ("complete", "running", "pending", "failed", "unknown"))
+    # Conservation: nothing lost.
+    assert counted == total, (counted, total, summary)
+    # Correct bucketing: each population lands in its own bucket and nothing
+    # spills to `unknown` (a 0-based/1-based key mismatch would dump the
+    # running/pending/failed tasks into `unknown` while still conserving total).
+    assert summary["complete"] == n_complete, summary
+    assert summary["running"] == n_running, summary
+    assert summary["pending"] == n_pending, summary
+    assert summary["failed"] == n_failed, summary
+    assert summary["unknown"] == 0, summary
 
 
 # ─── Layer 3: pure-helper unit tests ───────────────────────────────────

@@ -97,6 +97,75 @@ def _committed_path(experiment_dir: Path, skill: str) -> Path:
     return _returns_dir(experiment_dir) / f"{skill}.json"
 
 
+# --- experiment-dir breadcrumb -------------------------------------------------
+# The Stop guard (skill_return_stop_guard) fires on a payload that carries only
+# ``cwd`` — it has no command to parse, so it cannot recover the
+# ``--experiment-dir`` the emitter wrote to the way the autofetch hook does.
+# When ``experiment_dir != cwd`` (the very case the flag exists for) the guard
+# would scan the wrong directory and silently fail to block. To close that gap
+# the emitter — which knows ``experiment_dir`` authoritatively — records each
+# committed return dir in a cwd-independent breadcrumb the guard then scans.
+_MAX_BREADCRUMB_DIRS = 32
+
+
+def _breadcrumb_path() -> Path:
+    """Path to the committed-return-dir breadcrumb (cwd-independent).
+
+    Resolved from :func:`hpc_agent.state.run_record._current_homedir` (``~/.claude/hpc``,
+    overridable via ``HPC_JOURNAL_DIR``), so the emitter and the Stop guard —
+    running in the same process environment — resolve it identically regardless
+    of the harness cwd.
+    """
+    from hpc_agent.state.run_record import _current_homedir
+
+    return _current_homedir() / "_skill_return_dirs.json"
+
+
+def record_return_dir(experiment_dir: Path | str) -> None:
+    """Best-effort: record *experiment_dir* as a dir that committed a return.
+
+    Prepends the resolved dir (most-recent-first, deduped, bounded to
+    :data:`_MAX_BREADCRUMB_DIRS`). Never raises — a breadcrumb failure must not
+    fail the emit it trails.
+    """
+    try:
+        resolved = str(Path(experiment_dir).expanduser().resolve())
+        path = _breadcrumb_path()
+        existing: list[str] = []
+        with contextlib.suppress(OSError, ValueError):
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                existing = [d for d in loaded if isinstance(d, str)]
+        ordered = [resolved] + [d for d in existing if d != resolved]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(ordered[:_MAX_BREADCRUMB_DIRS]), encoding="utf-8")
+    except (OSError, ValueError):
+        return
+
+
+def known_return_dirs() -> list[Path]:
+    """Recorded committed-return dirs that still exist (most-recent-first).
+
+    Best-effort: a missing / malformed breadcrumb yields ``[]``. Non-existent
+    dirs are pruned so a deleted experiment tree leaves no phantom entry.
+    """
+    try:
+        loaded = json.loads(_breadcrumb_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    out: list[Path] = []
+    for d in loaded:
+        if not isinstance(d, str):
+            continue
+        p = Path(d)
+        with contextlib.suppress(OSError):
+            if p.is_dir():
+                out.append(p)
+    return out
+
+
 def _schema_resource_name(skill: str) -> str:
     """Return the schema basename — e.g. ``"hpc-classify-axis.json"``."""
     return f"{skill}.json"
@@ -199,7 +268,7 @@ def _cmd_emit_skill_return(args: argparse.Namespace) -> int:
 
     try:
         envelope = json.loads(staged.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         return _err(
             error_code="spec_invalid",
             message=f"staged envelope at {staged} is not valid JSON: {exc}",
@@ -243,6 +312,10 @@ def _cmd_emit_skill_return(args: argparse.Namespace) -> int:
     # Schema OK → atomic-rename. ``Path.replace`` (os.replace) is atomic on
     # the same filesystem on both POSIX and Windows.
     _atomic_rename(staged, committed)
+
+    # Record where we committed so the Stop guard (which only sees ``cwd``) can
+    # find this return even when ``experiment_dir != cwd``.
+    record_return_dir(experiment_dir)
 
     _emit(
         {
@@ -361,7 +434,7 @@ def _cmd_fetch_skill_return(args: argparse.Namespace) -> int:
 
     try:
         envelope = json.loads(committed.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         return _err(
             error_code="spec_invalid",
             message=f"return envelope at {committed} is not valid JSON: {exc}",

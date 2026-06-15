@@ -278,9 +278,16 @@ def find_prior_run(
 
     age_sec: int | None = None
     try:
-        age_sec = int(time.time() - path.stat().st_mtime)
+        # Clamp at 0: a sidecar mtime in the future (clock skew, or a file
+        # restored with a future timestamp) would otherwise yield a negative
+        # age that violates the output schema's `age_sec >= 0` constraint.
+        age_sec = max(0, int(time.time() - path.stat().st_mtime))
     except OSError:
         age_sec = None
+
+    # The output schema types job_ids as list[str]; a legacy/hand-written
+    # sidecar may carry non-string elements, so coerce to str.
+    job_ids = [str(j) for j in (data.get("job_ids") or [])]
 
     return {
         "found": True,
@@ -290,7 +297,7 @@ def find_prior_run(
         "age_sec": age_sec,
         "profile": data.get("profile"),
         "cluster": data.get("cluster"),
-        "job_ids": list(data.get("job_ids") or []),
+        "job_ids": job_ids,
         "campaign_id": data.get("campaign_id") or None,
         "submitted_at": data.get("submitted_at"),
     }

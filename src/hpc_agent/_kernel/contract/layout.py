@@ -91,15 +91,19 @@ class RepoLayout:
     def runtime_prior(self, profile: str, cluster: str) -> Path:
         """``.hpc/runtimes/<profile>.<cluster>.json``.
 
-        ``profile`` may contain ``/`` (e.g. ``foo/bar``); we substitute
-        ``_`` so the resulting filename is portable.
+        ``profile`` / ``cluster`` may contain ``/`` (e.g. ``foo/bar``); we
+        substitute ``_`` so the resulting filename is portable and a path-like
+        token cannot escape the ``runtimes`` dir — the same defensive
+        substitution ``cluster_history`` / ``preflight_marker`` apply to
+        ``cluster``.
         """
         if not profile:
             raise errors.SpecInvalid("profile must be non-empty")
         if not cluster:
             raise errors.SpecInvalid("cluster must be non-empty")
         safe_profile = profile.replace("/", "_")
-        return self.runtimes / f"{safe_profile}.{cluster}.json"
+        safe_cluster = cluster.replace("/", "_")
+        return self.runtimes / f"{safe_profile}.{safe_cluster}.json"
 
     def cluster_history(self, cluster: str) -> Path:
         """``.hpc/cluster_history/<cluster>/`` — created on first access.

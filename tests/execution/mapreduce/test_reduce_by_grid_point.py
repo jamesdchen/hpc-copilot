@@ -171,16 +171,20 @@ class TestReducePartials:
         _write_metrics(r1, {"mse": 0.10, "n_samples": 100})
         _write_metrics(r2, {"mse": 0.30, "n_samples": 300})
 
-        # reduce_by_grid_point path
+        # reduce_by_grid_point path. Multi-key params whose INSERTION order
+        # (model, alpha) differs from SORTED order (alpha, model) so the test
+        # actually exercises the sort-by-key grid-key semantics — single-key
+        # params would pass under either convention and hide a regression.
+        grid_params = {"model": "ridge", "alpha": 1.0}
         tasks_data = {
             "tasks": {
                 "0": {
-                    "params": {"model": "ridge"},
+                    "params": dict(grid_params),
                     "result_dir": str(r1),
                     "period": {"start": "2020-01-01", "end": "2020-03-31"},
                 },
                 "1": {
-                    "params": {"model": "ridge"},
+                    "params": dict(grid_params),
                     "result_dir": str(r2),
                     "period": {"start": "2020-04-01", "end": "2020-12-31"},
                 },
@@ -192,14 +196,16 @@ class TestReducePartials:
         combiner_dir = tmp_path / "_combiner"
         # Wave 0 has task 0, wave 1 has task 1.
         # Local copy of the combiner's _grid_key semantics, kept inline so
-        # the test stays self-contained.
+        # the test stays self-contained — MUST mirror production exactly,
+        # i.e. sort by key (combiner._grid_key / metrics._run_id), not the old
+        # insertion-order ``params.values()`` form.
         import re as _re
 
         def run_id(params):
-            raw = "_".join(str(v) for v in params.values())
+            raw = "_".join(str(params[k]) for k in sorted(params))
             return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
-        grid_key = run_id({"model": "ridge"})
+        grid_key = run_id(grid_params)
         _write_wave(combiner_dir, 0, {grid_key: {"mse": 0.10, "n_samples": 100}})
         _write_wave(combiner_dir, 1, {grid_key: {"mse": 0.30, "n_samples": 300}})
         pp_result = reduce_partials(combiner_dir)

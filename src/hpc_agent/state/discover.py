@@ -162,8 +162,14 @@ _DEFAULT_CANDIDATE_DIRS = ("executors", "scripts", "src")
 _SKIP_BASENAMES = frozenset({"__init__.py"})
 
 # Directory names whose contents are never user code — framework
-# scaffolding, caches, build artifacts.
-_SKIP_DIRS = frozenset({".hpc", ".git", "__pycache__", ".mypy_cache"})
+# scaffolding, caches, build artifacts, and vendored trees (virtualenvs,
+# node_modules, the agent's own .claude dir). Kept in lock-step with
+# ``experiment_kit.discover._SKIP_DIRS`` and the ``state.discover_cache``
+# fingerprint skip set, so the cache never serves a stale result for an edit
+# under a dir the scan ignores.
+_SKIP_DIRS = frozenset(
+    {".hpc", ".git", "__pycache__", ".mypy_cache", ".venv", "venv", "node_modules", ".claude"}
+)
 
 
 @dataclass(frozen=True)

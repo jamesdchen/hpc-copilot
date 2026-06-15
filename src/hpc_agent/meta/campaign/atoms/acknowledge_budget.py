@@ -138,9 +138,18 @@ def _raise_manifest_caps(
     existing budget caps not being raised. Creates a minimal manifest if
     none exists yet so the new caps are durable across ticks.
     """
+    import json
+
+    import jsonschema
+
     from hpc_agent.meta.campaign.manifest import read_manifest, write_manifest
 
-    manifest = read_manifest(experiment_dir, campaign_id) or {}
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id) or {}
+    except (OSError, json.JSONDecodeError, jsonschema.ValidationError):
+        # A schema-invalid / malformed manifest must not block clearing a
+        # budget halt — degrade to no existing manifest and write fresh caps.
+        manifest = {}
     budget = dict(manifest.get("budget") or {})
     budget.update(raised_caps)
 

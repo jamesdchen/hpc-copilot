@@ -222,13 +222,14 @@ def campaign_health(
     # the journal RunRecord (see state/run_record.py), not the sidecar —
     # reading sidecar.get('status') always returned None, so the n_complete
     # / n_failed counters never incremented.
+    from hpc_agent import errors
     from hpc_agent.state.journal import load_run
 
     for sidecar_path in find_existing_runs(experiment_dir):
         run_id = sidecar_path.stem
         try:
             sc = read_run_sidecar(experiment_dir, run_id)
-        except (FileNotFoundError, OSError, ValueError):
+        except (FileNotFoundError, OSError, ValueError, errors.HpcError):
             continue
         if campaign_id is not None and sc.get("campaign_id") != campaign_id:
             continue

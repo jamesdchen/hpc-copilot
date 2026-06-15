@@ -123,9 +123,11 @@ def write_axes(
         # bootstrap flows (homogeneous_axes-only writes before axes are
         # known) still succeed. Read failures (corruption / schema
         # violation) are surfaced loudly by read_axes itself.
+        import jsonschema
+
         try:
             existing = read_axes(experiment_dir)
-        except (ValueError, OSError):
+        except (ValueError, OSError, yaml.YAMLError, jsonschema.ValidationError, errors.HpcError):
             existing = None
         if existing is not None:
             existing_axes = existing.get("axes") or []

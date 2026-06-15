@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, get_args
 
+import jsonschema
+
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
@@ -123,7 +125,7 @@ def campaign_converged(
     manifest_stop: dict[str, Any] = {}
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
         # See campaign_budget.py for the rationale; we narrow this so
         # ^C during a long scan isn't silently swallowed.
         manifest = None

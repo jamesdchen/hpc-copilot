@@ -26,24 +26,32 @@
           "type": "string"
         },
         "host": {
-          "title": "Host",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
         },
         "scheduler": {
-          "enum": [
-            "sge",
-            "slurm",
-            "pbspro",
-            "torque"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Scheduler",
-          "type": "string"
+          "default": null,
+          "title": "Scheduler"
         }
       },
       "required": [
-        "name",
-        "host",
-        "scheduler"
+        "name"
       ],
       "title": "_ClusterListEntry",
       "type": "object"

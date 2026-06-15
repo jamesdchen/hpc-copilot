@@ -306,7 +306,13 @@ def _combiner_only_reduce(
             try:
                 sidecar = read_run_sidecar(experiment_dir, run_id)
                 has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
+            except (
+                FileNotFoundError,
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                errors.HpcError,
+            ):
                 pass
             cluster_reduce_hint = (
                 f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
@@ -368,7 +374,7 @@ def _cluster_final_reduce(
 
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         sidecar = {}
     remote_activation = remote_activation_for_sidecar(sidecar)
 
@@ -622,7 +628,7 @@ def aggregate_flow(
     sidecar_for_cmd: dict[str, Any] = {}
     try:
         sidecar_for_cmd = read_run_sidecar(experiment_dir, run_id) or {}
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         sidecar_for_cmd = {}
     if not sidecar_for_cmd:
         # Local sidecar absent: the caller no longer rsyncs it by hand —
@@ -686,7 +692,7 @@ def aggregate_flow(
     try:
         sidecar_data = read_run_sidecar(experiment_dir, run_id)
         wave_map_keys = list((sidecar_data.get("wave_map") or {}).keys())
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         # No wave_map → no waves to ensure. Aggregation falls back to
         # whatever's already in _combiner/ on the cluster.
         pass
@@ -735,16 +741,26 @@ def aggregate_flow(
     try:
         from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
 
+        cmd_sha_for_ingest: str | None = None
+        if combiner_local.is_dir():
+            try:
+                cmd_sha_for_ingest = read_run_sidecar(experiment_dir, run_id).get("cmd_sha")
+            except (
+                FileNotFoundError,
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                errors.HpcError,
+            ):
+                # Best-effort cmd_sha tag — a corrupt/too-new sidecar must
+                # not crash runtime ingestion; degrade to None.
+                cmd_sha_for_ingest = None
         ingested = ingest_runtime_samples_from_combiner_dir(
             combiner_local,
             experiment_dir=experiment_dir,
             profile=record.profile,
             cluster=record.cluster,
-            cmd_sha=(
-                read_run_sidecar(experiment_dir, run_id).get("cmd_sha")
-                if combiner_local.is_dir()
-                else None
-            ),
+            cmd_sha=cmd_sha_for_ingest,
         )
         if ingested:
             print(
@@ -803,7 +819,13 @@ def aggregate_flow(
     if not isinstance(results_block, dict):
         try:
             results_block = (read_run_sidecar(experiment_dir, run_id) or {}).get("results")
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
+        except (
+            FileNotFoundError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            errors.HpcError,
+        ):
             results_block = None
     if isinstance(results_block, dict) and summaries_local is not None:
         raw_cols = results_block.get("expected_columns")

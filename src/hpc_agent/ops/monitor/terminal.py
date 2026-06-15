@@ -42,6 +42,7 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
     long-running monitor that ticks N runs to terminal does not leak N
     ``hpc_runtime_pull_*`` dirs under ``$TMPDIR``.
     """
+    from hpc_agent import errors
     from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.runs import read_run_sidecar
     from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
@@ -59,7 +60,9 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
             if result.returncode != 0:
                 return 0
             cmd_sha = None
-            with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
+            with contextlib.suppress(
+                FileNotFoundError, OSError, json.JSONDecodeError, errors.HpcError
+            ):
                 cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
             return ingest_runtime_samples_from_combiner_dir(
                 local_dir,

@@ -199,7 +199,21 @@ def submit_and_record(
             sidecar_data = None
             try:
                 sidecar_data = read_run_sidecar(experiment_dir, existing_run_id)
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
+            except (
+                FileNotFoundError,
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                errors.HpcError,
+            ):
+                sidecar_data = None
+            if sidecar_data is not None and not (sidecar_data.get("job_ids") or []):
+                # Orphan sidecar: written by ``write_run_sidecar`` BEFORE qsub,
+                # so ``job_ids`` was never finalized. It is not a completed
+                # prior submission, so it must NOT be a dedup target — returning
+                # it as ``deduped`` would emit empty ``job_ids`` and fail
+                # submit's own output schema (``job_ids`` minItems:1). Fall
+                # through to a real submission instead.
                 sidecar_data = None
             if sidecar_data is not None:
                 # All sidecars produced by the framework are live records

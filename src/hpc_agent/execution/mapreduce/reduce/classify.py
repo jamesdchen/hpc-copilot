@@ -76,6 +76,19 @@ _SIGNATURE_TO_CATEGORY: dict[str, str] = {
     "import_error": "code_bug",
     "permission_denied": "code_bug",
     "disk_full": "code_bug",
+    # Newer catalog classes (environment / launcher / config failures the user
+    # must fix). Without these they fell through to "unknown", silently
+    # degrading the /status action table and TUI panel for real, classifiable
+    # failures. They are Python/setup-level problems → "code_bug" (escalate),
+    # consistent with the import_error / file_not_found rows above.
+    "uv_not_on_path": "code_bug",
+    "conda_command_not_found": "code_bug",
+    "module_not_found_hpc_agent": "code_bug",
+    "output_file_required": "code_bug",
+    "undefined_var_expansion": "code_bug",
+    "mpi_init_failed": "code_bug",
+    "mpi_launcher_missing": "code_bug",
+    "mpi_pe_invalid": "code_bug",
 }
 
 

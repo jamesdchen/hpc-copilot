@@ -59,6 +59,7 @@ def validate_stochastic_marker(
     """
     import json
 
+    from hpc_agent import errors
     from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
     matched_prior_run_ids: list[str] = []
@@ -69,7 +70,7 @@ def validate_stochastic_marker(
         run_id = sidecar_path.stem
         try:
             sidecar = read_run_sidecar(experiment_dir, run_id)
-        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError, errors.HpcError):
             # A single unreadable sidecar — pruned mid-scan, corrupted,
             # named off the run-id regex, permission-denied, or
             # schema-version mismatched — must NOT crash the validator.

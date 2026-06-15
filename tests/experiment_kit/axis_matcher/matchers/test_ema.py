@@ -73,6 +73,28 @@ def run(data, N, beta):
     assert result.halo_expr == "100"
 
 
+def test_ema_param_without_complement_is_sequential(tmp_path: Path) -> None:
+    """``state = gain * state + drive[t]`` — a bare-param coefficient with NO
+    complementary ``(1 - gain)`` weight is an unconstrained recurrence that may
+    diverge (gain ≥ 1). It must NOT be classified as a bounded halo; the safe
+    fallback is Sequential."""
+    src = _write(
+        tmp_path,
+        """
+def run(drive, N, gain):
+    state = 0.0
+    results = []
+    for t in range(N):
+        state = gain * state + drive[t]
+        results.append(state)
+    return results
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind == "sequential", result
+    assert result.halo_expr is None
+
+
 def test_ema_unbounded_accumulator(tmp_path: Path) -> None:
     """``state = state + data[t]`` (β=1) is unbounded → Sequential."""
     src = _write(

@@ -6,15 +6,18 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import Scheduler
-
 
 class _ClusterListEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    host: str
-    scheduler: Scheduler
+    # `host` is optional in clusters.yaml (a local/login-node cluster may omit
+    # it), and `scheduler` may be a custom family when a `scheduler_profile` is
+    # pinned (ClusterConfig explicitly permits this), so neither can be a
+    # required-string / four-value enum without `clusters-list` failing its own
+    # output schema on a legitimate user config.
+    host: str | None = None
+    scheduler: str | None = None
 
 
 class ClustersListResult(BaseModel):

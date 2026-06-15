@@ -470,7 +470,7 @@ def verify_canary(
     # yields ``""`` → bare python (the unchanged fallback).
     try:
         _canary_sidecar = read_run_sidecar(experiment_dir, canary_run_id)
-    except (OSError, ValueError):
+    except (OSError, ValueError, errors.HpcError):
         _canary_sidecar = {}
     remote_activation = remote_activation_for_sidecar(_canary_sidecar)
 

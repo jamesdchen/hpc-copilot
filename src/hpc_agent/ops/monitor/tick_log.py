@@ -22,23 +22,36 @@ from hpc_agent.state.run_record import runs_dir
 
 __all__ = ["_append_tick", "_status_fingerprint", "_tick_log_path"]
 
+# Keys stamped on every poll that carry no state-change signal. They must be
+# excluded from the fingerprint, or the equality oracle flips on every tick
+# and the adaptive backoff never engages (it would keep polling at the floor
+# cadence for the whole run). ``checked_at`` is set unconditionally by both
+# ``status.record_status`` and ``reconcile`` on each poll.
+_VOLATILE_FINGERPRINT_KEYS = frozenset({"checked_at"})
+
 
 def _status_fingerprint(status: dict[str, Any]) -> str:
-    """Return a stable hash of the polled status dict.
+    """Return a stable hash of the *state-bearing* part of the status dict.
 
     Any change in task counts, scheduler-state flips, new waves, etc.
-    flips the fingerprint and resets the adaptive backoff. We serialize
-    with ``sort_keys=True`` and ``default=str`` so heterogeneous (and
-    nested-dict) values like the ``waves`` block hash deterministically
-    without us having to enumerate which keys matter. blake2b is fast
-    and collision-resistant enough for an equality oracle.
+    flips the fingerprint and resets the adaptive backoff. Volatile
+    per-poll keys (see ``_VOLATILE_FINGERPRINT_KEYS``, e.g. the
+    ``checked_at`` timestamp) are stripped first so an *unchanged* status
+    hashes identically across ticks. We serialize with ``sort_keys=True``
+    and ``default=str`` so heterogeneous (and nested-dict) values like the
+    ``waves`` block hash deterministically without us having to enumerate
+    which keys matter. blake2b is fast and collision-resistant enough for
+    an equality oracle.
     """
+    state = {k: v for k, v in status.items() if k not in _VOLATILE_FINGERPRINT_KEYS}
     try:
-        payload = json.dumps(status, sort_keys=True, default=str).encode("utf-8")
+        payload = json.dumps(state, sort_keys=True, default=str).encode("utf-8")
     except (TypeError, ValueError):
         # Pathological payload — fall back to a per-call unique value so
         # we never spuriously declare "unchanged" on an opaque diff.
-        payload = repr(status).encode("utf-8", errors="replace")
+        payload = repr(sorted(state.items(), key=lambda kv: kv[0])).encode(
+            "utf-8", errors="replace"
+        )
     return hashlib.blake2b(payload, digest_size=16).hexdigest()
 
 

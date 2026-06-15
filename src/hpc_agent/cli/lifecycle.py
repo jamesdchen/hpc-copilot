@@ -105,7 +105,7 @@ def _preempted_summary_from_sidecar(
         )
 
         sidecar = _read_sidecar_for_status(Path(experiment_dir), run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         return None
     if not isinstance(sidecar, dict):
         return None

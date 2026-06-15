@@ -29,6 +29,8 @@ def derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[
     import jsonschema
     import yaml
 
+    from hpc_agent import errors
+
     try:
         from hpc_agent.state.axes import (
             compute_wave_map,
@@ -40,7 +42,7 @@ def derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[
 
     try:
         config = read_axes(experiment_dir)
-    except (jsonschema.ValidationError, yaml.YAMLError, ValueError, OSError):
+    except (jsonschema.ValidationError, yaml.YAMLError, ValueError, OSError, errors.JournalCorrupt):
         return None
     if config is None or not config.get("axes"):
         return None

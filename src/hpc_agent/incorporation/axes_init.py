@@ -118,6 +118,9 @@ def axes_init(
 
     Returns ``{axes_path, axes, homogeneous_axes, wrote, reason}``.
     """
+    import jsonschema
+    import yaml
+
     from hpc_agent.state.axes import axes_path, read_axes, write_axes
 
     target = axes_path(experiment_dir)
@@ -128,7 +131,14 @@ def axes_init(
 
         try:
             existing = read_axes(experiment_dir) or {}
-        except (FileNotFoundError, OSError, ValueError):
+        except (
+            FileNotFoundError,
+            OSError,
+            ValueError,
+            yaml.YAMLError,
+            jsonschema.ValidationError,
+            errors.HpcError,
+        ):
             existing = {}
         return {
             "axes_path": str(target),
@@ -150,7 +160,14 @@ def axes_init(
     if target.exists():
         try:
             existing_executors = (read_axes(experiment_dir) or {}).get("executors")
-        except (FileNotFoundError, OSError, ValueError):
+        except (
+            FileNotFoundError,
+            OSError,
+            ValueError,
+            yaml.YAMLError,
+            jsonschema.ValidationError,
+            errors.HpcError,
+        ):
             existing_executors = None
 
     try:

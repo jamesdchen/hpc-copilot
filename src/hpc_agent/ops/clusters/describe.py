@@ -61,6 +61,14 @@ def describe_cluster(*, name: str, strict: bool = False) -> dict[str, Any]:
     if name not in clusters:
         raise errors.ClusterUnknown(f"unknown cluster {name!r}; run `hpc-agent clusters list`")
     cfg = clusters[name]
+    if not isinstance(cfg, dict):
+        # The output schema types `config` as an object. A clusters.yaml entry
+        # that isn't a mapping (e.g. a bare scalar or list) would otherwise be
+        # emitted verbatim and fail output validation as an opaque `internal`
+        # error — surface it as a clear config error instead.
+        raise errors.ConfigInvalid(
+            f"cluster {name!r} entry in clusters.yaml must be a mapping, got {type(cfg).__name__}"
+        )
     out: dict[str, Any] = {"name": name, "config": cfg}
     if strict:
         allowed = set(ClusterConfig.model_fields.keys())

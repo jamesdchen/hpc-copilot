@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_metrics
 from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
@@ -53,7 +54,7 @@ def _read_sidecar_safe(path: Path) -> dict[str, Any] | None:
         experiment_dir = path.parent.parent.parent
         run_id = path.stem
         return read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError, errors.HpcError):
         return None
 
 

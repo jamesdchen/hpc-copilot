@@ -46,7 +46,7 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
         return dict(DEFAULT_AUTO_RETRY_POLICY)
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         return dict(DEFAULT_AUTO_RETRY_POLICY)
     user_policy = sidecar.get("auto_retry")
     if not isinstance(user_policy, dict):

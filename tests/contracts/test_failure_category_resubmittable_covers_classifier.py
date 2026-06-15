@@ -96,6 +96,25 @@ def test_resubmittable_covers_fingerprint_emissions() -> None:
     )
 
 
+def test_status_classifier_maps_every_catalog_class() -> None:
+    """Every catalog ``error_class`` must be handled by the ``/status``
+    classifier's ``_SIGNATURE_TO_CATEGORY`` map (or be one of the locally
+    handled / sentinel classes), so a new catalog row cannot silently fall
+    through to ``"unknown"`` and degrade the /status action table.
+    """
+    from hpc_agent.execution.mapreduce.reduce.classify import _SIGNATURE_TO_CATEGORY
+
+    catalog = _catalog_categories()
+    # ``unknown`` is the catalog's own catch-all; classify_failure returns it
+    # by design (no remap needed).
+    unmapped = catalog - set(_SIGNATURE_TO_CATEGORY) - {"unknown"}
+    assert not unmapped, (
+        "execution/mapreduce/reduce/classify.py::_SIGNATURE_TO_CATEGORY is "
+        "missing catalog error_class values, so /status would classify these "
+        f"real failures as 'unknown': {sorted(unmapped)}. Add them to the map."
+    )
+
+
 def test_resubmittable_subset_of_lifecycle_enum() -> None:
     """The wire Literal must not carry values the canonical StrEnum lacks.
 

@@ -255,12 +255,14 @@ def build_submit_spec(
     # cluster's scratch is the *parent* dir under which each experiment lives;
     # taking it verbatim made a deploy --delete pre-clean walk every sibling
     # project. Validator no-ops when scratch is undeclared.
+    import yaml
+
     from hpc_agent.infra.clusters import load_clusters_config
     from hpc_agent.infra.ssh_validation import validate_remote_path_under_scratch
 
     try:
         cluster_scratch = (load_clusters_config().get(cluster) or {}).get("scratch") or ""
-    except (OSError, ValueError):
+    except (OSError, ValueError, yaml.YAMLError):
         cluster_scratch = ""
     validate_remote_path_under_scratch(remote_path, cluster_scratch)
 

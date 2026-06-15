@@ -386,7 +386,11 @@ def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
         if not isinstance(entry, dict):
             return None
         kind = entry.get("kind")
-        if not isinstance(kind, str):
+        # The output schema constrains `kind` to this enum. A hand-written /
+        # foreign interview.json could carry an out-of-enum value; treat it as
+        # "no usable materialized entry point" (fall through) rather than emit a
+        # value that fails output validation.
+        if kind not in ("shell_command", "register_run", "python_module"):
             return None
         out: dict[str, Any] = {"kind": kind}
         for field in _MATERIALIZED_FIELDS:

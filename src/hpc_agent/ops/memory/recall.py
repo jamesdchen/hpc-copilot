@@ -33,6 +33,7 @@ file. Malformed ``interview.json`` files are skipped silently.
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
@@ -49,6 +50,14 @@ if TYPE_CHECKING:
 
 
 __all__ = ["recall_campaigns", "resolve_roots"]
+
+# Mirrors the ``cmd_sha`` pattern on recall's output schema (_CampaignSummary).
+_CMD_SHA_RE = re.compile(r"^[0-9a-f]{8,64}$")
+
+
+def _is_valid_cmd_sha(value: Any) -> bool:
+    """True if *value* is a lowercase-hex cmd_sha the output schema accepts."""
+    return isinstance(value, str) and bool(_CMD_SHA_RE.match(value))
 
 
 # Hard cap on filesystem walk to bound scans of giant trees.
@@ -315,15 +324,34 @@ def _summarize(doc: dict[str, Any], path: Path) -> dict[str, Any] | None:
         return None
     produced_by = doc.get("produced_by") or {}
     generator = doc.get("task_generator")
+    # interview.json is documented as untrusted (hand-written / legacy /
+    # cross-version files are tolerated and merely skipped when un-materialized).
+    # The recall output schema constrains these fields (cmd_sha hex pattern,
+    # produced_by_kind enum, task_count >= 0 int), so a malformed-but-present
+    # value would fail output validation and surface as an `internal` error
+    # instead of being recalled. Coerce out-of-contract values to None — the
+    # schema makes all three nullable.
+    raw_cmd_sha = materialized.get("cmd_sha")
+    cmd_sha = raw_cmd_sha if _is_valid_cmd_sha(raw_cmd_sha) else None
+    raw_kind = produced_by.get("kind")
+    produced_by_kind = raw_kind if raw_kind in ("agent", "human") else None
+    raw_task_count = doc.get("task_count")
+    task_count = (
+        raw_task_count
+        if isinstance(raw_task_count, int)
+        and not isinstance(raw_task_count, bool)
+        and raw_task_count >= 0
+        else None
+    )
     summary: dict[str, Any] = {
         "campaign_dir": str(path.parent.resolve()),
         "goal": doc.get("goal"),
         "task_kind": doc.get("task_kind"),
-        "task_count": doc.get("task_count"),
+        "task_count": task_count,
         "operator": produced_by.get("operator"),
-        "produced_by_kind": produced_by.get("kind"),
+        "produced_by_kind": produced_by_kind,
         "materialized_at": materialized.get("at"),
-        "cmd_sha": materialized.get("cmd_sha"),
+        "cmd_sha": cmd_sha,
         # Fix A: surface the structured prior-decision fields the next
         # interviewer wants to compare against. Drop only the verbose
         # transcript / notes fields — those the agent re-reads on demand.

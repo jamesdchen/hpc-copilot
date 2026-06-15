@@ -184,7 +184,18 @@ def validate_walltime_against_history(
 
     from hpc_agent.state.runtime_prior import roll_up_quantiles  # noqa: PLC0415 — lazy
 
-    rollup = roll_up_quantiles(experiment_dir, profile=spec.profile, cluster=spec.cluster)
+    # Forward the quantiles the active rules actually compare against, so a
+    # custom ``below_quantile`` (e.g. 0.90 → "p90") gets its bucket computed.
+    # Without this the rollup only emits the default p50/p95/p99 and any custom
+    # rule looks up a missing key, gets None, and is silently skipped — the
+    # walltime guard never fires.
+    rule_quantiles = tuple(sorted({rule.below_quantile for rule in walltime_rules}))
+    rollup = roll_up_quantiles(
+        experiment_dir,
+        profile=spec.profile,
+        cluster=spec.cluster,
+        quantiles=rule_quantiles,
+    )
 
     if rollup.get("needs_canary") and not (rollup.get("quantiles") or {}):
         findings.append(

@@ -285,11 +285,13 @@ def _manifest_circuit_breaker_failures(experiment_dir: Path, campaign_id: str) -
     """
     import json
 
+    import jsonschema
+
     from hpc_agent.meta.campaign.manifest import read_manifest
 
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
         return None
     if manifest is None:
         return None
@@ -307,11 +309,13 @@ def _manifest_max_task_resubmits(experiment_dir: Path, campaign_id: str) -> int 
     """
     import json
 
+    import jsonschema
+
     from hpc_agent.meta.campaign.manifest import read_manifest
 
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
         return None
     if manifest is None:
         return None

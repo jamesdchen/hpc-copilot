@@ -105,7 +105,16 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
     #    watch. A `deduped` outcome still proceeds: the run already exists/live,
     #    so we monitor the existing run.
     sp = submit_pipeline(experiment_dir, spec=spec.submit)
-    if sp.stage_reached in {"canary_failed", "verify_submitted_failed"}:
+    # `parents_not_ready` is the DAG readiness refusal: the submit did NOT run
+    # (no scheduler job ids). It must stop here like the gate failures — falling
+    # through would monitor a never-submitted run_id and raise an uncaught
+    # PreconditionFailed/JournalCorrupt out of the status stage instead of
+    # returning a clean `submit_failed` needs-decision result.
+    if sp.stage_reached in {
+        "canary_failed",
+        "verify_submitted_failed",
+        "parents_not_ready",
+    }:
         return CampaignRunResult(
             stage_reached="submit_failed",
             needs_decision=True,

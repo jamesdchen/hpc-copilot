@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.recovery.registry import (
@@ -100,13 +101,17 @@ def recoveries_show(*, kind: str, placeholders: str | None = None) -> dict[str, 
     key) are silently skipped — substitution is best-effort and
     unsubstituted tokens pass through unchanged.
 
-    Raises ``KeyError`` (surfaces as ``spec_invalid`` via the dispatch
-    layer) when *kind* is not ported. The error message names the
-    available kinds so a caller can recover.
+    Raises ``errors.SpecInvalid`` (surfaces as ``spec_invalid`` / exit 1
+    via the dispatch layer, which only maps ``HpcError`` subclasses) when
+    *kind* is not ported. A bare ``KeyError`` would fall through to the
+    last-resort handler and mislabel as ``internal`` / exit 3. The error
+    message names the available kinds so a caller can recover.
     """
     if kind not in REGISTRY:
         known = sorted(PORTED_KINDS)
-        raise KeyError(f"recoveries show: kind={kind!r} not in registry; ported kinds are {known}")
+        raise errors.SpecInvalid(
+            f"recoveries show: kind={kind!r} not in registry; ported kinds are {known}"
+        )
     subs = _parse_placeholders(placeholders)
     menu = menu_for(kind)
     # Substitute placeholders into per-option cli_command too so the

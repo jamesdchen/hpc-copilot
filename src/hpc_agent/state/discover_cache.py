@@ -32,9 +32,14 @@ if TYPE_CHECKING:
 
 __all__ = ["cache_disabled", "load", "store"]
 
-# Directories never holding user run-source — skipped in the fingerprint walk to
-# keep it cheap (``discover-runs`` skips these too, so pruning them can't make
-# the fingerprint miss a file the scan would have seen).
+# Directories never holding user run-source — pruned from the fingerprint walk
+# to keep it cheap. This MUST stay a subset of the set the actual
+# ``discover-runs`` source scan skips (``state.discover._SKIP_DIRS`` /
+# ``experiment_kit.discover._SKIP_DIRS``): pruning a directory here that the scan
+# still reads would let a ``@register_run`` edit under it change live results
+# WITHOUT changing the fingerprint, serving a stale cache. The scan skips this
+# exact set (vendored / VCS / cache dirs), so the pruning is safe; a contract
+# test pins the subset invariant.
 _SKIP_DIRS = frozenset(
     {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".hpc", ".claude"}
 )

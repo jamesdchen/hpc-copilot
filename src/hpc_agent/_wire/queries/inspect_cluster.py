@@ -46,6 +46,22 @@ class _ParallelEnvironment(BaseModel):
     )
 
 
+class _InspectError(BaseModel):
+    """One non-fatal probe failure, as emitted by the inspect backends.
+
+    Every producer (``infra/inspect/{sge,slurm,pbs}.py``) appends a
+    ``{"code", "detail"}`` dict; the model mirrors that shape so the output
+    schema matches what ``ClusterSnapshot.to_dict()`` actually carries.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(
+        description="Stable machine code, e.g. 'qhost_failed', 'pbs_inspect_minimal'."
+    )
+    detail: str = Field(description="Human-readable detail (truncated stderr or explanation).")
+
+
 class _NodeSnapshot(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -67,8 +83,8 @@ class InspectClusterResult(BaseModel):
     scheduler_kind: Scheduler
     now_iso: str = Field(description="UTC ISO-8601 timestamp of the snapshot.")
     nodes: list[_NodeSnapshot]
-    errors: list[str] = Field(
-        description="Non-fatal per-node errors (e.g. one node failed to report). Fatal cases raise ssh_unreachable instead.",
+    errors: list[_InspectError] = Field(
+        description="Non-fatal probe errors (e.g. one node/command failed to report). Fatal cases raise ssh_unreachable instead.",
     )
     parallel_environments: list[_ParallelEnvironment] = Field(
         default_factory=list,

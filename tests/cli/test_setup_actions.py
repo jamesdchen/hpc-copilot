@@ -105,8 +105,11 @@ def test_priority_0_picks_newest_when_multiple_in_flight(
     out = suggest_setup_action(tmp_path)
     assert out["priority"] == 0
     assert len(out["candidates"]) == 2
-    # find_in_flight_runs returns newest-first; first candidate is the recommendation.
-    assert out["recommended_run_id"] == out["candidates"][0]["run_id"]
+    # The NEWER run (by submitted_at) must be the recommendation and sort first —
+    # asserting only ``recommended == candidates[0]`` would be tautological and
+    # would pass even if the sort direction regressed to oldest-first.
+    assert out["candidates"][0]["run_id"] == "newer_run", out["candidates"]
+    assert out["recommended_run_id"] == "newer_run"
 
 
 # ─── find-prior-run ────────────────────────────────────────────────────────

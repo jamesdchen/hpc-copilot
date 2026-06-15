@@ -157,7 +157,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         try:
             with open(fields_file, encoding="utf-8") as fh:
                 raw_fields = fh.read()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             return _err(
                 error_code="spec_invalid",
                 message=f"--fields-file could not be read: {exc}",

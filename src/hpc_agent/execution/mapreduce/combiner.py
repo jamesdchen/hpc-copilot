@@ -352,7 +352,7 @@ def main(max_workers=None, argv=None):
 
     try:
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         print(f"[combiner] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -452,7 +452,7 @@ def main(max_workers=None, argv=None):
                 tid, grid_key, runtime_path = future_to_info[future]
                 try:
                     metrics = future.result()
-                except (json.JSONDecodeError, OSError) as exc:
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
                     errors.append(f"task {tid}: failed to read metrics.json: {exc}")
                     continue
                 groups.setdefault(grid_key, []).append(metrics)
@@ -465,7 +465,7 @@ def main(max_workers=None, argv=None):
                     try:
                         with open(runtime_path, encoding="utf-8") as rfh:
                             runtime_rows.append(json.load(rfh))
-                    except (json.JSONDecodeError, OSError) as exc:
+                    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
                         errors.append(f"task {tid}: failed to read _runtime.json: {exc}")
 
     # --- Aggregate per grid point ---

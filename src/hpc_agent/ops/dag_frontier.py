@@ -108,6 +108,7 @@ def dag_frontier(experiment_dir: Path) -> dict[str, Any]:
     """
     import json
 
+    from hpc_agent import errors
     from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
     edges: dict[str, list[str]] = {}
@@ -116,7 +117,7 @@ def dag_frontier(experiment_dir: Path) -> dict[str, Any]:
         run_id = path.stem
         try:
             sidecar = read_run_sidecar(experiment_dir, run_id)
-        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError, errors.HpcError):
             # Same tolerance as the campaign history walk: one unreadable
             # sidecar must not blank the whole graph view.
             continue

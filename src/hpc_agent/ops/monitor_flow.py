@@ -236,7 +236,7 @@ def monitor_flow(
     wave_map: dict[str, list[int]] | None = None
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, errors.HpcError):
         # Missing or unreadable sidecar → auto_combine_waves is a no-op.
         sidecar = None
     if sidecar is not None:

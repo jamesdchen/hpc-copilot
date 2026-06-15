@@ -106,6 +106,22 @@ def test_wrong_provenance_run_id(tmp_path: Path) -> None:
     assert out["provenance_present"] is False
 
 
+def test_wrong_provenance_wave_field(tmp_path: Path) -> None:
+    """A partial whose internal ``wave`` field disagrees with its filename
+    (``wave_<N>.json``) must fail provenance — the check keys on the filename
+    wave, not the doc's own field, so a mislabeled internal wave is caught."""
+    _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0, 1]})
+    combiner_dir = tmp_path / "_combiner_local"
+    combiner_dir.mkdir(parents=True, exist_ok=True)
+    # File is wave_0.json but its body claims wave 7.
+    (combiner_dir / "wave_0.json").write_text(
+        json.dumps({"wave": 7, "run_id": "r1", "task_ids": [0, 1]})
+    )
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["provenance_present"] is False
+
+
 def test_runtime_sidecar_skipped_in_walk(tmp_path: Path) -> None:
     """wave_*.runtime.json files (warm-picker pipeline) must not be parsed as wave partials."""
     _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0]})

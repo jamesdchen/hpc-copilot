@@ -104,3 +104,23 @@ def test_discover_runs_uses_cache(tmp_path, monkeypatch):
     assert first == second == []
     # The scan ran once; the second call was served from cache.
     assert calls == [exp]
+
+
+def test_fingerprint_skip_dirs_subset_of_scan_skip_dirs() -> None:
+    """The fingerprint must not prune a directory the actual source scan reads.
+
+    If ``discover_cache._SKIP_DIRS`` skips a dir that ``state.discover`` /
+    ``experiment_kit.discover`` still walk, a ``@register_run`` edit under it
+    (e.g. a run vendored inside ``.venv`` / ``.claude``) would change live
+    results without changing the fingerprint → a stale cache is served.
+    """
+    from hpc_agent.experiment_kit import discover as ek_discover
+    from hpc_agent.state import discover as state_discover
+
+    scan_skips = state_discover._SKIP_DIRS | ek_discover._SKIP_DIRS
+    extra = discover_cache._SKIP_DIRS - scan_skips
+    assert not extra, (
+        "discover_cache._SKIP_DIRS prunes dirs the scan still reads: "
+        f"{sorted(extra)}. A register_run edit under these would not change the "
+        "fingerprint, serving a stale cache."
+    )

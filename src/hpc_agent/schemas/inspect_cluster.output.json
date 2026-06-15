@@ -39,9 +39,9 @@
       "type": "array"
     },
     "errors": {
-      "description": "Non-fatal per-node errors (e.g. one node failed to report). Fatal cases raise ssh_unreachable instead.",
+      "description": "Non-fatal probe errors (e.g. one node/command failed to report). Fatal cases raise ssh_unreachable instead.",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/_InspectError"
       },
       "title": "Errors",
       "type": "array"
@@ -56,6 +56,28 @@
     }
   },
   "$defs": {
+    "_InspectError": {
+      "additionalProperties": false,
+      "description": "One non-fatal probe failure, as emitted by the inspect backends.\n\nEvery producer (``infra/inspect/{sge,slurm,pbs}.py``) appends a\n``{\"code\", \"detail\"}`` dict; the model mirrors that shape so the output\nschema matches what ``ClusterSnapshot.to_dict()`` actually carries.",
+      "properties": {
+        "code": {
+          "description": "Stable machine code, e.g. 'qhost_failed', 'pbs_inspect_minimal'.",
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "description": "Human-readable detail (truncated stderr or explanation).",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "_InspectError",
+      "type": "object"
+    },
     "_NodeSnapshot": {
       "additionalProperties": true,
       "properties": {

@@ -54,7 +54,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
         return {}
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         return {}
     block = sidecar.get("aggregate_defaults") or {}
     if not isinstance(block, dict):

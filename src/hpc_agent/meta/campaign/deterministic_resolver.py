@@ -372,6 +372,7 @@ class DeterministicCampaignResolver:
         values, so the next iteration gets its own run_id off the re-imported
         tasks.py.
         """
+        from hpc_agent import errors
         from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
         from hpc_agent._wire.actions.write_run_sidecar import WriteRunSidecarInput
         from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
@@ -397,7 +398,7 @@ class DeterministicCampaignResolver:
         record = load_run(experiment_dir, prior_run_id)
         try:
             sidecar = read_run_sidecar(experiment_dir, prior_run_id)
-        except (FileNotFoundError, OSError, ValueError):
+        except (FileNotFoundError, OSError, ValueError, errors.HpcError):
             sidecar = None
         if record is None or sidecar is None:
             return None

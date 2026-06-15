@@ -333,6 +333,13 @@ def _finalize_composes() -> None:
     if not _PENDING_COMPOSES:
         return
     unresolved: list[str] = []
+    # Stage every resolved meta and apply nothing until the WHOLE batch
+    # resolves. Committing resolved entries to ``_REGISTRY`` before the raise
+    # (while ``_PENDING_COMPOSES`` is retained for the retry) would re-append
+    # the same composes on the next ``_finalize_composes`` call, duplicating
+    # them. All-or-nothing keeps a failed run side-effect-free so the retry
+    # re-runs cleanly.
+    staged: dict[str, PrimitiveMeta] = {}
     for prim_name, pending in list(_PENDING_COMPOSES.items()):
         existing = _REGISTRY.get(prim_name)
         if existing is None:
@@ -347,33 +354,27 @@ def _finalize_composes() -> None:
                 )
                 continue
             extra.append(target)
-        # Only update the registry when EVERY pending name resolved.
-        # A partial update would silently drop the unresolved names from
-        # this primitive's composes tuple — the unresolved entries do get
-        # surfaced via ``unresolved`` / the final raise, but mutating the
-        # frozen meta with a half-resolved list first leaves the registry
-        # in an inconsistent state for any code that inspects it before
-        # the raise propagates. Leave the meta alone; the trailing
-        # ``raise ValueError`` is the single source of failure.
         if len(extra) != len(pending):
             continue
-        new_meta = dataclasses.replace(
+        staged[prim_name] = dataclasses.replace(
             existing,
             composes=tuple(existing.composes) + tuple(extra),
         )
-        _REGISTRY[prim_name] = new_meta
-        import contextlib as _ctx
+    if unresolved:
+        # Do NOT clear ``_PENDING_COMPOSES`` and do NOT apply ``staged`` on
+        # failure. ``register_primitives`` leaves ``_REGISTRATION_DONE`` False
+        # on raise, so a retry re-enters this function; module imports are
+        # cached, so the decorator side-effects that fill ``_PENDING_COMPOSES``
+        # do not re-fire. Keeping the dict populated (and the registry
+        # unmutated) means the retry surfaces the same error rather than
+        # silently "succeeding" with a half-resolved / double-appended registry.
+        raise ValueError("composes resolution failed:\n  " + "\n  ".join(sorted(unresolved)))
+    import contextlib as _ctx
 
+    for prim_name, new_meta in staged.items():
+        _REGISTRY[prim_name] = new_meta
         with _ctx.suppress(AttributeError, TypeError):
             new_meta.func._primitive_meta = new_meta  # type: ignore[attr-defined]
-    if unresolved:
-        # Do NOT clear ``_PENDING_COMPOSES`` on failure. ``register_primitives``
-        # leaves ``_REGISTRATION_DONE`` False on raise, so a retry re-enters
-        # this function; but module imports are cached, so the decorator
-        # side-effects that fill ``_PENDING_COMPOSES`` do not re-fire. Keeping
-        # the dict populated means the retry still surfaces the same error
-        # rather than silently "succeeding" with a half-resolved registry.
-        raise ValueError("composes resolution failed:\n  " + "\n  ".join(sorted(unresolved)))
     _PENDING_COMPOSES.clear()
 
 
@@ -460,4 +461,5 @@ def _reset_for_tests() -> None:
     """
     global _REGISTRATION_DONE
     _REGISTRY.clear()
+    _PENDING_COMPOSES.clear()
     _REGISTRATION_DONE = False

@@ -682,7 +682,7 @@ def _safe_read_sidecar(experiment_dir: Path, run_id: str) -> dict | None:
             run_id,
         )
         raise
-    except OSError:
+    except (OSError, UnicodeDecodeError, errors.HpcError):
         return None
 
 

@@ -36,22 +36,36 @@ def last_json_object(text: str) -> dict[str, Any] | None:
         whole = json.loads(stripped)
         if isinstance(whole, dict):
             return whole
+    # Fall back to the last balanced ``{...}`` span. The scanner is
+    # string-literal aware: braces inside JSON string values must not move
+    # the nesting depth, or a valid object whose strings contain ``{``/``}``
+    # would be split or dropped. Every balanced top-level span is re-parsed
+    # and the last one that yields a dict wins (earlier spans are chatter).
     depth = 0
     start = -1
-    last: str | None = None
+    in_string = False
+    escaped = False
+    last: dict[str, Any] | None = None
     for i, char in enumerate(stripped):
-        if char == "{":
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
             if depth == 0:
                 start = i
             depth += 1
         elif char == "}" and depth > 0:
             depth -= 1
             if depth == 0:
-                last = stripped[start : i + 1]
-    if last is None:
-        return None
-    with contextlib.suppress(json.JSONDecodeError):
-        obj = json.loads(last)
-        if isinstance(obj, dict):
-            return obj
-    return None
+                with contextlib.suppress(json.JSONDecodeError):
+                    obj = json.loads(stripped[start : i + 1])
+                    if isinstance(obj, dict):
+                        last = obj
+    return last

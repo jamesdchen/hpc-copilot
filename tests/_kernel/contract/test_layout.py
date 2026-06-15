@@ -70,6 +70,18 @@ def test_repo_layout_runtime_prior_sanitizes_slash(tmp_path: Path) -> None:
     assert p.name == "foo_bar.cluster1.json"
 
 
+def test_repo_layout_runtime_prior_sanitizes_cluster_slash(tmp_path: Path) -> None:
+    """A path-like cluster token must not escape the runtimes dir (matches the
+    defensive substitution cluster_history / preflight_marker apply)."""
+    layout = RepoLayout(tmp_path)
+    p = layout.runtime_prior("prof", "../../etc/passwd")
+    # The cluster token's separators are substituted, so the file stays a direct
+    # child of runtimes (no traversal out of the dir).
+    assert p.parent == layout.runtimes
+    assert "/" not in p.name
+    assert p.resolve().parent == layout.runtimes.resolve()
+
+
 def test_repo_layout_runtime_prior_rejects_empty(tmp_path: Path) -> None:
     layout = RepoLayout(tmp_path)
     with pytest.raises(errors.SpecInvalid):

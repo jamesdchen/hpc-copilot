@@ -30,8 +30,14 @@ def _match_bounded_window_deque(
     Returns ``(halo_expr, evidence)`` where halo_expr is ``W`` (literal
     integer or bare parameter name).
     """
-    # Find deque(maxlen=W) constructions in the function body (outside the loop).
+    # Find deque(maxlen=W) constructions in the function body but OUTSIDE the
+    # loop. A deque rebuilt inside the loop is re-created every iteration and
+    # carries no cross-iteration window, so it is not a bounded-window pattern;
+    # ``ast.walk(func)`` descends into the loop, so exclude the loop's nodes.
+    loop_node_ids = {id(n) for n in ast.walk(loop)}
     for node in ast.walk(func):
+        if id(node) in loop_node_ids:
+            continue
         if not isinstance(node, ast.Assign):
             continue
         if not isinstance(node.value, ast.Call):

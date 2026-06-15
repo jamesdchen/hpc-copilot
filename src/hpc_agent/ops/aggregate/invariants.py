@@ -291,11 +291,20 @@ def verify_aggregation_complete(
             except (TypeError, ValueError):
                 continue
 
-    # Walk the pulled partials.
+    # Walk the pulled partials. Key by the wave number encoded in the
+    # FILENAME (``wave_<N>.json``), which is the authoritative source-of-truth
+    # for which wave the file represents. Keying by the doc's own ``wave``
+    # field instead would make the provenance check below
+    # (``doc.get("wave") != w``) a tautology — a partial with a mislabeled
+    # internal ``wave`` would pass.
     pulled_waves: dict[int, dict[str, Any]] = {}
     for path in sorted(combiner_dir.glob("wave_*.json")):
         # Skip the runtime sidecar (wave_<N>.runtime.json).
         if path.name.endswith(".runtime.json"):
+            continue
+        try:
+            file_wave = int(path.stem[len("wave_") :])
+        except ValueError:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -303,9 +312,7 @@ def verify_aggregation_complete(
             continue
         if not isinstance(data, dict):
             continue
-        wave = data.get("wave")
-        if isinstance(wave, int):
-            pulled_waves[wave] = data
+        pulled_waves[file_wave] = data
 
     expected_waves = {int(k) for k in wave_map if str(k).isdigit()}
     missing_waves = sorted(expected_waves - set(pulled_waves.keys()))

@@ -95,7 +95,7 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
         )
     try:
         tasks = hpc_agent.load_tasks_module(tasks_py)
-    except (AttributeError, TypeError, ImportError, FileNotFoundError) as exc:
+    except (AttributeError, TypeError, ImportError, FileNotFoundError, ValueError, KeyError) as exc:
         raise errors.SpecInvalid(
             f".hpc/tasks.py at {tasks_py} is malformed: {exc} — "
             "run /wrap-entry-point first to rebuild it."
@@ -106,7 +106,7 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
         # the task list is realized at submit time). resolve() is idempotent by
         # the eager-materialization convention, so re-reading it here is cheap.
         tokens = [tasks.resolve(i).get(_TRIAL_TOKEN_KEY) for i in range(int(tasks.total()))]
-    except (AttributeError, TypeError) as exc:
+    except (AttributeError, TypeError, ValueError, KeyError) as exc:
         raise errors.SpecInvalid(
             f".hpc/tasks.py at {tasks_py} is malformed: {exc} — "
             "run /wrap-entry-point first to rebuild it."

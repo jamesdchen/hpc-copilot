@@ -138,7 +138,7 @@ def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
     """
     try:
         sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return
     tasks = sidecar.setdefault("tasks", {})
     if not isinstance(tasks, dict):
@@ -559,7 +559,7 @@ def main() -> None:
         sys.exit(1)
     try:
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         print(f"[dispatch] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
 

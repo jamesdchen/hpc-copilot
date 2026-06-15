@@ -1,12 +1,12 @@
 """Tests for the repurposed ``submit-preflight`` composite primitive (WS5 #1).
 
-Pins the install-commands → load-context prelude (sequential) followed by
-the check-preflight ∥ resolve-resources fan-out (concurrent when
-``--cluster`` is supplied, #277): argv composition (including the optional
-``--cluster`` that drives check-preflight's cluster_ssh_echo branch and
-gates resolve-resources), skip behavior, overall-derivation precedence,
-the concurrency of the parallel pair, and the synthesised-ErrorEnvelope
-shape.
+Pins the concurrent fan-out of all four mutually-independent sub-calls
+(install-commands, load-context, check-preflight, resolve-resources;
+#277, #289 — resolve-resources joins only when ``--cluster`` is supplied):
+argv composition (including the optional ``--cluster`` that drives
+check-preflight's cluster_ssh_echo branch and gates resolve-resources),
+skip behavior, overall-derivation precedence, the concurrency of the
+arms, and the synthesised-ErrorEnvelope shape.
 
 The ``subprocess.run`` plumbing is mocked at :func:`_run_subprocess` so
 these tests don't depend on a real ``hpc-agent`` binary being on PATH
@@ -209,9 +209,9 @@ class TestOverallDerivation:
 
 
 class TestExecutionOrder:
-    """install-commands → load-context prelude is sequential; the rest fan out."""
+    """All four sub-calls are independent (#277, #289) and fan out concurrently."""
 
-    def test_install_commands_runs_first(
+    def test_all_subcalls_run_concurrently(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         ordered: list[str] = []
@@ -226,12 +226,14 @@ class TestExecutionOrder:
             record_order=ordered,
         )
         sp.submit_preflight(experiment_dir=tmp_path, cluster="hoffman2")
-        # The prelude runs strictly in order; check-preflight + resolve-resources
-        # then fan out concurrently so their relative order is nondeterministic.
-        # (Appends from the two pool threads are fine for set membership; the
-        # "first two" check looks only at the sequential prelude.)
-        assert ordered[:2] == ["install-commands", "load-context"]
-        assert set(ordered[2:]) == {"check-preflight", "resolve-resources"}
+        # No serialized prelude any more: all four fan out, so the only
+        # guarantee is that every one ran (relative order is nondeterministic).
+        assert set(ordered) == {
+            "install-commands",
+            "load-context",
+            "check-preflight",
+            "resolve-resources",
+        }
 
 
 class TestSkipBehavior:
@@ -250,7 +252,7 @@ class TestSkipBehavior:
             record_order=ordered,
         )
         result = sp.submit_preflight(experiment_dir=tmp_path, skip=["check-preflight"])
-        assert ordered == ["install-commands", "load-context"]
+        assert set(ordered) == {"install-commands", "load-context"}
         # Skipped slot is null — not a SubResult with ok: false.
         assert result["check_preflight"] is None
         assert result["install_commands"] is not None

@@ -79,6 +79,30 @@ def _match_ema_smoothing(
     return None
 
 
+def _references_complement(term: ast.expr, param_name: str) -> bool:
+    """True if *term* contains the complementary factor ``(1 - param_name)``.
+
+    Detects ``1 - β`` / ``1.0 - β`` anywhere in *term* (e.g. the ``(1-β)``
+    in ``(1 - beta) * x``). This is the structural signal that distinguishes a
+    genuine EMA (``β·state + (1-β)·x``, where the two weights sum to 1 so the
+    recurrence is a convex combination and therefore bounded) from an
+    unconstrained accumulator like ``gain·state + drive`` whose free ``gain``
+    may be ≥ 1 and diverge.
+    """
+    for sub in ast.walk(term):
+        if (
+            isinstance(sub, ast.BinOp)
+            and isinstance(sub.op, ast.Sub)
+            and isinstance(sub.left, ast.Constant)
+            and isinstance(sub.left.value, int | float)
+            and float(sub.left.value) == 1.0
+            and isinstance(sub.right, ast.Name)
+            and sub.right.id == param_name
+        ):
+            return True
+    return False
+
+
 def _classify_ema_rhs(rhs: ast.expr, state_name: str):
     """Classify an EMA right-hand side.
 
@@ -86,7 +110,12 @@ def _classify_ema_rhs(rhs: ast.expr, state_name: str):
 
     - ``"unbounded"`` for ``state + x`` (β = 1, no smoothing).
     - ``("literal", <float β>)`` for ``0.9 * state + 0.1 * x`` etc.
-    - ``("param", "<name>")`` for ``beta * state + (1-beta) * x``.
+    - ``("param", "<name>")`` for ``beta * state + (1-beta) * x`` — ONLY when the
+      input term carries the complementary ``(1 - beta)`` factor, proving the
+      weights sum to 1 (a true convex-combination EMA). A bare parameter
+      coefficient WITHOUT that complement (e.g. ``gain * state + drive``) is an
+      unconstrained recurrence that may diverge, so it is rejected here and the
+      loop falls through to the safe ``sequential`` classification.
     - ``None`` otherwise.
     """
     # Unbounded: state + <anything not involving state>.
@@ -125,10 +154,17 @@ def _classify_ema_rhs(rhs: ast.expr, state_name: str):
         if _references(input_term, state_name):
             continue
         # If the coef is a literal float β ∈ (0, 1), we have a literal EMA.
+        # (The β ∈ (0,1) range is enforced by the caller; a literal coefficient
+        # below 1 guarantees the homogeneous part decays, so boundedness holds
+        # regardless of the input term's coefficient.)
         if isinstance(coef, float):
             return ("literal", coef)
-        # If the coef is a bare parameter name, we have a param EMA.
-        if isinstance(coef, str):
+        # A bare parameter coefficient is only a bounded EMA when the input term
+        # carries the complementary (1 - coef) weight; otherwise the parameter is
+        # unconstrained (possibly ≥ 1) and the recurrence may diverge. Without
+        # the complement, fall through to the next candidate / None so the loop
+        # classifies as the safe `sequential` rather than a wrong `bounded_halo`.
+        if isinstance(coef, str) and _references_complement(input_term, coef):
             return ("param", coef)
     return None
 
