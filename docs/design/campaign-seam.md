@@ -156,7 +156,12 @@ from `tasks.py` at module load.
 
 Both ship as tested, **cluster-safe** scaffolds (the cluster imports
 `tasks.py` and calls `resolve()` on the compute node, so the optimizer must
-not be imported / re-`ask`ed there). See
+not be imported / re-`ask`ed there). They are also **load-idempotent**:
+validators (`validate-campaign`, `dry-run-local`), `compute_cmd_sha`, and
+`--dry-run` submit paths all import the module and call `total()`/`resolve()`,
+so a strategy must index proposals by completed count — never by counting
+on-disk artifacts a prior load itself created, which would mint a phantom
+optimizer trial per validation pass. See
 [`optuna_strategy.py`](../../src/hpc_agent/execution/mapreduce/templates/scaffolds/optuna_strategy.py)
 and
 [`pbt_strategy.py`](../../src/hpc_agent/execution/mapreduce/templates/scaffolds/pbt_strategy.py).

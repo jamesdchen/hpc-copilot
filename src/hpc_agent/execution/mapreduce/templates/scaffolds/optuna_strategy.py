@@ -21,6 +21,13 @@ that would create divergent trials against the synced study copy. So:
   on which proposal file to read. ``_propose`` is idempotent: re-imports (the
   cmd_sha materialization, retries) reuse the persisted proposal rather than
   asking again.
+* Load-idempotency is load-bearing, not a nicety: validators
+  (``validate-campaign``, ``dry-run-local``), ``compute_cmd_sha``, and any
+  ``--dry-run`` submit path all import this module and call
+  ``total()``/``resolve()``. Index proposals by completed count as above —
+  NEVER by counting on-disk proposal/iter artifacts, because a prior load
+  created those: each subsequent load would resolve a fresh index and mint a
+  phantom optimizer trial per validation pass.
 
 Reconciliation
 --------------

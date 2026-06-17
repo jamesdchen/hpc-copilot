@@ -34,9 +34,16 @@ This primitive does two things, split so the cheap one is default-on:
    canary — it never replaces it.
 
 Like every validator: typed spec in → ``ValidatorFinding`` list out. A
-finding never raises; the gate records and returns, and the caller decides
-whether to abort (the ``/submit-hpc`` cascade treats this gate as
-non-blocking-by-default — see ``meta/validate_campaign.py``).
+finding never raises — "non-blocking" here means only that the gate
+*returns* findings instead of raising, NOT that an error is advisory.
+Severity decides enforcement: ``result_dir_collision`` /
+``template_unfilled_field`` / the smoke-exec failures are ``severity=
+"error"``, and ``meta/validate_campaign.py::_aggregate_overall`` escalates
+ANY error to ``overall="fail"`` (exit 1). A ``fail`` is a hard abort the
+submit cascade must honor — a collision here is a true positive (two ids
+write one dir; the second clobbers the first's ``metrics.json``), never a
+false positive to wave through. It only failed to bite on the cluster when
+an *earlier* error killed the run first.
 """
 
 from __future__ import annotations
