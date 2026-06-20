@@ -57,16 +57,22 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 - **Tiered discovery**: `find` (search intent → a thin candidate list) →
   `describe <name>` (one full contract) → invoke. A headless loop resolves a
   name without dumping the whole catalog into context each iteration; the
-  search-returns-pointers / fetch-returns-content split keeps the surface
-  POSIX-native, not an MCP server.
+  search-returns-pointers / fetch-returns-content split keeps the POSIX-native
+  surface lean. The bundled MCP server mirrors this exact split in its
+  `--catalog tiered` mode (see below).
 
 ## What this does NOT mean
 
-- **Not an MCP server.** MCP is a different transport with its own conventions
-  (stdio JSON-RPC framing, server-managed state, capability negotiation). The
-  CLI is invoked-on-demand and stateless between calls. MCP wrappers can be
-  written on top of the CLI if a downstream client wants them; we don't ship
-  one.
+- **The CLI itself is not an MCP server** — it is invoked-on-demand and
+  stateless between calls. But we *do* ship an optional MCP server as an
+  **additive projection** of the CLI: `hpc-agent mcp-serve` speaks stdio
+  JSON-RPC and exposes the `@primitive` registry as MCP tools/resources/prompts.
+  It does not re-implement anything — `tools/call` drives the same
+  `hpc-agent <verb>` subprocesses, inheriting the exit-code / envelope / schema
+  / idempotency contract verbatim, and the registry stays the single source of
+  truth (no second tool list to drift). It is read-only by default and ships a
+  tiered-discovery mode that mirrors `find` → `describe`. See
+  [`docs/reference/mcp.md`](mcp.md).
 - **Not Python-tied.** The agent harness can be in any language. The CLI
   binary is implemented in Python only because that's where the cluster-side
   primitives live.

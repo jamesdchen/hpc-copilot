@@ -97,6 +97,26 @@ Step 6b gate reads. hpc-agent does not kill cluster jobs by design
 (`settings.json` denies `scancel`/`qdel`); if the integrator decides
 a run is bad, stop polling and let it expire.
 
+### MCP server (optional)
+
+For harnesses that prefer the Model Context Protocol over shelling out,
+`hpc-agent mcp-serve` exposes the same primitive registry as MCP
+tools/resources/prompts over stdio JSON-RPC. It is an additive projection of
+the CLI — `tools/call` drives `hpc-agent <verb>` subprocesses, so the envelope,
+exit codes, schema validation, and idempotency are inherited unchanged. It is
+**read-only by default** (only `query`/`validate` verbs; `--allow-mutations`
+opts into submit/aggregate; scheduler cancel/raw-submit are never reachable),
+and `--catalog tiered` mirrors the `find` → `describe` discovery flow. Full
+contract in [`docs/reference/mcp.md`](docs/reference/mcp.md).
+
+```json
+{ "mcpServers": { "hpc-agent": { "type": "stdio", "command": "hpc-agent", "args": ["mcp-serve"] } } }
+```
+
+Or register it imperatively in Claude Code (default scope is `local`; use
+`--scope project` to write the shared `.mcp.json` above):
+`claude mcp add --scope project hpc-agent -- hpc-agent mcp-serve`.
+
 ---
 
 ## Standalone usage

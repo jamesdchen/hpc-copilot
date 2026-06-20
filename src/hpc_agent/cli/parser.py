@@ -140,14 +140,18 @@ def _register_tier3_modules(sub: argparse._SubParsersAction) -> None:
     """Register CLI-only verb modules that have no @primitive backing.
 
     Each Tier 3 module owns its ``register(sub)`` entry point;
-    aggregating them here keeps the surface in one place. ``run`` is
-    the only remaining Tier 3 verb post-Item-2 — capabilities, setup,
-    describe, and install-commands are now ``@primitive`` entries
-    picked up by :func:`_register_from_registry`.
+    aggregating them here keeps the surface in one place. ``run`` (a
+    fresh-context worker spawn) and ``mcp-serve`` (a long-lived MCP
+    server over stdio) are Tier 3: neither fits the one-shot
+    registry-driven envelope dispatcher — capabilities, setup,
+    describe, and install-commands are ``@primitive`` entries picked up
+    by :func:`_register_from_registry`.
     """
+    from hpc_agent.cli.mcp import register as _register_mcp
     from hpc_agent.cli.spawn import register as _register_spawn
 
     _register_spawn(sub)
+    _register_mcp(sub)
 
 
 def build_parser() -> argparse.ArgumentParser:
