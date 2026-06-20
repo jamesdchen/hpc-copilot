@@ -142,6 +142,37 @@ def test_existing_makefile_gets_include_appended(tmp_path: Path) -> None:
     assert makefile.read_text().count("include .hpc/template.mk") == 1
 
 
+def test_existing_gitignore_gets_block_appended(tmp_path: Path) -> None:
+    """An existing .gitignore without the marker gains the hpc-agent block,
+    keeping its own entries — the non-destructive merge path (sibling of the
+    Makefile-include merge, but for ignore rules)."""
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("*.pyc\n__pycache__/\n", encoding="utf-8")
+
+    data = build_template(repo_dir=tmp_path)
+    text = gitignore.read_text()
+    assert "*.pyc" in text  # original entries preserved
+    assert "hpc-agent experiment-template" in text  # generated block merged in
+    assert ".gitignore" in data["merged"]
+    assert ".gitignore" not in data["written"]  # merged, not freshly written
+
+    # Idempotent: the marker is now present, so a re-run skips rather than
+    # appending the block a second time.
+    data2 = build_template(repo_dir=tmp_path)
+    assert ".gitignore" in data2["skipped"]
+    assert gitignore.read_text().count("hpc-agent experiment-template") == 1
+
+
+def test_absent_gitignore_is_written_fresh(tmp_path: Path) -> None:
+    """No .gitignore at all → the starter block is written, not merged."""
+    data = build_template(repo_dir=tmp_path)
+    gitignore = tmp_path / ".gitignore"
+    assert gitignore.is_file()
+    assert "hpc-agent experiment-template" in gitignore.read_text()
+    assert ".gitignore" in data["written"]
+    assert ".gitignore" not in data["merged"]
+
+
 def test_existing_pyproject_is_never_clobbered(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = '[project]\nname = "mine"\n'

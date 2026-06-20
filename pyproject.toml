@@ -47,6 +47,14 @@ dev = [
     "pytest>=8.0",
     "pytest-xdist>=3.8",
     "pytest-cov>=5.0",
+    # Flake insurance. ``pytest-timeout`` caps any single test so a wedged
+    # in-process code path can't pin CI indefinitely (the subprocess-timeout
+    # discipline only guards *spawned* children). ``pytest-randomly`` shuffles
+    # test order each run to surface order-dependence — e.g. a teardown that
+    # assumes a sibling fixture's monkeypatch already undid. Both auto-activate
+    # once installed.
+    "pytest-timeout>=2.3",
+    "pytest-randomly>=3.15",
     "hypothesis>=6.100",
     "types-PyYAML>=6.0",
     "pre-commit>=3.5",
@@ -104,6 +112,13 @@ addopts = "-ra --strict-markers -n auto -m 'not slow'"
 markers = [
     "slow: real-process / real-time tests (subprocess + signals, multi-hour sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
 ]
+# Per-test wall-clock cap for the default tier: a wedged in-process path fails
+# the one test instead of hanging the runner until the job-level timeout. The
+# longest real default-tier test is a few seconds, so 300s is pure headroom.
+# On POSIX this uses SIGALRM; Windows falls back to the thread method. The
+# ``slow`` tier is real-time/multi-hour by definition and self-bounds via the
+# subprocess-timeout discipline, so its CI step opts out with ``--timeout=0``.
+timeout = 300
 
 [tool.ruff]
 target-version = "py310"
@@ -139,9 +154,37 @@ mypy_path = ["src"]
 #   pytest -m '' --cov=src/hpc_agent --cov-report=term-missing
 # to surface untested files in the critical path. No fail-under
 # threshold — chasing % over behaviour-coverage is the anti-pattern.
+#
+# CAVEAT — full-suite per-module numbers can UNDER-report. A few modules
+# (observed: incorporation/build/template.py, incorporation/build/tasks_py.py)
+# read as ~12% in a full-suite run while their own test files cover them
+# 90-100%. Root-caused to a coverage.py tracer artifact, not a test gap: the
+# bodies execute (their tests pass on the asserted output) but only the
+# import-time ``def`` lines get recorded. It is emergent — no single test
+# triggers it; it needs a critical mass of the suite — and reproduces both
+# serially and under ``-n auto``, so it is not an xdist combine race. On
+# Python 3.10/3.11 (C tracer) ``COVERAGE_CORE=pytrace`` recovers template.py
+# (slow, and only a partial fix). The discipline: before concluding a module
+# is under-tested, SPOT-CHECK by running its own test file
+# (``pytest tests/<path> --cov=hpc_agent.<module>``) — do not trust a single
+# full-suite number.
 [tool.coverage.run]
 source = ["src/hpc_agent"]
 branch = true
+# Subprocess coverage. ~37 test files exercise the CLI by spawning a child
+# ``python`` (``run_cli`` / the per-contract ``_run`` helpers); without this
+# the child's lines are invisible and modules like ``cli/*`` read as
+# near-zero coverage when they are in fact heavily driven through the wire.
+# ``parallel`` makes every process write its own ``.coverage.<host>.<pid>``
+# (pytest-cov combines them at session end); ``sigterm`` flushes data when a
+# spawned CLI is terminated. The child only records when
+# ``COVERAGE_PROCESS_START`` is set in its env AND a ``coverage.process_startup``
+# ``.pth`` is installed — wire both with ``scripts/enable_subprocess_coverage.py``
+# (the canonical ``run_cli`` helper forwards the env var into the child). Both
+# flags are inert for a plain ``pytest --cov`` run, so local/CI runs without the
+# wiring behave exactly as before — they just don't count subprocess lines.
+parallel = true
+sigterm = true
 omit = [
     "src/hpc_agent/schemas/*",  # generated JSON, not Python
     "src/hpc_agent/_wire/*",  # schema models — covered via roundtrip

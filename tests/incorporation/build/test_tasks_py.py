@@ -15,11 +15,13 @@ axes spec. We test:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._wire.actions.build_tasks_py import BuildTasksPyInput
-from hpc_agent.incorporation.build.tasks_py import build_tasks_py
+from hpc_agent.incorporation.build.tasks_py import _build_tasks_py_arg_pre, build_tasks_py
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -259,3 +261,49 @@ def test_reserved_axis_name_framework_keys_rejected(tmp_path: Path) -> None:
                     flags_by_executor={"src.ml": [{"name": bad, "type": "str"}]},
                 ),
             )
+
+
+# ── CLI arg-pre hook (--spec load / validate / --force merge) ─────────────
+#
+# ``_build_tasks_py_arg_pre`` is the dispatcher hook that loads ``--spec``,
+# schema-validates it, and folds ``--force`` into the spec before the model is
+# built. The unit tests above call ``build_tasks_py`` with an already-built
+# model, so this load/merge/validate seam is only reachable through the CLI
+# (a subprocess path coverage doesn't see) — exercise it directly.
+
+_VALID_SPEC = {
+    "axes": [{"name": "horizon", "values": [1, 5]}],
+    "flags_by_executor": {"src.ml_ridge": [{"name": "horizon", "type": "int", "default": 1}]},
+}
+
+
+def _write_spec(tmp_path: Path, payload: object) -> Path:
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+    return spec_path
+
+
+def test_arg_pre_loads_and_validates_spec(tmp_path: Path) -> None:
+    spec_path = _write_spec(tmp_path, _VALID_SPEC)
+    out = _build_tasks_py_arg_pre(SimpleNamespace(spec=spec_path, force=False))
+    assert isinstance(out["spec"], BuildTasksPyInput)
+    # --force absent → the spec's own force value (unset) is preserved.
+    assert out["spec"].force in (None, False)
+
+
+def test_arg_pre_force_flag_overrides_spec(tmp_path: Path) -> None:
+    """``--force`` must win even when the spec JSON omits ``force`` — the whole
+    reason the merge happens here rather than via the standard spec_arg flow."""
+    spec_path = _write_spec(tmp_path, _VALID_SPEC)  # no "force" key
+    out = _build_tasks_py_arg_pre(SimpleNamespace(spec=spec_path, force=True))
+    assert out["spec"].force is True
+
+
+def test_arg_pre_non_object_spec_raises_spec_invalid(tmp_path: Path) -> None:
+    import pytest
+
+    from hpc_agent import errors
+
+    spec_path = _write_spec(tmp_path, [1, 2, 3])  # JSON array, not an object
+    with pytest.raises(errors.SpecInvalid, match="must be a JSON object"):
+        _build_tasks_py_arg_pre(SimpleNamespace(spec=spec_path, force=False))

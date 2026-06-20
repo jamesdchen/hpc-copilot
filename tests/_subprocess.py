@@ -26,11 +26,35 @@ caller can pass ``cwd``, ``input``, ``env``, etc. without surprises.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import Any
 
 __all__ = ["run_cli"]
+
+# Coverage env vars forwarded into spawned children so subprocess coverage
+# (``[tool.coverage.run] parallel`` + the ``process_startup`` .pth installed by
+# ``scripts/enable_subprocess_coverage.py``) records the child's lines. When a
+# caller passes an explicit ``env=`` dict it replaces the parent environment
+# wholesale, which would drop ``COVERAGE_PROCESS_START`` and silently leave the
+# child uncounted; re-inject it. Inert outside a coverage run — the vars are
+# simply unset, and the app ignores them regardless.
+_COVERAGE_ENV_VARS = ("COVERAGE_PROCESS_START", "COVERAGE_FILE")
+
+
+def _forward_coverage_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    """Copy coverage env vars from the parent into an explicit child *env*.
+
+    Returns *env* unchanged when it is ``None`` (the child inherits the parent
+    environment, coverage vars included) or when no coverage var is set.
+    """
+    if env is None:
+        return None
+    forwarded = {k: os.environ[k] for k in _COVERAGE_ENV_VARS if k in os.environ}
+    if not forwarded:
+        return env
+    return {**env, **forwarded}
 
 
 def run_cli(
@@ -58,6 +82,6 @@ def run_cli(
         encoding="utf-8",
         check=False,
         timeout=timeout,
-        env=env,
+        env=_forward_coverage_env(env),
         **kwargs,
     )

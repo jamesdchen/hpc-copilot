@@ -131,13 +131,34 @@ jobs:
         run: pytest -q
       - name: Pytest (slow tier)
         if: always()
-        run: pytest -q -m slow
+        # ``--timeout=0`` disables the default-tier per-test cap: slow tests are
+        # real-time/multi-hour by design and self-bound via the
+        # subprocess-timeout discipline, so a 300s cap would falsely kill them.
+        run: pytest -q -m slow --timeout=0
       - name: Coverage report (informational, not gated)
         if: matrix.python-version == '3.12'
         # Pass ``-m 'not slow'`` so we don't re-run the slow tier here
         # (it already ran above). Coverage only needs ONE pass through
         # the test set to measure executed-line coverage.
-        run: pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing
+        #
+        # Install the ``process_startup`` .pth and set COVERAGE_PROCESS_START
+        # so the ~37 test files that drive the CLI via a spawned ``python``
+        # have their child lines counted too (``parallel``/``sigterm`` live in
+        # ``[tool.coverage.run]``; ``run_cli`` forwards the env vars into the
+        # children). Without this the ``cli/*`` modules read as near-zero
+        # coverage despite being exercised through the wire.
+        #
+        # COVERAGE_FILE must be absolute: spawned CLIs run in a per-test
+        # ``tmp_path`` cwd, so a relative data-file name would scatter their
+        # ``.coverage.<host>.<pid>`` shards where pytest-cov's session-end
+        # combine can't find them. Pinning it next to the parent's data file
+        # lets the combine pick every shard up.
+        env:
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
+        run: |
+          python scripts/enable_subprocess_coverage.py
+          pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing
 
   test-windows:
     # Signal-only Windows lane (ref #163): there is otherwise no Windows
