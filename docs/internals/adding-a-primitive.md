@@ -16,7 +16,7 @@ Two questions, both load-bearing:
 2. **`verb`?** One of `query`, `validate`, `mutate`, `submit`,
    `scaffold`, `workflow`. Three are agent-facing by construction
    (workflow / scaffold / validate — pinned by
-   `tests/test_agent_facing_partition.py`); the others are mixed.
+   `tests/contracts/test_agent_facing_partition.py`); the others are mixed.
 
 ## A primitive owns its invariants
 
@@ -257,7 +257,7 @@ Minimum:
   emit-byte-equal coverage automatically.
 
 If the new primitive is a workflow, the existing
-`test_agent_facing_partition.py::test_workflows_are_agent_facing`
+`tests/contracts/test_agent_facing_partition.py::test_workflows_are_agent_facing`
 will fail unless you set `agent_facing=True`.
 
 ## What you don't have to do

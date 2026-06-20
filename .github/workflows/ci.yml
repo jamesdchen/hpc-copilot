@@ -113,6 +113,8 @@ jobs:
         run: python scripts/check_no_pending_primitive_docs.py
       - name: Check skills <-> slash_commands stay in sync
         run: python scripts/lint_skill_command_sync.py
+      - name: Lint decision-content blocks stay byte-identical across files
+        run: python scripts/lint_decision_content.py
       - name: Lint @pure files (no I/O imports/calls)
         run: python scripts/lint_pure_files.py
       - name: Lint subject imports (no cross-subject reach)
@@ -121,6 +123,10 @@ jobs:
         run: python scripts/lint_library_knowledge.py
       - name: Lint subject __init__.py is docstring-only
         run: python scripts/lint_subject_init.py
+      - name: Lint text I/O declares utf-8 encoding
+        run: python scripts/lint_text_io_encoding.py
+      - name: Lint cluster-side schema-version constants stay synced
+        run: python scripts/lint_schema_versions.py
       - name: Lint plugin manifests reconcile with runtime
         run: python scripts/lint_plugin_manifests.py
       - name: Check JSON schemas regenerated from Pydantic

@@ -6,7 +6,9 @@ priors, executor inventory) plus the per-experiment scheduling configs
 reach for the specific submodule:
 
 * :mod:`hpc_agent.state.runs` — per-run sidecars (``read_run_sidecar``,
-  ``write_run_sidecar``, ``find_run_by_cmd_sha``, ``compute_cmd_sha``).
+  ``write_run_sidecar``, ``find_run_by_cmd_sha``).
+* :mod:`hpc_agent.state.run_sha` — cmd / tasks.py content hashes
+  (``compute_cmd_sha``, ``compute_tasks_py_sha``).
 * :mod:`hpc_agent.state.runtime_prior` — quantile rollups of past task
   runtimes per GPU type.
 * :mod:`hpc_agent.state.discover` — scan repo for executor / reducer modules.

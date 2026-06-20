@@ -45,7 +45,7 @@ def build_remote_backend(
 
     Both SGE and SLURM go through the cluster's login node via SSH —
     the local backends (which assume a local ``qsub``/``sbatch``
-    binary) are never used here. ``submit-flow`` and ``resubmit-flow``
+    binary) are never used here. ``submit-flow`` and ``resubmit-failed``
     are both laptop-driven.
 
     When *scheduler_profile* is given (a pinned / resolved

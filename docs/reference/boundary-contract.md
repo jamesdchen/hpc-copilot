@@ -14,12 +14,16 @@ here.
 
 ## What hpc-agent owns (public API allowlist)
 
-The exports below are the entire root-level public surface of the
-`hpc_agent` package. Groupings mirror those in
-[`hpc_agent/__init__.py`](../../src/hpc_agent/__init__.py).
+The sections below enumerate the framework's public Python names: the
+current **16-name** root namespace (`__all__` in
+[`hpc_agent/__init__.py`](../../src/hpc_agent/__init__.py)) **plus** the
+names that left the root in the Item-6 trim, kept here for migration.
+Each moved section is annotated "(moved)" with its canonical module
+home — those names import from the root only via the deprecation shim
+for one release.
 
 **Item 6 (post-reorg cleanup):** the root namespace was trimmed to the
-15-name integrator surface listed below. The 37 names that left the
+16-name integrator surface listed below. The 37 names that left the
 root (per-run sidecars, remote execution, status / reduce helpers,
 GPU selection, discovery, constraints, throughput, smart-submit,
 resubmit, the per-task metrics writer) are still importable from the
@@ -69,12 +73,17 @@ bind both.
 - `load_clusters_config` — parse and return `hpc_agent/config/clusters.yaml`.
 - `get_template_path` — resolve a bundled job template by `(scheduler, name)`.
 
-### Remote execution
+### Remote execution (moved — import from `hpc_agent.infra`)
 
-- `ssh_run` — run a command on a remote cluster.
-- `rsync_push` — push a local directory to the cluster.
-- `rsync_pull` — pull a remote directory to local.
+These left the root namespace in the Item-6 trim; the root shim
+re-exports them with a `DeprecationWarning` for one release.
+
+- `ssh_run` — run a command on a remote cluster. Now
+  `hpc_agent.infra.remote.ssh_run`.
+- `rsync_push` / `rsync_pull` — push / pull a directory. Now
+  `hpc_agent.infra.transport.rsync_push` / `rsync_pull`.
 - `deploy_runtime` — stage the framework's runtime files on the cluster.
+  Now `hpc_agent.infra.transport.deploy_runtime`.
 
 ### Framework subdirectory layout
 
@@ -83,8 +92,9 @@ Every framework-generated artifact in an experiment repo lives under
 `tasks.py`; per-run sidecars in `.hpc/runs/` are generated and
 gitignored.
 
-- `HPC_SUBDIR` — `".hpc"`. The directory name itself; reserved (see
-  *Reserved filenames* below).
+- The `.hpc` directory name itself is reserved (see *Reserved
+  filenames* below). It is not an exported constant — code resolves it
+  through `RepoLayout(experiment_dir).hpc` (`_kernel/contract/layout.py`).
 - `TASKS_FILENAME` — `"tasks.py"`. The single file the user owns inside
   `.hpc/`.
 - `RUNS_SUBDIR` — `"runs"`. Per-run sidecars live here.

@@ -35,7 +35,6 @@ rules.
 │  ops/monitor_flow.py       monitor-flow                             │
 │  ops/aggregate_flow.py     aggregate-flow                           │
 │  ops/verify_canary.py      verify-canary                            │
-│  ops/recover_flow.py       recover-flow                             │
 │  meta/validate_campaign.py validate-campaign                        │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
@@ -62,9 +61,12 @@ rules.
 │  meta/       "operations about operations" — workflows at root,     │
 │              subject dirs hold atoms                                │
 │   └ campaign/   driver, cursor, dirs, manifest, atoms/              │
-│                (atoms/ holds advance, budget, converged, init,      │
-│                health, list_campaigns, load_context, replay,        │
-│                status — the per-tick steps load-context spawns)     │
+│                (atoms/ holds the per-tick steps load-context        │
+│                spawns: advance, budget, acknowledge_budget,         │
+│                compute_spend, decide_concurrency, circuit_breaker,  │
+│                resubmit_cap, converged, health, init,               │
+│                list_campaigns, load_context, replay, status —       │
+│                see meta/campaign/atoms/ for the live set)           │
 │                                                                     │
 │  incorporation/  scaffolding primitives                             │
 │      axes_init, classify_axis, export_package, build/{executor,     │
@@ -123,13 +125,17 @@ rules.
 │   │   ├ primitive.py   @primitive + PrimitiveMeta + SideEffect      │
 │   │   ├ operations.py  agent-facing operations catalog envelope     │
 │   │   └ plugins.py     hpc_agent.plugins entry-point loader         │
-│   ├ contract/      schema + layout invariants                       │
+│   ├ contract/      schema + layout + vocabulary invariants          │
 │   │   ├ schema.py      runtime spec validation                      │
-│   │   └ layout.py      RepoLayout, JournalLayout                    │
-│   ├ lifecycle/     primitive lifecycle + spawn invocation           │
-│   │   ├ lifecycle.py   StrEnum: LifecycleState, FailureCategory     │
+│   │   ├ layout.py      RepoLayout, JournalLayout                    │
+│   │   └ vocabulary.py  StrEnum: LifecycleState, FailureCategory     │
+│   ├ lifecycle/     primitive lifecycle + spawn invocation +         │
+│   │                code-driven drive loop                           │
 │   │   ├ invoke.py      WorkerInvoker, InvocationResult,             │
 │   │   │                RenderedPrompt                               │
+│   │   ├ drive.py       drive_once code-driven orchestration         │
+│   │   ├ llm_resolver.py + structured.py  typed judgement funnel     │
+│   │   ├ run.py         lifecycle run helpers                        │
 │   │   └ playbook.py                                                 │
 │   └ extension/     kernel-to-agent surfaces                         │
 │       ├ capabilities.py   operations-catalog envelope (kernel       │

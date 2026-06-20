@@ -96,6 +96,13 @@ repos:
         pass_filenames: false
         files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'
 
+      - id: lint-decision-content
+        name: operationally-shared markdown blocks stay byte-identical across files
+        entry: python scripts/lint_decision_content.py
+        language: system
+        pass_filenames: false
+        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_decision_content\.py)$'
+
       - id: lint-pure-files
         name: '@pure: no-io files must not import I/O modules'
         entry: python scripts/lint_pure_files.py

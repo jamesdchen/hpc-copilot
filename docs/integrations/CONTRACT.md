@@ -177,7 +177,7 @@ compute node alongside the executor. The current allowlist:
 
 Nothing else from `hpc_agent` is importable from
 `hpc_agent/execution/mapreduce/templates/**`. The boundary is enforced by
-`tests/test_boundary_contract.py`. To extend it, the new module must
+`tests/contracts/test_boundary_contract.py`. To extend it, the new module must
 (a) be deployed by `deploy_runtime`, (b) be stdlib-only or
 self-contained, and (c) be added to both the allowlist constant in
 the lint test and this doc in the same PR.

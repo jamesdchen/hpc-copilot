@@ -250,9 +250,9 @@ Either path stays in-session: do NOT start another `claude -p` worker, do NOT re
 
 <!-- decision-content:inline-isolation-ceiling start -->
 **Isolation ceiling:** a subagent recovers *context* isolation but not *environment* isolation — it shares this session's sandbox posture and auto-loads project CLAUDE.md, unlike the default `--bare` spawn (sandbox forced off, CLAUDE.md stripped). If a sandboxed session would block the cluster SSH, or project memory must not color the run, that's a sign the *user* wants the default spawn, not inline.
+<!-- decision-content:inline-isolation-ceiling end -->
 
 **Sandbox-blocks-SSH is structural, so detect it FIRST (#265).** When inline mode runs in a sandboxed session AND the workflow needs cluster SSH (submit / status / aggregate), the SSH is blocked no matter how cleanly the local prep runs — and the worker would otherwise burn all the local prep (interview, classify, build-submit-spec) before hitting the wall, then return a misleading near-success. The worker's procedure runs a one-shot cluster-SSH preflight (`hpc-agent check-preflight --cluster <cluster>`) as its Step 0 and, on a sandbox-consistent block, returns `spec_invalid: sandbox_blocks_cluster_ssh` immediately (`ok: false`, no prep wasted), with remediation: *re-run as the default `--bare` spawn (set `ANTHROPIC_API_KEY`) or disable the session sandbox*. Treat that `sandbox_blocks_cluster_ssh` envelope as a hard stop, NOT a partial success — nothing was submitted.
-<!-- decision-content:inline-isolation-ceiling end -->
 
 ### 10. Propagate worker ambiguities (if any)
 

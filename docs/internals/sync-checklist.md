@@ -18,7 +18,7 @@ update both surfaces and bump the version.
 
 - **Recommended format**: `f"{profile}-{utc_ts}-{cmd_sha[:8]}"` where
   `utc_ts` is `YYYYMMDD-HHMMSS` and `cmd_sha` is computed by
-  `hpc_agent.state.runs.compute_cmd_sha(tasks_module)` over the
+  `hpc_agent.state.run_sha.compute_cmd_sha(tasks_module)` over the
   materialized `[tasks.resolve(i) for i in range(tasks.total())]`.
 - **Validation**: `hpc_agent.state.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
@@ -30,13 +30,14 @@ update both surfaces and bump the version.
 
 ### `error_code` enum
 
-The full set of 16 values that may appear in an error envelope's
+The full set of 17 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `hpc_agent/errors.py`.
 
 | `error_code` | Class | `category` | `retry_safe` |
 |---|---|---|---|
 | `ssh_unreachable` | `SshUnreachable` | network | yes |
+| `model_endpoint_error` | `ModelEndpointError` | network | yes |
 | `scheduler_throttled` | `SchedulerThrottled` | cluster | yes |
 | `spec_invalid` | `SpecInvalid` | user | no |
 | `executor_not_found` | `ExecutorNotFound` | user | no |
@@ -67,6 +68,7 @@ policy. The complete list (`CATEGORIES` constant in
 
 - `gpu_oom`
 - `system_oom`
+- `segv`
 - `walltime`
 - `node_failure`
 - `queue_stall`
@@ -108,7 +110,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
   `hpc_agent.infra.clusters`).
 - **Schema**: documented in `docs/reference/boundary-contract.md` under "Config
   split". Allowed keys enforced by
-  `tests/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
+  `tests/contracts/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
 
 ### Per-run sidecar v2 schema
 
@@ -160,8 +162,10 @@ set on `RunRecord` there too). Validated in `mark_run` (in
   `max_retries`, `runtime`, `auto_retry`, `aggregate_defaults`).
 - **Helpers**: `hpc_agent.state.runs.{write,read}_run_sidecar`,
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
-  `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
-  root; see `docs/reference/boundary-contract.md`.
+  `run_sidecar_path` (re-exported at package root; see
+  `docs/reference/boundary-contract.md`). The cmd-hash helpers
+  (`compute_cmd_sha`, `compute_tasks_py_sha`) live in
+  `hpc_agent.state.run_sha` — import from there directly.
 - **Retention**: `MAX_RUNS = 500` (overridable via the `HPC_MAX_RUNS`
   environment variable), oldest by mtime evicted on every write.
 - **Identity**: the `run_id` string is the sole identifier; sidecars
@@ -177,12 +181,12 @@ graph that used to hold them together is gone.
 | Invariant | Python SoT | Generated artifacts |
 |---|---|---|
 | `error_code` enum | `_wire/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
-| `failure_category` enum | `execution/mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
+| `failure_category` enum | `_wire/_shared.py:FailureCategory` (Literal); `execution/mapreduce/reduce/classify.py:CATEGORIES` derives from it via `typing.get_args` | `schemas/resubmit.input.json` (the resubmit spec's `category` field types `FailureCategoryResubmittable` in `_wire/actions/resubmit.py`) |
 | Lifecycle states | `state/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_wire/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
 | `run_id` shape | `_wire/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
 | Scheduler / GpuType / Runtime / BackendName | `_wire/_shared.py` aliases | every consumer model |
 | `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_kernel/registry/primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
-| Wire envelope shape | `_wire/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
+| Wire envelope shape | `_wire/fixtures/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
 
 ## How to extend
 
@@ -203,12 +207,10 @@ When you add a new invariant or change one of the above:
 4. Bump the package version in `pyproject.toml` for breaking
    wire-contract changes.
 
-## Known discrepancies (v0.2.0)
+## Resolved discrepancies
 
-`CATEGORIES` in `hpc_agent/execution/mapreduce/reduce/classify.py` is still
-the hand-authored Python source for failure categories; the
-`ResubmitCategory` Literal in
-`_wire/resubmit.py` mirrors it manually. Adding a new
-failure category requires updating both. Future cleanup: lift
-`CATEGORIES` into `_wire/_shared.py` and re-export from
-`classify.py` so there's one definition.
+The former `failure_category` double-source (a hand-authored `CATEGORIES`
+in `classify.py` mirrored by a separate Literal) is gone: `CATEGORIES`
+now derives from the single `_wire/_shared.py:FailureCategory` Literal via
+`typing.get_args`, so adding a failure category is a one-place edit and
+the `resubmit.input.json` enum stays in lock-step automatically.

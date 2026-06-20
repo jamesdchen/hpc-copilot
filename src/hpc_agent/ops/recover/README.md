@@ -45,8 +45,10 @@ All six modules are agent-facing primitive modules:
   them into batches per cluster constraints. Retains its `# @pure: no-io`
   header (enforced by `scripts/lint_pure_files.py`).
 
-The `resubmit-flow` workflow (composite) lives at `ops/recover_flow.py`
-(role-root sibling per P5a) — it composes the atoms above plus
-preempted-detection and the cluster-side qsub-per-batch loop.
+The `resubmit_flow()` helper (a plain role-root composite, **not** a
+registered `@primitive`) lives at `ops/recover_flow.py` (role-root
+sibling per P5a) — it composes the atoms above plus preempted-detection
+and the cluster-side qsub-per-batch loop. The registered recovery
+primitive callers reach by name is `resubmit-failed` (`runner.py`).
 
 No internal-only files in this subject.
