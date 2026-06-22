@@ -34,6 +34,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
@@ -315,6 +316,7 @@ def _run_shared_prelude(
     rsync_excludes: list[str] | None,
     scheduler: str | None,
     job_envs: list[dict[str, str]],
+    requires_ssh: bool = True,  # SSH is the default transport; pure-API callers pass False
     skip_preflight: bool,
     skip_prelude_io: bool,
 ) -> None:
@@ -345,7 +347,19 @@ def _run_shared_prelude(
     actionable error. ``skip_prelude_io`` (the operator/internal
     ``skip_rsync_deploy`` request — #185/#283, never a per-spec agent field)
     drops the deploy arm; the uv probe still runs.
+
+    A pure-API backend (``requires_ssh=False``) skips the prelude wholesale —
+    see the early return below.
     """
+    # A pure-API backend has no login node and no shared filesystem: nothing to
+    # ssh-probe, no `command -v uv` on a cluster it controls, and no tree to
+    # rsync (the runner fetches code itself, e.g. via actions/checkout). The
+    # whole prelude IS the SSH/shared-FS gate, so skip it wholesale; the
+    # backend's own _execute_command dispatches over its API
+    # (docs/proposals/crowd-compute-backend.md). Branching here, not at the call
+    # site, keeps the prelude the single owner of the pre-submit gate.
+    if not requires_ssh:
+        return
     _validate_ssh_target(ssh_target)
     _preflight_probe(ssh_target, skip=skip_preflight)
 
@@ -1585,6 +1599,10 @@ def _submit_flow_batch_locked(
         # same scheduler; deploy only that family's scripts.
         scheduler=specs[0].backend if specs else None,
         job_envs=[dict(specs[i].job_env or {}) for i in fresh_indices],
+        # A pure-API backend (requires_ssh=False) skips the SSH/rsync prelude
+        # wholesale; the built-in SSH families run it. Read the capability off
+        # the class (the backend object is built per-spec below).
+        requires_ssh=backend_requires_ssh(specs[0].backend) if specs else True,
         skip_preflight=skip_preflight,
         skip_prelude_io=skip_prelude_io,
     )

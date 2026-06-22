@@ -18,6 +18,7 @@ __all__ = [
     "HPCBackend",
     "ProfileBackend",
     "RemoteProfileBackend",
+    "backend_requires_ssh",
     "build_backend_class",
     "get_backend",
     "get_backend_class",
@@ -117,6 +118,17 @@ class HPCBackend(abc.ABC):
     # the planner currently checks via ``if scheduler == "slurm"``.
     supports_test_only_eta: bool = False
 
+    # Whether this backend reaches its scheduler over SSH to a login node with
+    # a shared filesystem (the built-in SGE/SLURM/PBS families) — as opposed to
+    # a pure-API "crowd-compute" backend that dispatches over HTTPS and ships
+    # data/results as artifacts (docs/proposals/crowd-compute-backend.md). The
+    # submit prelude, preflight, monitor, and aggregate flows read this to skip
+    # their SSH / shared-filesystem steps for a pure-API backend instead of
+    # re-deriving it from the scheduler name. Default True (the SSH ladder); a
+    # pure-API backend overrides to False and implements ``fetch_results`` /
+    # ``fetch_logs`` (below) as the artifact-based replacement for the rsync pull.
+    requires_ssh: bool = True
+
     log_dir: str  # subclasses must set this
     JOB_ID_REGEX: re.Pattern[str] = _DEFAULT_JOB_ID_REGEX
 
@@ -144,6 +156,28 @@ class HPCBackend(abc.ABC):
         default raises so an unmigrated backend is loud.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement inspect")
+
+    def fetch_results(self, run_id: str, dest_dir: str) -> list[str]:
+        """Download a run's per-task results into *dest_dir*; return the dirs.
+
+        The shared-filesystem replacement for a pure-API backend
+        (``requires_ssh = False``): instead of the aggregate flow rsync-pulling
+        result dirs off a login node, the backend pulls each task's
+        ``metrics.json`` (and any aggregate) over its API, so the flow can
+        reduce locally with ``execution.mapreduce.reduce``. SSH backends never
+        reach this hook — their results come back over rsync — so the default
+        raises, matching the other capability hooks.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement fetch_results")
+
+    def fetch_logs(self, run_id: str, dest_dir: str | None = None) -> str:
+        """Download a run's task logs into *dest_dir*; return the written path.
+
+        The pure-API counterpart of :meth:`stderr_log_path` followed by an ssh
+        ``tail``: a ``requires_ssh = False`` backend overrides this to pull its
+        logs over the API. Default raises, matching the other capability hooks.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement fetch_logs")
 
     # ------------------------------------------------------------------
     # B5-PR2 capability hooks — staticmethods so callers can invoke them
@@ -525,6 +559,28 @@ def get_backend_class(name: str) -> type[HPCBackend]:
 def template_ext_for(scheduler: str) -> str:
     """Convenience accessor for ``get_backend_class(scheduler).template_ext``."""
     return get_backend_class(scheduler).template_ext
+
+
+def backend_requires_ssh(name: str) -> bool:
+    """Whether the backend named *name* reaches its scheduler over SSH.
+
+    Reads the class-level :attr:`HPCBackend.requires_ssh` capability WITHOUT
+    constructing the backend — the submit prelude / preflight branch on this
+    before any backend instance exists. Built-in families default to ``True``;
+    a pure-API plugin backend returns ``False``.
+
+    Goes through :func:`registered_backend_names` (not bare
+    :func:`get_backend_class`) so a plugin module is imported for its
+    ``@register`` side effect first: ``get_backend_class`` /
+    ``_populate_registry`` load only the built-in ladder, but the prelude can
+    run before ``build_remote_backend`` (which triggers the plugin import) has
+    been reached. An unregistered name conservatively returns ``True`` — the
+    SSH path is the safe default, and a genuinely unknown backend fails later
+    at construction with a clearer error than a flipped capability would give.
+    """
+    if name in registered_backend_names():
+        return get_backend_class(name).requires_ssh
+    return True
 
 
 def registered_backend_names() -> frozenset[str]:

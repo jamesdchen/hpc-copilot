@@ -119,6 +119,11 @@ class GitHubActionsBackend(HPCBackend):
     scheduler_name = "github-actions"
     template_ext = ".yml"  # the deploy unit is the workflow file, not a scheduler script
     supports_test_only_eta = False
+    # Pure-API: no SSH login node, no shared filesystem. The submit prelude,
+    # preflight, monitor, and aggregate flows read this to skip their SSH /
+    # rsync steps and use this backend's ``alive_job_ids`` / ``fetch_results`` /
+    # ``fetch_logs`` hooks instead (docs/proposals/crowd-compute-backend.md).
+    requires_ssh = False
 
     def __init__(
         self,
