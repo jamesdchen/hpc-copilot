@@ -141,7 +141,12 @@ def test_concurrent_writers_serialize(tmp_path: Path) -> None:
 
     n = 8
     args = [(str(path), i) for i in range(n)]
-    ctx = multiprocessing.get_context("fork")
+    # "spawn", not "fork": this test runs inside a pytest-xdist worker, and a
+    # fork-based Pool inherits that already-threaded process — the classic
+    # fork-after-threads deadlock, which hung this test to the 300s timeout
+    # intermittently in CI. spawn starts clean children (``_concurrent_appender``
+    # is module-level, so it re-imports + pickles fine).
+    ctx = multiprocessing.get_context("spawn")
     with ctx.Pool(processes=n) as pool:
         pool.map(_concurrent_appender, args)
 

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpc-agent-github-actions"
+version = "0.1.0"
+description = "hpc-agent backend plugin: fan task arrays out onto GitHub Actions runners"
+requires-python = ">=3.10"
+# GitHub's REST API is hit with the stdlib (urllib) — no third-party SDK, so
+# installing the plugin pulls in nothing beyond hpc-agent itself.
+dependencies = ["hpc-agent"]
+
+# The entire opt-in: installing this distribution makes the host's entry-point
+# scan (hpc_agent._kernel.registry.plugins.load_plugins) discover the package.
+[project.entry-points."hpc_agent.plugins"]
+github_actions = "hpc_agent_github_actions"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,136 @@
+# Runner-side counterpart of the github-actions backend. The backend POSTs a
+# workflow_dispatch carrying the array size + run identity; this workflow
+# expands it into an N-cell matrix, resolves each task's kwargs from the SAME
+# .hpc/tasks.py the cluster dispatcher uses, runs the executor, and ships
+# results back as artifacts. Copy into <your-repo>/.github/workflows/ and set
+# HPC_GHA_WORKFLOW=fan-out.yml.
+name: hpc-agent-fan-out
+
+# The backend finds its dispatched run by matching this correlation id in the
+# run name (workflow_dispatch returns no run id).
+run-name: hpc-agent ${{ inputs.run_id }} (${{ inputs.correlation_id }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id: { required: true, type: string }
+      run_id: { required: true, type: string }
+      total_tasks: { required: true, type: string }
+      executor: { required: true, type: string } # per-task command, e.g. "python train.py"
+      cmd_sha: { required: false, type: string }
+      campaign_id: { required: false, type: string }
+      data_tag: { required: false, type: string, default: data-v1 } # release tag of the dataset
+
+permissions:
+  contents: read # gh release download needs this; artifacts need no token permission
+
+jobs:
+  expand: # turn total_tasks into a 0..N-1 matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          N: ${{ inputs.total_tasks }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          print("matrix=" + json.dumps({"i": list(range(int(os.environ["N"])))}))
+          PY
+
+  prefetch: # download the dataset ONCE from the release and warm the cache, so the
+    # N-cell matrix restores it from GitHub's cache instead of each cell
+    # re-downloading (1 fetch vs up to 256). Within a single run parallel cells
+    # can't share a cache that's only saved at job end — so this job saves it first.
+    needs: expand
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: data
+          key: data-${{ inputs.data_tag }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Download the dataset from the release (once)
+        env:
+          GH_TOKEN: ${{ github.token }} # the workflow's own token — no extra creds
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          # Store the dataset as a release asset, e.g.:
+          #   gh release create data-v1 train.parquet
+          # Release downloads are free + unmetered (GitHub -> runner, no egress).
+          gh release download "${{ inputs.data_tag }}" -R ${{ github.repository }} --dir data --clobber
+
+  task: # the fan-out — one runner per task point (GitHub caps a matrix at 256)
+    needs: [expand, prefetch]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.expand.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install hpc-agent xgboost optuna # framework + your executor deps
+      # The prefetch job already downloaded the dataset and warmed the cache;
+      # restore it here — 1 release download for the whole run, then free
+      # GitHub-cache restores per cell (a 193 MB restore is fast and free).
+      - uses: actions/cache/restore@v4
+        id: datacache
+        with:
+          path: data
+          key: data-${{ inputs.data_tag }}
+      - if: steps.datacache.outputs.cache-hit != 'true'
+        name: Download the dataset (rare cache-miss fallback)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.data_tag }}" -R ${{ github.repository }} --dir data --clobber
+      - name: Resolve this task's kwargs from .hpc/tasks.py
+        # Mirrors the cluster dispatcher: resolve(HPC_TASK_ID) -> HPC_KW_* env
+        # (the dispatcher contract in docs/integrations/CONTRACT.md). The
+        # executor reads them via metrics_io.read_kw_env.
+        env:
+          HPC_TASK_ID: ${{ matrix.i }}
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import importlib.util, json, os
+          spec = importlib.util.spec_from_file_location("tasks", ".hpc/tasks.py")
+          tasks = importlib.util.module_from_spec(spec); spec.loader.exec_module(tasks)
+          for key, value in tasks.resolve(int(os.environ["HPC_TASK_ID"])).items():
+              print(f"HPC_KW_{key.upper()}={json.dumps(value)}")
+          PY
+      - name: Run the task
+        env:
+          HPC_TASK_ID: ${{ matrix.i }}
+          HPC_RUN_ID: ${{ inputs.run_id }}
+          HPC_CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          RESULT_DIR: ${{ github.workspace }}/_out/${{ matrix.i }}
+          LOCAL_DATA_DIR: ${{ github.workspace }}/data # dispatcher data root; executor reads here
+        run: |
+          mkdir -p "$RESULT_DIR"
+          ${{ inputs.executor }}   # writes per-task metrics into $RESULT_DIR
+      - uses: actions/upload-artifact@v4
+        with:
+          name: task-${{ matrix.i }}
+          path: _out/${{ matrix.i }}/
+
+  reduce: # combine on Actions, emit ONE small artifact for the laptop to pull
+    needs: task
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: trials
+          pattern: task-*
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python .hpc/reduce.py trials/ > reduced.json # your reduce_metrics
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reduced # backend.fetch_results pulls this
+          path: reduced.json

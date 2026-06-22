@@ -226,8 +226,6 @@ class ScriptedModel:
 
 
 _MODELS: dict[str, Callable[..., ChatModel]] = {}
-#: Guards the one-time lazy registration of the built-in adapters.
-_BUILTINS_REGISTERED = False
 
 
 def _register_builtins() -> None:
@@ -239,14 +237,22 @@ def _register_builtins() -> None:
     Idempotent and default-OFF — it only *registers* the factory under
     ``"openai-compat"``; it never selects it, so ``get_model`` with nothing
     chosen still raises (the Phase-1 contract holds).
+
+    The "already done?" check reads the registry itself, not a separate
+    ``_BUILTINS_REGISTERED`` flag. A parallel bool could desync from
+    ``_MODELS``: a test that swaps ``_MODELS`` for a fresh dict
+    (``monkeypatch.setattr``), triggers registration into *that* dict, then
+    restores the original empty dict would leave the flag set but the registry
+    empty — so registration never re-ran and ``get_model`` reported
+    ``registered: []`` (a ``pytest -n auto`` ordering flake). Guarding on
+    membership self-heals under any such swap; the import stays once-only on the
+    hot path because it's skipped as soon as the key is present.
     """
-    global _BUILTINS_REGISTERED
-    if _BUILTINS_REGISTERED:
+    if "openai-compat" in _MODELS:
         return
     from hpc_agent._kernel.lifecycle.chat_models.openai_compat import OpenAICompatModel
 
-    _MODELS.setdefault("openai-compat", OpenAICompatModel.from_env)
-    _BUILTINS_REGISTERED = True
+    _MODELS["openai-compat"] = OpenAICompatModel.from_env
 
 
 def register_model(name: str, factory: Callable[..., ChatModel]) -> None:
