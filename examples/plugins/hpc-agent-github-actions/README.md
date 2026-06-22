@@ -179,19 +179,23 @@ smaller pinned asset — an experiment-design choice, not infra.)
 ### Runner-side: the executor reads `LOCAL_DATA_DIR`
 
 `LOCAL_DATA_DIR` is the dispatcher-contract data root; your executor already keys
-off it (no GitHub-specific code):
+off it (no GitHub-specific code). Start from
+[`examples/crowd-compute-executor/executor.py`](../../crowd-compute-executor/executor.py),
+which is stdlib-only **by design** — it mirrors `read_kw_env` / `write_metrics`
+instead of importing them, so the runner needs no hpc-agent install (only your
+compute deps). Swap its Monte-Carlo body for your training:
 
 ```python
-# .hpc/executor.py
+# .hpc/executor.py — read_kwargs / write_metrics are the stdlib helpers from
+# examples/crowd-compute-executor/executor.py (copied in, not imported).
 import os, xgboost as xgb, pandas as pd
-from hpc_agent.execution.mapreduce.metrics_io import read_kw_env, write_metrics
 
-kw = read_kw_env()                                          # {"max_depth": 6, "eta": 0.3, ...}
+kw = read_kwargs()                                          # {"max_depth": 6, "eta": 0.3, ...}
 df = pd.read_parquet(os.path.join(os.environ["LOCAL_DATA_DIR"], "train.parquet"))
 booster = xgb.train({"max_depth": int(kw["max_depth"]), "eta": float(kw["eta"])},
                     xgb.DMatrix(df.drop(columns="y"), label=df["y"]))
 rmse = ...                                                  # eval on a holdout
-write_metrics(os.environ["RESULT_DIR"], {"objective": rmse})  # → task-<i> artifact → reduce
+write_metrics({"objective": rmse}, os.environ["RESULT_DIR"])  # → task-<i> artifact → reduce
 ```
 
 Pin the version: every campaign iteration must train on the *same* data for
@@ -237,7 +241,7 @@ export HPC_GHA_REPO=owner/your-repo HPC_GHA_WORKFLOW=fan-out.yml GITHUB_TOKEN=gh
 python -c "
 from hpc_agent_github_actions.backend import GitHubActionsBackend
 b = GitHubActionsBackend('$HPC_GHA_REPO', 'fan-out.yml')
-cp = b._execute_command(b._build_command('1-4', 'smoke', {'HPC_RUN_ID':'smoke','EXECUTOR':'true'}), {}, None)
+cp = b._execute_command(b._build_command('1-4', 'smoke', {}), {'HPC_RUN_ID':'smoke','EXECUTOR':'true'}, None)
 print('run id:', cp.stdout, 'exit:', cp.returncode)
 print('alive:', b.alive_job_ids([cp.stdout]))
 "
