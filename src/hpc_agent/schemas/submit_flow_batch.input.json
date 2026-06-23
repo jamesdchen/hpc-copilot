@@ -138,12 +138,6 @@
           "type": "integer"
         },
         "backend": {
-          "enum": [
-            "sge",
-            "slurm",
-            "pbspro",
-            "torque"
-          ],
           "title": "Backend",
           "type": "string"
         },

@@ -64,6 +64,10 @@ jobs:
           gh release download "${{ inputs.data_tag }}" -R ${{ github.repository }} --dir data --clobber
 
   task: # the fan-out — one runner per task point (GitHub caps a matrix at 256)
+    # Deterministic per-task job name so the host's task_statuses can map each
+    # job to its 0-based task id (vs GitHub's auto "task (3)"), giving true
+    # per-task pending/running/complete/failed in /status.
+    name: task-${{ matrix.i }}
     needs: [expand, prefetch]
     strategy:
       fail-fast: false

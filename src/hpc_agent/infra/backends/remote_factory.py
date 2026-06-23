@@ -25,8 +25,9 @@ from hpc_agent.infra.remote import ssh_run
 if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
     from hpc_agent.infra.backends._engine import RemoteProfileBackend
+    from hpc_agent.state.run_record import RunRecord
 
-__all__ = ["build_remote_backend"]
+__all__ = ["backend_for_record", "build_remote_backend"]
 
 
 def build_remote_backend(
@@ -168,3 +169,30 @@ def build_remote_backend(
         )
         return get_backend_class(backend_name).from_build_context(ctx)
     raise errors.SpecInvalid(f"unknown backend: {backend_name!r}")
+
+
+def backend_for_record(record: RunRecord, *, scheduler: str | None = None) -> HPCBackend:
+    """Build the ``HPCBackend`` instance for an in-flight run *record*.
+
+    The construction seam the monitor (#337 Increment 4) and aggregate
+    (Increment 5) pure-API transports share: their liveness / logs / results
+    go through a backend's *instance* hooks (``alive_job_ids`` / ``fetch_logs``
+    / ``fetch_results``), which need a constructed backend — a pure-API backend
+    holds an authenticated client the SSH-era ``@staticmethod`` hooks cannot.
+
+    Lives here (``infra.backends``), not under a subject, so any subject builds
+    a backend from a record without reaching into another subject's tree — and
+    so a built-in SSH family and a registered pure-API plugin backend construct
+    identically via :func:`build_remote_backend` → ``from_build_context``. The
+    caller branches on ``backend.requires_ssh``, never on the name. *scheduler*
+    overrides ``record.backend`` for callers (reconcile / status) that already
+    hold the name; otherwise the name recorded on the run is used.
+    """
+    return build_remote_backend(
+        backend_name=scheduler or record.backend,
+        script=record.script,
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        pass_env_keys=None,
+        job_env_keys=tuple(record.job_env or ()),
+    )

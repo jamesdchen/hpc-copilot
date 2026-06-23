@@ -111,12 +111,6 @@
     "backend": {
       "anyOf": [
         {
-          "enum": [
-            "sge",
-            "slurm",
-            "pbspro",
-            "torque"
-          ],
           "type": "string"
         },
         {

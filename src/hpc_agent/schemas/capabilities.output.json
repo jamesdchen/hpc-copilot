@@ -27,12 +27,6 @@
     },
     "supported_schedulers": {
       "items": {
-        "enum": [
-          "sge",
-          "slurm",
-          "pbspro",
-          "torque"
-        ],
         "type": "string"
       },
       "title": "Supported Schedulers",

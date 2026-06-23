@@ -62,6 +62,8 @@ from typing import Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.clusters import load_clusters_config
 
 __all__ = [
     "SubCall",
@@ -134,6 +136,31 @@ def _resolve_resources_argv(
     return argv
 
 
+def _cluster_requires_ssh(cluster: str | None) -> bool:
+    """Whether *cluster*'s backend reaches its scheduler over SSH (#337 Class B).
+
+    Reads the cluster's ``scheduler`` from clusters.yaml and dispatches on the
+    backend's ``requires_ssh`` capability via
+    :func:`hpc_agent.infra.backends.backend_requires_ssh` — core dispatches on
+    the capability, it never branches on the scheduler name. A pure-API backend
+    (``requires_ssh=False``) has no login node, so the cluster arm of
+    check-preflight is a no-op for it. Anything we can't resolve (no cluster, a
+    name absent from clusters.yaml, an unreadable config, or an unregistered
+    scheduler) conservatively returns ``True`` — the SSH path is the safe
+    default.
+    """
+    if cluster is None:
+        return True
+    try:
+        clusters = load_clusters_config()
+    except (OSError, Exception):  # noqa: BLE001 - unreadable config → safe default
+        return True
+    entry = clusters.get(cluster)
+    if not isinstance(entry, dict):
+        return True
+    return backend_requires_ssh(str(entry.get("scheduler") or ""))
+
+
 def _build_subcalls(
     *,
     experiment_dir: Path,
@@ -168,7 +195,13 @@ def _build_subcalls(
 
     if "check-preflight" not in skip:
         argv = ["hpc-agent", "preflight"]
-        if cluster is not None:
+        # The cluster arm is check-preflight's only SSH-touching path. For a
+        # pure-API cluster (``requires_ssh=False``) there is no login node to
+        # probe, so route to the no-op by omitting ``--cluster`` entirely — the
+        # sub-call then runs only the local-env checks and issues ZERO ssh
+        # (#337 Class B). check-preflight itself also gates internally on the
+        # same capability, so this is a belt-and-suspenders skip.
+        if cluster is not None and _cluster_requires_ssh(cluster):
             argv += ["--cluster", cluster]
         calls.append(SubCall(name="check-preflight", argv=argv))
 

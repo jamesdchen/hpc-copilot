@@ -121,6 +121,12 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: lint-backend-boundary
+        name: orchestrator imports only the backend seam, never a concrete backend
+        entry: python scripts/lint_backend_boundary.py
+        language: python
+        pass_filenames: false
+
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality
         entry: python scripts/lint_plugin_manifests.py

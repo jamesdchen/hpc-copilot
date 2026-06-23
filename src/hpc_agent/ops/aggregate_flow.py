@@ -56,7 +56,12 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
-from hpc_agent.execution.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
+from hpc_agent.execution.mapreduce.reduce.metrics import (
+    collect_wave_errors,
+    reduce_metrics,
+    reduce_partials,
+)
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import rsync_pull
 from hpc_agent.ops.aggregate.combine import combine_wave
@@ -351,6 +356,35 @@ def _combiner_only_reduce(
     return aggregated, incomplete_waves
 
 
+def _pure_api_reduce(
+    run_id: str,
+    *,
+    record: Any,
+    out: Path,
+) -> dict[str, dict[str, Any]]:
+    """Fetch per-task artifacts over the backend API and reduce them LOCALLY.
+
+    The pure-API counterpart of :func:`_combiner_only_reduce` for a backend
+    whose ``requires_ssh`` capability is ``False`` (#337 Class B). There is no
+    login node and no shared filesystem to ``rsync_pull`` a cluster
+    ``_combiner/`` tree from: the backend's :meth:`HPCBackend.fetch_results`
+    hook downloads each task's ``metrics.json`` into ``task-<i>`` dirs under
+    *out*, and the LOCAL reducer (:func:`reduce_metrics`) means over them. ZERO
+    ``rsync_pull`` — the whole point of the capability split. The backend is
+    constructed via the shared :func:`backend_for_record` helper so core never
+    names the concrete (plugin) backend module; it routes through the registry.
+    """
+    from hpc_agent.infra.backends.remote_factory import backend_for_record
+
+    backend = backend_for_record(record)
+    result_dirs = backend.fetch_results(run_id, str(out))
+    # ``fetch_results`` returns the per-task dirs it wrote (``task-<i>``), each
+    # holding a ``metrics.json``. ``reduce_metrics`` scans each dir for that
+    # sidecar and weighted-means across tasks — identical reduce semantics to
+    # the SSH path's combiner, run on the locally-fetched artifacts.
+    return {run_id: reduce_metrics(result_dirs)}
+
+
 def _cluster_final_reduce(
     experiment_dir: Path,
     run_id: str,
@@ -616,6 +650,28 @@ def aggregate_flow(
     # Resolve output_dir.
     out = experiment_dir / "_aggregated" / run_id if output_dir is None else Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    # Class B (#337): a pure-API backend (``requires_ssh=False``) has no login
+    # node and no shared filesystem — there is nothing to ``rsync_pull``. Core
+    # dispatches on the *capability*, never on the scheduler name: the backend's
+    # ``fetch_results`` hook pulls each task's ``metrics.json`` over its API and
+    # we reduce LOCALLY with ``reduce_metrics``. The entire SSH ladder below
+    # (ssh-target validation, combine-wave, ``_combiner/`` pull, cluster
+    # final-reduce, summaries pull, cluster-side row/column gates) is skipped —
+    # those steps presuppose a shared filesystem the pure-API backend lacks.
+    # SSH families default ``requires_ssh=True`` and fall through unchanged.
+    if not backend_requires_ssh(record.backend):
+        aggregated = _pure_api_reduce(run_id, record=record, out=out)
+        return AggregateFlowResult(
+            run_id=run_id,
+            combined_waves=list(record.combined_waves),
+            failed_waves=list(record.failed_waves),
+            waves_combined_this_call=[],
+            combiner_dir_local=str(out),
+            aggregated_metrics=aggregated,
+            summaries_dir_local=None,
+            escalation_reason=None,
+        )
 
     _validate_ssh_target(record.ssh_target)
 

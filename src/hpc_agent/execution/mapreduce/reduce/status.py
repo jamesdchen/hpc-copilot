@@ -53,11 +53,9 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import get_args
 
 from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent._kernel.contract.vocabulary import TaskStatus
-from hpc_agent._wire._shared import Scheduler
 from hpc_agent.execution.mapreduce.reduce.rollup import (
     _grid_point_key,
     rollup_by_grid_point,
@@ -1007,7 +1005,10 @@ def _main() -> int:
         help="Comma-separated scheduler job IDs (optional)",
     )
     parser.add_argument("--job-name", default="", help="Job name for error-log lookup")
-    parser.add_argument("--scheduler", default=None, choices=[None, *get_args(Scheduler)])
+    # Free string: the orchestrator supplies an already-validated backend name
+    # (the wire ``Scheduler`` type gates it), and the profile engine rejects an
+    # unknown family downstream. No closed enum to mirror here (#337).
+    parser.add_argument("--scheduler", default=None)
     parser.add_argument("--file-glob", default="*", help="Glob for per-task result files")
     parser.add_argument("--log-dir", default="", help="SLURM log directory")
     parser.add_argument("--scratch-dir", default="", help="SGE scratch log directory")

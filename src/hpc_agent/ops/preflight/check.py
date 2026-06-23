@@ -31,6 +31,7 @@ from typing import Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.runtime_preflight import runtime_uv_preflight
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
@@ -421,6 +422,28 @@ def check_preflight(
                     "and pick from the available names",
                 )
             )
+        # A pure-API backend (``requires_ssh=False``) has no login node, so the
+        # whole transport block — TCP :22, the ssh ``echo ok`` round-trip, and
+        # the merged uv probe — is meaningless and must issue ZERO ssh (#337
+        # Class B). Gate on the cluster's ``scheduler`` capability via
+        # ``backend_requires_ssh`` (core dispatches on the capability, never
+        # branches on the name). Emit structured skipped checks in place of the
+        # probes so the envelope shape is preserved. An unregistered/unknown
+        # scheduler conservatively reports ``True`` (the safe SSH default).
+        elif not backend_requires_ssh(str(clusters[cluster].get("scheduler") or "")):
+            checks.append(
+                _check("cluster_tcp_22", True, "skipped: pure-API backend (no login node)")
+            )
+            checks.append(
+                _check("cluster_ssh_echo", True, "skipped: pure-API backend (no login node)")
+            )
+            if uv_pending:
+                # The #275 uv probe also rides ssh; skip it for the same reason
+                # rather than letting it run standalone below.
+                checks.append(
+                    _check("runtime_uv", True, "skipped: pure-API backend (no login node)")
+                )
+                uv_pending = False
         else:
             host = clusters[cluster].get("host")
             if not host:

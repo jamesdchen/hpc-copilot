@@ -51,10 +51,6 @@ __all__ = [
     "aggregate_preflight",
 ]
 
-# Scheduler families ``reconcile --scheduler`` accepts. Kept in sync with
-# the ``reconcile`` primitive's CliArg choices (ops/monitor/reconcile.py).
-_SCHEDULERS: tuple[str, ...] = ("sge", "slurm", "pbspro", "torque")
-
 # install-commands and load-context are write-disjoint AND read-disjoint
 # (#291), so they fan out concurrently on a thread pool. reconcile stays
 # sequential AFTER the fan — its argv is read from load-context's
@@ -290,7 +286,9 @@ def _run_subcalls(calls: list[SubCall], *, timeout_sec: float) -> dict[str, dict
                 "--reconcile-scheduler",
                 type=str,
                 default=None,
-                choices=_SCHEDULERS,
+                # No static ``choices`` — the value is forwarded verbatim to
+                # ``reconcile --scheduler``, which validates against the live
+                # backend registry (#337).
                 help=(
                     "Scheduler family of the in-flight run. When supplied AND "
                     "load-context reports next_step_hint == 'monitor', reconcile "

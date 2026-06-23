@@ -56,6 +56,7 @@ from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsS
 from hpc_agent._wire.workflows.validate_campaign import ValidateCampaignSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
+from hpc_agent.infra.backends import registered_backend_names
 from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config
 from hpc_agent.meta.campaign.atoms.load_context import load_context
 from hpc_agent.ops.detect_entry_point import detect_entry_point
@@ -66,10 +67,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["scaffold_spec"]
-
-# Valid scheduler backends (mirrors ``_wire._shared.BackendName``); a
-# clusters.yaml ``scheduler`` outside this set falls back to a placeholder.
-_BACKENDS = ("sge", "slurm", "pbspro", "torque")
 
 # Schema-valid placeholders for required fields context can't supply. Each
 # satisfies its target field's constraint so the skeleton still validates;
@@ -284,7 +281,7 @@ def _build_submit_block(ctx: _Context, acc: _Acc, prefix: str) -> dict[str, Any]
     acc.req(
         d,
         "backend",
-        (sched if sched in _BACKENDS else None),
+        (sched if sched in registered_backend_names() else None),
         f"clusters.yaml#{ctx.cluster_name}.scheduler",
         _PH_BACKEND,
         prefix=prefix,
@@ -480,7 +477,7 @@ def _build_submit_flow_block(ctx: _Context, acc: _Acc, prefix: str) -> dict[str,
     acc.req(
         d,
         "backend",
-        (sched if sched in _BACKENDS else None),
+        (sched if sched in registered_backend_names() else None),
         f"clusters.yaml#{ctx.cluster_name}.scheduler",
         _PH_BACKEND,
         prefix=prefix,

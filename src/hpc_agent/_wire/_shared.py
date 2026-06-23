@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints
+from pydantic import AfterValidator, Field, StringConstraints
 
 # ── identifiers ──────────────────────────────────────────────────────────────
 
@@ -89,10 +89,38 @@ LifecycleStateReconcile = Literal[
 
 # ── infra ────────────────────────────────────────────────────────────────────
 
-# Scheduler driver. 'sge' covers Sun/Univa/Open Grid Engine variants;
-# 'slurm' covers Slurm-Workload-Manager clusters; 'pbspro' covers PBS Pro /
-# OpenPBS and 'torque' covers TORQUE (distinct PBS forks — see KNOWN_FAMILIES).
-Scheduler = Literal["sge", "slurm", "pbspro", "torque"]
+
+def _validate_registered_backend(value: str) -> str:
+    """Reject a scheduler/backend name absent from the live backend registry.
+
+    Was a closed ``Literal`` over the four built-in SSH families; the
+    orchestrator may now name any registered backend — the four built-ins
+    *plus* any installed plugin backend (e.g. the pure-API github-actions
+    backend) — so a plugin backend is expressible as a spec everywhere a
+    scheduler name is accepted (#337, Class A).
+
+    ``registered_backend_names`` is imported lazily inside the validator: a
+    module-level ``_wire → infra.backends`` import would cycle, and pydantic
+    never calls this during ``model_json_schema()`` so the cost is paid only at
+    validation time. Going through the registry (not a bare class lookup) loads
+    a plugin's ``@register`` side effect first, matching
+    ``backend_requires_ssh``.
+    """
+    from hpc_agent.infra.backends import registered_backend_names
+
+    names = registered_backend_names()
+    if value not in names:
+        raise ValueError(f"unknown backend {value!r}; registered backends: {sorted(names)}")
+    return value
+
+
+# Scheduler driver. The four built-in families — 'sge' (Sun/Univa/Open Grid
+# Engine), 'slurm' (Slurm-Workload-Manager), 'pbspro' (PBS Pro / OpenPBS) and
+# 'torque' (TORQUE; distinct PBS forks — see KNOWN_FAMILIES) — validate, as does
+# any registered plugin backend. The emitted JSON schema widens to a bare
+# ``{type: string}`` (no enum): the valid set is install-dependent, and
+# membership is enforced at validation time, not by a frozen schema enum.
+Scheduler = Annotated[str, AfterValidator(_validate_registered_backend)]
 
 # Cluster-specific GPU label (e.g. 'A100', 'H100', 'L40S'). Semantic checks
 # live in inspect_cluster; the schema only enforces non-empty.
@@ -201,8 +229,11 @@ PlateauMode = Literal["prior_window", "all_time_best"]
 # Optional execution runtime override. Today only ``uv`` is supported.
 Runtime = Literal["uv"]
 
-# Submit backend names exposed on the wire — the curated scheduler
-# families. All resolve to the remote-over-ssh variant since submit-flow
-# only ever submits across an SSH boundary. ``pbspro`` and ``torque`` are
-# the two PBS forks (distinct command grammars; see SchedulerProfile).
-BackendName = Literal["sge", "slurm", "pbspro", "torque"]
+# Submit backend names exposed on the wire. Validated against the live backend
+# registry (same rule as ``Scheduler``): the four built-in SSH families resolve
+# to the remote-over-ssh variant, while a registered plugin backend (e.g. the
+# pure-API github-actions backend, ``requires_ssh=False``) is accepted too —
+# the submit path no longer assumes every backend submits across an SSH
+# boundary (#337). ``pbspro`` and ``torque`` are the two PBS forks (distinct
+# command grammars; see SchedulerProfile).
+BackendName = Annotated[str, AfterValidator(_validate_registered_backend)]

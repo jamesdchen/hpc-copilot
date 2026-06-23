@@ -495,17 +495,20 @@ class DeterministicCampaignResolver:
 
         Neither the journal record nor the sidecar config snapshot records the
         backend directly; resolve it from the cluster config the same way
-        submit-flow does, falling back to slurm. An unrecognized scheduler
+        submit-flow does, falling back to slurm. An unregistered scheduler
         string falls back to slurm rather than shipping a backend the submit
-        spec's ``BackendName`` literal would reject downstream.
+        spec's ``BackendName`` validator would reject downstream — and the
+        accepted set is the live registry (built-ins + plugin backends), not a
+        frozen list (#337).
         """
+        from hpc_agent.infra.backends import registered_backend_names
         from hpc_agent.infra.clusters import load_clusters_config
 
         cluster = record.cluster or sidecar.get("cluster")
         cfg = load_clusters_config().get(cluster, {}) if cluster else {}
         backend = cfg.get("scheduler") if isinstance(cfg, dict) else None
         resolved = str(backend) if backend else "slurm"
-        if resolved not in ("sge", "slurm", "pbspro", "torque"):
+        if resolved not in registered_backend_names():
             resolved = "slurm"
         return cast("BackendName", resolved)
 

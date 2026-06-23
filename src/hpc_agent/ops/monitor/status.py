@@ -8,10 +8,12 @@ import json
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
+from hpc_agent._kernel.contract.vocabulary import TaskStatus
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state.journal import update_run_status
+from hpc_agent.state.journal import load_run, update_run_status
 from hpc_agent.state.run_record import RunRecord, _atomic_write_json, runs_dir
 
 if TYPE_CHECKING:
@@ -40,6 +42,24 @@ def _status_handler(ns: argparse.Namespace) -> int:
 from hpc_agent.infra.cluster_status import ssh_status_report  # noqa: E402
 
 _ssh_status_report = ssh_status_report
+
+
+def _pure_api_status_summary(per_task: dict[int, str]) -> dict[str, object]:
+    """Build a ``last_status`` summary from a pure-API backend's per-task map.
+
+    Mirrors the SSH reporter's persisted shape — the five ``TaskStatus`` count
+    keys plus ``checked_at`` — and additionally carries a per-task ``tasks``
+    breakdown (``{task_id: {"status": ...}}``) so a consumer gets richer detail
+    than run-level liveness. Unknown/foreign status strings are bucketed under
+    ``unknown`` rather than silently dropped.
+    """
+    counts: dict[str, int] = {s.value: 0 for s in TaskStatus}
+    tasks: dict[str, dict[str, str]] = {}
+    for tid, status in sorted(per_task.items()):
+        key = status if status in counts else TaskStatus.UNKNOWN.value
+        counts[key] += 1
+        tasks[str(tid)] = {"status": status}
+    return {**counts, "tasks": tasks, "checked_at": utcnow_iso()}
 
 
 @primitive(
@@ -118,33 +138,56 @@ def record_status(
     ):  # missing/bad sidecar → bare python; a bug propagates
         _sidecar = {}
 
-    report = _ssh_status_report(
-        ssh_target=ssh_target,
-        remote_path=remote_path,
-        run_id=run_id,
-        job_ids=job_ids,
-        job_name=job_name,
-        file_glob=file_glob,
-        min_rows=min_rows,
-        remote_activation=remote_activation_for_sidecar(_sidecar),
-    )
-    summary = dict(report.get("summary", {}))
-    summary["checked_at"] = utcnow_iso()
-    # Carry per-wave breakdown into the persisted last_status when the
-    # cluster-side reporter emitted one (sidecar carried a wave_map).
-    if isinstance(report.get("waves"), dict) and report["waves"]:
-        summary["waves"] = report["waves"]
-    # Carry the fresh scheduler-side preemption signal (exit 130/143 / state
-    # PREEMPTED) into last_status so the monitor's auto-resume gate (#299)
-    # reads it without a second round-trip. These are *report-space* ids
-    # (1-based scheduler array indices, matching report["tasks"] keys); the
-    # auto-resume composite converts them to 0-based HPC_TASK_ID for resubmit.
-    # Present only when the reporter found preempted tasks; absent → the
-    # composite falls back to a log-based fetch (cross-scheduler, e.g. SGE
-    # without exit codes).
-    preempted_ids = report.get("preempted_task_ids")
-    if isinstance(preempted_ids, list) and preempted_ids:
-        summary["preempted_task_ids"] = preempted_ids
+    _record = load_run(experiment_dir, run_id)
+    if _record is not None and not backend_requires_ssh(_record.backend):
+        # Pure-API path (#337): no login-node reporter. Prefer the backend's
+        # richer ``task_statuses`` hook (real per-task complete/running/pending/
+        # failed counts, derived over the API) and fall back to run-level
+        # ``alive_job_ids`` liveness for a backend that only knows liveness.
+        # Either way: zero SSH.
+        from hpc_agent.infra.backends.remote_factory import backend_for_record
+
+        backend = backend_for_record(_record)
+        summary: dict[str, object]
+        try:
+            per_task = backend.task_statuses(job_ids, total_tasks=_record.total_tasks)
+        except NotImplementedError:
+            alive = backend.alive_job_ids(job_ids)
+            summary = {
+                "checked_at": utcnow_iso(),
+                "alive_job_ids": sorted(alive),
+                "in_flight": bool(alive),
+            }
+        else:
+            summary = _pure_api_status_summary(per_task)
+    else:
+        report = _ssh_status_report(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            run_id=run_id,
+            job_ids=job_ids,
+            job_name=job_name,
+            file_glob=file_glob,
+            min_rows=min_rows,
+            remote_activation=remote_activation_for_sidecar(_sidecar),
+        )
+        summary = dict(report.get("summary", {}))
+        summary["checked_at"] = utcnow_iso()
+        # Carry per-wave breakdown into the persisted last_status when the
+        # cluster-side reporter emitted one (sidecar carried a wave_map).
+        if isinstance(report.get("waves"), dict) and report["waves"]:
+            summary["waves"] = report["waves"]
+        # Carry the fresh scheduler-side preemption signal (exit 130/143 / state
+        # PREEMPTED) into last_status so the monitor's auto-resume gate (#299)
+        # reads it without a second round-trip. These are *report-space* ids
+        # (1-based scheduler array indices, matching report["tasks"] keys); the
+        # auto-resume composite converts them to 0-based HPC_TASK_ID for resubmit.
+        # Present only when the reporter found preempted tasks; absent → the
+        # composite falls back to a log-based fetch (cross-scheduler, e.g. SGE
+        # without exit codes).
+        preempted_ids = report.get("preempted_task_ids")
+        if isinstance(preempted_ids, list) and preempted_ids:
+            summary["preempted_task_ids"] = preempted_ids
     record = update_run_status(experiment_dir, run_id, last_status=summary)
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.

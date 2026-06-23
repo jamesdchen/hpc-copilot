@@ -42,7 +42,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.4",
+    # Exact pin: ruff's *formatter* output shifts between releases (0.15.12 vs
+    # 0.15.18 disagreed on two files), so a float makes local and CI run
+    # different formatters and `ruff format --check` flaps red. Bump
+    # deliberately, in lock-step with CI.
+    "ruff==0.15.18",
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-xdist>=3.8",

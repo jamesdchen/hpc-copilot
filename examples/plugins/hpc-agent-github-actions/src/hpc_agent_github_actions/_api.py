@@ -143,6 +143,33 @@ class GitHubActionsAPI:
         artifacts = data.get("artifacts", [])
         return artifacts if isinstance(artifacts, list) else []
 
+    def list_jobs(self, run_id: str) -> list[dict[str, object]]:
+        """Every job in a run — one per matrix task — with per-task status.
+
+        Each job object carries ``status`` (``queued`` / ``in_progress`` /
+        ``completed``), ``conclusion`` (when completed), and ``name`` (the
+        per-task job name the workflow sets, ``task-<i>``). This is the per-task
+        ground truth the run-level ``get_run`` can't give — it distinguishes a
+        *queued* task from a *running* one. Paginated: a matrix caps at 256
+        jobs and GitHub returns ≤100 per page.
+        """
+        jobs: list[dict[str, object]] = []
+        page = 1
+        while True:
+            data = self._request(
+                "GET",
+                f"/repos/{self.repo}/actions/runs/{run_id}/jobs",
+                params={"per_page": "100", "page": str(page)},
+            )
+            batch = data.get("jobs", []) if isinstance(data, dict) else []
+            if not isinstance(batch, list) or not batch:
+                break
+            jobs.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return jobs
+
     def download_artifact(self, artifact_id: int, dest_zip: str) -> None:
         """Download an artifact's zip to *dest_zip* (handles the signed redirect)."""
         self._download_via_redirect(

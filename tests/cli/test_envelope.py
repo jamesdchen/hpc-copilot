@@ -68,7 +68,10 @@ def test_capabilities_envelope_shape() -> None:
     assert "submit" in data["subcommands"]
     assert "status" in data["subcommands"]
     assert "preflight" in data["subcommands"]
-    assert data["supported_schedulers"] == ["sge", "slurm", "pbspro", "torque"]
+    # Registry-derived (#337), not a frozen list: the four built-in families
+    # are always present; an installed plugin backend may add more. Order is
+    # the registry's sorted order, so assert membership, not sequence.
+    assert set(data["supported_schedulers"]) >= {"sge", "slurm", "pbspro", "torque"}
     assert isinstance(data["ssh_multiplexing"], bool)
 
 

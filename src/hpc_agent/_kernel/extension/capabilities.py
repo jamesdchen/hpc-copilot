@@ -81,6 +81,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     """
     from hpc_agent._kernel.registry.operations import operations_bootstrap
     from hpc_agent._kernel.registry.plugins import get_plugin_manifests
+    from hpc_agent.infra.backends import registered_backend_names
     from hpc_agent.infra.clusters import CLUSTER_YAML_KEYS
 
     # #306: the bootstrap envelope carries only the thin per-op row an
@@ -93,7 +94,10 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     return {
         "version": hpc_agent.__version__,
         "subcommands": list(subcommands),
-        "supported_schedulers": ["sge", "slurm", "pbspro", "torque"],
+        # Derived from the live backend registry (built-ins + any installed
+        # plugin backend), not a frozen list — a pure-API plugin backend
+        # advertises itself here too (#337).
+        "supported_schedulers": sorted(registered_backend_names()),
         "schemas_dir": str(hpc_agent._PACKAGE_ROOT / "schemas"),
         "journal_dir": str(HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",

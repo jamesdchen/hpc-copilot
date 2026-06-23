@@ -12,6 +12,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import load_run, mark_run, update_run_status
@@ -145,8 +146,11 @@ def _sibling_run_ids(run_id: str) -> list[str]:
             CliArg(
                 flag="--scheduler",
                 required=True,
-                choices=("sge", "slurm", "pbspro", "torque"),
-                help="Scheduler family — needed to query alive job IDs.",
+                # No static ``choices``: the valid set is the live backend
+                # registry (built-ins + plugin backends), not a frozen list
+                # (#337). ``get_backend_class`` in ``_ssh_alive_job_ids`` fails
+                # loud (``SpecInvalid``) on an unregistered name.
+                help="Backend name — needed to query alive job IDs.",
             ),
         ),
         result_post=_reconcile_envelope,
@@ -287,63 +291,84 @@ def _reconcile_one(
         # surface unable_to_verify rather than silent abandon.
         _sidecar = {}
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        fut_status = pool.submit(
-            _ssh_status_report,
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-            run_id=run_id,
-            job_ids=record.job_ids,
-            job_name=record.job_name,
-            file_glob=file_glob,
-            remote_activation=remote_activation_for_sidecar(_sidecar),
-        )
-        fut_waves = pool.submit(
-            _ssh_list_combined_waves,
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-        )
-        fut_alive = pool.submit(
-            _ssh_alive_job_ids,
-            ssh_target=record.ssh_target,
-            job_ids=record.job_ids,
-            scheduler=scheduler,
-        )
+    warnings: list[str] = []
+    report: dict[str, Any] = {}
+    summary: dict[str, Any]
+    alive: list[str] | set[str]
+    if not backend_requires_ssh(scheduler):
+        # Pure-API path (#337 Increment 4): no login node, no shared
+        # ``_combiner/`` dir. Liveness comes from the backend's ``alive_job_ids``
+        # instance hook (a pure-API backend holds its own authenticated client);
+        # there is no SSH status reporter and no wave-listing to do, so the
+        # combiner waves stay as the journal recorded them.
+        from hpc_agent.infra.backends.remote_factory import backend_for_record
 
-        warnings: list[str] = []
-        report: dict[str, Any] = {}
+        summary = {"checked_at": utcnow_iso()}
+        reporter_failed = False
+        combined = list(record.combined_waves)
         try:
-            report = fut_status.result()
-            summary = dict(report.get("summary", {}))
-            reporter_failed = False
-        except Exception as exc:
-            summary = {"error": str(exc)}
-            warnings.append(f"status reporter: {exc}")
-            reporter_failed = True
-        summary["checked_at"] = utcnow_iso()
-        if isinstance(report.get("waves"), dict) and report["waves"]:
-            summary["waves"] = report["waves"]
-
-        # Each future has its own try/except: an SSH blip on any of them
-        # must not abort the journal update.  In particular, falling
-        # back to the *current* job_ids on the alive-check path is
-        # essential — defaulting to empty would mark a healthy run
-        # ``abandoned`` whenever the SSH check itself failed.
-        try:
-            combined = fut_waves.result()
-        except Exception as exc:
-            combined = list(record.combined_waves)
-            warnings.append(f"wave list: {exc}")
+            alive = backend_for_record(record, scheduler=scheduler).alive_job_ids(record.job_ids)
             alive_check_failed = False
-        else:
-            alive_check_failed = False
-
-        try:
-            alive: list[str] | set[str] = fut_alive.result()
         except Exception as exc:
             alive = list(record.job_ids)  # treat as still alive on error
             warnings.append(f"alive check: {exc}")
             alive_check_failed = True
+    else:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fut_status = pool.submit(
+                _ssh_status_report,
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                run_id=run_id,
+                job_ids=record.job_ids,
+                job_name=record.job_name,
+                file_glob=file_glob,
+                remote_activation=remote_activation_for_sidecar(_sidecar),
+            )
+            fut_waves = pool.submit(
+                _ssh_list_combined_waves,
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+            )
+            fut_alive = pool.submit(
+                _ssh_alive_job_ids,
+                ssh_target=record.ssh_target,
+                job_ids=record.job_ids,
+                scheduler=scheduler,
+            )
+
+            try:
+                report = fut_status.result()
+                summary = dict(report.get("summary", {}))
+                reporter_failed = False
+            except Exception as exc:
+                summary = {"error": str(exc)}
+                warnings.append(f"status reporter: {exc}")
+                reporter_failed = True
+            summary["checked_at"] = utcnow_iso()
+            if isinstance(report.get("waves"), dict) and report["waves"]:
+                summary["waves"] = report["waves"]
+
+            # Each future has its own try/except: an SSH blip on any of them
+            # must not abort the journal update.  In particular, falling
+            # back to the *current* job_ids on the alive-check path is
+            # essential — defaulting to empty would mark a healthy run
+            # ``abandoned`` whenever the SSH check itself failed.
+            try:
+                combined = fut_waves.result()
+            except Exception as exc:
+                combined = list(record.combined_waves)
+                warnings.append(f"wave list: {exc}")
+                alive_check_failed = False
+            else:
+                alive_check_failed = False
+
+            try:
+                alive = fut_alive.result()
+            except Exception as exc:
+                alive = list(record.job_ids)  # treat as still alive on error
+                warnings.append(f"alive check: {exc}")
+                alive_check_failed = True
 
     if warnings:
         summary["warnings"] = warnings

@@ -240,6 +240,21 @@ def _extract_max_float(metadata: list[Any], default: float) -> float:
     return default if hi is None else hi
 
 
+# ``_wire._shared.{Scheduler,BackendName}`` are no longer ``Literal`` enums:
+# they're ``Annotated[str, AfterValidator(_validate_registered_backend)]``, so a
+# valid value is any name in the live backend registry, not a pattern match. The
+# synthesizer can't derive that from the type alone — detect the validator and
+# hand back a known-registered built-in (#337).
+_A_REGISTERED_BACKEND = "slurm"
+
+
+def _has_registered_backend_validator(metadata: list[Any]) -> bool:
+    return any(
+        getattr(getattr(m, "func", None), "__name__", "") == "_validate_registered_backend"
+        for m in metadata
+    )
+
+
 def _string_for_metadata(metadata: list[Any]) -> str:
     pattern = None
     for m in metadata:
@@ -301,6 +316,8 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
         if annotation is bool:
             return False
         if annotation is str:
+            if _has_registered_backend_validator(metadata):
+                return _A_REGISTERED_BACKEND
             return _string_for_metadata(metadata)
         if annotation is int:
             return _extract_min_int(metadata)
@@ -471,6 +488,8 @@ def _strategy_for(annotation: Any, metadata: list[Any]) -> st.SearchStrategy:
             hi = _extract_max_float(metadata, default=lo + 100.0)
             return st.floats(min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False)
         if annotation is str:
+            if _has_registered_backend_validator(metadata):
+                return st.just(_A_REGISTERED_BACKEND)
             pattern = None
             for m in metadata:
                 p = getattr(m, "pattern", None)
