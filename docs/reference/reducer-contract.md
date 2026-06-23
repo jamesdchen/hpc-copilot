@@ -17,12 +17,21 @@ In those cases `aggregate-flow`'s default path either silently undercounts (comb
 
 A reducer is any executable (Python module, shell script, compiled binary) that:
 
-1. **Reads `$HPC_RUN_ID`** to find its inputs. The reducer typically uses `run_id` to discover the per-task `result_dir`s (via the run sidecar's `result_dir_template`) or to filter by run identity.
+1. **Reads `$HPC_RUN_ID`** to find its inputs. The reducer typically uses `run_id` to discover the per-task `result_dir`s (via the run sidecar's `result_dir_template`) or to filter by run identity. On a pure-API backend the inputs are local, under `$HPC_RESULTS_DIR` — see [Where the reducer runs](#where-the-reducer-runs-cluster-vs-local).
 2. **Reads `$HPC_AGGREGATED_OUTPUT`** to know where to write its single output. Defaults to `_aggregated/<run_id>.json` under `remote_path`. The reducer MUST write exactly this file; `cluster-reduce`'s `rsync_pull` includes only this basename.
 3. **Writes valid JSON** to `$HPC_AGGREGATED_OUTPUT`. Any JSON shape — dict, list, scalar — is accepted. The cluster-reduce envelope's `data.reduced` parses and surfaces it inline.
 4. **Exits 0 on success, non-zero on failure.** Stderr is captured (`stderr_tail` in the envelope, last ~2KB) and surfaced verbatim to the user when `exit_code != 0`.
 
 That's it. No package, no plugin, no framework imports — the reducer can be a bash one-liner that pipes find + jq, or a 200-line numpy script.
+
+## Where the reducer runs (cluster vs. local)
+
+The contract is transport-neutral; only *where* the command runs depends on the backend's `requires_ssh` capability:
+
+- **SSH backends** (SGE/SLURM/PBS): the reducer runs **on the cluster** over SSH (`cluster-reduce`), cwd = `remote_path`. Inputs are the per-task `result_dir`s on the shared filesystem; output is pulled back with a single `rsync_pull`.
+- **Pure-API backends** (`requires_ssh = False`, e.g. GitHub Actions): there is no login node, so `aggregate-flow` first calls the backend's `fetch_results` to download the run's artifacts locally, then runs the **same reducer command on the control plane** (`local-reduce`), cwd = the fetched dir. Inputs live under **`$HPC_RESULTS_DIR`** (the fetched dir, layout `task-<i>/...`) rather than `remote_path`. Because it runs locally, the reducer's dependencies (numpy/pandas/…) must be importable **on the machine running `aggregate-flow`** — the cluster's run env is not available.
+
+A portable reducer reads `$HPC_RESULTS_DIR` when set and falls back to its cluster convention otherwise, so the same script works on both paths.
 
 ## Minimal Python example
 

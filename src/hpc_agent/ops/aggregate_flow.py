@@ -357,27 +357,86 @@ def _combiner_only_reduce(
 
 
 def _pure_api_reduce(
+    experiment_dir: Path,
     run_id: str,
     *,
     record: Any,
     out: Path,
+    mode: str,
+    aggregate_cmd: str | None,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch per-task artifacts over the backend API and reduce them LOCALLY.
+    """Fetch a run's artifacts over the backend API and reduce them LOCALLY.
 
-    The pure-API counterpart of :func:`_combiner_only_reduce` for a backend
-    whose ``requires_ssh`` capability is ``False`` (#337 Class B). There is no
-    login node and no shared filesystem to ``rsync_pull`` a cluster
-    ``_combiner/`` tree from: the backend's :meth:`HPCBackend.fetch_results`
-    hook downloads each task's ``metrics.json`` into ``task-<i>`` dirs under
-    *out*, and the LOCAL reducer (:func:`reduce_metrics`) means over them. ZERO
-    ``rsync_pull`` — the whole point of the capability split. The backend is
-    constructed via the shared :func:`backend_for_record` helper so core never
-    names the concrete (plugin) backend module; it routes through the registry.
+    The pure-API counterpart of the SSH reduce dispatch for a backend whose
+    ``requires_ssh`` capability is ``False`` (#337 Class B). There is no login
+    node and no shared filesystem to ``rsync_pull`` from: the backend's
+    :meth:`HPCBackend.fetch_results` hook downloads the run's artifacts into
+    *out*, and reduction runs LOCALLY. ZERO ``rsync_pull`` — the whole point of
+    the capability split. The backend is constructed via the shared
+    :func:`backend_for_record` helper so core never names the concrete (plugin)
+    backend module; it routes through the registry.
+
+    Reduction *choice* mirrors the SSH path's ``mode`` resolution, so a pure-API
+    backend is NOT locked into the numeric weighted-mean:
+
+    * ``cluster-reduce`` (or ``auto`` + a resolved ``aggregate_cmd``) runs the
+      caller-owned reducer over the fetched artifacts via :func:`local_reduce`
+      (the local analogue of cluster-reduce) — honouring custom / non-mean /
+      non-``metrics.json`` reductions exactly as the SSH path does, just
+      executed locally rather than over SSH.
+    * otherwise (``combiner-only``, or ``auto`` with no command) falls back to
+      the weighted-mean :func:`reduce_metrics` over each task's ``metrics.json``
+      — the historical pure-API behaviour, unchanged.
     """
     from hpc_agent.infra.backends.remote_factory import backend_for_record
 
     backend = backend_for_record(record)
     result_dirs = backend.fetch_results(run_id, str(out))
+
+    # Resolve the caller-owned reducer: explicit kwarg > the LOCAL sidecar's
+    # ``aggregate_defaults.aggregate_cmd``. Local only — a pure-API backend has
+    # no remote sidecar to SSH-read, so the SSH path's remote-sidecar fallback
+    # does not apply here.
+    resolved_aggregate_cmd = aggregate_cmd
+    if resolved_aggregate_cmd is None:
+        try:
+            sidecar = read_run_sidecar(experiment_dir, run_id) or {}
+        except (
+            FileNotFoundError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            errors.HpcError,
+        ):
+            sidecar = {}
+        resolved_aggregate_cmd = (sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd")
+
+    if mode == "cluster-reduce" or (mode == "auto" and resolved_aggregate_cmd):
+        if not resolved_aggregate_cmd:
+            raise errors.SpecInvalid(
+                "mode='cluster-reduce' requires aggregate_cmd= or "
+                "aggregate_defaults.aggregate_cmd on the run sidecar."
+            )
+        from hpc_agent.ops.aggregate.local_reduce import local_reduce
+
+        # ``aggregate_output_path`` is deliberately NOT threaded here: it carries
+        # cluster-path semantics (resolved under ``remote_path`` by cluster-
+        # reduce), and an absolute cluster path would make the local
+        # ``mkdir`` target the control plane's filesystem. The local output is
+        # internal anyway — the reduced JSON is returned inline below — so
+        # local-reduce keeps its own local default location.
+        cr = local_reduce(
+            run_id=run_id,
+            results_dir=out,
+            aggregate_cmd=resolved_aggregate_cmd,
+        )
+        reduced = cr.get("reduced")
+        # Surface the reducer's JSON directly when it's a dict, matching the SSH
+        # cluster-reduce branch. The contract allows any JSON shape; a non-dict
+        # output (list/scalar) has no ``dict[str, dict]`` shape for
+        # ``aggregated_metrics``, so it collapses to ``{}`` — same as SSH.
+        return reduced if isinstance(reduced, dict) else {}
+
     # ``fetch_results`` returns the per-task dirs it wrote (``task-<i>``), each
     # holding a ``metrics.json``. ``reduce_metrics`` scans each dir for that
     # sidecar and weighted-means across tasks — identical reduce semantics to
@@ -654,14 +713,24 @@ def aggregate_flow(
     # Class B (#337): a pure-API backend (``requires_ssh=False``) has no login
     # node and no shared filesystem — there is nothing to ``rsync_pull``. Core
     # dispatches on the *capability*, never on the scheduler name: the backend's
-    # ``fetch_results`` hook pulls each task's ``metrics.json`` over its API and
-    # we reduce LOCALLY with ``reduce_metrics``. The entire SSH ladder below
-    # (ssh-target validation, combine-wave, ``_combiner/`` pull, cluster
-    # final-reduce, summaries pull, cluster-side row/column gates) is skipped —
-    # those steps presuppose a shared filesystem the pure-API backend lacks.
-    # SSH families default ``requires_ssh=True`` and fall through unchanged.
+    # ``fetch_results`` hook pulls the run's artifacts over its API and we reduce
+    # LOCALLY. Reduction honours ``mode`` / ``aggregate_cmd`` exactly as the SSH
+    # path does (custom reducer when selected, else the weighted-mean), just run
+    # locally — so a pure-API backend is not locked into the numeric mean. The
+    # entire SSH ladder below (ssh-target validation, combine-wave,
+    # ``_combiner/`` pull, cluster final-reduce, summaries pull, cluster-side
+    # row/column gates) is skipped — those steps presuppose a shared filesystem
+    # the pure-API backend lacks. SSH families default ``requires_ssh=True`` and
+    # fall through unchanged.
     if not backend_requires_ssh(record.backend):
-        aggregated = _pure_api_reduce(run_id, record=record, out=out)
+        aggregated = _pure_api_reduce(
+            experiment_dir,
+            run_id,
+            record=record,
+            out=out,
+            mode=mode,
+            aggregate_cmd=aggregate_cmd,
+        )
         return AggregateFlowResult(
             run_id=run_id,
             combined_waves=list(record.combined_waves),

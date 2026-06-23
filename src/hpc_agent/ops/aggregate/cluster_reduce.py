@@ -24,7 +24,6 @@ the reduced JSON crosses the wire.
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import tempfile
@@ -33,22 +32,15 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.ops.aggregate._reducer_contract import (
+    DEFAULT_OUTPUT_REL,
+    format_output_rel,
+    parse_reducer_output,
+)
 
 if TYPE_CHECKING:
     import argparse
     from pathlib import Path
-
-# Default cluster-side output path under remote_path. The reducer is
-# expected to write its single JSON output here unless overridden via
-# the ``output_path`` arg.
-_DEFAULT_OUTPUT_REL = "_aggregated/{run_id}.json"
-
-
-def _format_output_rel(template: str, *, run_id: str) -> str:
-    """Substitute ``{run_id}`` in *template*. Bare string replace so other
-    literal braces (e.g. ``{date}``) in a user-supplied path don't raise
-    ``KeyError`` from ``str.format``. Only ``{run_id}`` is recognised."""
-    return template.replace("{run_id}", run_id)
 
 
 def _resolve_aggregate_cmd(
@@ -101,23 +93,6 @@ def _build_remote_cmd(
         f"{env_setup} && "
         f"{aggregate_cmd}"
     )
-
-
-def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
-    """Read + JSON-parse the pulled reducer output, mapping errors to RemoteCommandFailed."""
-    if not local_output.is_file():
-        raise errors.RemoteCommandFailed(
-            f"reducer for run_id={run_id!r} reported success but "
-            f"{local_output} is missing locally — check rsync_pull "
-            "include filter and the reducer's output path."
-        )
-    try:
-        parsed: dict = json.loads(local_output.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise errors.RemoteCommandFailed(
-            f"reducer output at {local_output} is not valid JSON: {exc}"
-        ) from exc
-    return parsed
 
 
 def _cluster_reduce_arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
@@ -288,7 +263,7 @@ def cluster_reduce(
     aggregate_cmd = _resolve_aggregate_cmd(
         aggregate_cmd, experiment_dir=experiment_dir, run_id=run_id
     )
-    output_rel = _format_output_rel(output_path or _DEFAULT_OUTPUT_REL, run_id=run_id)
+    output_rel = format_output_rel(output_path or DEFAULT_OUTPUT_REL, run_id=run_id)
     local_dir_path = (
         _Path(local_dir)
         if local_dir is not None
@@ -354,7 +329,7 @@ def cluster_reduce(
         )
 
     local_output = local_dir_path / output_basename
-    reduced = _parse_local_output(local_output, run_id=run_id)
+    reduced = parse_reducer_output(local_output, run_id=run_id)
 
     return {
         "ok": True,

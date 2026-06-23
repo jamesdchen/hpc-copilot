@@ -229,15 +229,19 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError(f"{type(self).__name__} does not implement inspect")
 
     def fetch_results(self, run_id: str, dest_dir: str) -> list[str]:
-        """Download a run's per-task results into *dest_dir*; return the dirs.
+        """Download a run's per-task artifacts into *dest_dir*; return the dirs.
 
         The shared-filesystem replacement for a pure-API backend
         (``requires_ssh = False``): instead of the aggregate flow rsync-pulling
-        result dirs off a login node, the backend pulls each task's
-        ``metrics.json`` (and any aggregate) over its API, so the flow can
-        reduce locally with ``execution.mapreduce.reduce``. SSH backends never
-        reach this hook — their results come back over rsync — so the default
-        raises, matching the other capability hooks.
+        result dirs off a login node, the backend pulls the run's per-task
+        artifacts over its API into ``task-<i>`` dirs under *dest_dir*. It must
+        bring back the FULL per-task outputs — not just ``metrics.json`` — so
+        aggregate-flow can run either reducer locally: the weighted-mean over
+        each task's ``metrics.json`` (``combiner-only``) OR a caller-owned
+        ``aggregate_cmd`` over the raw artifacts (``cluster-reduce`` mode, e.g.
+        CSVs/parquet a mean can't reduce). SSH backends never reach this hook —
+        their results come back over rsync — so the default raises, matching the
+        other capability hooks.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement fetch_results")
 
