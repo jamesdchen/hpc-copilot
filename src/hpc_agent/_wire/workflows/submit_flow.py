@@ -237,11 +237,6 @@ class SubmitFlowSpec(BaseModel):
             "clusters.yaml 'scheduler_profile' entry."
         ),
     )
-    tasks_per_array: int | None = Field(
-        default=None,
-        ge=1,
-        description=("Batch tasks into arrays of this size. Null = single array of total_tasks."),
-    )
     canary: bool = Field(
         default=True,
         description=(

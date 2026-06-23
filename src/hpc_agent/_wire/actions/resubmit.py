@@ -44,8 +44,8 @@ class ResubmitSpec(BaseModel):
     submit_to_cluster: bool = Field(
         default=False,
         description=(
-            "When true, hpc-agent composes resubmit_plan + "
-            "backend.submit_array to actually re-issue the failed "
+            "When true, hpc-agent composes resubmit_plan + per-batch "
+            "backend submission to actually re-issue the failed "
             "tasks. When false (legacy default), the operation is "
             "journal-only. Requires script, backend, and job_name "
             "to be set when true."

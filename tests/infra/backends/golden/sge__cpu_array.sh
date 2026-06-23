@@ -26,7 +26,7 @@ set -eo pipefail
 #                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)
 #
 # Submit with:
-#   qsub -t 1-100 -v TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh
+#   qsub -t 1-100 -v CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh
 # ==============================================================
 
 # --- SGE directives ---
@@ -61,11 +61,11 @@ export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${NSLOTS:-1}}"
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
 
-# Convert 1-based SGE_TASK_ID to 0-based, add offset for batched submission
+# Convert 1-based SGE_TASK_ID to 0-based
 TASK_ID=$((SGE_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
 
-echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Task:         $TASK_ID"
 echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "Result dir:   $RESULT_DIR"
 echo "Executor:     $EXECUTOR"

@@ -43,7 +43,7 @@ GPU_COUNT="${GPU_COUNT:-2}"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SGE_TASK_ID to 0-based, add offset for batched submission
+# Convert 1-based SGE_TASK_ID to 0-based
 TASK_ID=$((SGE_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
 
@@ -53,7 +53,7 @@ echo "Job ID:       $JOB_ID"
 echo "Array Task:   $SGE_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
-echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Task:         $TASK_ID"
 echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 

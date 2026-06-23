@@ -28,9 +28,13 @@ preemption              interruptible-instance outbid -> map to the
 from __future__ import annotations
 
 import os
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hpc_agent.infra.backends import BackendBuildContext, HPCBackend, register
+
+if TYPE_CHECKING:
+    from hpc_agent.infra.throughput import SubmissionPlan
 
 #: Env vars the backend reads its configuration from — the
 #: marketplace-shaped replacement for the SSH ssh_run/remote_repo pair
@@ -93,7 +97,7 @@ class VastAIBackend(HPCBackend):
     # ------------------------------------------------------------------
     # Submission. A marketplace has no shell submit command, so the
     # shell-command pipeline (_build_command -> _execute_command) is
-    # bypassed: submit_array_tracked is overridden wholesale.
+    # bypassed: submit_plan is overridden wholesale.
     # ------------------------------------------------------------------
 
     def _build_command(
@@ -105,40 +109,33 @@ class VastAIBackend(HPCBackend):
         extra_flags: list[str] | None = None,
         array: bool = True,
     ) -> list[str]:
-        raise NotImplementedError(
-            "vastai submits via API, not a shell command; use submit_array_tracked"
-        )
+        raise NotImplementedError("vastai submits via API, not a shell command; use submit_plan")
 
-    def submit_array(
+    def submit_plan(
         self,
+        plan: SubmissionPlan,
         job_name: str,
-        total_tasks: int,
-        tasks_per_array: int,
         job_env: dict[str, str],
         *,
-        cwd: Any = None,
-    ) -> None:
-        self.submit_array_tracked(job_name, total_tasks, tasks_per_array, job_env, cwd=cwd)
+        cwd: Path | None = None,
+    ) -> list[tuple[int, str, str]]:
+        """Rent instances and launch one executor container per batch.
 
-    def submit_array_tracked(
-        self,
-        job_name: str,
-        total_tasks: int,
-        tasks_per_array: int,
-        job_env: dict[str, str],
-        *,
-        cwd: Any = None,
-    ) -> list[tuple[str, str]]:
-        """Rent instances and launch one executor container per task.
-
-        The real implementation: search offers (GPU type/price from the
-        submit spec), create one interruptible instance per task — or a
-        work-queue over ``tasks_per_array`` instances — passing
-        ``self.image`` with per-task env (``HPC_TASK_ID``,
-        ``HPC_KW_*`` from *job_env*, ``RESULT_DIR=/out``) and
-        ``self.label``; return ``(task_range, instance_id)`` pairs,
-        the same shape the SSH backends parse out of qsub/sbatch
-        stdout.
+        Overrides the host's surviving submission primitive
+        (:meth:`HPCBackend.submit_plan`) wholesale, since a marketplace has
+        no shell submit command for the base loop's ``_build_command ->
+        _execute_command`` pipeline to drive. The real implementation:
+        walk ``plan.batches`` in wave order, search offers (GPU type/price
+        from the submit spec), and for each batch create one interruptible
+        instance per task — or a work-queue over the batch's
+        ``array_size`` — passing ``self.image`` with per-task env
+        (``HPC_TASK_ID``, ``HPC_KW_*`` from *job_env*, ``RESULT_DIR=/out``)
+        and ``self.label``; return ``(batch.wave, batch.task_range,
+        instance_id)`` triples, the same shape the base loop yields from
+        qsub/sbatch stdout. Inter-wave dependencies (the base loop's
+        scheduler ``afterok`` chain) map to gating each wave's
+        instance-create on the prior wave's instances reaching a terminal
+        state via the API.
         """
         raise NotImplementedError("vastai instance-create call not implemented")
 

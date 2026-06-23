@@ -15,10 +15,31 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.infra.backends.sge_remote import RemoteSGEBackend
+from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+def _single_batch_plan(start: int = 1, end: int = 1) -> SubmissionPlan:
+    """A one-wave, one-batch plan covering tasks ``start..end`` (1-based)."""
+    batch = JobBatch(
+        batch_index=0,
+        task_start=start,
+        task_end=end,
+        array_size=end - start + 1,
+        est_wall_s=None,
+        wave=0,
+    )
+    return SubmissionPlan(
+        batches=[batch],
+        total_tasks=end - start + 1,
+        total_batches=1,
+        max_concurrent=1,
+        est_total_wall_s=None,
+        strategy="test",
+    )
 
 
 class _SSHRecorder:
@@ -57,12 +78,12 @@ class TestConstructor:
 
 
 # ---------------------------------------------------------------------------
-# submit_plan / submit_array_tracked build an SSH-wrapped qsub command
+# submit_plan builds an SSH-wrapped qsub command
 # ---------------------------------------------------------------------------
 
 
 class TestSSHWrappedCommand:
-    def test_submit_array_tracked_ssh_command_shape(self, tmp_path):
+    def test_submit_plan_ssh_command_shape(self, tmp_path):
         def responder(cmd):
             return _cp(
                 stdout='Your job-array 42.1-10:1 ("probe") has been submitted\n',
@@ -77,14 +98,13 @@ class TestSSHWrappedCommand:
             log_dir="/remote/path/logs",
         )
 
-        out = backend.submit_array_tracked(
+        out = backend.submit_plan(
+            _single_batch_plan(1, 10),
             "probe",
-            total_tasks=10,
-            tasks_per_array=10,
             job_env={},
             cwd=tmp_path,
         )
-        assert out == [("1-10", "42")]
+        assert out == [(0, "1-10", "42")]
 
         # ssh_run was called at least once for `mkdir -p <log_dir>` and then
         # once for qsub itself.
@@ -163,7 +183,10 @@ class TestSSHWrappedCommand:
             cwd=tmp_path,
         )
         assert len(submissions) == 2
-        wave0_jid = submissions[0][1]
+        # submit_plan returns (wave, task_range, job_id) tuples (#339).
+        assert submissions[0][0] == 0
+        assert submissions[1][0] == 1
+        wave0_jid = submissions[0][2]
 
         qsub_calls = [c for c in recorder.calls if "qsub" in c]
         assert len(qsub_calls) == 2
@@ -172,6 +195,65 @@ class TestSSHWrappedCommand:
         # Second wave: hold_jid carries the first wave's job ID.
         assert "-hold_jid" in qsub_calls[1]
         assert wave0_jid in qsub_calls[1]
+
+    def test_index_bounded_wave_emits_local_range_and_task_offset(self, tmp_path):
+        """#339: an index-bounded backend submits each wave as a LOCAL ``-t``
+        range (within the scheduler's array cap) and ships the global start as
+        ``TASK_OFFSET`` via ``-v`` — even though TASK_OFFSET is NOT in the
+        caller's pass_env_keys (it's a framework-internal var). Wave 0 (offset 0)
+        omits it, staying byte-identical to a ≤cap submission."""
+        from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
+
+        plan = SubmissionPlan(
+            batches=[
+                JobBatch(
+                    batch_index=0, task_start=1, task_end=5, array_size=5, est_wall_s=None, wave=0
+                ),
+                JobBatch(
+                    batch_index=1, task_start=6, task_end=10, array_size=5, est_wall_s=None, wave=1
+                ),
+            ],
+            total_tasks=10,
+            total_batches=2,
+            max_concurrent=1,
+            est_total_wall_s=None,
+            strategy="test",
+        )
+
+        counter = {"n": 99}
+
+        def responder(cmd):
+            if "qsub" not in cmd:
+                return _cp()
+            counter["n"] += 1
+            return _cp(
+                stdout=f'Your job-array {counter["n"]}.1-5:1 ("probe") has been submitted\n',
+                returncode=0,
+            )
+
+        recorder = _SSHRecorder(responder)
+        backend = RemoteSGEBackend(
+            script="/remote/path/job.sh",
+            ssh_run=recorder,
+            remote_repo="/remote/path",
+            log_dir="/remote/path/logs",
+        )
+        # FOO is allow-listed; TASK_OFFSET is deliberately NOT — it must still
+        # transport as a framework var.
+        backend.pass_env_keys = ("FOO",)
+
+        backend.submit_plan(plan, job_name="probe", job_env={"FOO": "bar"}, cwd=tmp_path)
+
+        qsub_calls = [c for c in recorder.calls if "qsub" in c]
+        assert len(qsub_calls) == 2
+        # Both waves submit the LOCAL 1-5 range (never the global 6-10 that would
+        # exceed the array-index cap).
+        assert "-t 1-5" in qsub_calls[0]
+        assert "-t 1-5" in qsub_calls[1]
+        assert "-t 6-10" not in qsub_calls[1]
+        # Wave 0 (offset 0) omits TASK_OFFSET; wave 1 (offset 5) carries it.
+        assert "TASK_OFFSET" not in qsub_calls[0]
+        assert "TASK_OFFSET=5" in qsub_calls[1]
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +305,7 @@ class TestStdoutParsing:
             job_env={},
             cwd=tmp_path,
         )
-        assert submissions == [("1-10", "42")]
+        assert submissions == [(0, "1-10", "42")]
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +327,9 @@ class TestErrors:
             remote_repo="/remote/path",
         )
         with pytest.raises(RuntimeError, match="qsub exploded"):
-            backend.submit_array_tracked(
+            backend.submit_plan(
+                _single_batch_plan(1, 5),
                 "probe",
-                total_tasks=5,
-                tasks_per_array=5,
                 job_env={},
                 cwd=tmp_path,
             )
@@ -273,10 +354,9 @@ class TestErrors:
             remote_repo="/remote/path with space",
             log_dir="/remote/path with space/logs",
         )
-        backend.submit_array_tracked(
+        backend.submit_plan(
+            _single_batch_plan(1, 5),
             "probe",
-            total_tasks=5,
-            tasks_per_array=5,
             job_env={},
             cwd=tmp_path,
         )
@@ -310,10 +390,9 @@ class TestErrors:
             remote_repo="/remote/path",
         )
         with pytest.raises(RuntimeError, match="Could not parse job ID"):
-            backend.submit_array_tracked(
+            backend.submit_plan(
+                _single_batch_plan(1, 5),
                 "probe",
-                total_tasks=5,
-                tasks_per_array=5,
                 job_env={},
                 cwd=tmp_path,
             )

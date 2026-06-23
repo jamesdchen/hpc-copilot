@@ -732,6 +732,28 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # it back to the ordered list compute_env_hash expects.
     data_sha, env_hash = _spec_provenance(experiment_dir, spec)
 
+    # #339 provenance precedence rule for the wave_map: when the sweep exceeds
+    # the effective array cap (it must be submitted as N concurrency-bounded
+    # waves), the CAP-DRIVEN plan wins — its wave_map (0-based GLOBAL task ids
+    # per wave, from build_wave_map(plan)) is stamped here and OVERRIDES the
+    # axes-derived default the sidecar layer would otherwise compute. The
+    # combiner then keys on the same waves the scheduler actually ran. For a
+    # ≤cap sweep (single wave) we keep today's behaviour: pass NO explicit
+    # wave_map, so write_run_sidecar falls through to the axes-derived default
+    # (derive_wave_map). The plan computed here and the plan submitted later in
+    # _submit_one_spec derive from the same packer over the same
+    # (constraints, total_tasks), so the stamped map matches what runs.
+    cap_wave_map: dict[str, list[int]] | None = None
+    if _is_multiwave_sweep(
+        backend_name=spec.backend, total_tasks=int(spec.total_tasks), cluster=spec.cluster
+    ):
+        from hpc_agent.infra.throughput import build_wave_map
+
+        plan = _main_submission_plan(
+            total_tasks=int(spec.total_tasks), cluster=spec.cluster, backend_name=spec.backend
+        )
+        cap_wave_map = {str(w): ids for w, ids in build_wave_map(plan).items()}
+
     write_run_sidecar(
         experiment_dir,
         run_id=spec.run_id,
@@ -742,6 +764,7 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         executor=executor,
         result_dir_template=spec.result_dir_template,
         task_count=int(spec.total_tasks),
+        wave_map=cap_wave_map,
         tasks_py_sha=tasks_py_sha,
         cluster=spec.cluster,
         profile=spec.profile,
@@ -914,19 +937,30 @@ def _make_single_array_submission(
     resources: object = None,
     extra_flags: list[str] | None = None,
 ) -> list[str]:
-    """Submit one array of size ``total_tasks`` and return the job IDs.
+    """Submit a ``<=cap`` sweep and return the job IDs (#339 increment 3).
 
-    Bypasses :class:`SubmissionPlan` for the simple case (no waves,
-    no batching). Wave-based submissions are out of scope for v1 of
-    submit-flow; callers needing them should use the legacy interactive
-    ``/submit-hpc`` path or extend this function with a ``plan`` input.
+    For the normal array case this is now the trivial *single-batch plan*: it
+    builds one :class:`~hpc_agent.infra.throughput.JobBatch` covering
+    ``1..total_tasks`` (wave 0) and submits it through the SAME backend wave
+    submitter (:meth:`HPCBackend.submit_plan`) that drives the multi-wave path —
+    so a ≤cap sweep flows through the identical seam, just with one wave. The
+    emitted scheduler command is BYTE-IDENTICAL to the pre-#339 inline qsub
+    (one array ``1-N`` carrying ``resource_flags + extra_flags``); see
+    ``tests/ops/submit/test_single_array_equivalence.py``.
 
     *resources* (a ``SubmitResources`` or ``None``) is translated by the
     backend into scheduler resource flags; ``None``/empty emits none, so
     the template directives apply unchanged. *extra_flags* (e.g. an afterok
     scheduler-dependency, #250) are appended after the resource flags.
+
+    The single multi-rank MPI job (#293; ``array=False``, ``task_range=None``)
+    is NOT a scheduler array, so it cannot be expressed as a ``JobBatch`` /
+    ``SubmissionPlan`` — it stays on the shared per-batch primitive
+    (:meth:`HPCBackend.submit_one`) with ``array=False``, byte-identical to
+    before.
     """
-    backend._setup_log_dir()  # type: ignore[attr-defined]
+    from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
+
     flags = backend.resource_flags(resources) + list(extra_flags or [])
     # #293: a single multi-rank MPI job is ONE job whose parallelism is the
     # rank count, not a scheduler array — submit it non-array (no --array/-t).
@@ -935,24 +969,322 @@ def _make_single_array_submission(
     # ``and total_tasks == 1`` is defense-in-depth against a hand-rolled spec.
     mpi = getattr(resources, "mpi", None) if resources is not None else None
     single_mpi_job = mpi is not None and total_tasks == 1
-    if single_mpi_job:
-        cmd = backend._build_command(  # type: ignore[attr-defined]
-            None, job_name, job_env, extra_flags=flags, array=False
+    try:
+        if single_mpi_job:
+            job_id = backend.submit_one(
+                None, job_name, job_env, extra_flags=flags, cwd=cwd, array=False
+            )
+            return [job_id]
+        # Normal array case: a one-batch, one-wave plan. submit_plan emits the
+        # same ``1-N`` array command the old inline qsub did; resource + afterok
+        # flags ride as the per-wave flags (a single wave, so no inter-wave dep
+        # to merge — byte-identical to the pre-#339 inline qsub).
+        plan = SubmissionPlan(
+            batches=[
+                JobBatch(
+                    batch_index=0,
+                    task_start=1,
+                    task_end=total_tasks,
+                    array_size=total_tasks,
+                    est_wall_s=None,
+                    wave=0,
+                )
+            ],
+            total_tasks=total_tasks,
+            total_batches=1,
+            max_concurrent=1,
+            est_total_wall_s=None,
+            strategy="single array (<=cap)",
         )
-    else:
-        cmd = backend._build_command(  # type: ignore[attr-defined]
-            f"1-{total_tasks}", job_name, job_env, extra_flags=flags
+        submissions = backend.submit_plan(
+            plan, job_name, job_env, cwd=cwd, per_wave_extra_flags=flags
         )
-    result = backend._execute_command(cmd, job_env, cwd)  # type: ignore[attr-defined]
-    if result.returncode != 0:
-        stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-        raise errors.RemoteCommandFailed(f"submit failed (exit {result.returncode}): {stderr_msg}")
-    match = backend.JOB_ID_REGEX.search(result.stdout)
-    if not match:
-        raise errors.RemoteCommandFailed(
-            f"could not parse job id from scheduler output: {result.stdout!r}"
+    except RuntimeError as exc:
+        # Map the backend submitter's RuntimeError (non-zero exit / unparseable
+        # id) onto submit-flow's typed envelope, preserving the prior contract.
+        raise errors.RemoteCommandFailed(str(exc)) from exc
+    return [job_id for _wave, _range, job_id in submissions]
+
+
+def _cluster_array_cap(cluster: str | None) -> int | None:
+    """The cluster's *declared* ``constraints.max_array_size``, or ``None``.
+
+    Returns the cap only when ``cluster`` names a clusters.yaml entry that
+    explicitly declares ``constraints.max_array_size``. A cluster that declares
+    no such limit (or is absent / unreadable) returns ``None`` so the guard
+    leaves today's behaviour byte-for-byte unchanged — we never synthesise a
+    phantom ceiling from ``ClusterConstraints`` defaults.
+    """
+    if not cluster:
+        return None
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        cfg = load_clusters_config().get(cluster)
+    except Exception:  # noqa: BLE001 — a missing/broken clusters.yaml must not block submit
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    block = cfg.get("constraints")
+    if not isinstance(block, dict):
+        return None
+    val = block.get("max_array_size")
+    return int(val) if isinstance(val, int) and not isinstance(val, bool) else None
+
+
+def _effective_array_cap(backend: HPCBackend, cluster: str | None) -> int | None:
+    """Smallest array-size ceiling that applies to this submission, or ``None``.
+
+    Reconciles the backend's hard platform cap
+    (:attr:`HPCBackend.max_array_size` — e.g. GitHub Actions' 256 matrix
+    cells/run; ``None`` for the SSH families) with the cluster's declared
+    ``constraints.max_array_size``. The effective ceiling is the smaller of
+    whichever are present; ``None`` means no cap is known and the guard is
+    skipped.
+    """
+    caps: list[int] = []
+    # Read the cap off the *class* — it is a backend capability, not per-run
+    # state — so the guard never pays the constructor cost (mirroring
+    # ``HPCBackend.max_array_size``'s "read off the class" note). ``getattr``
+    # with a ``None`` default keeps a test double / unmigrated backend that
+    # lacks the attribute uncapped rather than crashing.
+    backend_cap = getattr(type(backend), "max_array_size", None)
+    if backend_cap is not None:
+        caps.append(int(backend_cap))
+    cluster_cap = _cluster_array_cap(cluster)
+    if cluster_cap is not None:
+        caps.append(cluster_cap)
+    return min(caps) if caps else None
+
+
+def _enforce_array_cap(
+    backend: HPCBackend,
+    *,
+    total_tasks: int,
+    backend_name: str,
+    cluster: str | None,
+    single_mpi_job: bool,
+) -> None:
+    """Guard a sweep that exceeds the effective array cap before any dispatch.
+
+    #339 increment 3 repurposes the increment-1 hard-reject. The over-cap case
+    is no longer a dead end: when the sweep exceeds the cap it is now SPLIT into
+    concurrency-bounded waves via :meth:`HPCBackend.submit_plan` (see
+    :func:`_submit_main_array`). This guard therefore fires ONLY for the
+    genuinely unsatisfiable over-cap shapes the wave path cannot rescue:
+
+    * a single multi-rank MPI job (#293) — one indivisible job, no array to
+      split into waves; and
+    * a backend that declares it cannot wave (:attr:`HPCBackend.can_wave` is
+      ``False``).
+
+    In every other over-cap case the wave path takes over, so this returns
+    without raising. A ``None`` effective cap (built-in SSH backend with no
+    declared limit) is always a no-op, so ≤cap sweeps are unaffected. The
+    increment-1 safety is thus repurposed, not deleted: the fail-loud
+    ``SpecInvalid`` survives for the shapes that remain unsubmittable.
+    """
+    cap = _effective_array_cap(backend, cluster)
+    if cap is None or total_tasks <= cap:
+        return
+    can_wave = getattr(type(backend), "can_wave", True) and not single_mpi_job
+    if can_wave:
+        # The wave path (_submit_main_array) handles this over-cap sweep.
+        return
+    where = f" on cluster {cluster!r}" if cluster else ""
+    reason = (
+        "a single multi-rank MPI job is indivisible — it cannot be split into waves"
+        if single_mpi_job
+        else f"backend {backend_name!r} declares it cannot wave (can_wave=False)"
+    )
+    raise errors.SpecInvalid(
+        f"submit-flow: {total_tasks} tasks exceeds the {cap}-task array cap "
+        f"for backend {backend_name!r}{where}, and {reason}. Reduce the grid to "
+        f"<= {cap} tasks or raise the cap."
+    )
+
+
+def _load_cluster_constraints(cluster: str | None) -> Any:
+    """Load a cluster's :class:`ClusterConstraints` from clusters.yaml.
+
+    Mirrors ``plan_throughput``'s constraint-loading pattern
+    (``load_clusters_config`` → ``load_constraints``) so the main-run wave plan
+    is packed with the SAME limits the ``plan-throughput`` primitive would
+    report. Falls back to :class:`ClusterConstraints` defaults when the cluster
+    is absent / unreadable (the same posture as the cap helpers above), so the
+    wave path never crashes on a thin clusters.yaml.
+    """
+    from hpc_agent.infra.constraints import ClusterConstraints
+
+    if not cluster:
+        return ClusterConstraints()
+    try:
+        from hpc_agent.infra.clusters import load_clusters_config, load_constraints
+
+        cfg = load_clusters_config().get(cluster)
+        if isinstance(cfg, dict):
+            return load_constraints(cfg)
+    except Exception:  # noqa: BLE001 — a missing/broken clusters.yaml falls back to defaults
+        pass
+    return ClusterConstraints()
+
+
+def _effective_cap_for_backend_name(backend_name: str, cluster: str | None) -> int | None:
+    """Effective array cap from the backend CLASS (no instance) + cluster.
+
+    The pre-rsync sidecar write (:func:`_ensure_run_sidecar`) decides whether to
+    stamp the cap-plan ``wave_map`` BEFORE the SSH backend is constructed, so it
+    reads :attr:`HPCBackend.max_array_size` off the registered class (a
+    capability) rather than an instance. Symmetric with
+    :func:`_effective_array_cap`, which reads the same attribute off a built
+    instance during submission. Returns ``None`` when no cap is known.
+
+    Goes through :func:`registered_backend_names` (not bare
+    :func:`get_backend_class`) so a PLUGIN backend's module is imported for its
+    ``@register`` side effect first — mirroring :func:`backend_requires_ssh`.
+    ``get_backend_class`` alone loads only the built-in ladder, so a pure-API
+    plugin's cap (GitHub Actions = 256) would otherwise be invisible by name in
+    a headless caller that reached here before the plugin import, silently
+    misjudging a >cap GHA sweep as a single array.
+    """
+    caps: list[int] = []
+    try:
+        from hpc_agent.infra.backends import get_backend_class, registered_backend_names
+
+        if backend_name in registered_backend_names():
+            backend_cap = getattr(get_backend_class(backend_name), "max_array_size", None)
+            if backend_cap is not None:
+                caps.append(int(backend_cap))
+    except Exception:  # noqa: BLE001 — an unknown backend name is uncapped here; submit fails later
+        pass
+    cluster_cap = _cluster_array_cap(cluster)
+    if cluster_cap is not None:
+        caps.append(cluster_cap)
+    return min(caps) if caps else None
+
+
+def _is_multiwave_sweep(*, backend_name: str, total_tasks: int, cluster: str | None) -> bool:
+    """Whether *total_tasks* exceeds the effective cap → a multi-wave sweep.
+
+    The single switch behind the **provenance precedence rule** (#339): a
+    multi-wave sweep (over the cap) writes the cap-driven ``wave_map`` into the
+    main sidecar (overriding the axes default), and submits via N waves; a
+    ≤cap sweep keeps today's behaviour (single array, axes-derived wave_map).
+    Computed from the backend class + cluster cap so both the sidecar-write
+    decision and the submission decision agree without a live backend instance.
+    """
+    cap = _effective_cap_for_backend_name(backend_name, cluster)
+    return cap is not None and total_tasks > cap
+
+
+def _main_submission_plan(*, total_tasks: int, cluster: str, backend_name: str) -> Any:
+    """The cap-driven multi-wave :class:`SubmissionPlan` for the main array.
+
+    Packs ``total_tasks`` via ``compute_submission_plan(constraints,
+    WorkloadSpec(total_tasks))`` — the SAME deterministic packer the
+    ``plan-throughput`` primitive uses — so the waves submitted and the
+    ``wave_map`` written to the sidecar both derive from one plan.
+
+    The packer's ``max_array_size`` is the EFFECTIVE cap — the smaller of the
+    backend's platform cap (:attr:`HPCBackend.max_array_size`, e.g. GitHub
+    Actions' 256) and the cluster's declared limit — not the cluster constraint
+    alone. Otherwise a backend whose platform is the binding constraint (GHA on a
+    cluster that declares no ``max_array_size``, so the constraint defaults to
+    1000) would pack a >cap sweep into a single oversized array that the platform
+    then rejects — the exact failure waves exist to prevent. This keeps the plan
+    consistent with :func:`_is_multiwave_sweep`, which keys on the same effective
+    cap.
+    """
+    import dataclasses
+
+    from hpc_agent.infra.throughput import WorkloadSpec, compute_submission_plan
+
+    constraints = _load_cluster_constraints(cluster)
+    eff_cap = _effective_cap_for_backend_name(backend_name, cluster)
+    if eff_cap is not None and eff_cap < constraints.max_array_size:
+        constraints = dataclasses.replace(constraints, max_array_size=eff_cap)
+    return compute_submission_plan(constraints, WorkloadSpec(total_tasks=int(total_tasks)))
+
+
+def _submit_main_array(
+    backend: HPCBackend,
+    *,
+    job_name: str,
+    total_tasks: int,
+    job_env: dict[str, str],
+    cwd: Path,
+    resources: object,
+    gate_job_ids: list[str],
+    backend_name: str,
+    cluster: str | None,
+) -> list[str]:
+    """Submit the main array, single-wave (≤cap) or N-wave (>cap). Returns ids.
+
+    #339 increment 3 — the initial-submit path now goes through the SAME backend
+    wave submitter for both shapes:
+
+    * **≤cap** → :func:`_make_single_array_submission` (a one-batch, one-wave
+      plan; byte-identical to the pre-#339 inline qsub). The canary gate is the
+      afterok dependency built from *gate_job_ids*.
+    * **>cap** → the cap-driven multi-wave plan
+      (:func:`_main_submission_plan`) submitted via
+      :meth:`HPCBackend.submit_plan`. Each wave completion-chains behind the
+      prior wave for concurrency bounding (``afterany`` — a partial failure must
+      not drop later independent waves), and EVERY wave success-gates on the
+      canary (*gate_job_ids*) so a canary failure drops the whole sweep (#339
+      inc 4). The plan derives from the same packer over the same (constraints,
+      total_tasks) as the cap-plan ``wave_map`` stamped into the sidecar, so the
+      waves run and the combiner's map agree.
+
+    Returns one job id per wave for the multi-wave path (a list the journal /
+    pre-stamp already tolerate), or the single array's id for the ≤cap path.
+    """
+    if not _is_multiwave_sweep(backend_name=backend_name, total_tasks=total_tasks, cluster=cluster):
+        # ≤cap single wave: the canary gate is the afterok flag built from the
+        # gate ids, applied to the one array. Only build it when there ARE gate
+        # ids — the caller only populates them for an afterok-capable backend, so
+        # this never calls the method on a backend (or test stub) that lacks it.
+        afterok_flags = (
+            backend._build_afterok_dependency_flag(gate_job_ids)  # type: ignore[attr-defined]
+            if gate_job_ids
+            else []
         )
-    return [match.group(1)]
+        return _make_single_array_submission(
+            backend,
+            job_name=job_name,
+            total_tasks=total_tasks,
+            job_env=job_env,
+            cwd=cwd,
+            resources=resources,
+            extra_flags=afterok_flags,
+        )
+
+    # Over-cap: split into concurrency-bounded waves. Resource flags apply to
+    # every wave; the canary success-gate (gate_job_ids) applies to every wave,
+    # merged with the inter-wave completion-chain inside submit_plan.
+    plan = _main_submission_plan(
+        total_tasks=total_tasks, cluster=cluster or "", backend_name=backend_name
+    )
+    try:
+        submissions = backend.submit_plan(
+            plan,
+            job_name,
+            job_env,
+            cwd=cwd,
+            per_wave_extra_flags=backend.resource_flags(resources),
+            gate_job_ids=gate_job_ids,
+        )
+    except RuntimeError as exc:
+        # Carry submit_plan's partial accounting (the wave ids that DID land
+        # before the mid-plan failure, #339 inc 4) onto the typed envelope so the
+        # caller can pre-stamp them rather than losing them — mirroring
+        # _submit_flow_batch_locked's partial_submit_results contract.
+        landed = getattr(exc, "partial_submit_results", None)
+        wrapped = errors.RemoteCommandFailed(str(exc))
+        if landed:
+            wrapped.partial_submit_job_ids = [jid for _w, _r, jid in landed]  # type: ignore[attr-defined]
+        raise wrapped from exc
+    return [job_id for _wave, _range, job_id in submissions]
 
 
 @primitive(
@@ -1143,6 +1475,20 @@ def _submit_one_spec(
         scheduler_profile=spec.scheduler_profile,
     )
 
+    # #339 increment 3: an over-cap sweep is now SPLIT into concurrency-bounded
+    # waves (see _submit_main_array), so this guard only fail-louds the over-cap
+    # shapes the wave path cannot rescue — a single indivisible MPI job, or a
+    # backend that declares it cannot wave. ≤cap sweeps are unaffected.
+    spec_mpi = getattr(spec.resources, "mpi", None) if spec.resources is not None else None
+    single_mpi_job = spec_mpi is not None and spec.total_tasks == 1
+    _enforce_array_cap(
+        backend_obj,
+        total_tasks=spec.total_tasks,
+        backend_name=spec.backend,
+        cluster=spec.cluster,
+        single_mpi_job=single_mpi_job,
+    )
+
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     canary_done = False
@@ -1251,23 +1597,45 @@ def _submit_one_spec(
     # round-trip) yet the scheduler drops main if the canary fails. Only when
     # the canary actually fired this call (canary_job_ids), the spec opted in,
     # and the scheduler supports afterok (SGE has none → left un-gated, as today).
-    afterok_flags: list[str] = []
-    if (
-        spec.enable_afterok_dependency and canary_job_ids and backend_obj.supports_afterok  # type: ignore[attr-defined]
-    ):
-        afterok_flags = backend_obj._build_afterok_dependency_flag(  # type: ignore[attr-defined]
-            list(canary_job_ids)
+    # The canary gate ids: the main array depends on the canary SUCCEEDING.
+    # Only when the canary fired this call, the spec opted in, and the scheduler
+    # supports afterok (SGE has none → left un-gated, as today). Passed as ids
+    # (not pre-built flags) so the multi-wave path can gate *every* wave —
+    # the completion-only inter-wave chain can't propagate a canary failure.
+    gate_job_ids: list[str] = (
+        list(canary_job_ids)
+        if (
+            spec.enable_afterok_dependency and canary_job_ids and backend_obj.supports_afterok  # type: ignore[attr-defined]
         )
-
-    job_ids = _make_single_array_submission(
-        backend_obj,
-        job_name=spec.job_name,
-        total_tasks=spec.total_tasks,
-        job_env=job_env_full,
-        cwd=experiment_dir,
-        resources=spec.resources,
-        extra_flags=afterok_flags,
+        else []
     )
+
+    try:
+        job_ids = _submit_main_array(
+            backend_obj,
+            job_name=spec.job_name,
+            total_tasks=spec.total_tasks,
+            job_env=job_env_full,
+            cwd=experiment_dir,
+            resources=spec.resources,
+            gate_job_ids=gate_job_ids,
+            backend_name=spec.backend,
+            cluster=spec.cluster,
+        )
+    except errors.RemoteCommandFailed as exc:
+        # #339 inc 4 crash-safety: a multi-wave main array that failed mid-plan
+        # still landed the earlier waves' ids on the scheduler. Pre-stamp them to
+        # the sidecar (best-effort, same window as the post-qsub stamp below) so
+        # a reconcile / recovery can see the real ids instead of losing them with
+        # the bare raise. The journal entry never lands for this run (we re-raise),
+        # but the sidecar-reading recovery paths can still account for the waves.
+        landed_ids = getattr(exc, "partial_submit_job_ids", None)
+        if landed_ids:
+            from hpc_agent.state.runs import update_run_sidecar_job_ids
+
+            with contextlib.suppress(Exception):
+                update_run_sidecar_job_ids(experiment_dir, spec.run_id, list(landed_ids))
+        raise
     # Crash-safety pre-stamp — same rationale as the canary stamp above: the
     # 2026-06-11 demo lost main-array job id 13610902 to a process kill in
     # exactly this qsub → submit_and_record window, and the orchestrator's

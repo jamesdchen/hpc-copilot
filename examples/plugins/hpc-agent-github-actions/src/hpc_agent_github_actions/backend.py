@@ -15,7 +15,7 @@ to build, so :meth:`_build_command` encodes the dispatch intent and
 :meth:`_execute_command` performs it — POST ``workflow_dispatch`` then resolve
 the run id — returning a ``CompletedProcess`` whose stdout is the run id. (The
 submit override therefore lives in ``_execute_command``, NOT the
-``submit_array_tracked`` a marketplace skeleton stubs: that method is not on
+``submit_plan`` a marketplace skeleton overrides: that method is not on
 submit-flow v1's path.)
 
 The per-task kwargs are NOT shipped in the dispatch. Exactly as the SLURM
@@ -121,15 +121,36 @@ def _job_to_task_status(job: dict[str, object]) -> str:
 _QUOTA_SIGNALS = ("minutes", "spending limit", "billing", "quota", "payment", "exceeded")
 
 
+def _parse_window(task_range: str | None) -> tuple[int, int]:
+    """Map submit-flow's 1-based ``"start-end"`` range to ``(start0, count)``.
+
+    Returns the GLOBAL 0-based start and the task count for the window. A wave
+    covering global ids ``257-512`` (1-based) yields ``(256, 256)`` — the matrix
+    must fan out over the GLOBAL window ``256..511``, NOT a wave-local ``0..255``,
+    so per-task ``task-<i>`` job names + artifacts line up with the combiner's
+    0-based GLOBAL ``wave_map`` (#339 increment 5).
+
+    A bare ``"1-N"`` (the ≤cap single wave) yields ``(0, N)``. ``None`` (a single
+    non-array job, e.g. an MPI run) yields ``(0, 1)``.
+    """
+    if not task_range:
+        return 0, 1
+    start_s, sep, end_s = task_range.partition("-")
+    if not sep:
+        # A bare count or single index "k" → one task at 1-based k.
+        k = int(task_range)
+        return k - 1, 1
+    start = int(start_s)
+    end = int(end_s) if end_s else start
+    return start - 1, end - start + 1
+
+
 def _parse_total(task_range: str | None) -> int:
-    """Map submit-flow's 1-based ``"1-N"`` task range to the count N.
+    """Task count of a 1-based ``"start-end"`` range (the window size).
 
     ``None`` (a single non-array job, e.g. an MPI run) means one task.
     """
-    if not task_range:
-        return 1
-    _, _, end = task_range.partition("-")
-    return int(end or task_range)
+    return _parse_window(task_range)[1]
 
 
 def _parse_pool(spec: str) -> list[tuple[str, str]]:
@@ -170,6 +191,18 @@ class GitHubActionsBackend(HPCBackend):
     # rsync steps and use this backend's ``alive_job_ids`` / ``fetch_results`` /
     # ``fetch_logs`` hooks instead (docs/proposals/crowd-compute-backend.md).
     requires_ssh = False
+    # GitHub Actions caps a matrix at 256 jobs per workflow run, so a single
+    # fan-out array can hold at most 256 tasks. Declaring it here lets
+    # submit-flow reject an over-cap sweep with a clean ``SpecInvalid`` before
+    # dispatch, rather than the runner rejecting a >256-cell matrix afterward.
+    max_array_size = 256
+    # Actions matrix cell values are arbitrary integers, so a wave dispatches a
+    # GLOBAL window directly (``_execute_command`` derives the window from the
+    # global ``task_range``; ``fan-out.yml`` expands the global id range). Keeping
+    # this True preserves that inc-5 global-window path; the index-bounded SSH
+    # families (default False) instead get a LOCAL ``1-<size>`` range + offset
+    # from ``submit_plan`` because their scheduler caps the array index.
+    uses_global_array_index = True
 
     def __init__(
         self,
@@ -273,9 +306,17 @@ class GitHubActionsBackend(HPCBackend):
         if not cmd or cmd[0] != _DISPATCH:
             return subprocess.CompletedProcess(cmd, 3, "", f"not a gha dispatch payload: {cmd!r}")
         payload = json.loads(cmd[1])
+        # Forward the wave's GLOBAL 0-based start so the runner's matrix fans out
+        # over the GLOBAL id window (e.g. 256..511 for wave 257-512), not a
+        # wave-local 0..255 (#339 inc 5). ``total_tasks`` is the WINDOW SIZE (the
+        # number of matrix cells); ``task_start`` is where the window begins. For
+        # a ≤cap single wave (range "1-N") task_start=0 and the window is 0..N-1,
+        # byte-identical to the pre-#339 dispatch.
+        task_start, task_count = _parse_window(payload.get("task_range"))
         inputs = {
             "run_id": job_env.get("HPC_RUN_ID", ""),
-            "total_tasks": str(_parse_total(payload.get("task_range"))),
+            "total_tasks": str(task_count),
+            "task_start": str(task_start),
             "executor": job_env.get("EXECUTOR", ""),
             "cmd_sha": job_env.get("HPC_CMD_SHA", ""),
             "campaign_id": job_env.get("HPC_CAMPAIGN_ID", ""),

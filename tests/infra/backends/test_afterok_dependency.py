@@ -64,12 +64,16 @@ def test_submit_flow_appends_afterok_to_main_submission():
     from pathlib import Path
     from types import SimpleNamespace
 
+    from hpc_agent.infra.backends import HPCBackend
     from hpc_agent.ops import submit_flow as sf
 
     captured: dict[str, list[str]] = {}
 
-    class _FakeBackend:
+    class _FakeBackend(HPCBackend):
         JOB_ID_REGEX = re.compile(r"job (\d+)")
+
+        def __init__(self):
+            self.log_dir = "/tmp/afterok-stub-logs"
 
         def _setup_log_dir(self):
             pass
@@ -77,8 +81,8 @@ def test_submit_flow_appends_afterok_to_main_submission():
         def resource_flags(self, resources):
             return ["--res"]
 
-        def _build_command(self, task_range, job_name, job_env, *, extra_flags):
-            captured["flags"] = list(extra_flags)
+        def _build_command(self, task_range, job_name, job_env, *, extra_flags=None, array=True):
+            captured["flags"] = list(extra_flags or [])
             return ["sbatch"]
 
         def _execute_command(self, cmd, job_env, cwd):

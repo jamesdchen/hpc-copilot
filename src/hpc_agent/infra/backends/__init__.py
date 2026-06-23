@@ -8,7 +8,7 @@ the core submission logic.
 Usage:
     from hpc_agent.infra.backends import get_backend
     backend = get_backend("slurm", script="path/to/job.slurm")
-    backend.submit_array(job_name, total_tasks, tasks_per_array, job_env)
+    backend.submit_plan(plan, job_name, job_env)
 """
 
 from __future__ import annotations
@@ -51,6 +51,16 @@ if TYPE_CHECKING:
 # pre-empt; Submitted batch job 12345``) don't poison the parse with a
 # stray ``30``.
 _DEFAULT_JOB_ID_REGEX = re.compile(r"(\d+)")
+
+# Env var carrying a wave batch's GLOBAL 0-based offset to the cluster job.
+# On an index-bounded backend ``submit_plan`` submits each batch as a LOCAL
+# array ``1-<size>`` and injects this per batch; the runtime templates
+# (``_scripts.py``) recover the global task id as
+# ``<scheduler array index> - 1 + ${TASK_OFFSET:-0}``. Injected only when the
+# offset is non-zero, so a ≤cap single wave-0 array stays byte-identical. Kept
+# as a module constant so the submit edge and the template arithmetic name the
+# same variable.
+_TASK_OFFSET_ENV = "TASK_OFFSET"
 
 # Default subprocess timeout for ``qsub``/``sbatch`` invocations.  A
 # hung scheduler binary (NFS stall, scheduler outage) would otherwise
@@ -128,6 +138,52 @@ class HPCBackend(abc.ABC):
     # pure-API backend overrides to False and implements ``fetch_results`` /
     # ``fetch_logs`` (below) as the artifact-based replacement for the rsync pull.
     requires_ssh: bool = True
+
+    # Hard *platform* ceiling on the task count this backend can submit in a
+    # single scheduler array, independent of any clusters.yaml config. ``None``
+    # (the default for the built-in SSH families) means the backend imposes no
+    # cap of its own — the effective ceiling is then the cluster's
+    # ``constraints.max_array_size`` if one is declared. A pure-API backend
+    # whose platform caps the array overrides this (GitHub Actions = 256 matrix
+    # cells/run) so submit-flow can reject an over-cap sweep with a clean
+    # ``SpecInvalid`` *before* dispatch, instead of a low-signal platform error
+    # after (a >256-cell matrix that GitHub Actions rejects post-dispatch).
+    # Read off the *class* so the guard never pays the constructor cost.
+    max_array_size: int | None = None
+
+    # Whether this backend can split an over-cap sweep into multiple
+    # concurrency-bounded WAVES (#339). The shared wave submitter
+    # (:meth:`submit_plan`) drives every batch through the same per-batch
+    # primitive (:meth:`submit_one`), so any backend that can submit one array
+    # can submit N waves of arrays — hence the default ``True``. A backend that
+    # genuinely cannot wave (e.g. a one-shot dispatch with no per-wave
+    # sequencing) overrides to ``False``, and the submit-flow array-cap guard
+    # then hard-rejects an over-cap sweep instead of routing it through waves.
+    # Read off the *class* (a capability, not per-run state) so the guard pays
+    # no constructor cost.
+    can_wave: bool = True
+
+    # Whether the scheduler treats an array job's index space as GLOBAL and
+    # arbitrary (a wave can submit ``--array=1001-2000`` directly) — as opposed
+    # to BOUNDING the array index (SLURM ``MaxArraySize``, the SGE/PBS
+    # analogues), where a valid index is ``1 .. cap``. Waving fires exactly when
+    # ``total_tasks > max_array_size``, so on an index-bounded backend every wave
+    # past wave 0 would otherwise emit an array range ABOVE the cap and the
+    # scheduler rejects the whole batch (``Invalid job array specification``) —
+    # the post-dispatch failure waves exist to prevent. :meth:`submit_plan`
+    # reads this:
+    #   * True  → submit each batch's GLOBAL ``task_range`` unchanged (GitHub
+    #     Actions: matrix cell values are arbitrary, and its ``_execute_command``
+    #     already builds a global window).
+    #   * False → submit a LOCAL ``1-<array_size>`` array per batch + a per-batch
+    #     ``TASK_OFFSET`` so the job recovers its global 0-based id (the
+    #     ``_scripts.py`` templates do ``<index> - 1 + ${TASK_OFFSET:-0}``); the
+    #     offset is 0 for a single wave-0 array, keeping a ≤cap sweep
+    #     byte-for-byte unchanged.
+    # Default False = "the scheduler bounds the array index" (slurm / sge /
+    # pbspro / torque). A pure-API backend that builds its own global window
+    # overrides to True.
+    uses_global_array_index: bool = False
 
     log_dir: str  # subclasses must set this
     JOB_ID_REGEX: re.Pattern[str] = _DEFAULT_JOB_ID_REGEX
@@ -379,6 +435,73 @@ class HPCBackend(abc.ABC):
         """
         return []
 
+    def _build_wave_dependency_flag(
+        self, *, afterok_ids: list[str], afterany_ids: list[str]
+    ) -> list[str]:
+        """One combined dependency flag: success-gate AND/OR completion-gate (#339).
+
+        Used by :meth:`submit_plan` so each wave can depend on the canary
+        SUCCEEDING (``afterok_ids``) and on the prior wave COMPLETING
+        (``afterany_ids``) in a single scheduler flag. Default ``[]``
+        (no dependency support); the profile-driven engine overrides it. See
+        :meth:`ProfileBackend._build_wave_dependency_flag`.
+        """
+        return []
+
+    def submit_one(
+        self,
+        task_range: str | None,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+        cwd: Path | None = None,
+        array: bool = True,
+        setup_log_dir: bool = True,
+    ) -> str:
+        """Submit ONE scheduler array (or one non-array job) and return its id.
+
+        The single per-batch submission primitive shared by every submit edge
+        (#339 increment 3): :meth:`submit_plan`'s wave loop, submit-flow's
+        ``_make_single_array_submission`` (the ≤cap fast path and the canary),
+        and recover-flow's ``_submit_one_batch`` all collapse onto this one
+        ``setup_log_dir + _build_command + _execute_command + returncode-check +
+        JOB_ID_REGEX`` sequence so the qsub edge lives in exactly one place.
+
+        *task_range* is the scheduler array expression (``"1-100"``,
+        ``"4,8,13-15"``), or ``None`` together with ``array=False`` for a single
+        multi-rank MPI job (#293). *extra_flags* are appended verbatim to the
+        built command (resource flags, an afterok/hold dependency, planner
+        overrides). *setup_log_dir* lets a caller that has already ensured the
+        log directory (``submit_plan`` does it once per plan) skip the redundant
+        per-batch ``mkdir``.
+
+        Raises
+        ------
+        RuntimeError
+            If the submission exits non-zero (message carries the command and
+            stderr) or the scheduler stdout has no parseable job id.
+        """
+        cwd = cwd or Path.cwd()
+        if setup_log_dir:
+            self._setup_log_dir()
+        cmd = self._build_command(
+            task_range, job_name, job_env, extra_flags=extra_flags, array=array
+        )
+        result = self._execute_command(cmd, job_env, cwd)
+        if result.returncode != 0:
+            stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
+            raise RuntimeError(
+                f"Job submission failed (exit {result.returncode}) "
+                f"for array {task_range}:\n"
+                f"  command: {' '.join(cmd)}\n"
+                f"  stderr:  {stderr_msg}"
+            )
+        match = self.JOB_ID_REGEX.search(result.stdout)
+        if not match:
+            raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
+        return match.group(1)
+
     def submit_plan(
         self,
         plan: SubmissionPlan,
@@ -386,126 +509,120 @@ class HPCBackend(abc.ABC):
         job_env: dict[str, str],
         *,
         cwd: Path | None = None,
-    ) -> list[tuple[str, str]]:
-        """Submit batches according to a SubmissionPlan using scheduler dependencies.
+        per_wave_extra_flags: list[str] | None = None,
+        gate_job_ids: list[str] | None = None,
+    ) -> list[tuple[int, str, str]]:
+        """Submit a :class:`SubmissionPlan` as wave-sequenced array jobs (#339).
 
-        Returns (task_range, job_id) pairs.
+        The shared, subject-neutral wave submitter for both ``ops/submit`` and
+        ``ops/recover`` (it lives on :class:`HPCBackend` so neither subject
+        imports the other). Each :class:`JobBatch` is submitted as one global
+        sub-array using its :attr:`JobBatch.task_range`, routed through the
+        shared per-batch primitive :meth:`submit_one` so the qsub edge
+        (``_build_command`` / ``_execute_command`` / ``JOB_ID_REGEX``) lives in
+        exactly one place.
+
+        Batches are grouped by :attr:`JobBatch.wave` and waves are submitted in
+        ascending order. When ``max_concurrent_jobs`` > 1 yields multiple waves,
+        each wave after wave 0 is *chained* behind the prior wave for
+        concurrency bounding via a **completion** dependency (``afterany``):
+        wave N starts once wave N-1 has TERMINATED, regardless of per-task
+        outcome. Completion (not success) is deliberate — the waves are
+        independent slices of one sweep, so a single failed task must NOT cancel
+        the later, unrelated waves (a success-gate would, losing work). The
+        success-gate is reserved for the canary below.
+
+        *gate_job_ids* are job ids that EVERY wave must depend on SUCCEEDING
+        (the canary, #339 increment 4). Because the inter-wave dependency is
+        completion-only it does not propagate a canary failure on its own, so
+        the gate is applied to every wave directly (not just wave 0). The
+        per-wave success-gate and the inter-wave completion-gate are ANDed into
+        a single scheduler dependency flag by
+        :meth:`_build_wave_dependency_flag`. *per_wave_extra_flags* (resource
+        flags) are applied to every wave.
+
+        Returns ``(wave, task_range, job_id)`` tuples in submission order.
+
+        Raises
+        ------
+        RuntimeError
+            If a submission exits non-zero (message carries the command and
+            stderr) or the scheduler stdout has no parseable job id.
         """
         cwd = cwd or Path.cwd()
+        # Ensure the log dir once for the whole plan; each per-batch
+        # ``submit_one`` below skips its own (idempotent) ``mkdir``.
         self._setup_log_dir()
 
-        # Group batches by wave
+        # The per-batch offset ships to the job as ``TASK_OFFSET`` (read by the
+        # cluster templates). The scheduler env builders transport it as a
+        # framework-internal var whenever present — SGE/PBS ``-v`` special-case
+        # it past the ``pass_env_keys`` allowlist, SLURM ``--export ALL`` already
+        # carries everything — so no per-call backend mutation is needed here.
+
+        # Group batches by wave.
         waves: dict[int, list[JobBatch]] = defaultdict(list)
         for batch in plan.batches:
             waves[batch.wave].append(batch)
 
-        submissions: list[tuple[str, str]] = []
+        submissions: list[tuple[int, str, str]] = []
         prev_wave_ids: list[str] = []
+        gate_ids = list(gate_job_ids or [])
 
         for wave_num in sorted(waves):
-            current_wave_ids: list[str] = []
-            dep_flags = self._build_dependency_flag(prev_wave_ids) if wave_num > 0 else []
+            # Every wave success-gates on the canary (gate_ids); waves after the
+            # first ALSO complete-gate on the prior wave for concurrency bounding
+            # (afterany — must not drop later waves on a partial failure). Both
+            # conditions are merged into one dependency flag (a scheduler accepts
+            # only one). Resource flags apply to every wave.
+            afterany_ids = prev_wave_ids if wave_num > 0 else []
+            dep_flags = list(per_wave_extra_flags or []) + self._build_wave_dependency_flag(
+                afterok_ids=gate_ids, afterany_ids=afterany_ids
+            )
 
+            current_wave_ids: list[str] = []
             for batch in waves[wave_num]:
-                cmd = self._build_command(
-                    batch.task_range, job_name, job_env, extra_flags=dep_flags
-                )
-                result = self._execute_command(cmd, job_env, cwd)
-                if result.returncode != 0:
-                    stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-                    raise RuntimeError(
-                        f"Job submission failed (exit {result.returncode}) "
-                        f"for array {batch.task_range}:\n"
-                        f"  command: {' '.join(cmd)}\n"
-                        f"  stderr:  {stderr_msg}"
+                # Render the batch per the index-space capability:
+                #   * global-index backend (GHA) → its GLOBAL window
+                #     (``batch.task_range``) + the shared env, unchanged.
+                #   * index-bounded backend → a LOCAL ``1-<array_size>`` array
+                #     (always within the cap) + a per-batch ``TASK_OFFSET`` so the
+                #     job recovers its global id. The offset is injected ONLY when
+                #     ``task_start > 1``, so a single wave-0 array ``1-N`` (offset
+                #     0) emits the SAME command AND env as a pre-wave ≤cap sweep.
+                if self.uses_global_array_index:
+                    task_range = batch.task_range
+                    batch_env = job_env
+                else:
+                    task_range = f"1-{batch.array_size}"
+                    offset = batch.task_start - 1
+                    batch_env = (
+                        {**job_env, _TASK_OFFSET_ENV: str(offset)} if offset > 0 else job_env
                     )
-                match = self.JOB_ID_REGEX.search(result.stdout)
-                if not match:
-                    raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
-                job_id = match.group(1)
+                try:
+                    job_id = self.submit_one(
+                        task_range,
+                        job_name,
+                        batch_env,
+                        extra_flags=dep_flags,
+                        cwd=cwd,
+                        setup_log_dir=False,
+                    )
+                except RuntimeError as exc:
+                    # Partial accounting on mid-plan failure (#339 inc 4),
+                    # mirroring _submit_flow_batch_locked's partial_submit_results:
+                    # the ids that DID land (every prior wave + this wave's
+                    # earlier batches) are attached to the raised exception so the
+                    # caller can pre-stamp / reconcile them instead of losing them
+                    # with a bare raise. The chained-dependency waves that never
+                    # fired are simply absent — the scheduler drops them anyway.
+                    exc.partial_submit_results = list(submissions)  # type: ignore[attr-defined]
+                    exc.failed_wave = wave_num  # type: ignore[attr-defined]
+                    raise
                 current_wave_ids.append(job_id)
-                submissions.append((batch.task_range, job_id))
+                submissions.append((wave_num, batch.task_range, job_id))
 
             prev_wave_ids = current_wave_ids
-
-        return submissions
-
-    def submit_array(
-        self,
-        job_name: str,
-        total_tasks: int,
-        tasks_per_array: int,
-        job_env: dict[str, str],
-        *,
-        cwd: Path | None = None,
-    ) -> None:
-        """Submit an array job in batches of *tasks_per_array*.
-
-        Parameters
-        ----------
-        cwd : Path | None
-            Working directory for the subprocess.  Defaults to the current
-            working directory when ``None``.
-        """
-        self._run_batches(job_name, total_tasks, tasks_per_array, job_env, cwd=cwd)
-
-    def submit_array_tracked(
-        self,
-        job_name: str,
-        total_tasks: int,
-        tasks_per_array: int,
-        job_env: dict[str, str],
-        *,
-        cwd: Path | None = None,
-    ) -> list[tuple[str, str]]:
-        """Like submit_array but returns (task_range, job_id) pairs.
-
-        Parameters
-        ----------
-        cwd : Path | None
-            Working directory for the subprocess.  Defaults to the current
-            working directory when ``None``.
-        """
-        return self._run_batches(
-            job_name, total_tasks, tasks_per_array, job_env, cwd=cwd, track=True
-        )
-
-    def _run_batches(
-        self,
-        job_name: str,
-        total_tasks: int,
-        tasks_per_array: int,
-        job_env: dict[str, str],
-        *,
-        cwd: Path | None = None,
-        track: bool = False,
-    ) -> list[tuple[str, str]]:
-        """Core batching loop shared by submit_array and submit_array_tracked."""
-        if tasks_per_array < 1:
-            raise errors.SpecInvalid(f"tasks_per_array must be >= 1, got {tasks_per_array}")
-        cwd = cwd or Path.cwd()
-        self._setup_log_dir()
-        submissions: list[tuple[str, str]] = []
-
-        start_task = 1
-        while start_task <= total_tasks:
-            end_task = min(start_task + tasks_per_array - 1, total_tasks)
-            task_range = f"{start_task}-{end_task}"
-            cmd = self._build_command(task_range, job_name, job_env)
-            result = self._execute_command(cmd, job_env, cwd)
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-                raise RuntimeError(
-                    f"Job submission failed (exit {result.returncode}) for array {task_range}:\n"
-                    f"  command: {' '.join(cmd)}\n"
-                    f"  stderr:  {stderr_msg}"
-                )
-            if track:
-                match = self.JOB_ID_REGEX.search(result.stdout)
-                if not match:
-                    raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
-                submissions.append((task_range, match.group(1)))
-            start_task = end_task + 1
 
         return submissions
 

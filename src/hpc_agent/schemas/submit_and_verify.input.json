@@ -255,20 +255,6 @@
           "description": "Pinned SchedulerProfile (as a dict) for a cluster whose scheduler differs from the golden slurm/sge defaults. When set, the backend is built bound to this profile: its 'family' (slurm/sge) selects the command grammar and its data (job_id_regex, scripts, error_states) overrides the golden default. Null = use the golden profile for 'backend'. Typically sourced from the cluster's clusters.yaml 'scheduler_profile' entry.",
           "title": "Scheduler Profile"
         },
-        "tasks_per_array": {
-          "anyOf": [
-            {
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Batch tasks into arrays of this size. Null = single array of total_tasks.",
-          "title": "Tasks Per Array"
-        },
         "canary": {
           "default": true,
           "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good.",

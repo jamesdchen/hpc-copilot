@@ -8,18 +8,10 @@ patched at the module level used by ``HPCBackend._execute_command``.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from hpc_agent import errors
 from hpc_agent.infra.backends.sge import SGEBackend
-
-
-def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
-    """Fake ``subprocess.CompletedProcess`` for monkeypatching."""
-    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
-
 
 # ---------------------------------------------------------------------------
 # _build_command
@@ -134,54 +126,6 @@ class TestDependencyFlag:
     def test_empty_list_returns_empty(self, tmp_path):
         backend = SGEBackend(script=str(tmp_path / "j.sh"))
         assert backend._build_dependency_flag([]) == []
-
-
-# ---------------------------------------------------------------------------
-# submit_array_tracked (subprocess mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestSubmitArrayTracked:
-    def test_happy_path_returns_range_and_jobid(self, monkeypatch, tmp_path):
-        def fake_run(cmd, *args, **kwargs):
-            return _cp(
-                stdout='Your job-array 12345.1-10:1 ("probe") has been submitted\n',
-                returncode=0,
-            )
-
-        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
-
-        backend = SGEBackend(
-            script=str(tmp_path / "job.sh"),
-            log_dir=str(tmp_path / "logs"),
-        )
-        out = backend.submit_array_tracked(
-            "probe",
-            total_tasks=10,
-            tasks_per_array=10,
-            job_env={},
-            cwd=tmp_path,
-        )
-        assert out == [("1-10", "12345")]
-
-    def test_nonzero_returncode_raises_with_stderr(self, monkeypatch, tmp_path):
-        def fake_run(cmd, *args, **kwargs):
-            return _cp(stdout="", stderr="qsub: bad thing", returncode=2)
-
-        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
-
-        backend = SGEBackend(
-            script=str(tmp_path / "job.sh"),
-            log_dir=str(tmp_path / "logs"),
-        )
-        with pytest.raises(RuntimeError, match="qsub: bad thing"):
-            backend.submit_array_tracked(
-                "probe",
-                total_tasks=10,
-                tasks_per_array=10,
-                job_env={},
-                cwd=tmp_path,
-            )
 
 
 # ---------------------------------------------------------------------------

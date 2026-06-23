@@ -1007,12 +1007,16 @@ class TestResourceFlagPlumbing:
         import subprocess
 
         from hpc_agent._wire.workflows.submit_flow import SubmitResources
+        from hpc_agent.infra.backends import HPCBackend
         from hpc_agent.ops.submit_flow import _make_single_array_submission
 
         captured: dict[str, Any] = {}
 
-        class _FakeBackend:
+        class _FakeBackend(HPCBackend):
             JOB_ID_REGEX = re.compile(r"job (\d+)")
+
+            def __init__(self) -> None:
+                self.log_dir = "/tmp/resflag-stub-logs"
 
             def _setup_log_dir(self) -> None:
                 pass
@@ -1020,7 +1024,7 @@ class TestResourceFlagPlumbing:
             def resource_flags(self, resources: Any) -> list[str]:
                 return ["-l", f"h_rt={resources.walltime_sec}"] if resources else []
 
-            def _build_command(self, rng, name, env, *, extra_flags=None):  # type: ignore[no-untyped-def]
+            def _build_command(self, rng, name, env, *, extra_flags=None, array=True):  # type: ignore[no-untyped-def]
                 captured["extra_flags"] = extra_flags
                 return ["qsub", "..."]
 

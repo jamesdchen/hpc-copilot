@@ -25,7 +25,7 @@ model interruptible nodes; that part of the contract transfers as-is.
   override points an API-driven backend needs are explicit:
   `_execute_command` ("override for remote execution"), the
   `alive_job_ids` / `query_jobs` / `classify_scheduler_state` /
-  `stderr_log_path` capability hooks, and `submit_array_tracked` for
+  `stderr_log_path` capability hooks, and `submit_plan` for
   backends with no shell submit command at all.
 - **Plugin loading.** The `hpc_agent.plugins` entry-point group
   (`hpc_agent._kernel.registry.plugins`) imports a plugin's

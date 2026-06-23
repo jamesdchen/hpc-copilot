@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
+from hpc_agent.infra.backends import HPCBackend
 from hpc_agent.ops.recover_flow import (
+    _submit_resubmit_batches,
     render_overrides_to_extra_flags,
     resubmit_flow,
 )
@@ -88,18 +90,21 @@ def _write_clusters_yaml(tmp_path, monkeypatch):
     monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(yaml_path))
 
 
-class _StubBackend:
-    """Minimal backend stub mirroring HPCBackend's private surface.
+class _StubBackend(HPCBackend):
+    """Minimal backend stub over the real HPCBackend interface.
 
-    Records every ``_build_command`` and ``_execute_command`` invocation
-    so tests can assert on the task_range strings + extra_flags that
-    flowed through. Returns a synthetic job id by default; tests can
-    override ``submit_responses`` to simulate failures.
+    Subclasses :class:`HPCBackend` so it inherits the shared per-batch primitive
+    (:meth:`HPCBackend.submit_one`) that ``_submit_one_batch`` now routes through
+    (#339 inc 3). Records every ``_build_command`` and ``_execute_command``
+    invocation so tests can assert on the task_range strings + extra_flags that
+    flowed through. Returns a synthetic job id by default; tests can override
+    ``submit_responses`` to simulate failures.
     """
 
     JOB_ID_REGEX = re.compile(r"Submitted batch job (\d+)")
 
     def __init__(self, *, submit_responses=None):
+        self.log_dir = "/tmp/recover-stub-logs"
         self.calls: list[dict] = []
         self.responses: list = list(submit_responses) if submit_responses else []
         self._next_id = 90000000
@@ -107,7 +112,7 @@ class _StubBackend:
     def _setup_log_dir(self):
         self.calls.append({"step": "setup_log_dir"})
 
-    def _build_command(self, task_range, job_name, job_env, *, extra_flags=None):
+    def _build_command(self, task_range, job_name, job_env, *, extra_flags=None, array=True):
         self.calls.append(
             {
                 "step": "build_command",
@@ -247,6 +252,50 @@ class TestSubmitToClusterRequiredKwargs:
                 script="script.sh",
                 job_name="resub",
             )
+
+
+class TestResubmitOutOfRangeGuard:
+    """#339: resubmit on an index-bounded backend refuses out-of-range ids.
+
+    A multi-wave run's failed ids can exceed the scheduler's array-index cap.
+    The submit path waves past the cap with local-range + offset, but a resubmit
+    replays the actual (possibly non-contiguous) ids as a global array
+    expression a single offset can't encode — so it must fail loud rather than
+    emit an out-of-range array.
+    """
+
+    def _call(self, stub, *, failed_task_ids, total_tasks, cap, tmp_path):
+        from hpc_agent.infra.constraints import ClusterConstraints
+
+        return _submit_resubmit_batches(
+            experiment_dir=tmp_path,
+            run_id="r",
+            failed_task_ids=failed_task_ids,
+            effective_overrides=None,
+            ssh_target="u@h",
+            remote_path="/r",
+            scheduler="slurm",
+            script="run.sh",
+            job_name="resub",
+            job_env={"HPC_RUN_ID": "r"},
+            total_tasks=total_tasks,
+            constraints=ClusterConstraints(max_array_size=cap),
+            backend_factory=_make_factory(stub),
+        )
+
+    def test_over_cap_failed_id_raises(self, tmp_path):
+        # id 150 → 1-based array index 151 > cap 100 → refuse.
+        with pytest.raises(errors.SpecInvalid, match="out-of-range"):
+            self._call(
+                _StubBackend(), failed_task_ids=[150], total_tasks=200, cap=100, tmp_path=tmp_path
+            )
+
+    def test_in_range_ids_submit_as_before(self, tmp_path):
+        # All ids' 1-based indices are <= cap → submits exactly as before.
+        ids = self._call(
+            _StubBackend(), failed_task_ids=[3, 50], total_tasks=200, cap=100, tmp_path=tmp_path
+        )
+        assert len(ids) == 1  # one batch
 
 
 class TestClusterSubmission:

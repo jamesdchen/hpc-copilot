@@ -151,6 +151,20 @@ def test_wave_map_round_trips_with_string_keys(tmp_path: Path) -> None:
         assert isinstance(k, str)
 
 
+def test_pre_stamp_tolerates_n_job_ids_per_run(tmp_path: Path) -> None:
+    """A >cap main run carries ONE job id per wave (#339 inc 4): the crash-safety
+    pre-stamp (``update_run_sidecar_job_ids``) must accept and round-trip the
+    full list, not just a single id."""
+    write_run_sidecar(tmp_path, **_required_kwargs())
+    wave_ids = ["1001", "1002", "1003", "1004"]
+    update_run_sidecar_job_ids(tmp_path, _RUN_ID, wave_ids)
+    assert read_run_sidecar(tmp_path, _RUN_ID)["job_ids"] == wave_ids
+
+    # Idempotent re-stamp with the same N ids is a no-op rewrite.
+    update_run_sidecar_job_ids(tmp_path, _RUN_ID, wave_ids)
+    assert read_run_sidecar(tmp_path, _RUN_ID)["job_ids"] == wave_ids
+
+
 # ─── Layer 2: v1→v2 backfill ───────────────────────────────────────────
 
 

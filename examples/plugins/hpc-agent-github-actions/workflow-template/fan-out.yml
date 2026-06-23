@@ -15,7 +15,14 @@ on:
     inputs:
       correlation_id: { required: true, type: string }
       run_id: { required: true, type: string }
-      total_tasks: { required: true, type: string }
+      total_tasks: { required: true, type: string } # number of matrix cells in THIS wave
+      # GLOBAL 0-based id of the first task in this wave (#339 waves). A >256-task
+      # sweep is submitted as multiple waves; each wave dispatches its own GLOBAL
+      # window (e.g. wave 2 covering global ids 256..511 sends task_start=256,
+      # total_tasks=256) so task-<i> names + artifacts use GLOBAL ids that line
+      # up with the combiner's 0-based global wave_map. Defaults to 0 so a single
+      # ≤256 wave (and any older dispatcher) keeps fanning out over 0..N-1.
+      task_start: { required: false, type: string, default: "0" }
       executor: { required: true, type: string } # per-task command, e.g. "python train.py"
       cmd_sha: { required: false, type: string }
       campaign_id: { required: false, type: string }
@@ -25,18 +32,23 @@ permissions:
   contents: read # gh release download needs this; artifacts need no token permission
 
 jobs:
-  expand: # turn total_tasks into a 0..N-1 matrix
+  expand: # turn (task_start, total_tasks) into the GLOBAL id window matrix
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
     steps:
       - id: m
         env:
-          N: ${{ inputs.total_tasks }}
+          N: ${{ inputs.total_tasks }} # cells in this wave
+          START: ${{ inputs.task_start }} # GLOBAL 0-based start (0 for a single wave)
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
-          print("matrix=" + json.dumps({"i": list(range(int(os.environ["N"])))}))
+          start = int(os.environ["START"])
+          n = int(os.environ["N"])
+          # GLOBAL ids start..start+n-1 — so task-<i> + per-task artifacts use the
+          # SAME 0-based global ids the combiner's wave_map keys on (#339 waves).
+          print("matrix=" + json.dumps({"i": list(range(start, start + n))}))
           PY
 
   prefetch: # download the dataset ONCE from the release and warm the cache, so the

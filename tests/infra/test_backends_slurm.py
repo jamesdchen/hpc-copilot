@@ -14,10 +14,31 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.infra.backends.slurm import SlurmBackend
+from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+def _single_batch_plan(start: int = 1, end: int = 1) -> SubmissionPlan:
+    """A one-wave, one-batch plan covering tasks ``start..end`` (1-based)."""
+    batch = JobBatch(
+        batch_index=0,
+        task_start=start,
+        task_end=end,
+        array_size=end - start + 1,
+        est_wall_s=None,
+        wave=0,
+    )
+    return SubmissionPlan(
+        batches=[batch],
+        total_tasks=end - start + 1,
+        total_batches=1,
+        max_concurrent=1,
+        est_total_wall_s=None,
+        strategy="test",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +175,11 @@ class TestDependencyFlag:
 
 
 # ---------------------------------------------------------------------------
-# submit_array_tracked with mocked subprocess
+# submit_plan with mocked subprocess
 # ---------------------------------------------------------------------------
 
 
-class TestSubmitArrayTracked:
+class TestSubmitPlanErrors:
     def test_nonzero_returncode_raises(self, monkeypatch, tmp_path):
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout="", stderr="sbatch: bad", returncode=1)
@@ -170,10 +191,9 @@ class TestSubmitArrayTracked:
             log_dir=str(tmp_path / "logs"),
         )
         with pytest.raises(RuntimeError, match="sbatch: bad"):
-            backend.submit_array_tracked(
+            backend.submit_plan(
+                _single_batch_plan(1, 10),
                 "probe",
-                total_tasks=10,
-                tasks_per_array=10,
                 job_env={},
                 cwd=tmp_path,
             )
@@ -212,14 +232,13 @@ class TestJobIdParsingAnchored:
             script=str(tmp_path / "j.sh"),
             log_dir=str(tmp_path / "logs"),
         )
-        out = backend.submit_array_tracked(
+        out = backend.submit_plan(
+            _single_batch_plan(1, 1),
             "j",
-            total_tasks=1,
-            tasks_per_array=1,
             job_env={},
             cwd=tmp_path,
         )
-        assert out == [("1-1", "12345")]
+        assert out == [(0, "1-1", "12345")]
 
     def test_clean_output_still_parses(self, monkeypatch, tmp_path):
         def fake_run(cmd, *args, **kwargs):
@@ -230,14 +249,13 @@ class TestJobIdParsingAnchored:
             script=str(tmp_path / "j.sh"),
             log_dir=str(tmp_path / "logs"),
         )
-        out = backend.submit_array_tracked(
+        out = backend.submit_plan(
+            _single_batch_plan(1, 1),
             "j",
-            total_tasks=1,
-            tasks_per_array=1,
             job_env={},
             cwd=tmp_path,
         )
-        assert out == [("1-1", "99999")]
+        assert out == [(0, "1-1", "99999")]
 
 
 # ─── Bug 3: hung scheduler subprocess surfaces TimeoutExpired ────────────
@@ -263,10 +281,9 @@ class TestSubmitTimeout:
             log_dir=str(tmp_path / "logs"),
         )
         with pytest.raises(sp.TimeoutExpired):
-            backend.submit_array_tracked(
+            backend.submit_plan(
+                _single_batch_plan(1, 1),
                 "j",
-                total_tasks=1,
-                tasks_per_array=1,
                 job_env={},
                 cwd=tmp_path,
             )

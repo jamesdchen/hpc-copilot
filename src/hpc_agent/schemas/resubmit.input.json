@@ -91,7 +91,7 @@
     },
     "submit_to_cluster": {
       "default": false,
-      "description": "When true, hpc-agent composes resubmit_plan + backend.submit_array to actually re-issue the failed tasks. When false (legacy default), the operation is journal-only. Requires script, backend, and job_name to be set when true.",
+      "description": "When true, hpc-agent composes resubmit_plan + per-batch backend submission to actually re-issue the failed tasks. When false (legacy default), the operation is journal-only. Requires script, backend, and job_name to be set when true.",
       "title": "Submit To Cluster",
       "type": "boolean"
     },
