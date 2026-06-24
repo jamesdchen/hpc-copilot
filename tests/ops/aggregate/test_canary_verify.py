@@ -953,3 +953,202 @@ def test_checkpoint_canary_petsc_unloadable_names_format(
     assert out["failure_kind"] == "checkpoint_unloadable"
     assert "petsc_binary" in out["details"]
     assert "no PETSc Vec block found" in out["details"]
+
+
+# ── #351-3: positive exit_code read from _runtime.json ───────────────────────
+
+
+def _seed_canary_with_sidecar_cmd_sha(
+    experiment: Path,
+    *,
+    cmd_sha: str = "deadbeef",
+    result_dir_template: str = "results/{run_id}/task_{task_id}",
+) -> None:
+    """Journal record + canary sidecar carrying a real cmd_sha.
+
+    A non-empty cmd_sha is what drives ``record_canary_validated`` on the
+    success path (verify_canary.py ~:801) — the #351-3 tests need it to prove
+    a failing canary is NEVER cached.
+    """
+    from hpc_agent.state.runs import write_run_sidecar
+
+    _seed_canary(experiment)
+    write_run_sidecar(
+        experiment,
+        run_id="r1-canary",
+        cmd_sha=cmd_sha,
+        hpc_agent_version="",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template=result_dir_template,
+        task_count=1,
+        tasks_py_sha="",
+        cluster="hoffman2",
+    )
+
+
+def _is_cmd_sha_cached(cmd_sha: str) -> bool:
+    """Whether ``cmd_sha`` was recorded canary-validated (the cache poisoning)."""
+    from hpc_agent import __version__ as pkg_version
+    from hpc_agent.state import canary_cache
+
+    return canary_cache.is_canary_validated_fresh(
+        canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=pkg_version or "")
+    )
+
+
+# A canary that wrote a (partial) result file and went "complete" in the
+# scheduler's view, yet whose dispatcher recorded a non-zero exit — the exact
+# #351-3 trap: scheduler-state + result-presence + a clean 50-line stderr tail
+# all "pass", but the task actually failed.
+_COMPLETE_SUMMARY = {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+_CLEAN_STDERR = [{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1-canary\n"}]
+
+
+def test_nonzero_exit_in_runtime_json_fails_gate_and_is_not_cached(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """#351-3: a canary reported 'complete' with a clean stderr tail, but its
+    task-0 ``_runtime.json`` recorded ``exit_code: 1`` (e.g. a TypeError whose
+    traceback fell outside the fetched 50 lines). verify_canary must read that
+    exit code over SSH, return ``ok=False`` + ``failure_kind="nonzero_exit"``,
+    AND never cache the failing cmd_sha (no cache poisoning)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_fails")
+    runtime_json = '{"task_id": 0, "exit_code": 1, "elapsed_sec": 3}'
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(stdout=runtime_json),
+        ) as m_ssh,
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "nonzero_exit"
+    assert "exit_code=1" in out["details"]
+    assert "_runtime.json" in out["details"]
+    # The guard read the canary task-0 _runtime.json over SSH.
+    assert "_runtime.json" in m_ssh.call_args.args[0]
+    assert "results/r1-canary/task_0" in m_ssh.call_args.args[0]
+    # failure_features carries the stderr tail for the operator.
+    assert out["failure_features"] is not None
+    # The poisoning check: a FAILING cmd_sha must NOT be cached as validated.
+    assert _is_cmd_sha_cached("sha_fails") is False
+
+
+def test_zero_exit_in_runtime_json_passes_and_claims_exit_0(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """The positive side of the guard: when ``_runtime.json`` records
+    ``exit_code: 0``, the canary passes AND the details string truthfully
+    claims 'exit 0' (it was actually read, not asserted blindly). The valid
+    cmd_sha IS cached for the skip optimisation (#249)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_ok")
+    runtime_json = '{"task_id": 0, "exit_code": 0, "elapsed_sec": 3}'
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(stdout=runtime_json),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+    assert "exit 0" in out["details"]
+    assert out["failure_features"] is None
+    # A genuinely-passing canary IS cached (the #249 skip optimisation still works).
+    assert _is_cmd_sha_cached("sha_ok") is True
+
+
+def test_absent_runtime_json_falls_through_to_existing_logic(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """#351-3 is ADDITIVE: an ABSENT ``_runtime.json`` (a preamble crash before
+    the dispatcher writes it) must NOT mint a false failure — it falls through
+    to the unchanged success logic, and the details string does NOT lie 'exit 0'
+    since the exit code was never read."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_absent")
+    # `cat ... || echo __HPC_NO_RUNTIME__` → the sentinel for a missing file.
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(stdout="__HPC_NO_RUNTIME__"),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+    # The exit code was NEVER read → the details string must not assert "exit 0".
+    assert "exit 0" not in out["details"]
+    assert "no error markers" in out["details"]
+
+
+def test_unreadable_runtime_json_falls_through_does_not_fail_canary(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """A non-JSON / unreadable ``_runtime.json`` (ssh hiccup, truncated write)
+    must NOT mint a false ``nonzero_exit`` — we never fail a canary from a read
+    miss; the existing stderr / failed-count paths already gate real crashes."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_garbled")
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report", return_value=_COMPLETE_SUMMARY
+        ),
+        mock.patch("hpc_agent.infra.cluster_logs.fetch_task_logs", return_value=_CLEAN_STDERR),
+        mock.patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_fake_ssh_completed(stdout="not json {{{"),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+    assert "exit 0" not in out["details"]
+
+
+def test_nonzero_exit_guard_runs_after_existing_failure_paths(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """The exit_code read is ADDITIVE: a stderr failure marker still wins (the
+    guard runs only after the marker scan, which short-circuits first). Proven by
+    a [dispatch] FAILED marker resolving to dispatcher_failed even though a
+    _runtime.json would be available — ssh_run is never reached for the read."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary_with_sidecar_cmd_sha(tmp_path, cmd_sha="sha_marker")
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}],
+        ),
+        mock.patch("hpc_agent.infra.remote.ssh_run") as m_ssh,
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "dispatcher_failed"
+    # The stderr scan short-circuited before the exit_code read ran.
+    m_ssh.assert_not_called()
+    assert _is_cmd_sha_cached("sha_marker") is False

@@ -25,6 +25,7 @@
             "traceback",
             "oom_killed",
             "segfault",
+            "nonzero_exit",
             "missing_output",
             "reporter_unreachable",
             "completed_unknown",

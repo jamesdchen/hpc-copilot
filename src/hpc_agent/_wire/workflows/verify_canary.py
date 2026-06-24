@@ -13,6 +13,12 @@ CanaryFailureKind = Literal[
     "traceback",
     "oom_killed",
     "segfault",
+    # The canary task-0 ``_runtime.json`` recorded a non-zero ``exit_code`` even
+    # though scheduler state + result-file presence + the 50-line stderr scan all
+    # "passed" — a task that wrote a partial result then failed (#351-3). The
+    # positive exit-code read in ``verify-canary`` catches it before the success
+    # return and before the cmd_sha is cached as canary-validated.
+    "nonzero_exit",
     "missing_output",
     # Every status poll failed — broken cluster-side reporter (the job may have
     # run but its result can't be read, so the canary can't be trusted).

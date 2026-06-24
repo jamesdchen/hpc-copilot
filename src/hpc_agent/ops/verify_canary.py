@@ -193,6 +193,80 @@ def _verify_remote_checkpoint(
     return parsed
 
 
+def _read_canary_exit_code(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    result_dir: str,
+) -> dict[str, Any]:
+    """Read the canary task-0 ``_runtime.json`` ``exit_code`` over SSH.
+
+    #351-3: ``verify_canary`` concluded success from scheduler-state +
+    result-file-presence + a 50-line stderr scan — it NEVER read the per-task
+    ``exit_code`` the dispatcher records to ``<result_dir>/_runtime.json``
+    (``dispatch.py`` ~:984/:1007). A canary that wrote a partial result file
+    then exited non-zero (e.g. a ``TypeError`` whose traceback fell outside the
+    fetched tail) was counted ``complete`` and passed. This positively reads the
+    recorded exit code so a non-zero exit fails the gate.
+
+    *result_dir* is the canary task-0 result dir (absolute, or relative to
+    *remote_path*); the ``_runtime.json`` lives directly under it. Mirrors the
+    SSH-read-of-a-per-task-result-dir pattern of :func:`_verify_remote_checkpoint`.
+
+    Returns one of:
+
+    * ``{"status": "present", "exit_code": int}`` — runtime read and parsed.
+    * ``{"status": "absent"}`` — no ``_runtime.json`` (a preamble crash BEFORE
+      the dispatcher writes it; the existing stderr / failed-count paths catch
+      that). The caller falls through to the unchanged success logic.
+    * ``{"status": "unreadable", "detail": ...}`` — ssh error / non-JSON /
+      no ``exit_code`` field. Also falls through (do NOT mint a false failure
+      from an unreadable sidecar — the existing paths already gate real crashes).
+    """
+    import json
+    import shlex
+
+    from hpc_agent.infra.remote import ssh_run
+
+    target = result_dir
+    if not target.startswith("/"):
+        target = f"{remote_path.rstrip('/')}/{target.lstrip('/')}"
+    runtime_path = f"{target.rstrip('/')}/_runtime.json"
+    # Emit a sentinel for "file absent" so we distinguish a missing _runtime.json
+    # (preamble crash → fall through) from an unreadable one. ``cat`` on a missing
+    # file would just produce empty stdout; the marker makes absence unambiguous.
+    cmd = f"cat {shlex.quote(runtime_path)} 2>/dev/null || echo __HPC_NO_RUNTIME__"
+    try:
+        res = ssh_run(cmd, ssh_target=ssh_target)
+    except (errors.RemoteCommandFailed, OSError) as exc:
+        return {"status": "unreadable", "detail": f"ssh _runtime.json read raised: {exc}"}
+    if res.returncode != 0:
+        return {
+            "status": "unreadable",
+            "detail": (
+                f"remote _runtime.json read exited {res.returncode}: "
+                f"{(res.stderr or '').strip()[:200]}"
+            ),
+        }
+    raw = (res.stdout or "").strip()
+    if not raw or raw == "__HPC_NO_RUNTIME__":
+        return {"status": "absent"}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"status": "unreadable", "detail": f"_runtime.json not JSON: {raw[:200]!r}"}
+    if not isinstance(parsed, dict) or "exit_code" not in parsed:
+        return {"status": "unreadable", "detail": f"_runtime.json has no exit_code: {parsed!r}"}
+    try:
+        exit_code = int(parsed["exit_code"])
+    except (TypeError, ValueError):
+        return {
+            "status": "unreadable",
+            "detail": f"_runtime.json exit_code not an int: {parsed.get('exit_code')!r}",
+        }
+    return {"status": "present", "exit_code": exit_code}
+
+
 def _resolve_canary_checkpoint_dir(
     sidecar: dict[str, Any],
     *,
@@ -382,6 +456,8 @@ def verify_canary(
     * ``failure_kind`` is None on success; otherwise one of
       ``"dispatcher_failed"`` / ``"import_error"`` / ``"module_not_found"`` /
       ``"traceback"`` / ``"oom_killed"`` / ``"segfault"`` /
+      ``"nonzero_exit"`` (the canary task-0 ``_runtime.json`` recorded a
+      non-zero ``exit_code`` even though it wrote a result file — #351-3) /
       ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
       failed — broken cluster-side reporter) / ``"completed_unknown"`` (the
       job left the scheduler queue without recording a completion and no
@@ -769,6 +845,55 @@ def verify_canary(
             "failure_features": _failure_features(stderr_tail, log_path),
         }
 
+    # #351-3: positively read the canary task-0 ``exit_code`` before declaring
+    # success. The scheduler-state + result-file-presence + 50-line stderr scan
+    # above can ALL pass for a canary that wrote a partial result then exited
+    # non-zero (a TypeError whose traceback fell outside the fetched tail). The
+    # dispatcher records the real exit code to ``<result_dir>/_runtime.json``
+    # (dispatch.py ~:984/:1007); read it over SSH and fail the gate on a non-zero
+    # exit BEFORE record_canary_validated, so a failing cmd_sha is never cached.
+    #
+    # ADDITIVE positive check, not a replacement: an ABSENT/unreadable
+    # _runtime.json falls through to the unchanged logic (a preamble crash before
+    # the dispatcher writes it must still be caught by the stderr / failed-count
+    # paths above — those have already run and not fired). We only resolve the
+    # result dir from the sidecar's result_dir_template; a template that needs a
+    # per-task kwarg (unrenderable locally) is treated as "can't check" and falls
+    # through, exactly like the absent case, rather than failing a real canary.
+    canary_exit_code: int | None = None
+    try:
+        _result_dir = _resolve_canary_checkpoint_dir(
+            _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
+        )
+    except errors.SpecInvalid:
+        _result_dir = None
+    if _result_dir is not None:
+        runtime = _read_canary_exit_code(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            result_dir=_result_dir,
+        )
+        if runtime.get("status") == "present":
+            canary_exit_code = int(runtime["exit_code"])
+            if canary_exit_code != 0:
+                return {
+                    "ok": False,
+                    "failure_kind": "nonzero_exit",
+                    "details": (
+                        f"canary {canary_run_id!r} recorded exit_code={canary_exit_code} in "
+                        f"{_result_dir.rstrip('/')}/_runtime.json — it wrote a result file but "
+                        "the task FAILED (a non-zero exit whose traceback may fall outside the "
+                        "50-line stderr tail). Refusing to pass the canary; inspect the stderr "
+                        "tail / classified_error for the cause before submitting the main array."
+                    ),
+                    "stderr_tail": stderr_tail,
+                    "metrics_fingerprint": None,
+                    "failure_features": _failure_features(stderr_tail, log_path),
+                }
+        # status in {"absent", "unreadable"} → fall through unchanged: the run
+        # either crashed before _runtime.json (caught above) or we simply could
+        # not read it, and we never mint a false failure from a read miss.
+
     # Optional fingerprint. Best-effort: a fingerprint failure does NOT
     # invalidate the canary (the run itself is fine; we just couldn't
     # hash). Returns ``None`` when unavailable rather than raising.
@@ -807,11 +932,16 @@ def verify_canary(
             canary_cache.canary_cache_key(cmd_sha=_cmd_sha, version=_pkg_version or "")
         )
 
+    # #351-3: only claim "exit 0" when the exit code was ACTUALLY read as 0 from
+    # _runtime.json. When the sidecar was absent/unreadable we never verified the
+    # exit code — say "no error markers" without asserting an unchecked exit code,
+    # rather than the old string that lied "exit 0" on every success path.
+    _exit_claim = "exit 0" if canary_exit_code == 0 else "no error markers"
     return {
         "ok": True,
         "failure_kind": None,
         "details": (
-            f"canary {canary_run_id!r} verified: exit 0, no error markers, "
+            f"canary {canary_run_id!r} verified: {_exit_claim}, "
             + (f"output {expect_output!r} present." if expect_output else "no output check.")
         ),
         "stderr_tail": stderr_tail,
