@@ -229,8 +229,9 @@ class TestDeployRuntime:
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
         # One batched transfer to the project root carrying every file plus the
-        # cache-manifest write. Twelve files (no scheduler arg → sge + slurm
-        # cpu/gpu/mpi templates) + manifest = 13 dst_rels.
+        # cache-manifest write. No scheduler arg → sge + slurm cpu/gpu/mpi
+        # templates. Twelve base files + the 7-module status-reporter eager
+        # closure (#349) + manifest = 20 dst_rels.
         assert captured["ssh_target"] == "u@c"
         assert captured["remote_path"] == "/p"
         rels = set(captured["dst_rels"])
@@ -250,9 +251,18 @@ class TestDeployRuntime:
         # Two shared preambles into .hpc/templates/common/
         assert ".hpc/templates/common/hpc_preamble.sh" in rels
         assert ".hpc/templates/common/gpu_preamble.sh" in rels
+        # Status-reporter eager (import-time) closure into the namespace tree
+        # (#349) — self-contained from the deployed copy under any python.
+        assert "hpc_agent/execution/mapreduce/reduce/status.py" in rels
+        assert "hpc_agent/execution/mapreduce/reduce/rollup.py" in rels
+        assert "hpc_agent/_kernel/contract/task_id.py" in rels
+        assert "hpc_agent/_kernel/contract/vocabulary.py" in rels
+        assert "hpc_agent/errors.py" in rels
+        assert "hpc_agent/infra/time.py" in rels
+        assert "hpc_agent/execution/mapreduce/_guard.py" in rels
         # Cache manifest write (#242), riding the same transfer.
         assert ".hpc/.deploy_state.json" in rels
-        assert len(rels) == 13, sorted(rels)
+        assert len(rels) == 20, sorted(rels)
 
 
 # ---------------------------------------------------------------------------

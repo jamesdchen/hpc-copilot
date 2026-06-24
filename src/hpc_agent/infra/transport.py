@@ -674,6 +674,46 @@ def _build_deploy_items(*, scheduler: str | None) -> list[_DeployItem]:
 
     # Combiner inside .hpc/.
     add_file(pkg_dir / "execution" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
+
+    # Status REPORTER + its stdlib-only EAGER (import-time) closure (#349).
+    #
+    # The reporter runs cluster-side as
+    # ``python -m hpc_agent.execution.mapreduce.reduce.status`` (reconcile's
+    # remote_activation path, 0.10.12). Shipping its module-load closure here
+    # lets the *deployed* copy satisfy that import under any python, so the
+    # framework's runtime no longer needs a full ``hpc_agent`` in the job
+    # conda env. This is ADDITIVE: the deployed tree is a PEP 420 namespace
+    # package (no ``__init__.py``), so when the env DOES carry a regular
+    # ``hpc_agent`` install it wins by namespace-package precedence and these
+    # files are inert.
+    #
+    # SCOPE: only the *eager* (module-load) closure is shipped — every module
+    # ``status`` imports at top level, transitively. It is stdlib-only
+    # (verified by tests/contracts/test_cluster_runtime_self_contained.py,
+    # which imports the reporter under ``python -S`` with the installed
+    # ``hpc_agent`` invisible). The reporter's *function-local* runtime
+    # closure (``state.runs``, ``infra.backends``, ``infra.clusters``,
+    # ``recovery.registry``, and ``hpc_agent/__init__.py`` via
+    # ``from hpc_agent import load_tasks_module``) pulls in pydantic / yaml /
+    # jsonschema and is deliberately NOT shipped — those are the experiment
+    # env's job, and flipping the env to python-only is the separate,
+    # cluster-gated half of #349.
+    reporter_closure = (
+        # The reporter entry module itself.
+        ("execution/mapreduce/reduce/status.py", "hpc_agent/execution/mapreduce/reduce/status.py"),
+        # Eager intra-package deps of status (all stdlib-only):
+        ("execution/mapreduce/reduce/rollup.py", "hpc_agent/execution/mapreduce/reduce/rollup.py"),
+        ("_kernel/contract/task_id.py", "hpc_agent/_kernel/contract/task_id.py"),
+        ("_kernel/contract/vocabulary.py", "hpc_agent/_kernel/contract/vocabulary.py"),
+        ("errors.py", "hpc_agent/errors.py"),
+        ("infra/time.py", "hpc_agent/infra/time.py"),
+        # The #159 import-sanity guard the reporter's _main() invokes (after
+        # arg-parse, so ``--help`` never reaches it). Stdlib-only; shipped so
+        # a real reporter run resolves it from the deployed copy too.
+        ("execution/mapreduce/_guard.py", "hpc_agent/execution/mapreduce/_guard.py"),
+    )
+    for src_rel, dst_rel in reporter_closure:
+        add_file(pkg_dir / Path(src_rel), dst_rel)
     return items
 
 
@@ -857,9 +897,15 @@ def deploy_runtime(
     # ``rm -f`` clears stale ``__init__.py`` files left by pre-fix deploys
     # (rsync's ``--delete`` excludes ``hpc_agent/`` so they would persist).
     mkdir_cmd = (
-        f"mkdir -p {remote_path_q}/hpc_agent/execution/mapreduce"
+        f"mkdir -p {remote_path_q}/hpc_agent/execution/mapreduce/reduce"
+        f" {remote_path_q}/hpc_agent/_kernel/contract"
+        f" {remote_path_q}/hpc_agent/infra"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
+        # Strip any ``__init__.py`` a pre-fix deploy may have left so the
+        # deployed tree stays a PEP 420 namespace package end-to-end (#349
+        # ships reporter modules under reduce/, _kernel/contract/, infra/).
+        f" && find {remote_path_q}/hpc_agent -name '__init__.py' -delete"
         f" && rm -f {remote_path_q}/hpc_agent/__init__.py"
         f" {remote_path_q}/hpc_agent/execution/__init__.py"
         f" {remote_path_q}/hpc_agent/execution/mapreduce/__init__.py"

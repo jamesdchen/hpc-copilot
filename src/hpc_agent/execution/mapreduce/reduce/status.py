@@ -984,13 +984,6 @@ def _main() -> int:
     import argparse
     import sys
 
-    from hpc_agent.execution.mapreduce._guard import assert_canonical_import
-
-    # #159: fail loud with a clear, actionable message if a stale/shadowing
-    # hpc_agent (e.g. a ~/.local install or a namespace shadow) won the import,
-    # instead of emitting wrong results or dying with an opaque error later.
-    assert_canonical_import()
-
     parser = argparse.ArgumentParser(
         description="Emit a JSON status report for a run.",
     )
@@ -1022,6 +1015,17 @@ def _main() -> int:
         "Default 0 accepts header-only CSVs (e.g. zero-result CSVs).",
     )
     args = parser.parse_args()
+
+    from hpc_agent.execution.mapreduce._guard import assert_canonical_import
+
+    # #159: fail loud with a clear, actionable message if a stale/shadowing
+    # hpc_agent (e.g. a ~/.local install or a namespace shadow) won the import,
+    # instead of emitting wrong results or dying with an opaque error later.
+    # Runs AFTER arg-parse so ``--help``/``-h`` short-circuit cleanly via
+    # argparse (a help request never needs import-sanity) — which is what lets
+    # the deployed namespace-package copy answer ``--help`` self-contained
+    # (#349) without the guard rejecting its (intentionally) missing __file__.
+    assert_canonical_import()
 
     def _emit_err(code: str, detail: str, exit_code: int = 2) -> int:
         err_doc = {

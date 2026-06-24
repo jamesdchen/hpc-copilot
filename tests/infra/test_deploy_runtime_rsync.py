@@ -31,7 +31,10 @@ def _prelude_ok():
 
 def test_deploy_issues_a_single_rsync_invocation():
     n_files = len(transport._build_deploy_items(scheduler="sge"))
-    assert n_files == 9  # 2 stubs + dispatch + combiner + 3 templates (cpu/gpu/mpi) + 2 preambles
+    # 2 stubs + dispatch + combiner + 3 templates (cpu/gpu/mpi) + 2 preambles
+    # + the 7-module status-reporter eager closure (#349): status, rollup,
+    # task_id, vocabulary, errors, time, _guard.
+    assert n_files == 16
 
     calls: list[list[str]] = []
 
