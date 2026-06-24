@@ -234,7 +234,9 @@ def record_interview(
                 "kind": "register_run",
                 "run_name": ep["run_name"],
                 "executor_cmd": register_run_executor_cmd(
-                    campaign_dir=campaign_dir, run_path=run_path
+                    campaign_dir=campaign_dir,
+                    run_path=run_path,
+                    run_name=ep["run_name"],
                 ),
             }
 

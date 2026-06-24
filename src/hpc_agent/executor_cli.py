@@ -215,3 +215,164 @@ def build_parser_from_flags(
     for f in flags:
         _coerce_flag(f).add_to(parser)
     return parser
+
+
+# --------------------------------------------------------------------------- #
+# run-registered: the deterministic @register_run dispatcher (#351)
+# --------------------------------------------------------------------------- #
+#
+# Replaces the brittle ``python3 -c "<nested one-liner>"`` the framework used to
+# stamp into the run sidecar's ``executor`` field for a @register_run entry
+# point. That form nested a single-quoted Python program inside a double-quoted
+# ``-c`` argument; re-escaped through the worker's shell it broke, and the agent
+# would hand-edit a divined replacement (the recurring failure class, demo
+# 2026-06-24). This is the *same* work — import the module by path, build a
+# Namespace from ``HPC_KW_*``, call the decorator-injected ``compute(args)`` —
+# but as a real argv entry with no nested quoting, defined and tested once.
+#
+# Lives here (not in the full ``hpc_agent.cli``) because ``executor_cli`` is the
+# stdlib-only module deployed to the cluster (``transport._build_deploy_items``),
+# so the dispatch resolves under any cluster python without paying the full-CLI
+# import/argparse cost per array task.
+
+
+def _load_registered_module(module_rel: str) -> Any:
+    """Import the campaign-relative module file at ``$REPO_DIR/<module_rel>``.
+
+    Loaded by path (not package name): a ``@register_run`` file or a
+    materialized wrapper lives at an arbitrary campaign-relative location, not
+    necessarily an importable package. ``REPO_DIR`` is exported by the
+    cluster-side dispatcher (``hpc_preamble.sh``); it defaults to ``.`` so the
+    entry runs locally under test. Importing the module runs its
+    ``@register_run`` decorator, which injects ``compute`` into its namespace.
+    """
+    import importlib.util
+    import os
+
+    repo_dir = os.environ.get("REPO_DIR", ".")
+    path = os.path.join(repo_dir, module_rel)
+    if not os.path.isfile(path):
+        raise SystemExit(
+            f"[run-registered] cannot import a module from {path!r}: no such file "
+            "(is REPO_DIR set and the campaign deployed?)"
+        )
+    spec = importlib.util.spec_from_file_location("_hpc_registered", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"[run-registered] cannot import a module from {path!r}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        # User code import-time failure (syntax error, a failed
+        # `from hpc_agent import register_run`, …). Surface the cause as a
+        # clean dispatch error instead of a raw cluster-side traceback.
+        raise SystemExit(f"[run-registered] failed importing {path!r}: {exc}") from exc
+    return module
+
+
+def _registered_kwargs() -> dict[str, str]:
+    """Collect ``HPC_KW_*`` task kwargs — the dispatcher's stable contract.
+
+    Each ``HPC_KW_<NAME>=<value>`` export becomes ``<name>=<value>`` (prefix
+    stripped, lowercased). Values are strings; the ``@register_run`` ``compute``
+    wrapper coerces each to its parameter's annotated type before the call
+    (``experiment_kit._runtime._make_compute``, #350/#351).
+    """
+    import os
+
+    prefix = "HPC_KW_"
+    return {
+        key[len(prefix) :].lower(): value
+        for key, value in os.environ.items()
+        if key.startswith(prefix)
+    }
+
+
+def run_registered(argv: list[str] | None = None) -> int:
+    """Dispatch one task to a ``@register_run`` executor (#351).
+
+    ``python3 -m hpc_agent.executor_cli run-registered <module_rel>
+    [--run-name NAME]``. ``compute`` is the single callable ``@register_run``
+    injects per module (one run per module is the expected shape).
+    ``--run-name``, when supplied, is validated against the module's ``_RUNS``
+    registry so a stale spec fails loudly *here* — naming the mismatch — rather
+    than silently running the wrong module.
+
+    ``output_file`` defaults to ``$RESULT_DIR/metrics.json`` so a function that
+    just ``return``s a dict lands its result on disk; an explicit
+    ``HPC_KW_OUTPUT_FILE`` (from declared FLAGS) still wins via ``setdefault``.
+    """
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(
+        prog="hpc_agent.executor_cli run-registered",
+        description="Dispatch one task to a @register_run executor (#351).",
+    )
+    parser.add_argument(
+        "module_rel",
+        help="Campaign-relative path to the @register_run / wrapper module "
+        "(resolved against $REPO_DIR on the cluster).",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Registered run name; validated against the module's _RUNS registry when supplied.",
+    )
+    parser.add_argument(
+        "--no-default-output",
+        action="store_true",
+        help="Do not default output_file to $RESULT_DIR/metrics.json.",
+    )
+    args = parser.parse_args(argv)
+
+    module = _load_registered_module(args.module_rel)
+
+    runs = getattr(module, "_RUNS", None)
+    if args.run_name is not None and isinstance(runs, dict) and args.run_name not in runs:
+        raise SystemExit(
+            f"[run-registered] no @register_run named {args.run_name!r} in "
+            f"{args.module_rel!r}; found {sorted(runs)}. The spec is stale — "
+            "re-run the interview so the executor_cmd matches the module."
+        )
+
+    compute = getattr(module, "compute", None)
+    if compute is None:
+        raise SystemExit(
+            f"[run-registered] module {args.module_rel!r} exports no compute(); "
+            "is the entry point @register_run-decorated?"
+        )
+
+    kwargs = _registered_kwargs()
+    if not args.no_default_output:
+        kwargs.setdefault(
+            "output_file",
+            os.path.join(os.environ.get("RESULT_DIR", "."), "metrics.json"),
+        )
+    compute(argparse.Namespace(**kwargs))
+    return 0
+
+
+_SUBCOMMANDS = {"run-registered": run_registered}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m hpc_agent.executor_cli <subcommand> ...`` entry point.
+
+    Only ``run-registered`` exists today (the deterministic ``@register_run``
+    dispatcher, #351). The declarative helper API above (``flag`` /
+    ``generic_args`` / ``build_parser_from_flags``) is import-only and
+    unaffected — importing this module never runs ``main``.
+    """
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] not in _SUBCOMMANDS:
+        choices = ", ".join(sorted(_SUBCOMMANDS))
+        sys.stderr.write(f"usage: python -m hpc_agent.executor_cli {{{choices}}} ...\n")
+        return 2
+    return _SUBCOMMANDS[argv[0]](argv[1:])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

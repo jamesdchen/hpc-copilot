@@ -654,31 +654,32 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
     assert "interview.json" in result["artifacts"]
     assert not (tmp_path / ".hpc" / "wrappers").exists()
     # The materialized entry_point block records the pointer for downstream readers.
-    # `executor_cmd` is auto-generated so the per-task command is the correct
-    # `python3 -c "...; _m.compute(_n)"` one-liner that imports the user's file
-    # and dispatches via the HPC_KW_* env vars the cluster dispatcher exports.
-    # Without it, the cluster would default to `python3 <file>` which exits 0
-    # without invoking compute (empirical 0.10.2 demo failure).
+    # `executor_cmd` is auto-generated as the deterministic `run-registered`
+    # dispatch (#351): `python3 -m hpc_agent.executor_cli run-registered <rel>
+    # --run-name <name>` imports the user's file by path and dispatches via the
+    # HPC_KW_* env vars the cluster dispatcher exports. Without it, the cluster
+    # would default to `python3 <file>` which exits 0 without invoking compute
+    # (empirical 0.10.2 demo failure). The old nested `python3 -c "..."` form is
+    # gone — its quoting broke when re-escaped through the worker's shell (#351).
     doc = json.loads((tmp_path / "interview.json").read_text())
     materialized = doc["_materialized"]["entry_point"]
     assert materialized["kind"] == "register_run"
     assert materialized["run_name"] == "forecast"
     assert "executor_cmd" in materialized
     cmd = materialized["executor_cmd"]
-    assert cmd.startswith('python3 -c "')
-    # The one-liner imports by path, builds args from HPC_KW_*, calls compute(_n).
+    assert cmd.startswith("python3 -m hpc_agent.executor_cli run-registered ")
+    assert "python3 -c" not in cmd  # the brittle nested one-liner is gone
     assert "notebooks/forecast.py" in cmd
-    assert "compute" in cmd
-    assert "HPC_KW_" in cmd
+    assert "--run-name forecast" in cmd
 
 
 def test_entry_point_register_run_executor_cmd_matches_wrapper_shape(tmp_path: Path) -> None:
     """The register_run executor_cmd mirrors wrapper_executor_cmd's contract:
-    same import-by-path + argparse-from-HPC_KW_* + compute(_n) shape, only
-    the file path differs. This pins the two helpers to the same dispatch
-    convention so the cluster dispatcher's behavior is identical regardless
-    of whether the user direct-decorated their own file or the framework
-    materialized a wrapper for the shell_command fallback."""
+    both route through the same deterministic `run-registered` dispatch (#351),
+    only the module path differs (and the direct case forwards --run-name).
+    This pins the two helpers to one dispatch convention so the cluster
+    dispatcher's behavior is identical regardless of whether the user
+    direct-decorated their own file or the framework materialized a wrapper."""
     from hpc_agent.incorporation.wrap_entry_point import register_run_executor_cmd
 
     (tmp_path / "executors").mkdir()
@@ -689,23 +690,15 @@ def test_entry_point_register_run_executor_cmd_matches_wrapper_shape(tmp_path: P
         "def run(seed: int) -> dict:\n"
         "    return {'pi': 3.14}\n"
     )
-    cmd = register_run_executor_cmd(campaign_dir=tmp_path, run_path=user_file)
-    # POSIX path in the embedded import string (cluster is Linux).
+    cmd = register_run_executor_cmd(campaign_dir=tmp_path, run_path=user_file, run_name="run")
+    # Deterministic argv dispatch — no nested `python3 -c` quoting (#351).
+    assert cmd.startswith("python3 -m hpc_agent.executor_cli run-registered ")
+    assert "python3 -c" not in cmd
+    # POSIX module path (cluster is Linux) resolved against $REPO_DIR at task time.
     assert "executors/monte_carlo_pi.py" in cmd
-    # Same Namespace-from-HPC_KW_* + compute(_n) shape as wrapper_executor_cmd.
-    assert "argparse.Namespace" in cmd
-    assert "HPC_KW_" in cmd
-    assert ".compute(_n)" in cmd
-    # Pulls from $REPO_DIR like wrapper_executor_cmd — runs at the cluster
-    # cwd post-rsync, where REPO_DIR is the experiment root.
-    assert "REPO_DIR" in cmd
-    # Default output_file to $RESULT_DIR/metrics.json so a function that just
-    # returns a dict lands its result without the user wiring up the kwarg
-    # themselves. Explicit HPC_KW_OUTPUT_FILE still wins (dict comprehension
-    # runs before the setdefault).
-    assert "setdefault('output_file'" in cmd
-    assert "RESULT_DIR" in cmd
-    assert "metrics.json" in cmd
+    # --run-name forwards the decorated name so a stale spec fails loudly at
+    # dispatch (validated against the module's _RUNS registry).
+    assert "--run-name run" in cmd
 
 
 def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:
@@ -860,12 +853,11 @@ def test_entry_point_shell_command_executor_cmd_in_materialized(tmp_path: Path) 
     doc = json.loads((tmp_path / "interview.json").read_text())
     ep_mat = doc["_materialized"]["entry_point"]
     assert ep_mat["wrapper_path"] == ".hpc/wrappers/forecast.py"
-    # The executor_cmd builds an args namespace from HPC_KW_* env vars and
-    # invokes compute(). Pin the contract by checking key tokens.
-    assert "python3 -c" in ep_mat["executor_cmd"]
+    # The executor_cmd is the deterministic `run-registered` dispatch (#351),
+    # not the old nested `python3 -c "..."` one-liner. Pin the contract.
+    assert ep_mat["executor_cmd"].startswith("python3 -m hpc_agent.executor_cli run-registered ")
+    assert "python3 -c" not in ep_mat["executor_cmd"]
     assert ".hpc/wrappers/forecast.py" in ep_mat["executor_cmd"]
-    assert "HPC_KW_" in ep_mat["executor_cmd"]
-    assert "compute" in ep_mat["executor_cmd"]
 
 
 @pytest.mark.skipif(

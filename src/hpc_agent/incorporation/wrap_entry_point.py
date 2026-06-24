@@ -30,6 +30,7 @@ artifact imports ``@register_run`` from :mod:`hpc_agent.experiment_kit`
 from __future__ import annotations
 
 import hashlib
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -199,33 +200,33 @@ def wrapper_executor_cmd(
     ``<campaign_dir>/.hpc/wrappers/<run_name>.py``. The helper just
     composes the command — it neither writes nor verifies the wrapper.
     """
-    rel = _WRAPPERS_SUBDIR / f"{run_name}.py"
-    # Single-quote-safe Python one-liner: import the materialized module by
-    # path (no package install required on the cluster), build args from
-    # HPC_KW_* env vars, then call compute(args). The dispatcher's bare-
-    # form env exports (NAME alongside HPC_KW_NAME) aren't used here — the
-    # HPC_KW_* namespace is the stable contract.
+    rel = (_WRAPPERS_SUBDIR / f"{run_name}.py").as_posix()
+    # Deterministic dispatch via the deployed ``executor_cli`` entry (#351) —
+    # ``run-registered`` imports the module by path (no package install needed
+    # on the cluster), builds args from the HPC_KW_* contract, and calls the
+    # decorator-injected compute(args). This replaces the old nested
+    # ``python3 -c "<single-quoted program>"`` form, whose quoting broke when
+    # re-escaped through the worker's shell. No ``--run-name`` here: the
+    # wrapper's internal registration name is an implementation detail of the
+    # materializer, so we dispatch the module's single injected compute.
     #
-    # rel.as_posix(): this command runs on the Linux cluster, so the embedded
-    # path must use forward slashes even when the campaign was authored on
-    # Windows (str(WindowsPath) would bake in backslashes that break the
-    # cluster-side os.path.join lookup).
-    py = (
-        "import argparse,importlib.util,os,sys;"
-        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel.as_posix()!r});"
-        "_s=importlib.util.spec_from_file_location('_hpc_wrapper',_p);"
-        "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
-        "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
-        "for k,v in os.environ.items() if k.startswith('HPC_KW_')});"
-        "_m.compute(_n)"
+    # rel is POSIX: this runs on the Linux cluster even when the campaign was
+    # authored on Windows (a backslash path would break $REPO_DIR resolution).
+    #
+    # --no-default-output: a shell wrapper subprocess-invokes the user's argv,
+    # which writes its own output — the framework must NOT inject an
+    # output_file (the old one-liner didn't). The direct @register_run case
+    # DOES default it (a bare `return dict` needs somewhere to land).
+    return (
+        f"python3 -m hpc_agent.executor_cli run-registered {shlex.quote(rel)} --no-default-output"
     )
-    return f'python3 -c "{py}"'
 
 
 def register_run_executor_cmd(
     *,
     campaign_dir: Path,
     run_path: Path,
+    run_name: str | None = None,
 ) -> str:
     """Return the shell command to invoke a ``@register_run``-decorated
     function in the user's existing file on a task.
@@ -254,35 +255,31 @@ def register_run_executor_cmd(
     *run_path* must be a path inside *campaign_dir*; the embedded
     POSIX relative form ships with the campaign rsync and is resolved
     against ``$REPO_DIR`` at task time, matching the wrapper case.
+
+    *run_name*, when given (the decorated function's name), is forwarded
+    as ``--run-name`` so the dispatcher validates the run against the
+    module's ``_RUNS`` registry — a stale executor_cmd then fails loudly,
+    naming the mismatch, instead of silently running the wrong module.
     """
     rel = run_path.relative_to(campaign_dir).as_posix()
-    # Default ``output_file`` to ``$RESULT_DIR/metrics.json`` so a
-    # user function that just ``return``s a dict (the common
-    # @register_run pattern) actually lands the result on disk. The
-    # decorator-injected ``compute(args)`` writes the dict to
-    # ``args.output_file`` when both are present — without this
-    # ``setdefault``, the dispatcher exports ``RESULT_DIR`` but no
-    # ``HPC_KW_OUTPUT_FILE`` (the dispatcher's HPC_KW_* contract
-    # carries only ``tasks.resolve(i)`` kwargs, never framework
-    # metadata), so the dict is silently dropped. Empirical 0.10.3
-    # demo: 100 tasks ran, only ``_runtime.json`` written, no
-    # ``metrics.json``. The explicit user-supplied output_file (via
-    # FLAGS / argparse) still wins because it lands as
-    # ``HPC_KW_OUTPUT_FILE`` and the dict comprehension picks it up
-    # before the setdefault fires.
-    py = (
-        "import argparse,importlib.util,os;"
-        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel!r});"
-        "_s=importlib.util.spec_from_file_location('_hpc_run',_p);"
-        "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
-        "_kw={k[len('HPC_KW_'):].lower():v "
-        "for k,v in os.environ.items() if k.startswith('HPC_KW_')};"
-        "_kw.setdefault('output_file', "
-        "os.path.join(os.environ.get('RESULT_DIR','.'), 'metrics.json'));"
-        "_n=argparse.Namespace(**_kw);"
-        "_m.compute(_n)"
-    )
-    return f'python3 -c "{py}"'
+    # Deterministic dispatch via the deployed ``executor_cli`` entry (#351):
+    # ``run-registered`` imports the user's file by path, builds args from the
+    # HPC_KW_* contract, and calls the decorator-injected compute(args). It
+    # defaults ``output_file`` to ``$RESULT_DIR/metrics.json`` so a function
+    # that just ``return``s a dict lands its result on disk — without it the
+    # dispatcher exports ``RESULT_DIR`` but no ``HPC_KW_OUTPUT_FILE`` (the
+    # HPC_KW_* contract carries only ``tasks.resolve(i)`` kwargs, never
+    # framework metadata), so the dict was silently dropped (0.10.3 demo:
+    # 100 tasks ran, only ``_runtime.json`` written). An explicit
+    # ``HPC_KW_OUTPUT_FILE`` (from declared FLAGS) still wins.
+    #
+    # This replaces the old nested ``python3 -c "<single-quoted program>"``,
+    # whose quoting broke when re-escaped through the worker's shell — the
+    # recurring "agent hand-edits a divined executor_cmd" failure (#351).
+    parts = ["python3", "-m", "hpc_agent.executor_cli", "run-registered", shlex.quote(rel)]
+    if run_name is not None:
+        parts += ["--run-name", shlex.quote(run_name)]
+    return " ".join(parts)
 
 
 def _validate_solver(solver: Mapping[str, Any] | None) -> tuple[str, str | None] | None:

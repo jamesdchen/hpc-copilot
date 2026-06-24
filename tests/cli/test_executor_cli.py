@@ -8,6 +8,11 @@ breaks every experiment repo's executor invocations.
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +21,8 @@ from hpc_agent.executor_cli import (
     flag,
     generic_args,
     gpu_args,
+    main,
+    run_registered,
 )
 
 
@@ -113,3 +120,160 @@ def test_realistic_tasks_py_shape() -> None:
     patchts = build_parser_from_flags(FLAGS["src.dl_patchts"], description="src.dl_patchts")
     args = patchts.parse_args(["--output-file", "p.csv", "--epochs", "10"])
     assert args.epochs == 10
+
+
+# --------------------------------------------------------------------------- #
+# run-registered: the deterministic @register_run dispatcher (#351)
+# --------------------------------------------------------------------------- #
+
+
+def _write_register_run_module(path: Path, body: str) -> None:
+    """Write a @register_run module file (imports register_run from the package)."""
+    path.write_text("from hpc_agent import register_run\n" + body, encoding="utf-8")
+
+
+def test_run_registered_coerces_env_strings_and_writes_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dispatch coerces HPC_KW_* strings to annotated types (#350/#351) and
+    writes the returned dict to $RESULT_DIR/metrics.json — the exact path the
+    2026-06-24 demo failed on (``range("1000000")`` TypeError)."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\n"
+        "def estimate(samples: int = 5, seed: int = 0) -> dict:\n"
+        "    return {'doubled': samples * 2, 'seed_type': type(seed).__name__}\n",
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+    # Strings, exactly as the cluster dispatcher exports them:
+    monkeypatch.setenv("HPC_KW_SAMPLES", "1000000")
+    monkeypatch.setenv("HPC_KW_SEED", "3")
+
+    rc = run_registered(["mc.py", "--run-name", "estimate"])
+
+    assert rc == 0
+    metrics = json.loads((result_dir / "metrics.json").read_text())
+    assert metrics["doubled"] == 2_000_000  # coerced int, not "1000000" * 2
+    assert metrics["seed_type"] == "int"
+
+
+def test_run_registered_via_dash_m_subprocess(tmp_path: Path) -> None:
+    """The real cluster invocation form — ``python -m hpc_agent.executor_cli
+    run-registered ...`` — actually resolves and runs, with no nested-quote
+    shell fragility. This is the exact argv stamped into the sidecar
+    executor_cmd, so it pins the form the cluster will execute."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\n"
+        "def estimate(samples: int = 5) -> dict:\n"
+        "    return {'doubled': samples * 2}\n",
+    )
+    result_dir = tmp_path / "out"
+    env = {
+        **os.environ,
+        "REPO_DIR": str(tmp_path),
+        "RESULT_DIR": str(result_dir),
+        "HPC_KW_SAMPLES": "21",
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "hpc_agent.executor_cli",
+            "run-registered",
+            "mc.py",
+            "--run-name",
+            "estimate",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((result_dir / "metrics.json").read_text())["doubled"] == 42
+
+
+def test_run_registered_defaults_output_to_result_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No HPC_KW_OUTPUT_FILE → output_file defaults to $RESULT_DIR/metrics.json,
+    so a function that just returns a dict lands its result without the user
+    wiring up the kwarg (0.10.3 demo: dict silently dropped)."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\ndef estimate(seed: int = 0) -> dict:\n    return {'seed': seed}\n",
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+    monkeypatch.setenv("HPC_KW_SEED", "7")
+
+    assert run_registered(["mc.py"]) == 0
+    assert json.loads((result_dir / "metrics.json").read_text())["seed"] == 7
+
+
+def test_run_registered_explicit_output_file_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit HPC_KW_OUTPUT_FILE (declared FLAGS) wins over the default
+    via setdefault — the result lands where the operator asked, not the fallback."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\ndef estimate(seed: int = 0) -> dict:\n    return {'seed': seed}\n",
+    )
+    explicit = tmp_path / "custom" / "answer.json"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("HPC_KW_SEED", "1")
+    monkeypatch.setenv("HPC_KW_OUTPUT_FILE", str(explicit))
+
+    assert run_registered(["mc.py"]) == 0
+    assert explicit.is_file()
+    assert not (tmp_path / "out" / "metrics.json").exists()
+
+
+def test_run_registered_stale_run_name_is_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --run-name absent from the module's _RUNS registry fails loudly here
+    (naming the mismatch as a stale spec), not by silently running the wrong
+    module — the abandoned-vs-failed misdiagnosis class (#351)."""
+    _write_register_run_module(
+        tmp_path / "mc.py",
+        "@register_run\ndef estimate(seed: int = 0) -> dict:\n    return {'seed': seed}\n",
+    )
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(tmp_path / "out"))
+    with pytest.raises(SystemExit, match="ghost"):
+        run_registered(["mc.py", "--run-name", "ghost"])
+
+
+def test_run_registered_module_without_compute_is_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module with no @register_run (no injected compute) is rejected with an
+    actionable message rather than an opaque AttributeError."""
+    (tmp_path / "plain.py").write_text("def estimate():\n    return {}\n", encoding="utf-8")
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(tmp_path / "out"))
+    with pytest.raises(SystemExit, match="no compute"):
+        run_registered(["plain.py"])
+
+
+def test_run_registered_missing_module_is_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module_rel that doesn't exist under $REPO_DIR fails with a clear message."""
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    with pytest.raises(SystemExit, match="cannot import"):
+        run_registered(["nope.py"])
+
+
+def test_executor_cli_main_unknown_subcommand_returns_usage() -> None:
+    """`python -m hpc_agent.executor_cli <bogus>` returns a non-zero usage code,
+    and the helper-only import surface is never run by accident."""
+    assert main(["bogus"]) == 2
+    assert main([]) == 2
