@@ -5,7 +5,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## [Unreleased]
+## 0.10.65 — 2026-06-24
+
+### Added — pure-API reduction honors `mode` / `aggregate_cmd` (#342)
+
+- **A pure-API backend (`requires_ssh = False`) is no longer locked into the numeric weighted-mean.** `aggregate-flow`'s reduction *choice* (mean vs. a custom reducer command) now follows the spec `mode`, independent of reduction *location* (local vs. cluster, which follows the backend's `requires_ssh`). New `local-reduce` runs the reducer-contract command (`docs/reference/reducer-contract.md`) as a LOCAL subprocess over the artifacts `fetch_results` shipped back (`$HPC_RESULTS_DIR` / `$HPC_RUN_ID` / `$HPC_AGGREGATED_OUTPUT`), mirroring the SSH `cluster-reduce` envelope. `ops/aggregate/{local_reduce,_reducer_contract}.py`.
 
 ### Added — SSH connection-rate throttle (`safe_interval`, opt-in)
 
@@ -25,6 +29,10 @@ on the wire surface enumerated in
 - **`hpc-agent run --detached` / `HPC_AGENT_DRIVE=detached` (opt-in; default unchanged).** The recent cluster ban traced to *an LLM sitting in the connection loop*: `hpc-agent run --workflow status` spawns a `claude -p --bare` worker to **drive** the wait-until-terminal poll; the worker auto-backgrounds at 2 min, ends its turn mid-poll (so the run reports "no report"), and a fallback inline subagent then retries SSH in prose for ~21 min. The deterministic composite it was driving (`status-pipeline` → `monitor_flow`) already runs the whole poll loop in plain code with the connection owned by a single process — the principle `infra/retry.py` states ("the model is out of the loop"); the miss was the *drive layer*. The new **detached** drive mode launches that composite as a DETACHED `hpc-agent` subprocess (NOT a `claude -p` worker) that owns the connection and runs to terminal, and the orchestrator learns the outcome by **reading the journal**, never by spawning an LLM to poke SSH (mirrors DPDispatcher's submit-and-poke loop / jobflow-remote's Runner daemon). The detached child uses `start_new_session` (POSIX) / `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP` (Windows) so it OUTLIVES the orchestrator — the exact crash that killed the auto-backgrounded `submit-pipeline` ~1s after qsub in 0.10.63 no longer kills the poll.
 - **Journal-read poll helper (`hpc_agent.state.journal_poll`).** `read_run_status` / `poll_until_terminal` read the per-run journal record (the same on-disk state `monitor_flow` writes as it polls) and report terminal `JournalStatus` — **cluster-free, no SSH**. Keys off the durable journal status, not the monitor-flow `lifecycle_state` envelope, so a timed-out-but-still-live run is correctly NOT terminal and the caller keeps waiting. Injectable `sleep`/`now` for hermetic tests.
 - **Scope + safety.** Landed slice: the `status` workflow's blocking wait path (the lifecycle the LLM sat in). `submit`/`aggregate` keep the default worker (deferred — see `docs/workflows/code-driven-orchestration.md`). The flag/env is **opt-in**; the proven `--bare` worker stays the default. Unlike `--inline`, detached is NOT refused when a worker can authenticate (it spawns no LLM, so the #155 context-isolation guard does not apply). Unsupported shapes are refused with `spec_invalid`. Stays entirely in the drive/worker/CLI layer — no `ops/monitor`, backend-status, or `infra/{remote,ssh_*}` changes. New env var documented in `docs/reference/env-vars.md`; `tests/_kernel/lifecycle/test_detached_drive.py`.
+
+### Fixed
+
+- **`local-reduce` test helpers quote `sys.executable`** (#347) so the pure-API aggregate suite passes on install paths containing a space (e.g. a checkout under `...\CC Allowed\...`). Test-only; `local_reduce`'s shell-command contract is unchanged.
 
 ## 0.10.64 — 2026-06-23
 
