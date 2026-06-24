@@ -404,25 +404,51 @@ def _scp_pull(
     restrictive include will receive the entire subdirectory. For the
     payloads hpc-agent actually pulls (``_combiner/wave_*.json`` and
     optional per-task summaries), this is acceptable.
+
+    ``scp -r`` copies the SOURCE DIRECTORY into the destination — it does NOT
+    honor rsync's trailing-slash "contents-only" semantics — so a naive
+    ``scp -r remote:.../<sub>/ local/<sub>`` lands the files one level too deep
+    at ``local/<sub>/<sub>/``. That is the double-nested ``_combiner/_combiner/``
+    that broke ``verify-aggregation-complete`` on Windows (where rsync is
+    absent, so the pull falls through here). To match :func:`rsync_pull`'s
+    layout, scp the directory into a temp staging dir (scp creates
+    ``<staging>/<sub>``) and move that dir's CONTENTS into *local_dir*.
     """
-    src = f"{ssh_target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}/"
+    sub = remote_subdir.strip("/").rsplit("/", 1)[-1]
+    # No trailing slash: scp copies the directory itself into the staging dir.
+    src = f"{ssh_target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}"
     dst_path = Path(local_dir)
     dst_path.mkdir(parents=True, exist_ok=True)
-    dst = str(dst_path)
 
-    scp_cmd = [*ssh_argv("scp", extra_opts=["-r"]), src, dst]
-    try:
-        return subprocess.run(
-            scp_cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"scp pull from {ssh_target} timed out after {timeout}s: {_truncate(f'{src} -> {dst}')}"
-        ) from exc
+    with tempfile.TemporaryDirectory() as staging:
+        scp_cmd = [*ssh_argv("scp", extra_opts=["-r"]), src, staging]
+        try:
+            proc = subprocess.run(
+                scp_cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"scp pull from {ssh_target} timed out after {timeout}s: "
+                f"{_truncate(f'{src} -> {dst_path}')}"
+            ) from exc
+        if proc.returncode != 0:
+            return proc
+        # Flatten scp's dir-copy into local_dir so the result matches rsync's
+        # contents-only layout (local_dir/wave_*.json, not local_dir/<sub>/...).
+        staged = Path(staging) / sub
+        if staged.is_dir():
+            for item in staged.iterdir():
+                target = dst_path / item.name
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+                shutil.move(str(item), str(target))
+        return proc
 
 
 def rsync_push(

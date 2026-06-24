@@ -433,8 +433,43 @@ def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None
     cmd = run_mock.call_args[0][0]
     assert cmd[0] == _scp_binary()
     assert "-r" in cmd
-    assert any("u@h:/r/_combiner/" in arg for arg in cmd)
+    # scp receives the dir WITHOUT a trailing slash (it copies the dir itself
+    # into a staging area, which _scp_pull then flattens into local_dir — see
+    # test_scp_fallback_does_not_double_nest).
+    assert any(a == "u@h:/r/_combiner" for a in cmd)
     assert (tmp_path / "out").exists()
+
+
+def test_scp_fallback_does_not_double_nest(tmp_path: Path) -> None:
+    """scp -r copies the directory itself (not its contents); _scp_pull must
+    flatten the staging copy into local_dir so there is no ``_combiner/_combiner/``
+    nesting — the Windows (rsync-absent) aggregate bug that broke
+    verify-aggregation-complete."""
+    from pathlib import Path as _Path  # module-level import is TYPE_CHECKING-only
+
+    out = tmp_path / "_combiner"
+
+    def fake_scp(cmd, **kwargs):
+        # Emulate ``scp -r remote:.../_combiner <staging>`` creating
+        # ``<staging>/_combiner/wave_0.json`` (scp copies the dir, not contents).
+        staging = _Path(cmd[-1])
+        nested = staging / "_combiner"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / "wave_0.json").write_text("{}", encoding="utf-8")
+        return _ok()
+
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", side_effect=fake_scp),
+    ):
+        transport.rsync_pull(
+            ssh_target="u@h",
+            remote_path="/r",
+            remote_subdir="_combiner",
+            local_dir=str(out),
+        )
+    assert (out / "wave_0.json").is_file()  # flattened into local_dir
+    assert not (out / "_combiner").exists()  # NOT double-nested
 
 
 def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
