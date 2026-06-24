@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
+from hpc_agent._kernel.contract.vocabulary import JournalStatus
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
@@ -14,6 +15,155 @@ from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.journal import is_resubmittable_terminal, load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
+
+
+def _resolve_current_executor(
+    experiment_dir: Path,
+    run_id: str,
+    current_executor: str | None,
+) -> str | None:
+    """Resolve the about-to-submit per-task executor command.
+
+    Mirrors the #351 sub-bug #5 resolution in the A5/cmd_sha lane: when the
+    caller did not hand us one, read it from THIS run's own sidecar
+    (``.hpc/runs/<run_id>.json``) — submit-flow's ``_ensure_run_sidecar``
+    writes/validates the real per-task command there before rsync, so it is
+    the current intended executor. Best-effort: an unreadable/absent sidecar
+    leaves it None (executor-drift detection disabled — param-only fallback).
+    """
+    if current_executor is not None:
+        return current_executor
+    try:
+        own_sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        errors.HpcError,
+    ):
+        return None
+    raw_executor = own_sidecar.get("executor")
+    return str(raw_executor) if raw_executor else None
+
+
+def _resolve_current_tasks_py_sha(
+    experiment_dir: Path,
+    tasks_py_sha: str | None,
+) -> str | None:
+    """Resolve the about-to-submit code-provenance drift sha.
+
+    Mirrors the A5/cmd_sha lane: when the caller did not hand us one, derive
+    it from the on-disk ``<experiment>/.hpc/tasks.py`` — the same source
+    ``write_run_sidecar`` stamps onto the sidecar — so even callers that only
+    thread ``cmd_sha`` get the drift guard. An unreadable tasks.py disables
+    drift detection (param-only fallback).
+    """
+    if tasks_py_sha is not None:
+        return tasks_py_sha
+    tasks_py = Path(experiment_dir) / ".hpc" / "tasks.py"
+    if not tasks_py.is_file():
+        return None
+    from hpc_agent.state.run_sha import compute_tasks_py_sha
+
+    try:
+        return compute_tasks_py_sha(tasks_py)
+    except OSError:
+        return None
+
+
+def _layer1_code_drift(
+    existing: RunRecord,
+    *,
+    current_executor: str | None,
+    current_tasks_py_sha: str | None,
+) -> tuple[bool, str | None, str | None]:
+    """Detect executor / tasks.py drift between a COMPLETE prior run and the
+    about-to-submit code, at the LAYER-1 (run_id) dedup gate.
+
+    LAYER 1 keys on ``run_id`` and a COMPLETE prior run dedups (idempotency)
+    BEFORE the A5/cmd_sha LAYER-2 scan ever runs — so #207's tasks_py drift
+    and #351 sub-bug #5's executor drift, both enforced only in
+    :func:`find_run_by_cmd_sha`, are bypassed for the most common
+    same-machine "redo this finished run with new code" case (changed
+    executor / tasks.py, unchanged swept params → SAME run_id).
+
+    The recorded values come from the PRIOR run's **journal RunRecord**, NOT
+    its sidecar. This matters for fireability: an in-place redo with the same
+    run_id (params unchanged) re-writes the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` with the NEW executor/tasks_py_sha at Step 6d
+    (``ops/resolve_submit_inputs.py`` → ``write_run_sidecar``) BEFORE
+    ``submit_and_record`` runs, so by the time this gate fires the sidecar
+    already holds the NEW code — reading it would compare new-vs-new and the
+    guard could never fire. The journal record, by contrast, is only
+    rewritten by ``upsert_run`` AFTER this dedup decision, so it still carries
+    the PRIOR run's ``executor`` / ``tasks_py_sha`` (stamped onto it at the
+    prior submit) — the one durable signal the redo's sidecar overwrite does
+    not destroy.
+
+    Returns ``(drift, recorded_executor, recorded_tasks_py_sha)``. ``drift``
+    is True when EITHER the recorded executor or the recorded tasks_py_sha is
+    non-empty AND differs from the current — exactly the symmetric drift
+    predicate :func:`find_run_by_cmd_sha` applies at layer 2 (an
+    empty/absent recorded value is NOT drift; we cannot prove it changed,
+    e.g. a pre-#351 record that never stamped these fields).
+    """
+    recorded_executor = existing.executor
+    recorded_tasks_py_sha = existing.tasks_py_sha
+    executor_changed = bool(
+        current_executor and recorded_executor and str(recorded_executor) != str(current_executor)
+    )
+    code_changed = bool(
+        current_tasks_py_sha
+        and recorded_tasks_py_sha
+        and str(recorded_tasks_py_sha) != str(current_tasks_py_sha)
+    )
+    return (
+        executor_changed or code_changed,
+        str(recorded_executor) if executor_changed else None,
+        str(recorded_tasks_py_sha) if code_changed else None,
+    )
+
+
+def _warn_layer1_drift(
+    run_id: str,
+    *,
+    recorded_executor: str | None,
+    current_executor: str | None,
+    recorded_tasks_py_sha: str | None,
+    current_tasks_py_sha: str | None,
+) -> None:
+    """Emit the LAYER-1 drift warning(s) — same shape/wording as the layer-2
+    warnings in :func:`find_run_by_cmd_sha`, so a complete-prior dedup that
+    replays stale code/executor is now VISIBLE instead of silent."""
+    import warnings
+
+    if recorded_executor is not None:
+        warnings.warn(
+            f"deduping against COMPLETE run {run_id!r} (same run_id, i.e. "
+            "identical swept parameters), but its recorded executor command "
+            f"({recorded_executor!r}) differs from the current "
+            f"({str(current_executor)!r}) — the entry point / executor changed "
+            "since that run. The replay is a no-op against the PRIOR "
+            "submission's executor (dedup keys on parameters by design, "
+            "#207/#351). Pass --invalidate-on-code-change (or set "
+            "invalidate_on_code_change=True) to force a fresh run.",
+            UserWarning,
+            stacklevel=3,
+        )
+    if recorded_tasks_py_sha is not None:
+        warnings.warn(
+            f"deduping against COMPLETE run {run_id!r} (same run_id, i.e. "
+            "identical swept parameters), but its recorded tasks.py drift sha "
+            f"{recorded_tasks_py_sha[:8]}… differs from the current "
+            f"{str(current_tasks_py_sha)[:8]}… — the executor code changed "
+            "since that run. The replay is a no-op against the PRIOR "
+            "submission's code (dedup keys on parameters by design, #207). "
+            "Pass --invalidate-on-code-change (or set "
+            "invalidate_on_code_change=True) to force a fresh run.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]
@@ -147,6 +297,17 @@ def submit_and_record(
     total_tasks = spec.total_tasks
     campaign_id = spec.campaign_id or ""
 
+    # Resolve the about-to-submit code-provenance ONCE — the per-task executor
+    # command and the tasks.py drift sha. Both feed three consumers below: the
+    # LAYER-1 COMPLETE-redo drift gate, the A5/cmd_sha LAYER-2 lookup, and the
+    # journal record we stamp them onto so a FUTURE same-run_id redo can detect
+    # drift against this run (the sidecar is overwritten before that gate runs;
+    # the journal record is the durable copy). When the caller didn't thread a
+    # value, derive it from THIS run's own sidecar / on-disk tasks.py — the same
+    # sources submit-flow stamps the sidecar from (see the helper docstrings).
+    resolved_executor = _resolve_current_executor(experiment_dir, run_id, current_executor)
+    resolved_tasks_py_sha = _resolve_current_tasks_py_sha(experiment_dir, tasks_py_sha)
+
     existing = load_run(experiment_dir, run_id)
     if existing is not None and not is_resubmittable_terminal(existing):
         # #276: a terminal-but-not-``complete`` record (``failed`` / ``abandoned``)
@@ -155,7 +316,49 @@ def submit_and_record(
         # abandoned record, or after any prior failure). A ``complete`` run still
         # dedups (idempotency) and an ``in_flight`` one still blocks; only the
         # terminal-failure record falls through to a fresh RunRecord + upsert below.
-        return existing, True
+        #
+        # #351 sub-bug #5 (layer-1 companion): a COMPLETE prior run dedups HERE,
+        # keyed on run_id, BEFORE the A5/cmd_sha LAYER-2 scan that enforces #207
+        # tasks_py drift and #351 executor drift ever runs. So a "redo THIS
+        # finished run with new code" (changed executor / entry point / tasks.py,
+        # unchanged swept params → same run_id) was a SILENT replay on the
+        # PRE-change code. Compare the PRIOR run's recorded executor/tasks_py_sha
+        # — read from its journal RunRecord (the sidecar at the same run_id is
+        # already overwritten with the NEW code by the time we get here, so only
+        # the journal carries the prior values; see ``_layer1_code_drift``) —
+        # against the about-to-submit code. This is an IN-PLACE REDO (stay within
+        # #207): the run_id is unchanged — a drift under the lever falls through
+        # to the same fresh in-place submit as the ``failed``/``abandoned`` lanes
+        # below (overwrites the old record + cluster dir); run-id minting is NOT
+        # touched. ``in_flight`` is left to block as before (only COMPLETE redoes).
+        if existing.status == JournalStatus.COMPLETE:
+            drift, recorded_executor, recorded_tasks_py_sha = _layer1_code_drift(
+                existing,
+                current_executor=resolved_executor,
+                current_tasks_py_sha=resolved_tasks_py_sha,
+            )
+            if not drift:
+                return existing, True
+            if invalidate_on_code_change:
+                # Opt-in: this finished run's code/executor changed, so the
+                # dedup is NOT a valid replay — fall through to a fresh in-place
+                # submit (same run_id, overwrites the old record + cluster dir),
+                # exactly like the failed/abandoned lanes below.
+                existing = None
+            else:
+                # Default: idempotency preserved (re-running a finished
+                # experiment stays a no-op) but the drift is now VISIBLE — warn
+                # (same shape as the layer-2 warning) and STILL dedup.
+                _warn_layer1_drift(
+                    run_id,
+                    recorded_executor=recorded_executor,
+                    current_executor=resolved_executor,
+                    recorded_tasks_py_sha=recorded_tasks_py_sha,
+                    current_tasks_py_sha=resolved_tasks_py_sha,
+                )
+                return existing, True
+        else:
+            return existing, True
 
     # A5: cmd_sha-based dedup. Covers the case where the journal at
     # ~/.claude/hpc/<repo_hash>/runs/ has been wiped (rm -rf, machine
@@ -171,48 +374,11 @@ def submit_and_record(
     # path (lever off) is unchanged — find_run_by_cmd_sha still matches
     # on cmd_sha alone and only warns on detected drift.
     if cmd_sha:
-        # Resolve the current code-provenance drift sha once. When the
-        # caller did not hand us one, derive it from the on-disk tasks.py
-        # — the same source write_run_sidecar stamps onto the sidecar —
-        # so even callers that only thread cmd_sha get the drift guard.
-        current_tasks_py_sha = tasks_py_sha
-        if current_tasks_py_sha is None:
-            tasks_py = Path(experiment_dir) / ".hpc" / "tasks.py"
-            if tasks_py.is_file():
-                from hpc_agent.state.run_sha import compute_tasks_py_sha
-
-                try:
-                    current_tasks_py_sha = compute_tasks_py_sha(tasks_py)
-                except OSError:
-                    # Unreadable tasks.py disables drift detection for this
-                    # lookup (falls back to param-only dedup); mirrors the
-                    # empty-sha tolerance in _ensure_run_sidecar.
-                    current_tasks_py_sha = None
-        # #351 sub-bug #5: resolve the about-to-submit per-task EXECUTOR
-        # command so find_run_by_cmd_sha can flag an executor/entry-point
-        # change (same drift lane as tasks_py_sha). The executor is in NO
-        # identity sha (cmd_sha is pure params, #207), so without this an
-        # executor change with unchanged params silently replays the old
-        # executor. When the caller didn't hand us one, read it from THIS
-        # run's own sidecar — submit-flow's _ensure_run_sidecar writes/validates
-        # it (the real per-task command) before rsync, so it is the current
-        # intended executor. Best-effort: an unreadable/absent sidecar leaves
-        # it None and disables the executor-drift check (param-only fallback).
-        resolved_executor = current_executor
-        if resolved_executor is None:
-            try:
-                own_sidecar = read_run_sidecar(experiment_dir, run_id)
-            except (
-                FileNotFoundError,
-                OSError,
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-                errors.HpcError,
-            ):
-                own_sidecar = None
-            if own_sidecar is not None:
-                raw_executor = own_sidecar.get("executor")
-                resolved_executor = str(raw_executor) if raw_executor else None
+        # ``resolved_executor`` / ``resolved_tasks_py_sha`` were resolved once
+        # at the top of the function (the same on-disk-sidecar / on-disk-tasks.py
+        # sources, with the caller's threaded values taking precedence). Reuse
+        # them for the LAYER-2 drift lane so layer 1, layer 2, and the stamped
+        # journal record all agree on the about-to-submit code.
         sidecar_path = find_run_by_cmd_sha(
             experiment_dir,
             cmd_sha,
@@ -223,7 +389,7 @@ def submit_and_record(
             # (the default, and every pre-DAG caller) keeps the historical
             # bare-cmd_sha key.
             node_sha=node_sha,
-            tasks_py_sha=current_tasks_py_sha,
+            tasks_py_sha=resolved_tasks_py_sha,
             # #351 sub-bug #5: the executor command rides the same code-drift
             # lane as tasks_py_sha — see find_run_by_cmd_sha. Default path
             # warns + dedups (the change is now VISIBLE); the
@@ -292,6 +458,15 @@ def submit_and_record(
                     max_auto_resumes=int(max_auto_resumes),
                     auto_recover_on_failure=auto_recover_on_failure,
                     max_auto_recovers=int(max_auto_recovers),
+                    # #351 layer-1 companion: mirror the matched sidecar's
+                    # executor / tasks_py_sha onto the reconstructed journal
+                    # record so a FUTURE same-run_id redo can detect drift
+                    # against it (the sidecar will have been overwritten by
+                    # then; the journal record is the durable copy). The
+                    # journal-wiped sidecar IS the prior run's record here, so
+                    # its own values are the right provenance to carry forward.
+                    executor=str(sidecar_data.get("executor") or ""),
+                    tasks_py_sha=str(sidecar_data.get("tasks_py_sha") or ""),
                 )
                 # Repair the journal so future load_run calls hit it
                 # directly without re-doing the cmd_sha scan.
@@ -324,6 +499,15 @@ def submit_and_record(
         # the zero-blast-radius baseline (resolve-and-recover never auto-acts).
         auto_recover_on_failure=auto_recover_on_failure,
         max_auto_recovers=int(max_auto_recovers),
+        # #351 layer-1 companion: the durable record of WHAT this run actually
+        # ran. The sidecar carries these too, but a future same-run_id in-place
+        # redo overwrites the sidecar with its NEW code BEFORE the layer-1
+        # COMPLETE-dedup gate reads it — so only this journal copy lets that
+        # redo detect drift against the run we are recording now (see
+        # ``_layer1_code_drift``). Empty strings when unresolved → "cannot prove
+        # drift" (never a false invalidation).
+        executor=resolved_executor or "",
+        tasks_py_sha=resolved_tasks_py_sha or "",
     )
     upsert_run(experiment_dir, record)
     # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids

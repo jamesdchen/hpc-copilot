@@ -440,3 +440,212 @@ def test_351_find_run_no_drift_when_recorded_executor_absent(tmp_path: Path) -> 
             invalidate_on_code_change=True,  # would invalidate IF drift fired
         )
     assert hit == target  # no drift detected → still a valid dedup target
+
+
+# ─── #351 sub-bug #5 (layer-1 companion): the COMPLETE-prior in-place redo ───
+#
+# These pin the LAYER-1 dedup gate (the ``load_run(run_id)`` branch), NOT the
+# A5/cmd_sha LAYER-2 scan the tests above exercise. The distinction: here the
+# spec's run_id MATCHES a COMPLETE journal record (same swept params → same
+# run_id), so ``load_run`` returns it and the COMPLETE-dedup short-circuits
+# BEFORE layer 2 ever runs. A "redo this finished run with new code" (changed
+# executor / entry point, unchanged params) was therefore a SILENT replay on
+# the PRE-change executor — layer 2's #5 guard never got a chance to fire.
+#
+# The recorded prior executor lives on the JOURNAL RunRecord, not the sidecar:
+# a same-run_id redo overwrites the sidecar with the NEW code at Step 6d before
+# submit_and_record runs, so the journal copy is the only durable prior signal
+# (see ``_layer1_code_drift``). These fixtures reproduce that exact on-disk
+# state: a COMPLETE journal record carrying the OLD executor + a sidecar that
+# already holds the NEW (about-to-submit) code.
+
+
+def _seed_complete_journal_record(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    executor: str,
+    tasks_py_sha: str = "1" * 64,
+    job_ids: list[str] | None = None,
+) -> None:
+    """Write a COMPLETE journal RunRecord at *run_id* carrying the PRIOR run's
+    executor / tasks_py_sha — the durable provenance the layer-1 redo gate
+    compares against. ``HPC_JOURNAL_DIR`` must already point at a tmp dir."""
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        experiment_dir,
+        RunRecord(
+            run_id=run_id,
+            profile="gpu-a100",
+            cluster="discovery",
+            ssh_target="me@cluster",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            job_ids=list(job_ids or ["12345"]),
+            total_tasks=4,
+            submitted_at="2026-01-01T00:00:00Z",
+            experiment_dir=str(experiment_dir),
+            status="complete",
+            executor=executor,
+            tasks_py_sha=tasks_py_sha,
+        ),
+    )
+
+
+def test_351_layer1_opt_in_redoes_complete_run_on_executor_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LAYER 1, lever ON: a COMPLETE prior run at the SAME run_id whose recorded
+    executor differs from the about-to-submit one is NOT a replay — it falls
+    through to a fresh IN-PLACE submit (same run_id, new executor). Pins the
+    most common same-machine redo the layer-2 guard could never reach."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    run_id = "20260101-000000-redo001"
+    cmd_sha = "f" * 64
+
+    _seed_complete_journal_record(tmp_path, run_id, executor="python3 src/run_v1.py --seed $SEED")
+    # The sidecar already holds the NEW code (Step 6d overwrote it pre-qsub →
+    # no job_ids yet, i.e. an orphan, so the A5 scan after layer-1 invalidation
+    # correctly falls through to a real submit rather than re-deduping on self).
+    _write_sidecar(
+        tmp_path,
+        run_id,
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run_v2.py --seed $SEED",
+        job_ids=[],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec(run_id, job_ids=["99999"]),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,  # tasks.py unchanged — only the executor moved
+        current_executor="python3 src/run_v2.py --seed $SEED",
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is False  # NOT a replay — the finished run is redone in place
+    assert record.run_id == run_id  # SAME run_id (in-place; run-id minting untouched)
+    assert record.job_ids == ["99999"]  # the fresh submission's job_ids
+    assert record.status == "in_flight"  # a brand-new run, not the COMPLETE replay
+
+
+def test_351_layer1_default_warns_and_dedups_complete_run_on_executor_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LAYER 1, lever OFF: a COMPLETE prior run with a changed executor STILL
+    dedups (re-running a finished experiment stays an idempotent no-op) but the
+    drift is now VISIBLE — a UserWarning naming the executor change instead of
+    the pre-fix SILENT replay. The win is observability; the OLD run wins."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    run_id = "20260101-000000-redo002"
+    cmd_sha = "f" * 64
+
+    _seed_complete_journal_record(
+        tmp_path,
+        run_id,
+        executor="python3 src/run_v1.py --seed $SEED",
+        job_ids=["12345"],
+    )
+    _write_sidecar(
+        tmp_path,
+        run_id,
+        cmd_sha=cmd_sha,
+        executor="python3 src/run_v2.py --seed $SEED",
+        job_ids=["12345"],
+    )
+
+    with pytest.warns(UserWarning, match="executor command"):
+        record, deduped = submit_and_record(
+            tmp_path,
+            spec=_spec(run_id, job_ids=["99999"]),
+            cmd_sha=cmd_sha,
+            tasks_py_sha="1" * 64,
+            current_executor="python3 src/run_v2.py --seed $SEED",
+            # invalidate_on_code_change defaults False
+        )
+
+    assert deduped is True  # idempotent no-op preserved
+    assert record.run_id == run_id
+    assert record.job_ids == ["12345"]  # the COMPLETE run's job_ids, not ["99999"]
+    assert record.status == "complete"  # the prior COMPLETE record is returned as-is
+
+
+def test_351_layer1_same_executor_dedups_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LAYER 1: a COMPLETE prior run re-submitted with the SAME executor + SAME
+    params dedups silently — NO false warning, NO false invalidation even under
+    the opt-in lever (a transient-retry resubmit of an unchanged finished run
+    must stay a clean idempotent no-op)."""
+    import warnings
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    run_id = "20260101-000000-redo003"
+    cmd_sha = "f" * 64
+    same_executor = "python3 src/run.py --seed $SEED"
+
+    _seed_complete_journal_record(tmp_path, run_id, executor=same_executor, job_ids=["12345"])
+    _write_sidecar(tmp_path, run_id, cmd_sha=cmd_sha, executor=same_executor, job_ids=["12345"])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any drift warning would fail the test
+        record, deduped = submit_and_record(
+            tmp_path,
+            spec=_spec(run_id, job_ids=["99999"]),
+            cmd_sha=cmd_sha,
+            tasks_py_sha="1" * 64,
+            current_executor=same_executor,  # unchanged
+            invalidate_on_code_change=True,  # would invalidate IF drift fired
+        )
+
+    assert deduped is True  # clean idempotent no-op
+    assert record.run_id == run_id
+    assert record.job_ids == ["12345"]
+    assert record.status == "complete"
+
+
+def test_351_layer1_default_warns_and_dedups_complete_run_on_tasks_py_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LAYER 1 also covers tasks.py drift (the unified drift check): a COMPLETE
+    prior run whose recorded tasks_py_sha differs from the current code warns +
+    dedups by default — closing the SAME layer-1 bypass #207 had for executor
+    drift. Same on-disk shape; only the tasks_py_sha moved this time."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    run_id = "20260101-000000-redo004"
+    cmd_sha = "f" * 64
+    same_executor = "python3 src/run.py --seed $SEED"
+
+    _seed_complete_journal_record(
+        tmp_path,
+        run_id,
+        executor=same_executor,
+        tasks_py_sha="1" * 64,  # the code AT submit time
+        job_ids=["12345"],
+    )
+    _write_sidecar(
+        tmp_path,
+        run_id,
+        cmd_sha=cmd_sha,
+        executor=same_executor,
+        tasks_py_sha="2" * 64,
+        job_ids=["12345"],
+    )
+
+    with pytest.warns(UserWarning, match="invalidate-on-code-change"):
+        record, deduped = submit_and_record(
+            tmp_path,
+            spec=_spec(run_id, job_ids=["99999"]),
+            cmd_sha=cmd_sha,
+            tasks_py_sha="2" * 64,  # tasks.py drifted; executor unchanged
+            current_executor=same_executor,
+            # invalidate_on_code_change defaults False
+        )
+
+    assert deduped is True
+    assert record.run_id == run_id
+    assert record.job_ids == ["12345"]

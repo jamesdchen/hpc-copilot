@@ -232,6 +232,21 @@ class RunRecord:
     # resubmit actually fires.
     max_auto_recovers: int = 2
     auto_recover_count: int = 0
+    # ── #351 sub-bug #5 (layer-1 companion): durable code-drift provenance ────
+    # The per-task ``executor`` command and the ``tasks.py`` drift sha this run
+    # was submitted with. These are otherwise SIDECAR-only fields — but a
+    # same-run_id in-place redo (unchanged swept params) re-writes the per-run
+    # sidecar with the NEW code at Step 6d, BEFORE the dedup gate runs, so the
+    # sidecar cannot tell the layer-1 COMPLETE-dedup gate what the PRIOR run
+    # actually ran. Mirroring them onto the journal record — which is rewritten
+    # only by ``upsert_run`` AFTER the dedup decision — gives
+    # ``submit_and_record`` the one durable prior-vs-new signal that survives
+    # the redo's destructive sidecar overwrite (see ``_layer1_code_drift``).
+    # Harmless empty defaults: a pre-#351 record loads unchanged (``from_dict``
+    # filters to known fields) and an empty recorded value is treated as
+    # "cannot prove drift" — never a false invalidation.
+    executor: str = ""
+    tasks_py_sha: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
