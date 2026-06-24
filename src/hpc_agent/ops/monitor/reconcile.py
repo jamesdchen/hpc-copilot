@@ -156,9 +156,10 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
     lives in ``last_status.verify_state`` (set by :func:`_reconcile_one`).
 
     A benign :class:`OrphanedReconcile` (#356) projects to the terminal-ish
-    ``no_run_record`` state with an empty ``last_status`` — there is no cluster
-    reading because the run never reached the scheduler. It is NOT an error
-    envelope: the caller may discard/overwrite the residue and proceed.
+    ``no_run_record`` state. ``last_status`` carries the ``orphaned`` verdict
+    plus an actionable ``next_step`` — there is no cluster reading because the
+    run never reached the scheduler. It is NOT an error envelope: the caller may
+    discard/overwrite the residue and proceed with a fresh submit.
     """
     if isinstance(record, OrphanedReconcile):
         return {
@@ -166,7 +167,17 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
             "lifecycle_state": "no_run_record",
             "combined_waves": [],
             "failed_waves": [],
-            "last_status": {"verdict": "orphaned"},
+            "last_status": {
+                "verdict": "orphaned",
+                "next_step": (
+                    "Crashed-submit residue: a valid jobless sidecar with no "
+                    "journal record. Nothing reached the scheduler — proceed "
+                    "with a fresh submit (it discards/overwrites the orphan; "
+                    "the runner's cmd_sha dedup treats it as an orphan and "
+                    "falls through). No manual rm required; "
+                    "prune-orphan-sidecars cleans it up."
+                ),
+            },
         }
     last_status = record.last_status or {}
     state = record.status

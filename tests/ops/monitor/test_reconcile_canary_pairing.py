@@ -389,6 +389,10 @@ def test_benign_orphan_classifies_no_run_record_not_corrupt(tmp_path, monkeypatc
     assert envelope["run_id"] == "rOrphan"
     assert envelope["combined_waves"] == []
     assert envelope["failed_waves"] == []
+    # last_status carries the orphaned verdict + an actionable next_step so the
+    # agent reading the envelope knows to proceed with a fresh submit (no rm).
+    assert envelope["last_status"]["verdict"] == "orphaned"
+    assert "fresh submit" in envelope["last_status"]["next_step"]
 
 
 def test_benign_orphan_via_top_level_reconcile_no_ssh(tmp_path, monkeypatch):
