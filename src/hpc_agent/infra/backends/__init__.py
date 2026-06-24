@@ -297,6 +297,23 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement classify_scheduler_state")
 
     @staticmethod
+    def batch_status(states: dict[str, str]) -> dict[str, str]:
+        """Map raw scheduler state tokens to ``TaskStatus`` values, in bulk.
+
+        *states* is ``{job_id: raw_state_token}`` — exactly the shape
+        :meth:`parse_scheduler_states` returns from ONE ``qstat -u $USER`` /
+        ``squeue`` query, so the whole batch is classified without a second
+        scheduler round-trip per run. Returns ``{job_id: TaskStatus.value}``.
+
+        Finer-grained than :meth:`classify_scheduler_state`'s 3-bucket
+        alive/error/held: it separates a queued job (``PENDING``) from a
+        running one (``RUNNING``) so the monitor's per-tick diff reads real
+        progress. A job *absent* from *states* has left the queue and is the
+        caller's terminal-vs-complete decision — it is simply omitted here.
+        """
+        raise NotImplementedError("backend does not implement batch_status")
+
+    @staticmethod
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Return the cluster-side path to a single task's stderr log.
 

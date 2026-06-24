@@ -170,7 +170,9 @@ def test_resume_verdict_keeps_polling_to_complete(
     # The composite was consulted exactly once (the single FAILED tick).
     assert calls == [_RUN_ID]
     # We slept once (between the resume continue and the completing poll).
-    assert sleeps == [5.0]
+    # The spec's 5s is lifted to the connection-pacing floor (#3, default
+    # 10s) — the floored value is what the loop actually sleeps.
+    assert sleeps == [monitor_flow_module._floor_poll_interval(5)]
 
 
 def test_escalate_verdict_surfaces_failed_with_reason(

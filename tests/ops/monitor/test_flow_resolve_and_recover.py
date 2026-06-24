@@ -225,7 +225,9 @@ def test_resolve_and_recover_resubmit_keeps_polling_to_complete(
     )
 
     assert result.lifecycle_state == LifecycleState.COMPLETE
-    assert sleeps == [5.0]
+    # The spec's 5s is lifted to the connection-pacing floor (#3, default
+    # 10s) — assert against the floored value, not the raw request.
+    assert sleeps == [monitor_flow_module._floor_poll_interval(5)]
 
 
 def test_resolve_and_recover_held_surfaces_failed_with_reason(

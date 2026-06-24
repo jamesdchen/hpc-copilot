@@ -26,6 +26,10 @@ Environment variables consulted here
     first :func:`_ssh_multiplex_opts` call warns and falls back to the
     legacy override when the local binary reports an older version.
     ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits ahead of all of this.
+``HPC_SSH_CONNECT_TIMEOUT``
+    Bound the TCP-connect phase of every ssh-family call — see
+    :func:`_ssh_connect_opts`. Default ``15`` (seconds); set to ``default``
+    to drop the override and let OpenSSH / ``ssh_config`` decide.
 ``HPC_SSH_CIPHER`` / ``HPC_SSH_MAC`` / ``HPC_SSH_COMPRESSION``
     Cipher / MAC / compression tuning spliced into every ssh-family call —
     see :func:`_ssh_crypto_opts`. Defaults favour AES-NI-accelerated GCM
@@ -54,6 +58,7 @@ __all__ = [
     "_ssh_binary",
     "_ssh_config_override_opts",
     "_ssh_config_forces_no_multiplex",
+    "_ssh_connect_opts",
     "_ssh_crypto_opts",
     "_ssh_multiplex_opts",
     "_windows_openssh_named_pipe_supported",
@@ -158,7 +163,7 @@ def _rsync_rsh_env() -> dict[str, str]:
     # something to override: a bare ``ssh`` with no extra opts is exactly
     # rsync's default, so leave the env unset to preserve PATH resolution and
     # the pre-tuning no-op POSIX path.
-    parts = [ssh, *_ssh_crypto_opts()]
+    parts = [ssh, *_ssh_connect_opts(), *_ssh_crypto_opts()]
     if sys.platform == "win32":
         parts += _ssh_config_override_opts()
     if parts == ["ssh"]:
@@ -601,6 +606,48 @@ def _resolve_ssh_persist_interval() -> str | None:
     return raw
 
 
+# --- ConnectTimeout (ban-driver hardening) -----------------------------------
+#
+# OpenSSH ships no default ``ConnectTimeout`` — it defers to the OS TCP timeout,
+# which on a misconfigured host (wrong ``HostName``, an unreachable login node,
+# a hostname that matches no ssh-config key) is tens of seconds to minutes. Each
+# such call then hangs until ``infra.remote``'s ``SSH_TIMEOUT_SEC`` (60s)
+# hard-kill. Slow failures pile up — and a burst of them from one IP is exactly
+# what a cluster's fail2ban / connection-rate limiter bans. A tight connect
+# bound fails fast and surfaces the misconfig before the pile-up forms. It caps
+# only how long we wait to ESTABLISH the connection; a legitimately
+# long-running remote command keeps the larger ``SSH_TIMEOUT_SEC`` budget.
+_DEFAULT_SSH_CONNECT_TIMEOUT = "15"
+
+
+def _ssh_connect_opts() -> list[str]:
+    """SSH ``-o ConnectTimeout`` option bounding the TCP-connect wait.
+
+    Spliced into the ``ssh`` command channel and one-shot ``scp`` by
+    :func:`ssh_argv`, and into rsync's own ssh by :func:`_rsync_rsh_env`, so
+    every connection this framework opens fails fast on an unreachable/
+    misconfigured host instead of hanging to the subprocess hard-kill.
+
+    Tunable via ``HPC_SSH_CONNECT_TIMEOUT`` (positive integer seconds). The
+    literal ``default`` drops the override entirely (let OpenSSH / ssh_config
+    decide). A non-positive or non-integer value warns to stderr — no raise, a
+    typo must not break every ssh call — and falls back to
+    :data:`_DEFAULT_SSH_CONNECT_TIMEOUT`.
+    """
+    raw = (os.environ.get("HPC_SSH_CONNECT_TIMEOUT") or _DEFAULT_SSH_CONNECT_TIMEOUT).strip()
+    if raw.lower() == "default":
+        return []
+    if not raw.isdigit() or int(raw) <= 0:
+        print(
+            f"hpc-agent: ignoring HPC_SSH_CONNECT_TIMEOUT={raw!r} "
+            f"(want a positive integer of seconds, or 'default'); using "
+            f"{_DEFAULT_SSH_CONNECT_TIMEOUT!r}",
+            file=sys.stderr,
+        )
+        raw = _DEFAULT_SSH_CONNECT_TIMEOUT
+    return ["-o", f"ConnectTimeout={raw}"]
+
+
 # --- Cipher / MAC / compression tuning (#256) --------------------------------
 #
 # OpenSSH's portable defaults favour broad compatibility: the
@@ -697,14 +744,17 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
     returned list.
 
     * ``"ssh"`` — command channel (``ssh_run``, the tar-fallback push):
-      ``[<ssh>, -o BatchMode=yes, *_ssh_multiplex_opts()]``. ``BatchMode``
-      fails fast on a missing key instead of hanging on a prompt;
+      ``[<ssh>, -o BatchMode=yes, *_ssh_connect_opts(), *_ssh_multiplex_opts()]``.
+      ``BatchMode`` fails fast on a missing key instead of hanging on a prompt;
+      :func:`_ssh_connect_opts` bounds the connect phase so an unreachable host
+      fails fast instead of hanging to the subprocess hard-kill;
       :func:`_ssh_multiplex_opts` reuses one connection on POSIX and applies
       the ControlMaster override on Windows.
     * ``"scp"`` — one-shot transfer: ``[<scp>, -o BatchMode=yes,
-      *_ssh_config_override_opts()]``. A transfer needn't be a multiplex
-      master, but on Windows it still must neutralise the user's ssh-config
-      ControlMaster, so it gets the override only (nothing on POSIX).
+      *_ssh_connect_opts(), *_ssh_config_override_opts()]``. A transfer needn't
+      be a multiplex master, but on Windows it still must neutralise the user's
+      ssh-config ControlMaster, so it gets the override only (nothing on POSIX),
+      plus the same connect bound.
     * ``"ssh-add"`` — local agent probe, no remote host: ``[<ssh-add>]``
       (no BatchMode, no multiplexing).
 
@@ -715,6 +765,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             _ssh_binary(),
             "-o",
             "BatchMode=yes",
+            *_ssh_connect_opts(),
             *_ssh_crypto_opts(),
             *_ssh_multiplex_opts(),
             *extra_opts,
@@ -724,6 +775,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             _scp_binary(),
             "-o",
             "BatchMode=yes",
+            *_ssh_connect_opts(),
             *_ssh_crypto_opts(),
             *_ssh_config_override_opts(),
             *extra_opts,

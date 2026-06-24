@@ -371,6 +371,71 @@ def test_sge_classify(state, bucket):
 
 
 # ---------------------------------------------------------------------------
+# batch_status — raw scheduler token -> TaskStatus (#2 connection-storm fix)
+# ---------------------------------------------------------------------------
+
+# Finer than classify_scheduler_state's alive/error/held: a live queue token
+# splits into pending (queued/held — waiting) vs running (executing); an error
+# token maps to failed. A finished job leaves the live queue, so 'complete'
+# is never emitted (the caller infers it from absence).
+_SLURM_BATCH = [
+    ("RUNNING", "running"),
+    ("COMPLETING", "running"),
+    ("CONFIGURING", "running"),
+    ("PENDING", "pending"),
+    ("SUSPENDED", "pending"),  # held -> waiting, not executing
+    ("FAILED", "failed"),
+    ("TIMEOUT", "failed"),
+    ("PREEMPTED", "failed"),
+    ("CANCELLED by 100123", "failed"),
+]
+_SGE_BATCH = [
+    ("r", "running"),
+    ("t", "running"),
+    ("dr", "running"),
+    ("Rr", "running"),
+    ("qw", "pending"),
+    ("hqw", "pending"),  # held -> pending
+    ("Eqw", "failed"),
+    ("Er", "failed"),
+]
+_PBS_BATCH = [
+    ("R", "running"),
+    ("E", "running"),  # exiting -> still progressing
+    ("B", "running"),
+    ("Q", "pending"),
+    ("W", "pending"),
+    ("H", "pending"),  # held -> pending
+    ("S", "pending"),  # suspended -> pending
+]
+
+
+@pytest.mark.parametrize(("state", "status"), _SLURM_BATCH)
+def test_slurm_batch_status(state, status):
+    assert get_backend_class("slurm").batch_status({"1": state}) == {"1": status}
+
+
+@pytest.mark.parametrize(("state", "status"), _SGE_BATCH)
+def test_sge_batch_status(state, status):
+    assert get_backend_class("sge").batch_status({"1": state}) == {"1": status}
+
+
+@pytest.mark.parametrize(("state", "status"), _PBS_BATCH)
+def test_pbs_batch_status(state, status):
+    assert get_backend_class("pbspro").batch_status({"1": state}) == {"1": status}
+
+
+def test_batch_status_bulk_and_empty():
+    cls = get_backend_class("slurm")
+    assert cls.batch_status({}) == {}
+    assert cls.batch_status({"1": "RUNNING", "2": "PENDING", "3": "FAILED"}) == {
+        "1": "running",
+        "2": "pending",
+        "3": "failed",
+    }
+
+
+# ---------------------------------------------------------------------------
 # log paths
 # ---------------------------------------------------------------------------
 

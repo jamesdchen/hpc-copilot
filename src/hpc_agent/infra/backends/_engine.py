@@ -628,6 +628,66 @@ class ProfileBackend(HPCBackend):
         return "alive"
 
     @classmethod
+    def batch_status(cls, states: dict[str, str]) -> dict[str, str]:
+        """Bulk map ``{job_id: raw_state}`` to ``{job_id: TaskStatus.value}``.
+
+        One classification pass over the dict :meth:`parse_scheduler_states`
+        produced from a single batched ``qstat``/``squeue`` query — no extra
+        scheduler round-trips. Family-aware so a *live* queue token is split
+        into ``pending`` (queued/held — waiting, not progressing) vs
+        ``running`` (executing) vs ``failed`` (SGE ``Eqw`` / a SLURM error
+        state), distinguishing the queued-vs-running boundary that the coarse
+        alive/error/held bucketing collapses.
+
+        ``complete`` is never emitted: a finished job leaves the live queue,
+        so it is absent from *states* entirely — the caller infers completion
+        from absence (cross-checked against result files / history), never
+        from a live token. Unrecognized live tokens fall back to ``running``
+        (present in the queue ⇒ making progress), matching
+        :meth:`classify_scheduler_state`'s conservative ``alive`` default.
+        """
+        from hpc_agent._kernel.contract.vocabulary import TaskStatus
+
+        out: dict[str, str] = {}
+        for job_id, raw in states.items():
+            bucket = cls.classify_scheduler_state(raw)
+            if bucket == "error":
+                out[job_id] = TaskStatus.FAILED.value
+                continue
+            if bucket == "held":
+                # Held jobs are waiting on a dependency/hold, not executing.
+                out[job_id] = TaskStatus.PENDING.value
+                continue
+            # bucket == "alive": split queued vs running on the family token.
+            out[job_id] = cls._alive_task_status(raw)
+        return out
+
+    @classmethod
+    def _alive_task_status(cls, raw: str) -> str:
+        """Split a live (non-error/held) scheduler token into running vs pending."""
+        from hpc_agent._kernel.contract.vocabulary import TaskStatus
+
+        if cls.profile.family == "slurm":
+            s = raw.strip().upper()
+            # squeue %T pending family. RUNNING/COMPLETING/CONFIGURING/etc. =>
+            # running; anything else live but not yet executing => pending.
+            if s in {"PENDING", "REQUEUED", "REQUEUE_HOLD", "RESV_DEL_HOLD"}:
+                return TaskStatus.PENDING.value
+            return TaskStatus.RUNNING.value
+        if cls.profile.family in ("pbspro", "torque"):
+            # PBS live single-letter: Q (queued)/W (waiting)/M (moved)/T
+            # (transit) are not executing; R/B/E (running/begun/exiting) are.
+            if raw.strip() in {"Q", "W", "M", "T"}:
+                return TaskStatus.PENDING.value
+            return TaskStatus.RUNNING.value
+        # sge: ``qw`` (queued waiting) and any ``w``-bearing wait state =>
+        # pending; ``r``/``t`` (running/transferring) => running.
+        s = raw.strip()
+        if "r" not in s and "w" in s:
+            return TaskStatus.PENDING.value
+        return TaskStatus.RUNNING.value
+
+    @classmethod
     def stderr_log_path(cls, remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 

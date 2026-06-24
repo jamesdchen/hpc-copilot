@@ -144,14 +144,15 @@ def test_ssh_multiplex_uses_tempfile_fallback(monkeypatch):
 def _clear_binary_overrides(monkeypatch):
     """Each binary-resolution test starts from a clean env.
 
-    The cipher/MAC/compression tuning (#256) is pinned to ``default`` here so
-    these binary-resolution + Windows-multiplex assertions stay focused on the
-    RSYNC_RSH *binary/override* shape and aren't coupled to the crypto opts,
-    which have their own coverage in ``test_ssh_options_cipher.py``.
+    The cipher/MAC/compression tuning (#256) and the ConnectTimeout bound are
+    pinned to ``default`` here so these binary-resolution + Windows-multiplex
+    assertions stay focused on the RSYNC_RSH *binary/override* shape and aren't
+    coupled to those opts, which have their own coverage in
+    ``test_ssh_options_cipher.py`` / ``test_ssh_options_connect_timeout.py``.
     """
     for var in ("HPC_SSH_BINARY", "HPC_SCP_BINARY", "HPC_SSH_ADD_BINARY", "RSYNC_RSH"):
         monkeypatch.delenv(var, raising=False)
-    for var in ("HPC_SSH_CIPHER", "HPC_SSH_MAC", "HPC_SSH_COMPRESSION"):
+    for var in ("HPC_SSH_CIPHER", "HPC_SSH_MAC", "HPC_SSH_COMPRESSION", "HPC_SSH_CONNECT_TIMEOUT"):
         monkeypatch.setenv(var, "default")
 
 

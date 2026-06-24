@@ -146,6 +146,20 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent batch-status [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "batch-status",
+    "output_schema": null,
+    "python": "hpc_agent.ops.monitor.batch_status.batch_status",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Poll ALL in-flight runs with one scheduler query per login node (qstat -u $USER / squeue) instead of one per run — the connection-storm fix. Returns per-run {job_id: TaskStatus} maps. Read-only: does not mutate the journal.",
+    "verb": "query"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>]",
     "idempotent": true,

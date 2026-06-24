@@ -41,6 +41,18 @@ from hpc_agent.cli._helpers import (
 _INVOKER_ENV = "HPC_AGENT_INVOKER"
 _INLINE_INVOKER = "inline"
 
+# Deterministic-runner drive mode (#connection-storm-4). The DEFAULT drive is the
+# proven ``claude -p --bare`` worker; ``detached`` opts into running the
+# deterministic lifecycle composite in a DETACHED CLI subprocess (no LLM in the
+# connection loop) with the caller polling the journal for the outcome. Selected
+# by the ``--detached`` flag OR ``HPC_AGENT_DRIVE=detached`` — the same
+# flag-or-env shape ``--inline`` / ``HPC_AGENT_INVOKER=inline`` uses, except this
+# one is NOT refused when a worker is available: it does not spawn an LLM, so the
+# #155 worker-available guard (which protects the worker's context isolation)
+# does not apply. See hpc_agent._kernel.lifecycle.detached.
+_DRIVE_ENV = "HPC_AGENT_DRIVE"
+_DETACHED_DRIVE = "detached"
+
 # The named subagent inline mode routes to. Its definition
 # (src/slash_commands/agents/hpc-worker.md, installed to ~/.claude/agents/ by
 # `hpc-agent install-commands`) carries ``model:`` in its own frontmatter, so
@@ -55,6 +67,16 @@ _WORKER_SUBAGENT = "hpc-worker"
 def _inline_via_flag(args: argparse.Namespace) -> bool:
     """The agent-reachable ``--inline`` flag was passed."""
     return bool(getattr(args, "inline", False))
+
+
+def _detached_via_flag(args: argparse.Namespace) -> bool:
+    """The ``--detached`` deterministic-runner flag was passed."""
+    return bool(getattr(args, "detached", False))
+
+
+def _detached_via_env() -> bool:
+    """``HPC_AGENT_DRIVE=detached`` selects the deterministic detached runner."""
+    return os.environ.get(_DRIVE_ENV, "").strip().lower() == _DETACHED_DRIVE
 
 
 def _inline_via_env() -> bool:
@@ -180,6 +202,79 @@ def cmd_run(args: argparse.Namespace) -> int:
             category="user",
             retry_safe=False,
         )
+    # Deterministic detached drive mode (#connection-storm-4): run the lifecycle
+    # composite in a DETACHED CLI subprocess (no LLM in the connection loop) and
+    # hand the caller a run_id to poll the journal for. Checked before the
+    # inline/spawn branches and NOT gated by the #155 worker-available guard — it
+    # spawns no LLM, so the context-isolation rationale that guard protects does
+    # not apply here. Only the supported shape (status workflow, blocking wait)
+    # takes this path; anything else falls through to the default worker.
+    if _detached_via_flag(args) or _detached_via_env():
+        from hpc_agent._kernel.lifecycle.detached import (
+            DriveModeError,
+            detached_drive_supported,
+            launch_status_pipeline_detached,
+        )
+
+        if not detached_drive_supported(args.workflow, fields):
+            return _err(
+                error_code="spec_invalid",
+                message=(
+                    "detached drive mode is only supported for the 'status' "
+                    "workflow on its blocking wait path (fields.blocking=true) — "
+                    "the wait-until-terminal poll the deterministic runner owns. "
+                    f"Got workflow={args.workflow!r}, blocking={fields.get('blocking')!r}. "
+                    "Drop --detached / HPC_AGENT_DRIVE to use the default worker, "
+                    "or pass blocking=true with a run_id for a status wait."
+                ),
+                category="user",
+                retry_safe=False,
+            )
+        try:
+            launch = launch_status_pipeline_detached(
+                experiment_dir=str(args.experiment_dir),
+                fields=fields,
+            )
+        except DriveModeError as exc:
+            return _err(
+                error_code="spec_invalid",
+                message=str(exc),
+                category="user",
+                retry_safe=False,
+            )
+        # The runner now owns the connection in its own detached process. The
+        # caller polls the journal (hpc_agent.state.journal_poll) for the
+        # terminal outcome — no LLM, no cluster touch on the orchestrator side.
+        _ok(
+            {
+                "mode": "detached",
+                "workflow": args.workflow,
+                "experiment_dir": str(args.experiment_dir),
+                "run_id": launch.run_id,
+                "detached_pid": launch.pid,
+                "log_path": launch.log_path,
+                "instructions": (
+                    "Deterministic detached drive: the lifecycle composite "
+                    "('status-pipeline') is now running to terminal in a DETACHED "
+                    "hpc-agent subprocess that owns the SSH connection — NO `claude "
+                    "-p` worker, no LLM in the poll loop. Do NOT open your own SSH, "
+                    "schedule a wake-up to poke the cluster, or spawn a worker to "
+                    "drive polling. Learn the outcome by READING THE JOURNAL "
+                    "(cluster-free): call "
+                    "hpc_agent.state.journal_poll.poll_until_terminal(experiment_dir, "
+                    "run_id) — or read the per-run journal record yourself — until "
+                    "the run reaches a terminal status (complete / failed / "
+                    "abandoned). The detached runner writes that status as it polls; "
+                    "you only read it. (`hpc-agent poll-run-status` exists too but "
+                    "does a one-shot CLUSTER snapshot — prefer the journal read so "
+                    "the orchestrator never opens its own SSH.) "
+                    "The runner's own stdout/stderr (the composite envelope) is "
+                    "captured at log_path for a post-mortem without re-opening SSH."
+                ),
+            },
+            idempotent=False,
+        )
+        return EXIT_OK
     flag_inline = _inline_via_flag(args)
     env_inline = _inline_via_env()
     if flag_inline and not env_inline and worker_credentials_available():
@@ -385,6 +480,21 @@ def register(sub: argparse._SubParsersAction) -> None:
             "flag is no longer needed. The worker runs with `--output-format "
             "json` to capture billing usage; disable the whole behaviour with "
             "HPC_AGENT_REPORT_CACHE_STATS=0. Ignored by --inline (no worker)."
+        ),
+    )
+    p_run.add_argument(
+        "--detached",
+        action="store_true",
+        help=(
+            "Deterministic detached drive (opt-in; default is the `claude -p` "
+            "worker). Run the lifecycle composite (status-pipeline) to terminal "
+            "in a DETACHED hpc-agent subprocess that owns the SSH connection — no "
+            "LLM in the poll loop — and return a `run_id` (mode=detached) for the "
+            "caller to poll the journal with (`hpc-agent poll-run-status`). "
+            "Supported only for --workflow status on its blocking wait path "
+            "(fields.blocking=true, fields.run_id=<id>). Also selectable via "
+            "HPC_AGENT_DRIVE=detached. Unlike --inline this is NOT refused when a "
+            "worker can authenticate — it spawns no LLM."
         ),
     )
     p_run.add_argument(

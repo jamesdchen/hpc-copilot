@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from hpc_agent.infra.retry import RetryPolicy, run_with_retry
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv
+from hpc_agent.infra.ssh_throttle import throttle_connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -445,6 +446,14 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    # Cap the connection-open *rate* to this host (ban-driver guard): a burst of
+    # back-to-back ssh calls (retry storms, parallel probes) is what trips a
+    # cluster's fail2ban / rate-limiter, and neither ConnectTimeout (duration)
+    # nor IdentitiesOnly (auth attempts) bounds frequency. No-op unless
+    # HPC_SSH_SAFE_INTERVAL is set (>0). Runs once per ssh_run; retries are
+    # already spaced by _with_ssh_backoff. See infra.ssh_throttle.
+    throttle_connection(ssh_target)
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # Rebuild argv each attempt: the named-pipe-failure retry path picks up

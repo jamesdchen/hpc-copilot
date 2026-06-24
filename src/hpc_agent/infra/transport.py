@@ -33,6 +33,7 @@ from hpc_agent.infra.remote import (
     ssh_run,
 )
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv, ssh_env
+from hpc_agent.infra.ssh_throttle import throttle_connection
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
 __all__ = [
@@ -469,6 +470,10 @@ def rsync_push(
     TimeoutError
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
+    # Per-host connection-rate guard (ban-driver): paces this push's connection
+    # open(s) so back-to-back transfers can't burst past a cluster rate-limiter.
+    # No-op unless HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
+    throttle_connection(ssh_target)
     exclude = _effective_excludes(exclude)
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
@@ -691,6 +696,9 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
     files. rsync invokes its own ssh, so :func:`ssh_env` pins the binary +
     crypto/multiplex opts, mirroring :func:`rsync_push`.
     """
+    # Per-host connection-rate guard (ban-driver); no-op unless
+    # HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
+    throttle_connection(ssh_target)
     src = str(staging).rstrip("/\\") + "/"
     dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
     rsync_env = {**os.environ, **ssh_env()}
@@ -1057,6 +1065,9 @@ def rsync_pull(
     # rsync invokes. (The earlier ``shlex.quote`` form was inconsistent
     # with ``rsync_push`` and produced literal single quotes that some
     # rsync builds passed straight to the remote shell.)
+    # Per-host connection-rate guard (ban-driver); no-op unless
+    # HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
+    throttle_connection(ssh_target)
     validate_remote_path(remote_path.rstrip("/"))
     if remote_subdir.strip("/"):
         validate_remote_path(remote_subdir.strip("/"))

@@ -126,6 +126,108 @@ The integrator workflow (`find-prior-run` → `submit` →
 envelope and exit codes in
 [`../reference/cli-spec.md`](../reference/cli-spec.md).
 
+## 4. The deterministic detached drive — no LLM in the connection loop
+
+The seams above keep the LLM out of *control flow*; this one keeps it out
+of the *connection loop*. The recent cluster ban traced to an LLM
+**driving SSH**: `hpc-agent run --workflow status` spawns a `claude -p
+--bare` worker to run the wait-until-terminal poll; the worker
+auto-backgrounds at 2 min, ends its turn mid-poll (so the run reports
+"no report"), and a fallback inline subagent retries SSH in prose for
+~21 min. The composite the worker was driving (`status-pipeline` →
+`monitor_flow`) already runs the whole poll loop in plain code with one
+process owning the connection — the `infra/retry.py` principle. The miss
+was the drive layer sitting an LLM on top of it.
+
+**Detached drive** (opt-in: `--detached` or `HPC_AGENT_DRIVE=detached`)
+runs that composite as a DETACHED `hpc-agent` subprocess — **not** a
+`claude -p` worker — that owns the connection and runs to terminal, while
+the orchestrator learns the outcome by **reading the journal**. This is
+DPDispatcher's "submit and poke until they finish" loop / jobflow-remote's
+Runner daemon, applied to the drive layer:
+
+```bash
+# Launch: the deterministic runner owns the connection; returns immediately
+# with a run_id to poll. NO claude -p worker, no LLM in the poll loop.
+hpc-agent run --workflow status --detached \
+  --fields-json '{"run_id": "ml-abcd1234", "blocking": true, "wall_clock_budget_seconds": 7200}'
+# → {"ok": true, "data": {"mode": "detached", "run_id": "ml-abcd1234",
+#                          "detached_pid": 4242, "log_path": ".../status-...log"}}
+```
+
+```python
+# Poll the JOURNAL (cluster-free) until terminal — the runner writes it as
+# it polls; the orchestrator only reads. The model schedules nothing.
+from pathlib import Path
+from hpc_agent.state.journal_poll import poll_until_terminal
+
+snap = poll_until_terminal(Path("~/experiments/tune_lr").expanduser(), "ml-abcd1234")
+if snap.terminal:
+    ...  # snap.status ∈ {complete, failed, abandoned}; act on it
+```
+
+The detached child uses `start_new_session` (POSIX) /
+`DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP` (Windows) so it **outlives the
+orchestrator** — the crash that killed the auto-backgrounded
+`submit-pipeline` ~1s after qsub in 0.10.63 no longer kills the poll. The
+runner's stdout/stderr (the composite envelope) is captured to `log_path`
+for a post-mortem that never re-opens SSH.
+
+Implementation: `hpc_agent._kernel.lifecycle.detached`
+(`launch_status_pipeline_detached`, `build_status_pipeline_spec`,
+`detached_drive_supported`) + `hpc_agent.state.journal_poll`. Wired into
+`hpc-agent run` in `cli/spawn.py`. Pinned by
+`tests/_kernel/lifecycle/test_detached_drive.py`.
+
+### Landed scope and the plan for the remainder
+
+The landed slice is the **`status` workflow's blocking wait path** — the
+exact lifecycle the LLM sat in (`detached._SUPPORTED = {"status"}`,
+gated on `fields.blocking`). `submit` and `aggregate` keep the default
+`claude -p` worker. The deferred work, file-by-file:
+
+1. **`submit` detached drive.** `submit` is a *judgement-bearing*
+   workflow (axis classification, entry-point, env selection are genuine
+   LLM tail) UPSTREAM of a deterministic spine (`submit-pipeline`). The
+   detached runner can only own the spine once inputs are resolved — so
+   the plan is: caller resolves inputs (interactive slash / the bridge in
+   §2), then `run --workflow submit --detached` launches
+   `submit-pipeline` (NOT `claude -p`) for the canary→promote→stage spine.
+   Changes: add `"submit"` to `_SUPPORTED`; a `build_submit_pipeline_spec`
+   mapping resolved fields → `SubmitPipelineSpec` (mirrors
+   `build_status_pipeline_spec`); refuse when inputs are unresolved
+   (point the caller at `resolve-submit-inputs`). The run_id may not exist
+   pre-launch, so the poll helper must tolerate a `found=False` window
+   until `submit-flow`'s record-creation path writes it (already handled:
+   `read_run_status` returns `found=False`, the poller keeps waiting).
+2. **`aggregate` detached drive.** `aggregate` is mostly deterministic
+   (`aggregate-flow`) with a `partial_handling` judgement tail. Same
+   shape as `status`: add `"aggregate"` to `_SUPPORTED`, a
+   `build_aggregate_flow_spec`, and launch `aggregate-flow` detached. Its
+   terminal signal is NOT a journal status transition (aggregate doesn't
+   move the run lifecycle) — it writes an aggregate envelope/sidecar — so
+   the poll helper needs an `aggregate`-aware terminal predicate (read the
+   aggregate result sidecar, not the run record's `status`). This is the
+   one place the journal-read contract genuinely differs; keep it as a
+   separate `read_aggregate_status` rather than overloading
+   `read_run_status`.
+3. **Result-envelope capture (both).** Today the composite's envelope is
+   captured to `log_path` (a file) for post-mortem; a follow-up should
+   parse the last JSON line of that log into a structured
+   `data.result` on a `poll-detached-result` verb, so the caller gets the
+   typed `stage_reached` / `needs_decision` without reading the log. The
+   journal status already answers "done?"; this answers "done *how*?".
+4. **Re-arm-on-timeout helper.** `poll_until_terminal` returns
+   non-terminal at the local budget; a thin `run --detached --re-arm`
+   (or a caller-side loop) should re-launch the runner for a
+   still-`in_flight` run rather than leaving it un-watched. Deferred
+   because the single launch already runs to the composite's own
+   `wall_clock_budget_seconds`; re-arm is only for budgets longer than one
+   detached process should hold a connection.
+
+Until those land, `submit`/`aggregate` `--detached` is refused with
+`spec_invalid` (drop the flag for the default worker).
+
 ## Composing with the DAG kernel
 
 For multi-stage pipelines, the same loop walks the run graph:

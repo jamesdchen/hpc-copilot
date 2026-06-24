@@ -42,6 +42,7 @@ What it intentionally does NOT do (in MVP)
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,17 +101,57 @@ class MonitorFlowResult:
 #: is large enough to be unreachable in practice without ambiguity.
 _COMBINER_GIVE_UP_SENTINEL: int = 10**9
 
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to *default* on unset/invalid.
+
+    Mirrors :func:`hpc_agent.infra.remote._env_int`'s fail-safe contract
+    (a typo must not silently disable the floor) but accepts fractional
+    seconds. Negative values fall back too — a poll floor can't be < 0.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        return default
+    return val if val >= 0 else default
+
+
+#: Minimum seconds between status polls — the connection-pacing floor
+#: (#3). Mirrors AiiDA's ``minimum_job_poll_interval``: a hard lower
+#: bound applied to the caller's ``poll_interval_seconds`` so no spec /
+#: campaign can poll faster than this and re-trigger the connection
+#: storm. Env-tunable via ``HPC_STATUS_POLL_INTERVAL_SEC`` (default 10s).
+#: A spec asking for a *larger* interval is honored as-is.
+_MIN_POLL_INTERVAL_SECONDS: float = _env_float("HPC_STATUS_POLL_INTERVAL_SEC", 10.0)
+
 #: Upper bound (seconds) on the adaptive poll sleep. Hot-path cost is
 #: dominated by the per-poll SSH + remote-status round-trip (~0.5-1s).
 #: After K consecutive unchanged polls we double the effective interval
 #: up to this cap (5 minutes), reverting instantly on any state change.
-_MAX_ADAPTIVE_POLL_SECONDS: float = 300.0
+#: Env-tunable via ``HPC_STATUS_POLL_MAX_SEC`` (default 300s).
+_MAX_ADAPTIVE_POLL_SECONDS: float = _env_float("HPC_STATUS_POLL_MAX_SEC", 300.0)
 
 #: Number of consecutive unchanged polls before the adaptive backoff
 #: starts doubling the effective sleep. Small (2) so a long-running but
 #: chatty job barely backs off, while a truly idle 4h job ramps up
 #: quickly: 60s → 120 → 240 → 300 (cap) within ~10 minutes of quiet.
 _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
+
+
+def _floor_poll_interval(requested: float) -> float:
+    """Apply the connection-pacing floor to a requested poll interval.
+
+    Returns ``max(requested, _MIN_POLL_INTERVAL_SECONDS)`` — the caller's
+    interval is honored unless it's faster than the floor, in which case
+    the floor wins. Also clamps the floor itself below the adaptive cap so
+    a mis-set ``HPC_STATUS_POLL_INTERVAL_SEC`` > ``HPC_STATUS_POLL_MAX_SEC``
+    can't make the floor exceed the ceiling.
+    """
+    floor = min(_MIN_POLL_INTERVAL_SECONDS, _MAX_ADAPTIVE_POLL_SECONDS)
+    return max(float(requested), floor)
 
 
 # ``_status_fingerprint`` lives in
@@ -208,7 +249,11 @@ def monitor_flow(
     # the wire-validated authoring SoT (schemas/monitor_flow.input.json
     # is regenerated from MonitorFlowSpec).
     run_id = spec.run_id
-    poll_interval_seconds = spec.poll_interval_seconds
+    # Apply the connection-pacing floor (#3): the spec's poll_interval is a
+    # request, but HPC_STATUS_POLL_INTERVAL_SEC (default 10s, AiiDA-style
+    # minimum_job_poll_interval) is a hard lower bound so no spec/campaign
+    # can poll faster than the floor and re-trigger the connection storm.
+    poll_interval_seconds = _floor_poll_interval(spec.poll_interval_seconds)
     wall_clock_budget_seconds = spec.wall_clock_budget_seconds
     auto_combine_waves = spec.auto_combine_waves
     combiner_max_retries = spec.combiner_max_retries
