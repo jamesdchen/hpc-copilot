@@ -97,11 +97,12 @@ def _procedure_body(workflow: str) -> str:
     in-process). Tests that swap plugins call ``cache_clear()``.
 
     The worker prompt *inlines* this rather than telling the worker to
-    invoke the Skill tool: a headless ``claude -p`` worker has no skill
-    discovery (``--bare`` skips it, and headless mode does not support
-    user-invoked skills), so the procedure must travel inside the
-    prompt itself. The directory name ``worker_prompts/`` reflects
-    that — these are not skills. See
+    invoke a skill: a headless worker has no skill discovery (under
+    Claude Code ``claude -p --bare`` skips it, and headless mode does
+    not support user-invoked skills; the other harness drivers likewise
+    spawn a bare, skill-less worker), so the procedure must travel
+    inside the prompt itself. The directory name ``worker_prompts/``
+    reflects that — these are not skills. See
     ``docs/internals/skill-policy.md``.
     """
     from hpc_agent._kernel.extension.worker_prompts import read_procedure

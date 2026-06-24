@@ -30,6 +30,9 @@ import inspect
 import json
 import os
 import pickle
+import re
+import types
+import typing
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -267,6 +270,82 @@ def save_artifact(name: str, obj: Any) -> Path:
     return path
 
 
+# Env-var kwargs (HPC_KW_*) reach a @register_run function as STRINGS. Coerce
+# each to its parameter annotation before the call so a `samples: int` executor
+# receives `1000000`, not `"1000000"` (which blows up at `range("1000000")`).
+# Only the four scalar types env vars realistically carry get a coercer; an
+# unannotated or non-scalar parameter is left as the raw string (unchanged
+# behaviour). Stdlib-only — this file is inlined into the cluster executor.
+_UNION_TYPE = getattr(types, "UnionType", None)  # `X | None` on 3.10+
+_TRUE_STRINGS = frozenset({"1", "true", "t", "yes", "y", "on"})
+_FALSE_STRINGS = frozenset({"0", "false", "f", "no", "n", "off", ""})
+
+
+def _coerce_bool(value: str) -> bool:
+    """Parse a string to bool by token — ``bool("false")`` is wrongly True."""
+    token = value.strip().lower()
+    if token in _TRUE_STRINGS:
+        return True
+    if token in _FALSE_STRINGS:
+        return False
+    raise ValueError(f"cannot interpret {value!r} as a boolean")
+
+
+_SCALAR_BY_NAME: dict[str, Callable[[str], Any]] = {
+    "bool": _coerce_bool,
+    "int": int,
+    "float": float,
+    "str": str,
+}
+
+
+def _strip_optional_str(annotation: str) -> str:
+    """Reduce a string annotation to its inner scalar name.
+
+    Handles the `from __future__ import annotations` fallback path where
+    ``get_type_hints`` couldn't resolve and the raw annotation is text:
+    ``Optional[int]`` / ``int | None`` / ``builtins.int`` → ``int``.
+    """
+    text = annotation.strip()
+    for pattern in (
+        r"Optional\[\s*([\w.]+)\s*\]",
+        r"([\w.]+)\s*\|\s*None",
+        r"None\s*\|\s*([\w.]+)",
+    ):
+        match = re.fullmatch(pattern, text)
+        if match:
+            text = match.group(1)
+            break
+    return text.rsplit(".", 1)[-1]
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """``Optional[T]`` / ``T | None`` → ``T`` (single non-None member only)."""
+    origin = typing.get_origin(annotation)
+    union_origins = (typing.Union, _UNION_TYPE) if _UNION_TYPE is not None else (typing.Union,)
+    if origin in union_origins:
+        non_none = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return annotation
+
+
+def _scalar_coercer(annotation: Any) -> Callable[[str], Any] | None:
+    """Return a ``str -> value`` coercer for a scalar annotation, else None."""
+    annotation = _unwrap_optional(annotation)
+    if annotation is bool:
+        return _coerce_bool
+    if annotation is int:
+        return int
+    if annotation is float:
+        return float
+    if annotation is str:
+        return str
+    if isinstance(annotation, str):
+        return _SCALAR_BY_NAME.get(_strip_optional_str(annotation))
+    return None
+
+
 def _make_compute(spec: RunSpec) -> Callable[[Any], None]:
     sig = inspect.signature(spec.func)
     accepted = {
@@ -274,6 +353,18 @@ def _make_compute(spec: RunSpec) -> Callable[[Any], None]:
         for p in sig.parameters.values()
         if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     }
+    # Resolve annotations once (handles `from __future__ import annotations`);
+    # fall back to the raw signature annotation if resolution fails.
+    try:
+        hints = typing.get_type_hints(spec.func)
+    except Exception:
+        hints = {}
+    coercers: dict[str, Callable[[str], Any]] = {}
+    for name in accepted:
+        annotation = hints.get(name, sig.parameters[name].annotation)
+        coercer = _scalar_coercer(annotation)
+        if coercer is not None:
+            coercers[name] = coercer
 
     def compute(args: Any) -> None:
         ns: dict[str, Any] = dict(vars(args)) if hasattr(args, "__dict__") else dict(args)
@@ -294,7 +385,23 @@ def _make_compute(spec: RunSpec) -> Callable[[Any], None]:
         if spec.mpi:
             ns.setdefault("rank", rank)
             ns.setdefault("world_size", world_size)
-        kwargs = {k: ns[k] for k in accepted if k in ns}
+        kwargs: dict[str, Any] = {}
+        for k in accepted:
+            if k not in ns:
+                continue
+            value = ns[k]
+            coercer = coercers.get(k)
+            # Only env-var-sourced (string) values need coercion; framework-
+            # injected typed values (rank:int, resume_from:None) pass through.
+            if coercer is not None and isinstance(value, str):
+                try:
+                    value = coercer(value)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        f"could not coerce {k}={ns[k]!r} (from HPC_KW_{k.upper()}) "
+                        f"to {spec.func.__name__}'s annotated parameter type: {exc}"
+                    ) from exc
+            kwargs[k] = value
         output_file = ns.get("output_file")
         with _run_context(ns):
             result = spec.func(**kwargs)

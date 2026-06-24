@@ -149,3 +149,97 @@ def test_compute_unaffected_for_run_without_resume_param(
     out = tmp_path / "o.json"
     mod.compute(argparse.Namespace(alpha=1.0, output_file=str(out)))
     assert json.loads(out.read_text()) == {"alpha": 1.0}
+
+
+# --- #351: env-var kwargs (HPC_KW_*, all strings) coerced to annotated types ---
+
+
+def test_compute_coerces_string_kwargs_to_annotated_types(tmp_path: Path) -> None:
+    # The live-demo repro: monte_carlo_pi(samples: int, seed: int) reached
+    # compute with samples="1000000" (an HPC_KW_SAMPLES string) and blew up at
+    # range("1000000"). Coercion to the int annotation makes the run succeed.
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(samples: int = 1000, seed: int = 0):\n"
+        "    return {'count': len(range(samples)), 'seed': seed}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(samples="1000000", seed="7", output_file=str(out)))
+    assert json.loads(out.read_text()) == {"count": 1000000, "seed": 7}
+
+
+def test_compute_coerces_float_bool_and_optional(tmp_path: Path) -> None:
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "from typing import Optional\n"
+        "\n"
+        "@register_run\n"
+        "def run(lr: float = 0.1, verbose: bool = False, limit: Optional[int] = None):\n"
+        "    return {'lr': lr, 'verbose': verbose, 'limit': limit}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(lr="0.25", verbose="false", limit="50", output_file=str(out)))
+    assert json.loads(out.read_text()) == {"lr": 0.25, "verbose": False, "limit": 50}
+
+
+def test_compute_leaves_unannotated_kwarg_as_string(tmp_path: Path) -> None:
+    # No annotation -> the runtime can't know the type; the raw string passes
+    # through unchanged (prior behaviour, not a regression).
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(label='x'):\n"
+        "    return {'label': label, 'is_str': isinstance(label, str)}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(label="123", output_file=str(out)))
+    assert json.loads(out.read_text()) == {"label": "123", "is_str": True}
+
+
+def test_compute_coercion_error_names_the_param_and_env_var(tmp_path: Path) -> None:
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(samples: int = 1000):\n"
+        "    return {'samples': samples}\n"
+    )
+    out = tmp_path / "o.json"
+    with pytest.raises(ValueError, match=r"samples='not-a-number'.*HPC_KW_SAMPLES"):
+        mod.compute(argparse.Namespace(samples="not-a-number", output_file=str(out)))
+
+
+def test_compute_coerces_under_future_annotations(tmp_path: Path) -> None:
+    # The realistic cluster case: an exported executor carries
+    # `from __future__ import annotations`, so signature annotations are
+    # strings ('int'). get_type_hints resolution (with a string-name fallback)
+    # must still coerce.
+    mod = _exec_module(
+        "from __future__ import annotations\n"
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run\n"
+        "def run(samples: int = 1000):\n"
+        "    return {'count': len(range(samples))}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(samples="500000", output_file=str(out)))
+    assert json.loads(out.read_text()) == {"count": 500000}
+
+
+def test_compute_does_not_coerce_framework_injected_typed_values(tmp_path: Path) -> None:
+    # rank/world_size are injected as ints (not strings) for mpi runs; the
+    # string-only coercion guard must leave them untouched.
+    mod = _exec_module(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "\n"
+        "@register_run(mpi=True)\n"
+        "def run(rank: int = 0, world_size: int = 1):\n"
+        "    return {'rank': rank, 'world_size': world_size}\n"
+    )
+    out = tmp_path / "o.json"
+    mod.compute(argparse.Namespace(output_file=str(out)))
+    assert json.loads(out.read_text()) == {"rank": 0, "world_size": 1}

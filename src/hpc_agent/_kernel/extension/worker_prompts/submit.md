@@ -73,7 +73,7 @@ Exports `notebooks/{pipeline,executors,scripts}/*.ipynb` → `src/<module>.py`, 
 
 This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), the entry-point wrap workflow materializes a wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` with a `shell_command` `_materialized.entry_point`.
 
-**Run ONE call to get both the materialized block and the mature-repo probe** — never inspect files yourself (no Read/Glob/Grep tool, no shell `grep`/`cat`/`test`/`python`):
+**Run ONE call to get both the materialized block and the mature-repo probe** — never inspect files yourself (no file-read/search tool, no shell `grep`/`cat`/`test`/`python`):
 
 ```bash
 hpc-agent detect-entry-point --experiment-dir .
@@ -138,12 +138,12 @@ The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_i
 - **Cartesian grid** — independent cells of a parameter grid; scaffolded by [build-tasks-py](../../docs/primitives/build-tasks-py.md) with **no** `data_axis`. The 80% case.
 - **Planner-driven** — a totally-ordered series fanned out across chunks (walk-forward backtest, online-learning scan). Stateful splits need correct warm-up; hpc-agent owns that via `hpc_agent.experiment_kit.plan_tasks`, emitted when the spec carries a `data_axis`.
 
-**Which shape is not the worker's call.** Resolved upstream by the `hpc-classify-axis` skill and recorded in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha`. Read it and branch:
+**Which shape is not the worker's call.** Resolved upstream by the caller's axis-classification step (the `hpc-classify-axis` skill under Claude Code; the equivalent caller-side step under another harness) and recorded in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha`. Read it and branch:
 
 - **`executors.<run_name>` present AND its `run_signature_sha` matches the picked run's** (Step 1) → verdict is valid:
   - `data_axis.kind == "cartesian"` → build a **plain cartesian** `tasks.py` (Step 6, **omit** `data_axis` from `build_tasks`).
   - `independent` / `associative` / `bounded_halo` / `sequential` → planner-driven; thread the `data_axis` block into Step 6's `build_tasks` spec verbatim.
-- **No entry, or `run_signature_sha` drifted** → unresolved. **Do NOT infer an axis from code, and do NOT default to cartesian** — a wrong guess silently mishandles a stateful series. Record an `axis_class` decision with outcome `unclassified` (put `run_name=<name>, run_signature_sha=<sha>` in `why`) and **stop**; the caller runs `hpc-classify-axis` and re-invokes.
+- **No entry, or `run_signature_sha` drifted** → unresolved. **Do NOT infer an axis from code, and do NOT default to cartesian** — a wrong guess silently mishandles a stateful series. Record an `axis_class` decision with outcome `unclassified` (put `run_name=<name>, run_signature_sha=<sha>` in `why`) and **stop**; the caller runs its axis-classification step (`hpc-classify-axis` under Claude Code) and re-invokes.
 
 A *recorded* `cartesian` verdict means the matcher confidently found no series; *absent* means escalate. Never conflate.
 
