@@ -50,7 +50,7 @@ class CanaryFailureFeatures(BaseModel):
     that step into framework code: the same ``stderr_tail`` is restated
     under ``cluster_log_tail`` for structured consumers, and
     ``classified_error`` carries the
-    :func:`hpc_agent.ops.recover.failure_signatures.classify` result so a
+    :func:`hpc_agent.infra.failure_signatures.classify` result so a
     decision-maker reads an ``error_class`` + ``suggested_fix`` instead
     of paraphrasing the log.
     """
@@ -77,7 +77,7 @@ class CanaryFailureFeatures(BaseModel):
         default=None,
         description=(
             "The ``{error_class, suggested_fix, matched_pattern}`` triple "
-            "returned by :func:`ops.recover.failure_signatures.classify` on "
+            "returned by :func:`infra.failure_signatures.classify` on "
             "the cluster log tail. ``None`` when the stderr was empty "
             "(nothing to classify)."
         ),

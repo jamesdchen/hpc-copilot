@@ -4,7 +4,7 @@ Wires together the cluster-side dispatcher's SIGTERM trap with the
 agent-surface's failure-clustering and envelope-key path:
 
   dispatch.py exit 130 + SIGTERM stderr line
-   → ops.recover.failure_signatures.classify finds the 'preempted' pattern
+   → infra.failure_signatures.classify finds the 'preempted' pattern
    → ops.recover.runner_failures.cluster_failures_by_fingerprint groups all bumped tasks
    → ops.recover.failures_atom.fetch_failures surfaces preempted_count /
      preempted_task_ids on the envelope
@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent.ops.recover.failure_signatures import classify
+from hpc_agent.infra.failure_signatures import classify
 from hpc_agent.ops.recover.runner_failures import cluster_failures_by_fingerprint
 from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run

@@ -51,8 +51,8 @@ rules.
 │   ├ monitor/    status, reconcile, logs, list_in_flight, arm,       │
 │   │            summary, update_constraints, logs_atom               │
 │   ├ preflight/  check                                               │
-│   ├ recover/    runner, batching, failure_signatures,               │
-│   │            failures_atom, runner_failures                       │
+│   ├ recover/    runner, batching, failures_atom,                    │
+│   │            runner_failures                                      │
 │   ├ submit/     runner, plan_summary, plan_throughput,              │
 │   │            recommend_partition                                  │
 │   └ validate/   executor_signatures, input_dataset, self_qos_limit, │
@@ -111,6 +111,7 @@ rules.
 │   ├ time.py   canonical UTC                                         │
 │   ├ io.py     atomic flock                                          │
 │   ├ parsing.py                                                      │
+│   ├ failure_signatures.py  stderr→error_class catalog              │
 │   └ cache.py                                                        │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓

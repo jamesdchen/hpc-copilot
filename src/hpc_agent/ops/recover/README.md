@@ -3,8 +3,11 @@
 ## What and why
 
 `ops/recover/` owns the "what went wrong, how do we recover" loop after a
-run produces failed tasks. It classifies each per-task failure against a
-shared signature catalog, clusters the failures by stderr fingerprint so
+run produces failed tasks. It classifies each per-task failure against the
+shared signature catalog (`infra.failure_signatures`, the pure
+stderr→`error_class` catalog every subject shares — `recover`, `reduce`,
+`verify_canary`, and `reconcile` all consume it), clusters the failures by
+stderr fingerprint so
 forty tasks with the same root cause surface as a single cluster, decides
 the per-cluster retry policy from a sidecar-or-default auto-retry config,
 and batches the resulting resubmit into compact scheduler array
@@ -19,7 +22,10 @@ signature catalog or the configured auto-retry policy doesn't justify.
 
 ## Public vs internal
 
-All six modules are agent-facing primitive modules:
+All five modules are agent-facing primitive modules (the pure signature
+catalog they share, `failure_signatures.py`, now lives in `infra/` — see
+`infra.failure_signatures` — since `reduce`, `verify_canary`, and `reconcile`
+consume it too, and a subject may not import another subject):
 
 - `failures_atom.py` — the `failures` query primitive (`fetch_failures`):
   re-polls run status, fetches stderr tails, returns the clustered failure
@@ -32,10 +38,6 @@ All six modules are agent-facing primitive modules:
   `fingerprint_stderr_tail`, `DEFAULT_AUTO_RETRY_POLICY`). Also re-exports
   `_FAILURE_CATEGORY_PATTERNS` / `_categorize` from `infra.parsing` for
   back-compat with cross-subject contract tests.
-- `failure_signatures.py` — the VASPilot-style signature catalog
-  (`CATALOG`, `FailureSignature`, `classify`) that returns
-  `{error_class, suggested_fix, matched_pattern}` per failure so callers
-  can auto-resubmit with adjusted resources rather than asking the user.
 - `runner.py` — the `resubmit-failed` mutate primitive
   (`resubmit_failed`, `derive_resubmit_request_id`): records a
   resubmission attempt in the journal, deduping on `request_id`.

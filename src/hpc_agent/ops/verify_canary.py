@@ -60,18 +60,17 @@ def _failure_features(stderr_tail: str, log_path: str | None) -> dict[str, Any]:
       tail more if they need to.
 
     * **classified_error** — the structured pattern match from
-      :data:`failure_signatures.CATALOG` (the same classifier
-      ``ops/recover`` uses for resubmit categorization). Gives the
-      decision-maker an ``error_class`` + ``suggested_fix`` + the
-      ``matched_pattern`` regex, so an agent can act on the structured
-      remediation instead of paraphrasing the log tail. ``None`` when
-      the stderr is empty (nothing to classify).
+      :data:`hpc_agent.infra.failure_signatures.CATALOG` (the one shared
+      classifier catalog — ``recover``, ``reduce``, and ``reconcile`` all
+      consume it). Gives the decision-maker an ``error_class`` +
+      ``suggested_fix`` + the ``matched_pattern`` regex, so an agent can act
+      on the structured remediation instead of paraphrasing the log tail.
+      ``None`` when the stderr is empty (nothing to classify).
     """
-    # Import inside the helper — `failure_signatures` lives in `ops/recover`,
-    # and `verify_canary` is loaded at module-discovery time. Keeping the
-    # import lazy avoids dragging the recover package in for callers that
-    # only ever hit the happy path.
-    from hpc_agent.ops.recover.failure_signatures import classify
+    # Import inside the helper — keeps the classifier off the module-discovery
+    # import path for callers that only ever hit the happy path (it's a pure
+    # ``infra`` citizen now, so this is cheap; the laziness is just hygiene).
+    from hpc_agent.infra.failure_signatures import classify
 
     classified: dict[str, Any] | None = None
     if stderr_tail:

@@ -337,19 +337,27 @@ def test_ran_and_failed_with_purged_records_is_failed_not_abandoned(tmp_path, mo
     assert recon._reconcile_envelope(result)["lifecycle_state"] == "failed"
     # The readable cluster log tail is carried out for the skill's ``failed``
     # branch — the load-bearing evidence (the TypeError that proves FAILURE, not
-    # a purge). ``classified_error`` stays None in the reconcile path: the
-    # signature classifier lives in the ops/recover subject, which ops/monitor
-    # may not import (cross-subject boundary) — it is a verify_canary-only
-    # enrichment. The raw tail still contains the error.
+    # a purge). The signature classifier now lives in ``infra.failure_signatures``
+    # (shared substrate the cross-subject boundary lint allows), so reconcile
+    # classifies the tail inline — same enrichment ``verify_canary`` attaches.
     features = (result.last_status or {}).get("failure_features")
     assert isinstance(features, dict)
     assert features["cluster_log_tail"] == stderr_tail
     assert "TypeError" in features["cluster_log_tail"]
     assert features["log_path"] == "/remote/logs/j.o1.1"
-    assert features["classified_error"] is None
+    # The Traceback tail classifies (python_traceback) — a populated triple, not
+    # a bare None: reconcile can classify now that the catalog is in infra.
+    classified = features["classified_error"]
+    assert isinstance(classified, dict)
+    assert classified["error_class"] == "python_traceback"
+    assert classified["suggested_fix"] == {"action": "user-debug"}
+    assert classified["matched_pattern"]
     # The envelope's last_status carries the same evidence.
     env = recon._reconcile_envelope(result)
     assert "TypeError" in env["last_status"]["failure_features"]["cluster_log_tail"]
+    assert env["last_status"]["failure_features"]["classified_error"]["error_class"] == (
+        "python_traceback"
+    )
 
 
 def test_failed_verdict_survives_a_log_fetch_blip(tmp_path, monkeypatch):

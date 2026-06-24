@@ -1,7 +1,7 @@
 """Context-keyed failure resolver — the widened deterministic key (#234).
 
 The existing deterministic layer keys a fix on ``error_class`` *alone*
-(``failure_signatures.classify`` → ``DEFAULT_AUTO_RETRY_POLICY[category]``),
+(``infra.failure_signatures.classify`` → ``DEFAULT_AUTO_RETRY_POLICY[category]``),
 so it emits one static fix per signature. This module widens that key to
 ``(error_class, temporal_context, resource_spec)`` — the discriminating
 fields of the #230 ``failure_features`` evidence vector — so the *same*

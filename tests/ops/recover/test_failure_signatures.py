@@ -1,8 +1,8 @@
-"""Tests for hpc_agent.ops.recover.failure_signatures.classify."""
+"""Tests for hpc_agent.infra.failure_signatures.classify."""
 
 from __future__ import annotations
 
-from hpc_agent.ops.recover.failure_signatures import CATALOG, classify
+from hpc_agent.infra.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:

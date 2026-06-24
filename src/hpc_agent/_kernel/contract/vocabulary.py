@@ -146,7 +146,7 @@ class FailureCategory(StrEnum):
     # surfacing a real failure to the user.
     PREEMPTED = "preempted"
     # Empirical-failure signatures the canary verifier learned to classify
-    # (see ops/recover/failure_signatures.py). Each names a concrete
+    # (see infra/failure_signatures.py). Each names a concrete
     # remediation: the wire layer must accept these so a resubmit carrying
     # them isn't rejected at the boundary.
     UV_NOT_ON_PATH = "uv_not_on_path"

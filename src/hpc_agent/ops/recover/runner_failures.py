@@ -5,16 +5,16 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent.ops.recover.failure_signatures import classify
+from hpc_agent.infra.failure_signatures import classify
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
 # Single failure classifier: cluster_failures_by_fingerprint delegates both
-# category and suggested_fix to failure_signatures.classify (the one catalog),
-# so the cluster's category and error_class are derived from one source and
-# cannot disagree. (This module used to re-export a sibling pattern table from
-# infra.parsing; that duplicate classifier was removed — #236.)
+# category and suggested_fix to infra.failure_signatures.classify (the one
+# catalog), so the cluster's category and error_class are derived from one
+# source and cannot disagree. (This module used to re-export a sibling pattern
+# table from infra.parsing; that duplicate classifier was removed — #236.)
 __all__ = [
     "fingerprint_stderr_tail",
     "annotate_clusters_with_retry_advice",

@@ -179,18 +179,22 @@ def _gather_failure_features(
     (the ``exit_code``/traceback that proves this is a FAILURE, not a purge) so
     the operator sees the evidence inline instead of hand-fetching. Shape matches
     the ``failure_features`` ``verify_canary`` attaches — ``cluster_log_tail`` /
-    ``log_path`` / ``classified_error`` — EXCEPT ``classified_error`` stays
-    ``None`` here: the signature classifier lives in the ``ops/recover`` subject,
-    which ``ops/monitor`` may NOT import (the cross-subject boundary lint —
-    subjects compose only through ``infra.*`` / ``state.*``). The raw tail is the
-    load-bearing evidence; classification is a verify_canary-only enrichment.
-    Routes only through ``infra.cluster_logs`` (allowed substrate).
+    ``log_path`` / ``classified_error``. The signature classifier now lives in
+    ``infra.failure_signatures`` (shared substrate the cross-subject boundary
+    lint allows), so reconcile classifies the tail inline just like
+    ``verify_canary`` does — same ``error_class`` / ``suggested_fix`` /
+    ``matched_pattern`` triple. Routes only through ``infra.*`` (allowed
+    substrate: ``cluster_logs`` for the fetch, ``failure_signatures`` for the
+    classify).
 
-    Best-effort: an SSH blip fetching the log degrades to an empty tail (the
-    ``failed`` verdict still stands on the reporter's positive ``failed`` count,
-    which already proved non-completion). Never raises.
+    Best-effort: an SSH blip fetching the log degrades to an empty tail and a
+    ``None`` classification, and a ``classify`` failure likewise degrades to
+    ``None`` — neither gates the verdict. The ``failed`` verdict still stands on
+    the reporter's positive ``failed`` count, which already proved
+    non-completion. Never raises.
     """
     from hpc_agent.infra.cluster_logs import fetch_task_logs
+    from hpc_agent.infra.failure_signatures import classify
 
     stderr_tail = ""
     log_path: str | None = None
@@ -211,10 +215,18 @@ def _gather_failure_features(
     except Exception:  # noqa: BLE001 — log fetch is best-effort, never gates the verdict
         stderr_tail = ""
         log_path = None
+
+    classified_error: dict[str, Any] | None = None
+    if stderr_tail:
+        try:
+            classified_error = classify(stderr_tail, exit_code=None)
+        except Exception:  # noqa: BLE001 — classify is best-effort, never gates the verdict
+            classified_error = None
+
     return {
         "cluster_log_tail": stderr_tail,
         "log_path": log_path,
-        "classified_error": None,
+        "classified_error": classified_error,
     }
 
 

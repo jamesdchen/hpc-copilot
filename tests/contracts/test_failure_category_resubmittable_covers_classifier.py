@@ -6,7 +6,7 @@ governs the values accepted by ``resubmit --spec.category``. Two
 classifiers can emit a category that the resubmit path must then
 accept:
 
-* :data:`hpc_agent.ops.recover.failure_signatures.CATALOG` — the single
+* :data:`hpc_agent.infra.failure_signatures.CATALOG` — the single
   pattern catalog (``classify()``); ``cluster_failures_by_fingerprint``
   delegates to it (so ``CLASSIFIER_CATEGORIES`` is the emitted-category set).
 
@@ -38,7 +38,7 @@ from hpc_agent._kernel.contract.vocabulary import FailureCategory as FailureCate
 from hpc_agent._wire._shared import (
     FailureCategoryResubmittable,
 )
-from hpc_agent.ops.recover.failure_signatures import CATALOG, CLASSIFIER_CATEGORIES
+from hpc_agent.infra.failure_signatures import CATALOG, CLASSIFIER_CATEGORIES
 
 
 def _resubmittable_args() -> set[str]:
@@ -73,7 +73,7 @@ def test_resubmittable_covers_catalog_emissions() -> None:
     missing = catalog - resubmittable
     assert not missing, (
         "FailureCategoryResubmittable must be a superset of every "
-        "category that hpc_agent.ops.recover.failure_signatures.CATALOG emits "
+        "category that hpc_agent.infra.failure_signatures.CATALOG emits "
         f"— resubmit would 400 these otherwise: {sorted(missing)}. "
         "Add the missing values to the Literal in "
         "src/hpc_agent/_wire/_shared.py."

@@ -39,7 +39,7 @@
         }
       ],
       "default": null,
-      "description": "The canonical failure class. Reuses the framework-owned 'FailureCategory' vocabulary (the values 'classify_failure' returns and that DEFAULT_AUTO_RETRY_POLICY keys on) — NOT a parallel taxonomy. Populated by the existing classifier ('ops/recover/failure_signatures.py:classify' + 'execution/mapreduce/reduce/classify.py:classify_failure') from the raw stderr signature in 'error_class_raw', not by a new normalizer. 'unknown' is the escape hatch: the classifier could not categorize the failure — the well-defined trigger to escalate to a decision-maker (e.g. the agentic layer). Service/staging classes (#231/#232) extend FailureCategory in '_shared.py' — the single governed place the vocabulary grows — rather than introducing a new enum here. Distinct from the coarser envelope 'error_code'.",
+      "description": "The canonical failure class. Reuses the framework-owned 'FailureCategory' vocabulary (the values 'classify_failure' returns and that DEFAULT_AUTO_RETRY_POLICY keys on) — NOT a parallel taxonomy. Populated by the existing classifier ('infra/failure_signatures.py:classify' + 'execution/mapreduce/reduce/classify.py:classify_failure') from the raw stderr signature in 'error_class_raw', not by a new normalizer. 'unknown' is the escape hatch: the classifier could not categorize the failure — the well-defined trigger to escalate to a decision-maker (e.g. the agentic layer). Service/staging classes (#231/#232) extend FailureCategory in '_shared.py' — the single governed place the vocabulary grows — rather than introducing a new enum here. Distinct from the coarser envelope 'error_code'.",
       "title": "Error Class"
     },
     "resource_spec": {

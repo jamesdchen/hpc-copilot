@@ -111,7 +111,7 @@ class TestFailureCategoryVocabulary:
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from hpc_agent.cli.recover import _VALID_RESUBMIT_CATEGORIES
-        from hpc_agent.ops.recover.failure_signatures import CLASSIFIER_CATEGORIES
+        from hpc_agent.infra.failure_signatures import CLASSIFIER_CATEGORIES
 
         emitted = set(CLASSIFIER_CATEGORIES)
         missing = emitted - _VALID_RESUBMIT_CATEGORIES

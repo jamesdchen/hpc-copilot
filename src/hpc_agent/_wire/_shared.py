@@ -173,7 +173,7 @@ FailureCategory = Literal[
 
 # Values accepted by the ``resubmit`` primitive's ``--spec.category``.
 # Must contain every value emitted by the classifier
-# (``ops.recover.failure_signatures.CATALOG`` — the single classifier;
+# (``infra.failure_signatures.CATALOG`` — the single classifier;
 # ``ops.recover.runner_failures.cluster_failures_by_fingerprint`` delegates
 # to it) — five emissions (``import_error``, ``file_not_found``,
 # ``permission_denied``, ``disk_full``, ``python_traceback``) were
@@ -200,7 +200,7 @@ FailureCategoryResubmittable = Literal[
     "python_traceback",
     "preempted",
     # Cluster-side environment / executor-shape failures the canary verifier
-    # now classifies (see ops/recover/failure_signatures.py). Carried here so
+    # now classifies (see infra/failure_signatures.py). Carried here so
     # the resubmit path does not silently reject a real classifier emission.
     "uv_not_on_path",
     "conda_command_not_found",
