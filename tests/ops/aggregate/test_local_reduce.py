@@ -30,7 +30,10 @@ def _reducer(tmp_path: Path, body: str) -> str:
     """Write a reducer script and return an ``aggregate_cmd`` that runs it."""
     script = tmp_path / "reducer.py"
     script.write_text(textwrap.dedent(body), encoding="utf-8")
-    return f"{sys.executable} {script}"
+    # Quote both paths: aggregate_cmd runs under shell=True, and an install
+    # path with a space (e.g. sys.executable under "...\CC Allowed\...") would
+    # otherwise split — `'C:\\...\\CC' is not recognized` on Windows cmd.exe.
+    return f'"{sys.executable}" "{script}"'
 
 
 def test_runs_cmd_over_results_and_parses_json(tmp_path: Path) -> None:

@@ -138,7 +138,10 @@ def _no_rsync(monkeypatch: pytest.MonkeyPatch) -> None:
 def _reducer(tmp_path: Path, body: str, name: str = "reducer.py") -> str:
     script = tmp_path / name
     script.write_text(textwrap.dedent(body), encoding="utf-8")
-    return f"{sys.executable} {script}"
+    # Quote both paths: aggregate_cmd runs under shell=True, and an install
+    # path with a space (e.g. sys.executable under "...\CC Allowed\...") would
+    # otherwise split — `'C:\\...\\CC' is not recognized` on Windows cmd.exe.
+    return f'"{sys.executable}" "{script}"'
 
 
 # Sums the RAW value.txt files — a reduction the weighted-mean path cannot do,
