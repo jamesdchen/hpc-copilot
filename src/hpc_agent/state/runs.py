@@ -530,6 +530,7 @@ def find_run_by_cmd_sha(
     *,
     skip_orphans: bool = False,
     tasks_py_sha: str | None = None,
+    current_executor: str | None = None,
     invalidate_on_code_change: bool = False,
     campaign_id: str | None = None,
     node_sha: str | None = None,
@@ -577,6 +578,23 @@ def find_run_by_cmd_sha(
       sidecars (an older run whose ``tasks_py_sha`` matches the current
       code is still a legitimate dedup target); ``None`` is returned when
       no param-and-code match remains.
+
+    *current_executor* (#351 sub-bug #5) rides the SAME code-drift lane as
+    *tasks_py_sha* — it is the per-task ``executor`` command of the
+    about-to-submit run (what ``_hpc_dispatch.py`` actually invokes; read
+    from the run's own sidecar, which submit-flow ensures before rsync).
+    ``cmd_sha`` stays PURE PARAMETER identity (#207) — the executor is
+    NOT folded into it — but the executor command participates in NO
+    identity sha at all (not ``cmd_sha``, ``tasks_py_sha``, or
+    ``node_sha``), so an entry-point / executor change with unchanged
+    swept params was previously an INVISIBLE silent replay on the PRE-change
+    executor. When *current_executor* differs from the matched sidecar's
+    recorded ``executor`` we treat it EXACTLY as a ``tasks_py_sha``
+    mismatch: warn-and-dedup by default (the change is now VISIBLE), and
+    ``continue`` past the match under *invalidate_on_code_change* (fresh
+    run). A matched sidecar with an empty/absent recorded ``executor`` is
+    NOT treated as drift (same tolerance as the empty-``tasks_py_sha``
+    fallback) — we cannot prove the command changed.
 
     A sidecar with an empty/absent recorded ``tasks_py_sha`` (drift
     detection was disabled for that run, e.g. ``tasks.py`` was unreadable
@@ -640,25 +658,57 @@ def find_run_by_cmd_sha(
             and recorded_tasks_py_sha
             and str(recorded_tasks_py_sha) != str(tasks_py_sha)
         )
-        if code_changed:
+        # #351 sub-bug #5: an executor-command change is in the SAME drift
+        # lane as a tasks.py edit. The executor command (what _hpc_dispatch.py
+        # runs per task) participates in NO identity sha — cmd_sha is pure
+        # PARAMETER identity (#207), and tasks_py_sha hashes tasks.py bytes,
+        # not the entry point — so a user who changes their executor / entry
+        # point and resubmits the SAME swept params would otherwise replay the
+        # PRE-change executor with zero warning. Compare only when we have a
+        # current executor AND the matched sidecar recorded a non-empty one
+        # (an absent recorded executor disables the check, mirroring the
+        # empty-tasks_py_sha tolerance — we cannot prove it changed).
+        recorded_executor = data.get("executor")
+        executor_changed = bool(
+            current_executor
+            and recorded_executor
+            and str(recorded_executor) != str(current_executor)
+        )
+        if code_changed or executor_changed:
             if invalidate_on_code_change:
-                # Fold tasks_py_sha into the dedup key for this lookup:
-                # this run's params match but its code differs, so it is
-                # NOT a valid replay target — keep scanning for an older
-                # run whose code also matches (returns None if none does).
+                # Fold the drift signal (tasks_py_sha AND/OR executor) into the
+                # dedup key for this lookup: this run's params match but its
+                # code/executor differs, so it is NOT a valid replay target —
+                # keep scanning for an older run that also matches (returns
+                # None if none does).
                 continue
-            warnings.warn(
-                f"deduping against run {path.stem!r} (same cmd_sha "
-                f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
-                f"recorded tasks.py drift sha {str(recorded_tasks_py_sha)[:8]}… "
-                f"differs from the current {str(tasks_py_sha)[:8]}… — the "
-                "executor code changed since that run. The replay will run "
-                "the PRIOR submission's code (dedup keys on parameters by "
-                "design, #207). Pass --invalidate-on-code-change (or set "
-                "invalidate_on_code_change=True) to force a fresh run.",
-                UserWarning,
-                stacklevel=2,
-            )
+            if executor_changed:
+                warnings.warn(
+                    f"deduping against run {path.stem!r} (same cmd_sha "
+                    f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
+                    f"recorded executor command ({str(recorded_executor)!r}) "
+                    f"differs from the current ({str(current_executor)!r}) — the "
+                    "entry point / executor changed since that run. The replay "
+                    "will run the PRIOR submission's executor (dedup keys on "
+                    "parameters by design, #207/#351). Pass "
+                    "--invalidate-on-code-change (or set "
+                    "invalidate_on_code_change=True) to force a fresh run.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if code_changed:
+                warnings.warn(
+                    f"deduping against run {path.stem!r} (same cmd_sha "
+                    f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
+                    f"recorded tasks.py drift sha {str(recorded_tasks_py_sha)[:8]}… "
+                    f"differs from the current {str(tasks_py_sha)[:8]}… — the "
+                    "executor code changed since that run. The replay will run "
+                    "the PRIOR submission's code (dedup keys on parameters by "
+                    "design, #207). Pass --invalidate-on-code-change (or set "
+                    "invalidate_on_code_change=True) to force a fresh run.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         return path
     return None
 

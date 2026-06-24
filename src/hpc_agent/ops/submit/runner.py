@@ -77,6 +77,7 @@ def submit_and_record(
     cmd_sha: str | None = None,
     node_sha: str | None = None,
     tasks_py_sha: str | None = None,
+    current_executor: str | None = None,
     invalidate_on_code_change: bool = False,
     script: str = "",
     backend: str = "",
@@ -123,6 +124,18 @@ def submit_and_record(
     ``<experiment>/.hpc/tasks.py`` (the same source the run sidecar
     records), so callers that already pass ``cmd_sha`` get the drift
     guard for free.
+
+    *current_executor* (#351 sub-bug #5) is the about-to-submit run's
+    per-task ``executor`` command. It rides the SAME code-drift lane as
+    *tasks_py_sha*: a matched prior sidecar whose recorded ``executor``
+    differs warns-and-dedups by default and forces a fresh run under
+    *invalidate_on_code_change*. The executor is in NO identity sha
+    (``cmd_sha`` stays pure parameter identity, #207), so without this an
+    entry-point / executor change with unchanged swept params was a silent
+    replay on the PRE-change executor. When None it is read from THIS run's
+    own sidecar (``.hpc/runs/<run_id>.json``, written by submit-flow before
+    rsync), so callers that already thread ``cmd_sha`` get the executor
+    drift guard for free.
     """
     profile = spec.profile
     cluster = spec.cluster
@@ -175,6 +188,31 @@ def submit_and_record(
                     # lookup (falls back to param-only dedup); mirrors the
                     # empty-sha tolerance in _ensure_run_sidecar.
                     current_tasks_py_sha = None
+        # #351 sub-bug #5: resolve the about-to-submit per-task EXECUTOR
+        # command so find_run_by_cmd_sha can flag an executor/entry-point
+        # change (same drift lane as tasks_py_sha). The executor is in NO
+        # identity sha (cmd_sha is pure params, #207), so without this an
+        # executor change with unchanged params silently replays the old
+        # executor. When the caller didn't hand us one, read it from THIS
+        # run's own sidecar — submit-flow's _ensure_run_sidecar writes/validates
+        # it (the real per-task command) before rsync, so it is the current
+        # intended executor. Best-effort: an unreadable/absent sidecar leaves
+        # it None and disables the executor-drift check (param-only fallback).
+        resolved_executor = current_executor
+        if resolved_executor is None:
+            try:
+                own_sidecar = read_run_sidecar(experiment_dir, run_id)
+            except (
+                FileNotFoundError,
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                errors.HpcError,
+            ):
+                own_sidecar = None
+            if own_sidecar is not None:
+                raw_executor = own_sidecar.get("executor")
+                resolved_executor = str(raw_executor) if raw_executor else None
         sidecar_path = find_run_by_cmd_sha(
             experiment_dir,
             cmd_sha,
@@ -186,6 +224,11 @@ def submit_and_record(
             # bare-cmd_sha key.
             node_sha=node_sha,
             tasks_py_sha=current_tasks_py_sha,
+            # #351 sub-bug #5: the executor command rides the same code-drift
+            # lane as tasks_py_sha — see find_run_by_cmd_sha. Default path
+            # warns + dedups (the change is now VISIBLE); the
+            # invalidate_on_code_change opt-in forces a fresh run.
+            current_executor=resolved_executor,
             invalidate_on_code_change=invalidate_on_code_change,
             # Campaign iterations deliberately re-run (a stochastic strategy
             # may re-propose identical params), so a same-campaign sidecar is

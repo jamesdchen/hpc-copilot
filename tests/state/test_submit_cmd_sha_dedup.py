@@ -251,3 +251,192 @@ def test_207_opt_in_still_dedups_when_code_unchanged(tmp_path: Path) -> None:
     assert deduped is True
     assert record.run_id == "20260101-000000-existin"
     assert record.job_ids == ["12345"]
+
+
+# ─── #351 sub-bug #5: executor-command drift rides the #207 code-drift lane ──
+#
+# cmd_sha is PURE PARAMETER identity (#207) and the executor command is in NO
+# identity sha at all — so a user who changes their entry point / executor and
+# resubmits the SAME swept params would (pre-fix) silently REPLAY the old run on
+# the PRE-change executor. These pin the three drift directions, mirroring the
+# test_207_* tasks_py_sha tests above: opt-in → fresh, default → warn+dedup,
+# same-executor → still dedups.
+
+
+def test_351_opt_in_forces_fresh_run_on_executor_change(tmp_path: Path) -> None:
+    """Lever on: same params + CHANGED executor (same tasks_py_sha) is NOT
+    deduped — submit_and_record mints a fresh record with the caller's run_id
+    so the NEW executor / entry point actually runs."""
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run_v1.py --seed $SEED",  # the OLD entry point
+        job_ids=["12345"],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec("20260102-000000-newone1"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,  # tasks.py UNCHANGED — only the executor moved
+        current_executor="python3 src/run_v2.py --seed $SEED",  # the NEW one
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is False
+    assert record.run_id == "20260102-000000-newone1"  # fresh run, new executor
+    assert record.job_ids == ["99999"]  # the caller's job_ids, not the stale ones
+
+
+def test_351_default_warns_and_dedups_on_executor_change(tmp_path: Path) -> None:
+    """Default (lever off): same params + changed executor still DEDUPS (params
+    define the experiment, #207) BUT the drift is now VISIBLE — a UserWarning
+    naming the executor change instead of the pre-fix SILENT replay. The win is
+    observability; deduped stays True and the OLD run_id/job_ids win."""
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run_v1.py --seed $SEED",
+        job_ids=["12345"],
+    )
+
+    with pytest.warns(UserWarning, match="executor command"):
+        record, deduped = submit_and_record(
+            tmp_path,
+            spec=_spec("20260102-000000-newone1"),
+            cmd_sha=cmd_sha,
+            tasks_py_sha="1" * 64,  # tasks.py unchanged
+            current_executor="python3 src/run_v2.py --seed $SEED",
+            # invalidate_on_code_change defaults False
+        )
+
+    assert deduped is True
+    assert record.run_id == "20260101-000000-existin"
+    assert record.job_ids == ["12345"]
+
+
+def test_351_opt_in_still_dedups_when_executor_unchanged(tmp_path: Path) -> None:
+    """Lever on but the executor is unchanged: NO false invalidation — a
+    transient-retry resubmit of the SAME executor + SAME params still
+    short-circuits (params-and-code-and-executor all match)."""
+    cmd_sha = "f" * 64
+    same_executor = "python3 src/run.py --seed $SEED"
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor=same_executor,
+        job_ids=["12345"],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec("20260102-000000-newone1"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        current_executor=same_executor,  # SAME executor as the recorded run
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is True
+    assert record.run_id == "20260101-000000-existin"
+    assert record.job_ids == ["12345"]
+
+
+# ─── #351 sub-bug #5: the guard at the find_run_by_cmd_sha unit boundary ────
+#
+# These pin the drift branch directly (no submit_and_record self-match noise):
+# current_executor differs from the matched sidecar's recorded executor.
+
+
+def test_351_find_run_opt_in_skips_match_on_executor_change(tmp_path: Path) -> None:
+    """find_run_by_cmd_sha: same cmd_sha + same tasks_py_sha but a DIFFERENT
+    current_executor than the recorded one, under invalidate_on_code_change →
+    the match is NOT a replay target (returns None: no other sidecar matches)."""
+    from hpc_agent.state.runs import find_run_by_cmd_sha
+
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run_v1.py --seed $SEED",
+        job_ids=["12345"],
+    )
+
+    hit = find_run_by_cmd_sha(
+        tmp_path,
+        cmd_sha,
+        tasks_py_sha="1" * 64,  # tasks.py UNCHANGED — the executor alone moved
+        current_executor="python3 src/run_v2.py --seed $SEED",
+        invalidate_on_code_change=True,
+    )
+    assert hit is None  # drifted-executor match rejected → caller submits fresh
+
+
+def test_351_find_run_default_warns_but_returns_match_on_executor_change(
+    tmp_path: Path,
+) -> None:
+    """find_run_by_cmd_sha, lever off: an executor change still DEDUPS (returns
+    the match) but emits the drift warning — observability without changing the
+    dedup decision (the #207 default-dedup-with-warning contract, extended to
+    the executor by #351)."""
+    from hpc_agent.state.runs import find_run_by_cmd_sha
+
+    cmd_sha = "f" * 64
+    target = _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run_v1.py --seed $SEED",
+        job_ids=["12345"],
+    )
+
+    with pytest.warns(UserWarning, match="executor command"):
+        hit = find_run_by_cmd_sha(
+            tmp_path,
+            cmd_sha,
+            tasks_py_sha="1" * 64,
+            current_executor="python3 src/run_v2.py --seed $SEED",
+            # invalidate_on_code_change defaults False
+        )
+    assert hit == target  # still deduped — only the visibility changed
+
+
+def test_351_find_run_no_drift_when_recorded_executor_absent(tmp_path: Path) -> None:
+    """A matched sidecar with NO recorded executor is NOT treated as drift
+    (mirrors the empty-tasks_py_sha tolerance) — we cannot prove it changed, so
+    the dedup falls back to param-only and neither warns nor invalidates."""
+    import warnings
+
+    from hpc_agent.state.runs import find_run_by_cmd_sha
+
+    cmd_sha = "f" * 64
+    target = _write_sidecar(
+        tmp_path,
+        "20260101-000000-existin",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="",  # absent/empty recorded executor disables the check
+        job_ids=["12345"],
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any drift warning would fail the test
+        hit = find_run_by_cmd_sha(
+            tmp_path,
+            cmd_sha,
+            tasks_py_sha="1" * 64,
+            current_executor="python3 src/run_v2.py --seed $SEED",
+            invalidate_on_code_change=True,  # would invalidate IF drift fired
+        )
+    assert hit == target  # no drift detected → still a valid dedup target
