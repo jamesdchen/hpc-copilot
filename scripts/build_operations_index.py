@@ -48,13 +48,29 @@ VERB_DESCRIPTIONS = {
 
 
 def fetch_operations() -> list[dict]:
-    """Subprocess-call `hpc-agent capabilities` and parse the operations array."""
+    """Subprocess-call ``hpc-agent capabilities`` and parse the operations array.
+
+    Invokes ``capabilities`` via the *running* interpreter
+    (``sys.executable -m hpc_agent``), NOT a bare ``hpc-agent`` on PATH. A bare
+    PATH lookup silently picks up whatever ``hpc-agent`` is first on PATH — e.g.
+    a stale venv from another project (observed: a demo venv pinned an older
+    build) — which returns out-of-date capabilities and makes ``--check``
+    false-flag drift / ``--write`` emit a wrong index (dropping a just-added
+    primitive). Pinning to ``sys.executable`` guarantees the index reflects
+    THIS repo's code; ``src`` on the child ``PYTHONPATH`` lets ``-m hpc_agent``
+    resolve even without an editable install, matching this script's own
+    import shim above.
+    """
+    env = {**os.environ}
+    src = str(REPO_ROOT / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else src
     result = subprocess.run(
-        ["hpc-agent", "capabilities"],
+        [sys.executable, "-m", "hpc_agent", "capabilities"],
         capture_output=True,
         text=True,
         encoding="utf-8",
         check=True,
+        env=env,
     )
     lines = result.stdout.strip().splitlines()
     if not lines:
@@ -65,7 +81,8 @@ def fetch_operations() -> list[dict]:
     data = envelope.get("data") or {}
     if not isinstance(data, dict):
         raise SystemExit(f"capabilities envelope returned non-dict data: {type(data).__name__}")
-    return data.get("operations", [])
+    ops = data.get("operations", [])
+    return ops if isinstance(ops, list) else []
 
 
 def render_row(op: dict) -> str:
