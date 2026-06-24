@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,37 @@ from hpc_agent.state.journal import load_run, mark_run, update_run_status
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
+
+
+@dataclasses.dataclass(frozen=True)
+class OrphanedReconcile:
+    """Benign verdict for a crashed-submit residue, NOT a corruption (#356).
+
+    A run whose per-experiment sidecar exists, is valid JSON, carries
+    **no** ``job_ids``, AND has **no** journal record is crashed-submit
+    *residue* — ``submit-flow`` wrote the jobless sidecar (Step 6d) but the
+    process died before the post-qsub ``submit_and_record`` minted the journal
+    record and stamped the ids. It never reached the scheduler, so there is no
+    run to reconcile; the sidecar is safe to discard or overwrite by a fresh
+    submit (which the cmd_sha dedup in ``runner.submit_and_record`` already
+    treats as an orphan and falls through, #356 AC2).
+
+    This is the SAME invariant :func:`hpc_agent.state.runs.is_orphan_sidecar`
+    keys on (jobless sidecar + no committed journal). Surfacing it as a
+    benign envelope — not a :class:`errors.JournalCorrupt` — is the whole
+    point: the operator no longer has to hand-``rm`` the residue before
+    re-submitting.
+
+    Deliberately NOT an orphan, still :class:`errors.JournalCorrupt` (#328 —
+    the hint must never mask a real corruption):
+
+    * sidecar carries ``job_ids`` but no journal record → stranded post-qsub
+      ids; the operator must mint the record from THOSE ids (see the hint in
+      :func:`_reconcile_one`).
+    * sidecar missing, malformed, or schema-incompat → unreadable on-disk state.
+    """
+
+    run_id: str
 
 
 def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
@@ -113,8 +145,8 @@ def _all_tasks_complete(summary: dict[str, Any], total_tasks: int) -> bool:
     )
 
 
-def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
-    """Project ``RunRecord`` into the ``reconcile.output.json`` envelope shape.
+def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]:
+    """Project the reconcile result into the ``reconcile.output.json`` shape.
 
     The envelope ``lifecycle_state`` is the journal status, EXCEPT when the
     cluster alive-check could not run (SSH/auth/network failure): the journal
@@ -122,7 +154,20 @@ def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
     ``unable_to_verify`` (#258) so callers can distinguish "cluster says it's
     still running" from "we couldn't ask" — different remediations. The marker
     lives in ``last_status.verify_state`` (set by :func:`_reconcile_one`).
+
+    A benign :class:`OrphanedReconcile` (#356) projects to the terminal-ish
+    ``no_run_record`` state with an empty ``last_status`` — there is no cluster
+    reading because the run never reached the scheduler. It is NOT an error
+    envelope: the caller may discard/overwrite the residue and proceed.
     """
+    if isinstance(record, OrphanedReconcile):
+        return {
+            "run_id": record.run_id,
+            "lifecycle_state": "no_run_record",
+            "combined_waves": [],
+            "failed_waves": [],
+            "last_status": {"verdict": "orphaned"},
+        }
     last_status = record.last_status or {}
     state = record.status
     if last_status.get("verify_state") == "unable_to_verify":
@@ -194,7 +239,7 @@ def reconcile(
     *,
     scheduler: str,
     file_glob: str = "*",
-) -> RunRecord:
+) -> RunRecord | OrphanedReconcile:
     """Self-healing resume step — reconciles *run_id* AND its paired sibling.
 
     Re-derives ground truth from the cluster for *run_id* (see
@@ -207,13 +252,22 @@ def reconcile(
 
     Returns the requested run's reconciled record. Its envelope
     ``lifecycle_state`` becomes ``unable_to_verify`` when the cluster
-    alive-check could not run (#258).
+    alive-check could not run (#258), or ``no_run_record`` when the run is a
+    benign crashed-submit orphan (#356) — an :class:`OrphanedReconcile` is
+    returned in that case, with no sibling cascade (there is no record).
     """
     from hpc_agent.state.run_record import TERMINAL_STATUSES
 
     primary, _primary_alive_failed = _reconcile_one(
         experiment_dir, run_id, scheduler=scheduler, file_glob=file_glob
     )
+
+    # A benign orphan (#356) has no journal record to cascade FROM or merge the
+    # sibling outcomes INTO — update_run_status on a non-existent record would
+    # raise FileNotFoundError. There is nothing to settle: return the benign
+    # verdict directly. (A genuine paired run always lands a record first.)
+    if isinstance(primary, OrphanedReconcile):
+        return primary
 
     sibling_outcomes: list[dict[str, Any]] = []
     for sib_id in _sibling_run_ids(run_id):
@@ -229,8 +283,11 @@ def reconcile(
         sib_rec, _ = _reconcile_one(
             experiment_dir, sib_id, scheduler=scheduler, file_glob=file_glob
         )
+        # A sibling can itself be a benign orphan — surface no_run_record
+        # rather than reaching for a record attribute it does not have.
+        sib_state = "no_run_record" if isinstance(sib_rec, OrphanedReconcile) else sib_rec.status
         sibling_outcomes.append(
-            {"run_id": sib_id, "lifecycle_state": sib_rec.status, "reconciled": True}
+            {"run_id": sib_id, "lifecycle_state": sib_state, "reconciled": True}
         )
 
     if sibling_outcomes:
@@ -245,8 +302,13 @@ def _reconcile_one(
     *,
     scheduler: str,
     file_glob: str = "*",
-) -> tuple[RunRecord, bool]:
+) -> tuple[RunRecord | OrphanedReconcile, bool]:
     """Reconcile a single run against the cluster; return ``(record, alive_check_failed)``.
+
+    Returns an :class:`OrphanedReconcile` (#356) in place of the record when the
+    run is crashed-submit residue: a valid jobless sidecar with no journal
+    record. That verdict is benign — there is no cluster round-trip because the
+    run never reached the scheduler — and ``alive_check_failed`` is ``False``.
 
     Re-derives ground truth from the cluster:
       A. Fresh status report -> ``last_status``.
@@ -290,20 +352,39 @@ def _reconcile_one(
 
     record = load_run(experiment_dir, run_id)
     if record is None:
-        # The sidecar may carry job_ids the journal never got (the post-qsub
-        # pre-stamp in submit-flow lands them even when the process dies
-        # before submit_and_record — empirical 2026-06-11 demo). Name the real
-        # ids in the remediation so the caller mints the record from THEM via
-        # `hpc-agent submit-spec --spec <file>`, never an invented placeholder
-        # (submit-spec refuses non-scheduler-shaped ids at intake).
-        # Best-effort hint decoration only — it must NEVER mask the
-        # JournalCorrupt below. read_run_sidecar can also raise SchemaIncompat
-        # (a too-new sidecar) on top of OSError/JSONDecodeError, so swallow
-        # broadly: a failed read just means "no hint", not a different error.
+        # No journal record. Three sub-cases, distinguished by the sidecar
+        # (#356) — and the #328 invariant holds throughout: the benign branch
+        # only fires on a PROVABLY benign read, never by masking a failed one.
+        #
+        #   (a) sidecar valid JSON + NO job_ids  → benign ``orphaned`` residue.
+        #       submit-flow wrote the jobless sidecar (Step 6d) but the process
+        #       died before submit_and_record minted the record + stamped ids,
+        #       so the run never reached the scheduler. Same invariant as
+        #       ``is_orphan_sidecar``. Report a benign verdict, not a corruption
+        #       — the operator no longer hand-``rm``s residue before re-submitting.
+        #   (b) sidecar valid JSON WITH job_ids  → stranded post-qsub ids; the
+        #       process died after qsub pre-stamped them (empirical 2026-06-11
+        #       demo). Name the REAL ids so the caller mints the record from
+        #       THEM via `hpc-agent submit-spec --spec <file>`, never an invented
+        #       placeholder (submit-spec refuses non-scheduler-shaped ids).
+        #   (c) sidecar missing/malformed/schema-incompat → unreadable on-disk
+        #       state, genuinely loud. read_run_sidecar can raise SchemaIncompat
+        #       (a too-new sidecar) on top of OSError/JSONDecodeError; a failed
+        #       read drops to the bare JournalCorrupt — it must NEVER read as a
+        #       benign orphan (that would mask a real corruption, #328).
+        sidecar_read_ok = False
+        _stranded: list[str] = []
         try:
             _stranded = list(read_run_sidecar(experiment_dir, run_id).get("job_ids") or [])
+            sidecar_read_ok = True
         except Exception:
-            _stranded = []
+            # (c): no readable sidecar → no hint, no benign reclassification.
+            sidecar_read_ok = False
+        if sidecar_read_ok and not _stranded:
+            # (a) benign orphan: valid sidecar, jobless, no journal record.
+            return OrphanedReconcile(run_id=run_id), False
+        # (b)/(c): stranded-ids hint when the read succeeded with ids; bare
+        # message otherwise. Either way this stays a loud JournalCorrupt.
         hint = (
             f" Sidecar .hpc/runs/{run_id}.json carries job_ids {_stranded} from the "
             "post-qsub pre-stamp; mint the journal record with `hpc-agent submit-spec "

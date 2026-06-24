@@ -76,8 +76,10 @@ LifecycleStateObservableWithTimeout = Literal[
 
 # Reconcile's envelope can additionally report 'unable_to_verify' (#258): the
 # cluster alive-check failed (SSH/auth/network), so the run's true state is
-# unknown — distinct from a confirmed 'in_flight'. Reconcile-specific so the
-# observable literal above stays clean for status.
+# unknown — distinct from a confirmed 'in_flight'. It can also report
+# 'no_run_record' (#356): a benign crashed-submit orphan — a valid jobless
+# sidecar with no journal record, safe to discard/overwrite (NOT journal_corrupt).
+# Reconcile-specific so the observable literal above stays clean for status.
 LifecycleStateReconcile = Literal[
     "in_flight",
     "complete",
@@ -85,6 +87,7 @@ LifecycleStateReconcile = Literal[
     "abandoned",
     "timeout",
     "unable_to_verify",
+    "no_run_record",
 ]
 
 # ── infra ────────────────────────────────────────────────────────────────────

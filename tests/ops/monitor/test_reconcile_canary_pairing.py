@@ -339,3 +339,149 @@ def test_no_record_unreadable_sidecar_keeps_bare_message(tmp_path, monkeypatch):
     # The unreadable sidecar yields no hint, and the SchemaIncompat never surfaces.
     assert "submit-spec" not in msg
     assert "schema_version" not in msg
+
+
+# ---------------------------------------------------------------------------
+# #356 — a crashed-submit orphan (valid jobless sidecar + no journal record)
+# is a BENIGN ``no_run_record`` verdict, NOT a JournalCorrupt. Both halves are
+# pinned here: (a) the benign path classifies + a fresh submit proceeds with no
+# manual rm; (b) the three loud cases still fire JournalCorrupt and can never
+# be masked by the benign branch (#328).
+# ---------------------------------------------------------------------------
+
+
+def _write_jobless_sidecar(tmp_path, run_id: str):
+    """A valid v2 sidecar written at Step 6d, before any qsub — no job_ids.
+
+    This is exactly what ``submit-flow`` leaves when the process dies before
+    ``submit_and_record`` minted the journal record and stamped the ids.
+    """
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id=run_id,
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-06-24T00:00:00Z",
+        executor="python3 run.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=8,
+        tasks_py_sha="b" * 64,
+    )
+
+
+def test_benign_orphan_classifies_no_run_record_not_corrupt(tmp_path, monkeypatch):
+    """Valid jobless sidecar + no journal record → benign OrphanedReconcile,
+    surfaced as a ``no_run_record`` envelope. NOT a JournalCorrupt (the #356
+    core requirement): no hand-``rm`` before a fresh submit."""
+    _write_jobless_sidecar(tmp_path, "rOrphan")
+
+    # _reconcile_one returns the benign marker (no exception), alive_failed False.
+    result, alive_failed = recon._reconcile_one(tmp_path, "rOrphan", scheduler="sge")
+    assert isinstance(result, recon.OrphanedReconcile)
+    assert result.run_id == "rOrphan"
+    assert alive_failed is False
+
+    # The envelope surfaces the benign terminal-ish state — discardable/overwritable.
+    envelope = recon._reconcile_envelope(result)
+    assert envelope["lifecycle_state"] == "no_run_record"
+    assert envelope["run_id"] == "rOrphan"
+    assert envelope["combined_waves"] == []
+    assert envelope["failed_waves"] == []
+
+
+def test_benign_orphan_via_top_level_reconcile_no_ssh(tmp_path, monkeypatch):
+    """The public ``reconcile`` short-circuits on a benign orphan — no sibling
+    cascade (there is no record to merge into) and no cluster round-trip. If
+    any of the three SSH probes were invoked this would raise."""
+
+    def _boom(**_kw):
+        raise AssertionError("benign orphan must not reach the cluster")
+
+    monkeypatch.setattr(recon, "_ssh_status_report", _boom)
+    monkeypatch.setattr(recon, "_ssh_list_combined_waves", _boom)
+    monkeypatch.setattr(recon, "_ssh_alive_job_ids", _boom)
+    _write_jobless_sidecar(tmp_path, "rOrphan2")
+
+    result = recon.reconcile(tmp_path, "rOrphan2", scheduler="sge")
+    assert isinstance(result, recon.OrphanedReconcile)
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "no_run_record"
+
+
+def test_benign_orphan_fresh_submit_proceeds_without_manual_rm(tmp_path, monkeypatch):
+    """AC2: a fresh submit for the SAME run_id proceeds with no file deletion.
+
+    The orphan sidecar (matching cmd_sha, empty job_ids, no journal record) must
+    NOT be a dedup target — ``submit_and_record`` falls through to a real submit
+    and the new record carries the freshly-minted job_ids."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    _write_jobless_sidecar(tmp_path, "rOrphan3")
+
+    from hpc_agent._wire.actions.submit import SubmitSpec
+    from hpc_agent.ops.submit.runner import submit_and_record
+
+    spec = SubmitSpec(
+        run_id="rOrphan3",
+        profile="p",
+        cluster="c",
+        ssh_target="u@h",
+        remote_path="/remote",
+        job_name="j",
+        job_ids=["55501"],  # the real ids the fresh qsub returned
+        total_tasks=8,
+    )
+    record, deduped = submit_and_record(
+        tmp_path, spec=spec, cmd_sha="a" * 64, tasks_py_sha="b" * 64
+    )
+    # The submit PROCEEDED (not a dedup replay against the orphan) and stamped
+    # the real job_ids — no manual rm of the orphan sidecar was required.
+    assert deduped is False
+    assert record.job_ids == ["55501"]
+    assert load_run(tmp_path, "rOrphan3").job_ids == ["55501"]
+
+
+def test_stranded_ids_orphan_stays_journal_corrupt_not_benign(tmp_path, monkeypatch):
+    """REGRESSION-PIN (#328/#356): a sidecar WITH job_ids but no journal record
+    is the stranded-post-qsub case — it must STAY a JournalCorrupt-with-hint,
+    NOT be reclassified as a benign orphan. The benign branch can never mask it."""
+    from hpc_agent.state.runs import update_run_sidecar_job_ids
+
+    _write_jobless_sidecar(tmp_path, "rStranded")
+    update_run_sidecar_job_ids(tmp_path, "rStranded", ["13610902"])
+
+    with pytest.raises(errors.JournalCorrupt) as exc:
+        recon._reconcile_one(tmp_path, "rStranded", scheduler="sge")
+    msg = str(exc.value)
+    assert "13610902" in msg
+    assert "submit-spec" in msg
+
+
+def test_malformed_sidecar_stays_journal_corrupt_not_benign(tmp_path, monkeypatch):
+    """REGRESSION-PIN (#356): a sidecar that is NOT valid JSON must stay a loud
+    JournalCorrupt — a failed read can never read as a benign orphan."""
+    from hpc_agent.state.runs import run_sidecar_path
+
+    target = run_sidecar_path(tmp_path, "rGarbage")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{ this is not valid json")
+
+    with pytest.raises(errors.JournalCorrupt) as exc:
+        recon._reconcile_one(tmp_path, "rGarbage", scheduler="sge")
+    assert "no run record" in str(exc.value)
+
+
+def test_registered_inconsistent_run_still_abandoned_not_orphaned(tmp_path, monkeypatch):
+    """A REGISTERED run with no alive jobs and an incomplete reporter summary is
+    an ``abandoned`` verdict (existing path) — the benign-orphan branch only
+    fires when there is NO journal record, so a registered-but-inconsistent run
+    is untouched by #356."""
+    upsert_run(tmp_path, _record("registered_bad", job_ids=["42"], total_tasks=10))
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),
+        summary={"complete": 3, "running": 0, "pending": 0, "failed": 0, "unknown": 7},
+    )
+    result = recon.reconcile(tmp_path, "registered_bad", scheduler="sge")
+    assert not isinstance(result, recon.OrphanedReconcile)
+    assert result.status == "abandoned"

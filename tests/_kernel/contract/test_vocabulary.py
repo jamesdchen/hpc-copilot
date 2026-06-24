@@ -72,9 +72,12 @@ def test_lifecycle_state_matches_reconcile_schema() -> None:
     enum = _load_lifecycle_enum("reconcile.output.json")
     # #258: reconcile additionally surfaces ``unable_to_verify`` (the cluster
     # alive-check failed → the run's true state is unknown), an observability
-    # state distinct from the canonical lifecycle values. Everything else must
-    # still match the StrEnum exactly.
-    assert enum == set(LifecycleState) | {"unable_to_verify"}
+    # state distinct from the canonical lifecycle values.
+    # #356: reconcile also surfaces ``no_run_record`` — a benign crashed-submit
+    # orphan (valid jobless sidecar, no journal record), safe to
+    # discard/overwrite and explicitly NOT a journal_corrupt. Both are
+    # reconcile-only extras; everything else must still match the StrEnum exactly.
+    assert enum == set(LifecycleState) | {"unable_to_verify", "no_run_record"}
 
 
 def test_failure_category_includes_classifier_emissions() -> None:

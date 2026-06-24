@@ -21,7 +21,7 @@ class ReconcileResult(BaseModel):
 
     run_id: RunIdStrict
     lifecycle_state: LifecycleStateReconcile = Field(
-        description="Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler; 'unable_to_verify' when the cluster alive-check could not run (#258).",
+        description="Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler; 'unable_to_verify' when the cluster alive-check could not run (#258); 'no_run_record' for a benign crashed-submit orphan — a valid jobless sidecar with no journal record, safe to discard/overwrite (#356).",
     )
     combined_waves: CombinedWaves
     failed_waves: FailedWaves
