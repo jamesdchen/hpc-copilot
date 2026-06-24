@@ -288,6 +288,96 @@ def test_incomplete_with_purged_records_is_abandoned(tmp_path, monkeypatch):
 
     assert result.status == "abandoned"
     assert recon._reconcile_envelope(result)["lifecycle_state"] == "abandoned"
+    # The new ``_run_failed`` arm must NOT steal this verdict: failed == 0, so
+    # there is no positive failure evidence — pure absence stays ``abandoned``.
+    assert result.status != "failed"
+    assert "failure_features" not in (result.last_status or {})
+
+
+# ---------------------------------------------------------------------------
+# #351 sub-bug #4 — a run that RAN and FAILED (reporter failed>=1, readable
+# exit_code/traceback on disk) must route to ``failed`` carrying the classified
+# error, NOT collapse into ``abandoned`` ("scratch purged, no recovery"). Same
+# verdict-routing class as the 0.10.12 reconcile fix: absence and failure must
+# not share one bucket.
+# ---------------------------------------------------------------------------
+
+
+def test_ran_and_failed_with_purged_records_is_failed_not_abandoned(tmp_path, monkeypatch):
+    """The canary ran and FAILED: reporter shows failed>=1 with a readable
+    TypeError on disk, and no job is alive. The verdict must be terminal
+    ``failed`` carrying ``failure_features`` (the classified error), NOT
+    ``abandoned`` — the #351 bug routed this through abandoned and told the
+    operator 'scratch purged; re-submit' for a fixable, on-disk failure."""
+    upsert_run(tmp_path, _record("canary_failed", job_ids=["13548842"], total_tasks=1))
+    # 1 task, it FAILED (failed=1, complete=0) — positive failure evidence.
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),  # job left the queue (purged) but it FAILED, didn't vanish
+        summary={"complete": 0, "running": 0, "pending": 0, "failed": 1, "unknown": 0},
+    )
+    # Stub the cluster-side log fetch (lazily imported by _gather_failure_features)
+    # so the classifier has a real traceback to bite on — the structured evidence
+    # the ``failed`` verdict must carry.
+    stderr_tail = (
+        'Traceback (most recent call last):\n  File "run.py", line 12, in <module>\n'
+        '    main()\n  File "run.py", line 8, in main\n    return x + None\n'
+        "TypeError: unsupported operand type(s) for +: 'int' and 'NoneType'\n"
+        "[dispatch] FAILED task 0 exit_code: 1"
+    )
+    monkeypatch.setattr(
+        "hpc_agent.infra.cluster_logs.fetch_task_logs",
+        lambda **_kw: [{"task_id": 0, "content": stderr_tail, "path": "/remote/logs/j.o1.1"}],
+    )
+
+    result = recon.reconcile(tmp_path, "canary_failed", scheduler="sge")
+
+    # NOT abandoned — the run failed, with evidence on disk.
+    assert result.status == "failed"
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "failed"
+    # The readable cluster log tail is carried out for the skill's ``failed``
+    # branch — the load-bearing evidence (the TypeError that proves FAILURE, not
+    # a purge). ``classified_error`` stays None in the reconcile path: the
+    # signature classifier lives in the ops/recover subject, which ops/monitor
+    # may not import (cross-subject boundary) — it is a verify_canary-only
+    # enrichment. The raw tail still contains the error.
+    features = (result.last_status or {}).get("failure_features")
+    assert isinstance(features, dict)
+    assert features["cluster_log_tail"] == stderr_tail
+    assert "TypeError" in features["cluster_log_tail"]
+    assert features["log_path"] == "/remote/logs/j.o1.1"
+    assert features["classified_error"] is None
+    # The envelope's last_status carries the same evidence.
+    env = recon._reconcile_envelope(result)
+    assert "TypeError" in env["last_status"]["failure_features"]["cluster_log_tail"]
+
+
+def test_failed_verdict_survives_a_log_fetch_blip(tmp_path, monkeypatch):
+    """The ``failed`` verdict stands on the reporter's positive ``failed`` count
+    alone — if the best-effort log fetch raises (SSH blip), the run is STILL
+    ``failed`` (never silently demoted to ``abandoned``); the evidence just
+    degrades to an empty tail."""
+    upsert_run(tmp_path, _record("failed_noLog", job_ids=["13548843"], total_tasks=1))
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),
+        summary={"complete": 0, "running": 0, "pending": 0, "failed": 1, "unknown": 0},
+    )
+
+    def _boom(**_kw):
+        raise errors.RemoteCommandFailed("ssh blip fetching the stderr tail")
+
+    monkeypatch.setattr("hpc_agent.infra.cluster_logs.fetch_task_logs", _boom)
+
+    result = recon.reconcile(tmp_path, "failed_noLog", scheduler="sge")
+
+    assert result.status == "failed"
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "failed"
+    # Evidence degraded but present (empty tail, no classification).
+    features = (result.last_status or {}).get("failure_features")
+    assert isinstance(features, dict)
+    assert features["cluster_log_tail"] == ""
+    assert features["classified_error"] is None
 
 
 def test_connectivity_blip_is_unable_to_verify_even_with_complete_results(tmp_path, monkeypatch):

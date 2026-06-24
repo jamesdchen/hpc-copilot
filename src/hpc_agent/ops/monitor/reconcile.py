@@ -145,6 +145,79 @@ def _all_tasks_complete(summary: dict[str, Any], total_tasks: int) -> bool:
     )
 
 
+def _run_failed(summary: dict[str, Any]) -> bool:
+    """True when the reporter's per-task counts prove a task ran AND failed.
+
+    The symmetric counterpart to :func:`_all_tasks_complete`: that one reads
+    POSITIVE evidence of completion, this one reads POSITIVE evidence of
+    *failure*. A reporter ``failed >= 1`` is a task that reached the cluster,
+    ran, and exited non-zero (a readable ``exit_code``/traceback) — categorically
+    different from a purged scratch dir where nothing is observable. Collapsing
+    the two into ``abandoned`` (the pre-#351 bug) told the operator "scratch
+    purged, no recovery; re-submit" for a run whose canary actually failed with
+    a fixable error already on disk.
+
+    Reads the same canonical 5-key ``TaskStatus`` summary as
+    ``_all_tasks_complete``. A reporter-failure summary (``{"error": ...}``)
+    carries no ``failed`` count, so this returns False — that case is already
+    routed through ``unable_to_verify`` upstream, never here.
+    """
+    return int(summary.get("failed", 0) or 0) > 0
+
+
+def _gather_failure_features(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    job_name: str,
+    job_ids: list[str],
+    scheduler: str,
+) -> dict[str, Any]:
+    """Fetch the failed run's cluster log tail for the envelope.
+
+    A reconcile that routes to ``failed`` carries the readable cluster log tail
+    (the ``exit_code``/traceback that proves this is a FAILURE, not a purge) so
+    the operator sees the evidence inline instead of hand-fetching. Shape matches
+    the ``failure_features`` ``verify_canary`` attaches — ``cluster_log_tail`` /
+    ``log_path`` / ``classified_error`` — EXCEPT ``classified_error`` stays
+    ``None`` here: the signature classifier lives in the ``ops/recover`` subject,
+    which ``ops/monitor`` may NOT import (the cross-subject boundary lint —
+    subjects compose only through ``infra.*`` / ``state.*``). The raw tail is the
+    load-bearing evidence; classification is a verify_canary-only enrichment.
+    Routes only through ``infra.cluster_logs`` (allowed substrate).
+
+    Best-effort: an SSH blip fetching the log degrades to an empty tail (the
+    ``failed`` verdict still stands on the reporter's positive ``failed`` count,
+    which already proved non-completion). Never raises.
+    """
+    from hpc_agent.infra.cluster_logs import fetch_task_logs
+
+    stderr_tail = ""
+    log_path: str | None = None
+    try:
+        logs = fetch_task_logs(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            job_name=job_name,
+            job_ids=job_ids,
+            scheduler=scheduler,
+            task_ids=[0],
+            lines=50,
+        )
+        if logs and isinstance(logs[0], dict):
+            stderr_tail = str(logs[0].get("content") or "")
+            raw_path = logs[0].get("path")
+            log_path = raw_path if isinstance(raw_path, str) else None
+    except Exception:  # noqa: BLE001 — log fetch is best-effort, never gates the verdict
+        stderr_tail = ""
+        log_path = None
+    return {
+        "cluster_log_tail": stderr_tail,
+        "log_path": log_path,
+        "classified_error": None,
+    }
+
+
 def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]:
     """Project the reconcile result into the ``reconcile.output.json`` shape.
 
@@ -154,6 +227,13 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
     ``unable_to_verify`` (#258) so callers can distinguish "cluster says it's
     still running" from "we couldn't ask" — different remediations. The marker
     lives in ``last_status.verify_state`` (set by :func:`_reconcile_one`).
+
+    A ``failed`` verdict (#351 sub-bug #4 — the reporter showed positive
+    ``failed >= 1`` task evidence) carries the classified error in
+    ``last_status.failure_features`` (same shape ``verify_canary`` attaches),
+    set by :func:`_reconcile_one` before it marks the run terminal-``failed``.
+    The skill's ``failed`` branch surfaces that instead of mapping the run to a
+    misleading ``run_abandoned``.
 
     A benign :class:`OrphanedReconcile` (#356) projects to the terminal-ish
     ``no_run_record`` state. ``last_status`` carries the ``orphaned`` verdict
@@ -326,7 +406,10 @@ def _reconcile_one(
       B. List ``_combiner/wave_*.json`` -> canonical ``combined_waves``
          (cluster wins; journal overwritten on drift).
       C. Cross-check ``job_ids`` against the scheduler; if zero are alive,
-         flip ``status`` to ``"abandoned"``.
+         route the verdict by the reporter's per-task evidence — ``complete``
+         (all tasks complete), ``failed`` (positive ``failed >= 1`` evidence,
+         #351), or ``abandoned`` (no evidence on disk at all), never a blind
+         flip to ``"abandoned"``.
 
     All three SSH calls run concurrently. Writes the reconciled record
     back atomically.
@@ -512,8 +595,10 @@ def _reconcile_one(
 
     # Verdict routing when no recorded job is alive on the scheduler.
     #
-    # "abandoned" must require EVIDENCE OF NON-COMPLETION — it is not the
-    # default for "no alive jobs". Two distinct cases share that observation:
+    # "abandoned" must require EVIDENCE OF NON-COMPLETION *WITHOUT* evidence of
+    # what happened — it is not the default for "no alive jobs". THREE distinct
+    # cases share the "nothing alive" observation, and absence must not collapse
+    # failure into it (#351 sub-bug #4):
     #
     #   * All tasks complete + records purged. SGE/Slurm drop a finished
     #     job's records post-completion; the reporter's per-task counts still
@@ -521,8 +606,17 @@ def _reconcile_one(
     #     (the demo-bug class: a FINISHED run read as abandoned because its
     #     job records were purged). Guarded by ``_all_tasks_complete`` below,
     #     alongside the existing ``alive_check_failed`` guard.
-    #   * Incomplete + records gone. Tasks missing/failed AND nothing alive
-    #     AND both probes ran cleanly → genuine abandon.
+    #   * Ran and FAILED + records purged. The reporter shows ``failed >= 1``:
+    #     a task reached the cluster, ran, and exited non-zero with a readable
+    #     ``exit_code``/traceback on disk. That is POSITIVE failure evidence, the
+    #     symmetric counterpart to ``_all_tasks_complete`` — categorically NOT a
+    #     vanished scratch. Pre-#351 this routed through ``abandoned`` ("scratch
+    #     purged, no recovery; re-submit") because the binary verdict keyed only
+    #     on completeness, hiding the fixable error. Now ``_run_failed`` routes it
+    #     to ``failed`` and carries the classified error out via ``last_status``.
+    #   * Incomplete-but-not-failed + records gone. Tasks merely missing/unknown
+    #     (NO positive ``failed`` count) AND nothing alive AND both probes ran
+    #     cleanly → genuine abandon: no evidence on disk at all.
     #
     # Both probes must have run cleanly first: either failing routes through
     # ``unable_to_verify`` (set above) — confirmed-dead-on-scheduler +
@@ -530,6 +624,21 @@ def _reconcile_one(
     if record.job_ids and not alive and not alive_check_failed and not reporter_failed:
         if _all_tasks_complete(summary, record.total_tasks):
             updated = mark_run(experiment_dir, run_id, status="complete")
+        elif _run_failed(summary):
+            # Positive failure evidence — surface the classified error in
+            # ``last_status.failure_features`` so ``_reconcile_envelope`` carries
+            # it out (the skill's ``failed`` branch reads it), then mark terminal
+            # ``failed`` (a valid JournalStatus + reconcile lifecycle_state).
+            features = _gather_failure_features(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                job_name=record.job_name,
+                job_ids=list(record.job_ids),
+                scheduler=scheduler,
+            )
+            failed_status = {**summary, "failure_features": features}
+            update_run_status(experiment_dir, run_id, last_status=failed_status)
+            updated = mark_run(experiment_dir, run_id, status="failed")
         else:
             updated = mark_run(experiment_dir, run_id, status="abandoned")
     return updated, alive_check_failed
