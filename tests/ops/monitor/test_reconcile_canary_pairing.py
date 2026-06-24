@@ -26,7 +26,9 @@ def _journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _record(run_id: str, *, status: str = "in_flight", job_ids=("1",)) -> RunRecord:
+def _record(
+    run_id: str, *, status: str = "in_flight", job_ids=("1",), total_tasks: int = 4
+) -> RunRecord:
     return RunRecord(
         run_id=run_id,
         profile="p",
@@ -35,18 +37,23 @@ def _record(run_id: str, *, status: str = "in_flight", job_ids=("1",)) -> RunRec
         remote_path="/remote",
         job_name="j",
         job_ids=list(job_ids),
-        total_tasks=4,
+        total_tasks=total_tasks,
         submitted_at="2026-06-04T00:00:00Z",
         experiment_dir="/exp",
         status=status,
     )
 
 
-def _stub_cluster(monkeypatch, *, alive: set[str] | None, raise_alive: bool = False):
+def _stub_cluster(
+    monkeypatch,
+    *,
+    alive: set[str] | None,
+    raise_alive: bool = False,
+    summary: dict | None = None,
+):
     """Stub the three SSH calls reconcile fans out."""
-    monkeypatch.setattr(
-        recon, "_ssh_status_report", lambda **_kw: {"summary": {"complete": 0}, "waves": {}}
-    )
+    report = {"summary": summary if summary is not None else {"complete": 0}, "waves": {}}
+    monkeypatch.setattr(recon, "_ssh_status_report", lambda **_kw: report)
     monkeypatch.setattr(recon, "_ssh_list_combined_waves", lambda **_kw: [])
 
     def _alive(**_kw):
@@ -234,6 +241,74 @@ def test_no_record_hint_names_sidecar_job_ids(tmp_path, monkeypatch):
     msg = str(exc.value)
     assert "13610902" in msg
     assert "submit-spec" in msg
+
+
+# ---------------------------------------------------------------------------
+# Post-completion record purge must NOT read as abandoned (demo bug).
+# A FINISHED run (all tasks complete, results on disk) whose scheduler dropped
+# its job records post-completion has no alive jobs — but "no alive jobs" alone
+# is not abandon. "abandoned" requires evidence of NON-completion. This is the
+# same verdict-routing class as the alive_check_failed / reporter_failed guards.
+# ---------------------------------------------------------------------------
+
+
+def test_all_tasks_complete_with_purged_records_is_complete(tmp_path, monkeypatch):
+    """All 10 array tasks complete + 0 failed/pending/running, but the scheduler
+    purged the finished job's records (none alive). The verdict must be terminal
+    ``complete``, NOT ``abandoned`` — the live-demo bug."""
+    upsert_run(tmp_path, _record("done_purged", job_ids=["13548839"], total_tasks=10))
+    # Reporter ran cleanly: every task complete, nothing outstanding.
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),  # records purged → nothing alive on the scheduler
+        summary={"complete": 10, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+    )
+
+    result = recon.reconcile(tmp_path, "done_purged", scheduler="sge")
+
+    assert result.status == "complete"
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "complete"
+    # NOT abandoned, NOT unable_to_verify (both probes ran cleanly).
+    assert (result.last_status or {}).get("verify_state") != "unable_to_verify"
+
+
+def test_incomplete_with_purged_records_is_abandoned(tmp_path, monkeypatch):
+    """Genuinely incomplete: some tasks never produced results AND nothing is
+    alive AND the alive-check ran cleanly → ``abandoned``. The complete-guard
+    must NOT fire when there is evidence of non-completion."""
+    upsert_run(tmp_path, _record("half_done", job_ids=["13548840"], total_tasks=10))
+    # 6 complete, 4 missing (unknown) — incomplete.
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),
+        summary={"complete": 6, "running": 0, "pending": 0, "failed": 0, "unknown": 4},
+    )
+
+    result = recon.reconcile(tmp_path, "half_done", scheduler="sge")
+
+    assert result.status == "abandoned"
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "abandoned"
+
+
+def test_connectivity_blip_is_unable_to_verify_even_with_complete_results(tmp_path, monkeypatch):
+    """The alive-check SSH itself fails. Even though the (stubbed) reporter says
+    all complete, an alive-check we couldn't run routes through
+    ``unable_to_verify`` (unchanged behavior) — we don't mint a terminal verdict
+    on a probe that didn't run."""
+    upsert_run(tmp_path, _record("blip", job_ids=["13548841"], total_tasks=10))
+    _stub_cluster(
+        monkeypatch,
+        alive=None,
+        raise_alive=True,  # connectivity blip on the alive-check
+        summary={"complete": 10, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+    )
+
+    result = recon.reconcile(tmp_path, "blip", scheduler="sge")
+
+    # Journal status untouched; envelope surfaces unable_to_verify.
+    assert result.status == "in_flight"
+    assert (result.last_status or {}).get("verify_state") == "unable_to_verify"
+    assert recon._reconcile_envelope(result)["lifecycle_state"] == "unable_to_verify"
 
 
 def test_no_record_no_sidecar_keeps_bare_message(tmp_path, monkeypatch):

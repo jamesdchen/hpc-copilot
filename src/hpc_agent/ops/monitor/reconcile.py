@@ -83,6 +83,36 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
     return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
+def _all_tasks_complete(summary: dict[str, Any], total_tasks: int) -> bool:
+    """True when the reporter's per-task counts prove the run finished.
+
+    Ground-truth-from-the-cluster completion: every expected task is
+    ``complete`` and NOTHING is failed / pending / running / unknown. This
+    is the evidence that distinguishes a normal post-completion record purge
+    (SGE/Slurm drop a finished job's records) from a genuine abandon. A run
+    whose tasks all completed but whose scheduler records were purged is
+    COMPLETE, not abandoned — so reconcile must NOT flip it to ``abandoned``
+    just because no job_ids are alive.
+
+    Reads the canonical 5-key ``TaskStatus`` summary
+    (``complete``/``running``/``pending``/``failed``/``unknown`` — see
+    ``execution/mapreduce/reduce/status._empty_summary``). Returns False on a
+    reporter-failure summary (``{"error": ...}``) or a zero-task run: those
+    carry no completion evidence and must not read as complete.
+    """
+    if total_tasks <= 0:
+        return False
+    complete = summary.get("complete")
+    if not isinstance(complete, int) or complete != total_tasks:
+        return False
+    # No task may be in any non-complete bucket. Missing keys count as 0
+    # (a clean reporter always emits all five), but any positive non-complete
+    # count is disqualifying evidence of non-completion.
+    return all(
+        int(summary.get(key, 0) or 0) == 0 for key in ("running", "pending", "failed", "unknown")
+    )
+
+
 def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
     """Project ``RunRecord`` into the ``reconcile.output.json`` envelope shape.
 
@@ -388,12 +418,28 @@ def _reconcile_one(
     }
     updated = update_run_status(experiment_dir, run_id, **fields)
 
-    # Only mark abandoned when BOTH probes ran cleanly and the alive check
-    # found nothing. Either probe failing routes through ``unable_to_verify``
-    # (set above) — confirmed-dead-on-scheduler + reporter-dead-so-results-unknown
-    # is not provable abandon.
+    # Verdict routing when no recorded job is alive on the scheduler.
+    #
+    # "abandoned" must require EVIDENCE OF NON-COMPLETION — it is not the
+    # default for "no alive jobs". Two distinct cases share that observation:
+    #
+    #   * All tasks complete + records purged. SGE/Slurm drop a finished
+    #     job's records post-completion; the reporter's per-task counts still
+    #     prove every result is on disk. This run is COMPLETE, not abandoned
+    #     (the demo-bug class: a FINISHED run read as abandoned because its
+    #     job records were purged). Guarded by ``_all_tasks_complete`` below,
+    #     alongside the existing ``alive_check_failed`` guard.
+    #   * Incomplete + records gone. Tasks missing/failed AND nothing alive
+    #     AND both probes ran cleanly → genuine abandon.
+    #
+    # Both probes must have run cleanly first: either failing routes through
+    # ``unable_to_verify`` (set above) — confirmed-dead-on-scheduler +
+    # reporter-dead-so-results-unknown is not a provable verdict either way.
     if record.job_ids and not alive and not alive_check_failed and not reporter_failed:
-        updated = mark_run(experiment_dir, run_id, status="abandoned")
+        if _all_tasks_complete(summary, record.total_tasks):
+            updated = mark_run(experiment_dir, run_id, status="complete")
+        else:
+            updated = mark_run(experiment_dir, run_id, status="abandoned")
     return updated, alive_check_failed
 
 
