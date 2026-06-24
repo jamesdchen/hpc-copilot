@@ -26,7 +26,8 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s
-    <est_task_duration_s>]
+    <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>]
+    [--interactive]
   python: hpc_agent.ops.submit.plan_throughput.plan_throughput
 exit_codes:
 - 0: ok

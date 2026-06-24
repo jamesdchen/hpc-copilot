@@ -211,10 +211,22 @@ class TestReduceResourceUsage:
         # Only the two tasks with elapsed_s > 0 count.
         assert out["tasks_counted"] == 2
 
+    def test_core_hours_surfaced_and_equals_cpu_hours(self):
+        # #345: the normalized per-run cost (core_hours) is surfaced and
+        # equals cpu_hours by construction (cpu_s already = cores x elapsed_s).
+        tasks = {
+            "1": {"elapsed_s": 3600, "cpu_s": 8 * 3600, "gpu_s": 0},
+            "2": {"elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
+        }
+        out = reduce_resource_usage(tasks)
+        assert out["core_hours"] == out["cpu_hours"]
+        assert out["core_hours"] == round((8 * 3600 + 4 * 1800) / 3600.0, 4)
+
     def test_empty_input(self):
         out = reduce_resource_usage({})
         assert out == {
             "cpu_hours": 0.0,
+            "core_hours": 0.0,
             "gpu_hours": 0.0,
             "elapsed_hours": 0.0,
             "tasks_counted": 0,

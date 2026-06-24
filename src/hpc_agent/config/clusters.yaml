@@ -82,6 +82,12 @@ hoffman2:
     max_walltime: "3:00:00"
     max_concurrent_jobs: 2
     est_spin_up: "5m"
+    # Cost/scale gate (#345). Estimated core-hours
+    # (tasks x walltime x cores) above this require interactive
+    # confirmation, or are refused with spec_invalid for an unattended
+    # agent unless under HPC_AGENT_COST_BUDGET. OFF by default (key
+    # omitted) — uncomment and set a core-hours ceiling to enable.
+    # max_estimated_core_hours: 5000
 
 discovery:
   host: discovery2.usc.edu
@@ -130,3 +136,9 @@ discovery:
     max_walltime: "3:00:00"
     max_concurrent_jobs: 2
     est_spin_up: "5m"
+    # Cost/scale gate (#345). Estimated core-hours
+    # (tasks x walltime x cores) above this require interactive
+    # confirmation, or are refused with spec_invalid for an unattended
+    # agent unless under HPC_AGENT_COST_BUDGET. OFF by default (key
+    # omitted) — uncomment and set a core-hours ceiling to enable.
+    # max_estimated_core_hours: 5000

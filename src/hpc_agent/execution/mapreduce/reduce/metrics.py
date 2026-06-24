@@ -266,11 +266,28 @@ def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
 
         {
             "cpu_hours": float,   # sum(cpu_s) / 3600
+            "core_hours": float,  # #345 normalized cost — identical to cpu_hours,
+                                  # surfaced under the issue's cost vocabulary so
+                                  # status/aggregate carry the per-run *actual* in
+                                  # the same unit the pre-dispatch estimate uses
             "gpu_hours": float,   # sum(gpu_s) / 3600
             "elapsed_hours": float,  # sum(elapsed_s) / 3600 -- i.e. wall-time summed across tasks
             "tasks_counted": int, # number of tasks that contributed nonzero elapsed_s
         }
+
+    ``core_hours`` is the per-run *actual* compute cost (#345). It equals
+    ``cpu_hours`` by construction (per-task ``cpu_s`` is already
+    ``cores × elapsed_s``); both names are emitted via the single
+    normalization in :mod:`hpc_agent.infra.cost` so the post-run actual and
+    the pre-dispatch estimate (the cost/scale gate) can never drift onto two
+    different definitions of a core-hour. Additive surfacing only — no
+    behavior gate lives here.
     """
+    from hpc_agent.infra.cost import (
+        core_hours_from_cpu_seconds,
+        gpu_hours_from_gpu_seconds,
+    )
+
     total_cpu_s = 0.0
     total_gpu_s = 0.0
     total_elapsed_s = 0.0
@@ -290,9 +307,11 @@ def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
         total_gpu_s += gpu
         if elapsed > 0:
             counted += 1
+    core_hours = core_hours_from_cpu_seconds(total_cpu_s)
     return {
-        "cpu_hours": round(total_cpu_s / 3600.0, 4),
-        "gpu_hours": round(total_gpu_s / 3600.0, 4),
+        "cpu_hours": core_hours,
+        "core_hours": core_hours,
+        "gpu_hours": gpu_hours_from_gpu_seconds(total_gpu_s),
         "elapsed_hours": round(total_elapsed_s / 3600.0, 4),
         "tasks_counted": counted,
     }

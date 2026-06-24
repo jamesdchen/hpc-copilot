@@ -551,7 +551,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>]",
+    "cli": "hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]",
     "idempotent": true,
     "input_schema": null,
     "name": "plan-throughput",

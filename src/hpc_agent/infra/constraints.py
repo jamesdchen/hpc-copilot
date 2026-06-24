@@ -34,6 +34,14 @@ class ClusterConstraints:
         Surfaced by ``/submit`` to confirm large grids with the user.  This
         is **not** enforced by the throughput optimizer — it is a soft hint.
         ``None`` disables the advisory.
+    max_estimated_core_hours:
+        Optional per-cluster compute-cost threshold for the #345 cost/scale
+        gate (estimated ``tasks × walltime × cores`` core-hours). When the
+        pre-dispatch estimate crosses this, the submit gate requires explicit
+        confirmation (interactive) or refuses with ``spec_invalid``
+        (unattended, unless under ``HPC_AGENT_COST_BUDGET``). ``None``
+        (the default) disables the gate entirely — **off by default, no
+        behavior change** until an operator sets it.
     """
 
     max_array_size: int = 1000
@@ -41,6 +49,7 @@ class ClusterConstraints:
     max_concurrent_jobs: int = 10
     est_spin_up: str = "5m"
     max_tasks: int | None = None
+    max_estimated_core_hours: float | None = None
 
     def walltime_seconds(self) -> int:
         """Parse max_walltime HH:MM:SS to total seconds."""

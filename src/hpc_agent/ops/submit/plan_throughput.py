@@ -20,9 +20,101 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_constraints
+from hpc_agent.infra.constraints import ClusterConstraints
+from hpc_agent.infra.cost import CostEstimate, env_cost_budget, estimate_core_hours
 from hpc_agent.infra.throughput import WorkloadSpec, build_wave_map, compute_submission_plan
 
-__all__ = ["plan_throughput"]
+__all__ = ["evaluate_cost_gate", "plan_throughput"]
+
+
+def evaluate_cost_gate(
+    constraints: ClusterConstraints,
+    estimate: CostEstimate,
+    *,
+    interactive: bool = False,
+    budget: float | None = None,
+) -> dict[str, Any] | None:
+    """Decide the #345 cost/scale gate against a pre-dispatch *estimate*.
+
+    The gate is **off by default**: when ``constraints.max_estimated_core_hours``
+    is ``None`` (the default) this returns ``None`` (a no-op — zero behavior
+    change). It also returns ``None`` when the estimate is at/under the
+    threshold. Only an over-threshold estimate produces a decision:
+
+    * **Interactive** (``interactive=True`` — the slash command passed it):
+      return a ``requires_confirmation`` decision block. A pure
+      query-primitive cannot block on stdin, so it surfaces the need to
+      confirm with the numbers; the interactive caller does the asking.
+    * **Unattended** (the default for an agent / headless run): refuse by
+      raising :class:`errors.SpecInvalid` with an actionable message —
+      UNLESS *budget* (the operator's ``HPC_AGENT_COST_BUDGET`` cap) is set
+      and the estimate is under it, in which case the operator has opted into
+      the higher cap and the gate returns a ``budget_override`` decision
+      block (allowed) instead of refusing.
+
+    The returned decision block (when not ``None``) is informational and
+    surfaced under the plan's ``cost_gate`` key; it never silently changes
+    the wave plan.
+
+    Raises
+    ------
+    errors.SpecInvalid
+        Unattended estimate over threshold and not under an operator budget.
+    """
+    threshold = constraints.max_estimated_core_hours
+    if threshold is None:
+        return None  # gate disabled — default off, no behavior change.
+
+    est = estimate.est_core_hours
+    if est <= float(threshold):
+        return None  # under the operator's ceiling — nothing to gate.
+
+    base = {
+        "est_core_hours": est,
+        "est_gpu_hours": estimate.est_gpu_hours,
+        "threshold_core_hours": float(threshold),
+        "total_tasks": estimate.total_tasks,
+        "walltime_s": estimate.walltime_s,
+        "cores_per_task": estimate.cores_per_task,
+        "gpus_per_task": estimate.gpus_per_task,
+    }
+
+    if interactive:
+        return {
+            "decision": "requires_confirmation",
+            "message": (
+                f"Estimated {est:g} core-hours "
+                f"({estimate.total_tasks} tasks × {estimate.walltime_s}s × "
+                f"{estimate.cores_per_task} core(s)) exceeds this cluster's "
+                f"max_estimated_core_hours threshold ({float(threshold):g}). "
+                "Confirm to proceed."
+            ),
+            **base,
+        }
+
+    if budget is not None and est <= budget:
+        return {
+            "decision": "budget_override",
+            "message": (
+                f"Estimated {est:g} core-hours exceeds threshold "
+                f"({float(threshold):g}) but is within the operator budget "
+                f"cap HPC_AGENT_COST_BUDGET={budget:g}; allowed."
+            ),
+            "budget_core_hours": budget,
+            **base,
+        }
+
+    over_budget = f" and the operator budget cap ({budget:g})" if budget is not None else ""
+    raise errors.SpecInvalid(
+        f"estimated submission cost {est:g} core-hours "
+        f"({estimate.total_tasks} tasks × {estimate.walltime_s}s × "
+        f"{estimate.cores_per_task} core(s)) exceeds this cluster's "
+        f"max_estimated_core_hours threshold ({float(threshold):g}){over_budget}. "
+        "Reduce the grid (fewer tasks), shorten the per-task walltime, or — if "
+        "this spend is intended — raise max_estimated_core_hours in clusters.yaml "
+        "or set HPC_AGENT_COST_BUDGET to a core-hours cap that covers it. Running "
+        "interactively, re-run with confirmation instead."
+    )
 
 
 @primitive(
@@ -59,6 +151,31 @@ __all__ = ["plan_throughput"]
                     "walltime-feasibility check and the total-time estimate."
                 ),
             ),
+            CliArg(
+                "--cores-per-task",
+                type=int,
+                default=None,
+                help=(
+                    "Cores each task requests, for the #345 cost estimate "
+                    "(defaults to 1 when unknown). Only used when the cluster "
+                    "sets max_estimated_core_hours."
+                ),
+            ),
+            CliArg(
+                "--gpus-per-task",
+                type=int,
+                default=None,
+                help="GPUs each task requests, for the #345 cost estimate (0 for CPU-only).",
+            ),
+            CliArg(
+                "--interactive",
+                action="store_true",
+                help=(
+                    "An interactive caller (slash command). When the #345 cost "
+                    "gate trips, surface a confirmation request instead of "
+                    "refusing with spec_invalid (the unattended/agent default)."
+                ),
+            ),
         ),
     ),
     agent_facing=True,
@@ -68,6 +185,9 @@ def plan_throughput(
     cluster: str,
     total_tasks: int,
     est_task_duration_s: int | None = None,
+    cores_per_task: int | None = None,
+    gpus_per_task: int | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Compute the wave-batched submission plan for *total_tasks* on *cluster*.
 
@@ -90,22 +210,40 @@ def plan_throughput(
         Optional estimated per-task wall seconds. When supplied it
         enables the walltime-feasibility check and the total-time
         estimate; when omitted the plan is structural only.
+    cores_per_task:
+        Optional cores-per-task for the #345 cost estimate (defaults to 1
+        when unknown). Only consulted when the cluster sets
+        ``max_estimated_core_hours``.
+    gpus_per_task:
+        Optional GPUs-per-task for the #345 cost estimate (0 for CPU-only).
+    interactive:
+        Whether an interactive caller invoked this. When the cost gate
+        trips, an interactive caller is handed a confirmation request; an
+        unattended caller (the default) is refused with ``spec_invalid``
+        unless under ``HPC_AGENT_COST_BUDGET``.
 
     Returns
     -------
     ``{strategy, total_tasks, total_batches, max_concurrent, n_waves,
-    est_total_wall_s, wave_map, batches}``. ``wave_map`` maps each wave
-    number (as a string key, for JSON) to its 0-based task ids;
-    ``batches`` lists each array's task range.
+    est_total_wall_s, wave_map, batches, cost_gate?}``. ``wave_map`` maps each
+    wave number (as a string key, for JSON) to its 0-based task ids;
+    ``batches`` lists each array's task range. ``cost_gate`` is present only
+    when the #345 gate is active *and* the estimate crosses the cluster's
+    ``max_estimated_core_hours`` threshold (interactive confirmation request,
+    or an operator-budget override); it is **absent** in the default
+    off/under-threshold case, so behavior is unchanged unless an operator
+    opts in.
 
     Raises
     ------
     errors.ClusterUnknown
         ``cluster`` is not defined in ``clusters.yaml``.
     errors.SpecInvalid
-        ``total_tasks`` < 1, or a single task exceeds the cluster's
+        ``total_tasks`` < 1; a single task exceeds the cluster's
         ``max_walltime`` (only checkable when ``est_task_duration_s`` is
-        supplied).
+        supplied); or — when the cluster sets ``max_estimated_core_hours``
+        and this is an unattended over-threshold submission not under
+        ``HPC_AGENT_COST_BUDGET`` — the #345 cost gate.
     """
     from hpc_agent import load_clusters_config
 
@@ -124,8 +262,31 @@ def plan_throughput(
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
+    # #345 cost/scale gate. Default off: only fires when the operator set
+    # ``max_estimated_core_hours`` on this cluster (evaluate_cost_gate is a
+    # no-op otherwise). The pre-dispatch walltime is the per-task duration
+    # when supplied, else the cluster's hard ``max_walltime`` ceiling — the
+    # conservative worst-case footprint a task could consume.
+    walltime_s = (
+        int(est_task_duration_s)
+        if est_task_duration_s is not None
+        else constraints.walltime_seconds()
+    )
+    estimate = estimate_core_hours(
+        total_tasks=int(total_tasks),
+        walltime_s=walltime_s,
+        cores_per_task=cores_per_task,
+        gpus_per_task=gpus_per_task,
+    )
+    cost_gate = evaluate_cost_gate(
+        constraints,
+        estimate,
+        interactive=interactive,
+        budget=env_cost_budget(),
+    )
+
     wave_map = build_wave_map(plan)
-    return {
+    result: dict[str, Any] = {
         "strategy": plan.strategy,
         "total_tasks": plan.total_tasks,
         "total_batches": plan.total_batches,
@@ -146,3 +307,10 @@ def plan_throughput(
             for b in plan.batches
         ],
     }
+    # Surfaced only when the gate produced a decision (interactive
+    # confirmation request or operator-budget override). Absent in the
+    # default off / under-threshold case so the envelope is byte-identical
+    # to the pre-#345 shape when no operator opted in.
+    if cost_gate is not None:
+        result["cost_gate"] = cost_gate
+    return result
