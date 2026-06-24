@@ -264,12 +264,84 @@ def _combine_missing(
     return combined_now, failures
 
 
+def _per_task_metrics_reduce(
+    run_id: str,
+    *,
+    record: Any,
+    out: Path,
+    results_subdir: str,
+) -> dict[str, Any]:
+    """Weighted-mean the per-task ``metrics.json`` over SSH — the no-combiner default.
+
+    The SSH analogue of the LOCAL / pure-API ``reduce_metrics`` fallback
+    (#342). When a run was submitted with NO reducer (``aggregate_cmd``) and
+    NO cluster-side combiner ever ran, there is no ``_combiner/`` tree to
+    reduce — but the per-task ``results/<...>/metrics.json`` sidecars the
+    tasks wrote are still on the cluster. Rather than error out (which forced
+    the skill to improvise the mean by hand — the very "LLM in the compute
+    loop" failure this framework exists to prevent), pull those sidecars and
+    run the SAME deterministic :func:`reduce_metrics` weighted-mean the local
+    path uses. Reduction is ALWAYS code, never the model.
+
+    Pulls the cluster ``results/`` subtree (filtered to ``metrics.json``
+    files so the transfer stays small), discovers the per-task dirs locally,
+    and weighted-means across them keyed by ``run_id`` — the same
+    ``{run_id: {...}}`` shape :func:`reduce_partials` and the pure-API path
+    return, so the rest of the flow is identical.
+
+    Raises :class:`errors.RemoteCommandFailed` when even the per-task
+    ``metrics.json`` files cannot be pulled (nothing deterministic to reduce)
+    or when the pull succeeds but yields zero readable sidecars — in either
+    case there is no numeric input, and fabricating a mean is exactly the
+    failure mode being closed.
+    """
+    results_local = out / "_per_task_results"
+    pull = rsync_pull(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        remote_subdir=results_subdir,
+        local_dir=str(results_local),
+        include=["metrics.json"],
+    )
+    if pull.returncode != 0:
+        stderr_tail = (pull.stderr or "").strip()
+        raise errors.RemoteCommandFailed(
+            f"no cluster-side _combiner/ for run_id {run_id!r} AND the per-task "
+            f"{results_subdir}/ fallback pull failed (exit {pull.returncode}). "
+            f"There is no deterministic numeric input to reduce — refusing to "
+            f"fabricate an aggregate. Check that the run actually wrote per-task "
+            f"metrics.json sidecars under {record.remote_path}/{results_subdir}/. "
+            f"rsync_pull stderr: {stderr_tail[:300]}"
+        )
+
+    # Every directory under the pulled tree that carries a metrics.json is a
+    # per-task result dir. reduce_metrics scans each for that sidecar and
+    # weighted-means across tasks — identical reduce semantics to the
+    # combiner, run on the locally-pulled per-task sidecars.
+    result_dirs = sorted(
+        {str(p.parent) for p in results_local.rglob("metrics.json") if p.is_file()}
+    )
+    aggregated = reduce_metrics(result_dirs)
+    if not aggregated:
+        raise errors.RemoteCommandFailed(
+            f"no cluster-side _combiner/ for run_id {run_id!r} and the per-task "
+            f"{results_subdir}/ fallback found no readable metrics.json sidecars "
+            f"under {record.remote_path}/{results_subdir}/. There is no numeric "
+            f"input to reduce — refusing to fabricate an aggregate. The tasks "
+            f"likely never wrote metrics.json; inspect per-task stderr under "
+            f"{record.remote_path}/{run_id}/logs/."
+        )
+    return {run_id: aggregated}
+
+
 def _combiner_only_reduce(
     experiment_dir: Path,
     run_id: str,
     *,
     record: Any,
     combiner_local: Path,
+    results_subdir: str = "results",
+    out: Path | None = None,
 ) -> tuple[dict[str, Any], list[int]]:
     """Pull the cluster ``_combiner/`` partials and reduce them locally.
 
@@ -283,6 +355,16 @@ def _combiner_only_reduce(
     ``wave_<N>.json`` files is the set still to fetch. When the diff equals the
     full set (first call) or ``combined_waves`` is empty, an unfiltered pull is
     emitted so behaviour matches the original.
+
+    No-combiner default (#352): when the ``_combiner/`` tree does not exist on
+    the cluster (the combiner step never ran — the common shape for a
+    ``@register_run`` SSH sweep submitted with no reducer) AND no
+    ``aggregate_cmd`` is configured on the sidecar, fall back to
+    :func:`_per_task_metrics_reduce` — the SAME deterministic weighted-mean
+    over per-task ``metrics.json`` the LOCAL / pure-API path uses. Reduction
+    stays in code. When an ``aggregate_cmd`` IS configured the original
+    cluster-reduce remediation hint is raised instead (the caller chose a
+    custom reducer; silently meaning would mask their intent).
     """
     include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
     pull = rsync_pull(
@@ -319,16 +401,29 @@ def _combiner_only_reduce(
                 errors.HpcError,
             ):
                 pass
+            if not has_agg_cmd:
+                # No combiner ran AND no custom reducer configured — the
+                # @register_run-SSH-sweep-with-no-reducer shape (#352). Fall
+                # back to the SAME deterministic weighted-mean over per-task
+                # metrics.json the LOCAL / pure-API path uses, so reduction is
+                # ALWAYS code, never the model improvising a mean by hand.
+                aggregated = _per_task_metrics_reduce(
+                    run_id,
+                    record=record,
+                    out=(out if out is not None else combiner_local.parent),
+                    results_subdir=results_subdir,
+                )
+                # No wave partials → no per-wave incomplete-task signal to
+                # surface; the per-task fallback either reduced over readable
+                # sidecars or raised above.
+                return aggregated, []
+            # has_agg_cmd is True here (the no-cmd case fell back above): the
+            # caller configured a custom reducer, so cluster-reduce is the
+            # right remediation — silently meaning their metrics.json would
+            # mask that intent.
             cluster_reduce_hint = (
                 f"Run `hpc-agent cluster-reduce --run-id {run_id}` — uses the "
                 f"sidecar's aggregate_cmd directly, no combiner needed."
-                if has_agg_cmd
-                else (
-                    f"`hpc-agent cluster-reduce --run-id {run_id}` is NOT available "
-                    f"here because the run sidecar has no aggregate_defaults.aggregate_cmd. "
-                    f"Configure one at submit time (write_run_sidecar's aggregate_defaults arg) "
-                    f"to enable this path on future runs."
-                )
             )
             raise errors.RemoteCommandFailed(
                 f"the cluster-side _combiner/ for run_id {run_id!r} does not "
@@ -854,7 +949,12 @@ def aggregate_flow(
         )
     else:
         aggregated, incomplete_waves = _combiner_only_reduce(
-            experiment_dir, run_id, record=record, combiner_local=combiner_local
+            experiment_dir,
+            run_id,
+            record=record,
+            combiner_local=combiner_local,
+            results_subdir=results_subdir,
+            out=out,
         )
 
     # Ingest runtime samples (timing + axis_bindings) from the pulled
