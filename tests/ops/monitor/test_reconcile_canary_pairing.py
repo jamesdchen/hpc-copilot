@@ -267,9 +267,13 @@ def test_all_tasks_complete_with_purged_records_is_complete(tmp_path, monkeypatc
     result = recon.reconcile(tmp_path, "done_purged", scheduler="sge")
 
     assert result.status == "complete"
-    assert recon._reconcile_envelope(result)["lifecycle_state"] == "complete"
+    envelope = recon._reconcile_envelope(result)
+    assert envelope["lifecycle_state"] == "complete"
     # NOT abandoned, NOT unable_to_verify (both probes ran cleanly).
     assert (result.last_status or {}).get("verify_state") != "unable_to_verify"
+    # Provenance is recorded AND reaches the envelope (Phase 1.5), not just
+    # computed in isolation.
+    assert envelope["last_status"]["verdict_reason"] == "all_tasks_complete"
 
 
 def test_incomplete_with_purged_records_is_abandoned(tmp_path, monkeypatch):
@@ -292,6 +296,8 @@ def test_incomplete_with_purged_records_is_abandoned(tmp_path, monkeypatch):
     # there is no positive failure evidence — pure absence stays ``abandoned``.
     assert result.status != "failed"
     assert "failure_features" not in (result.last_status or {})
+    # Provenance distinguishes "no evidence" from a verified failure.
+    assert (result.last_status or {})["verdict_reason"] == "no_on_disk_evidence"
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +341,8 @@ def test_ran_and_failed_with_purged_records_is_failed_not_abandoned(tmp_path, mo
     # NOT abandoned — the run failed, with evidence on disk.
     assert result.status == "failed"
     assert recon._reconcile_envelope(result)["lifecycle_state"] == "failed"
+    # Provenance: positive failure evidence (alongside failure_features below).
+    assert (result.last_status or {})["verdict_reason"] == "positive_failure_evidence"
     # The readable cluster log tail is carried out for the skill's ``failed``
     # branch — the load-bearing evidence (the TypeError that proves FAILURE, not
     # a purge). The signature classifier now lives in ``infra.failure_signatures``

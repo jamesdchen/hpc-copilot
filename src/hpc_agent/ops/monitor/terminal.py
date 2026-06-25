@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._kernel.contract.vocabulary import LifecycleState
+from hpc_agent.ops.monitor.classify import classify_polling
 
 __all__ = ["_ingest_runtime_at_terminal", "_is_terminal"]
 
@@ -88,19 +88,9 @@ def _is_terminal(
     With ``partial_ok=True``, the wave is classified ``complete`` as
     soon as no work is left and at least one task succeeded. Only a
     zero-success wave is classified ``failed`` under partial-ok.
-    """
-    complete = int(last_status.get("complete", 0))
-    running = int(last_status.get("running", 0))
-    pending = int(last_status.get("pending", 0))
-    failed = int(last_status.get("failed", 0))
 
-    if complete >= total_tasks:
-        return (LifecycleState.COMPLETE, None)
-    if running == 0 and pending == 0 and failed > 0:
-        if partial_ok and complete > 0:
-            # Partial success: at least one task done, no work left.
-            return (LifecycleState.COMPLETE, "partial_ok_with_failures")
-        # No work left and at least one failure. MVP doesn't auto-resubmit;
-        # surface the failure for the caller to handle.
-        return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
-    return (None, None)
+    Thin adapter over the shared mid-flight classifier so the monitor poll
+    loop and the reconcile settle path read the same count-to-verdict rule
+    from one place (:mod:`hpc_agent.ops.monitor.classify`).
+    """
+    return classify_polling(last_status, total_tasks, partial_ok=partial_ok)

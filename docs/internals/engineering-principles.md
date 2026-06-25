@@ -116,3 +116,39 @@ the deploy-ship list it cited omitted `executor_cli.py`. The lints and tests
 from the same era all still held. Facts belong where they are checked; this
 page cites sources of truth (`transport._build_deploy_items`, the lint's
 `KNOWLEDGE_PACKAGES`) instead of restating their contents.
+
+## Lifecycle verdicts and run identity: one definition, named tests
+
+A run's terminal verdict (did it complete / fail / vanish?) and its dedup
+identity (is this the same run; did its code drift?) are decisions that were
+each historically re-derived at several call sites whose copies then disagreed —
+the abandoned-vs-failed cluster (#351 #4: monitor, reconcile, and aggregate each
+turned the reporter's counts into a verdict differently) and the executor-drift
+replay that had to be fixed twice, once per dedup layer (#351 #5). The rule:
+each such decision has exactly ONE definition that every call site routes
+through, and the precedence it encodes is pinned by a property test, not a
+comment.
+
+Two corollaries the history earned:
+
+- **The verdict is revisable; the evidence is durable.** Terminal states are NOT
+  monotonic here — reconcile legitimately downgrades a premature `complete` to
+  `failed` when new evidence arrives (#351 #4 *is* that correction). So do not
+  add a "terminal is sticky" transition guard: it would re-break the bug it
+  looks like it prevents. Record WHY each verdict was reached
+  (`last_status.verdict_reason`, from `classify.settle`) so a wrong verdict is
+  debuggable without re-running reconcile.
+- **Centralize the decision, keep side-effects local.** `classify_polling` /
+  `settle` decide; `_gather_failure_features` and `mark_run` stay at the call
+  site. A pure decision over explicit evidence is testable without a cluster.
+
+### Enforcement map
+
+| Rule | Enforced by | Fires when |
+|---|---|---|
+| One count→verdict definition (poll + settle) | `tests/ops/monitor/test_classify.py` | a call site re-derives complete/failed/abandoned from raw counts instead of `classify_polling` / `settle` (`_is_terminal` is a thin adapter over the former) |
+| Settle precedence: failure outranks absence; strict completion is never claimed while a failure is present (#351 #4) | `tests/ops/monitor/test_classify.py::test_settled_failure_outranks_absence`, `::test_settled_never_complete_while_failure_present` | a positive `failed` count reads as abandoned or complete |
+| One executor/code-drift predicate for both dedup layers (#351 #5) | `tests/state/test_code_drift.py::test_layers_share_one_drift_predicate` | layer-1 (`runner._layer1_code_drift`) or layer-2 (`runs.find_run_by_cmd_sha`) re-inlines the drift comparison instead of routing through `state.code_drift.detect_code_drift` |
+| Layer-1 dedup decision is pure + named (dedup/proceed/redo by status × drift × lever, #276 / #351 #5) | `tests/ops/submit/test_layer1_dedup.py` | the `submit_and_record` run_id-dedup tree changes behavior on any branch (terminal-failure proceeds, in_flight blocks, complete dedups / redoes-in-place / warns) without the unit test moving in lockstep |
+| Verdict provenance is recorded | `tests/ops/monitor/test_classify.py::test_settle_carries_reason_and_evidence_for_each_arm` | `settle` stops carrying a reason + evidence snapshot for any arm |
+| Polling-vs-settled completion divergence stays intentional | `tests/ops/monitor/test_classify.py::test_polling_and_settled_diverge_on_complete_with_stale_failure` | the lenient (mid-flight) and strict (settled) completion predicates are silently unified |

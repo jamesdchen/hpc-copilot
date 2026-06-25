@@ -26,6 +26,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.wave_map import derive_wave_map
 
 __all__ = [
@@ -649,32 +650,22 @@ def find_run_by_cmd_sha(
         # code-drift logic below.
         if campaign_id and data.get("campaign_id") == campaign_id:
             continue
-        # Param identity matched. Now consider code identity only if the
-        # caller opted in by supplying the current tasks_py_sha AND the
-        # matched run recorded a non-empty one to compare against.
-        recorded_tasks_py_sha = data.get("tasks_py_sha")
-        code_changed = bool(
-            tasks_py_sha
-            and recorded_tasks_py_sha
-            and str(recorded_tasks_py_sha) != str(tasks_py_sha)
+        # Param identity matched. Now consider CODE identity — the executor
+        # command and the tasks.py bytes — via the single shared drift predicate
+        # (also used by the layer-1 run_id gate in ``ops/submit/runner.py``). A
+        # dimension fires only when both the matched sidecar AND the caller
+        # supply a non-empty value to compare; an absent value disables it (we
+        # cannot prove it changed). cmd_sha is pure PARAMETER identity (#207), so
+        # a changed executor / entry point (#351 sub-bug #5) or an edited
+        # tasks.py on the SAME swept params would otherwise replay PRE-change
+        # code silently.
+        drift = detect_code_drift(
+            recorded_executor=data.get("executor"),
+            recorded_tasks_py_sha=data.get("tasks_py_sha"),
+            current_executor=current_executor,
+            current_tasks_py_sha=tasks_py_sha,
         )
-        # #351 sub-bug #5: an executor-command change is in the SAME drift
-        # lane as a tasks.py edit. The executor command (what _hpc_dispatch.py
-        # runs per task) participates in NO identity sha — cmd_sha is pure
-        # PARAMETER identity (#207), and tasks_py_sha hashes tasks.py bytes,
-        # not the entry point — so a user who changes their executor / entry
-        # point and resubmits the SAME swept params would otherwise replay the
-        # PRE-change executor with zero warning. Compare only when we have a
-        # current executor AND the matched sidecar recorded a non-empty one
-        # (an absent recorded executor disables the check, mirroring the
-        # empty-tasks_py_sha tolerance — we cannot prove it changed).
-        recorded_executor = data.get("executor")
-        executor_changed = bool(
-            current_executor
-            and recorded_executor
-            and str(recorded_executor) != str(current_executor)
-        )
-        if code_changed or executor_changed:
+        if drift.drifted:
             if invalidate_on_code_change:
                 # Fold the drift signal (tasks_py_sha AND/OR executor) into the
                 # dedup key for this lookup: this run's params match but its
@@ -682,11 +673,11 @@ def find_run_by_cmd_sha(
                 # keep scanning for an older run that also matches (returns
                 # None if none does).
                 continue
-            if executor_changed:
+            if drift.executor_changed:
                 warnings.warn(
                     f"deduping against run {path.stem!r} (same cmd_sha "
                     f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
-                    f"recorded executor command ({str(recorded_executor)!r}) "
+                    f"recorded executor command ({drift.drifted_executor!r}) "
                     f"differs from the current ({str(current_executor)!r}) — the "
                     "entry point / executor changed since that run. The replay "
                     "will run the PRIOR submission's executor (dedup keys on "
@@ -696,11 +687,11 @@ def find_run_by_cmd_sha(
                     UserWarning,
                     stacklevel=2,
                 )
-            if code_changed:
+            if drift.code_changed:
                 warnings.warn(
                     f"deduping against run {path.stem!r} (same cmd_sha "
                     f"{cmd_sha[:8]}…, i.e. identical swept parameters), but its "
-                    f"recorded tasks.py drift sha {str(recorded_tasks_py_sha)[:8]}… "
+                    f"recorded tasks.py drift sha {str(drift.drifted_tasks_py_sha)[:8]}… "
                     f"differs from the current {str(tasks_py_sha)[:8]}… — the "
                     "executor code changed since that run. The replay will run "
                     "the PRIOR submission's code (dedup keys on parameters by "

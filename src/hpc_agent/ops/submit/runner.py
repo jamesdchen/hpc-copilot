@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.journal import is_resubmittable_terminal, load_run, upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
@@ -104,25 +106,19 @@ def _layer1_code_drift(
     Returns ``(drift, recorded_executor, recorded_tasks_py_sha)``. ``drift``
     is True when EITHER the recorded executor or the recorded tasks_py_sha is
     non-empty AND differs from the current — exactly the symmetric drift
-    predicate :func:`find_run_by_cmd_sha` applies at layer 2 (an
-    empty/absent recorded value is NOT drift; we cannot prove it changed,
+    predicate :func:`find_run_by_cmd_sha` applies at layer 2, now a single
+    shared definition (:func:`hpc_agent.state.code_drift.detect_code_drift`) so
+    a change to the rule can no longer land in one layer and miss the other
+    (an empty/absent recorded value is NOT drift; we cannot prove it changed,
     e.g. a pre-#351 record that never stamped these fields).
     """
-    recorded_executor = existing.executor
-    recorded_tasks_py_sha = existing.tasks_py_sha
-    executor_changed = bool(
-        current_executor and recorded_executor and str(recorded_executor) != str(current_executor)
+    drift = detect_code_drift(
+        recorded_executor=existing.executor,
+        recorded_tasks_py_sha=existing.tasks_py_sha,
+        current_executor=current_executor,
+        current_tasks_py_sha=current_tasks_py_sha,
     )
-    code_changed = bool(
-        current_tasks_py_sha
-        and recorded_tasks_py_sha
-        and str(recorded_tasks_py_sha) != str(current_tasks_py_sha)
-    )
-    return (
-        executor_changed or code_changed,
-        str(recorded_executor) if executor_changed else None,
-        str(recorded_tasks_py_sha) if code_changed else None,
-    )
+    return (drift.drifted, drift.drifted_executor, drift.drifted_tasks_py_sha)
 
 
 def _warn_layer1_drift(
@@ -164,6 +160,75 @@ def _warn_layer1_drift(
             UserWarning,
             stacklevel=3,
         )
+
+
+# Layer-1 (run_id / journal) dedup actions. The LOOKUP (load_run) and the
+# SIDE-EFFECTS (warn, return, upsert) stay in submit_and_record; this names the
+# DECISION so it is unit-testable without I/O and carries a provenance reason.
+_DEDUP = "dedup"  # the existing record stands; do not submit
+_PROCEED = "proceed"  # fall through to a fresh / in-place submit
+
+
+@dataclass(frozen=True)
+class _Layer1Decision:
+    """What layer-1 (the run_id journal lookup) decided about an existing run.
+
+    ``action`` is ``_DEDUP`` (the call is a no-op replay — return the existing
+    record) or ``_PROCEED`` (fall through to a fresh/in-place submit).
+    ``reason`` is a stable provenance string. ``warn_drift`` + the recorded
+    values are set only on the COMPLETE-redo-with-drift-but-lever-off case, so
+    the caller emits the same visible-drift warning as before.
+    """
+
+    action: str
+    reason: str
+    warn_drift: bool = False
+    recorded_executor: str | None = None
+    recorded_tasks_py_sha: str | None = None
+
+
+def _resolve_layer1(
+    existing: RunRecord,
+    *,
+    invalidate_on_code_change: bool,
+    current_executor: str | None,
+    current_tasks_py_sha: str | None,
+) -> _Layer1Decision:
+    """Decide what an existing journal record means for this submit.
+
+    Pure: same RunRecord + inputs always yield the same decision. The branches:
+
+    * ``failed`` / ``abandoned`` (resubmittable-terminal, #276) -> ``_PROCEED``:
+      a terminal-failure corpse is not a live run and must not block a retry.
+    * ``in_flight`` (and any other non-terminal, non-complete) -> ``_DEDUP``:
+      a live run blocks a duplicate submit.
+    * ``complete`` with no code/executor drift -> ``_DEDUP`` (idempotency).
+    * ``complete`` with drift + ``invalidate_on_code_change`` -> ``_PROCEED``:
+      the finished run's code changed, so it is NOT a valid replay; redo in
+      place (same run_id, #207).
+    * ``complete`` with drift + lever off -> ``_DEDUP`` with ``warn_drift`` so
+      the no-op replay against stale code is VISIBLE (#351 sub-bug #5).
+    """
+    if is_resubmittable_terminal(existing):
+        return _Layer1Decision(_PROCEED, "terminal_failure_resubmittable")
+    if existing.status != JournalStatus.COMPLETE:
+        return _Layer1Decision(_DEDUP, "in_flight_blocks_duplicate")
+    drift, recorded_executor, recorded_tasks_py_sha = _layer1_code_drift(
+        existing,
+        current_executor=current_executor,
+        current_tasks_py_sha=current_tasks_py_sha,
+    )
+    if not drift:
+        return _Layer1Decision(_DEDUP, "complete_idempotent_replay")
+    if invalidate_on_code_change:
+        return _Layer1Decision(_PROCEED, "complete_code_drift_invalidated")
+    return _Layer1Decision(
+        _DEDUP,
+        "complete_code_drift_warned",
+        warn_drift=True,
+        recorded_executor=recorded_executor,
+        recorded_tasks_py_sha=recorded_tasks_py_sha,
+    )
 
 
 def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]
@@ -308,57 +373,36 @@ def submit_and_record(
     resolved_executor = _resolve_current_executor(experiment_dir, run_id, current_executor)
     resolved_tasks_py_sha = _resolve_current_tasks_py_sha(experiment_dir, tasks_py_sha)
 
+    # LAYER 1 — run_id / journal dedup. The decision tree (terminal-failure
+    # falls through; in_flight blocks; COMPLETE dedups, redoes-in-place under
+    # the lever on drift, or warns-and-dedups, #276 / #351 sub-bug #5) lives in
+    # the pure ``_resolve_layer1`` so it is unit-testable without I/O. The
+    # COMPLETE-redo drift compares the PRIOR run's recorded executor/tasks_py_sha
+    # — read from its journal RunRecord, since the same-run_id sidecar is already
+    # overwritten with the NEW code by now (see ``_layer1_code_drift``) — against
+    # the about-to-submit code; an in-place redo keeps the run_id (#207). The
+    # side-effects (warn / return / fall-through) stay here.
     existing = load_run(experiment_dir, run_id)
-    if existing is not None and not is_resubmittable_terminal(existing):
-        # #276: a terminal-but-not-``complete`` record (``failed`` / ``abandoned``)
-        # is not a live run — do not dedup against it (that blocked every future
-        # submit for this run_id after a transient status-probe failure minted an
-        # abandoned record, or after any prior failure). A ``complete`` run still
-        # dedups (idempotency) and an ``in_flight`` one still blocks; only the
-        # terminal-failure record falls through to a fresh RunRecord + upsert below.
-        #
-        # #351 sub-bug #5 (layer-1 companion): a COMPLETE prior run dedups HERE,
-        # keyed on run_id, BEFORE the A5/cmd_sha LAYER-2 scan that enforces #207
-        # tasks_py drift and #351 executor drift ever runs. So a "redo THIS
-        # finished run with new code" (changed executor / entry point / tasks.py,
-        # unchanged swept params → same run_id) was a SILENT replay on the
-        # PRE-change code. Compare the PRIOR run's recorded executor/tasks_py_sha
-        # — read from its journal RunRecord (the sidecar at the same run_id is
-        # already overwritten with the NEW code by the time we get here, so only
-        # the journal carries the prior values; see ``_layer1_code_drift``) —
-        # against the about-to-submit code. This is an IN-PLACE REDO (stay within
-        # #207): the run_id is unchanged — a drift under the lever falls through
-        # to the same fresh in-place submit as the ``failed``/``abandoned`` lanes
-        # below (overwrites the old record + cluster dir); run-id minting is NOT
-        # touched. ``in_flight`` is left to block as before (only COMPLETE redoes).
-        if existing.status == JournalStatus.COMPLETE:
-            drift, recorded_executor, recorded_tasks_py_sha = _layer1_code_drift(
-                existing,
-                current_executor=resolved_executor,
-                current_tasks_py_sha=resolved_tasks_py_sha,
-            )
-            if not drift:
-                return existing, True
-            if invalidate_on_code_change:
-                # Opt-in: this finished run's code/executor changed, so the
-                # dedup is NOT a valid replay — fall through to a fresh in-place
-                # submit (same run_id, overwrites the old record + cluster dir),
-                # exactly like the failed/abandoned lanes below.
-                existing = None
-            else:
-                # Default: idempotency preserved (re-running a finished
-                # experiment stays a no-op) but the drift is now VISIBLE — warn
-                # (same shape as the layer-2 warning) and STILL dedup.
+    if existing is not None:
+        decision = _resolve_layer1(
+            existing,
+            invalidate_on_code_change=invalidate_on_code_change,
+            current_executor=resolved_executor,
+            current_tasks_py_sha=resolved_tasks_py_sha,
+        )
+        if decision.action == _DEDUP:
+            if decision.warn_drift:
                 _warn_layer1_drift(
                     run_id,
-                    recorded_executor=recorded_executor,
+                    recorded_executor=decision.recorded_executor,
                     current_executor=resolved_executor,
-                    recorded_tasks_py_sha=recorded_tasks_py_sha,
+                    recorded_tasks_py_sha=decision.recorded_tasks_py_sha,
                     current_tasks_py_sha=resolved_tasks_py_sha,
                 )
-                return existing, True
-        else:
             return existing, True
+        # _PROCEED: a terminal-failure corpse or an invalidated COMPLETE redo —
+        # fall through to a fresh / in-place submit (overwrites the old record +
+        # cluster dir); run-id minting is untouched.
 
     # A5: cmd_sha-based dedup. Covers the case where the journal at
     # ~/.claude/hpc/<repo_hash>/runs/ has been wiped (rm -rf, machine

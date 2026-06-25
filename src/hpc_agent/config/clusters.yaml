@@ -10,6 +10,12 @@ hoffman2:
   # pin fails every task with "Unable to locate a modulefile".
   modules: []
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
+  # conda_envs is your experiment runtime, but it currently ALSO supplies the
+  # cluster-side `hpc_agent` the combiner/status-reporter import (#349): the
+  # framework deploys only a stdlib-only import closure, so the reporter's
+  # runtime deps (pydantic/yaml/jsonschema) still come from this env. Until the
+  # cluster-gated python-only flip lands, a stdlib-only experiment still needs an
+  # env here that has hpc_agent installed.
   conda_envs: [<your_env>]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]
   # Per-cluster GPU queue map for live scoring (infra/gpu.py).
