@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_scaffold_staleness.output.json",
+  "title": "ValidateScaffoldStalenessResult",
+  "description": "Output — the standard ``findings`` envelope plus stamp diagnostics.\n\nEmpty ``findings`` == pass. A ``stale_scaffold`` finding (severity\n``error``) blocks submission. ``status`` / ``installed_version`` /\n``stamp_version`` carry the diagnosis even when there is no finding, so\na caller can tell \"fresh because the stamp matched\" from \"fresh because\nevery import resolved.\"",
+  "type": "object",
+  "required": [
+    "installed_version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/ValidatorFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "status": {
+      "default": "fresh",
+      "description": "'fresh' when the scaffold is compatible; 'stale' when it must be regenerated.",
+      "enum": [
+        "fresh",
+        "stale"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "installed_version": {
+      "description": "The installed hpc_agent.__version__ the scaffold was checked against.",
+      "title": "Installed Version",
+      "type": "string"
+    },
+    "stamp_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The generator version stamped in .hpc/.scaffold_meta.json, or null for an unstamped (legacy) scaffold.",
+      "title": "Stamp Version"
+    }
+  },
+  "$defs": {
+    "ValidatorFinding": {
+      "additionalProperties": false,
+      "description": "One actionable finding emitted by a single atomic validator.\n\nShared across every validator so the agent loop can branch on\n``code`` uniformly. Fields:\n\n* ``validator`` — name of the validator that emitted the finding\n  (e.g. ``\"validate-executor-signatures\"``); the workflow report\n  collects findings from every atom and prefixes by validator so\n  the agent knows where each came from.\n* ``severity`` — ``\"error\"`` blocks submission, ``\"warning\"`` is\n  informational, ``\"info\"`` is purely advisory.\n* ``code`` — machine-readable enum the agent branches on (e.g.\n  ``\"missing_parameter\"``, ``\"row_index_oob\"``,\n  ``\"walltime_below_p95\"``).\n* ``message`` — human-readable summary surfaced in the report.\n* ``suggested_fix`` — optional hint for the agent (\"increase\n  walltime to >= 7200s\" / \"use --gpu a100\"). Lets the agent loop\n  apply a fix without LLM-reasoning the recovery path.\n* ``evidence`` — validator-specific raw values (the ``p95_sec``,\n  the ``requested_walltime_sec``, the missing ``param_name``).\n* ``file`` / ``line`` — when the finding is sourced from a code\n  location (executor module, tasks.py), surface it for line-level\n  evidence.",
+      "properties": {
+        "validator": {
+          "minLength": 1,
+          "title": "Validator",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "suggested_fix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Fix"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        }
+      },
+      "required": [
+        "validator",
+        "severity",
+        "code",
+        "message"
+      ],
+      "title": "ValidatorFinding",
+      "type": "object"
+    }
+  }
+}

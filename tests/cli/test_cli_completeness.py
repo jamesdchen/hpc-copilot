@@ -58,15 +58,16 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
 # argue for it explicitly.
 _INTENTIONALLY_NO_CLI: set[str] = {
     # Validators that are part of the ``validate-campaign`` family but
-    # have no standalone CLI verb. Five of them
+    # have no standalone CLI verb. Six of them
     # (validate-executor-signatures, validate-input-dataset,
     # validate-stochastic-marker, validate-walltime-against-history,
-    # dry-run-local) are explicitly composed into ``validate-campaign``;
-    # ``validate-self-qos-limit`` is registered for schema/contract
-    # symmetry but not yet wired into the workflow body.
+    # dry-run-local, validate-scaffold-staleness) are explicitly composed
+    # into ``validate-campaign``; ``validate-self-qos-limit`` is registered
+    # for schema/contract symmetry but not yet wired into the workflow body.
     "dry-run-local",
     "validate-executor-signatures",
     "validate-input-dataset",
+    "validate-scaffold-staleness",
     "validate-self-qos-limit",
     "validate-stochastic-marker",
     "validate-walltime-against-history",

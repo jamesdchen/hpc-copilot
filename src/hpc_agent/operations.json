@@ -1111,6 +1111,18 @@
     "agent_facing": true,
     "cli": null,
     "idempotent": true,
+    "input_schema": null,
+    "name": "validate-scaffold-staleness",
+    "output_schema": "validate_scaffold_staleness.output.json",
+    "python": "hpc_agent.ops.validate.scaffold_staleness.validate_scaffold_staleness",
+    "side_effects": [],
+    "summary": "",
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
     "input_schema": "validate_self_qos_limit.input.json",
     "name": "validate-self-qos-limit",
     "output_schema": "validate_self_qos_limit.output.json",

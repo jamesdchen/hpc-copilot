@@ -587,6 +587,19 @@ def build_tasks_py(
         target.parent / "cli.py",
     )
 
+    # Stamp the generating hpc_agent version into .hpc/.scaffold_meta.json so a
+    # later submit (under a possibly-upgraded hpc-agent) can detect a stale
+    # scaffold locally instead of discovering it as a runtime ImportError on a
+    # compute node (#364). Best-effort: an absent stamp is handled as "unknown
+    # generator → verify imports" by the staleness checker, so a metadata-write
+    # hiccup must not fail the scaffold build itself.
+    from contextlib import suppress as _suppress
+
+    from hpc_agent.incorporation.build.scaffold_meta import stamp_scaffold_meta
+
+    with _suppress(OSError):
+        stamp_scaffold_meta(experiment_dir, scaffold_files=["tasks.py", "cli.py"])
+
     return {
         "path": str(target),
         "wrote": True,

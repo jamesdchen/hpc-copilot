@@ -55,21 +55,24 @@ def _write_tasks_py(tmp_path: Path, tasks: list[dict]) -> None:
 # ─── verdict aggregation ───────────────────────────────────────────────
 
 
-def test_no_validators_runs_returns_pass(tmp_path: Path) -> None:
-    """Spec with no validator inputs → composer skips everything,
-    returns pass with empty findings + empty validators_run."""
+def test_no_conditional_validators_run_returns_pass(tmp_path: Path) -> None:
+    """Spec with no validator inputs → composer skips every conditional
+    atom; only the unconditional stale-scaffold gate (#364) runs, and with
+    no ``.hpc/`` scaffold on disk it is a clean no-op (pass, no findings)."""
     report = validate_campaign(
         tmp_path,
         spec=ValidateCampaignSpec(profile=_PROFILE, cluster=_CLUSTER),
     )
     assert report.overall == "pass"
     assert report.findings == []
-    assert report.validators_run == []
+    # validate-scaffold-staleness always runs; the conditional atoms don't.
+    assert report.validators_run == ["validate-scaffold-staleness"]
 
 
 def test_only_walltime_validator_runs_when_only_walltime_supplied(tmp_path: Path) -> None:
-    """When the spec only supplies the walltime params, only that atom
-    runs; ``validators_run`` reflects exactly which atoms fired."""
+    """When the spec only supplies the walltime params, only that atom (plus
+    the unconditional stale-scaffold gate) runs; ``validators_run`` reflects
+    exactly which atoms fired."""
     report = validate_campaign(
         tmp_path,
         spec=ValidateCampaignSpec(
@@ -79,7 +82,10 @@ def test_only_walltime_validator_runs_when_only_walltime_supplied(tmp_path: Path
             gpu_type="a100",
         ),
     )
-    assert report.validators_run == ["validate-walltime-against-history"]
+    assert report.validators_run == [
+        "validate-scaffold-staleness",
+        "validate-walltime-against-history",
+    ]
 
 
 def test_overall_fail_when_any_error_finding(tmp_path: Path) -> None:
