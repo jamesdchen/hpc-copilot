@@ -175,6 +175,52 @@ def test_resolved_overrides_executor_from_materialized_interview(tmp_path: Path)
     assert ws.call_args.kwargs["spec"].executor == materialized_cmd
 
 
+def test_materialized_executor_cmd_reads_run_module_from_a_real_interview(tmp_path: Path) -> None:
+    """End-to-end seam: a real `record_interview` for a python_module entry writes
+    a run-module `executor_cmd`, and `_materialized_executor_cmd` reads it back —
+    so resolve-submit-inputs gets the deterministic run-module command from a REAL
+    interview, not a hand-crafted interview.json. Pins the producer↔consumer
+    contract the run-module work created end-to-end (previously each side was
+    tested alone: the interview emits it; the reader reads it)."""
+    import json as _json
+
+    from hpc_agent._wire.actions.interview import InterviewSpec
+    from hpc_agent.ops.memory.interview import record_interview
+    from hpc_agent.ops.resolve_submit_inputs import _materialized_executor_cmd
+
+    # tasks.py the interview validates task_count against (3 tasks).
+    tasks = tmp_path / ".hpc" / "tasks.py"
+    tasks.parent.mkdir(parents=True, exist_ok=True)
+    tasks.write_text(
+        '_TASKS = [{"seed": 0}, {"seed": 1}, {"seed": 2}]\n'
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n",
+        encoding="utf-8",
+    )
+    # An importable module with `main` so the python_module intake validation
+    # passes (campaign_dir is on sys.path during intake, #178).
+    (tmp_path / "pm_e2e.py").write_text(
+        "def main(seed: int = 0) -> dict:\n    return {'seed': seed}\n", encoding="utf-8"
+    )
+    intent = {
+        "goal": "e2e seam",
+        "task_count": 3,
+        "produced_by": {"kind": "human", "operator": "test"},
+        "entry_point": {"kind": "python_module", "module": "pm_e2e", "function": "main"},
+    }
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    # The reader resolve-submit-inputs uses returns the run-module command the
+    # interview materialized — no LLM, no hand-crafted JSON.
+    assert (
+        _materialized_executor_cmd(tmp_path)
+        == "python3 -m hpc_agent.executor_cli run-module pm_e2e:main"
+    )
+    # And it is actually persisted in interview.json's materialized block.
+    doc = _json.loads((tmp_path / "interview.json").read_text(encoding="utf-8"))
+    assert doc["_materialized"]["entry_point"]["executor_cmd"].endswith("run-module pm_e2e:main")
+
+
 def test_terminal_failed_prior_is_not_live_proceeds_fresh(tmp_path: Path) -> None:
     """A failed/abandoned record (#276) is forensic, not live → resolved."""
     from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
