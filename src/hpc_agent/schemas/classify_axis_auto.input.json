@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/classify_axis_auto.input.json",
+  "title": "classify-axis-auto input",
+  "description": "Inputs to the ``classify-axis-auto`` composite verb.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The @register_run function to classify. When omitted, the composite resolves it from discover-runs: if exactly one run exists it is used; if several exist, the composite returns spec_invalid (ambiguous_run) listing the candidates.",
+      "title": "Run Name"
+    },
+    "data_axis": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_DataAxisConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "A caller-resolved classification (the interview / slash path, after a human-facing dialog). When present the composite records it directly as classified_by='interview' and runs neither recall nor the matcher."
+    },
+    "root": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Experiments root forwarded to the preflight's recall sub-call. When omitted, recall falls back to ~/.hpc-agent/config.json:experiment_roots.",
+      "title": "Root"
+    },
+    "task_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Forwarded to the preflight's recall --task-kind to scope prior campaigns.",
+      "title": "Task Kind"
+    }
+  },
+  "$defs": {
+    "_DataAxisConfig": {
+      "additionalProperties": false,
+      "description": "A classified :data:`~hpc_agent.experiment_kit.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.experiment_kit.axis_config`.",
+      "properties": {
+        "kind": {
+          "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default. 'cartesian': there is no ordered series to split — a plain cartesian sweep (distinct from 'independent', which has a parallelizable series). Recorded only on a confident no-loop signal; anything ambiguous stays 'sequential'.",
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential",
+            "cartesian"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "halo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_HaloConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for kind='bounded_halo'; forbidden otherwise."
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For kind='associative': the built-in monoid chunks reduce with.",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_DataAxisConfig",
+      "type": "object"
+    },
+    "_HaloConfig": {
+      "additionalProperties": false,
+      "description": "The bounded look-back distance of a :class:`BoundedHalo` series axis.",
+      "properties": {
+        "expr": {
+          "description": "Arithmetic expression giving the warm-up row count, over the run()'s own parameter names (bare names, resolved from the sweep point), e.g. 'train_window * 48'. Evaluated by hpc_agent.experiment_kit.axis_config with a restricted AST walk — only names, numeric literals, + - * //, and min()/max() are permitted; never eval().",
+          "minLength": 1,
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "title": "_HaloConfig",
+      "type": "object"
+    }
+  }
+}

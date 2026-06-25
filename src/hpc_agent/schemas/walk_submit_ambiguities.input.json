@@ -1,0 +1,567 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/walk_submit_ambiguities.input.json",
+  "title": "walk-submit-ambiguities input",
+  "description": "Inputs to the deterministic submit-input walk (SKILL Steps 2-6).\n\nEach caller-supplied field short-circuits its resolution step (the\n\"caller-supplied is authoritative\" contract). Absent fields are\nresolved by a deterministic rule where one exists, or accumulated as\nan :class:`~hpc_agent.ops.submit.field_partition.Ambiguity`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller-resolved cluster; else auto-resolved from configured_clusters.",
+      "title": "Cluster"
+    },
+    "configured_clusters": {
+      "description": "Clusters configured in clusters.yaml. One → auto-use; multiple → ambiguity with safe_default = first lexicographically.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Configured Clusters",
+      "type": "array"
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Free-text campaign goal. REQUIRED_CALLER_FIELDS — when absent it is surfaced WITHOUT a safe_default (the guard forbids one).",
+      "title": "Goal"
+    },
+    "task_generator": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "cartesian_product": "#/$defs/_CartesianProduct",
+              "enumerated": "#/$defs/_Enumerated",
+              "items_x_seeds": "#/$defs/_ItemsXSeeds",
+              "numeric_linspace": "#/$defs/_NumericLinspace",
+              "numeric_logspace": "#/$defs/_NumericLogspace"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_Enumerated"
+            },
+            {
+              "$ref": "#/$defs/_CartesianProduct"
+            },
+            {
+              "$ref": "#/$defs/_ItemsXSeeds"
+            },
+            {
+              "$ref": "#/$defs/_NumericLogspace"
+            },
+            {
+              "$ref": "#/$defs/_NumericLinspace"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The sweep recipe. REQUIRED_CALLER_FIELDS — the framework cannot invent it. Absent (and no tasks.py) → surfaced WITHOUT a safe_default.",
+      "title": "Task Generator"
+    },
+    "tasks_py_present": {
+      "default": false,
+      "description": "Whether .hpc/tasks.py already exists. When true, an absent task_generator is NOT an ambiguity (the hand-written tasks.py path).",
+      "title": "Tasks Py Present",
+      "type": "boolean"
+    },
+    "entry_point_resolved": {
+      "default": false,
+      "description": "Whether the entry point is resolved (a @register_run / interview.json on disk).",
+      "title": "Entry Point Resolved",
+      "type": "boolean"
+    },
+    "entry_point_candidates": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Candidate entry-point paths when unresolved (e.g. ['train.py', 'main.py']).",
+      "title": "Entry Point Candidates"
+    },
+    "uncovered_required_params": {
+      "description": "Required (no-default) executor params that are NOT swept axes and lack a fixed_params value. Each must be covered or every task crashes.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Uncovered Required Params",
+      "type": "array"
+    },
+    "uncovered_param_defaults": {
+      "additionalProperties": true,
+      "description": "Per-param argparse default where one exists (e.g. {'samples': 10000}). Feeds the uncovered_param safe_default's {param: <default-or-null>} map.",
+      "title": "Uncovered Param Defaults",
+      "type": "object"
+    },
+    "executor_run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The executor's run_name; surfaced in the uncovered_param context block.",
+      "title": "Executor Run Name"
+    },
+    "data_axis_resolved": {
+      "default": false,
+      "description": "Whether axes.yaml has an executors.<run_name> entry for the current sha.",
+      "title": "Data Axis Resolved",
+      "type": "boolean"
+    },
+    "homogeneous_axes_resolved": {
+      "default": false,
+      "description": "Whether axes.yaml carries homogeneous_axes.",
+      "title": "Homogeneous Axes Resolved",
+      "type": "boolean"
+    },
+    "experiment_dir": {
+      "default": ".",
+      "description": "Experiment directory; passed to resolve-resources.",
+      "title": "Experiment Dir",
+      "type": "string"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Run profile (run_name); resolve-resources prior key.",
+      "title": "Profile"
+    },
+    "cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional cmd_sha for the runtime prior.",
+      "title": "Cmd Sha"
+    },
+    "walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller override for walltime_sec.",
+      "title": "Walltime Sec"
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller override for gpu_type.",
+      "title": "Gpu Type"
+    },
+    "partition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller override for partition.",
+      "title": "Partition"
+    },
+    "user_preferred_partition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Soft partition preference forwarded to recommend-partition.",
+      "title": "User Preferred Partition"
+    },
+    "partitions": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PartitionInfo"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The cluster's partition list (for recommend-partition).",
+      "title": "Partitions"
+    },
+    "mpi_pe": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller override for the SGE parallel env.",
+      "title": "Mpi Pe"
+    },
+    "mpi_ranks": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Total MPI ranks; when set, mpi_pe is auto-derived.",
+      "title": "Mpi Ranks"
+    },
+    "parallel_environments": {
+      "anyOf": [
+        {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The cluster's parallel_environments (for recommend-pe).",
+      "title": "Parallel Environments"
+    }
+  },
+  "$defs": {
+    "PartitionInfo": {
+      "additionalProperties": false,
+      "description": "One partition the cluster exposes, with its scheduling shape.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "priority_tier": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Priority Tier",
+          "type": "integer"
+        },
+        "walltime_cap_sec": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime Cap Sec"
+        },
+        "is_debug": {
+          "default": false,
+          "title": "Is Debug",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "PartitionInfo",
+      "type": "object"
+    },
+    "_CartesianProduct": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "cartesian_product",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_CartesianProductParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_CartesianProduct",
+      "type": "object"
+    },
+    "_CartesianProductParams": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "additionalProperties": {
+            "items": {},
+            "type": "array"
+          },
+          "description": "Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis.",
+          "minProperties": 1,
+          "title": "Axes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "axes"
+      ],
+      "title": "_CartesianProductParams",
+      "type": "object"
+    },
+    "_Enumerated": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "enumerated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_EnumeratedParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_Enumerated",
+      "type": "object"
+    },
+    "_EnumeratedParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "description": "List of task-kwargs dicts. Most agnostic shape — just stores the list verbatim and resolve(i) returns items[i].",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "_EnumeratedParams",
+      "type": "object"
+    },
+    "_ItemsXSeeds": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "items_x_seeds",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ItemsXSeedsParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ItemsXSeeds",
+      "type": "object"
+    },
+    "_ItemsXSeedsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "seeds": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Seeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "seeds"
+      ],
+      "title": "_ItemsXSeedsParams",
+      "type": "object"
+    },
+    "_NumericLinspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_linspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLinspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLinspace",
+      "type": "object"
+    },
+    "_NumericLinspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLinspaceParams",
+      "type": "object"
+    },
+    "_NumericLogspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_logspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLogspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLogspace",
+      "type": "object"
+    },
+    "_NumericLogspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "exclusiveMinimum": 0,
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "exclusiveMinimum": 0,
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        },
+        "base": {
+          "default": 10.0,
+          "exclusiveMinimum": 1,
+          "title": "Base",
+          "type": "number"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLogspaceParams",
+      "type": "object"
+    }
+  }
+}

@@ -22,6 +22,19 @@ from hpc_agent.infra.clusters import get_nfs_data_dir
 from hpc_agent.state.journal import upsert_run
 
 
+@pytest.fixture(autouse=True)
+def _stub_executor_existence_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the post-deploy executor-existence preflight (#S5 / incident 6).
+
+    It issues a real SSH ``test -f "$REPO_DIR/<executor>"`` and is covered
+    directly in ``tests/incorporation/build/test_deployment_consistency.py``.
+    These flow tests mock deploy at the function level and don't set the probe
+    up, so stub it here (mirrors how they stub ``_preflight_probe``)."""
+    from hpc_agent.ops import submit_flow as _sf
+
+    monkeypatch.setattr(_sf, "_run_executor_existence_preflight", lambda **_k: None)
+
+
 def _resolve_nfs_dir_for_cluster(cluster: str, full_clusters: dict[str, Any]):
     """Mirror the resolution logic in submit_flow.submit_flow().
 

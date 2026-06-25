@@ -285,6 +285,18 @@ def build_submit_spec(
         # incident). Catches a hand-rolled spec / stale divergent-build sidecar.
         _check_bare_module_executor(extra_env["EXECUTOR"])
 
+    # S5 / incident 6: REPO_DIR is derived from the SAME value the rsync deploy
+    # lands at (``remote_path``) via the single deploy-target derivation, so the
+    # cluster-side ``cd "$REPO_DIR"`` and the rsync destination cannot diverge by
+    # construction. ``deploy_target_for`` is the one owner of that identity
+    # (infra/backends/_remote_base.py) — also the source of the backend's
+    # ``remote_repo`` and the post-deploy existence preflight, so all four anchor
+    # on one string. The equality is re-asserted after the ``extra_env`` merge
+    # below, where a stale/hand-rolled divergent ``REPO_DIR`` override would land.
+    from hpc_agent.infra.backends._remote_base import deploy_target_for
+
+    repo_dir = deploy_target_for(remote_path)
+
     job_name = job_name or profile
     if script is None:
         # #293: an mpi block routes to the single multi-rank template (one unit
@@ -301,7 +313,7 @@ def build_submit_spec(
         "HPC_RUN_ID": run_id,
         "HPC_CMD_SHA": cmd_sha,
         "HPC_TASK_COUNT": str(int(total_tasks)),
-        "REPO_DIR": remote_path,
+        "REPO_DIR": repo_dir,
         "MODULES": modules,
         "CONDA_SOURCE": conda_source,
         "CONDA_ENV": conda_env,
@@ -334,6 +346,45 @@ def build_submit_spec(
         )
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
+
+    # S5 / incident 6: REPO_DIR ↔ deploy-target invariant. ``REPO_DIR`` was set
+    # from ``deploy_target_for(remote_path)`` — the SAME derivation rsync_push /
+    # deploy_runtime / the backend's ``remote_repo`` use — so it equals the rsync
+    # destination by construction. The ONE way it can now diverge is a divergent
+    # ``REPO_DIR`` threaded through ``extra_env`` (a stale/hand-rolled override or
+    # a cached spec field), which the merge above would have just applied. That is
+    # exactly the 2026-06 live-canary drift: REPO_DIR pointed at ``…/hpc-demo``
+    # while rsync deployed to ``…/demo-hpc`` and every task's ``cd "$REPO_DIR"``
+    # missed the executor. Assert the post-merge value still equals the derived
+    # deploy target; on mismatch refuse at the build boundary so the drift never
+    # reaches a scheduler round-trip. (A caller that legitimately set REPO_DIR to
+    # the SAME value as remote_path passes unchanged — back-compat preserved.)
+    _effective_repo_dir = job_env.get("REPO_DIR", "")
+    if _effective_repo_dir.rstrip("/") != repo_dir:
+        raise errors.SpecInvalid(
+            f"repo_dir_deploy_mismatch: job_env['REPO_DIR']={_effective_repo_dir!r} "
+            f"diverges from the deploy target {repo_dir!r} derived from "
+            f"remote_path={remote_path!r}. The cluster-side dispatch runs "
+            '`cd "$REPO_DIR" && <executor>`, but rsync deploys the tree to '
+            "remote_path — a divergent REPO_DIR (typically a stale extra_env "
+            "override or a cached spec field) lands the per-task command in a "
+            "directory the executor was never deployed to, the failure the "
+            "2026-06 live canary hit (dispatcher_failed: REPO_DIR=…/hpc-demo vs "
+            "deployed …/demo-hpc). Drop the REPO_DIR override from extra_env; it "
+            "is derived from remote_path automatically."
+        )
+
+    # S5 / incident 6 (static, zero-network): the executor's referenced file
+    # must be part of the bundle rsync will actually deploy under remote_path. A
+    # file that is present locally but stripped by an rsync exclude (or simply
+    # absent from the deploy set) lands NO file at REPO_DIR, so the per-task
+    # ``cd "$REPO_DIR" && python <file>.py`` fails on the cluster exactly as a
+    # REPO_DIR drift would. Catch it at build time, before any network round-trip.
+    _check_executor_in_deploy_manifest(
+        job_env.get("EXECUTOR", ""),
+        experiment_dir=experiment_dir,
+        rsync_excludes=rsync_excludes,
+    )
 
     # #292 Bug B: cross-check the effective EXECUTOR's ``$VAR`` references
     # against the vars the cluster-side dispatcher will actually export. The
@@ -491,6 +542,125 @@ def _check_register_run_executor(executor: str, *, base_dir: Path | None = None)
         "interview from before the auto-generation fix. Re-run the "
         "interview (`hpc-agent setup` / `/submit-hpc`) to regenerate."
     )
+
+
+def _check_executor_in_deploy_manifest(
+    executor: str,
+    *,
+    experiment_dir: Path | None,
+    rsync_excludes: list[str] | None,
+) -> None:
+    """Refuse an EXECUTOR whose script file won't be in the deployed bundle.
+
+    S5 / incident 6, static layer. The per-task command runs
+    ``cd "$REPO_DIR" && python <file>.py`` on the cluster, so ``<file>.py`` must
+    be one of the files rsync ships under ``remote_path``. A script that exists
+    locally but is stripped by an rsync exclude (or is otherwise outside the
+    deploy set) lands NO file at REPO_DIR and fails every task exactly as a
+    REPO_DIR drift would — but it can be caught with zero network at build time.
+
+    Conservative by construction (only refuse on a PROVABLE miss, matching the
+    rest of this module's guards):
+
+    * no ``experiment_dir`` → the deploy set's local root is unknown, skip.
+    * the executor carries no relative ``.py`` script token (the ``python3 -c``
+      one-liner, a ``-m`` / ``run-module`` dispatch, or an absolute path that the
+      job inherits rather than the deployed tree) → nothing manifest-shaped to
+      check, skip.
+    * the script file is NOT present locally under ``experiment_dir`` → that is
+      the LOCAL-presence guard's job (``_check_register_run_executor`` already
+      no-ops a missing file); this manifest check only fires for a file that IS
+      present locally but would be EXCLUDED from the deploy — the genuine
+      "present here, absent there" drift.
+
+    Raises :class:`errors.SpecInvalid` only when the file is present locally yet
+    an effective rsync exclude would strip it from the deploy bundle.
+    """
+    from hpc_agent.infra.backends._remote_base import executor_script_path
+
+    if experiment_dir is None:
+        return
+    script = executor_script_path(executor)
+    if script is None or script.startswith("/"):
+        return
+    base = Path(experiment_dir)
+    local_path = base / script
+    if not local_path.is_file():
+        # Absent locally is a different failure mode (handled elsewhere); this
+        # guard is strictly about a locally-present file being excluded from the
+        # deploy, so a positively-established "would be deployed" baseline.
+        return
+    # Build the effective exclude set the deploy will actually apply: the
+    # framework's mandatory + default excludes unioned with the caller's, minus
+    # the generated-but-needed carve-out submit-flow restores
+    # (``_keep_generated_shippable``). Mirror that logic so this static check and
+    # the real push agree on what ships.
+    from hpc_agent.infra.transport import (
+        DEFAULT_RSYNC_EXCLUDES,
+        MANDATORY_RSYNC_EXCLUDES,
+    )
+    from hpc_agent.ops.submit_flow import _GENERATED_SHIPPABLE
+
+    caller = list(rsync_excludes) if rsync_excludes is not None else list(DEFAULT_RSYNC_EXCLUDES)
+    effective = [*caller, *MANDATORY_RSYNC_EXCLUDES]
+    # Drop the generated-shippable carve-out: those patterns never strip a file
+    # from the deploy because submit-flow re-includes them.
+    effective = [e for e in effective if e.strip().strip("/") not in _GENERATED_SHIPPABLE]
+
+    rel = script.lstrip("./")
+    if _path_excluded(rel, effective):
+        raise errors.SpecInvalid(
+            f"executor_not_in_deploy_manifest: the executor's script {script!r} is "
+            f"present locally ({local_path}) but an effective rsync exclude would "
+            f"strip it from the deploy bundle, so it would NOT exist under "
+            f"REPO_DIR on the cluster. The per-task command runs "
+            '`cd "$REPO_DIR" && <executor>`, so every task would fail as if the '
+            "executor were missing (the 2026-06 REPO_DIR/deploy-drift class, "
+            "caught statically here). Remove the matching pattern from "
+            "rsync_excludes, or move the executor into the deployed tree."
+        )
+
+
+def _path_excluded(rel_path: str, patterns: list[str]) -> bool:
+    """Whether *rel_path* (deploy-relative, ``/``-separated) is rsync-excluded.
+
+    A deliberately conservative subset of rsync's matching — enough to catch the
+    common "this file/dir is excluded" cases without false positives:
+
+    * a directory pattern (``foo/`` or ``foo``) excludes the dir and everything
+      under it, matched at any depth (rsync's bare-name semantics);
+    * a ``*.ext`` glob excludes any path whose basename matches;
+    * an exact relative path matches itself.
+
+    Only used to PROVE an exclusion; an unrecognised pattern shape simply
+    doesn't match, so the guard never refuses on a pattern it can't reason about.
+    """
+    import fnmatch
+
+    parts = rel_path.split("/")
+    basename = parts[-1]
+    for raw in patterns:
+        pat = raw.strip()
+        if not pat:
+            continue
+        core = pat.strip("/")
+        if not core:
+            continue
+        # Glob on the basename (``*.pyc``, ``*.log``).
+        if ("*" in core or "?" in core) and "/" not in core:
+            if fnmatch.fnmatch(basename, core):
+                return True
+            continue
+        # Bare name (``__pycache__``, ``results``, ``src`` …): excludes any path
+        # component equal to it (rsync matches a bare name at any depth).
+        if "/" not in core:
+            if core in parts:
+                return True
+            continue
+        # Anchored relative path (``a/b.py``): exact match or a prefix dir.
+        if rel_path == core or rel_path.startswith(core + "/"):
+            return True
+    return False
 
 
 # Matches a lone ``<dotted.module>:<function>`` token — the shape a divergent

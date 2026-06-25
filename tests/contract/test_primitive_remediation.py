@@ -88,10 +88,12 @@ def _verb_from_schema_path(path: Path) -> str:
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
         "aggregate-flow",
+        "apply-safe-defaults",
         "build-submit-spec",
         "build-tasks-py",
         "campaign-run",
         "classify-axis",
+        "classify-axis-auto",
         "decide-monitor-arm",
         "interview",
         "monitor-flow",
@@ -112,6 +114,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "submit-pipeline",
         "summarize-submit-plan",
         "validate-campaign",
+        "walk-submit-ambiguities",
         "write-run-sidecar",
     }
 )
@@ -211,6 +214,11 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "submit-pipeline",
     "campaign-run",
     "resolve-submit-inputs",
+    # lift-out-of-llm spec-verbs (S2/S3) — new resolvers/composites; like the
+    # other composites they do not yet thread failure_features (WS3 punch list).
+    "walk-submit-ambiguities",
+    "apply-safe-defaults",
+    "classify-axis-auto",
 }
 
 

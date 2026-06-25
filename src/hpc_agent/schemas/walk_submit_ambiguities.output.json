@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/walk_submit_ambiguities.output.json",
+  "title": "walk-submit-ambiguities output",
+  "description": "The ``needs_resolution``-shaped data block: ``{resolved, ambiguities}``.\n\n``resolved`` carries every field the walk could fill (caller-supplied\nor auto-resolved). ``ambiguities`` is the list of unresolved fields in\nthe SKILL's hand-built shape (``{field, candidates, depends_on,\nsafe_default, context?}``); a REQUIRED_CALLER_FIELDS member never\ncarries a ``safe_default`` (the Ambiguity guard enforces this). The\nmatching envelope ``error_code`` is ``needs_resolution`` when\n``ambiguities`` is non-empty.",
+  "type": "object",
+  "required": [
+    "resolved",
+    "ambiguities"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "resolved": {
+      "additionalProperties": true,
+      "description": "Every field the walk resolved (caller-supplied or auto-resolved).",
+      "title": "Resolved",
+      "type": "object"
+    },
+    "ambiguities": {
+      "description": "Unresolved fields in the needs_resolution ambiguity shape.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Ambiguities",
+      "type": "array"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "description": "How each resolved field was reached (caller / auto-rule / resolve-resources).",
+      "title": "Provenance",
+      "type": "object"
+    }
+  }
+}

@@ -39,68 +39,42 @@ They are orthogonal and live in the same file under different keys. This skill *
 
 ## Steps
 
-### 1–3. Preflight: discover the run, cache-check, pre-fill from memory
+### 1–4a. Classify in one call — `classify-axis-auto`
 
-These three steps are collapsed into one composite verb — [classify-axis-preflight](../../../../docs/primitives/classify-axis-preflight.md). It runs `discover-runs` → cache-check (`axes.yaml` reuse) → (conditionally) `recall` in one CLI call and returns each sub-call's verbatim envelope under `data`, so the branching below reads exactly the same shapes the three separate calls used to return.
+Steps 1–4a (discover the run, cache-check, recall pre-fill, and the cheap AST match) are collapsed into **one composite verb** — [classify-axis-auto](../../../../docs/primitives/classify-axis-auto.md). It calls `classify-axis-preflight` → `classify-axis-easy` → the `classify-axis` recorder **directly in-process** (no subprocess fan-out), so the strict preflight-produces-`source_path` → matcher-consumes-it dependency is a code invariant — you no longer hand-sequence (and cannot mis-order) the chain. You make one call and only do work on the genuine long tail.
 
 ```bash
-hpc-agent classify-axis-preflight \
+hpc-agent classify-axis-auto \
   --experiment-dir . \
-  [--run-name <name-if-caller-supplied>] \
-  [--run-signature-sha <sha-once-known>] \
-  [--root <experiments-root>] [--task-kind <kind>] \
-  [--data-axis-supplied]
+  --spec <spec.json>
 ```
 
-Pass `--data-axis-supplied` when the caller already supplied `data_axis` (the slash path) — it skips the `recall` sub-call, the classification being already resolved. When you don't yet have the run's `run_signature_sha` (you only learn it from the discover sub-call), invoke once without it: the cache-check reports a miss, `recall` still runs, and Step 5 records the freshly-classified axis. A second pass with `--run-name`/`--run-signature-sha` filled in is only needed when you want the early-return cache reuse.
+Pass `--spec` only when you have inputs to give; a bare `--experiment-dir .` call classifies the sole `@register_run` autonomously. The spec (`hpc_agent/schemas/classify_axis_auto.input.json`) is all-optional:
 
-Branch on the returned `data`:
-
-#### 1. Identify the run — `data.discover_runs`
-
-`data.discover_runs.envelope.data.runs` is a list of `{path, name, gpu, run_signature_sha, flags}`. Resolve to a single run:
-
-- If the caller supplied `run_name`, scope to it.
-- Else if exactly one run exists, use it.
-- Else (multiple runs, no `run_name` supplied) **return `spec_invalid` with `error_code: ambiguous_run`** listing the candidates. The skill does not pick blindly across multiple registered runs.
-
-Record `name` and `run_signature_sha`.
-
-#### 2. Cache check — reuse a still-valid classification — `data.cache_check`
-
-`data.cache_check.envelope.data.hit` is `true` when `executors.<name>` existed **and** its stored `run_signature_sha` equals the run's current one — the stored `DataAxis` is still valid. On a hit, **reuse `data.cache_check.envelope.data.stored`, return early**, and report which classification was reused. A miss (`hit: false`) means the signature changed or the run was never classified → continue. (A `cache_check.ok: false` carrying `config_invalid` is a corrupt `axes.yaml` — surface it.)
-
-#### 3. Pre-fill from memory (recall) — `data.recall`
-
-`data.recall` is `null` when the preflight skipped it (cache hit, or `--data-axis-supplied`). When present, `data.recall.envelope` is the `recall` envelope: each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}}`, and the rollup carries a `data_axis_kinds` histogram. If a prior *similar* experiment classified an analogous series — same loop shape, same parameter names — adopt its classification (set `classified_by: "recall"`) and jump to Step 5. If no clean match, continue to Step 4.
-
-### 4. Skip if caller supplied `data_axis`; otherwise classify
-
-**If the caller already supplied `data_axis` in the spec** (the human-driven slash path, after `/classify-axis-hpc` ran its interview), set `classified_by: "interview"` and jump to Step 5 — do not re-classify.
-
-**Otherwise, classify autonomously.** The classifier is hybrid: a stdlib AST pattern-matcher (`classify-axis-easy`) handles ~80% of cases without LLM reasoning; the LLM decision tree below is the long-tail fallback for novel patterns.
-
-#### 4a. Try the cheap match first
-
-```bash
-hpc-agent classify-axis-easy --source-path <path-from-Step-1> --run-name <name>
+```json
+{
+  "run_name": "forecast",
+  "data_axis": { "kind": "bounded_halo", "halo": { "expr": "train_window * 48" } },
+  "root": "<experiments-root>",
+  "task_kind": "<kind>"
+}
 ```
 
-The envelope's `data` carries `{kind, evidence, halo_expr?, tried}`. The matcher's autonomous scope is narrow: `independent`, `bounded_halo` (committed with a structurally-extracted `halo_expr`), or `sequential` (carried state but no recognized halo pattern — safe default). Anything outside that scope (`unclassifiable` / `no_loop_detected` / `function_not_found`) falls through to Step 4b.
+- `run_name` — scope when multiple `@register_run` functions exist (else the sole one is used; multiple with no scope → `spec_invalid` `ambiguous_run`).
+- `data_axis` — supply when the caller already resolved the classification (the human-driven slash path, after `/classify-axis-hpc` ran its interview); the composite records it directly as `classified_by: "interview"` and runs neither recall nor the matcher.
+- `root` / `task_kind` — forwarded to the recall sub-call for memory pre-fill.
 
-Branch on `data.kind`:
+**Branch on the returned `data` — exactly two outcomes:**
 
-| `kind` | action |
-|---|---|
-| `independent` | Committed. Build `data_axis: {kind: "independent"}`. Jump to Step 5. |
-| `bounded_halo` | Committed — the matcher recognized one of the pattern-library shapes (first-order / finite-order stencil, bounded-window deque, pandas rolling, EMA) and extracted `data.halo_expr`. Build `data_axis: {kind: "bounded_halo", halo: {expr: data.halo_expr}}`. Jump to Step 5. **No LLM call is needed** — the halo expression is already structurally derived. |
-| `sequential` | Committed — the matcher saw carried outer-scope state but no halo pattern matched. Sequential is the safe default; the framework will run the inner loop serially. Build `data_axis: {kind: "sequential"}`. Jump to Step 5. |
-| `no_loop_detected` | Committed — the matcher confidently found **no ordered-series loop** to split. Build `data_axis: {kind: "cartesian"}` (a plain cartesian sweep — distinct from `independent`, which has a parallelizable series). Jump to Step 5. **No LLM call needed**, and **not** a fall-through: a confident no-loop signal is a terminal verdict, recorded so the worker never re-infers it. |
-| `unclassifiable` / `function_not_found` | Fall through to Step 4b — genuinely uncertain (a parse the matcher couldn't resolve); the LLM tree decides, or the run escalates. |
+#### `data.recorded == true` — done
 
-Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-line reasoning for Step 6's transcript turn.
+The composite resolved and recorded the classification. `data` carries `{recorded: true, run_name, kind, classified_by, axes_path}`. `classified_by` is `"interview"` (you supplied `data_axis`), `"recall"` (a prior similar campaign classified the same run with a confident kind), or `"agent"` (the AST matcher committed a confident kind: `independent` / `bounded_halo` with a structurally-extracted halo / `sequential` / `cartesian` from a confident no-loop verdict). A still-valid cache hit also returns `recorded: true`, reusing the stored classification with **no re-write**. **Skip Steps 4b and 5** — the axis is already in `axes.yaml`. Carry `kind` + `classified_by` into Step 8's return envelope.
 
-**Halo expression syntax** (`hpc_agent.experiment_kit.axis_config`): only bare `run()` parameter names, numeric literals, `+ - * //`, and `min()` / `max()`. It is **never `eval()`'d** — a restricted AST interpreter walks it. The matcher emits halo expressions that already conform to this syntax. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+#### `data.needs_llm_tree == true` — walk the long tail
+
+The matcher abstained (`unclassifiable` / `function_not_found`) and **nothing was recorded**. `data` carries `{needs_llm_tree: true, run_name, source_path, run_signature_sha, evidence, tried}`. This is the genuine-judgement case: proceed to **Step 4b**, reading the run body from `data.source_path`, then record via the `classify-axis` primitive (Step 5) using `data.run_name` / `data.run_signature_sha`.
+
+**Halo expression syntax** (`hpc_agent.experiment_kit.axis_config`): only bare `run()` parameter names, numeric literals, `+ - * //`, and `min()` / `max()`. It is **never `eval()`'d** — a restricted AST interpreter walks it. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
 
 **Note: the matcher does NOT autonomously classify `Associative`.** The framework provides task-array map-reduce via `combine-wave`; users who want to parallelize an inner reduction express it as a sweep dimension in their `task_generator`. Step 4b's LLM tree still recognizes Associative — the matcher just doesn't.
 

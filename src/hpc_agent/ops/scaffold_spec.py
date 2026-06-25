@@ -60,6 +60,10 @@ from hpc_agent.infra.backends import registered_backend_names
 from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config
 from hpc_agent.meta.campaign.atoms.load_context import load_context
 from hpc_agent.ops.detect_entry_point import detect_entry_point
+from hpc_agent.ops.submit.field_partition import (
+    REQUIRED_CALLER_FIELDS,
+    may_have_safe_default,
+)
 from hpc_agent.state.discover import discover_executors
 
 if TYPE_CHECKING:
@@ -648,12 +652,41 @@ def _scaffold_interview(ctx: _Context, acc: _Acc) -> dict[str, Any]:
     # ── ``task_generator``: optional in the schema but always wanted by the
     # wrap-entry-point skill. Emit a single-item ``enumerated`` placeholder so
     # the caller has a typed shape to mutate rather than synthesizing a
-    # discriminated-union node from scratch.
+    # discriminated-union node from scratch. It is flagged unresolved because
+    # it is a REQUIRED_CALLER_FIELDS member in the single field partition
+    # (ops/submit/field_partition) — the framework never invents the recipe,
+    # so the skeleton's placeholder is always the caller's to fill. Sourcing
+    # the flag from the partition (not a bare literal) keeps the read-only
+    # skeleton and the authoritative `interview` assembler reconciled on one
+    # definition of "caller must supply this".
     spec["task_generator"] = {"kind": "enumerated", "params": {"items": [{}]}}
     acc.sources["task_generator"] = (
-        "placeholder — single-item enumerated; replace with the real recipe"
+        "placeholder — single-item enumerated; replace with the real recipe "
+        "(REQUIRED_CALLER_FIELDS — never auto-resolved)"
     )
     acc.unresolved.append("task_generator")
+
+    # Drift guard: the fields this skeleton flags as caller-required for the
+    # interview MUST be exactly the partition's REQUIRED_CALLER_FIELDS that
+    # name an interview-spec field. `goal` (flagged by acc.req above) and
+    # `task_generator` are both REQUIRED_CALLER_FIELDS; neither may be
+    # auto-resolvable. If the partition ever reclassifies one of them, this
+    # fires so the skeleton and the partition can't silently disagree.
+    _interview_required = REQUIRED_CALLER_FIELDS & {"goal", "task_generator"}
+    _wrongly_auto = {f for f in _interview_required if may_have_safe_default(f)}
+    if _wrongly_auto:  # pragma: no cover — guards a partition/skeleton drift
+        raise errors.SpecInvalid(
+            "field_partition marks interview caller-required fields as "
+            f"auto-resolvable: {sorted(_wrongly_auto)}; the scaffold-spec "
+            "interview skeleton flags them unresolved. Reconcile "
+            "ops/submit/field_partition with this scaffolder."
+        )
+    _missing_flag = {f for f in _interview_required if f not in set(acc.unresolved)}
+    if _missing_flag:  # pragma: no cover — guards a skeleton regression
+        raise errors.SpecInvalid(
+            f"scaffold-spec interview skeleton failed to flag partition "
+            f"REQUIRED_CALLER_FIELDS as unresolved: {sorted(_missing_flag)}."
+        )
 
     # ── ``entry_point``: probe the experiment dir; default to register_run.
     preferred_kind, candidates = _detect_entry_point_candidates(ctx.experiment_dir, acc)

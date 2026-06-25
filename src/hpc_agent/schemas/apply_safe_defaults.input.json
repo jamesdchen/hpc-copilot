@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/apply_safe_defaults.input.json",
+  "title": "apply-safe-defaults input",
+  "description": "The ``{resolved, ambiguities}`` envelope to auto-fill.\n\nShaped exactly like ``walk-submit-ambiguities``'s output so the two\nchain without reshaping: the autonomous caller pipes the walk's\n``data`` straight into this verb's ``--spec``.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "resolved": {
+      "additionalProperties": true,
+      "description": "Fields the walk already resolved; auto-filled defaults merge on top.",
+      "title": "Resolved",
+      "type": "object"
+    },
+    "ambiguities": {
+      "description": "Ambiguity dicts from walk-submit-ambiguities. Each is filled from its safe_default when present; a required-caller field (no safe_default) stays unresolved and is reported.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Ambiguities",
+      "type": "array"
+    }
+  }
+}

@@ -51,12 +51,32 @@ from hpc_agent._wire.queries.recommend_partition import (
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.ops.recommend_pe import recommend_pe
+from hpc_agent.ops.submit.field_partition import AUTO_RESOLVABLE_FIELDS
 from hpc_agent.ops.submit.recommend_partition import recommend_partition
 
 __all__ = [
     "DEFAULT_SAFETY_MULT",
     "resolve_resources",
 ]
+
+# Drift guard: every field this verb auto-resolves MUST be declared
+# auto-resolvable in the single field partition (ops/submit/field_partition).
+# If a future edit teaches resolve-resources a new field but forgets to
+# register it as auto-resolvable, the partition and the resolver have
+# drifted — and walk-submit-ambiguities (which reuses this verb) would then
+# put a value into `resolved` for a field the partition thinks needs the
+# caller. Fail at import, not at the demo. (The reverse — partition fields
+# this verb doesn't touch, e.g. data_axis — is fine; they resolve elsewhere.)
+_RESOLVE_RESOURCES_FIELDS: frozenset[str] = frozenset(
+    {"walltime_sec", "gpu_type", "partition", "mpi_pe"}
+)
+_resource_drift = _RESOLVE_RESOURCES_FIELDS - AUTO_RESOLVABLE_FIELDS
+if _resource_drift:
+    raise RuntimeError(
+        "resolve-resources auto-resolves fields the partition does not mark "
+        f"auto-resolvable: {sorted(_resource_drift)}. Add them to "
+        "hpc_agent.ops.submit.field_partition.AUTO_RESOLVABLE_FIELDS."
+    )
 
 # p95 → walltime ask safety multiplier. Mirrors the Step 6 prose default
 # (``prior.p95_sec * 1.30``): a 30% headroom over the historical p95 so a

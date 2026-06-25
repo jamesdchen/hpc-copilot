@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/classify_axis_auto.output.json",
+  "title": "ClassifyAxisAutoResult",
+  "description": "Discriminated result: a recorded classification, or an LLM-tree hand-off.",
+  "$defs": {
+    "_NeedsLlmTreeResult": {
+      "additionalProperties": false,
+      "description": "Terminal shape E: the matcher abstained; the LLM decision tree decides.",
+      "properties": {
+        "needs_llm_tree": {
+          "const": true,
+          "description": "Discriminator: the AST matcher abstained (unclassifiable / function_not_found); nothing was recorded. The caller walks the LLM decision tree and records via the classify-axis primitive.",
+          "title": "Needs Llm Tree",
+          "type": "boolean"
+        },
+        "run_name": {
+          "description": "The resolved @register_run function name.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        },
+        "source_path": {
+          "description": "Path to the source the LLM tree should read run_name's body from.",
+          "minLength": 1,
+          "title": "Source Path",
+          "type": "string"
+        },
+        "run_signature_sha": {
+          "description": "The run's current signature hash — passed to the classify-axis recorder.",
+          "minLength": 1,
+          "title": "Run Signature Sha",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "The matcher's one-line evidence for why it abstained.",
+          "title": "Evidence",
+          "type": "string"
+        },
+        "tried": {
+          "description": "The ordered pattern checks the matcher walked before abstaining.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tried",
+          "type": "array"
+        }
+      },
+      "required": [
+        "needs_llm_tree",
+        "run_name",
+        "source_path",
+        "run_signature_sha",
+        "evidence",
+        "tried"
+      ],
+      "title": "_NeedsLlmTreeResult",
+      "type": "object"
+    },
+    "_RecordedResult": {
+      "additionalProperties": false,
+      "description": "Terminal shape A–D: a classification was recorded into axes.yaml.",
+      "properties": {
+        "recorded": {
+          "const": true,
+          "description": "Discriminator: the classification was recorded into .hpc/axes.yaml.",
+          "title": "Recorded",
+          "type": "boolean"
+        },
+        "run_name": {
+          "description": "The resolved @register_run function name.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The recorded DataAxis kind.",
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential",
+            "cartesian"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "classified_by": {
+          "description": "How the classification was reached: 'interview' (caller supplied data_axis), 'recall' (a prior similar experiment was reused), or 'agent' (the AST matcher classified it autonomously).",
+          "enum": [
+            "interview",
+            "recall",
+            "agent"
+          ],
+          "title": "Classified By",
+          "type": "string"
+        },
+        "axes_path": {
+          "description": "Absolute path to the axes.yaml the entry was written into.",
+          "title": "Axes Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recorded",
+        "run_name",
+        "kind",
+        "classified_by",
+        "axes_path"
+      ],
+      "title": "_RecordedResult",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/_RecordedResult"
+    },
+    {
+      "$ref": "#/$defs/_NeedsLlmTreeResult"
+    }
+  ]
+}

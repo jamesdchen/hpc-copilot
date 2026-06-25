@@ -120,6 +120,20 @@ If ambiguities accumulated, return `needs_resolution`. Else return the tick's re
 }
 ```
 
+## Strategy authoring contract
+
+A closed-loop (path `"B"`) campaign's `.hpc/tasks.py` **is** the strategy. Get it by running `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir <experiment_dir>` (see [scaffold-strategy](../../../../docs/primitives/scaffold-strategy.md)) — never hand-roll an `sbatch` controller, and **never `Read` the framework's `optuna_strategy.py` / `pbt_strategy.py` from site-packages to learn the contract.** It is stated here, load-bearing. The scaffolded template already wires every invariant below; you customize **only the search space**.
+
+1. **ask/tell run ONLY on the orchestrator; compute nodes call ONLY `resolve(task_id)`.** The orchestrator's `_propose` does `study.tell(finished)` → `study.ask()` → persist strategy state (Optuna SQLite under `.hpc/campaigns/<cid>/`). The optimizer import is **local to `_propose`** so a compute node never imports it; the compute node reads the already-decided proposal file and never `ask`s. Indexing proposals by *completed count* (not by counting on-disk artifacts) keeps `_propose` load-idempotent — `validate-campaign`, `dry-run-local`, and `compute_cmd_sha` all import the module and would otherwise mint a phantom trial per load.
+
+2. **`.hpc/tasks.py` IS the strategy; `trial_token` is the reconciliation key.** Whatever `resolve(i)` returns reaches the executor as `HPC_KW_*` env vars (e.g. `{"lr": 1e-3}` → `$HPC_KW_LR`). The one reserved key is `trial_token`: it is **stripped from `cmd_sha`** (parameter identity, so it never busts dedup) but **still exported** as `$HPC_KW_TRIAL_TOKEN`, round-tripped to the run sidecar, and re-paired with that iteration's results. It is the out-of-order `tell` key — opaque bytes the framework never interprets (`trial.number` for Optuna; `[generation, member]` for PBT).
+
+3. **Custom reduce is an `aggregate_cmd` on the sidecar, run cluster-side.** When the fold needs experiment-specific logic, set an `aggregate_cmd` (env-var I/O: it reads `$HPC_RUN_ID`, writes its one JSON to `$HPC_AGGREGATED_OUTPUT`). It runs on the cluster and pulls back **one** JSON — the per-trial-metrics fold — so there is no N-task rsync back to the orchestrator.
+
+4. **Batch case (B trials per iteration): the strategy owns ask/tell internally.** `total()` returns B (e.g. PBT's `_POP` members per generation); the strategy reads the prior batch's results, `tell`s all B, then `ask`s the next B. The per-iteration reduce must therefore emit **per-trial metrics keyed by `trial_token`**, NOT one scalar — that is what lets the next `_propose` reconcile each trial.
+
+5. **The campaign loop is synchronous-batched BY DESIGN.** Per [campaign-lifecycle.md](../../../../docs/internals/campaign-lifecycle.md) (TL;DR): the driver advances **exactly one step per invocation**, reconstructs all state from `.hpc/` each tick, and survives crashes (memory-stateless tick model). The default is synchronous-batched; concurrency **within a batch** comes from `decide-concurrency`, not from the strategy. Continuous-async refill (keep the cluster full by submitting new trials as others finish) is a **separate, deferred feature tracked in issue #362** — do NOT implement async here.
+
 ## Notes
 
 - **One tick per invocation.** The skill does NOT loop. The caller (slash, cron, or MARs experiment-runner) drives ticks.

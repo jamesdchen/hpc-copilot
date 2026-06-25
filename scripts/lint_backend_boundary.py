@@ -92,10 +92,22 @@ FORBIDDEN_BACKEND_MODULES: frozenset[str] = frozenset(
 )
 
 # Documented, cited exceptions — ``(orchestrator_rel_path, concrete_module)``
-# pairs the rule deliberately permits. Empty today: the current tree has
-# zero orchestrator imports of a concrete backend module (#337). Add an
-# entry only as a reviewed boundary decision, with a comment citing why.
-ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
+# pairs the rule deliberately permits. Add an entry only as a reviewed boundary
+# decision, with a comment citing why.
+#
+# #S5 / incident 6 (deployment-consistency guard): the post-deploy executor-
+# existence preflight and the REPO_DIR↔deploy-target single derivation are
+# module-level remote/deploy utilities (``deploy_target_for`` /
+# ``executor_script_path`` / ``preflight_executor_exists``) co-located with the
+# remote backend base. ``build_submit_spec`` and ``submit_flow`` reach for them
+# to verify the deploy *before* scheduling — routing through the HPCBackend
+# interface would not fit (these are not per-backend methods).
+ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("incorporation/build/submit_spec.py", "hpc_agent.infra.backends._remote_base"),
+        ("ops/submit_flow.py", "hpc_agent.infra.backends._remote_base"),
+    }
+)
 
 
 def _module_package(rel: str) -> str:

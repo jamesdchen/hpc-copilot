@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/apply_safe_defaults.output.json",
+  "title": "apply-safe-defaults output",
+  "description": "The result of auto-filling: merged ``resolved`` plus what stayed open.",
+  "type": "object",
+  "required": [
+    "resolved",
+    "applied",
+    "still_unresolved",
+    "all_resolved"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "resolved": {
+      "additionalProperties": true,
+      "description": "The input `resolved` merged with every applied safe_default.",
+      "title": "Resolved",
+      "type": "object"
+    },
+    "applied": {
+      "additionalProperties": true,
+      "description": "field → value for each ambiguity auto-filled from its safe_default.",
+      "title": "Applied",
+      "type": "object"
+    },
+    "still_unresolved": {
+      "description": "Fields that could NOT be auto-filled — a REQUIRED_CALLER_FIELDS member (no safe_default by partition), or an ambiguity whose safe_default was absent. These remain for the caller; chiefly goal / task_generator.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Still Unresolved",
+      "type": "array"
+    },
+    "all_resolved": {
+      "description": "True iff still_unresolved is empty (the spec is ready to hand off).",
+      "title": "All Resolved",
+      "type": "boolean"
+    }
+  }
+}

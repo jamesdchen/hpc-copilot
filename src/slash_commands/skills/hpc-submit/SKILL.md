@@ -1,6 +1,6 @@
 ---
 name: hpc-submit
-description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off via `hpc-agent run --workflow submit`. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
+description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off via `hpc-agent run --workflow submit`. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults via `apply-safe-defaults`) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
 allowed-tools: Bash Read Write Skill Agent
 execution: inline
 category: agent-autonomous
@@ -30,7 +30,7 @@ The slash `/submit-hpc` is the human-interview wrapper; external autonomous agen
 | `data_axis` | Caller, or invoke `hpc-classify-axis` sub-skill if no classification for current run_signature_sha |
 | `homogeneous_axes` | Caller, or invoke `hpc-build-executor` (axes-init companion) if no `.hpc/axes.yaml` |
 | `frozen_configs` | Caller, or detect from `configs/*.yaml` |
-| `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented) |
+| `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented). Adaptive sweeps (Optuna ask-tell / PBT / Hyperband) are NOT a `task_generator` → route to `hpc-campaign` + `scaffold-strategy`. |
 | `on_task_generator_mismatch` | Caller (default `fail`; `refresh` is the explicit opt-in — see Step 3) |
 | `walltime_sec` | Caller, or auto-resolve from runtime priors (p95 × safety_mult) |
 | `gpu_type` | Caller, or first GPU in `clusters.<cluster>.gpu_types` |
@@ -201,7 +201,7 @@ If the ambiguities list is non-empty:
 }
 ```
 
-The caller resolves every entry (slash walks user dialogs; autonomous caller applies safe_defaults) and re-invokes this skill with the augmented spec. The skill walks the same resolution steps; the caller-supplied fields now make Steps 2-5 short-circuit; the ambiguities list comes back empty; the skill proceeds to Step 8.
+The caller resolves every entry and re-invokes this skill with the augmented spec. The **slash** path walks user dialogs. The **autonomous** path runs the deterministic resolution verbs rather than hand-filling: `walk-submit-ambiguities` produces the `{resolved, ambiguities}` envelope, then `apply-safe-defaults` fills each ambiguity from its `safe_default`. The single field partition (`ops/submit/field_partition.py`) gives `goal` and `task_generator` **no** `safe_default`, so `apply-safe-defaults` structurally cannot fabricate them — an unresolved `goal`/`task_generator` stays `spec_invalid` and escalates (the incident-1b lock: the framework never invents a sweep). The skill then walks the same steps; caller-supplied fields short-circuit Steps 2-5; the ambiguities list comes back empty; proceed to Step 8.
 
 ### 8. Build the fields JSON
 

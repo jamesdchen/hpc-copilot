@@ -1,7 +1,7 @@
 ---
 name: hpc-wrap-entry-point
 description: "Onboard a repo for hpc-agent submission, autonomously. Given a partial `InterviewSpec` (goal + task_generator are required from the caller; everything else is detected from the repo), the skill: (a) detects an existing entry point or scaffolds one via `build-template --shape {script,notebook}` for greenfield repos, (b) prefers `@register_run` direct decoration on the user's existing function and falls back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration is structurally blocked (non-Python entry point, `@hydra.main` signature rewrite, vendor code), (c) detects frozen YAML configs by convention, (d) walks the data-axis decision tree, (e) invokes the `interview` primitive to persist `tasks.py` + `interview.json`. No `[Y/n]` prompts — every choice point has a deterministic resolution. Human-driven callers (the `/wrap-entry-point-hpc` slash) gather intent from the user *first* and pass a fully-resolved spec; the skill records what it was given."
-allowed-tools: Bash Read Edit Write Glob
+allowed-tools: Bash Read Write Glob
 execution: inline
 category: agent-autonomous
 ---
@@ -94,41 +94,38 @@ Deterministic decision table:
 
 | Condition | Pathway |
 |---|---|
-| Python-importable function the caller can edit — even one that currently parses `sys.argv` via argparse | **Step 3a** (direct decoration) |
+| Python function whose params are already real kwargs (body does NOT parse `sys.argv`) | **Step 3a** (direct decoration via the `decorate-entry-point` verb) |
+| Python function whose body parses `sys.argv` (an argparse `main()`) | **Step 3b** / `python_module` — the verb decorates an existing kwarg'd function; it does NOT refactor a `main()` |
 | Non-Python entry point (shell script, compiled binary) | **Step 3b** (wrapper fallback) |
 | `@hydra.main` on the entry point (rewrites the signature; `@register_run` cannot see through it) | **Step 3b** (wrapper fallback) |
 | `@click.command` / `@app.command` that consumes the function (typer/click decorator forms that swap the callable) | **Step 3b** (wrapper fallback) |
 | Caller's spec sets `entry_point.kind = "shell_command"` explicitly | **Step 3b** (wrapper fallback) |
 
-`@click.command` and Typer commands are auto-detected by reading the decorator stack. When the decorator stack is `[@register_run, @click.command]`-compatible (click leaves the underlying callable intact for some shapes), 3a is still safe; only the consuming forms force 3b.
+`@click.command` / `@app.command` / `@hydra.main` are auto-detected by the `decorate-entry-point` verb (it reads the decorator stack). The verb conservatively refuses every `*.command` / `*.group` / `hydra.main` form with `spec_invalid` and routes it to 3b — over-refusal is safe because the 3b wrapper always works, whereas decorating through a signature-rewriting decorator silently produces an executor the framework can't introspect.
 
 ### 3a. `@register_run` direct decoration (the default path)
 
-Apply the two-line edit autonomously. The decorator goes on the function the framework should treat as the entry point — not on the `if __name__ == "__main__":` block, but on the function it ultimately calls.
+Decoration is a **deterministic verb** — do NOT edit the file by hand. (An
+`Edit`-tool decoration once rewrote a scaffold's whole body into experiment
+logic; that affordance is removed — the skill no longer carries `Edit`.) Invoke:
 
-**Common shape: argparse-driven `main()` reading `sys.argv`.** Factor out an inner function and decorate it; keep the argparse block so the CLI still works:
-
-```python
-# train.py
-from hpc_agent import register_run
-
-@register_run
-def run(config: str, seed: int) -> None:
-    # ... the body that used to live below argparse.parse_args() ...
-    ...
-
-if __name__ == "__main__":
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--seed", type=int, required=True)
-    args = ap.parse_args()
-    run(config=args.config, seed=args.seed)
+```bash
+hpc-agent decorate-entry-point --path <file> --function-name <run_name>
 ```
 
-**Shape: function already takes kwargs.** Just add the import and the decorator — no refactor.
+The verb is a bounded AST line-splice: it inserts `from hpc_agent import register_run`
+(when absent) and `@register_run` onto the named function, leaving the body
+**byte-identical**. The decorator lands on the function the framework ultimately
+calls — never the `if __name__ == "__main__":` block.
 
-Apply the edit via the `Edit` tool (autonomous; no confirmation). Record the picked `run_name` (the function name) and proceed to Step 4. Step 7's interview carries `entry_point.kind = "register_run"`.
+**Scope: the verb decorates a function whose parameters are already real kwargs.**
+It does NOT refactor. If the envelope is `spec_invalid` (function not found, or a
+signature-rewriting decorator like `@hydra.main` / a consuming `@click.command`),
+route to **Step 3b** (wrapper fallback) or the `python_module` path — never
+hand-edit a `main()` that parses `sys.argv` into an inner function.
+
+On success, record the picked `run_name` (the function name) and proceed to
+Step 4. Step 7's interview carries `entry_point.kind = "register_run"`.
 
 ### 3b. Wrapper materialization (fallback path)
 
@@ -173,6 +170,8 @@ The entry point handles *one task*. The `task_generator` enumerates the **N task
 | `numeric_linspace` / `numeric_logspace` | Sweep one numeric hyperparameter | `param="lr", low, high, n` |
 
 The skill does **not** invent a `task_generator` — refuse with `spec_invalid` if absent. (The slash command elicits this from the user; MARs supplies it explicitly.)
+
+**Fixed enumeration vs. adaptive sweep.** The shapes above enumerate a *fixed* task set up front. If the sweep is **adaptive** — each batch's hyperparameters depend on prior results (Bayesian optimization / Optuna ask-tell, PBT, Hyperband) — it is NOT a `task_generator`: route to **`hpc-campaign`** and materialize the strategy with **`hpc-agent scaffold-strategy --name {optuna,pbt}`**. The framework drives the submit→monitor→aggregate→decide loop and owns the ask/tell contract (see the hpc-campaign strategy-authoring contract). Do NOT hand-roll a campaign controller or reverse-engineer the strategy from source.
 
 ### 5b. Cover non-axis required params (fixed_params)
 

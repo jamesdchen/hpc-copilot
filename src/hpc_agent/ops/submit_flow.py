@@ -319,6 +319,7 @@ def _run_shared_prelude(
     requires_ssh: bool = True,  # SSH is the default transport; pure-API callers pass False
     skip_preflight: bool,
     skip_prelude_io: bool,
+    per_task_executors: list[str] | None = None,
 ) -> None:
     """Connectivity gate, then rsync+deploy CONCURRENT with the uv probe (#280).
 
@@ -400,6 +401,85 @@ def _run_shared_prelude(
             raise uv_exc
         if deploy_exc is not None:
             raise deploy_exc
+
+    # S5 / incident 6: post-deploy, pre-canary remote existence preflight — the
+    # missing layer. The deploy arm above just landed the tree at remote_path;
+    # before any canary/array is scheduled, one cheap ``test -f
+    # "$REPO_DIR/<executor-file>"`` per distinct per-task executor surfaces a
+    # REPO_DIR/deploy mismatch (or a misnamed/absent executor) in seconds rather
+    # than a full scheduler round-trip later (the dispatcher_failed class the
+    # live canary hit). Skipped when the rsync+deploy arm was skipped
+    # (``skip_prelude_io`` — the tree wasn't (re)deployed this call, so there is
+    # nothing freshly-deployed to verify; a prior phase already deployed and
+    # verified it). Only the per-task executors that carry a checkable ``.py``
+    # script token actually issue a probe (see preflight_executor_exists), so the
+    # canonical ``python3 -c "..."`` one-liner path no-ops.
+    if not skip_prelude_io and per_task_executors:
+        _run_executor_existence_preflight(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            executors=per_task_executors,
+        )
+
+
+def _collect_per_task_executors(
+    experiment_dir: Path,
+    specs: list[SubmitFlowSpec],
+    fresh_indices: list[int],
+) -> list[str]:
+    """Read each fresh spec's per-task executor from its on-disk sidecar.
+
+    The sidecars were written by ``_ensure_run_sidecar`` just above this call,
+    so the REAL per-task command (``executor``) is on disk for every fresh spec.
+    A sidecar that can't be read / lacks a runnable executor contributes nothing
+    — the existence preflight is best-effort defense-in-depth, never a hard
+    precondition (the dispatcher-self-recursion / write-first guards already
+    own the "sidecar must carry a real executor" contract).
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    executors: list[str] = []
+    for i in fresh_indices:
+        try:
+            sidecar = read_run_sidecar(experiment_dir, specs[i].run_id)
+        except Exception:  # noqa: BLE001 — unreadable sidecar → contribute nothing
+            continue
+        executor = sidecar.get("executor") if isinstance(sidecar, dict) else None
+        if _is_runnable_executor(executor):
+            executors.append(str(executor))
+    return executors
+
+
+def _run_executor_existence_preflight(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    executors: list[str],
+) -> None:
+    """``test -f "$REPO_DIR/<executor-file>"`` for each distinct per-task executor.
+
+    Delegates the extraction + probe + typed error to
+    :func:`hpc_agent.infra.backends._remote_base.preflight_executor_exists`,
+    which owns the ``shlex.split`` script extraction and the REPO_DIR derivation
+    (one owner with build-submit-spec's REPO_DIR ↔ deploy-target invariant). The
+    production ``ssh_run`` is injected so the SSH round-trip is mockable in
+    tests. De-dups identical executor strings so a batch sharing one command
+    issues a single probe.
+    """
+    from hpc_agent.infra.backends._remote_base import preflight_executor_exists
+    from hpc_agent.infra.remote import ssh_run
+
+    seen: set[str] = set()
+    for executor in executors:
+        if not executor or executor in seen:
+            continue
+        seen.add(executor)
+        preflight_executor_exists(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            executor=executor,
+            ssh_run=ssh_run,
+        )
 
 
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster
@@ -1958,6 +2038,14 @@ def _submit_flow_batch_locked(
     # rsync+deploy arm is dropped; the uv probe still runs.
     ssh_target, remote_path = next(iter(targets))
     skip_prelude_io = skip_rsync_deploy
+    # S5 / incident 6: collect the per-task executors from the sidecars written
+    # above (one per fresh spec) so the prelude can ``test -f
+    # "$REPO_DIR/<executor-file>"`` after deploy. The sidecar's ``executor`` is
+    # the REAL per-task command (``cd "$REPO_DIR" && <executor>``), unlike
+    # job_env["EXECUTOR"] which is the dispatcher; the former is what must exist
+    # under REPO_DIR. A sidecar that can't be read contributes nothing (the probe
+    # simply skips it) — the check is best-effort defense-in-depth.
+    per_task_executors = _collect_per_task_executors(experiment_dir, specs, fresh_indices)
     _run_shared_prelude(
         experiment_dir=experiment_dir,
         ssh_target=ssh_target,
@@ -1973,6 +2061,7 @@ def _submit_flow_batch_locked(
         requires_ssh=backend_requires_ssh(specs[0].backend) if specs else True,
         skip_preflight=skip_preflight,
         skip_prelude_io=skip_prelude_io,
+        per_task_executors=per_task_executors,
     )
 
     # Per-spec submission work.

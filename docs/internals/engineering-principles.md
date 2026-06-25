@@ -59,6 +59,52 @@ must demonstrate its fire path in a test (see
 and `tests/scripts/test_lint_library_knowledge.py` — each rule is exercised
 against a synthetic violation).
 
+## The determinism boundary: judgment in the LLM, mechanism in verbs
+
+An autonomous worker should perform only *genuine judgment* — the free-text
+intent it relays (a campaign `goal`), long-tail classification a matcher can't
+resolve, choosing among real candidate ambiguities. Every step whose outcome is
+fixed by a rule belongs in a **composed verb**, not in skill prose the model
+executes: authoring source or spec files, sequencing a deterministic verb chain,
+resolving a field that has a known default, deriving a path. And every
+agent-facing capability and contract must be reachable through a verb or a doc
+the worker prompt points at — the worker must never read framework source (or
+`inspect.getsource`) to learn a contract, nor hand-roll a capability the
+framework already provides.
+
+The enforcement is **removing the affordance**, not adding prose. Prose ("apply
+a two-line edit", "do not invent a task_generator") is honor-system: the model
+rationalizes around it under pressure. Observed failures that prose did not hold:
+an `Edit`-tool decoration step that rewrote a scaffold's whole function body; a
+fabricated `task_generator` justified by "autonomous mode applies safe_defaults";
+a hand-sequenced classify pipeline mislabelled "in parallel" across a strict
+producer→consumer dependency; a hand-rolled SLURM campaign controller and a
+strategy contract reverse-engineered from site-packages source. Each is the same
+root cause in a different face — **authoring / sequencing / discovery** — and
+each fix takes the same shape: a bounded verb does the deterministic step, and
+the tool or surface that allowed freelancing is removed (no `Edit` in onboarding
+skills; the strategy is materialized by `scaffold-strategy`, not copied from
+source; the preflight→classify chain is one `classify-axis-auto` call, not
+hand-sequenced; the submit resolution applies safe-defaults via a deterministic
+verb whose field partition refuses to fabricate a `task_generator`).
+
+A guard the LLM itself satisfies is not a guard. A provenance marker claiming
+"this task_generator was caller-supplied" was rejected for exactly this reason
+(see "Verify a guard can actually fire") — the same model that fabricates the
+value sets the marker. The lock is the missing affordance plus a deterministic
+field partition (`ops/submit/field_partition.py`) whose `Ambiguity` refuses a
+safe-default on a required-caller field — a guard that *can* fire.
+
+### Enforcement map
+
+Rows accrue per surface as the verbs land; the first two ship with the
+`decorate-entry-point` surface.
+
+| Rule | Enforced by | Fires when |
+|---|---|---|
+| Onboarding skills carry no `Edit` (decoration is a verb, not free-form source editing) | `tests/contracts/test_onboarding_skill_no_edit.py` | the `hpc-wrap-entry-point` skill's `allowed-tools` lists `Edit` |
+| `decorate-entry-point` leaves the function body byte-identical | `tests/incorporation/test_decorate_entry_point.py::test_decorates_and_leaves_body_byte_identical` | the AST splice changes any line other than the inserted import + decorator |
+
 ## Library knowledge in core: the four-question boundary test
 
 hpc-agent's core is *experiment*-agnostic, not *software*-agnostic: it never
