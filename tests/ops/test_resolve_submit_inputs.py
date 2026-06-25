@@ -128,7 +128,51 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     assert bs.call_args.kwargs["spec"].run_id == "ridge-abcd1234"
     assert ws.call_args.kwargs["spec"].run_id == "ridge-abcd1234"
     assert ws.call_args.kwargs["spec"].cmd_sha == "a" * 64
+    # No interview.json here → the caller-supplied executor stands (the
+    # deterministic override is a no-op on the canonical no-interview path).
+    assert ws.call_args.kwargs["spec"].executor == "python -m src.ridge --alpha $alpha"
     bt.assert_not_called()  # tasks.py present → no scaffold
+
+
+def test_resolved_overrides_executor_from_materialized_interview(tmp_path: Path) -> None:
+    """When interview.json materialized a per-task executor_cmd (a python_module's
+    run-module dispatch), CODE resolves it and it WINS over the caller-supplied
+    sidecar.executor — executor selection never rides on the LLM, so the agent
+    can't divine a broken `python3 -m <module>` (the ridge_imp exit-127 class)."""
+    import json as _json
+
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    materialized_cmd = "python3 -m hpc_agent.executor_cli run-module my_pkg.train:main"
+    (tmp_path / "interview.json").write_text(
+        _json.dumps(
+            {
+                "_materialized": {
+                    "entry_point": {
+                        "kind": "python_module",
+                        "module": "my_pkg.train",
+                        "function": "main",
+                        "executor_cmd": materialized_cmd,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value={"x": 1}),
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "resolved"
+    # The caller passed executor="python -m src.ridge --alpha $alpha"; the
+    # materialized run-module command overrides it deterministically.
+    assert ws.call_args.kwargs["spec"].executor == materialized_cmd
 
 
 def test_terminal_failed_prior_is_not_live_proceeds_fresh(tmp_path: Path) -> None:

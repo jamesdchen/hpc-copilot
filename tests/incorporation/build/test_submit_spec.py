@@ -486,6 +486,24 @@ def test_accepts_run_module_executor_form(tmp_path, monkeypatch: pytest.MonkeyPa
     assert spec["job_env"]["EXECUTOR"] == cmd
 
 
+def test_check_per_task_executor_rejects_bare_module_function() -> None:
+    """The SIDECAR per-task executor validator (what the dispatcher actually
+    reads) rejects a bare ``module:function`` — the ridge_imp exit-127 field
+    where a divergent build stamped ``hpc_wrappers.ridge_imp:ridge_imp``."""
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    with pytest.raises(errors.SpecInvalid, match="module:function"):
+        check_per_task_executor("hpc_wrappers.ridge_imp:ridge_imp")
+
+
+def test_check_per_task_executor_accepts_run_module_form() -> None:
+    """The correct run-module dispatch (a full ``python3 -m`` command) passes the
+    sidecar validator — multiple tokens, not a lone module:function."""
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    check_per_task_executor("python3 -m hpc_agent.executor_cli run-module my_pkg.train:main")
+
+
 def test_register_run_guard_resolves_script_against_experiment_dir(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

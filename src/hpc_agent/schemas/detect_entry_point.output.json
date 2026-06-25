@@ -47,7 +47,7 @@
       "additionalProperties": false,
       "title": "MaterializedEntryPoint",
       "type": "object",
-      "description": "The worker-facing subset of ``interview.json``'s ``_materialized.entry_point`` block. ``kind`` selects the Step 0b procedure: ``shell_command`` short-circuits Step 1's discover scan (honor the wrapper at ``wrapper_path``, use ``executor_cmd`` as the EXECUTOR, feed ``data_axis`` into axes.yaml if present); ``register_run`` / ``python_module`` are pointers that fall through to normal discovery. Only the fields the source block declares are present (the internal ``frozen_shas`` identity detail is intentionally omitted).",
+      "description": "The worker-facing subset of ``interview.json``'s ``_materialized.entry_point`` block. ``kind`` selects the Step 0b procedure: ``shell_command`` and ``python_module`` short-circuit Step 1's discover scan (honor the materialized wrapper / dotted module; the per-task executor is ``executor_cmd``, which ``resolve-submit-inputs`` writes into the sidecar in code, feed ``data_axis`` into axes.yaml if present); ``register_run`` is a pointer that falls through to normal discovery. Only the fields the source block declares are present (the internal ``frozen_shas`` identity detail is intentionally omitted).",
       "required": [
         "kind"
       ],
@@ -60,7 +60,7 @@
           ],
           "type": "string",
           "title": "Kind",
-          "description": "The materialized entry-point shape. ``shell_command``: a thin ``@register_run`` wrapper was materialized (the fallback path) — skip Step 1's discover scan. ``register_run`` / ``python_module``: pointers to a function the worker resolves through normal Step 1 discovery (no wrapper to honor)."
+          "description": "The materialized entry-point shape. ``shell_command``: a thin ``@register_run`` wrapper was materialized (the fallback path) — skip Step 1's discover scan. ``python_module``: an importable ``module``:``function`` targeted by dotted path — also skip discovery (no ``@register_run`` to find); its per-task executor is ``executor_cmd`` (a ``run-module`` dispatch). ``register_run``: a pointer to a decorated function the worker resolves through normal Step 1 discovery."
         },
         "run_name": {
           "type": "string",
@@ -75,7 +75,7 @@
         "executor_cmd": {
           "type": "string",
           "title": "Executor Cmd",
-          "description": "The per-task EXECUTOR command for this entry point (``shell_command`` and ``register_run`` kinds). Use it as the Step 6 ``job_env`` EXECUTOR instead of synthesizing one from ``discover-executors``."
+          "description": "The per-task executor command for this entry point (``shell_command``, ``register_run``, and ``python_module`` kinds). ``resolve-submit-inputs`` writes it into the sidecar's ``executor`` field deterministically from the materialized block, so the worker does not synthesize one from ``discover-executors`` or divine a ``python3 -m <module>`` (the ridge_imp exit-127 class)."
         },
         "module": {
           "type": "string",

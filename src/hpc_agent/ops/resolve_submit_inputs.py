@@ -46,6 +46,7 @@ I/O contracts:
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -72,6 +73,39 @@ __all__ = ["resolve_submit_inputs"]
 # live — the chain proceeds as fresh and re-submits over it (mirrors
 # submit.md Step 6c branching).
 _LIVE_PRIOR_STATUSES: frozenset[str] = frozenset({"complete", "in_flight"})
+
+
+def _materialized_executor_cmd(experiment_dir: Path) -> str | None:
+    """The per-task executor the interview materialized, if any — read in CODE.
+
+    The interview persists ``_materialized.entry_point.executor_cmd`` for every
+    entry kind that has a deterministic per-task command: ``shell_command``'s
+    wrapper, ``register_run``, and ``python_module``'s ``run-module`` dispatch.
+    Resolving it here keeps executor selection out of the LLM — the orchestrator
+    never threads it into ``spec.sidecar.executor`` (and so can't divine a broken
+    ``python3 -m <module>`` for a ``python_module`` entry, the ridge_imp exit-127
+    class). The interview is the source of truth, so its command WINS over a
+    caller-supplied one when present.
+
+    Defensive, mirroring ``submit_flow``'s ``interview.json`` read (#195): a
+    missing / unreadable / non-object / ``executor_cmd``-less ``interview.json``
+    returns ``None`` and the caller-supplied executor stands — the canonical
+    bare-``@register_run`` path (no interview) is unchanged.
+    """
+    path = experiment_dir / "interview.json"
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    entry = (doc.get("_materialized") or {}).get("entry_point")
+    if not isinstance(entry, dict):
+        return None
+    cmd = entry.get("executor_cmd")
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
 @primitive(
@@ -189,11 +223,15 @@ def resolve_submit_inputs(
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`
     #    output is fully submit-ready. Same run_id/cmd_sha injection (after the
     #    find-prior-run resume check cleared, so no sidecar is written for a
-    #    resume-or-escalate path).
-    written = write_run_sidecar(
-        experiment_dir=experiment_dir,
-        spec=spec.sidecar.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
-    )
+    #    resume-or-escalate path). The per-task executor is resolved in CODE from
+    #    the interview's materialized entry point when present (see
+    #    _materialized_executor_cmd) — so it's the framework, not the LLM, that
+    #    decides a python_module dispatches via run-module.
+    sidecar_spec = spec.sidecar.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha})
+    materialized_executor = _materialized_executor_cmd(experiment_dir)
+    if materialized_executor is not None:
+        sidecar_spec = sidecar_spec.model_copy(update={"executor": materialized_executor})
+    written = write_run_sidecar(experiment_dir=experiment_dir, spec=sidecar_spec)
 
     return ResolveSubmitInputsResult(
         stage_reached="resolved",

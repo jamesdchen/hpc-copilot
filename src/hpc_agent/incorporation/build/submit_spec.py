@@ -763,6 +763,13 @@ def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None
     known.
     """
     _check_executor_format_placeholders(executor)
+    # A bare ``module:function`` here is the ridge_imp exit-127 class: the
+    # dispatcher reads THIS field and execs it as a shell command, so a lone
+    # dotted-module:function (a hand-rolled / divergent-build sidecar) becomes
+    # command-not-found. The interview emits the correct ``run-module`` form and
+    # resolve-submit-inputs writes it deterministically; this is defense-in-depth
+    # at the field the dispatcher actually consumes.
+    _check_bare_module_executor(executor)
     if "$" in (executor or ""):
         _check_executor_kwarg_casing(executor, kwargs_keys=_resolve_kwargs_keys(experiment_dir))
 
