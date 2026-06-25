@@ -459,6 +459,33 @@ def test_accepts_bare_script_executor_for_non_register_run_file(
     assert spec["job_env"]["EXECUTOR"] == "python3 plain.py"
 
 
+def test_rejects_bare_module_function_executor(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare ``<module>:<function>`` EXECUTOR is refused at build time — it is
+    not a runnable command and exits 127 cluster-side (the ridge_imp incident,
+    where a divergent build stamped ``hpc_wrappers.ridge_imp:ridge_imp`` into the
+    sidecar). A python_module entry must dispatch through ``run-module``."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": "hpc_wrappers.ridge_imp:ridge_imp"},
+            )
+        )
+    msg = str(excinfo.value)
+    assert "module:function" in msg
+    assert "run-module" in msg  # points at the correct dispatch form
+
+
+def test_accepts_run_module_executor_form(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The correct ``run-module`` dispatch form is NOT a bare module:function
+    token (it's a full ``python3 -m …`` command), so the guard must not fire."""
+    monkeypatch.chdir(tmp_path)
+    cmd = "python3 -m hpc_agent.executor_cli run-module my_pkg.train:main"
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": cmd}))
+    assert spec["job_env"]["EXECUTOR"] == cmd
+
+
 def test_register_run_guard_resolves_script_against_experiment_dir(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

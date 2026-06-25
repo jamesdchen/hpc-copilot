@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "materialize_shell_wrapper",
+    "python_module_executor_cmd",
     "register_run_executor_cmd",
     "WrapperResult",
     "wrapper_executor_cmd",
@@ -280,6 +281,34 @@ def register_run_executor_cmd(
     if run_name is not None:
         parts += ["--run-name", shlex.quote(run_name)]
     return " ".join(parts)
+
+
+def python_module_executor_cmd(*, module: str, function: str = "main") -> str:
+    """Return the shell command to dispatch a ``python_module`` entry point.
+
+    The python_module entry point names an importable ``<module>:<function>``
+    (e.g. ``my_pkg.train:main``) — a plain, *undecorated* function the framework
+    introspects. Like :func:`register_run_executor_cmd`, the per-task command
+    routes through the deployed ``executor_cli`` so the cluster dispatcher's
+    ``HPC_KW_*`` contract reaches the function with coerced kwargs:
+    ``run-module`` imports the module by name (under ``$REPO_DIR`` on
+    ``PYTHONPATH``) and applies the same ``compute`` wrapper ``@register_run``
+    would inject.
+
+    Without this helper the materialized entry_point carried NO ``executor_cmd``
+    (the interview recorded ``{module, function}`` for introspection only), so a
+    python_module submission had no runnable per-task command — and a bare
+    ``module:function`` stamped into the sidecar gets exec'd as a shell command
+    and exits 127 (the ridge_imp class). ``output_file`` defaults to
+    ``$RESULT_DIR/metrics.json`` (handled inside ``run-module``), so a function
+    that just ``return``s a dict still lands its result on disk.
+
+    Unlike the wrapper / direct-decoration cases, the dispatch target is a
+    dotted *module name*, not a campaign-relative file path — nothing is
+    materialized and there is no path to make POSIX.
+    """
+    spec = f"{module}:{function}"
+    return f"python3 -m hpc_agent.executor_cli run-module {shlex.quote(spec)}"
 
 
 def _validate_solver(solver: Mapping[str, Any] | None) -> tuple[str, str | None] | None:

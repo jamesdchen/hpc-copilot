@@ -49,6 +49,7 @@ __all__ = [
     "deactivate_slice",
     "register_run",
     "RunSpec",
+    "make_compute",
     "save_artifact",
     "mpi_rank_world",
 ]
@@ -247,6 +248,29 @@ def register_run(func: Any = None, *, gpu: bool = False, mpi: bool = False) -> A
     if func is not None and callable(func):
         return decorate(func)
     return decorate
+
+
+def make_compute(
+    func: Callable[..., Any], *, gpu: bool = False, mpi: bool = False
+) -> Callable[[Any], None]:
+    """Build a ``compute(args)`` wrapper for *func* without registering it.
+
+    ``@register_run`` injects exactly this callable into a decorated module's
+    namespace (see :func:`register_run`). This factory builds the same wrapper
+    for an *undecorated* importable function — the ``python_module`` entry
+    point, dispatched cluster-side by ``executor_cli run-module``. Both paths
+    then share one ``HPC_KW_*`` coercion + result-writing body (#350/#351), so
+    a ``python_module`` task coerces env strings to annotated types and lands a
+    returned dict on disk exactly as a ``@register_run`` task does — no second
+    copy of that logic to drift.
+
+    Unlike applying the decorator, this does not mutate *func*'s module
+    namespace (no injected ``compute`` / ``_RUNS``): it only needs the
+    callable's signature + annotations, so it also works for callables that
+    are not module-level functions.
+    """
+    name = getattr(func, "__name__", "compute")
+    return _make_compute(RunSpec(func=func, name=name, gpu=gpu, mpi=mpi))
 
 
 def save_artifact(name: str, obj: Any) -> Path:

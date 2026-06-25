@@ -279,6 +279,11 @@ def build_submit_spec(
     # rolling extra_env or carrying a pre-fix interview, catch it here.
     if extra_env and "EXECUTOR" in extra_env:
         _check_register_run_executor(extra_env["EXECUTOR"], base_dir=experiment_dir)
+        # Sibling guard: a python_module entry must dispatch through
+        # ``run-module``, never as a bare ``<module>:<function>`` token — the
+        # latter is exec'd as a shell command and exits 127 (the ridge_imp
+        # incident). Catches a hand-rolled spec / stale divergent-build sidecar.
+        _check_bare_module_executor(extra_env["EXECUTOR"])
 
     job_name = job_name or profile
     if script is None:
@@ -485,6 +490,46 @@ def _check_register_run_executor(executor: str, *, base_dir: Path | None = None)
         "probably constructing the spec by hand or carrying an older "
         "interview from before the auto-generation fix. Re-run the "
         "interview (`hpc-agent setup` / `/submit-hpc`) to regenerate."
+    )
+
+
+# Matches a lone ``<dotted.module>:<function>`` token — the shape a divergent
+# build (or a hand-rolled spec) stamps for a python_module entry when it skips
+# the run-module dispatch. The module side is a dotted Python identifier path
+# and the function side a single identifier, so a Windows drive path (``C:\x``)
+# or a URL (``http://``) can't match: those carry a backslash/slash the class
+# excludes.
+_BARE_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_bare_module_executor(executor: str) -> None:
+    """Raise :class:`errors.SpecInvalid` if *executor* is a bare ``module:function``.
+
+    A ``python_module`` entry point must dispatch via
+    ``python3 -m hpc_agent.executor_cli run-module <module>:<function>`` — never
+    the bare ``<module>:<function>`` token alone. The bare form reaches the
+    cluster as the per-task command, is exec'd as a shell command, and exits 127
+    (command not found): the ridge_imp incident, where a divergent local build
+    materialized ``hpc_wrappers.ridge_imp:ridge_imp`` into the sidecar's
+    ``executor``. The interview's python_module branch emits the correct
+    ``run-module`` form (:func:`wrap_entry_point.python_module_executor_cmd`);
+    this guard catches a hand-rolled spec or a stale/divergent-build sidecar.
+    """
+    try:
+        parts = shlex.split(executor)
+    except ValueError:
+        return  # unparseable shell — leave it to the cluster to surface
+    if len(parts) != 1 or not _BARE_MODULE_RE.match(parts[0]):
+        return
+    raise errors.SpecInvalid(
+        f"EXECUTOR is the bare module:function form {executor!r}, which is not a "
+        "runnable command — exec'd on the cluster it exits 127 (command not "
+        "found). A python_module entry point must dispatch through the deployed "
+        "executor_cli:\n"
+        f"  python3 -m hpc_agent.executor_cli run-module {executor}\n"
+        "The interview's python_module path generates this automatically; if "
+        "you're seeing this you're hand-rolling the spec or carrying a stale "
+        "sidecar from a divergent build. Re-run the interview (`/submit-hpc`)."
     )
 
 

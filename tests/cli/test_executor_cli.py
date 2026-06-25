@@ -22,6 +22,7 @@ from hpc_agent.executor_cli import (
     generic_args,
     gpu_args,
     main,
+    run_module,
     run_registered,
 )
 
@@ -272,8 +273,138 @@ def test_run_registered_missing_module_is_loud(
         run_registered(["nope.py"])
 
 
-def test_executor_cli_main_unknown_subcommand_returns_usage() -> None:
+# --------------------------------------------------------------------------- #
+# run-module: the deterministic python_module dispatcher (#351 follow-up)
+# --------------------------------------------------------------------------- #
+
+
+def test_run_module_coerces_env_strings_and_writes_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run-module imports an UNDECORATED function by dotted name, coerces
+    HPC_KW_* strings to its annotated types (the same #350 body run-registered
+    uses), and writes the returned dict to $RESULT_DIR/metrics.json — closing
+    the python_module gap (the entry kind that previously shipped no executor)."""
+    (tmp_path / "rm_train.py").write_text(
+        "def main(samples: int = 5, seed: int = 0) -> dict:\n"
+        "    return {'doubled': samples * 2, 'seed_type': type(seed).__name__}\n",
+        encoding="utf-8",
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+    # Strings, exactly as the cluster dispatcher exports them:
+    monkeypatch.setenv("HPC_KW_SAMPLES", "1000000")
+    monkeypatch.setenv("HPC_KW_SEED", "3")
+
+    assert run_module(["rm_train:main"]) == 0
+    metrics = json.loads((result_dir / "metrics.json").read_text())
+    assert metrics["doubled"] == 2_000_000  # coerced int, not "1000000" * 2
+    assert metrics["seed_type"] == "int"
+
+
+def test_run_module_via_dash_m_subprocess(tmp_path: Path) -> None:
+    """The real cluster invocation form — ``python -m hpc_agent.executor_cli
+    run-module my_pkg.train:main`` — resolves and runs end-to-end. This is the
+    exact argv ``python_module_executor_cmd`` stamps into the sidecar."""
+    pkg = tmp_path / "rm_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "train.py").write_text(
+        "def main(samples: int = 5) -> dict:\n    return {'doubled': samples * 2}\n",
+        encoding="utf-8",
+    )
+    result_dir = tmp_path / "out"
+    env = {
+        **os.environ,
+        "REPO_DIR": str(tmp_path),
+        "RESULT_DIR": str(result_dir),
+        "HPC_KW_SAMPLES": "21",
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "hpc_agent.executor_cli", "run-module", "rm_pkg.train:main"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((result_dir / "metrics.json").read_text())["doubled"] == 42
+
+
+def test_run_module_defaults_output_to_result_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No HPC_KW_OUTPUT_FILE → output_file defaults to $RESULT_DIR/metrics.json."""
+    (tmp_path / "rm_def.py").write_text(
+        "def main(seed: int = 0) -> dict:\n    return {'seed': seed}\n", encoding="utf-8"
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+    monkeypatch.setenv("HPC_KW_SEED", "7")
+
+    assert run_module(["rm_def:main"]) == 0
+    assert json.loads((result_dir / "metrics.json").read_text())["seed"] == 7
+
+
+def test_run_module_no_default_output_suppresses_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--no-default-output → the framework injects no output_file, so a dict
+    return has nowhere to land and no metrics.json is written."""
+    (tmp_path / "rm_nodef.py").write_text(
+        "def main(seed: int = 0) -> dict:\n    return {'seed': seed}\n", encoding="utf-8"
+    )
+    result_dir = tmp_path / "out"
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(result_dir))
+    monkeypatch.setenv("HPC_KW_SEED", "7")
+
+    assert run_module(["rm_nodef:main", "--no-default-output"]) == 0
+    assert not (result_dir / "metrics.json").exists()
+
+
+def test_run_module_malformed_spec_is_loud() -> None:
+    """A spec missing the ``<module>:<function>`` colon fails loudly with guidance."""
+    with pytest.raises(SystemExit, match="expected <module>:<function>"):
+        run_module(["just_a_module"])
+
+
+def test_run_module_missing_function_is_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A function absent from the module fails loudly (stale spec), not silently."""
+    (tmp_path / "rm_nofn.py").write_text("def other() -> dict:\n    return {}\n", encoding="utf-8")
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(tmp_path / "out"))
+    with pytest.raises(SystemExit, match="has no attribute"):
+        run_module(["rm_nofn:main"])
+
+
+def test_run_module_not_callable_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A target that exists but isn't callable fails loudly."""
+    (tmp_path / "rm_notcall.py").write_text("main = 42\n", encoding="utf-8")
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    monkeypatch.setenv("RESULT_DIR", str(tmp_path / "out"))
+    with pytest.raises(SystemExit, match="not callable"):
+        run_module(["rm_notcall:main"])
+
+
+def test_run_module_missing_module_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A module that doesn't import under $REPO_DIR fails with a clear message."""
+    monkeypatch.setenv("REPO_DIR", str(tmp_path))
+    with pytest.raises(SystemExit, match="cannot import"):
+        run_module(["rm_does_not_exist_xyz:main"])
+
+
+def test_executor_cli_main_unknown_subcommand_returns_usage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """`python -m hpc_agent.executor_cli <bogus>` returns a non-zero usage code,
-    and the helper-only import surface is never run by accident."""
+    the usage lists both dispatchers, and the helper-only import surface is
+    never run by accident."""
     assert main(["bogus"]) == 2
+    err = capsys.readouterr().err
+    assert "run-registered" in err and "run-module" in err
     assert main([]) == 2

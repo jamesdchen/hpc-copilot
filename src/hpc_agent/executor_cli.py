@@ -353,16 +353,132 @@ def run_registered(argv: list[str] | None = None) -> int:
     return 0
 
 
-_SUBCOMMANDS = {"run-registered": run_registered}
+# --------------------------------------------------------------------------- #
+# run-module: the deterministic python_module dispatcher (#351 follow-up)
+# --------------------------------------------------------------------------- #
+#
+# The ``python_module`` entry point names an *undecorated* importable function
+# by dotted path (``my_pkg.train:main``) — the framework introspects it but the
+# user never applied ``@register_run``, so there is no injected ``compute``.
+# Before this dispatcher the interview recorded ``{module, function}`` for
+# introspection only and emitted no executor_cmd, so a genuine python_module
+# submission shipped no runnable per-task command (a bare ``module:function``
+# would be exec'd as a shell command → command-not-found / exit 127, the
+# ridge_imp class). This is the symmetric counterpart of ``run-registered``:
+# import the module BY NAME (not by path), build the SAME compute wrapper for
+# the plain function via ``experiment_kit.make_compute``, and dispatch from the
+# ``HPC_KW_*`` contract — so coercion + result-writing is one body across both
+# entry kinds.
+
+
+def _load_module_by_name(module_name: str) -> Any:
+    """Import a dotted module name with ``$REPO_DIR`` on ``sys.path``.
+
+    The ``python_module`` entry point is an importable dotted path, not a file,
+    so this resolves it by name (the by-path :func:`_load_registered_module` is
+    the run-registered counterpart). ``REPO_DIR`` is prepended to ``sys.path``
+    to replicate the cluster's ``$REPO_DIR``-on-``PYTHONPATH`` context
+    (``hpc_preamble.sh``); it defaults to ``.`` so the entry runs locally under
+    test. Stdlib-only — same self-contained posture as the run-registered
+    loader, so module *resolution* never needs the rest of ``hpc_agent``.
+    """
+    import importlib
+    import os
+    import sys
+
+    repo_dir = os.path.abspath(os.environ.get("REPO_DIR", "."))
+    if repo_dir not in sys.path:
+        sys.path.insert(0, repo_dir)
+    # A previous attempt (before repo_dir was on the path) can leave a negative
+    # result in the finder caches; clear them so the inserted entry is consulted.
+    importlib.invalidate_caches()
+    try:
+        return importlib.import_module(module_name)
+    except Exception as exc:
+        # Genuine import failure (missing module, error inside it). Surface the
+        # cause as a clean dispatch error instead of a raw cluster traceback.
+        raise SystemExit(
+            f"[run-module] cannot import module {module_name!r} "
+            f"(REPO_DIR={os.environ.get('REPO_DIR', '.')!r}): "
+            f"{exc.__class__.__name__}: {exc}"
+        ) from exc
+
+
+def run_module(argv: list[str] | None = None) -> int:
+    """Dispatch one task to a ``python_module`` entry point (#351 follow-up).
+
+    ``python3 -m hpc_agent.executor_cli run-module <module>:<function>``. The
+    function is imported by dotted name and wrapped with the same
+    ``compute(args)`` factory ``@register_run`` injects
+    (:func:`hpc_agent.experiment_kit.make_compute`), so ``HPC_KW_*`` strings are
+    coerced to the function's annotated parameter types and a returned dict is
+    written to ``output_file`` — identical to ``run-registered``.
+
+    ``output_file`` defaults to ``$RESULT_DIR/metrics.json`` (``setdefault``, so
+    an explicit ``HPC_KW_OUTPUT_FILE`` from declared FLAGS still wins).
+    """
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(
+        prog="hpc_agent.executor_cli run-module",
+        description="Dispatch one task to a python_module entry point (#351 follow-up).",
+    )
+    parser.add_argument(
+        "module_spec",
+        help="Importable entry point as <module>:<function>, e.g. my_pkg.train:main "
+        "(module resolved against $REPO_DIR on the cluster).",
+    )
+    parser.add_argument(
+        "--no-default-output",
+        action="store_true",
+        help="Do not default output_file to $RESULT_DIR/metrics.json.",
+    )
+    args = parser.parse_args(argv)
+
+    module_name, sep, function_name = args.module_spec.rpartition(":")
+    if not sep or not module_name or not function_name:
+        raise SystemExit(
+            f"[run-module] expected <module>:<function>, got {args.module_spec!r} "
+            "(e.g. my_pkg.train:main)."
+        )
+
+    module = _load_module_by_name(module_name)
+    func = getattr(module, function_name, None)
+    if func is None:
+        raise SystemExit(
+            f"[run-module] module {module_name!r} has no attribute {function_name!r}; "
+            "the spec is stale — re-run the interview so the executor_cmd matches the module."
+        )
+    if not callable(func):
+        raise SystemExit(f"[run-module] {module_name}:{function_name} is not callable.")
+
+    # Function-local: module RESOLUTION above is stdlib-only, but the shared
+    # coercion seam lives in experiment_kit — the same dependency run-registered
+    # already requires on the cluster (the user's module imports register_run).
+    from hpc_agent.experiment_kit._runtime import make_compute
+
+    kwargs = _registered_kwargs()
+    if not args.no_default_output:
+        kwargs.setdefault(
+            "output_file",
+            os.path.join(os.environ.get("RESULT_DIR", "."), "metrics.json"),
+        )
+    make_compute(func)(argparse.Namespace(**kwargs))
+    return 0
+
+
+_SUBCOMMANDS = {"run-registered": run_registered, "run-module": run_module}
 
 
 def main(argv: list[str] | None = None) -> int:
     """``python -m hpc_agent.executor_cli <subcommand> ...`` entry point.
 
-    Only ``run-registered`` exists today (the deterministic ``@register_run``
-    dispatcher, #351). The declarative helper API above (``flag`` /
-    ``generic_args`` / ``build_parser_from_flags``) is import-only and
-    unaffected — importing this module never runs ``main``.
+    Two dispatchers exist: ``run-registered`` (the deterministic
+    ``@register_run`` dispatcher, #351) and ``run-module`` (its python_module
+    counterpart — a plain importable ``<module>:<function>``). The declarative
+    helper API above (``flag`` / ``generic_args`` / ``build_parser_from_flags``)
+    is import-only and unaffected — importing this module never runs ``main``.
     """
     import sys
 

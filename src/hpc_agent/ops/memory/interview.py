@@ -204,10 +204,23 @@ def record_interview(
             # Validate the module/function imports; surface the same spec_invalid
             # the rest of the interview uses so a typo is loud at intake.
             _validate_python_module_entry(ep, campaign_dir)
+            # Emit the per-task executor command the same way register_run does
+            # for its own entry. ``run-module`` imports the dotted module by name
+            # and applies the same compute wrapper @register_run injects. Without
+            # this the materialized entry_point carried no executor_cmd at all, so
+            # a python_module submission had no runnable per-task command (a bare
+            # ``module:function`` exec'd as a shell command exits 127).
+            from hpc_agent.incorporation.wrap_entry_point import (
+                python_module_executor_cmd,
+            )
+
+            module = ep["module"]
+            function = ep.get("function", "main")
             entry_point_materialized = {
                 "kind": "python_module",
-                "module": ep["module"],
-                "function": ep.get("function", "main"),
+                "module": module,
+                "function": function,
+                "executor_cmd": python_module_executor_cmd(module=module, function=function),
             }
         elif kind == "register_run":
             # Validate the named run is actually discoverable. ``discover_runs``

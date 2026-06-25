@@ -743,7 +743,9 @@ def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> N
 
 
 def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
-    """python_module pointer to an importable function: accepted; no wrapper."""
+    """python_module pointer to an importable function: accepted; no wrapper
+    materialized, but a deterministic ``run-module`` executor_cmd IS emitted
+    (the python_module entry used to ship none → no runnable per-task command)."""
     _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
@@ -756,7 +758,35 @@ def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
         "kind": "python_module",
         "module": "json",
         "function": "dumps",
+        "executor_cmd": "python3 -m hpc_agent.executor_cli run-module json:dumps",
     }
+
+
+def test_entry_point_python_module_executor_cmd_dispatches_via_run_module(tmp_path: Path) -> None:
+    """The python_module executor_cmd routes through the deployed executor_cli's
+    ``run-module`` dispatch — the symmetric counterpart of register_run's
+    ``run-registered``. This is what makes a python_module submission runnable;
+    without it the cluster had no valid per-task command (a bare
+    ``module:function`` exec'd as a shell command exits 127, the ridge_imp class).
+    Also pins the schema's ``function`` default ('main') flowing into the cmd."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    # A local importable module with a `main` so the (defaulted) function
+    # validates; campaign_dir is on sys.path during intake (#178).
+    (tmp_path / "pm_entry.py").write_text(
+        "def main(seed: int = 0) -> dict:\n    return {'seed': seed}\n", encoding="utf-8"
+    )
+    intent = _minimal_intent(
+        3,
+        entry_point={"kind": "python_module", "module": "pm_entry"},  # function omitted → 'main'
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    materialized = doc["_materialized"]["entry_point"]
+    assert materialized["function"] == "main"  # schema default
+    cmd = materialized["executor_cmd"]
+    assert cmd.startswith("python3 -m hpc_agent.executor_cli run-module ")
+    assert "python3 -c" not in cmd  # no brittle nested one-liner
+    assert cmd.endswith("pm_entry:main")
 
 
 def test_entry_point_shell_command_frozen_configs_without_generator_rejected(
