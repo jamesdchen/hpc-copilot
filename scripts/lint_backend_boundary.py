@@ -106,6 +106,13 @@ ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
     {
         ("incorporation/build/submit_spec.py", "hpc_agent.infra.backends._remote_base"),
         ("ops/submit_flow.py", "hpc_agent.infra.backends._remote_base"),
+        # ``inspect-deployment`` is the general case of S5's
+        # ``preflight_executor_exists`` — a read-only listing over the same
+        # throttled transport. It reuses the SAME ``deploy_target_for``
+        # REPO_DIR↔deploy-target derivation (one owner, no inline duplicate of
+        # ``remote_path.rstrip('/')``) to resolve the path from a run's
+        # journaled remote_path. Same reviewed boundary as the two callers above.
+        ("ops/inspect_deployment.py", "hpc_agent.infra.backends._remote_base"),
     }
 )
 

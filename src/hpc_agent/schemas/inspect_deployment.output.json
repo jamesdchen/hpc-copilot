@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/inspect_deployment.output.json",
+  "title": "InspectDeploymentReport",
+  "description": "Output ``data`` block for ``inspect-deployment`` (wraps inside the standard SuccessEnvelope's ``data`` field; see envelope.json).\n\nThe structured result of a single read-only, depth-bounded listing probe: the resolved target, whether it exists, and the (cluster-side capped) listing.",
+  "type": "object",
+  "required": [
+    "cluster",
+    "ssh_target",
+    "path",
+    "depth",
+    "exists",
+    "entries",
+    "entry_count",
+    "truncated"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "type": "string",
+      "title": "Cluster",
+      "description": "The cluster key the probe targeted."
+    },
+    "ssh_target": {
+      "type": "string",
+      "title": "Ssh Target",
+      "description": "The ``user@host`` (or OpenSSH alias) resolved from the cluster config — the throttled destination the probe ran against."
+    },
+    "path": {
+      "type": "string",
+      "title": "Path",
+      "description": "The absolute path that was probed (``REPO_DIR`` when derived from ``run_id``, else the supplied ``path``). Always strictly under the cluster scratch root."
+    },
+    "repo_dir": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repo Dir",
+      "description": "The derived ``REPO_DIR`` when the target came from ``run_id`` (``deploy_target_for(remote_path)``); ``null`` when an explicit ``path`` was probed."
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id",
+      "description": "The run id whose deployment was inspected, or ``null`` when an explicit ``path`` was probed."
+    },
+    "depth": {
+      "type": "integer",
+      "title": "Depth",
+      "description": "The ``find -maxdepth`` applied to the listing."
+    },
+    "exists": {
+      "type": "boolean",
+      "title": "Exists",
+      "description": "Whether the target path exists on the cluster (a non-existent target is reported here, not as an error)."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Entries",
+      "description": "The depth-bounded listing (absolute paths), sorted, capped cluster-side. Empty when the target is absent."
+    },
+    "entry_count": {
+      "type": "integer",
+      "title": "Entry Count",
+      "description": "Number of listing entries returned."
+    },
+    "truncated": {
+      "type": "boolean",
+      "title": "Truncated",
+      "description": "True when the listing hit the cluster-side line cap (the deployment has more entries than were returned)."
+    }
+  }
+}

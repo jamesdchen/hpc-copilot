@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/inspect_deployment.input.json",
+  "title": "InspectDeploymentSpec",
+  "description": "Input for the ``inspect-deployment`` primitive: a read-only, throttled probe of a deployed experiment tree on the cluster.\n\nReplaces raw ``ssh <host> \"ls /scratch1/...\"`` — which bypasses the #346 connection-storm hardening (ConnectTimeout / IdentitiesOnly / per-host safe_interval). The probe runs ``test -e`` + ``find -maxdepth N`` through the single throttled ``infra.remote.ssh_run`` seam: one connection per call, no caller-supplied command string, and the target path is confined strictly under the cluster's scratch root.\n\nExactly one of ``run_id`` / ``path`` selects the target.",
+  "type": "object",
+  "required": [
+    "cluster"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "minLength": 1,
+      "title": "Experiment Dir",
+      "type": "string",
+      "description": "Absolute path to the experiment directory (the one containing ``.hpc/``). Used to locate the journal when ``run_id`` is given. Defaults to the current working directory when omitted on the CLI."
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string",
+      "description": "Cluster key from ``clusters.yaml``. Resolves ``ssh_target`` (the throttled SSH destination) and ``scratch`` (the confinement root) for the probe."
+    },
+    "run_id": {
+      "type": "string",
+      "title": "Run Id",
+      "description": "Derive the probed path (``REPO_DIR``) from this run's journaled ``remote_path`` via the canonical ``deploy_target_for`` derivation. Mutually exclusive with ``path``."
+    },
+    "path": {
+      "type": "string",
+      "title": "Path",
+      "description": "Explicit absolute path to probe. MUST resolve strictly under the cluster's scratch root, or the call returns ``spec_invalid``. Mutually exclusive with ``run_id``."
+    },
+    "depth": {
+      "type": "integer",
+      "title": "Depth",
+      "minimum": 1,
+      "maximum": 4,
+      "default": 1,
+      "description": "``find -maxdepth`` for the listing (1..4, default 1). Bounded so a single call cannot become a deep-traversal storm."
+    }
+  }
+}

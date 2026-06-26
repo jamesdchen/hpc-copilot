@@ -515,6 +515,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent inspect-deployment [--experiment-dir <dir>] --cluster <cluster> [--run-id <run_id>] [--path <path>] [--depth <depth>]",
+    "idempotent": true,
+    "input_schema": "inspect_deployment.input.json",
+    "name": "inspect-deployment",
+    "output_schema": "inspect_deployment.output.json",
+    "python": "hpc_agent.ops.inspect_deployment.inspect_deployment",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Inspect a deployed experiment tree on the cluster (read-only, throttled): ls/find under REPO_DIR (--run-id) or an explicit scratch path (--path), through the connection-storm-safe ssh seam. Replaces raw `ssh <host> \"ls ...\"`, which bypasses the safe_interval / ConnectTimeout guards. Scratch-confined; no caller command string.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent inspect-parallel-axes [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "inspect_parallel_axes.input.json",

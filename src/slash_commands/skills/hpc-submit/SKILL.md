@@ -60,7 +60,7 @@ This means **one round-trip per workflow invocation** — the caller resolves ev
 hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]
 ```
 
-Composite verb that runs `install-commands` → `load-context` → (when `--cluster` is supplied) `check-preflight` in sequence. Folds the production-ssh-path check the bare TCP probe missed (TCP :22 open but `rsync push` failing mid-submit with `getsockname failed: Not a socket`).
+Composite verb that runs `install-commands` → `load-context` → (when `--cluster` is supplied) `check-preflight` in sequence. Folds the production-ssh-path check the bare TCP probe missed (TCP :22 open but the `rsync`-based push failing mid-submit with `getsockname failed: Not a socket`).
 
 The composite's `data` carries:
 

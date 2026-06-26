@@ -127,6 +127,13 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: lint-no-raw-ssh
+        name: agent-facing prose routes cluster access through throttled verbs, never raw ssh
+        entry: python scripts/lint_no_raw_ssh.py
+        language: python
+        pass_filenames: false
+        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_raw_ssh\.py)$'
+
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality
         entry: python scripts/lint_plugin_manifests.py

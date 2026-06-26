@@ -313,7 +313,7 @@ When the `verify_submitted_failed` stage surfaces a job in a failed state, or a 
 | Memory exceeded | Exceeded the memory limit | Resubmit with higher memory |
 | Walltime exceeded | Exceeded the time limit | Resubmit with longer walltime |
 | `ModuleNotFoundError` | Environment not set up | Check the modules / conda_env |
-| rsync / scp transfer failure | SSH key issue | Verify `ssh $SSH_TARGET hostname` first |
+| rsync / scp transfer failure | SSH key issue | Run `hpc-agent check-preflight --cluster <cluster>` first (it round-trips the production ssh path through the throttled seam — no raw ssh) |
 | `--<flag>` not recognized | The executor does not accept that argument | Check `--help`; the flag must be in the executor's `FLAGS` / CLI |
 
 If the requested run names a CLI flag the executor does not accept, record it in `anomalies` and stop before submitting — a missing flag fails every task in the array.

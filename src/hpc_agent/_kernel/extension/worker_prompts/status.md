@@ -31,6 +31,8 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
+**To see what was deployed on the cluster** (the experiment tree under `REPO_DIR`, or any scratch path), use `hpc-agent inspect-deployment --cluster <cluster> --run-id <run_id>` (or `--path <scratch-path>`, optional `--depth`). It is the read-only, throttled, scratch-confined listing verb — **never** reach for raw `ssh`/`scp`/`rsync` to inspect a deployment: raw ssh bypasses the connection-storm guards (`safe_interval` / `ConnectTimeout`) that only hold when all SSH flows through the framework.
+
 ## Steps
 
 1. **If `run_id` is unknown**, pick it from `data.in_flight` returned by Step 0 (filter by `profile`, `cluster`, or `submitted_at`). `list-in-flight` is the same data if you need a standalone call.

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**101 operations total**: 90 primitive atoms + 11 workflow atoms.
+**102 operations total**: 91 primitive atoms + 11 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (47)
+## `query` (48)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -49,6 +49,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`fetch-skill-return`](../primitives/fetch-skill-return.md) | ✓ | filesystem | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` | `_(none)_` | — | — |
 | [`find`](../primitives/find.md) | ✓ | _none_ | `hpc-agent find <query> [--limit <limit>]` | `_(none)_` | — | — |
 | [`find-prior-run`](../primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` | `_(none)_` | — | — |
+| [`inspect-deployment`](../primitives/inspect-deployment.md) | ✓ | ssh | `hpc-agent inspect-deployment [--experiment-dir <dir>] --cluster <cluster> [--run-id <run_id>] [--path <path>] [--depth <depth>]` | `_(none)_` | — | — |
 | [`inspect-parallel-axes`](../primitives/inspect-parallel-axes.md) | ✓ | _none_ | `hpc-agent inspect-parallel-axes [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`list-in-flight`](../primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`load-context`](../primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context [--experiment-dir <dir>]` | `_(none)_` | — | — |
