@@ -269,6 +269,37 @@ def test_prior_records_round_trips_trial_tokens(tmp_path: Path) -> None:
     assert rec["trial_tokens"] == [7]
 
 
+def test_prior_records_pairs_trial_params_with_metrics(tmp_path: Path) -> None:
+    """Opaque per-task params written at submit re-surface paired with that
+    iteration's reduced metrics — the (params, metrics) corpus a strategy
+    warm-starts from. The framework never interprets the params (synthetic,
+    meaningless keys here; no optimizer)."""
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs("20260101-000000-par0001"),
+        campaign_id="A",
+        trial_params=[{"lr": 0.05, "wd": 1e-4}],
+    )
+    _write_metrics(
+        tmp_path / "results" / "20260101-000000-par0001" / "task_0",
+        {"val_loss": 0.3, "n_samples": 1},
+    )
+    [rec] = prior_records(tmp_path, "A")
+    assert rec["trial_params"] == [{"lr": 0.05, "wd": 1e-4}]
+    assert rec["metrics"]["val_loss"] == pytest.approx(0.3)
+
+
+def test_prior_records_trial_params_none_when_absent(tmp_path: Path) -> None:
+    """An iteration submitted without trial_params surfaces None (backfill)."""
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs("20260101-000000-nopar01"),
+        campaign_id="A",
+    )
+    [rec] = prior_records(tmp_path, "A")
+    assert rec["trial_params"] is None
+
+
 def test_prior_records_marks_in_flight_iteration_incomplete(tmp_path: Path) -> None:
     """No result dir yet → complete=False, empty metrics, empty result_dirs."""
     write_run_sidecar(

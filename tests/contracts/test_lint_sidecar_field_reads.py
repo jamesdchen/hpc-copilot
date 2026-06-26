@@ -76,6 +76,7 @@ _V2_CONFIG = frozenset(
         "aggregate_defaults",
         "results",
         "trial_tokens",
+        "trial_params",
         "parent_run_ids",
         "node_sha",
         "data_sha",

@@ -227,7 +227,21 @@ def resolve_submit_inputs(
     #    the interview's materialized entry point when present (see
     #    _materialized_executor_cmd) — so it's the framework, not the LLM, that
     #    decides a python_module dispatches via run-module.
-    sidecar_spec = spec.sidecar.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha})
+    #    compute-run-id is the ONE place the task list is materialized, so it is
+    #    authoritative for the per-task round-trip: inject its trial_tokens
+    #    (opaque reconciliation key) AND trial_params (the cmd_sha pre-image,
+    #    persisted for provenance) — not the caller's placeholders — so both land
+    #    on the sidecar without the caller hand-threading them and getting them
+    #    wrong. trial_tokens stays None for ordinary submits (omitted on write);
+    #    trial_params makes every run's params recoverable from its sidecar.
+    sidecar_spec = spec.sidecar.model_copy(
+        update={
+            "run_id": run_id,
+            "cmd_sha": cmd_sha,
+            "trial_tokens": cr["trial_tokens"],
+            "trial_params": cr["trial_params"],
+        }
+    )
     materialized_executor = _materialized_executor_cmd(experiment_dir)
     if materialized_executor is not None:
         sidecar_spec = sidecar_spec.model_copy(update={"executor": materialized_executor})

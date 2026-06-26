@@ -280,6 +280,22 @@
       "default": null,
       "title": "Trial Tokens"
     },
+    "trial_params": {
+      "anyOf": [
+        {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trial Params"
+    },
     "parent_run_ids": {
       "anyOf": [
         {

@@ -84,6 +84,23 @@ of the `hpc-campaign` SKILL for the full statement:
    async refill loop. Continuous-async refill is a separate, deferred feature
    (issue #362) — not implemented here.
 
+## Warm-starting from a prior corpus (you own relevance)
+
+Each completed iteration's resolved params are persisted on the run sidecar as
+`trial_params` (the `cmd_sha` pre-image, computed by `compute-run-id`) and
+re-surfaced by `prior_records()` paired with that iteration's `metrics`. That
+`(params, metrics)` corpus is exactly what an optimizer needs to **warm-start** a
+fresh study (`study.add_trial(study.create_trial(...))` before `ask`).
+
+This is a **strategy-owned bolt-on**, not a framework feature: the seeding is
+optimizer-specific (~10 lines in your `_propose`), and the framework cannot
+judge whether a prior trial is *relevant*. It can filter only on **structure**
+(param-key set + objective key); **structural compatibility ≠ transferability**
+(same data regime? comparable objective scale?). You assemble the corpus and own
+that judgement — seeding from structurally-compatible-but-irrelevant trials
+quietly misleads the optimizer. See the worked pattern + caveat in
+[`docs/design/campaign-seam.md`](../design/campaign-seam.md#trial_params--opaque-params-provenance-and-the-warm-start-hook).
+
 ## Compose with
 
 - Predecessors: `build-template` / `wrap-entry-point` (the executor + repo

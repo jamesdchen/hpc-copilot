@@ -10,7 +10,12 @@
 > per-task tokens (the one place the task list is materialized) and
 > `write-run-sidecar` persists them, so `prior_records()["trial_tokens"]` is
 > populated through the canonical Step-6d submit path, not just via a direct
-> library call.
+> library call. Also shipped
+> ([#369](https://github.com/jamesdchen/hpc-agent/issues/369)): the
+> `trial_params` round-trip — the resolved per-task params (the `cmd_sha`
+> pre-image) persisted on the sidecar and re-surfaced by `prior_records()` for
+> provenance, with warm-start left a documented strategy pattern (below), not a
+> framework subsystem.
 >
 > **Still deferred** (only matters for a concurrent / out-of-order strategy,
 > and only on the path that skips Step-6d): threading `trial_tokens` through
@@ -139,6 +144,7 @@ is "the objective", nor the optimisation direction.
     "run_id": "…",
     "campaign_id": "…" | None,
     "trial_tokens": [<opaque, round-tripped from resolve()>] | None,
+    "trial_params": [{…}, …] | None,  # per-task resolved params (cmd_sha pre-image)
     "result_dirs": ["…"],   # per-task output dirs — artifact lineage
     "metrics": {…},         # reduce_metrics(result_dirs) — same payload as prior()
     "complete": bool,       # filesystem-derived: any result_dir has a metrics.json
@@ -151,6 +157,69 @@ authoritative lifecycle — `failed` vs `timeout` vs `abandoned` live in the
 journal and are reported by `hpc-agent status`. Keeping `prior_records` a
 sidecar+filesystem read (no SSH, no journal) is what makes it safe to call
 from `tasks.py` at module load.
+
+## `trial_params` — opaque params provenance (and the warm-start hook)
+
+`cmd_sha` is a SHA-256 of the materialized task list — a one-way hash. The
+framework persists it, but you **cannot recover what params a run actually
+used** from it. That is a real provenance / reproducibility gap, independent
+of any campaign. `trial_params` closes it: the resolved per-task params (one
+dict per task, `resolve(i)`-order, with
+[`RESERVED_TASK_KEYS`](../../src/hpc_agent/state/run_sha.py) stripped — i.e.
+the *exact pre-image* of `cmd_sha`) are persisted on the run sidecar and
+re-surfaced by `prior_records()`, paired with that iteration's `metrics`.
+
+It rides the same plumbing as `trial_token`: `compute-run-id` materializes the
+task list once at submit and surfaces both `trial_tokens` and `trial_params`;
+`write-run-sidecar` persists them; `prior_records()` round-trips them. The
+framework records them **verbatim and never interprets them** — same discipline
+as `trial_tokens`. The field is provenance first; it is also the clean hook for
+a strategy that wants to **warm-start**.
+
+### Warm-start is a strategy-owned pattern, not a framework subsystem
+
+Pairing `(trial_params, metrics)` across a prior corpus is exactly what an
+optimizer needs to seed a fresh study. But the seeding is **optimizer-specific**
+and lives in your scaffold (no optimizer in core), and — more importantly — the
+framework **cannot judge relevance**:
+
+> An experiment-agnostic framework can filter a prior corpus only on
+> **structure** (does it have the same param keys + objective key). It can
+> never judge **transferability** — whether the prior trials came from the same
+> data regime, a comparable objective scale, the same model. **Structural
+> compatibility ≠ transferability.** Seeding an optimizer from
+> structurally-compatible-but-irrelevant trials quietly misleads it. That call
+> belongs to whoever assembles the corpus — **you**, not the framework.
+
+So warm-start stays a documented strategy bolt-on. The framework hands you the
+bytes (`prior_records()` → `(trial_params, metrics)`); you own the corpus and
+the relevance judgement. A sketch, in an Optuna scaffold's `_propose` (read your
+own prior corpus however you assemble it — a sibling campaign, a curated file —
+and `add_trial` the ones *you* deem relevant before `ask`ing):
+
+```python
+import optuna
+
+study = optuna.create_study(direction="minimize", ...)
+
+# YOU own relevance: only fold in priors you judge transferable to THIS regime.
+for rec in my_relevant_prior_corpus():          # not a framework call
+    params, value = rec["trial_params"][0], rec["metrics"]["val_loss"]
+    study.add_trial(optuna.trial.create_trial(
+        params=params,
+        distributions=MY_DISTRIBUTIONS,           # must match the search space
+        value=value,
+    ))
+
+trial = study.ask()   # now seeded by the prior corpus
+...
+```
+
+`prior_records(".", CID)` surfaces the *current* campaign's `(trial_params,
+metrics)`; a cross-campaign warm-start reads from whatever corpus you assemble
+and vouch for. The framework adds no manifest opt-in and no scaffold seeding
+surface — that would make seeding from irrelevant trials frictionless, which is
+a footgun, not a feature.
 
 ## Worked examples
 

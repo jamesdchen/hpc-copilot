@@ -206,5 +206,25 @@ def test_trial_tokens_omitted_when_absent(tmp_path: Path) -> None:
     assert "trial_tokens" not in data
 
 
+def test_trial_params_persist_to_disk(tmp_path: Path) -> None:
+    """trial_params (the opaque cmd_sha pre-image from compute-run-id) land on
+    the sidecar verbatim — provenance the framework records but never reads.
+
+    Synthetic, meaningless keys/values: no optimizer is installed and core
+    never interprets them."""
+    params = [{"alpha": 0.1, "nonsense": [1, 2]}, {"alpha": 0.2, "nonsense": []}]
+    spec = _spec(trial_params=params)
+    out = write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+    data = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert data["trial_params"] == params
+
+
+def test_trial_params_omitted_when_absent(tmp_path: Path) -> None:
+    """Ordinary submit (no params threaded) leaves the key off the JSON."""
+    out = write_run_sidecar(experiment_dir=tmp_path, spec=_spec())
+    data = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert "trial_params" not in data
+
+
 # Import Path lazily for the runtime branches above (TYPE_CHECKING gate).
 from pathlib import Path  # noqa: E402

@@ -123,6 +123,11 @@ class WriteRunSidecarInput(BaseModel):
     # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
     # and re-surfaced by prior_records(); never interpreted by the framework.
     trial_tokens: list[Any] | None = None
+    # Resolved per-task params (task-ordered; one dict per task, RESERVED_TASK_KEYS
+    # stripped — the cmd_sha pre-image). Persisted for provenance so a run's params
+    # are recoverable from its sidecar; recorded verbatim, re-surfaced by
+    # prior_records(), never interpreted. Produced by compute-run-id.
+    trial_params: list[dict[str, Any]] | None = None
     # Run_ids whose outputs this run consumes (DAG lineage). The primitive
     # derives node_sha from these via resolve_node_sha — identity is computed
     # from the parents' on-disk sidecars, never asserted by the caller.

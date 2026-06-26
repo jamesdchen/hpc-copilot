@@ -23,12 +23,14 @@ import hpc_agent
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.state.run_sha import compute_cmd_sha
+from hpc_agent.state.run_sha import RESERVED_TASK_KEYS, compute_cmd_sha
 
 # The reserved per-task bookkeeping key a closed-loop strategy round-trips
-# through ``resolve()``. Must match the member of
-# ``hpc_agent.state.run_sha.RESERVED_TASK_KEYS`` (the key compute_cmd_sha
-# strips, so it never affects parameter identity).
+# through ``resolve()``. A member of
+# ``hpc_agent.state.run_sha.RESERVED_TASK_KEYS`` (the keys compute_cmd_sha
+# strips, so they never affect parameter identity); we read it directly to
+# surface ``trial_tokens`` and strip the whole set when surfacing
+# ``trial_params``.
 _TRIAL_TOKEN_KEY = "trial_token"
 
 # Mirror the ``RunIdStrict`` constraint from
@@ -59,14 +61,20 @@ _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
     agent_facing=True,
 )
 def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
-    """Return ``{"run_id": ..., "cmd_sha": ..., "trial_tokens": ...}``.
+    """Return ``{"run_id", "cmd_sha", "trial_tokens", "trial_params"}``.
 
     ``run_id`` is ``"<run_name>-<sha[:8]>"``; ``cmd_sha`` is the full 64-char
     hash. ``trial_tokens`` is the task-ordered list of the opaque
     ``trial_token`` each ``resolve(i)`` returned (``None`` when no task carries
-    one) — surfaced here, the one place the task list is materialized, so a
-    CLI caller can thread it into ``write-run-sidecar`` and have it round-trip
-    to ``prior_records()``.
+    one). ``trial_params`` is the task-ordered list of the resolved per-task
+    params each ``resolve(i)`` returned, minus
+    :data:`~hpc_agent.state.run_sha.RESERVED_TASK_KEYS` (i.e. the exact
+    pre-image of ``cmd_sha``) — so a run's params are recoverable from its
+    sidecar for provenance / reproducibility, since ``cmd_sha`` is a one-way
+    hash. Both are surfaced here, the one place the task list is materialized,
+    so a CLI caller can thread them into ``write-run-sidecar`` and have them
+    round-trip to ``prior_records()``. The framework never interprets
+    ``trial_params`` — they are opaque bytes (see ``docs/design/campaign-seam.md``).
 
     Parameters
     ----------
@@ -102,10 +110,18 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
         ) from exc
     try:
         cmd_sha = compute_cmd_sha(tasks)
-        # Materialize the per-task trial_token in the SAME load (the only place
+        # Materialize the per-task kwargs ONCE in the SAME load (the only place
         # the task list is realized at submit time). resolve() is idempotent by
         # the eager-materialization convention, so re-reading it here is cheap.
-        tokens = [tasks.resolve(i).get(_TRIAL_TOKEN_KEY) for i in range(int(tasks.total()))]
+        # The reserved bookkeeping key (trial_token) is the reconciliation
+        # token; everything else is a swept/resolved param.
+        materialized = [tasks.resolve(i) for i in range(int(tasks.total()))]
+        tokens = [m.get(_TRIAL_TOKEN_KEY) for m in materialized]
+        # trial_params is the cmd_sha pre-image: each task's resolved kwargs
+        # with the reserved keys stripped, exactly what compute_cmd_sha hashed.
+        params: list[dict[str, Any]] = [
+            {k: v for k, v in m.items() if k not in RESERVED_TASK_KEYS} for m in materialized
+        ]
     except (AttributeError, TypeError, ValueError, KeyError) as exc:
         raise errors.SpecInvalid(
             f".hpc/tasks.py at {tasks_py} is malformed: {exc} — "
@@ -118,4 +134,7 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
         "run_id": f"{run_name}-{cmd_sha[:8]}",
         "cmd_sha": cmd_sha,
         "trial_tokens": trial_tokens,
+        # Always surfaced (one dict per task): the run's params ARE its
+        # provenance, recoverable independent of whether it's a campaign.
+        "trial_params": params,
     }

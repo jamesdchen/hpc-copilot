@@ -124,6 +124,7 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         aggregate_defaults=spec.aggregate_defaults,
         results=spec.results,
         trial_tokens=spec.trial_tokens,
+        trial_params=spec.trial_params,
         parent_run_ids=spec.parent_run_ids,
         # Derived, never caller-asserted: a supplied node_sha could decouple
         # the child from its real ancestry. resolve_node_sha raises

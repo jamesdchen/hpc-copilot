@@ -105,6 +105,7 @@ def test_v2_write_omits_none_keys_to_keep_sidecar_compact(tmp_path: Path) -> Non
         "auto_retry",
         "aggregate_defaults",
         "trial_tokens",
+        "trial_params",
     ):
         assert omitted not in raw, f"{omitted!r} should be omitted when None"
 
@@ -131,6 +132,32 @@ def test_trial_tokens_backfilled_none_when_absent(tmp_path: Path) -> None:
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
     assert data["trial_tokens"] is None
+
+
+# ---------------------------------------------------------------------------
+# trial_params round-trip (provenance — cmd_sha pre-image)
+# ---------------------------------------------------------------------------
+
+
+def test_trial_params_write_then_read_roundtrips(tmp_path: Path) -> None:
+    """Opaque per-task params persist verbatim; core never interprets them
+    (synthetic, meaningless keys/values — no optimizer involved)."""
+    params = [{"lr": 0.1, "blob": {"k": 1}}, {"lr": 0.2, "blob": {"k": 2}}]
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs(),
+        trial_params=params,
+    )
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trial_params"] == params
+
+
+def test_trial_params_backfilled_none_when_absent(tmp_path: Path) -> None:
+    """A sidecar written without trial_params reads back with the key present
+    and None (the v2 backfill contract prior_records relies on)."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trial_params"] is None
 
 
 # ---------------------------------------------------------------------------

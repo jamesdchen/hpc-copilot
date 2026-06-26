@@ -116,6 +116,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
+    "trial_params",  # list[dict] — opaque per-task resolved params (cmd_sha pre-image; provenance)
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
     "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
     "data_sha",  # str — data identity of the declared input dataset(s) (#222)
@@ -157,6 +158,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "aggregate_defaults": None,
     "results": None,
     "trial_tokens": None,
+    "trial_params": None,
     "parent_run_ids": None,
     "node_sha": None,
     "data_sha": None,
@@ -226,6 +228,7 @@ def write_run_sidecar(
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
     trial_tokens: list[Any] | None = None,
+    trial_params: list[dict[str, Any]] | None = None,
     parent_run_ids: list[str] | None = None,
     node_sha: str | None = None,
     data_sha: str | None = None,
@@ -258,6 +261,16 @@ def write_run_sidecar(
     pair). The framework never interprets them — they are recorded verbatim
     and re-surfaced by
     :func:`hpc_agent.execution.mapreduce.reduce.history.prior_records`.
+
+    *trial_params* is an optional list of the resolved per-task params (one
+    dict per task, ``resolve(i)``-order, with
+    :data:`hpc_agent.state.run_sha.RESERVED_TASK_KEYS` stripped — i.e. the
+    exact pre-image of ``cmd_sha``). Persisting it makes a run's params
+    recoverable from its sidecar (``cmd_sha`` is a one-way hash), purely for
+    provenance / reproducibility; like *trial_tokens* the framework records
+    them verbatim and never interprets them, and ``prior_records`` re-surfaces
+    them paired with each iteration's metrics. Compute it at submit via
+    :func:`hpc_agent.incorporation.build.compute_run_id.compute_run_id`.
 
     *data_sha* / *env_hash* extend provenance past parameter (``cmd_sha``)
     and code (``tasks_py_sha``) identity to the DATA and ENVIRONMENT a run
@@ -316,6 +329,7 @@ def write_run_sidecar(
         "aggregate_defaults": aggregate_defaults,
         "results": results,
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
+        "trial_params": [dict(p) for p in trial_params] if trial_params is not None else None,
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
         "node_sha": node_sha,
         "data_sha": data_sha,

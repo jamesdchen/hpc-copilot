@@ -35,13 +35,16 @@ def test_happy_path_returns_deterministic_run_id(tmp_path: Path) -> None:
 
     out = compute_run_id(tmp_path, run_name="myrun")
 
-    assert set(out.keys()) == {"run_id", "cmd_sha", "trial_tokens"}
+    assert set(out.keys()) == {"run_id", "cmd_sha", "trial_tokens", "trial_params"}
     assert len(out["cmd_sha"]) == 64
     assert all(c in "0123456789abcdef" for c in out["cmd_sha"])
     assert out["run_id"] == f"myrun-{out['cmd_sha'][:8]}"
     assert out["run_id"].startswith("myrun-")
     # No task carries a trial_token → omitted (None), not a list of nulls.
     assert out["trial_tokens"] is None
+    # Resolved per-task params are always surfaced (the cmd_sha pre-image),
+    # task-ordered, for provenance — recoverable independent of any campaign.
+    assert out["trial_params"] == [{"seed": 0}, {"seed": 1}]
 
 
 _TOKEN_TASKS_PY = """\
@@ -62,11 +65,17 @@ def test_trial_tokens_surfaced_task_ordered_when_present(tmp_path: Path) -> None
 
     out = compute_run_id(tmp_path, run_name="tune")
     assert out["trial_tokens"] == [10, 11, 12]
+    # trial_params is the cmd_sha pre-image: the reserved trial_token is
+    # stripped, the swept param remains, one dict per task.
+    assert out["trial_params"] == [{"lr": 0.1}, {"lr": 0.1}, {"lr": 0.1}]
 
     # Same params, different token values → identical cmd_sha (token stripped).
     other = tmp_path / "other"
     _write_tasks_py(other, _TOKEN_TASKS_PY.replace("i + 10", "i + 99"))
-    assert compute_run_id(other, run_name="tune")["cmd_sha"] == out["cmd_sha"]
+    other_out = compute_run_id(other, run_name="tune")
+    assert other_out["cmd_sha"] == out["cmd_sha"]
+    # ...and the params are identical too (token never leaks into trial_params).
+    assert other_out["trial_params"] == out["trial_params"]
 
 
 def test_determinism_same_tasks_same_output(tmp_path: Path) -> None:

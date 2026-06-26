@@ -67,7 +67,12 @@ def _spec(build_tasks: BuildTasksPyInput | None = None) -> ResolveSubmitInputsSp
 
 
 def _cr() -> dict[str, Any]:
-    return {"run_id": "ridge-abcd1234", "cmd_sha": "a" * 64, "trial_tokens": None}
+    return {
+        "run_id": "ridge-abcd1234",
+        "cmd_sha": "a" * 64,
+        "trial_tokens": None,
+        "trial_params": [{"alpha": 0.1}, {"alpha": 1.0}],
+    }
 
 
 def _fp(
@@ -128,6 +133,11 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     assert bs.call_args.kwargs["spec"].run_id == "ridge-abcd1234"
     assert ws.call_args.kwargs["spec"].run_id == "ridge-abcd1234"
     assert ws.call_args.kwargs["spec"].cmd_sha == "a" * 64
+    # compute-run-id is authoritative for the per-task round-trip: its
+    # trial_tokens AND trial_params (the cmd_sha pre-image, persisted for
+    # provenance) are injected onto the sidecar spec, not hand-threaded.
+    assert ws.call_args.kwargs["spec"].trial_tokens is None
+    assert ws.call_args.kwargs["spec"].trial_params == [{"alpha": 0.1}, {"alpha": 1.0}]
     # No interview.json here → the caller-supplied executor stands (the
     # deterministic override is a no-op on the canonical no-interview path).
     assert ws.call_args.kwargs["spec"].executor == "python -m src.ridge --alpha $alpha"

@@ -188,12 +188,13 @@ def prior_records(
             "run_id": str,            # the iteration's run_id
             "campaign_id": str | None,
             "trial_tokens": list | None,  # opaque, round-tripped verbatim
+            "trial_params": list | None,  # opaque per-task resolved params (provenance)
             "result_dirs": [str, ...],    # per-task output dirs (artifact lineage)
             "metrics": {...},             # reduce_metrics(result_dirs) — same as prior()
             "complete": bool,             # at least one result_dir has a metrics.json
         }
 
-    The three additions over ``prior`` are the seam (see
+    The additions over ``prior`` are the seam (see
     ``docs/design/campaign-seam.md``):
 
     * ``result_dirs`` — **artifact lineage**. PBT clones a checkpoint from
@@ -204,6 +205,13 @@ def prior_records(
       round-tripped through ``resolve()`` (recorded on the sidecar by
       :func:`hpc_agent.state.runs.write_run_sidecar`). ``None`` for
       iterations submitted without one.
+    * ``trial_params`` — the resolved per-task params recorded on the sidecar
+      (the ``cmd_sha`` pre-image; ``None`` for iterations submitted before this
+      was wired). Pairing ``(trial_params, metrics)`` per completed trial is
+      the data a strategy needs to **warm-start** a fresh study from a prior
+      corpus — but the framework hands back only the bytes; whether a prior
+      trial is *relevant* (same data regime, comparable objective scale) is
+      the strategy's call, not the framework's. Opaque, never interpreted.
     * ``complete`` — a filesystem-derived readiness flag (does any task
       have a ``metrics.json`` yet). This is NOT the authoritative
       lifecycle state — ``failed`` vs ``timeout`` vs ``abandoned`` live in
@@ -225,6 +233,7 @@ def prior_records(
                 "run_id": sidecar.get("run_id", ""),
                 "campaign_id": sidecar.get("campaign_id"),
                 "trial_tokens": sidecar.get("trial_tokens"),
+                "trial_params": sidecar.get("trial_params"),
                 "result_dirs": [str(d) for d in dirs],
                 "metrics": reduce_metrics(dirs),
                 "complete": bool(dirs),
@@ -245,9 +254,9 @@ def parent_records(
     exact runs a child declared as ``parents`` on its submit spec —
     typically read by the child's ``tasks.py`` at module load to locate
     its inputs. Records carry the same keys as :func:`prior_records`
-    (``run_id`` / ``campaign_id`` / ``trial_tokens`` / ``result_dirs`` /
-    ``metrics`` / ``complete``), in *parent_run_ids* order, one per
-    distinct run_id (duplicates collapse — parents are a set).
+    (``run_id`` / ``campaign_id`` / ``trial_tokens`` / ``trial_params`` /
+    ``result_dirs`` / ``metrics`` / ``complete``), in *parent_run_ids* order,
+    one per distinct run_id (duplicates collapse — parents are a set).
 
     Opacity is the contract: the framework hands back paths and reduced
     metrics; what crosses the edge — which files, what format, whether
@@ -270,6 +279,7 @@ def parent_records(
                 "run_id": sidecar.get("run_id", run_id),
                 "campaign_id": sidecar.get("campaign_id"),
                 "trial_tokens": sidecar.get("trial_tokens"),
+                "trial_params": sidecar.get("trial_params"),
                 "result_dirs": [str(d) for d in dirs],
                 "metrics": reduce_metrics(dirs),
                 "complete": bool(dirs),
