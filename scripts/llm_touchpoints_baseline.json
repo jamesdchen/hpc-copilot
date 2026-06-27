@@ -19,9 +19,9 @@
   "campaign": {
     "branches": 10,
     "escalation_points": 2,
-    "retry_loops": 10,
+    "retry_loops": 11,
     "stop_gates": 0,
-    "total_touchpoints": 20
+    "total_touchpoints": 21
   },
   "status": {
     "branches": 6,

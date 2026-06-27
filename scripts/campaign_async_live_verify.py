@@ -110,7 +110,7 @@ def _run_hpc(hpc_bin: str, verb: str, args: list[str]) -> dict[str, Any]:
     hand back the ``data`` payload. Stderr is diagnostic prose, surfaced on error.
     """
     cmd = [hpc_bin, verb, *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=False)  # noqa: S603
     out = (proc.stdout or "").strip()
     if not out:
         raise CliError(
