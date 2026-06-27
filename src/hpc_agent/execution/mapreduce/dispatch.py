@@ -510,44 +510,7 @@ def _format_result_dir(template, *, task_id, run_id, kwargs):
 def main() -> None:
     here = Path(__file__).resolve().parent  # cluster-side .hpc/
 
-    # --- Load user tasks.py ---
-    tasks_path_str = os.environ.get("HPC_TASKS_PATH")
-    tasks_path = Path(tasks_path_str) if tasks_path_str else here / "tasks.py"
-    if not tasks_path.is_file():
-        print(f"[dispatch] ERROR: tasks.py not found: {tasks_path}", file=sys.stderr)
-        sys.exit(1)
-    try:
-        tasks = _load_tasks_module(tasks_path)
-    except Exception as exc:
-        print(f"[dispatch] ERROR: failed to import tasks.py: {exc}", file=sys.stderr)
-        sys.exit(1)
-    if not (hasattr(tasks, "total") and hasattr(tasks, "resolve")):
-        print(
-            f"[dispatch] ERROR: {tasks_path} must define total() and resolve(task_id)",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # --- Resolve task identity ---
-    task_id_str = os.environ.get("HPC_TASK_ID") or os.environ.get("TASK_ID")
-    if task_id_str is None:
-        print("[dispatch] ERROR: HPC_TASK_ID env var not set", file=sys.stderr)
-        sys.exit(1)
-    try:
-        task_id = int(task_id_str)
-    except ValueError:
-        print(f"[dispatch] ERROR: HPC_TASK_ID is not an integer: {task_id_str!r}", file=sys.stderr)
-        sys.exit(1)
-
-    n = int(tasks.total())
-    if not 0 <= task_id < n:
-        print(
-            f"[dispatch] ERROR: task_id={task_id} out of range [0, {n})",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # --- Resolve run identity & sidecar ---
+    # --- Resolve run identity & sidecar (before tasks.py to enable frozen-manifest fast path) ---
     run_id = os.environ.get("HPC_RUN_ID")
     if not run_id:
         print("[dispatch] ERROR: HPC_RUN_ID env var not set", file=sys.stderr)
@@ -607,19 +570,91 @@ def main() -> None:
         )
         sys.exit(_EXIT_NO_RUNNER)
 
-    # --- Resolve task kwargs ---
+    # --- Resolve task identity ---
+    task_id_str = os.environ.get("HPC_TASK_ID") or os.environ.get("TASK_ID")
+    if task_id_str is None:
+        print("[dispatch] ERROR: HPC_TASK_ID env var not set", file=sys.stderr)
+        sys.exit(1)
     try:
-        kwargs = tasks.resolve(task_id)
-    except Exception as exc:
-        print(f"[dispatch] ERROR: tasks.resolve({task_id}) raised: {exc}", file=sys.stderr)
+        task_id = int(task_id_str)
+    except ValueError:
+        print(f"[dispatch] ERROR: HPC_TASK_ID is not an integer: {task_id_str!r}", file=sys.stderr)
         sys.exit(1)
-    if not isinstance(kwargs, dict):
-        print(
-            f"[dispatch] ERROR: tasks.resolve({task_id}) must return dict, "
-            f"got {type(kwargs).__name__}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+
+    # --- Resolve task kwargs ---
+    # Fast path: trial_params is serialized at submit time by compute-run-id,
+    # containing the exact per-task kwargs pre-image (reserved keys stripped).
+    # Using the frozen list means every array task sees the identical kwargs
+    # that were hashed into cmd_sha at submission — even if tasks.py is later
+    # edited, deleted, or contains stochastic module-level code. This is the
+    # structural fix for per-array-task re-derivation: the sidecar carries the
+    # ground truth; tasks.py is never re-executed on the cluster side.
+    #
+    # Fallback to tasks.py import when trial_params is absent (old sidecars
+    # written before this field existed, or sidecars from _ensure_run_sidecar's
+    # minimal path) preserves full backward compatibility.
+    _trial_params = sidecar.get("trial_params")
+    if isinstance(_trial_params, list):
+        n = int(sidecar.get("task_count") or len(_trial_params))
+        if not 0 <= task_id < n:
+            print(
+                f"[dispatch] ERROR: task_id={task_id} out of range [0, {n})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            kwargs = _trial_params[task_id]
+        except IndexError:
+            print(
+                f"[dispatch] ERROR: trial_params has {len(_trial_params)} entries but "
+                f"task_id={task_id} (sidecar task_count={n}); re-submit to regenerate.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not isinstance(kwargs, dict):
+            print(
+                f"[dispatch] ERROR: trial_params[{task_id}] must be a dict, "
+                f"got {type(kwargs).__name__}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        # Fallback: import tasks.py (backward compat — sidecar has no frozen manifest).
+        tasks_path_str = os.environ.get("HPC_TASKS_PATH")
+        tasks_path = Path(tasks_path_str) if tasks_path_str else here / "tasks.py"
+        if not tasks_path.is_file():
+            print(f"[dispatch] ERROR: tasks.py not found: {tasks_path}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            tasks = _load_tasks_module(tasks_path)
+        except Exception as exc:
+            print(f"[dispatch] ERROR: failed to import tasks.py: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not (hasattr(tasks, "total") and hasattr(tasks, "resolve")):
+            print(
+                f"[dispatch] ERROR: {tasks_path} must define total() and resolve(task_id)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        n = int(tasks.total())
+        if not 0 <= task_id < n:
+            print(
+                f"[dispatch] ERROR: task_id={task_id} out of range [0, {n})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            kwargs = tasks.resolve(task_id)
+        except Exception as exc:
+            print(f"[dispatch] ERROR: tasks.resolve({task_id}) raised: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(kwargs, dict):
+            print(
+                f"[dispatch] ERROR: tasks.resolve({task_id}) must return dict, "
+                f"got {type(kwargs).__name__}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     try:
         result_dir = _format_result_dir(

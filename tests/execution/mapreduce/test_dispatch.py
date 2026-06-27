@@ -596,3 +596,180 @@ def test_latest_checkpoint_sees_petsc_binary_steps(tmp_path: Path) -> None:
     # (pre-petsc behavior preserved for runs that only ever write pickles).
     (ckdir / "checkpoint-6.pkl").write_bytes(b"d")
     assert dispatch._latest_checkpoint(str(ckdir)) == str(ckdir / "checkpoint-6.pkl")
+
+
+# ---------------------------------------------------------------------------
+# BUG 5 — frozen-manifest fast path (trial_params in sidecar)
+# ---------------------------------------------------------------------------
+
+
+def _scaffold_with_manifest(
+    tmp_path: Path,
+    *,
+    executor: str,
+    trial_params: list[dict],
+    run_id: str = "test_run",
+) -> Path:
+    """Scaffold a .hpc/ with a sidecar that carries trial_params (the frozen manifest).
+
+    Does NOT write tasks.py — the fast path must not need it.
+    Returns the .hpc/ path.
+    """
+    result_root = tmp_path / "results"
+    hpc = tmp_path / ".hpc"
+    hpc.mkdir(parents=True, exist_ok=True)
+    make_sidecar_json(
+        tmp_path,
+        run_id=run_id,
+        executor=executor,
+        result_dir_template=str(result_root / "{task_id}"),
+        task_count=len(trial_params),
+        tasks_py_sha="abc123",
+        trial_params=trial_params,
+    )
+    return hpc
+
+
+class TestFrozenManifest:
+    """dispatcher reads kwargs from sidecar trial_params, not by re-importing tasks.py."""
+
+    def test_fast_path_skips_tasks_py(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When trial_params is present in the sidecar the dispatcher succeeds
+        even if tasks.py does not exist — tasks.py is never imported."""
+        hpc = _scaffold_with_manifest(
+            tmp_path,
+            executor="true",
+            trial_params=[{"seed": 0}, {"seed": 1}],
+        )
+        # Deliberately do NOT write tasks.py — the fast path must not need it.
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+
+    def test_fast_path_exports_kwargs_as_hpc_kw(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Kwargs from trial_params are exported as HPC_KW_* in the child env.
+
+        We verify this indirectly: if the dispatcher exits 0 for task_id=0
+        and does NOT raise about a missing tasks.py, the frozen params were
+        used. The actual env-export is exercised by the POSIX executor tests
+        (TestDispatchAtomicOutput), but the kwargs-to-env wiring is shared
+        code so checking the sidecar fast path ends at a valid kwargs dict
+        is sufficient here to confirm the dispatch path is taken.
+        """
+        params = [{"lr": "0.01", "batch": "32"}, {"lr": "0.001", "batch": "64"}]
+        hpc = _scaffold_with_manifest(
+            tmp_path,
+            executor="true",
+            trial_params=params,
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+
+    def test_fallback_to_tasks_py_when_no_trial_params(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Old sidecars without trial_params still load tasks.py (backward compat)."""
+        hpc = tmp_path / ".hpc"
+        write_hpc_tasks(hpc, [{"seed": 7}])
+        make_sidecar_json(
+            tmp_path,
+            run_id="old_run",
+            executor="true",
+            result_dir_template=str(tmp_path / "results" / "{task_id}"),
+            task_count=1,
+            tasks_py_sha="abc123",
+            # No trial_params key — simulates a pre-BUG5-fix sidecar.
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "old_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+
+    def test_fast_path_task_id_out_of_range_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """task_id beyond the manifest length → exit 1 with a clear message."""
+        hpc = _scaffold_with_manifest(
+            tmp_path,
+            executor="true",
+            trial_params=[{"seed": 0}],  # only 1 task
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "5")  # out of range
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+        assert "out of range" in capsys.readouterr().err
+
+    def test_fast_path_entry_not_dict_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """If trial_params[task_id] is not a dict the dispatcher exits 1."""
+        hpc = tmp_path / ".hpc"
+        hpc.mkdir(parents=True, exist_ok=True)
+        make_sidecar_json(
+            tmp_path,
+            run_id="test_run",
+            executor="true",
+            result_dir_template=str(tmp_path / "results" / "{task_id}"),
+            task_count=1,
+            tasks_py_sha="abc123",
+            trial_params=["not-a-dict"],  # malformed
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+        assert "dict" in capsys.readouterr().err
+
+    def test_fast_path_task_count_mismatch_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """task_count in sidecar > len(trial_params) → IndexError path → exit 1."""
+        hpc = tmp_path / ".hpc"
+        hpc.mkdir(parents=True, exist_ok=True)
+        make_sidecar_json(
+            tmp_path,
+            run_id="test_run",
+            executor="true",
+            result_dir_template=str(tmp_path / "results" / "{task_id}"),
+            task_count=10,  # claims 10 tasks
+            tasks_py_sha="abc123",
+            trial_params=[{"seed": 0}],  # but only 1 entry
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "5")  # valid by task_count, out of trial_params
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "trial_params" in err and "re-submit" in err
