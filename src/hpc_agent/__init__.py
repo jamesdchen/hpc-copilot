@@ -216,7 +216,30 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     #   * any ``from __future__ import annotations`` user module that
     #     introspects its own type hints works.
     _sys.modules[mod_name] = module
-    spec.loader.exec_module(module)
+    # Put the experiment root and ``.hpc/`` on ``sys.path`` for the duration
+    # of ``exec_module`` so a tasks.py that does ``import my_root_module`` or
+    # ``from src.x import y`` (where those live at the experiment root) resolves
+    # during LOCAL enumeration (compute-run-id / build-submit-spec) exactly as
+    # it does on the CLUSTER. The cluster job script exports
+    # ``PYTHONPATH="$REPO_DIR:$REPO_DIR/.hpc"`` (see
+    # execution/mapreduce/templates/runtime/common/hpc_preamble.sh) before the
+    # dispatcher imports tasks.py; without this, the same tasks.py imports fine
+    # on the cluster but raises ModuleNotFoundError locally. Layout is
+    # ``<experiment_dir>/.hpc/tasks.py`` (see RepoLayout), so the experiment
+    # root is ``path.parent.parent`` and ``.hpc/`` is ``path.parent``. Mirror
+    # the cluster ordering (root before ``.hpc/``); skip any entry already on
+    # the path to avoid duplicate insertions, and restore the original
+    # ``sys.path`` afterward so we don't leak entries into the host process.
+    _exp_root = str(path.resolve().parent.parent)
+    _hpc_dir = str(path.resolve().parent)
+    _saved_sys_path = list(_sys.path)
+    for _entry in (_hpc_dir, _exp_root):
+        if _entry not in _sys.path:
+            _sys.path.insert(0, _entry)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        _sys.path[:] = _saved_sys_path
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(
             f"{path} must define both total() and resolve(task_id) — "
