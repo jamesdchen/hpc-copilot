@@ -75,6 +75,8 @@ def write_manifest(
     budget: dict[str, Any] | None = None,
     stop_criteria: dict[str, Any] | None = None,
     strategy: dict[str, Any] | None = None,
+    async_refill: bool = False,
+    max_in_flight: int | None = None,
     created_at: str | None = None,
 ) -> Path:
     """Write the manifest atomically and return its path.
@@ -82,6 +84,11 @@ def write_manifest(
     All sections are optional — the framework will validate whatever
     subset the caller supplies. Pass ``strategy={"name": "...", "params": {...}}``
     to record strategy choice + opaque params (round-tripped untouched).
+
+    ``async_refill`` / ``max_in_flight`` opt the campaign into
+    continuous-async refill (#362). They are written ONLY when set — a
+    default (``False`` / ``None``) leaves them out of the JSON so a
+    synchronous campaign's manifest stays byte-identical to today's.
     """
     payload: dict[str, Any] = {
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
@@ -98,6 +105,12 @@ def write_manifest(
         payload["stop_criteria"] = stop_criteria
     if strategy is not None:
         payload["strategy"] = strategy
+    # Only emit the async-refill opt-in when actually enabled, so a default
+    # synchronous campaign's manifest is unchanged (default-off byte-identity).
+    if async_refill:
+        payload["async_refill"] = True
+    if max_in_flight is not None:
+        payload["max_in_flight"] = max_in_flight
     validate_manifest(payload)
 
     target = manifest_path(experiment_dir, campaign_id)

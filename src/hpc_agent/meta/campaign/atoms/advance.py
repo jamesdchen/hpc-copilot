@@ -21,6 +21,11 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 if TYPE_CHECKING:
     from pathlib import Path
 
+# Framework default pool-occupancy target K when async_refill is on but
+# --max-in-flight / the manifest leaves it unset. Matches decide-concurrency's
+# k_cap default (the bound whose computation this primitive folds in).
+_DEFAULT_MAX_IN_FLIGHT = 4
+
 
 @primitive(
     name="campaign-advance",
@@ -31,7 +36,7 @@ if TYPE_CHECKING:
         help=(
             "Decide the next campaign action (continue / stop_converged / "
             "stop_over_budget / stop_circuit_breaker / stop_resubmit_cap / "
-            "wait_in_flight)."
+            "wait_in_flight / refill)."
         ),
         experiment_dir_arg=True,
         args=(
@@ -81,6 +86,28 @@ if TYPE_CHECKING:
                     "omitted means no cap."
                 ),
             ),
+            CliArg(
+                "--async-refill",
+                action="store_true",
+                help=(
+                    "Continuous-async refill (#362): replace the wait_in_flight "
+                    "barrier with a 'refill' decision that keeps --max-in-flight "
+                    "iterations in flight. Defaults from the manifest's top-level "
+                    "async_refill. Ordered AFTER the budget/stop halts so a "
+                    "converged or circuit-broken campaign stops refilling."
+                ),
+            ),
+            CliArg(
+                "--max-in-flight",
+                type=int,
+                default=None,
+                help=(
+                    "Pool-occupancy target K for --async-refill. refill_count = "
+                    "max(0, min(K, remaining_max_jobs) - in_flight). Defaults from "
+                    "the manifest's top-level max_in_flight, then the framework "
+                    f"default ({_DEFAULT_MAX_IN_FLIGHT}). Ignored when async is off."
+                ),
+            ),
         ),
         group="campaign",
     ),
@@ -102,10 +129,12 @@ def campaign_advance(
     max_core_hours: float | None = None,
     circuit_breaker_failures: int | None = None,
     max_task_resubmits: int | None = None,
+    async_refill: bool = False,
+    max_in_flight: int | None = None,
 ) -> dict[str, Any]:
     """Decide the next campaign action from history + budget.
 
-    Decision precedence:
+    Decision precedence (synchronous, default):
       1. ``stop_over_budget``     — any supplied budget cap met AND the halt
                                     is not covered by a fresh acknowledgement
       2. ``wait_in_flight``       — runs are still pending (let them finish)
@@ -117,6 +146,15 @@ def campaign_advance(
     The loop-safety halts (circuit breaker, resubmit cap) sit *after*
     ``wait_in_flight`` so an in-flight retry (which carries no terminal
     verdict yet) is given the chance to succeed before they fire.
+
+    Async-refill mode (``async_refill`` set, #362): the ``wait_in_flight``
+    barrier is **replaced** by a ``refill`` rule ordered *after* the budget
+    and stop_* halts — so a converged / over-budget / circuit-broken campaign
+    stops refilling rather than topping the pool back up. ``refill`` carries
+    ``refill_count = max(0, min(K, remaining_max_jobs) - in_flight)`` (``K`` =
+    ``max_in_flight``; ``remaining_max_jobs`` may be ``None`` = unbounded);
+    when the pool is already full it falls back to ``wait_in_flight``. Default
+    off keeps the synchronous ladder byte-identical.
 
     Budget acknowledgement: ``stop_over_budget`` is a halt the loop cannot
     silently pass. When a cap is met, the campaign halts until the spend is
@@ -148,6 +186,13 @@ def campaign_advance(
         circuit_breaker_failures = _manifest_circuit_breaker_failures(experiment_dir, campaign_id)
     if max_task_resubmits is None:
         max_task_resubmits = _manifest_max_task_resubmits(experiment_dir, campaign_id)
+    # Async-refill opt-in. ``--async-refill`` is a store_true (default False,
+    # not None), so we can't use the None-sentinel default pattern: instead the
+    # CLI flag force-enables, and an absent flag falls back to the manifest.
+    if not async_refill:
+        async_refill = bool(_manifest_async_refill(experiment_dir, campaign_id))
+    if max_in_flight is None:
+        max_in_flight = _manifest_max_in_flight(experiment_dir, campaign_id)
 
     status = campaign_status(experiment_dir=experiment_dir, campaign_id=campaign_id)
     budget = campaign_budget(
@@ -247,10 +292,48 @@ def campaign_advance(
             return CandidateAction(action="stop_converged", rationale=e["converged"]["reason"])
         return None
 
+    def _refill(e: dict[str, Any]) -> CandidateAction | None:
+        # Async-refill only (#362): keep up to K iterations in flight, capped by
+        # budget headroom. This folds decide-concurrency's safe-bound computation
+        # (currently unused by the driver) into the ladder. Reached only AFTER
+        # over_budget + the stop_* halts, so a converged / circuit-broken /
+        # over-budget campaign stops refilling instead of topping the pool back up.
+        n = e["status"]["in_flight"]
+        remaining_max_jobs = e["budget"]["remaining"].get("max_jobs")  # None = unbounded
+        k = max_in_flight if max_in_flight is not None else _DEFAULT_MAX_IN_FLIGHT
+        target = k if remaining_max_jobs is None else min(k, remaining_max_jobs)
+        refill_count = max(0, target - n)
+        if refill_count > 0:
+            return CandidateAction(
+                action="refill",
+                params={"refill_count": refill_count},
+                rationale=(
+                    f"async refill: {n} in flight < target {target} "
+                    f"(K={k}, remaining_max_jobs={remaining_max_jobs}); "
+                    f"submit {refill_count} more iteration(s)"
+                ),
+            )
+        if n > 0:
+            # Pool already at/over target — wait for a slot rather than over-submit.
+            # The async analogue of the synchronous wait_in_flight guard.
+            return CandidateAction(
+                action="wait_in_flight",
+                rationale=f"async pool full: {n} in flight >= target {target}",
+            )
+        return None
+
+    # Async mode REPLACES wait_in_flight with the refill rule, and orders it
+    # after the budget/stop halts (decision #362). Default (sync) ladder is
+    # byte-identical to before.
+    rules = (
+        [_over_budget, _circuit_breaker, _resubmit_cap, _converged, _refill]
+        if async_refill
+        else [_over_budget, _wait_in_flight, _circuit_breaker, _resubmit_cap, _converged]
+    )
     outcome = decide(
         "decide",
         evidence,
-        rules=[_over_budget, _wait_in_flight, _circuit_breaker, _resubmit_cap, _converged],
+        rules=rules,
         default=CandidateAction(
             action="continue",
             rationale=(
@@ -261,6 +344,12 @@ def campaign_advance(
     )
     assert outcome.chosen is not None  # a total ladder always resolves to a branch
 
+    # refill_count rides on CandidateAction.params; surface it on the return so
+    # the deterministic resolver's refill arm knows how many iterations to submit.
+    refill_count: int | None = None
+    if outcome.chosen.action == "refill":
+        refill_count = (outcome.chosen.params or {}).get("refill_count")
+
     return {
         "campaign_id": campaign_id,
         "decision": outcome.chosen.action,
@@ -268,6 +357,7 @@ def campaign_advance(
         # Set only when the active decision is the budget halt: the loop must
         # call campaign-acknowledge-budget before it can continue (#224).
         "needs_acknowledgement": outcome.chosen.action == "stop_over_budget",
+        "refill_count": refill_count,
         "status": status,
         "converged": converged,
         "budget": budget,
@@ -322,3 +412,52 @@ def _manifest_max_task_resubmits(experiment_dir: Path, campaign_id: str) -> int 
     stop_criteria = manifest.get("stop_criteria") or {}
     value = stop_criteria.get("max_task_resubmits")
     return value if isinstance(value, int) else None
+
+
+def _manifest_async_refill(experiment_dir: Path, campaign_id: str) -> bool | None:
+    """Read the **top-level** ``async_refill`` flag from the manifest.
+
+    Unlike the circuit-breaker / resubmit-cap helpers (which read under
+    ``stop_criteria``), the async-refill opt-in is a top-level manifest
+    field — do NOT copy the ``stop_criteria.get(...)`` key path. A missing /
+    malformed manifest yields ``None`` (treated as off) rather than crashing
+    the advance read.
+    """
+    import json
+
+    import jsonschema
+
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
+        return None
+    if manifest is None:
+        return None
+    value = manifest.get("async_refill")
+    return value if isinstance(value, bool) else None
+
+
+def _manifest_max_in_flight(experiment_dir: Path, campaign_id: str) -> int | None:
+    """Read the **top-level** ``max_in_flight`` (pool target K) from the manifest.
+
+    Top-level field (see :func:`_manifest_async_refill`) — not under
+    ``stop_criteria``. ``bool`` is excluded explicitly (``isinstance(True, int)``
+    is ``True``) so a stray boolean never reads as a pool size. A missing /
+    malformed manifest yields ``None``.
+    """
+    import json
+
+    import jsonschema
+
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
+        return None
+    if manifest is None:
+        return None
+    value = manifest.get("max_in_flight")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

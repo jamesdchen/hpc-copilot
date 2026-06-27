@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import multiprocessing
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from hpc_agent.infra.io import atomic_locked_update
+from hpc_agent.infra.io import advisory_flock, atomic_locked_update
 
 
 def test_create_new_doc(tmp_path: Path) -> None:
@@ -153,3 +154,64 @@ def test_concurrent_writers_serialize(tmp_path: Path) -> None:
     final = json.loads(path.read_text())
     assert isinstance(final["entries"], list)
     assert sorted(final["entries"]) == list(range(n))
+
+
+def _child_hold_lock(args: tuple[str, str, str]) -> None:
+    """Acquire ``advisory_flock`` (blocking), signal held, hold until released.
+
+    Module-level so the ``spawn`` context can pickle + re-import it. The hold
+    is bounded (~30s ceiling) so a missed release never wedges CI.
+    """
+    lock_str, held_path, release_path = args
+    release = Path(release_path)
+    with advisory_flock(Path(lock_str)):
+        Path(held_path).write_text("held", encoding="utf-8")
+        for _ in range(600):
+            if release.exists():
+                return
+            time.sleep(0.05)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("win"),
+    reason="msvcrt byte-range locking is the win32-only branch; POSIX uses fcntl",
+)
+def test_advisory_flock_serializes_cross_process_win32(tmp_path: Path) -> None:
+    """A second process cannot acquire the lock while the first holds it (win32).
+
+    Proves the msvcrt branch is a REAL cross-process exclusion, not the old
+    permissions-only no-op: while a child holds the blocking lock, a
+    ``blocking=False`` acquire yields ``False``; once the child releases,
+    the same non-blocking acquire yields ``True``.
+    """
+    lock = tmp_path / "submit.lock"
+    held = tmp_path / "held.flag"
+    release = tmp_path / "release.flag"
+
+    ctx = multiprocessing.get_context("spawn")
+    proc = ctx.Process(target=_child_hold_lock, args=((str(lock), str(held), str(release)),))
+    proc.start()
+    try:
+        # Wait (≤10s) for the child to actually hold the lock.
+        for _ in range(200):
+            if held.exists():
+                break
+            time.sleep(0.05)
+        assert held.exists(), "child never acquired the lock"
+
+        # Contended: a non-blocking acquire must fail while the child holds it.
+        with advisory_flock(lock, blocking=False) as got:
+            assert got is False
+
+        # Release the child; once it lets go, the lock is acquirable again.
+        release.write_text("go", encoding="utf-8")
+        proc.join(timeout=15)
+        assert not proc.is_alive()
+        with advisory_flock(lock, blocking=False) as got:
+            assert got is True
+    finally:
+        # Belt-and-suspenders: never leave the child wedged.
+        release.write_text("go", encoding="utf-8")
+        if proc.is_alive():
+            proc.terminate()
+        proc.join(timeout=5)

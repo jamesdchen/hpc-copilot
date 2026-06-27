@@ -29,7 +29,11 @@ from typing import Any
 
 import pytest
 
-from hpc_agent._kernel.extension.spawn_prompt import WorkerReport, parse_worker_report
+from hpc_agent._kernel.extension.spawn_prompt import (
+    WorkerDecision,
+    WorkerReport,
+    parse_worker_report,
+)
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 from hpc_agent.meta.campaign.cursor import read_cursor
 from hpc_agent.meta.campaign.deterministic_resolver import (
@@ -293,7 +297,7 @@ def test_resolved_path_hint_unparks_classify_escalation(
     points = {d.point: d for d in report.decisions}
     assert points["path"].outcome == "strategy"
     assert "fields.resolved" in points["path"].why
-    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1
+    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1  # type: ignore[index]
 
 
 def test_resolved_hint_never_overrides_confident_classification(
@@ -368,7 +372,7 @@ def test_llm_resolver_bridge_continues_campaign_end_to_end(
     assert "consumes prior-iteration history" in whys
     assert "fields.resolved" in whys
     assert parse_worker_report(json.dumps(report.model_dump(mode="json")), workflow="campaign")
-    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1
+    assert read_cursor(experiment, _CAMPAIGN_ID)["iteration"] == 1  # type: ignore[index]
 
 
 def test_decide_stop_decision_is_clean_terminal_not_residue(
@@ -428,3 +432,112 @@ def test_deterministic_config_injects_resolver_into_loop_config() -> None:
     cfg = deterministic_campaign_config()
     assert isinstance(cfg.resolver, DeterministicCampaignResolver)
     assert dict(cfg.step_table) == {"monitor": "monitor-flow", "aggregate": "aggregate-flow"}
+
+
+# ─── async refill arm (#362, plan §1.4) ─────────────────────────────────────
+
+# A strategy tasks.py that is BOTH classify-as-strategy (guarded optuna import)
+# AND stateful across submits: ``resolve`` seeds params by the count of existing
+# run sidecars, which each refill submit increments — so successive submits in
+# one tick produce distinct cmd_shas / run_ids (the property the real async
+# scaffold gets from constant_liar + the submitted-count proposal index).
+_STATEFUL_STRATEGY_TASKS_PY = """\
+try:
+    import optuna  # noqa: F401
+except ImportError:
+    optuna = None
+
+from pathlib import Path
+
+from hpc_agent.state.runs import find_existing_runs
+
+_EXP = Path(__file__).resolve().parent.parent
+
+
+def total():
+    return 1
+
+
+def resolve(i):
+    n = len(find_existing_runs(_EXP))
+    return {"seed": n, "trial_token": n}
+"""
+
+
+def test_refill_submits_n_distinct_iterations_and_advances_cursor(
+    journal_home: Path, experiment: Path
+) -> None:
+    """async_refill manifest → campaign-advance decides ``refill`` → the resolver
+    submits refill_count distinct iterations and advances the cursor once each."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _write_tasks_py(experiment, _STATEFUL_STRATEGY_TASKS_PY)
+    _seed_prior_iteration(experiment, run_id="iter0", loss=0.9)
+    # Async on, K=3, no budget cap → in_flight 0, remaining unbounded →
+    # refill_count = min(3, ∞) - 0 = 3.
+    write_manifest(experiment, campaign_id=_CAMPAIGN_ID, async_refill=True, max_in_flight=3)
+
+    submit = _SubmitStub()
+    resolver = DeterministicCampaignResolver(submit_fn=submit)
+    report, exit_code = resolver(_decide_spawn_request(experiment), experiment)
+
+    assert exit_code == 0
+    # Three distinct iterations submitted through the (stubbed) seam.
+    assert len(submit.calls) == 3
+    assert report.result["refilled"] is True
+    assert report.result["submitted"] == 3
+    run_ids = report.result["run_ids"]
+    assert len(run_ids) == 3
+    assert len(set(run_ids)) == 3  # distinct — no cmd_sha dedup collision
+
+    # The decisions name the strategy path and the refill decision (deduped:
+    # the shared path/decide entries appear once, not three times).
+    points = {(d.point, d.outcome) for d in report.decisions}
+    assert ("path", "strategy") in points
+    assert ("decide", "refill") in points
+
+    # The cursor advanced once per submit → +3.
+    cursor = read_cursor(experiment, _CAMPAIGN_ID)
+    assert cursor is not None
+    assert cursor["iteration"] == 3
+
+
+def test_refill_merge_surfaces_residue_and_worst_exit(journal_home: Path, experiment: Path) -> None:
+    """A residue mid-refill is surfaced (anomalies + worst exit code), not
+    swallowed — one parked submit parks the whole tick."""
+    from hpc_agent.meta.campaign.deterministic_resolver import _EXIT_RESIDUE
+
+    resolver = DeterministicCampaignResolver(submit_fn=_SubmitStub())
+
+    ok = WorkerReport(
+        result={"submitted": True, "run_id": "run_a", "job_ids": ["1"]},
+        decisions=[],
+        anomalies="",
+    )
+    residue = WorkerReport(
+        result={"residue": True, "point": "decide", "outcome": "needs_interview"},
+        decisions=[WorkerDecision(point="decide", outcome="needs_interview", why="no prior run")],
+        anomalies="ESCALATION (parked, not guessed): no prior run sidecar",
+    )
+    shared = [WorkerDecision(point="decide", outcome="refill", why="async refill: submit 2 more")]
+
+    merged, exit_code = resolver._aggregate_refill_reports(
+        [(ok, 0), (residue, _EXIT_RESIDUE)],
+        campaign_id=_CAMPAIGN_ID,
+        refill_count=2,
+        extra_decisions=shared,
+    )
+
+    # Worst-of-N exit: the parked submit dominates.
+    assert exit_code == _EXIT_RESIDUE
+    # The residue is surfaced, not swallowed.
+    assert "ESCALATION" in merged.anomalies
+    # Only the successful submit contributes a run_id.
+    assert merged.result["run_ids"] == ["run_a"]
+    assert merged.result["submitted"] == 1
+    # Both the shared refill decision and the residue's decide entry survive.
+    points = {(d.point, d.outcome) for d in merged.decisions}
+    assert ("decide", "refill") in points
+    assert ("decide", "needs_interview") in points
+    # The merged report is still contract-valid.
+    assert parse_worker_report(json.dumps(merged.model_dump(mode="json")), workflow="campaign")

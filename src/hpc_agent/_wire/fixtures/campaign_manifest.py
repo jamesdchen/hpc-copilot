@@ -98,3 +98,26 @@ class CampaignManifest(BaseModel):
     budget: _CampaignBudget | None = None
     stop_criteria: _StopCriteria | None = None
     strategy: _Strategy | None = None
+    async_refill: bool = Field(
+        default=False,
+        description=(
+            "Opt into continuous-async refill (#362). When set, the campaign "
+            "keeps up to ``max_in_flight`` iterations in flight, telling "
+            "results as they land and refilling empty slots, instead of the "
+            "default staged barrier (one iteration drains before the next is "
+            "proposed). ``campaign-advance`` emits a ``refill`` decision and "
+            "``load-context`` routes a decide/refill step even while runs are "
+            "in flight. Default ``False`` keeps today's synchronous behavior "
+            "byte-identical."
+        ),
+    )
+    max_in_flight: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Pool-occupancy target K for ``async_refill``. ``campaign-advance`` "
+            "refills until ``in_flight`` reaches this many (capped by budget "
+            "headroom). Ignored when ``async_refill`` is false. ``None`` with "
+            "``async_refill`` set falls back to the framework default K."
+        ),
+    )

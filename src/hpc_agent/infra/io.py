@@ -194,7 +194,7 @@ def atomic_locked_update(
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX)  # type: ignore[attr-defined]  # win32 mypy: fcntl is platform-gated
         existing = _read_json_doc(path)
         new_doc = mutate(existing)
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
@@ -232,7 +232,7 @@ def atomic_locked_update(
     finally:
         if fcntl is not None:
             with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]  # win32 mypy: fcntl is platform-gated
         os.close(fd)
 
 
@@ -242,40 +242,80 @@ def advisory_flock(
     *,
     blocking: bool = True,
 ) -> Iterator[bool]:
-    """Per-process advisory ``fcntl.flock`` around a code block.
+    """Per-process advisory exclusive lock around a code block.
 
     Yields ``True`` if the lock was acquired, ``False`` if *blocking*
-    is False and another process held it. On non-POSIX platforms (no
-    ``fcntl``), always yields ``True`` — the lock degrades to a
-    permissions-only sentinel since we have no real cross-process
-    serialization, and the caller is expected to tolerate the race.
+    is False and another process held it. Backed by ``fcntl.flock`` on
+    POSIX and ``msvcrt.locking`` (byte-range lock) on win32 — both give
+    real cross-process exclusion, so the lock is NOT a no-op on any
+    platform we ship to.
 
     Use case: serialize parallel ``submit-flow`` calls from different
     shells targeting the same cluster (``~/.claude/hpc/<repo>/.submit_lock``).
-    The lock is advisory — only callers who flock the same path
+    The lock is advisory — only callers who lock the same path
     coordinate; the underlying file system operations remain unprotected.
 
     The lock file itself is created (``mkdir -p`` on the parent) and
     left in place; it's a sentinel, never read or written. If the
-    process dies, the kernel releases the flock automatically.
+    process dies, the OS releases the lock automatically.
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         import fcntl  # noqa: PLC0415 — POSIX-only import
     except ImportError:
-        # Windows / no-fcntl: degrade to no-op. We still touch the file
-        # so callers can rely on it existing (e.g. for ad-hoc inspection).
-        with contextlib.suppress(OSError):
-            lock_path.touch(exist_ok=True)
-        yield True
+        fcntl = None  # type: ignore[assignment]
+
+    if fcntl is None:
+        # win32 (no fcntl): acquire a REAL exclusive lock via msvcrt
+        # byte-range locking so concurrent submit-flow deploys serialize
+        # exactly as the POSIX branch does. Before this the win32 path
+        # degraded to a permissions-only no-op — silently dropping
+        # cross-process serialization and leaving the
+        # ``prune_orphan_sidecars(min_age_seconds=0)`` race unguarded on
+        # the one platform without flock (the campaign multi-cluster bug).
+        import msvcrt  # noqa: PLC0415 — win32-only import
+
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        acquired = False
+        try:
+            # ``msvcrt.locking`` locks ``nbytes`` from the current file
+            # position; lock 1 byte at offset 0 (the fd is never read /
+            # written / seeked, so the position stays 0). ``LK_NBLCK`` is
+            # the non-blocking try; ``LK_LOCK`` blocks but only retries 10×
+            # at 1s before raising, so for ``blocking=True`` we spin the
+            # non-blocking variant ourselves to get the unbounded blocking
+            # semantics ``fcntl.LOCK_EX`` provides.
+            if blocking:
+                while not acquired:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        acquired = True
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    acquired = True
+                except OSError:
+                    yield False
+                    return
+            yield True
+        finally:
+            if acquired:
+                with contextlib.suppress(OSError):
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            os.close(fd)
         return
 
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     acquired = False
     try:
-        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        # win32 mypy: fcntl is platform-gated (typeshed exposes flock/LOCK_*
+        # only off-win32); the runtime branch is unreachable here anyway.
+        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)  # type: ignore[attr-defined]
         try:
-            fcntl.flock(fd, flags)
+            fcntl.flock(fd, flags)  # type: ignore[attr-defined]
             acquired = True
         except BlockingIOError:
             yield False
@@ -284,5 +324,5 @@ def advisory_flock(
     finally:
         if acquired:
             with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
         os.close(fd)

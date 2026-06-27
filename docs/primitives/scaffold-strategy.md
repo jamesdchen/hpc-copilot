@@ -11,6 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force]
+    [--async-refill]
   python: hpc_agent.incorporation.scaffold_strategy.scaffold_strategy
 exit_codes:
 - 0: ok

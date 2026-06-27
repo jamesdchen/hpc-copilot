@@ -53,7 +53,70 @@ def _is_onboarded(experiment_dir: Path) -> bool:
     return (experiment_dir / ".hpc" / "tasks.py").is_file()
 
 
+# Framework default pool-occupancy target K for an async-refill campaign whose
+# manifest omits ``max_in_flight``. Kept in sync with
+# ``advance._DEFAULT_MAX_IN_FLIGHT`` and ``decide_concurrency``'s k_cap default.
+_DEFAULT_MAX_IN_FLIGHT = 4
+
+
+def _campaign_async_config(experiment_dir: Path, campaign_id: str) -> tuple[bool, int | None]:
+    """Return ``(async_refill, max_in_flight)`` from a campaign's manifest.
+
+    A missing / malformed manifest yields ``(False, None)`` — async refill is
+    an explicit opt-in, so the absence of a readable manifest means the
+    synchronous barrier (treat as off). Top-level manifest fields (#362), not
+    under ``stop_criteria``.
+    """
+    import json
+
+    import jsonschema
+
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
+        return False, None
+    if not manifest:
+        return False, None
+    async_on = manifest.get("async_refill") is True
+    raw_k = manifest.get("max_in_flight")
+    k = raw_k if isinstance(raw_k, int) and not isinstance(raw_k, bool) else None
+    return async_on, k
+
+
+def _async_free_slot(
+    experiment_dir: Path,
+    in_flight: list[dict[str, Any]],
+    campaigns: list[dict[str, Any]],
+) -> bool:
+    """True when an async-refill campaign has a free per-campaign slot.
+
+    Counts in-flight runs **per campaign** (the rows carry ``campaign_id``) and
+    compares each async campaign's count to its ``max_in_flight`` (K). A single
+    campaign with ``in_flight < K`` is enough to route a refill step. Sync
+    campaigns are skipped, so a repo with no async opt-in always returns
+    ``False`` and the synchronous routing below is unchanged.
+    """
+    if not campaigns:
+        return False
+    counts: dict[str, int] = {}
+    for row in in_flight:
+        cid = row.get("campaign_id")
+        if cid:
+            counts[cid] = counts.get(cid, 0) + 1
+    for camp in campaigns:
+        cid = camp["campaign_id"]
+        async_on, k = _campaign_async_config(experiment_dir, cid)
+        if not async_on:
+            continue
+        if counts.get(cid, 0) < (k or _DEFAULT_MAX_IN_FLIGHT):
+            return True
+    return False
+
+
 def _next_step_hint(
+    experiment_dir: Path,
     in_flight: list[dict[str, Any]],
     campaigns: list[dict[str, Any]],
     *,
@@ -61,6 +124,8 @@ def _next_step_hint(
 ) -> str:
     """Coarse next-action hint from the in-flight set and known campaigns.
 
+    - async-refill campaign with a free slot (``in_flight < K``)  -> ``decide``
+      (refill — even while OTHER runs are in flight)
     - any in-flight run still in the ``monitor`` stage  -> ``monitor``
     - in-flight runs exist but all past monitoring      -> ``aggregate``
     - nothing in flight, a campaign exists              -> ``decide``
@@ -68,14 +133,22 @@ def _next_step_hint(
     - nothing in flight, no campaign, NOT onboarded     -> ``onboard``
 
     ``decide`` distinguishes "a campaign finished an iteration and needs
-    its next one chosen" from a cold ``submit`` of a fresh experiment.
-    ``onboard`` catches the un-onboarded repo (no ``.hpc/tasks.py``) so a
-    fresh-context agent is routed to ``wrap-entry-point`` instead of being
-    pointed at submission with nothing to submit.
+    its next one chosen" from a cold ``submit`` of a fresh experiment. In an
+    async-refill campaign (#362) the ``decide`` (refill) step is **no longer
+    gated on ``in_flight == 0``**: whenever a campaign has an empty slot it
+    refills, and only when every async campaign's pool is full does the
+    synchronous monitor/aggregate routing take over to drain the in-flight
+    runs. ``onboard`` catches the un-onboarded repo (no ``.hpc/tasks.py``).
 
     Advisory only: the skill still decides, but a fresh step gets a
     deterministic starting point instead of guessing from memory.
     """
+    # Async-refill: a free per-campaign slot routes a refill (decide) step
+    # even while runs are in flight. Checked first so refilling keeps the pool
+    # full; when no async campaign has a free slot this is False and the
+    # synchronous routing below is byte-identical.
+    if _async_free_slot(experiment_dir, in_flight, campaigns):
+        return "decide"
     if not in_flight:
         if campaigns:
             return "decide"
@@ -182,9 +255,14 @@ def _build_delegate(
             "campaign_id": campaign_id,
             "experiment_dir": exp,
             "reason": (
-                f"campaign {campaign_id!r} has no runs in flight; "
-                "decide and submit its next iteration"
+                f"campaign {campaign_id!r} is ready to decide/refill its next "
+                "iteration(s) (a free slot in async-refill mode, or an idle "
+                "campaign in synchronous mode)"
             ),
+            # step stays "decide" even for an async refill: the deterministic
+            # resolver dispatches its decide chain on fields.step == "decide",
+            # then campaign-advance returns decision="refill" and the resolver's
+            # refill arm submits refill_count iterations (#362, plan §1.4).
             "spawn_request": {
                 "workflow": "campaign",
                 "experiment_dir": exp,
@@ -254,8 +332,9 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
     - ``next_step_hint`` — ``submit`` / ``monitor`` / ``aggregate`` /
       ``decide`` / ``onboard``, derived from the in-flight set, known
       campaigns, and onboarding state (``decide`` when a campaign is idle
-      and awaiting its next iteration; ``onboard`` when the repo has no
-      ``.hpc/tasks.py``).
+      and awaiting its next iteration, OR — for an async-refill campaign
+      (#362) — whenever it has a free slot, even with runs still in flight;
+      ``onboard`` when the repo has no ``.hpc/tasks.py``).
     - ``delegate`` — the next step as a delegable unit of work
       (``kind`` ``cli``/``agent``, ``step``, ``run_id``,
       ``campaign_id``, ``prompt``, ``spawn_request``); consumed by an
@@ -355,7 +434,7 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
         campaigns.append(row)
 
     onboarded = _is_onboarded(experiment_dir)
-    hint = _next_step_hint(in_flight, campaigns, onboarded=onboarded)
+    hint = _next_step_hint(experiment_dir, in_flight, campaigns, onboarded=onboarded)
     return {
         "experiment_dir": str(experiment_dir),
         "latest_run": latest_run,

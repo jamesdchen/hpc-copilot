@@ -24,10 +24,11 @@ For the campaign ``decide`` step
 1. ``classify-campaign-path`` (`.hpc/tasks.py`) — manual grid vs strategy.
    A confident hit is ``decided_by="code"``; an unparseable / unrecognized
    tasks.py escalates (``decided_by="judgement"``) → **residue**.
-2. ``campaign-advance`` — the deterministic decision ladder. ``continue`` is
-   the only branch that submits the next iteration; every ``stop_*`` /
-   ``wait_in_flight`` is a *decided* clean terminal (NOT residue — the loop
-   correctly stops), reported and exited 0.
+2. ``campaign-advance`` — the deterministic decision ladder. ``continue``
+   submits the next iteration; ``refill`` (async mode, #362) submits
+   ``refill_count`` iterations to top the in-flight pool back up to K; every
+   ``stop_*`` / ``wait_in_flight`` is a *decided* clean terminal (NOT residue —
+   the loop correctly stops/waits), reported and exited 0.
 3. On ``continue``: reconstruct the next iteration's submit context from the
    prior run's sidecar config snapshot (cluster / profile / remote_path /
    executor / result_dir_template / resources / runtime — the values
@@ -247,6 +248,22 @@ class DeterministicCampaignResolver:
             why=advance["reason"],
         )
 
+        # Async-refill (#362): not a terminal — submit `refill_count` iterations
+        # to bring the in-flight pool back up to K. Each _submit_next_iteration
+        # call re-imports tasks.py via a fresh compute-run-id, which asks the
+        # NEXT distinct trial (load-bearing dependency on the async scaffold's
+        # constant_liar + submitted-count index, plan §1.5) and advances the
+        # cursor once — so N calls advance it N times. Reached BEFORE the
+        # non-continue terminal gate below.
+        if decision == "refill":
+            refill_count = advance.get("refill_count") or 0
+            return self._resolve_refill(
+                experiment_dir,
+                campaign_id=campaign_id,
+                refill_count=int(refill_count),
+                extra_decisions=[path_decision, advance_decision],
+            )
+
         # A non-`continue` decision is a DECIDED clean terminal, not residue: the
         # loop is correctly stopping / waiting. Report it and exit 0.
         if decision != "continue":
@@ -267,6 +284,96 @@ class DeterministicCampaignResolver:
             campaign_id=campaign_id,
             extra_decisions=[path_decision, advance_decision],
         )
+
+    # -- refill chain (#362) -----------------------------------------------
+
+    def _resolve_refill(
+        self,
+        experiment_dir: Path,
+        *,
+        campaign_id: str,
+        refill_count: int,
+        extra_decisions: list[WorkerDecision],
+    ) -> tuple[WorkerReport, int]:
+        """Submit ``refill_count`` iterations and merge the N reports into one.
+
+        Each call to :meth:`_submit_next_iteration` is an independent
+        reconstruct -> resolve-submit-inputs -> submit -> advance_cursor chain,
+        returning its own ``(WorkerReport, exit_code)``. They are aggregated by
+        :meth:`_aggregate_refill_reports` so the neutral loop sees ONE report:
+        the N run_ids, deduped decisions, the worst exit code, and any residue
+        surfaced (never swallowed). The cursor advances once per successful
+        call, so a ``refill_count`` of N leaves it at +N — correct.
+
+        ``refill_count == 0`` (a pool already at target) submits nothing and
+        reports a clean no-op; ``campaign-advance`` only emits ``refill`` with a
+        positive count, so this is a defensive floor, not the common path.
+        """
+        results = [
+            self._submit_next_iteration(experiment_dir, campaign_id=campaign_id, extra_decisions=[])
+            for _ in range(max(0, refill_count))
+        ]
+        return self._aggregate_refill_reports(
+            results,
+            campaign_id=campaign_id,
+            refill_count=refill_count,
+            extra_decisions=extra_decisions,
+        )
+
+    def _aggregate_refill_reports(
+        self,
+        results: list[tuple[WorkerReport, int]],
+        *,
+        campaign_id: str,
+        refill_count: int,
+        extra_decisions: list[WorkerDecision],
+    ) -> tuple[WorkerReport, int]:
+        """Fold N per-submit ``(report, exit)`` tuples into one campaign report.
+
+        - **run_ids**: every submitted iteration's run_id, in submit order.
+        - **decisions**: ``extra_decisions`` (the shared path + decide=refill
+          entries) plus each per-submit report's decisions, deduped by
+          ``(point, outcome)`` so a residue's escalation entry survives but the
+          shared decisions aren't repeated N times.
+        - **exit code**: the worst of the N (``_EXIT_RESIDUE`` beats
+          ``_EXIT_OK``) — one parked submit parks the whole tick.
+        - **anomalies**: every non-empty per-submit residue string concatenated,
+          so a parked submit is surfaced, not swallowed.
+        """
+        worst_exit = _EXIT_OK
+        run_ids: list[Any] = []
+        submitted = 0
+        anomaly_parts: list[str] = []
+        decisions: list[WorkerDecision] = list(extra_decisions)
+        seen: set[tuple[str, str]] = {(d.point, d.outcome) for d in decisions}
+
+        for report, exit_code in results:
+            worst_exit = max(worst_exit, exit_code)
+            for d in report.decisions:
+                key = (d.point, d.outcome)
+                if key not in seen:
+                    seen.add(key)
+                    decisions.append(d)
+            if report.result.get("submitted"):
+                submitted += 1
+                run_id = report.result.get("run_id")
+                if run_id:
+                    run_ids.append(run_id)
+            if report.anomalies:
+                anomaly_parts.append(report.anomalies)
+
+        merged = WorkerReport(
+            result={
+                "refilled": True,
+                "campaign_id": campaign_id,
+                "refill_count": refill_count,
+                "submitted": submitted,
+                "run_ids": run_ids,
+            },
+            decisions=decisions,
+            anomalies="\n".join(anomaly_parts),
+        )
+        return self._validated(merged, "campaign"), worst_exit
 
     # -- cold submit chain -------------------------------------------------
 

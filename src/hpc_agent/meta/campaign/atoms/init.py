@@ -94,6 +94,26 @@ if TYPE_CHECKING:
                 default=None,
                 help="JSON object for strategy.params (round-tripped untouched).",
             ),
+            CliArg(
+                "--async-refill",
+                action="store_true",
+                help=(
+                    "Opt into continuous-async refill (#362): keep --max-in-flight "
+                    "iterations in flight, telling results as they land and refilling "
+                    "empty slots, instead of the default staged barrier. Read by "
+                    "campaign-advance / load-context. Default off = synchronous."
+                ),
+            ),
+            CliArg(
+                "--max-in-flight",
+                type=int,
+                default=None,
+                help=(
+                    "Pool-occupancy target K for --async-refill (ignored when async "
+                    "is off). Refills until in_flight reaches K, capped by budget "
+                    "headroom. Omit to use the framework default K."
+                ),
+            ),
         ),
         group="campaign",
     ),
@@ -119,6 +139,8 @@ def campaign_init(
     max_task_resubmits: int | None = None,
     strategy_name: str | None = None,
     strategy_params_json: str | None = None,
+    async_refill: bool = False,
+    max_in_flight: int | None = None,
 ) -> dict[str, Any]:
     """Write ``<campaign_dir>/manifest.json`` from CLI args.
 
@@ -195,6 +217,8 @@ def campaign_init(
         budget=budget,
         stop_criteria=stop_criteria,
         strategy=strategy,
+        async_refill=async_refill,
+        max_in_flight=max_in_flight,
     )
     return {
         "campaign_id": campaign_id,

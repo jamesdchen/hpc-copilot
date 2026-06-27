@@ -7,7 +7,7 @@ to rely on conversational memory. These tests pin that contract.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -38,8 +38,8 @@ def experiment(tmp_path: Path) -> Path:
     return d
 
 
-def _write_sidecar(experiment: Path, run_id: str, **overrides) -> None:
-    base = dict(
+def _write_sidecar(experiment: Path, run_id: str, **overrides: Any) -> None:
+    base: dict[str, Any] = dict(
         run_id=run_id,
         cmd_sha="a" * 64,
         hpc_agent_version="0.4.0",
@@ -71,8 +71,8 @@ def _onboard(experiment: Path) -> None:
     (hpc / "tasks.py").write_text("# dispatch contract\n", encoding="utf-8")
 
 
-def _make_record(run_id: str, **overrides) -> RunRecord:
-    base = {
+def _make_record(run_id: str, **overrides: Any) -> RunRecord:
+    base: dict[str, Any] = {
         "run_id": run_id,
         "profile": "gpu-sweep",
         "cluster": "greene",
@@ -254,3 +254,56 @@ def test_submit_hint_when_idle_and_no_campaign(journal_home, experiment):
     assert ctx["next_step_hint"] == "submit"
     assert ctx["delegate"]["step"] == "submit"
     assert ctx["delegate"]["campaign_id"] is None
+
+
+# ─── async-refill routing (#362, plan §1.3) ─────────────────────────────────
+
+
+def _seed_in_flight_campaign_run(experiment: Path, run_id: str, cid: str) -> None:
+    """A campaign run that is BOTH in flight (journal, monitor stage) and has a
+    sidecar (so the campaign shows up in ``campaigns``)."""
+    _write_sidecar(experiment, run_id, campaign_id=cid)
+    upsert_run(experiment, _make_record(run_id, stage="monitor", campaign_id=cid))
+
+
+def test_async_refill_decides_while_runs_in_flight(journal_home, experiment):
+    """An async-refill campaign with a free slot routes a decide/refill step
+    EVEN with a run still in flight — the load-bearing async change (#362)."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    write_manifest(experiment, campaign_id="optuna-1", async_refill=True, max_in_flight=4)
+
+    ctx = load_context(experiment_dir=experiment)
+    # A run IS in flight (monitor stage), yet the hint is decide (refill).
+    assert len(ctx["in_flight"]) == 1
+    assert ctx["next_step_hint"] == "decide"
+    delegate = ctx["delegate"]
+    assert delegate["kind"] == "agent"
+    assert delegate["step"] == "decide"
+    assert delegate["campaign_id"] == "optuna-1"
+    assert delegate["spawn_request"]["workflow"] == "campaign"
+
+
+def test_async_off_still_monitors_in_flight(journal_home, experiment):
+    """Default-off: the same in-flight campaign run routes monitor, not refill —
+    synchronous routing is byte-identical when no async manifest is present."""
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    # No manifest written → async opt-in absent → synchronous behavior.
+
+    ctx = load_context(experiment_dir=experiment)
+    assert ctx["next_step_hint"] == "monitor"
+
+
+def test_async_pool_full_routes_monitor(journal_home, experiment):
+    """At K in flight the async campaign has no free slot, so monitoring (drain)
+    takes over instead of refilling."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    _seed_in_flight_campaign_run(experiment, "20260521-130000-bbb", "optuna-1")
+    write_manifest(experiment, campaign_id="optuna-1", async_refill=True, max_in_flight=2)
+
+    ctx = load_context(experiment_dir=experiment)
+    assert len(ctx["in_flight"]) == 2  # == K
+    assert ctx["next_step_hint"] == "monitor"

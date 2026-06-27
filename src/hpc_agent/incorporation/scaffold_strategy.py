@@ -40,6 +40,16 @@ _STRATEGY_ASSETS: dict[str, str] = {
     "pbt": "pbt_strategy.py",
 }
 
+# Continuous-async-refill variants (#362): emitted when ``--async-refill`` is
+# set. Only strategies that can propose distinctly under concurrency have one —
+# optuna's ``constant_liar`` + tell-by-trial_token variant. PBT already batches a
+# whole generation, so it needs no separate async asset (``--async-refill`` is a
+# no-op for it). A strategy absent from this map falls back to its synchronous
+# asset regardless of the flag.
+_ASYNC_STRATEGY_ASSETS: dict[str, str] = {
+    "optuna": "optuna_async_strategy.py",
+}
+
 # The materialized strategy IS the experiment's tasks.py — the framework
 # imports it and calls total()/resolve() (and, on the orchestrator only,
 # _propose()). The campaign loop reads it as `.hpc/tasks.py`.
@@ -81,6 +91,16 @@ _DEFAULT_DEST_REL = Path(".hpc") / "tasks.py"
                 action="store_true",
                 help="Overwrite the destination .hpc/tasks.py if it already exists.",
             ),
+            CliArg(
+                "--async-refill",
+                action="store_true",
+                help=(
+                    "Emit the continuous-async-refill variant of the strategy "
+                    "(#362): keeps K trials in flight via tell-by-trial_token + a "
+                    "constant_liar sampler. Only optuna has a distinct async "
+                    "asset; a no-op for strategies that already batch (pbt)."
+                ),
+            ),
         ),
     ),
     agent_facing=True,
@@ -90,6 +110,7 @@ def scaffold_strategy(
     output_dir: Path,
     name: str,
     force: bool = False,
+    async_refill: bool = False,
 ) -> dict[str, Any]:
     """Materialize the ``name`` strategy template into ``output_dir``.
 
@@ -108,12 +129,15 @@ def scaffold_strategy(
         ``"optuna"`` or ``"pbt"``.
     force:
         Overwrite an existing ``.hpc/tasks.py``. Default ``False``.
+    async_refill:
+        Emit the continuous-async-refill variant (#362) when one exists for
+        *name* (currently optuna). Default ``False`` → the synchronous asset.
 
     Returns
     -------
-    ``{path, name, source, output_dir}`` — the absolute path written, the
-    strategy name, the absolute template path it was copied from, and the
-    resolved repo root.
+    ``{path, name, async_refill, source, output_dir}`` — the absolute path
+    written, the strategy name, whether the async variant was emitted, the
+    absolute template path it was copied from, and the resolved repo root.
 
     Raises
     ------
@@ -127,8 +151,14 @@ def scaffold_strategy(
     if not output_dir.is_dir():
         raise errors.SpecInvalid(f"output-dir {output_dir} does not exist or is not a directory")
 
+    # Pick the async variant when requested and one exists for this strategy;
+    # otherwise fall back to the synchronous asset (default + pbt).
+    asset = _STRATEGY_ASSETS[name]
+    if async_refill and name in _ASYNC_STRATEGY_ASSETS:
+        asset = _ASYNC_STRATEGY_ASSETS[name]
+
     scaffold_dir = hpc_agent._PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds"
-    src = scaffold_dir / _STRATEGY_ASSETS[name]
+    src = scaffold_dir / asset
     if not src.is_file():
         raise errors.SpecInvalid(f"strategy template missing on disk: {src}")
 
@@ -145,6 +175,7 @@ def scaffold_strategy(
     return {
         "path": str(dest.resolve()),
         "name": name,
+        "async_refill": bool(async_refill),
         "source": str(src),
         "output_dir": str(output_dir.resolve()),
     }

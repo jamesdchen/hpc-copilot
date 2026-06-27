@@ -11,7 +11,8 @@ backed_by:
     <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>]
     [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>]
     [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures
-    <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>]
+    <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill]
+    [--max-in-flight <max_in_flight>]
   python: hpc_agent.meta.campaign.atoms.advance.campaign_advance
 ---
 # campaign-advance
