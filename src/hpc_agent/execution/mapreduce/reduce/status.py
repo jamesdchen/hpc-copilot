@@ -940,8 +940,42 @@ def report_status_from_tasks(
 # ---------------------------------------------------------------------------
 
 
+# Placeholders the reporter can always supply from the sidecar alone,
+# without importing ``tasks.py``. Any OTHER ``{name}`` in
+# ``result_dir_template`` must come from ``tasks_module.resolve(i)``.
+_SIDECAR_ONLY_PLACEHOLDERS = frozenset({"run_id", "task_id"})
+
+
+def _template_needs_resolve_kwargs(template: str) -> bool:
+    """True when *template* references a placeholder beyond run_id/task_id.
+
+    Parses ``result_dir_template`` for ``{name}`` fields via the stdlib
+    formatter. A template like ``results/{run_id}/task_{task_id}`` references
+    only sidecar-supplied names, so the per-task ``resolve(i)`` kwargs are
+    unused and importing ``tasks.py`` is pure cost (and pure risk — a foreign
+    campaign's strategy file may fail to import and would otherwise wedge the
+    whole report). Only when a template names some *other* placeholder do we
+    actually need the import. An unparseable template is treated as needing
+    kwargs (conservative: fall through to the import path, which preserves the
+    prior behavior for that edge).
+    """
+    import string
+
+    try:
+        names = {
+            field for _literal, field, _spec, _conv in string.Formatter().parse(template) if field
+        }
+    except (ValueError, TypeError):
+        return True
+    # An auto-numbered ``{}`` field parses to an empty string (filtered out
+    # by ``if field`` above) and a positional ``{0}`` to a digit name; neither
+    # is sidecar-supplied, so any leftover non-sidecar name means we need the
+    # resolve() kwargs.
+    return bool(names - _SIDECAR_ONLY_PLACEHOLDERS)
+
+
 def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
-    """Build a per-task dict from sidecar + ``.hpc/tasks.py``.
+    """Build a per-task dict from sidecar (+ optional ``.hpc/tasks.py``).
 
     Adapter that lets the existing reporting code
     (``report_status_from_tasks``, ``rollup_by_grid_point``,
@@ -949,21 +983,34 @@ def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
     task's ``result_dir`` is computed by formatting the sidecar's
     ``result_dir_template`` against ``task_id`` + ``run_id`` + the
     kwargs returned by ``tasks_module.resolve(task_id)``.
+
+    ``tasks_module`` may be ``None`` — the *degraded* path used when the
+    template references no ``resolve()`` kwargs (so the import was skipped)
+    or when the import failed for a foreign ``tasks.py``. In that mode each
+    task's kwargs are empty: result dirs synthesize from ``run_id``/``task_id``
+    only, and ``params`` is ``{}`` (so the grid rollup falls under the ``"_"``
+    key rather than crashing the whole report). A template that *does* need
+    kwargs but ran in degraded mode formats with an empty context and yields
+    an empty ``result_dir`` for the missing fields — surfaced as "incomplete"
+    downstream, never an exception.
     """
     n = int(sidecar["task_count"])
     template = sidecar["result_dir_template"]
     run_id = sidecar["run_id"]
     tasks: dict[str, dict] = {}
     for i in range(n):
-        kwargs = tasks_module.resolve(i)
-        if not isinstance(kwargs, dict):
-            kwargs = {}
+        kwargs: dict = {}
+        if tasks_module is not None:
+            resolved = tasks_module.resolve(i)
+            if isinstance(resolved, dict):
+                kwargs = resolved
         ctx = {"task_id": i, "run_id": run_id, **kwargs}
         try:
             result_dir = template.format(**ctx)
-        except KeyError:
+        except (KeyError, IndexError):
             # Surface as empty so downstream "missing result file" logic
-            # flags the misconfiguration without crashing the report.
+            # flags the misconfiguration (or the degraded fallback) without
+            # crashing the report.
             result_dir = ""
         tasks[str(i)] = {
             "result_dir": result_dir,
@@ -1055,15 +1102,42 @@ def _main() -> int:
         sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 
+    # Decide whether reporting THIS run actually needs ``tasks.py``. The
+    # per-task result dirs come from ``result_dir_template``; only templates
+    # that reference a placeholder beyond ``run_id``/``task_id`` need the
+    # per-task ``resolve(i)`` kwargs (and thus the import). For the common
+    # ``results/{run_id}/task_{task_id}`` shape the import is pure cost — and
+    # a foreign campaign's ``tasks.py`` (heavy imports / import-time side
+    # effects / missing campaign env vars) would otherwise wedge status for an
+    # unrelated run. So import LAZILY, and only when the template needs it.
+    template = sidecar.get("result_dir_template", "") or ""
+    tasks_module = None
+    _degraded_import_detail: str | None = None
+    # A genuinely MISSING ``.hpc/tasks.py`` is a malformed run regardless of the
+    # template — keep the documented ``tasks_py_not_found`` contract. But only
+    # IMPORT it (the wedge cost: a foreign campaign's heavy / env-dependent
+    # tasks.py would otherwise block an unrelated run) when ``result_dir_template``
+    # actually needs per-task ``resolve()`` kwargs; for the common
+    # ``results/{run_id}/task_{task_id}`` shape the import is pure cost.
     tasks_py_path = Path(".hpc") / "tasks.py"
     if not tasks_py_path.is_file():
         return _emit_err("tasks_py_not_found", str(tasks_py_path))
-    try:
-        from hpc_agent import load_tasks_module
+    if _template_needs_resolve_kwargs(template):
+        try:
+            from hpc_agent import load_tasks_module
 
-        tasks_module = load_tasks_module(tasks_py_path)
-    except Exception as exc:
-        return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
+            tasks_module = load_tasks_module(tasks_py_path)
+        except Exception as exc:
+            # DEGRADE rather than fail the whole report: a foreign tasks.py
+            # that won't import (present, but heavy / env-dependent) must not
+            # block reconciliation of THIS run. Fall back to task_id-only result
+            # dirs (tasks_module=None) + a non-fatal note in the errors list.
+            print(
+                f"tasks.py import failed ({tasks_py_path}: {exc}); "
+                "degrading to task_id-only result dirs",
+                file=sys.stderr,
+            )
+            _degraded_import_detail = f"{tasks_py_path}: {exc}"
 
     try:
         tasks_data = _build_per_task_dict_from_sidecar(sidecar, tasks_module)
@@ -1093,6 +1167,14 @@ def _main() -> int:
     report.setdefault("rollup", {})
     report.setdefault("waves", {})
     report.setdefault("errors", [])
+
+    # A degraded import is non-fatal: the report stands (exit 0) but records
+    # WHY result dirs were synthesized from task_id only, so the operator can
+    # tell a genuinely-empty run apart from one whose tasks.py wouldn't load.
+    if _degraded_import_detail is not None:
+        report["errors"].append(
+            {"code": "tasks_py_import_degraded", "detail": _degraded_import_detail}
+        )
 
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

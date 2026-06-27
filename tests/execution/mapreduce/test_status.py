@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import json
+import sys
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from hpc_agent.execution.mapreduce.reduce.status import (
@@ -330,3 +334,155 @@ class TestDetectSchedulerMetaHint:
         ):
             report = report_status_from_tasks(tasks_data, [])
         assert report["scheduler"] == "slurm"
+
+
+# ─── BUG 3: status reporter must not let a foreign tasks.py wedge the report ──
+
+
+class TestTemplateNeedsResolveKwargs:
+    """``result_dir_template`` placeholder analysis gates the tasks.py import."""
+
+    def test_run_id_task_id_only_needs_no_kwargs(self):
+        from hpc_agent.execution.mapreduce.reduce.status import _template_needs_resolve_kwargs
+
+        assert _template_needs_resolve_kwargs("results/{run_id}/task_{task_id}") is False
+        assert _template_needs_resolve_kwargs("out/{task_id}") is False
+        assert _template_needs_resolve_kwargs("flat") is False  # no placeholders at all
+
+    def test_other_placeholder_needs_kwargs(self):
+        from hpc_agent.execution.mapreduce.reduce.status import _template_needs_resolve_kwargs
+
+        assert _template_needs_resolve_kwargs("results/{model}/task_{task_id}") is True
+        assert _template_needs_resolve_kwargs("results/{run_id}/{horizon}/{task_id}") is True
+
+    def test_unparseable_template_is_conservative(self):
+        """A malformed template falls through to the import path (prior behavior)."""
+        from hpc_agent.execution.mapreduce.reduce.status import _template_needs_resolve_kwargs
+
+        assert _template_needs_resolve_kwargs("results/{unclosed") is True
+
+
+class TestBuildPerTaskDictDegraded:
+    """``_build_per_task_dict_from_sidecar`` tolerates ``tasks_module=None``."""
+
+    def test_none_module_synthesizes_from_run_id_task_id(self):
+        from hpc_agent.execution.mapreduce.reduce.status import _build_per_task_dict_from_sidecar
+
+        sidecar = {
+            "task_count": 2,
+            "result_dir_template": "results/{run_id}/task_{task_id}",
+            "run_id": "abc123",
+            "wave_map": {},
+            "cmd_sha": "deadbeef",
+        }
+        out = _build_per_task_dict_from_sidecar(sidecar, None)
+
+        assert out["total_tasks"] == 2
+        assert out["tasks"]["0"]["result_dir"] == "results/abc123/task_0"
+        assert out["tasks"]["1"]["result_dir"] == "results/abc123/task_1"
+        # Degraded path carries empty params (grid rollup falls under "_").
+        assert out["tasks"]["0"]["params"] == {}
+
+    def test_none_module_with_kwargs_template_yields_empty_dir_not_crash(self):
+        """A kwargs template run degraded formats with an empty context — the
+        missing field leaves an empty ``result_dir`` rather than raising."""
+        from hpc_agent.execution.mapreduce.reduce.status import _build_per_task_dict_from_sidecar
+
+        sidecar = {
+            "task_count": 1,
+            "result_dir_template": "results/{model}/task_{task_id}",
+            "run_id": "r1",
+            "wave_map": {},
+        }
+        out = _build_per_task_dict_from_sidecar(sidecar, None)
+        assert out["tasks"]["0"]["result_dir"] == ""
+
+
+def _drive_main(tmp_path, monkeypatch, sidecar, *, run_id="run1"):
+    """Drive ``status._main`` with a fake sidecar + a real ``.hpc/tasks.py``.
+
+    Returns ``(exit_code, parsed_stdout_doc)``. ``report_status_from_tasks`` is
+    patched to a trivial stub so no scheduler subprocess runs; the only thing
+    under test is the import-gating / degrade logic around it.
+    """
+    from hpc_agent.execution.mapreduce.reduce import status as status_mod
+
+    hpc_dir = tmp_path / ".hpc"
+    hpc_dir.mkdir()
+    # A poison-pill tasks.py: importing it raises at module top-level, modeling
+    # a foreign campaign's strategy file that needs env vars THIS run never set.
+    (hpc_dir / "tasks.py").write_text(
+        "raise RuntimeError('foreign campaign tasks.py cannot import here')\n"
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["status", "--run-id", run_id])
+    monkeypatch.setattr(status_mod, "read_run_sidecar", lambda _exp, _rid: sidecar, raising=False)
+    # read_run_sidecar is imported lazily inside _main via
+    # ``from hpc_agent.state.runs import read_run_sidecar`` — patch the source.
+    monkeypatch.setattr(
+        "hpc_agent.state.runs.read_run_sidecar", lambda _exp, _rid: sidecar, raising=False
+    )
+
+    def _stub_report(tasks_data, job_ids, **kwargs):
+        return {
+            "total_tasks": tasks_data["total_tasks"],
+            "tasks": {tid: {"status": "unknown"} for tid in tasks_data["tasks"]},
+            "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+            "errors": [],
+        }
+
+    monkeypatch.setattr(status_mod, "report_status_from_tasks", _stub_report)
+    monkeypatch.setattr(status_mod, "rollup_by_grid_point", lambda *a, **k: {})
+    monkeypatch.setattr(status_mod, "rollup_by_wave", lambda *a, **k: {})
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = status_mod._main()
+    return rc, json.loads(buf.getvalue())
+
+
+class TestMainImportGating:
+    """``_main`` imports ``tasks.py`` lazily and degrades on failure (BUG 3)."""
+
+    def test_no_kwargs_template_skips_import_entirely(self, tmp_path, monkeypatch):
+        """A run whose template needs no resolve() kwargs reconciles even when
+        ``load_tasks_module`` would explode — the import is never attempted."""
+        sidecar = {
+            "task_count": 2,
+            "result_dir_template": "results/{run_id}/task_{task_id}",
+            "run_id": "run1",
+            "wave_map": {},
+        }
+
+        def _boom(*_a, **_k):
+            raise AssertionError("load_tasks_module must NOT be called for a no-kwargs template")
+
+        # Patch the source binding (imported lazily inside _main).
+        with patch("hpc_agent.load_tasks_module", side_effect=_boom):
+            rc, doc = _drive_main(tmp_path, monkeypatch, sidecar)
+
+        assert rc == 0
+        # No degrade note: the import was skipped, not failed.
+        codes = [e["code"] for e in doc.get("errors", [])]
+        assert "tasks_py_import_error" not in codes
+        assert "tasks_py_import_degraded" not in codes
+
+    def test_kwargs_template_import_failure_degrades_not_fails(self, tmp_path, monkeypatch):
+        """A run whose template DOES need kwargs but whose tasks.py won't import
+        degrades to task_id-only result dirs (exit 0 + non-fatal note) instead
+        of returning ``tasks_py_import_error`` / exit 2 for the whole run."""
+        sidecar = {
+            "task_count": 1,
+            "result_dir_template": "results/{model}/task_{task_id}",
+            "run_id": "run1",
+            "wave_map": {},
+        }
+        # The on-disk .hpc/tasks.py (written by _drive_main) raises on import,
+        # so the real load_tasks_module fails — exactly the BUG 3 scenario.
+        rc, doc = _drive_main(tmp_path, monkeypatch, sidecar)
+
+        assert rc == 0  # degraded, NOT a hard exit-2 failure
+        codes = [e["code"] for e in doc.get("errors", [])]
+        assert "tasks_py_import_degraded" in codes
+        assert "tasks_py_import_error" not in codes
