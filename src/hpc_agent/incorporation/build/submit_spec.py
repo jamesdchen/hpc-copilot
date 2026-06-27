@@ -70,6 +70,44 @@ _MPI_SCRIPTS: dict[str, str] = {
 _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
 
 
+def _campaign_strategy_kw_env(experiment_dir: Path | None, campaign_id: str) -> dict[str, str]:
+    """Materialize a campaign manifest's ``strategy.params`` as ``HPC_KW_*`` env.
+
+    A Path-B strategy ``tasks.py`` reads its knobs from
+    ``os.environ["HPC_KW_<PARAM>"]`` (the documented convention). The campaign
+    manifest stores them under ``strategy.params`` at
+    ``<experiment_dir>/.hpc/campaigns/<campaign_id>/manifest.json`` — but
+    nothing wired the two together, so a campaign submit enumerated ``tasks.py``
+    under default knobs (the ``cmd_sha = e3b0c442…`` empty-list hash → canary
+    ``dispatcher_failed``). This is the symmetric missing half of the cluster
+    dispatcher's ``resolve()``-kwargs → ``HPC_KW_*`` export (dispatch.py:815),
+    for STRATEGY params.
+
+    Returns ``{"HPC_KW_<KEY.upper()>": str(value), ...}`` for each entry in
+    ``strategy.params``, stringifying values exactly as the dispatcher does
+    (``str(value)``). Returns ``{}`` (clean no-op) when there is no
+    experiment_dir, no campaign_id, no manifest, or no strategy params — so a
+    non-campaign submit is byte-identical to before.
+    """
+    if experiment_dir is None or not campaign_id:
+        return {}
+    try:
+        from hpc_agent.meta.campaign.manifest import read_manifest
+
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except Exception:  # noqa: BLE001 — a missing/bad manifest must not break a non-campaign-shaped submit
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    strategy = manifest.get("strategy")
+    if not isinstance(strategy, dict):
+        return {}
+    params = strategy.get("params")
+    if not isinstance(params, dict):
+        return {}
+    return {f"HPC_KW_{str(key).upper()}": str(value) for key, value in params.items()}
+
+
 @primitive(
     name="build-submit-spec",
     verb="scaffold",
@@ -199,17 +237,56 @@ def build_submit_spec(
     # all-empty + per-pair guards now live inside ``Activation.__post_init__``.
     from hpc_agent.infra.clusters import load_clusters_config, resolve_activation
 
+    _cluster_cfg = load_clusters_config().get(cluster) or {}
+    # Minor fix: a spec built directly (not via the worker) may omit all three
+    # env-activation fields even though clusters.yaml carries them for this
+    # cluster. The worker happens to thread modules/conda_source/conda_env from
+    # clusters.yaml (resolve-submit-inputs / scaffold-spec do), but the raw
+    # primitive must not require the caller to re-supply config the framework
+    # already knows. When NONE of the three is supplied, fall back to the
+    # cluster's config — mirroring scaffold_spec's coherent-pair discipline:
+    # only emit the conda_env when its conda_source is also present (an env
+    # without a source crashes the preamble, #281), and space-join the modules
+    # list into the single ``$MODULES`` string the preamble iterates.
+    _modules = spec.modules
+    _conda_source = spec.conda_source
+    _conda_env = spec.conda_env
+    if _modules is None and _conda_source is None and _conda_env is None and _cluster_cfg:
+        _cfg_modules = _cluster_cfg.get("modules") or []
+        if isinstance(_cfg_modules, list) and _cfg_modules:
+            _modules = " ".join(str(m) for m in _cfg_modules)
+        _cfg_source = _cluster_cfg.get("conda_source")
+        _cfg_envs = _cluster_cfg.get("conda_envs") or []
+        if _cfg_source and isinstance(_cfg_envs, list) and _cfg_envs:
+            _conda_source = str(_cfg_source)
+            _conda_env = str(_cfg_envs[0])
     _activation = resolve_activation(
-        cluster_cfg=load_clusters_config().get(cluster) or {},
-        modules=spec.modules,
-        conda_source=spec.conda_source,
-        conda_env=spec.conda_env,
+        cluster_cfg=_cluster_cfg,
+        modules=_modules,
+        conda_source=_conda_source,
+        conda_env=_conda_env,
     )
     modules = _activation.modules
     conda_source = _activation.conda_source
     conda_env = _activation.conda_env
     runtime = spec.runtime
     campaign_id = spec.campaign_id or ""
+    # BUG 4: materialize the campaign manifest's strategy.params as HPC_KW_*.
+    # A Path-B strategy tasks.py reads its knobs from os.environ["HPC_KW_*"];
+    # the manifest stores them under strategy.params but nothing wired them
+    # together, so the LOCAL enumeration (which imports tasks.py to compute the
+    # task list / cmd_sha) and the CLUSTER job ran under default knobs. Export
+    # them into BOTH (a) the PROCESS env now — BEFORE the local enumeration's
+    # load_tasks_module runs (_resolve_kwargs_keys, below) — AND (b) the job_env
+    # (assembled below), so the cluster job carries them too. The cluster
+    # dispatcher already exports resolve()-kwargs as HPC_KW_* (dispatch.py:815);
+    # this is the symmetric missing half for STRATEGY params. No-op for a
+    # non-campaign submit (empty dict → no env writes, no job_env additions).
+    _campaign_kw_env = _campaign_strategy_kw_env(experiment_dir, campaign_id)
+    if _campaign_kw_env:
+        import os as _os
+
+        _os.environ.update(_campaign_kw_env)
     canary = bool(spec.canary) if spec.canary is not None else True
     partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
     # #275: ``skip_preflight`` is no longer emitted onto the submit_flow spec —
@@ -322,6 +399,12 @@ def build_submit_spec(
         job_env["HPC_RUNTIME"] = "uv"
     if campaign_id:
         job_env["HPC_CAMPAIGN_ID"] = campaign_id
+        # BUG 4 half (b): carry the campaign's strategy.params to the CLUSTER
+        # job as HPC_KW_* (the same dict already exported into the local process
+        # env above for enumeration). Stamped before extra_env so an explicit
+        # caller override still wins on key collision.
+        if _campaign_kw_env:
+            job_env.update(_campaign_kw_env)
     if spec.mpi is not None:
         # #293: the mpi template reads these to fold the launcher + rank count
         # into $EXECUTOR. The scheduler-side allocation (ntasks/select/-pe) is

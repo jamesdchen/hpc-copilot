@@ -3,6 +3,7 @@ collapses to one primitive call."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -436,6 +437,197 @@ def test_accepts_one_liner_executor_for_register_run_file(
     assert spec["job_env"]["EXECUTOR"] == one_liner
 
 
+# --- BUG 4: campaign manifest strategy.params → HPC_KW_* --------------------
+
+
+def _write_manifest_with_params(experiment_dir: Path, *, campaign_id: str, params: dict) -> None:
+    """Persist a campaign manifest carrying ``strategy.params`` for *experiment_dir*."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    write_manifest(
+        experiment_dir,
+        campaign_id=campaign_id,
+        goal="hyperparam search",
+        strategy={"name": "optuna_tpe", "params": params},
+    )
+
+
+def _write_strategy_tasks_py(experiment_dir: Path) -> None:
+    """A Path-B strategy tasks.py whose total()/resolve() read HPC_KW_* env.
+
+    Mirrors the documented convention (os.environ["HPC_KW_<PARAM>"]) — its task
+    count and per-task kwargs come straight from the strategy params, so an
+    enumeration under the WRONG (empty) env yields total()==0 and the empty-list
+    cmd_sha that BUG 4 produced.
+    """
+    hpc = experiment_dir / ".hpc"
+    hpc.mkdir(parents=True, exist_ok=True)
+    (hpc / "tasks.py").write_text(
+        "import os\n"
+        "\n"
+        "def total():\n"
+        "    return int(os.environ['HPC_KW_N_TRIALS'])\n"
+        "\n"
+        "def resolve(task_id):\n"
+        "    return {'lr': os.environ['HPC_KW_LR'], 'task_id': task_id}\n",
+        encoding="utf-8",
+    )
+
+
+def test_campaign_strategy_params_materialized_into_job_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BUG 4: a campaign manifest's strategy.params reach the built spec's
+    job_env as HPC_KW_<UPPER> — the symmetric half of the cluster dispatcher's
+    resolve()-kwargs → HPC_KW_* export, so the cluster job carries the strategy
+    knobs a Path-B tasks.py reads from os.environ."""
+    monkeypatch.delenv("HPC_KW_N_TRIALS", raising=False)
+    monkeypatch.delenv("HPC_KW_LR", raising=False)
+    _write_manifest_with_params(
+        tmp_path, campaign_id="ridge_q1", params={"n_trials": 16, "lr": 0.01}
+    )
+    spec = build_submit_spec(
+        tmp_path,
+        spec=BuildSubmitSpecInput(**_required(), campaign_id="ridge_q1"),
+    )
+    assert spec["job_env"]["HPC_KW_N_TRIALS"] == "16"
+    assert spec["job_env"]["HPC_KW_LR"] == "0.01"
+    # The campaign id itself still threads through unchanged.
+    assert spec["job_env"]["HPC_CAMPAIGN_ID"] == "ridge_q1"
+
+
+def test_campaign_strategy_params_present_in_enumeration_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BUG 4: the strategy params are exported into the PROCESS env BEFORE the
+    local enumeration imports tasks.py — so a Path-B strategy tasks.py that
+    reads os.environ["HPC_KW_*"] enumerates the RIGHT task list (not the empty
+    one whose cmd_sha is the empty-string hash e3b0c442…)."""
+    import hpc_agent
+
+    monkeypatch.delenv("HPC_KW_N_TRIALS", raising=False)
+    monkeypatch.delenv("HPC_KW_LR", raising=False)
+    _write_strategy_tasks_py(tmp_path)
+    _write_manifest_with_params(
+        tmp_path, campaign_id="ridge_q1", params={"n_trials": 16, "lr": 0.01}
+    )
+    build_submit_spec(
+        tmp_path,
+        spec=BuildSubmitSpecInput(**_required(), campaign_id="ridge_q1"),
+    )
+    # The build set the strategy params into the process env, so a subsequent
+    # local enumeration of the strategy tasks.py (exactly what compute-run-id /
+    # the var-ref guard do) sees them and produces the right task list.
+    assert os.environ["HPC_KW_N_TRIALS"] == "16"
+    assert os.environ["HPC_KW_LR"] == "0.01"
+    mod = hpc_agent.load_tasks_module(tmp_path / ".hpc" / "tasks.py")
+    assert mod.total() == 16
+    assert mod.resolve(0) == {"lr": "0.01", "task_id": 0}
+
+
+def test_no_campaign_id_writes_no_hpc_kw_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-campaign submit is byte-identical to before — no HPC_KW_* leaks
+    into job_env, and no process-env write happens even if a manifest exists."""
+    monkeypatch.delenv("HPC_KW_N_TRIALS", raising=False)
+    # A manifest is present but no campaign_id is passed → it must be ignored.
+    _write_manifest_with_params(tmp_path, campaign_id="ridge_q1", params={"n_trials": 16})
+    spec = build_submit_spec(tmp_path, spec=BuildSubmitSpecInput(**_required()))
+    assert not any(k.startswith("HPC_KW_") for k in spec["job_env"])
+    assert "HPC_KW_N_TRIALS" not in os.environ
+
+
+def test_caller_extra_env_wins_over_campaign_strategy_param(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit extra_env override still wins over a manifest strategy param
+    on key collision (campaign params are framework defaults, stamped before
+    the extra_env merge)."""
+    monkeypatch.delenv("HPC_KW_LR", raising=False)
+    _write_manifest_with_params(tmp_path, campaign_id="ridge_q1", params={"lr": 0.01})
+    spec = build_submit_spec(
+        tmp_path,
+        spec=BuildSubmitSpecInput(
+            **_required(), campaign_id="ridge_q1", extra_env={"HPC_KW_LR": "0.5"}
+        ),
+    )
+    assert spec["job_env"]["HPC_KW_LR"] == "0.5"
+
+
+# --- Minor: build-submit-spec auto-reads env-activation from clusters.yaml ---
+
+
+def test_env_activation_auto_read_from_clusters_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Minor: a spec built directly (not via the worker) with NO env-activation
+    fields supplied picks up modules/conda_source/conda_env from clusters.yaml
+    for the target cluster — no 'submission has no env-activation declared'."""
+    cfg = tmp_path / "clusters.yaml"
+    cfg.write_text(
+        "hoffman2:\n"
+        "  scheduler: sge\n"
+        "  host: h2.idre.ucla.edu\n"
+        "  modules: [gcc/11, cuda/12.3]\n"
+        "  conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh\n"
+        "  conda_envs: [ml-py311, ml-py312]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+    intent = _required()
+    intent.pop("conda_env")
+    intent.pop("conda_source")  # supply NONE of the three; clusters.yaml has them
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert spec["job_env"]["MODULES"] == "gcc/11 cuda/12.3"
+    assert (
+        spec["job_env"]["CONDA_SOURCE"] == "/u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh"
+    )
+    assert spec["job_env"]["CONDA_ENV"] == "ml-py311"  # first conda_envs entry
+
+
+def test_env_activation_modules_only_from_clusters_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Minor: a module-only cluster (no conda) still yields a valid activation
+    from clusters.yaml when the caller supplies none of the three."""
+    cfg = tmp_path / "clusters.yaml"
+    cfg.write_text(
+        "hoffman2:\n  scheduler: sge\n  host: h2.idre.ucla.edu\n  modules: [anaconda3/2024.06]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+    intent = _required()
+    intent.pop("conda_env")
+    intent.pop("conda_source")
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert spec["job_env"]["MODULES"] == "anaconda3/2024.06"
+    assert spec["job_env"]["CONDA_ENV"] == ""
+
+
+def test_explicit_env_activation_wins_over_clusters_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Minor: the auto-read fallback only fires when NONE of the three is
+    supplied — an explicit value still wins (back-compat with the worker path,
+    which threads the resolved values)."""
+    cfg = tmp_path / "clusters.yaml"
+    cfg.write_text(
+        "hoffman2:\n"
+        "  scheduler: sge\n"
+        "  host: h2.idre.ucla.edu\n"
+        "  modules: [gcc/11]\n"
+        "  conda_source: /cluster/conda.sh\n"
+        "  conda_envs: [cluster-env]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+    intent = _required()  # carries explicit conda_env + conda_source
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert spec["job_env"]["CONDA_ENV"] == "ml-py311"  # caller's, not cluster-env
+    assert spec["job_env"]["CONDA_SOURCE"].endswith("2024.06/etc/profile.d/conda.sh")
+
+
 def test_accepts_bare_script_executor_for_non_register_run_file(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -652,7 +844,12 @@ def test_default_executor_does_not_import_tasks_py(
 
     calls: list = []
     real = hpc_agent.load_tasks_module
-    monkeypatch.setattr(hpc_agent, "load_tasks_module", lambda p: (calls.append(p), real(p))[1])
+
+    def _record(p):  # type: ignore[no-untyped-def]
+        calls.append(p)
+        return real(p)
+
+    monkeypatch.setattr(hpc_agent, "load_tasks_module", _record)
     exp = tmp_path / "exp"
     exp.mkdir()
     _write_tasks_py(exp, "{'seed': i}")
