@@ -128,6 +128,14 @@ timeout = 300
 target-version = "py310"
 line-length = 100
 
+[tool.ruff.format]
+# The generated CLI fast-path map (scripts/build_verb_module_map.py) is a
+# machine-emitted dict literal — one (verb, module) row per line, with long
+# dotted module paths. Exclude it from the formatter so the generator's output
+# isn't a moving target against ruff's line-reflow/quote normalisation; it stays
+# lint-clean via an in-file ``# ruff: noqa: E501``.
+exclude = ["src/hpc_agent/cli/_verb_module_map.py"]
+
 [tool.ruff.lint]
 # TCH (move-imports-into-TYPE_CHECKING) is dropped: this codebase
 # routes Pydantic specs through atom signatures (``def atom(spec:

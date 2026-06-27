@@ -154,6 +154,45 @@ def _register_tier3_modules(sub: argparse._SubParsersAction) -> None:
     _register_mcp(sub)
 
 
+def build_single_verb_parser(primitive_name: str) -> argparse.ArgumentParser | None:
+    """Build a top-level parser exposing ONLY *primitive_name*'s subparser.
+
+    The single-verb fast path (:func:`hpc_agent.cli.dispatch.main`) has imported
+    just the one module that defines *primitive_name*, so the registry is
+    partial — we cannot (and need not) walk it. Build a parser with the same
+    top-level shape as :func:`build_parser` but a subparsers action carrying the
+    one verb, so ``hpc-agent <verb> ...`` and ``hpc-agent <verb> --help`` parse
+    and dispatch identically to the full path.
+
+    Returns ``None`` (caller falls back to the full path) when the primitive is
+    absent, carries no :class:`CliShape`, or is verb-grouped — the fast path
+    only ever maps ungrouped, handler-less verbs, so this is a belt-and-braces
+    guard against a stale map, not an expected branch.
+    """
+    from hpc_agent._kernel.registry.primitive import get_meta
+
+    try:
+        meta = get_meta(primitive_name)
+    except (KeyError, RuntimeError):
+        return None
+    shape = meta.cli
+    if not isinstance(shape, CliShape) or shape.group is not None or shape.handler is not None:
+        return None
+
+    parser = _HpcArgumentParser(prog="hpc-agent")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {hpc_agent.__version__}",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    verb = _leaf_verb(primitive_name, shape)
+    verb_parser = sub.add_parser(verb, help=shape.help)
+    _add_standard_args(verb_parser, shape)
+    _bind_dispatch(verb_parser, primitive_name)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level ``hpc-agent`` argparse tree.
 

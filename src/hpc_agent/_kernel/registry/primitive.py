@@ -134,7 +134,15 @@ class PrimitiveMeta:
 
 
 _REGISTRY: dict[str, PrimitiveMeta] = {}
+# ``_REGISTRATION_DONE`` means the FULL package walk has run (every primitive
+# imported + ``_finalize_composes`` resolved). ``_DISPATCH_READY`` is the weaker
+# "the registry may be queried" latch: it is set by full registration AND by the
+# CLI fast path's :func:`register_single_module` (which imports only the one
+# module a verb needs). ``get_meta`` / ``get_registry`` gate on the weaker latch
+# so a single-verb dispatch works off a partial registry, while
+# ``register_primitives`` still early-returns only on the full latch.
 _REGISTRATION_DONE: bool = False
+_DISPATCH_READY: bool = False
 
 # Pending string-name composes waiting for lazy resolution. Populated by
 # the decorator; drained by :func:`_finalize_composes` after every
@@ -396,7 +404,7 @@ def register_primitives() -> None:
     not in registry" warning); plugin modules log-and-skip per the
     plugins.load_plugins contract.
     """
-    global _REGISTRATION_DONE
+    global _REGISTRATION_DONE, _DISPATCH_READY
     if _REGISTRATION_DONE:
         return
     for modname in _discover_primitive_modules():
@@ -423,17 +431,44 @@ def register_primitives() -> None:
             )
     _finalize_composes()
     _REGISTRATION_DONE = True
+    _DISPATCH_READY = True
+
+
+def register_single_module(module_name: str) -> None:
+    """Import ONE primitive-bearing module and mark the registry queryable.
+
+    The CLI fast path (:func:`hpc_agent.cli.dispatch.main`) invokes a single
+    known verb far more often than it introspects the whole surface, so it
+    imports only the module that defines that verb instead of paying the full
+    :func:`register_primitives` walk (~100 modules of Pydantic models, ~half the
+    process's cold-start cost). This is sound because dispatch reads exactly ONE
+    :class:`PrimitiveMeta` and the primitive executes via *direct* imports —
+    ``composes=`` is declarative catalog metadata, never consulted at run time —
+    so a partial registry is sufficient to dispatch a single verb.
+
+    Sets the weaker :data:`_DISPATCH_READY` latch (so ``get_meta`` answers) but
+    NOT :data:`_REGISTRATION_DONE`: a later :func:`register_primitives` call in
+    the same process still runs the full walk + :func:`_finalize_composes`. A
+    no-op once full registration has completed.
+    """
+    global _DISPATCH_READY
+    if _REGISTRATION_DONE:
+        return
+    importlib.import_module(module_name)
+    _DISPATCH_READY = True
 
 
 def get_registry() -> dict[str, PrimitiveMeta]:
     """Return a snapshot of the primitive registry.
 
-    Raises ``RuntimeError`` if :func:`register_primitives` has not yet
-    been called. Tests configure an autouse session fixture; the
-    ``hpc-agent`` CLI invokes it from ``main()`` before subcommand
-    dispatch.
+    Raises ``RuntimeError`` if neither :func:`register_primitives` nor
+    :func:`register_single_module` has run. Tests configure an autouse session
+    fixture; the ``hpc-agent`` CLI invokes one of them from ``main()`` before
+    subcommand dispatch. Note a partial registry (single-module fast path) is a
+    *subset* — callers that need the whole surface (the operations catalog,
+    ``capabilities``, the full parser walk) run full registration first.
     """
-    if not _REGISTRATION_DONE:
+    if not _DISPATCH_READY:
         raise RuntimeError(
             "Primitive registry queried before register_primitives() "
             "was called. Call hpc_agent.register_primitives() at "
@@ -444,7 +479,7 @@ def get_registry() -> dict[str, PrimitiveMeta]:
 
 def get_meta(name: str) -> PrimitiveMeta:
     """Return the :class:`PrimitiveMeta` for ``name`` (KeyError if absent)."""
-    if not _REGISTRATION_DONE:
+    if not _DISPATCH_READY:
         raise RuntimeError(
             "Primitive registry queried before register_primitives() "
             "was called. Call hpc_agent.register_primitives() at "
@@ -459,7 +494,8 @@ def _reset_for_tests() -> None:
     Not part of the public API. Tests that need a clean registry
     snapshot call this before re-importing primitive modules.
     """
-    global _REGISTRATION_DONE
+    global _REGISTRATION_DONE, _DISPATCH_READY
     _REGISTRY.clear()
     _PENDING_COMPOSES.clear()
     _REGISTRATION_DONE = False
+    _DISPATCH_READY = False

@@ -119,26 +119,75 @@ def _strip_verb_group(argv: list[str]) -> list[str]:
     raise SystemExit(2)
 
 
-def main(argv: list[str] | None = None) -> int:
-    # Windows consoles default to a legacy code page (cp1252) whose codec
-    # cannot encode the ``→`` and box-drawing characters in our --help
-    # text and catalog tables, raising UnicodeEncodeError on print_help().
-    # Force UTF-8 on the std streams up front.
-    for _stream in (sys.stdout, sys.stderr):
-        _reconfigure = getattr(_stream, "reconfigure", None)
-        if _reconfigure is not None:
-            with contextlib.suppress(ValueError, OSError):
-                _reconfigure(encoding="utf-8")
+def _fast_dispatch_enabled() -> bool:
+    """Whether the single-verb fast path may run (opt-out + plugin gate).
 
-    # Populate the primitive registry once before any subcommand dispatch.
-    from hpc_agent._kernel.registry.primitive import register_primitives
+    Disabled by ``HPC_AGENT_NO_FAST_CLI=1`` (a field kill switch for the
+    central path) and whenever any ``hpc_agent.plugins`` entry point is
+    installed — a plugin may override or extend a core verb via
+    ``register_cli``, which only the full :func:`build_parser` walk honours, so
+    a plugin's mere presence forces every verb onto the full path. The
+    entry-point scan is cheap and short-circuits under
+    ``HPC_AGENT_DISABLE_PLUGINS=1``.
+    """
+    import os
 
-    register_primitives()
-    if argv is None:
-        argv = sys.argv[1:]
-    argv = _strip_verb_group(argv)
-    parser = build_parser()
+    if os.environ.get("HPC_AGENT_NO_FAST_CLI") == "1":
+        return False
+    if os.environ.get("HPC_AGENT_DISABLE_PLUGINS") == "1":
+        return True
+    from importlib.metadata import entry_points
+
+    try:
+        return not list(entry_points(group="hpc_agent.plugins"))
+    except Exception:  # noqa: BLE001 — a metadata hiccup must not break the CLI
+        return False
+
+
+def _try_fast_dispatch(argv: list[str]) -> int | None:
+    """Dispatch a single known ungrouped verb without the full registry walk.
+
+    Returns the process exit code on the fast path, or ``None`` to signal the
+    caller to fall back to the full ``register_primitives`` + ``build_parser``
+    path. Falls back (returns ``None``) for: an empty argv, a leading global
+    flag (``--version`` / top-level ``--help``), a verb absent from the
+    generated map (grouped verbs, Tier-3 ``run`` / ``mcp-serve``, unknown
+    verbs), an installed plugin, or any stale-map miss. Every fallback path
+    yields byte-identical behaviour to before — only speed differs.
+    """
+    if not argv or argv[0].startswith("-"):
+        return None
+    if not _fast_dispatch_enabled():
+        return None
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+
+    entry = VERB_MODULE_MAP.get(argv[0])
+    if entry is None:
+        return None
+    primitive_name, module_name = entry
+
+    from hpc_agent._kernel.registry.primitive import register_single_module
+    from hpc_agent.cli.parser import build_single_verb_parser
+
+    register_single_module(module_name)
+    parser = build_single_verb_parser(primitive_name)
+    if parser is None:
+        # Stale map (module no longer defines the verb / shape changed): fall
+        # back. register_single_module already imported the module, which the
+        # full walk would import anyway (cached), so this is correct, just not
+        # the saved-import win.
+        return None
     args = parser.parse_args(argv)
+    return _invoke_parsed(args)
+
+
+def _invoke_parsed(args: argparse.Namespace) -> int:
+    """Run ``args.func`` under the uniform error→envelope translation.
+
+    Shared by the fast path and the full path so a primitive raising
+    ``HpcError`` / ``ValidationError`` / an unguarded exception maps to the
+    same exit code and JSON envelope regardless of how the parser was built.
+    """
     try:
         rc: int = args.func(args)
         return rc
@@ -162,10 +211,41 @@ def main(argv: list[str] | None = None) -> int:
         # above with exit 1). Any ``ValueError`` reaching here is now
         # an unguarded internal bug (a stray ``int("garbage")`` from a
         # buggy parser), so let it surface as exit 3 instead of being
-        # mis-classified as a user error. See ``docs/internals/`` for
-        # the migration history; the prior blanket ``except ValueError``
-        # was removed once every spec-input raise site was migrated.
+        # mis-classified as a user error.
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to a legacy code page (cp1252) whose codec
+    # cannot encode the ``→`` and box-drawing characters in our --help
+    # text and catalog tables, raising UnicodeEncodeError on print_help().
+    # Force UTF-8 on the std streams up front.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                _reconfigure(encoding="utf-8")
+
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = _strip_verb_group(argv)
+
+    # Single-verb fast path: import ONLY the module that defines a known
+    # ungrouped verb instead of the full ~100-module registry walk (~half the
+    # cold-start cost). Returns None — falling through to the full path — for
+    # help/version, grouped/Tier-3/unknown verbs, an installed plugin, or any
+    # stale-map miss, so behaviour is byte-identical and only speed differs.
+    fast = _try_fast_dispatch(argv)
+    if fast is not None:
+        return fast
+
+    # Full path: populate the whole registry, build the complete parser.
+    from hpc_agent._kernel.registry.primitive import register_primitives
+
+    register_primitives()
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return _invoke_parsed(args)
 
 
 if __name__ == "__main__":

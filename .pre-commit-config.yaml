@@ -52,6 +52,17 @@ repos:
         pass_filenames: false
         files: '^docs/primitives/.*\.md$'
 
+      - id: build-verb-module-map
+        name: regenerate CLI fast-path verb→module map
+        entry: python scripts/build_verb_module_map.py --write
+        language: system
+        pass_filenames: false
+        # Fires whenever a primitive-bearing source changes — adding, renaming,
+        # moving, or grouping a verb changes the single-verb fast-path map. The
+        # runtime is self-healing (a stale entry just falls back to the full
+        # path), so this is a perf-hygiene gate, not correctness-critical.
+        files: '^src/hpc_agent/.*\.py$'
+
       - id: build-operations-index
         name: regenerate operations index
         entry: python scripts/build_operations_index.py

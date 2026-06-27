@@ -248,10 +248,13 @@ def test_vanished_canary_resolves_completed_unknown_fast(
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
-    # monotonic() never crosses the deadline — if the loop didn't break on the
-    # persistent all-zero summary it would spin forever (StopIteration), so a
-    # clean verdict is the assertion that the fast break fired.
-    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    # monotonic() advances 100s per read (far above the default 30s registration
+    # grace, well under the 1800s deadline) so the all-zero state spans the grace
+    # by the 2nd poll and the fast break fires — proving the verdict, not a timeout.
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
@@ -281,7 +284,10 @@ def test_transient_all_zero_then_progress_does_not_false_trigger(
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
-    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     summaries = iter(
         [
             # poll 1: transient all-zero (pre-registration window)
@@ -316,7 +322,10 @@ def test_vanished_canary_with_stderr_marker_prefers_the_marker(
     from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
-    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    import itertools
+
+    _clk = itertools.count(0.0, 100.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
     with (
         mock.patch(
             "hpc_agent.infra.cluster_status.ssh_status_report",
@@ -1152,3 +1161,125 @@ def test_nonzero_exit_guard_runs_after_existing_failure_paths(
     # The stderr scan short-circuited before the exit_code read ran.
     m_ssh.assert_not_called()
     assert _is_cmd_sha_cached("sha_marker") is False
+
+
+# --- Adaptive fast-start (canary poll latency) -------------------------------
+#
+# The canary is a 1-task probe on the critical path of every fresh submit, so
+# the poll loop ramps from a small fast-start floor toward poll_interval_sec
+# (the steady-state ceiling) instead of dead-waiting a flat interval. See
+# ``_CANARY_FAST_POLL_SEC`` / ``_next_poll_interval`` in verify_canary.
+
+
+def test_initial_poll_interval_uses_fast_start_floor() -> None:
+    from hpc_agent.ops import verify_canary as vc
+
+    # Default floor (3s) wins when it's below the configured interval...
+    assert vc._initial_poll_interval(30) == 3.0
+    # ...but a caller asking for a FASTER steady cadence than the floor is
+    # honored as-is — the floor never slows the loop down.
+    assert vc._initial_poll_interval(1) == 1.0
+
+
+def test_initial_poll_interval_opt_out_falls_back_to_flat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hpc_agent.ops import verify_canary as vc
+
+    # HPC_CANARY_FAST_POLL_SEC=0 opts out → start at the configured interval.
+    monkeypatch.setattr(vc, "_CANARY_FAST_POLL_SEC", 0.0)
+    assert vc._initial_poll_interval(30) == 30.0
+
+
+def test_next_poll_interval_doubles_and_caps_at_ceiling() -> None:
+    from hpc_agent.ops import verify_canary as vc
+
+    assert vc._next_poll_interval(3.0, 30.0) == 6.0
+    assert vc._next_poll_interval(6.0, 30.0) == 12.0
+    assert vc._next_poll_interval(12.0, 30.0) == 24.0
+    # Past the ceiling, hold the configured cadence — never poll slower.
+    assert vc._next_poll_interval(24.0, 30.0) == 30.0
+    assert vc._next_poll_interval(30.0, 30.0) == 30.0
+
+
+def test_fast_start_allzero_within_grace_is_not_falsely_vanished(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the fast-start ramp must NOT trip the 2-consecutive-all-zero
+    vanished verdict before the scheduler has had ``poll_interval_sec`` to list
+    the array. Two rapid all-zero polls (a slow-to-register canary) followed by
+    progress must complete normally, not fail as ``completed_unknown``."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    # Clock advances only 2s per read: two all-zero polls land well inside the
+    # 30s registration grace. Without the time floor the 2nd poll would falsely
+    # declare the canary vanished; with it, the verdict waits for the grace.
+    _clk = itertools.count(0.0, 2.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+    summaries = iter(
+        [
+            {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0},  # all-zero
+            {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0},  # all-zero
+            {"complete": 0, "running": 1, "pending": 0, "failed": 0, "unknown": 0},  # registered!
+            {"complete": 1, "running": 0, "pending": 0, "failed": 0, "unknown": 0},  # complete
+        ]
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=lambda **_: {"summary": next(summaries)},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is True, out
+    assert out["failure_kind"] is None
+
+
+def test_poll_loop_ramps_instead_of_flat_waiting(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A canary that stays in-flight for several polls is observed on the
+    fast-start ramp (3 → 6 → 12 …), not after flat 30s intervals."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+
+    # monotonic advances 1s per read; a large budget keeps us under the deadline
+    # so the loop exits on the COMPLETE poll, not on timeout.
+    _clock = itertools.count(0, 1.0)
+    monkeypatch.setattr(
+        "hpc_agent.ops.verify_canary.time.monotonic",
+        lambda: next(_clock),
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", sleeps.append)
+
+    # Three in-flight polls, then complete on the fourth.
+    running = {"summary": {"complete": 0, "running": 1, "pending": 0, "failed": 0}}
+    done = {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=[running, running, running, done],
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0\n"}],
+        ),
+    ):
+        out = verify_canary(
+            tmp_path, canary_run_id="r1-canary", poll_interval_sec=30, wait_budget_sec=100_000
+        )
+
+    assert out["ok"] is True
+    # Three sleeps between four polls, ramping from the 3s floor — NOT flat 30s.
+    assert sleeps == [3.0, 6.0, 12.0]

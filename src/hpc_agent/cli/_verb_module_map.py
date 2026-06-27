@@ -1,0 +1,82 @@
+# ruff: noqa: E501 — generated dict literal; one (verb, module) row per line.
+"""Generated verb → defining-module map for the CLI single-verb fast path.
+
+DO NOT EDIT BY HAND. Regenerate with::
+
+    uv run python scripts/build_verb_module_map.py --write
+
+Maps each ungrouped, handler-less verb to ``(primitive_name, module_path)`` so
+``hpc_agent.cli.dispatch.main`` can import only that module (instead of the full
+``register_primitives`` walk) before dispatching it. Self-healing: a stale entry
+just falls back to the full path. See ``scripts/build_verb_module_map.py``.
+"""
+
+from __future__ import annotations
+
+VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
+    'aggregate-flow': ('aggregate-flow', 'hpc_agent.ops.aggregate_flow'),
+    'aggregate-preflight': ('aggregate-preflight', 'hpc_agent.ops.aggregate_preflight'),
+    'apply-safe-defaults': ('apply-safe-defaults', 'hpc_agent.ops.submit.apply_safe_defaults'),
+    'axes-init': ('axes-init', 'hpc_agent.incorporation.axes_init'),
+    'batch-status': ('batch-status', 'hpc_agent.ops.monitor.batch_status'),
+    'build-executor': ('build-executor', 'hpc_agent.incorporation.build.executor'),
+    'build-submit-spec': ('build-submit-spec', 'hpc_agent.incorporation.build.submit_spec'),
+    'build-tasks-py': ('build-tasks-py', 'hpc_agent.incorporation.build.tasks_py'),
+    'build-template': ('build-template', 'hpc_agent.incorporation.build.template'),
+    'campaign-run': ('campaign-run', 'hpc_agent.ops.campaign_run'),
+    'check-task-generator-mismatch': ('check-task-generator-mismatch', 'hpc_agent.ops.check_task_generator_mismatch'),
+    'classify-axis': ('classify-axis', 'hpc_agent.incorporation.classify_axis'),
+    'classify-axis-auto': ('classify-axis-auto', 'hpc_agent.incorporation.classify_axis_auto'),
+    'classify-axis-easy': ('classify-axis-easy', 'hpc_agent.incorporation.classify_axis_easy'),
+    'classify-axis-preflight': ('classify-axis-preflight', 'hpc_agent.ops.classify_axis_preflight'),
+    'classify-campaign-path': ('classify-campaign-path', 'hpc_agent.incorporation.classify_campaign_path'),
+    'cluster-reduce': ('cluster-reduce', 'hpc_agent.ops.aggregate.cluster_reduce'),
+    'compute-run-id': ('compute-run-id', 'hpc_agent.incorporation.build.compute_run_id'),
+    'dag-frontier': ('dag-frontier', 'hpc_agent.ops.dag_frontier'),
+    'decide-concurrency': ('decide-concurrency', 'hpc_agent.meta.campaign.atoms.decide_concurrency'),
+    'decide-monitor-arm': ('decide-monitor-arm', 'hpc_agent.ops.monitor.arm'),
+    'decide-partial-handling': ('decide-partial-handling', 'hpc_agent.ops.aggregate.decide_partial_handling'),
+    'decide-resubmit': ('decide-resubmit', 'hpc_agent.ops.decide_resubmit'),
+    'decorate-entry-point': ('decorate-entry-point', 'hpc_agent.incorporation.decorate_entry_point'),
+    'detect-entry-point': ('detect-entry-point', 'hpc_agent.ops.detect_entry_point'),
+    'discover': ('discover-executors', 'hpc_agent.state.discover'),
+    'discover-reducers': ('discover-reducers', 'hpc_agent.state.discover'),
+    'discover-runs': ('discover-runs', 'hpc_agent.state.discover'),
+    'export-package': ('export-package', 'hpc_agent.incorporation.export_package'),
+    'failures': ('failures', 'hpc_agent.ops.recover.failures_atom'),
+    'find-prior-run': ('find-prior-run', 'hpc_agent.cli.setup_actions'),
+    'inspect-deployment': ('inspect-deployment', 'hpc_agent.ops.inspect_deployment'),
+    'inspect-parallel-axes': ('inspect-parallel-axes', 'hpc_agent.ops.inspect_parallel_axes'),
+    'interview': ('interview', 'hpc_agent.ops.memory.interview'),
+    'list-in-flight': ('list-in-flight', 'hpc_agent.ops.monitor.list_in_flight'),
+    'load-context': ('load-context', 'hpc_agent.meta.campaign.atoms.load_context'),
+    'logs': ('logs', 'hpc_agent.ops.monitor.logs_atom'),
+    'monitor-flow': ('monitor-flow', 'hpc_agent.ops.monitor_flow'),
+    'monitor-summary': ('monitor-summary', 'hpc_agent.ops.monitor.summary'),
+    'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
+    'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),
+    'prepare-followup-specs': ('prepare-followup-specs', 'hpc_agent.ops.prepare_followup_specs'),
+    'prepare-phase2-spec': ('prepare-phase2-spec', 'hpc_agent.ops.prepare_phase2_spec'),
+    'provenance-manifest': ('provenance-manifest', 'hpc_agent.ops.provenance_manifest'),
+    'recall': ('recall', 'hpc_agent.ops.memory.recall'),
+    'recommend-partition': ('recommend-partition', 'hpc_agent.ops.submit.recommend_partition'),
+    'reconcile': ('reconcile-journal', 'hpc_agent.ops.monitor.reconcile'),
+    'resolve-resources': ('resolve-resources', 'hpc_agent.ops.resolve_resources'),
+    'resolve-submit-inputs': ('resolve-submit-inputs', 'hpc_agent.ops.resolve_submit_inputs'),
+    'scaffold-spec': ('scaffold-spec', 'hpc_agent.ops.scaffold_spec'),
+    'scaffold-strategy': ('scaffold-strategy', 'hpc_agent.incorporation.scaffold_strategy'),
+    'smoke-test-executor': ('smoke-test-executor', 'hpc_agent.ops.smoke_test_executor'),
+    'status-pipeline': ('status-pipeline', 'hpc_agent.ops.status_pipeline'),
+    'status-preflight': ('status-preflight', 'hpc_agent.ops.status_preflight'),
+    'submit-and-verify': ('submit-and-verify', 'hpc_agent.ops.submit_and_verify'),
+    'submit-pipeline': ('submit-pipeline', 'hpc_agent.ops.submit_pipeline'),
+    'submit-preflight': ('submit-preflight', 'hpc_agent.ops.submit_preflight'),
+    'suggest-setup-action': ('suggest-setup-action', 'hpc_agent.cli.setup_actions'),
+    'summarize-submit-plan': ('summarize-submit-plan', 'hpc_agent.ops.submit.plan_summary'),
+    'validate-campaign': ('validate-campaign', 'hpc_agent.meta.validate_campaign'),
+    'verify-aggregation-complete': ('verify-aggregation-complete', 'hpc_agent.ops.aggregate.invariants'),
+    'verify-canary': ('verify-canary', 'hpc_agent.ops.verify_canary'),
+    'verify-submitted': ('verify-submitted', 'hpc_agent.ops.verify_submitted'),
+    'walk-submit-ambiguities': ('walk-submit-ambiguities', 'hpc_agent.ops.walk_submit_ambiguities'),
+    'write-run-sidecar': ('write-run-sidecar', 'hpc_agent.ops.write_run_sidecar'),
+}

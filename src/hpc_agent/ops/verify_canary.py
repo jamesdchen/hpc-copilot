@@ -21,6 +21,7 @@ atomizing it eliminates the agent-judgment-on-each-step failure mode.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -85,6 +86,60 @@ def _failure_features(stderr_tail: str, log_path: str | None) -> dict[str, Any]:
 
 _DEFAULT_POLL_INTERVAL_SEC = 30
 _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to *default* on unset/invalid/negative.
+
+    Mirrors :func:`hpc_agent.ops.monitor_flow._env_float`: a typo in the shell
+    must not silently disable the fast-start (which would re-introduce the flat
+    30s dead-wait), so an unparseable or negative value falls back to *default*.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        return default
+    return val if val >= 0 else default
+
+
+#: Fast-start floor (seconds) for the canary poll loop. The canary is a 1-task
+#: probe on the critical path of EVERY fresh submit (the cache at
+#: ``submit_flow._should_canary`` already skips it for a repeat ``cmd_sha``), so
+#: a flat ``poll_interval_sec`` (default 30s) means a canary that lands in
+#: ~5-10s is not OBSERVED for a full interval — pure dead wait the submit
+#: pipeline pays before the main array can launch. We start polling at this
+#: floor and ramp geometrically toward ``poll_interval_sec`` (the steady-state
+#: ceiling), so a fast canary is caught in seconds while a slow one settles to
+#: the configured cadence. This is the inverse of ``monitor_flow``'s adaptive
+#: backoff: there the long idle loop ramps the interval UP to save SSH polls;
+#: here the short critical-path loop ramps UP FROM a fast start to save
+#: latency, never exceeding the configured ceiling (so steady-state SSH load is
+#: unchanged). Env-tunable via ``HPC_CANARY_FAST_POLL_SEC``; set to 0 to opt out
+#: (fall back to the flat interval).
+_CANARY_FAST_POLL_SEC: float = _env_float("HPC_CANARY_FAST_POLL_SEC", 3.0)
+
+
+def _initial_poll_interval(poll_interval_sec: float) -> float:
+    """The interval the canary loop starts at: the fast-start floor, capped by
+    the caller's configured interval (a caller asking for a *faster* steady
+    cadence than the floor is honored as-is, and the floor never slows it down).
+    """
+    if _CANARY_FAST_POLL_SEC <= 0:
+        return float(poll_interval_sec)
+    return min(float(poll_interval_sec), _CANARY_FAST_POLL_SEC)
+
+
+def _next_poll_interval(current: float, ceiling: float) -> float:
+    """Geometric fast-start ramp: double *current* toward *ceiling*, never past it.
+
+    Bounds the early burst (3 → 6 → 12 → 24 → 30 → 30 … for the default 30s
+    ceiling — ~4 extra polls in the first window) so the speedup costs only a
+    handful of cheap multiplexed round-trips, then holds the configured cadence.
+    """
+    return min(current * 2.0, float(ceiling))
 
 
 # Remote snippet that round-trips the canary's latest checkpoint ON THE CLUSTER
@@ -372,7 +427,12 @@ def _resolve_canary_checkpoint_dir(
                 "--poll-interval-sec",
                 type=int,
                 default=30,
-                help="Seconds between status polls (default 30).",
+                help=(
+                    "Steady-state ceiling (seconds) between status polls (default 30). "
+                    "The loop fast-starts below this (HPC_CANARY_FAST_POLL_SEC, default "
+                    "3s) and ramps up to it, so a canary that lands in seconds is caught "
+                    "immediately without dead-waiting a full interval."
+                ),
             ),
             CliArg(
                 "--wait-budget-sec",
@@ -439,9 +499,14 @@ def verify_canary(
         ``result_dir_template`` (task 0) — pass it explicitly when the template
         references per-task kwargs that can't be rendered locally.
     poll_interval_sec, wait_budget_sec:
-        Adaptive poll knobs. Exits early once the canary is terminal;
-        otherwise gives up after *wait_budget_sec* with
-        ``failure_kind="timeout"``.
+        Adaptive poll knobs. ``poll_interval_sec`` is the steady-state
+        *ceiling*: the loop fast-starts at ``HPC_CANARY_FAST_POLL_SEC``
+        (default 3s) and ramps geometrically up to it, so a canary that
+        lands in a few seconds is observed immediately instead of
+        dead-waiting a full interval (the dominant submit-pipeline latency
+        for a fresh ``cmd_sha`` the canary cache can't skip). Exits early
+        once the canary is terminal; otherwise gives up after
+        *wait_budget_sec* with ``failure_kind="timeout"``.
     log_dir, file_glob:
         Threaded through to the cluster-side status reporter so it
         finds the canary's stderr log.
@@ -563,7 +628,23 @@ def verify_canary(
     # than riding the full wait_budget_sec polling an absent job (#193).
     vanished_polls = 0
     _VANISHED_POLLS_TO_TERMINAL = 2
+    # The vanished verdict also requires the all-zero state to SPAN at least this
+    # much wall-clock, not just N consecutive polls. The 2-poll heuristic relied
+    # on polls being ``poll_interval_sec`` apart (≈30s) to give the scheduler
+    # time to register the array after qsub; the fast-start ramp below now spaces
+    # the first polls only seconds apart, so without a time floor a canary whose
+    # array is merely slow to appear in qstat (all-zero for the first few rapid
+    # polls) would be falsely declared ``completed_unknown`` and wrongly fail the
+    # gate. Tying the grace to ``poll_interval_sec`` reproduces the original
+    # timing (the two confirming polls used to be exactly that far apart).
+    _vanished_grace_sec = float(poll_interval_sec)
+    first_vanished_at: float | None = None
     job_vanished = False
+    # Adaptive fast-start: poll quickly at first (so a canary that lands in a
+    # few seconds is caught immediately) and ramp toward ``poll_interval_sec``,
+    # which stays the steady-state ceiling. See ``_CANARY_FAST_POLL_SEC``.
+    _poll_ceiling = float(poll_interval_sec)
+    effective_poll = _initial_poll_interval(poll_interval_sec)
     while time.monotonic() < deadline:
         try:
             report = ssh_status_report(
@@ -578,7 +659,8 @@ def verify_canary(
             )
         except (errors.RemoteCommandFailed, OSError) as exc:
             last_poll_error = exc
-            time.sleep(int(poll_interval_sec))
+            time.sleep(effective_poll)
+            effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
             continue
         got_report = True
         last_summary = dict(report.get("summary") or {})
@@ -600,12 +682,20 @@ def verify_canary(
         # marker (OOM, traceback) is preferred over the bland unknown verdict.
         if complete == 0 and failed == 0 and running == 0 and pending == 0 and unknown == 0:
             vanished_polls += 1
-            if vanished_polls >= _VANISHED_POLLS_TO_TERMINAL:
+            if first_vanished_at is None:
+                first_vanished_at = time.monotonic()
+            # Require BOTH enough consecutive all-zero polls AND that they span
+            # the registration grace, so the fast-start ramp can't trip this
+            # before the scheduler has had ``poll_interval_sec`` to list the job.
+            spanned = time.monotonic() - first_vanished_at
+            if vanished_polls >= _VANISHED_POLLS_TO_TERMINAL and spanned >= _vanished_grace_sec:
                 job_vanished = True
                 break
         else:
             vanished_polls = 0
-        time.sleep(int(poll_interval_sec))
+            first_vanished_at = None
+        time.sleep(effective_poll)
+        effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
     else:
         # Distinguish a broken reporter (EVERY poll raised, we never got a
         # single status read) from a genuine slow/stuck run (polls
