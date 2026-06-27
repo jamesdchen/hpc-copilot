@@ -53,12 +53,6 @@ def _is_onboarded(experiment_dir: Path) -> bool:
     return (experiment_dir / ".hpc" / "tasks.py").is_file()
 
 
-# Framework default pool-occupancy target K for an async-refill campaign whose
-# manifest omits ``max_in_flight``. Kept in sync with
-# ``advance._DEFAULT_MAX_IN_FLIGHT`` and ``decide_concurrency``'s k_cap default.
-_DEFAULT_MAX_IN_FLIGHT = 4
-
-
 def _campaign_async_config(experiment_dir: Path, campaign_id: str) -> tuple[bool, int | None]:
     """Return ``(async_refill, max_in_flight)`` from a campaign's manifest.
 
@@ -85,32 +79,40 @@ def _campaign_async_config(experiment_dir: Path, campaign_id: str) -> tuple[bool
     return async_on, k
 
 
-def _async_free_slot(
+def _async_should_refill(
     experiment_dir: Path,
-    in_flight: list[dict[str, Any]],
     campaigns: list[dict[str, Any]],
 ) -> bool:
-    """True when an async-refill campaign has a free per-campaign slot.
+    """True when an async-refill campaign authoritatively wants to refill now.
 
-    Counts in-flight runs **per campaign** (the rows carry ``campaign_id``) and
-    compares each async campaign's count to its ``max_in_flight`` (K). A single
-    campaign with ``in_flight < K`` is enough to route a refill step. Sync
-    campaigns are skipped, so a repo with no async opt-in always returns
-    ``False`` and the synchronous routing below is unchanged.
+    Defers to ``campaign-advance`` — the SAME deterministic ladder the decide
+    step runs — for each async campaign, and routes a refill only when it
+    actually decides ``refill`` (a free pool slot AND budget headroom AND no
+    terminal stop pending). Asking advance rather than re-deriving
+    ``in_flight < K`` here keeps the routing target identical to the refill
+    target, so a budget-capped or terminal-stop-pending pool routes
+    monitor/aggregate to DRAIN instead of looping forever on a no-op ``decide``
+    step that advance would only answer with ``wait_in_flight`` (the livelock a
+    standalone ``in_flight < K`` check invited). Sync campaigns never decide
+    ``refill``, so a repo with no async opt-in always returns ``False`` and the
+    synchronous routing below is unchanged.
     """
     if not campaigns:
         return False
-    counts: dict[str, int] = {}
-    for row in in_flight:
-        cid = row.get("campaign_id")
-        if cid:
-            counts[cid] = counts.get(cid, 0) + 1
+    from hpc_agent.meta.campaign.atoms.advance import campaign_advance
+
     for camp in campaigns:
         cid = camp["campaign_id"]
-        async_on, k = _campaign_async_config(experiment_dir, cid)
+        async_on, _k = _campaign_async_config(experiment_dir, cid)
         if not async_on:
             continue
-        if counts.get(cid, 0) < (k or _DEFAULT_MAX_IN_FLIGHT):
+        try:
+            decision = campaign_advance(experiment_dir=experiment_dir, campaign_id=cid)["decision"]
+        except (OSError, ValueError, KeyError):
+            # Routing must degrade, never crash load-context; a campaign whose
+            # state can't be read just doesn't route a refill this tick.
+            continue
+        if decision == "refill":
             return True
     return False
 
@@ -124,7 +126,7 @@ def _next_step_hint(
 ) -> str:
     """Coarse next-action hint from the in-flight set and known campaigns.
 
-    - async-refill campaign with a free slot (``in_flight < K``)  -> ``decide``
+    - async-refill campaign that advance decides ``refill``  -> ``decide``
       (refill — even while OTHER runs are in flight)
     - any in-flight run still in the ``monitor`` stage  -> ``monitor``
     - in-flight runs exist but all past monitoring      -> ``aggregate``
@@ -135,19 +137,22 @@ def _next_step_hint(
     ``decide`` distinguishes "a campaign finished an iteration and needs
     its next one chosen" from a cold ``submit`` of a fresh experiment. In an
     async-refill campaign (#362) the ``decide`` (refill) step is **no longer
-    gated on ``in_flight == 0``**: whenever a campaign has an empty slot it
-    refills, and only when every async campaign's pool is full does the
-    synchronous monitor/aggregate routing take over to drain the in-flight
-    runs. ``onboard`` catches the un-onboarded repo (no ``.hpc/tasks.py``).
+    gated on ``in_flight == 0``**: whenever ``campaign-advance`` decides
+    ``refill`` (a free slot with budget headroom and no stop pending) it refills,
+    and otherwise — pool full, budget-capped, or a terminal stop draining its
+    in-flight runs — the synchronous monitor/aggregate routing takes over to
+    drain. ``onboard`` catches the un-onboarded repo (no ``.hpc/tasks.py``).
 
     Advisory only: the skill still decides, but a fresh step gets a
     deterministic starting point instead of guessing from memory.
     """
-    # Async-refill: a free per-campaign slot routes a refill (decide) step
-    # even while runs are in flight. Checked first so refilling keeps the pool
-    # full; when no async campaign has a free slot this is False and the
-    # synchronous routing below is byte-identical.
-    if _async_free_slot(experiment_dir, in_flight, campaigns):
+    # Async-refill: route a refill (decide) step — even while runs are in
+    # flight — only when advance authoritatively decides ``refill``. Checked
+    # first so refilling keeps the pool full; when advance would instead
+    # wait/stop (full pool, no budget headroom, or draining before a terminal
+    # stop) this is False and the synchronous monitor/aggregate routing below
+    # drains the in-flight runs. A repo with no async opt-in is byte-identical.
+    if _async_should_refill(experiment_dir, campaigns):
         return "decide"
     if not in_flight:
         if campaigns:
@@ -333,7 +338,9 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
       ``decide`` / ``onboard``, derived from the in-flight set, known
       campaigns, and onboarding state (``decide`` when a campaign is idle
       and awaiting its next iteration, OR — for an async-refill campaign
-      (#362) — whenever it has a free slot, even with runs still in flight;
+      (#362) — whenever ``campaign-advance`` decides ``refill``, even with
+      runs still in flight; a pool that is full, budget-capped, or draining
+      before a terminal stop routes monitor/aggregate instead;
       ``onboard`` when the repo has no ``.hpc/tasks.py``).
     - ``delegate`` — the next step as a delegable unit of work
       (``kind`` ``cli``/``agent``, ``step``, ``run_id``,

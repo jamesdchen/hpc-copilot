@@ -10,7 +10,10 @@ in-flight journal records. Pins:
 * ``refill_count = max(0, min(K, remaining_max_jobs) - in_flight)``, incl.
   the unbounded (``remaining = None``) and budget-capped cases;
 * a full pool falls back to ``wait_in_flight`` (never over-submits);
-* over_budget / stop_converged still win over refill (stops outrank refill).
+* over_budget / stop_converged still win over refill (stops outrank refill);
+* a terminal stop pending WHILE runs are in flight drains them first
+  (``wait_in_flight``), and only emits the stop once the pool is empty —
+  the issue's "don't orphan jobs on a terminal stop" guard.
 """
 
 from __future__ import annotations
@@ -108,14 +111,31 @@ def test_async_refill_unbounded_budget(experiment: Path, monkeypatch: pytest.Mon
 
 
 def test_async_refill_budget_capped(experiment: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tight jobs budget caps the refill below K - in_flight."""
+    """A tight jobs budget caps the refill at the affordable headroom."""
     _patch_evidence(monkeypatch, in_flight=1, remaining_max_jobs=3)
     out = campaign_advance(
         experiment_dir=experiment, campaign_id=_CID, async_refill=True, max_in_flight=10
     )
     assert out["decision"] == "refill"
-    # min(K=10, remaining=3) - in_flight=1 = 2
-    assert out["refill_count"] == 2
+    # min(K - in_flight = 9, remaining = 3) = 3. ``remaining`` already excludes the
+    # 1 in-flight job (it carries a sidecar counted in ``spent``), so it is NOT
+    # reduced by in_flight a second time.
+    assert out["refill_count"] == 3
+
+
+def test_async_refill_budget_caps_at_remaining(
+    experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When budget headroom is the binding cap, refill == remaining_max_jobs
+    exactly (never the old ``remaining - in_flight`` under-count)."""
+    _patch_evidence(monkeypatch, in_flight=2, remaining_max_jobs=1)
+    out = campaign_advance(
+        experiment_dir=experiment, campaign_id=_CID, async_refill=True, max_in_flight=10
+    )
+    assert out["decision"] == "refill"
+    # min(K - in_flight = 8, remaining = 1) = 1 (the old formula gave 10-2... then
+    # -? = under-count; the binding budget cap is exactly the 1 affordable job).
+    assert out["refill_count"] == 1
 
 
 def test_async_pool_full_waits(experiment: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,9 +170,34 @@ def test_over_budget_beats_refill(experiment: Path, monkeypatch: pytest.MonkeyPa
     assert out["refill_count"] is None
 
 
-def test_converged_beats_refill(experiment: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A fired stop criterion halts refilling — stop_converged outranks refill."""
+def test_converged_drains_in_flight_before_stop(
+    experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fired stop criterion halts refilling, but with runs STILL in flight the
+    async ladder drains them first (wait_in_flight) rather than orphaning them —
+    the issue's "don't orphan jobs on a terminal stop" guard."""
     _patch_evidence(monkeypatch, in_flight=1, remaining_max_jobs=10)
+
+    def fake_converged(**_kw: Any) -> dict[str, Any]:
+        return {"converged": True, "reason": "max_iters_reached(5)"}
+
+    monkeypatch.setattr(
+        "hpc_agent.meta.campaign.atoms.converged.campaign_converged", fake_converged
+    )
+    out = campaign_advance(
+        experiment_dir=experiment, campaign_id=_CID, async_refill=True, max_in_flight=4
+    )
+    # Drains, does NOT stop while a run is still in flight (no refill either).
+    assert out["decision"] == "wait_in_flight"
+    assert out["refill_count"] is None
+
+
+def test_converged_stops_once_pool_drained(
+    experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the pool has drained (in_flight == 0), the same fired stop criterion
+    finally emits stop_converged — the terminal stop the drain deferred."""
+    _patch_evidence(monkeypatch, in_flight=0, remaining_max_jobs=10)
 
     def fake_converged(**_kw: Any) -> dict[str, Any]:
         return {"converged": True, "reason": "max_iters_reached(5)"}

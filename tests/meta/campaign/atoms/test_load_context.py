@@ -307,3 +307,29 @@ def test_async_pool_full_routes_monitor(journal_home, experiment):
     ctx = load_context(experiment_dir=experiment)
     assert len(ctx["in_flight"]) == 2  # == K
     assert ctx["next_step_hint"] == "monitor"
+
+
+def test_async_budget_halt_drains_in_flight_not_loop_on_decide(journal_home, experiment):
+    """A budget-halted async campaign with a run in flight routes monitor (drain),
+    NOT a no-op decide step.
+
+    Free slot by K alone (in_flight 1 < K 4) used to route ``decide`` forever even
+    though campaign-advance would only answer ``stop_over_budget`` / ``wait_in_flight``
+    — the in-flight run never got monitored, so it never drained (a livelock). Routing
+    now defers to advance: not ``refill`` → fall through to monitor/aggregate to drain.
+    """
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    # max_jobs=1 with the 1 in-flight sidecar already counted as spent → budget met.
+    write_manifest(
+        experiment,
+        campaign_id="optuna-1",
+        async_refill=True,
+        max_in_flight=4,
+        budget={"max_jobs": 1},
+    )
+
+    ctx = load_context(experiment_dir=experiment)
+    assert len(ctx["in_flight"]) == 1  # below K, but advance won't refill
+    assert ctx["next_step_hint"] == "monitor"  # drains, does not loop on decide

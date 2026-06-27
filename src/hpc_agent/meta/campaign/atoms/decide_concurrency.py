@@ -28,6 +28,7 @@ from typing import Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.meta.campaign.atoms._concurrency import DEFAULT_MAX_IN_FLIGHT as _K_CAP_DEFAULT
 
 __all__ = ["decide_concurrency"]
 
@@ -64,7 +65,7 @@ __all__ = ["decide_concurrency"]
             CliArg(
                 "--k-cap",
                 type=int,
-                default=4,
+                default=_K_CAP_DEFAULT,
                 help="Upper guardrail on parallelism regardless of headroom (default 4).",
             ),
         ),
@@ -76,7 +77,7 @@ def decide_concurrency(
     supports_async: bool = False,
     remaining_jobs: int | None = None,
     in_flight: int = 0,
-    k_cap: int = 4,
+    k_cap: int = _K_CAP_DEFAULT,
 ) -> dict[str, Any]:
     """Decide sequential vs. how-aggressive parallel from evidence.
 

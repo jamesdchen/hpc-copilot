@@ -17,14 +17,12 @@ from typing import TYPE_CHECKING, Any, get_args
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire._shared import OptimizationDirection, PlateauMode
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.meta.campaign.atoms._concurrency import (
+    DEFAULT_MAX_IN_FLIGHT as _DEFAULT_MAX_IN_FLIGHT,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Framework default pool-occupancy target K when async_refill is on but
-# --max-in-flight / the manifest leaves it unset. Matches decide-concurrency's
-# k_cap default (the bound whose computation this primitive folds in).
-_DEFAULT_MAX_IN_FLIGHT = 4
 
 
 @primitive(
@@ -103,7 +101,7 @@ _DEFAULT_MAX_IN_FLIGHT = 4
                 default=None,
                 help=(
                     "Pool-occupancy target K for --async-refill. refill_count = "
-                    "max(0, min(K, remaining_max_jobs) - in_flight). Defaults from "
+                    "max(0, min(K - in_flight, remaining_max_jobs)). Defaults from "
                     "the manifest's top-level max_in_flight, then the framework "
                     f"default ({_DEFAULT_MAX_IN_FLIGHT}). Ignored when async is off."
                 ),
@@ -147,14 +145,21 @@ def campaign_advance(
     ``wait_in_flight`` so an in-flight retry (which carries no terminal
     verdict yet) is given the chance to succeed before they fire.
 
-    Async-refill mode (``async_refill`` set, #362): the ``wait_in_flight``
-    barrier is **replaced** by a ``refill`` rule ordered *after* the budget
-    and stop_* halts — so a converged / over-budget / circuit-broken campaign
-    stops refilling rather than topping the pool back up. ``refill`` carries
-    ``refill_count = max(0, min(K, remaining_max_jobs) - in_flight)`` (``K`` =
-    ``max_in_flight``; ``remaining_max_jobs`` may be ``None`` = unbounded);
-    when the pool is already full it falls back to ``wait_in_flight``. Default
-    off keeps the synchronous ladder byte-identical.
+    Async-refill mode (``async_refill`` set, #362): the steady-state
+    ``wait_in_flight`` barrier is **replaced** by a ``refill`` rule ordered
+    *after* the budget and stop_* halts — so a converged / over-budget /
+    circuit-broken campaign stops refilling rather than topping the pool back
+    up. ``refill`` carries ``refill_count = max(0, min(K - in_flight,
+    remaining_max_jobs))`` (``K`` = ``max_in_flight``; ``remaining_max_jobs``
+    may be ``None`` = unbounded, and already excludes in-flight jobs); when the
+    pool is already full it falls back to
+    ``wait_in_flight``. Crucially, ``wait_in_flight`` STILL fires for the
+    terminal-stop case: when a circuit-breaker / resubmit-cap / convergence stop
+    is pending but runs are still in flight, the async ladder drains them
+    (``_drain_before_stop``) before emitting the stop, so a terminal stop never
+    orphans an in-flight cluster job — exactly as the sync ladder's
+    ``wait_in_flight`` guard does. Default off keeps the synchronous ladder
+    byte-identical.
 
     Budget acknowledgement: ``stop_over_budget`` is a halt the loop cannot
     silently pass. When a cap is met, the campaign halts until the spend is
@@ -301,32 +306,73 @@ def campaign_advance(
         n = e["status"]["in_flight"]
         remaining_max_jobs = e["budget"]["remaining"].get("max_jobs")  # None = unbounded
         k = max_in_flight if max_in_flight is not None else _DEFAULT_MAX_IN_FLIGHT
-        target = k if remaining_max_jobs is None else min(k, remaining_max_jobs)
-        refill_count = max(0, target - n)
+        # Two INDEPENDENT caps on how many to submit this tick:
+        #   pool_room  = K - in_flight      — don't exceed K concurrent
+        #   remaining_max_jobs              — jobs still affordable. campaign-budget's
+        #     ``remaining`` is cap - spent, and ``spent`` already counts in-flight runs
+        #     (they carry sidecars from submit time) — so it must NOT be reduced by
+        #     in_flight again. The old ``min(K, remaining) - n`` double-counted the
+        #     in-flight jobs and under-filled the pool by ``n`` on a tight budget.
+        pool_room = max(0, k - n)
+        refill_count = (
+            pool_room if remaining_max_jobs is None else max(0, min(pool_room, remaining_max_jobs))
+        )
         if refill_count > 0:
             return CandidateAction(
                 action="refill",
                 params={"refill_count": refill_count},
                 rationale=(
-                    f"async refill: {n} in flight < target {target} "
-                    f"(K={k}, remaining_max_jobs={remaining_max_jobs}); "
+                    f"async refill: {n} in flight (K={k}, "
+                    f"remaining_max_jobs={remaining_max_jobs}); "
                     f"submit {refill_count} more iteration(s)"
                 ),
             )
         if n > 0:
-            # Pool already at/over target — wait for a slot rather than over-submit.
+            # Pool full or out of budget room — wait for a slot rather than over-submit.
             # The async analogue of the synchronous wait_in_flight guard.
             return CandidateAction(
                 action="wait_in_flight",
-                rationale=f"async pool full: {n} in flight >= target {target}",
+                rationale=(
+                    f"async pool full: {n} in flight, no refill room "
+                    f"(K={k}, remaining_max_jobs={remaining_max_jobs})"
+                ),
             )
         return None
 
-    # Async mode REPLACES wait_in_flight with the refill rule, and orders it
-    # after the budget/stop halts (decision #362). Default (sync) ladder is
-    # byte-identical to before.
+    def _terminal_stop_pending(e: dict[str, Any]) -> bool:
+        # True when a TERMINAL stop (circuit breaker / resubmit cap / convergence)
+        # would fire. Budget is excluded: it's a recoverable, ack-gated halt
+        # handled by _over_budget, which — like the sync ladder — does not wait.
+        # Reuses the very rules below, so the drain check can never drift from
+        # what actually fires.
+        return any(rule(e) is not None for rule in (_circuit_breaker, _resubmit_cap, _converged))
+
+    def _drain_before_stop(e: dict[str, Any]) -> CandidateAction | None:
+        # Async-refill (#362): honour the issue's "wait_in_flight still fires for
+        # the *stop*-decision case (don't orphan jobs on a terminal stop)". When a
+        # terminal stop is pending but runs are still in flight, drain them
+        # (wait_in_flight) BEFORE emitting the stop — mirroring the sync ladder's
+        # wait_in_flight guard, which the async ladder otherwise drops. Only once
+        # the pool has drained (in_flight == 0) do the terminal stop rules below
+        # fire. Ordered after _over_budget (the recoverable halt that, as in sync,
+        # does not wait) and before the stop rules + refill.
+        n = e["status"]["in_flight"]
+        if n > 0 and _terminal_stop_pending(e):
+            return CandidateAction(
+                action="wait_in_flight",
+                rationale=(
+                    f"terminal stop pending but {n} run(s) still in flight — "
+                    "draining before stop so no cluster job is orphaned"
+                ),
+            )
+        return None
+
+    # Async mode REPLACES the steady-state wait_in_flight with the refill rule
+    # (ordered last, after the budget/stop halts, #362), but reintroduces
+    # wait_in_flight via _drain_before_stop for the terminal-stop case so a stop
+    # never orphans in-flight runs. Default (sync) ladder is byte-identical.
     rules = (
-        [_over_budget, _circuit_breaker, _resubmit_cap, _converged, _refill]
+        [_over_budget, _drain_before_stop, _circuit_breaker, _resubmit_cap, _converged, _refill]
         if async_refill
         else [_over_budget, _wait_in_flight, _circuit_breaker, _resubmit_cap, _converged]
     )
