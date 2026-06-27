@@ -15,6 +15,7 @@ parse failure.
 
 from __future__ import annotations
 
+import json
 import shlex
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,39 @@ if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
 
 __all__ = ["ssh_status_report", "ssh_batch_scheduler_states"]
+
+# Pin the reporter to the *activated env's* interpreter. A CARC ``module load
+# python/X`` (or an Lmod auto-reload) hijacks a bare ``python`` on PATH even
+# after ``conda activate``, so the reporter runs under the WRONG interpreter
+# (``hpc_agent`` is installed for the env's python, not the module's) → an
+# import/version failure → ``rc != 0`` → ``unable_to_verify`` that stalls the
+# monitor. After ``conda activate`` exports ``$CONDA_PREFIX``,
+# ``$CONDA_PREFIX/bin/python`` is the env's python regardless of a later PATH
+# swap; with no conda env active the expansion is empty and it falls back to a
+# bare ``python`` (unchanged behaviour). Offline-pinned form; cluster efficacy
+# is a live-verify item.
+_ENV_PYTHON = "${CONDA_PREFIX:+$CONDA_PREFIX/bin/}python"
+
+
+def _reporter_error_from_stdout(stdout: str) -> str | None:
+    """Extract the reporter's structured error (``errors: [{code, detail}]``).
+
+    On a handled failure the reporter writes that doc to **stdout** AND exits
+    non-zero (its ``_emit_err`` default is ``exit_code=2``). Surface ``code:
+    detail`` so the real cause (e.g. ``tasks_py_import_error``) reaches the
+    operator instead of the stderr noise — an Lmod ``python/X => python/Y``
+    reload notice — that otherwise masks it. Returns ``None`` if stdout is not
+    the structured error envelope.
+    """
+    try:
+        errors = json.loads(stdout).get("errors") or []
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not errors:
+        return None
+    first = errors[0]
+    code, detail = first.get("code"), first.get("detail")
+    return f"{code}: {detail}" if detail else (str(code) if code else None)
 
 
 def ssh_status_report(
@@ -57,7 +91,7 @@ def ssh_status_report(
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
         f"{remote_activation}"
-        f"python -m hpc_agent.execution.mapreduce.reduce.status "
+        f"{_ENV_PYTHON} -m hpc_agent.execution.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
@@ -67,9 +101,15 @@ def ssh_status_report(
     )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        raise RemoteCommandFailed(
-            f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
-        )
+        # Prefer the reporter's own structured error (on stdout) over the stderr
+        # noise (Lmod reload notices) that otherwise masks the real cause.
+        structured = _reporter_error_from_stdout(proc.stdout)
+        stderr = proc.stderr.strip()[:200]
+        if structured and stderr:
+            detail = f"{structured} [stderr: {stderr}]"
+        else:
+            detail = structured or stderr or "(no output)"
+        raise RemoteCommandFailed(f"status reporter failed (rc={proc.returncode}): {detail}")
     return parse_remote_json(proc.stdout, source_label="status reporter")
 
 
