@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace.output.json",
+  "title": "trace output",
+  "description": "Returned by ``hpc-agent trace --campaign-id <id>`` / ``--run-id <id>``.",
+  "type": "object",
+  "required": [
+    "trace_schema_version",
+    "scope",
+    "format",
+    "root",
+    "node_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "trace_schema_version": {
+      "description": "Bumped when the emitted node/edge shape changes incompatibly.",
+      "minimum": 1,
+      "title": "Trace Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "description": "Whether the DAG was rooted at a campaign or a single run's lineage.",
+      "enum": [
+        "campaign",
+        "run"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "format": {
+      "description": "`dag` includes edges + per-wave nodes; `flat` is the run list only; `dot` is the full dag plus a rendered Graphviz `dot` string.",
+      "enum": [
+        "dag",
+        "flat",
+        "dot"
+      ],
+      "title": "Format",
+      "type": "string"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The campaign tag, when scope == 'campaign'; null for run scope.",
+      "title": "Campaign Id"
+    },
+    "root": {
+      "description": "Node id of the DAG root (`campaign:<id>` or `run:<seed>`).",
+      "minLength": 1,
+      "title": "Root",
+      "type": "string"
+    },
+    "signature": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The provenance-manifest self-attesting signature for this campaign (64-hex). Campaign scope only — null for run scope.",
+      "title": "Signature"
+    },
+    "node_count": {
+      "description": "Number of nodes in `nodes`.",
+      "minimum": 0,
+      "title": "Node Count",
+      "type": "integer"
+    },
+    "nodes": {
+      "description": "Heterogeneous nodes keyed by `kind`: a `campaign` node, one `run` node per run (carrying its provenance fingerprint + lifecycle status + timing), and one `wave` node per wave (dag format only).",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "edges": {
+      "description": "Directed edges by `rel`: `member` (run→campaign membership), `derived-from` (run→parent run lineage via parent_run_ids), and `contains` (run→wave). Empty in `flat` format.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "dot": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Graphviz DOT rendering of the DAG — populated only in `dot` format, null otherwise. Pipe it to `dot -Tsvg` to draw the graph.",
+      "title": "Dot"
+    }
+  }
+}

@@ -73,6 +73,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'submit-preflight': ('submit-preflight', 'hpc_agent.ops.submit_preflight'),
     'suggest-setup-action': ('suggest-setup-action', 'hpc_agent.cli.setup_actions'),
     'summarize-submit-plan': ('summarize-submit-plan', 'hpc_agent.ops.submit.plan_summary'),
+    'trace': ('trace', 'hpc_agent.ops.trace'),
     'validate-campaign': ('validate-campaign', 'hpc_agent.meta.validate_campaign'),
     'verify-aggregation-complete': ('verify-aggregation-complete', 'hpc_agent.ops.aggregate.invariants'),
     'verify-canary': ('verify-canary', 'hpc_agent.ops.verify_canary'),

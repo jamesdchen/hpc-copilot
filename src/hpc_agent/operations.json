@@ -713,6 +713,18 @@
     "verb": "query"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "trace",
+    "output_schema": "trace.output.json",
+    "python": "hpc_agent.ops.trace.trace",
+    "side_effects": [],
+    "summary": "Assemble a derived execution DAG for a campaign (--campaign-id) or a single run's lineage (--run-id) by joining the per-run journal records, the per-run sidecars, and the signable provenance manifest. Read-only, no SSH. --format dag (default) emits run + wave nodes and member/derived-from/contains edges; --format flat emits the run list only; --format dot adds a Graphviz `dot` string.",
+    "verb": "query"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]",
     "idempotent": true,

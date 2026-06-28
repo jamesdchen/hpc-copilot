@@ -233,6 +233,27 @@ def test_tool_schema_embeds_spec_as_required() -> None:
     assert "spec" in schema["required"]
 
 
+def test_trace_is_exposed_read_only_with_flag_schema() -> None:
+    # The `trace` query verb is auto-exposed in the default (read-only)
+    # catalog, and its flags project into the tool inputSchema — including the
+    # `--format` enum — so an MCP client can pull the execution DAG.
+    server = _server()
+    assert "trace" in _tool_names(server)
+    meta = get_registry()["trace"]
+    assert meta.verb in M._READ_ONLY_VERBS
+    schema = M._tool_input_schema("trace", meta.cli)
+    assert {"campaign_id", "run_id", "trace_format"} <= set(schema["properties"])
+    assert schema["properties"]["trace_format"]["enum"] == ["dag", "flat", "dot"]
+
+
+def test_trace_argv_renders_campaign_and_format() -> None:
+    meta = get_registry()["trace"]
+    argv = M._build_invocation(
+        "trace", meta.cli, {"campaign_id": "camp", "trace_format": "dot"}, None
+    )
+    assert argv == ["trace", "--campaign-id", "camp", "--format", "dot"]
+
+
 # ─── resources & prompts ──────────────────────────────────────────────────────
 
 

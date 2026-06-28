@@ -33,6 +33,7 @@ from hpc_agent.execution.mapreduce.reduce.history import find_sidecars_by_campai
 __all__ = [
     "build_provenance_manifest",
     "manifest_signature",
+    "project_run_provenance",
     "provenance_manifest",
     "write_provenance_manifest",
 ]
@@ -55,6 +56,19 @@ _RUN_PROVENANCE_FIELDS: tuple[str, ...] = (
     "submitted_at",  # ISO-8601 submit time
     "trial_tokens",  # opaque per-task reconciliation tokens (closed-loop)
 )
+
+
+def project_run_provenance(sidecar: dict[str, Any]) -> dict[str, Any]:
+    """Project one run *sidecar* to the :data:`_RUN_PROVENANCE_FIELDS` allowlist.
+
+    The single source of truth for "which provenance facts a run contributes" —
+    used both by :func:`build_provenance_manifest` (the signable artifact) and
+    by the ``trace`` query verb (the derived DAG view), so the two never drift.
+    A field the sidecar never recorded is emitted as ``null`` so the shape is
+    uniform across sidecar vintages. Excludes ``run_id`` (the caller already
+    holds the run identity); returns only the fingerprint fields.
+    """
+    return {field: sidecar.get(field) for field in _RUN_PROVENANCE_FIELDS}
 
 
 def build_provenance_manifest(experiment_dir: Path, campaign_id: str) -> dict[str, Any]:
@@ -95,8 +109,7 @@ def build_provenance_manifest(experiment_dir: Path, campaign_id: str) -> dict[st
     runs: list[dict[str, Any]] = []
     for sidecar in sidecars:
         record: dict[str, Any] = {"run_id": sidecar.get("run_id")}
-        for field in _RUN_PROVENANCE_FIELDS:
-            record[field] = sidecar.get(field)
+        record.update(project_run_provenance(sidecar))
         runs.append(record)
     return {
         "manifest_schema_version": PROVENANCE_MANIFEST_SCHEMA_VERSION,
