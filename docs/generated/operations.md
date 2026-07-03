@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**121 operations total**: 98 primitive atoms + 23 workflow atoms.
+**122 operations total**: 98 primitive atoms + 24 workflow atoms.
 
 ## How to read this page
 
@@ -147,7 +147,7 @@ Creates new files (e.g. starter executor templates).
 | [`scaffold-strategy`](../primitives/scaffold-strategy.md) | ✓ | writes-file | `hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]` | `_(none)_` | — | — |
 | [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `_(none)_` | — | — |
 
-## `workflow` (23)
+## `workflow` (24)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -156,6 +156,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`aggregate-check`](../primitives/aggregate-check.md) | ✓ | ssh | `hpc-agent aggregate-check --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`aggregate-flow`](../primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]` | `_(none)_` | — | — |
 | [`aggregate-run`](../primitives/aggregate-run.md) | ✓ | ssh; sync-pull | `hpc-agent aggregate-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`block-drive`](../primitives/block-drive.md) | ✓ | spawns-subprocess; writes-journal | `hpc-agent block-drive --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-complete`](../primitives/campaign-complete.md) | ✓ | _none_ | `hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-greenlight`](../primitives/campaign-greenlight.md) | ✓ | writes-campaign-state | `hpc-agent campaign-greenlight --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-run`](../primitives/campaign-run.md) | ✓ | scheduler-submit; ssh; writes-aggregate-output | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

@@ -1,14 +1,14 @@
 ---
 name: hpc-status
-description: "Start the status blocks (`status-snapshot`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names. Snapshot is a cheap journal-first digest of what is running where and what changed since the human last looked; a live run's `next_block` is `status-watch`, a detached blocking poll to terminal or anomaly. The skill never resolves a decision and never interprets raw results."
+description: "Start the status workflow with the code-driven chain (`block-drive`, first block `status-snapshot`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. Snapshot is a cheap journal-first digest of what is running where and what changed since the human last looked; a live run advances to `status-watch`, a detached blocking poll to terminal or anomaly. The skill never resolves a decision and never interprets raw results."
 allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Start the status workflow by invoking the **`status-snapshot`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb` — never a hardcoded sequence, never a verb the envelope did not name.
+Start the status workflow by invoking the **`block-drive`** verb — the code-driven chain (design [§2](../../../../docs/design/human-amplification-blocks.md), [§6](../../../../docs/design/block-drive.md)). It starts at the **`status-snapshot`** block, chains the deterministic spans in code, and exits at each human decision point returning a **brief**. You are the translator at those rendezvous points **only**: render the brief as a proposal, take the human's `y` or nudge, and on `y` commit the approved input spec so the next `block-drive` tick advances. You do **not** read `next_block` and dispatch the next verb yourself — that sequencing is re-homed off the LLM into the driver's chaining table (design §6).
 
-The two status blocks (`ops/status_blocks.py`) are `status-snapshot` (one-shot, journal-first digest: what is running where + what changed since `last_seen_by_human_at`, plus §5 stalled-driver and failed/abandoned anomaly detection) and `status-watch` (a blocking poll to terminal/anomaly, composing `monitor-flow` — which owns the throttled SSH spine and the §5 guaranteed terminal harvest). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The blocks are the whole execution** — the poll loop, lifecycle transitions, and harvest all live in code; this skill only relays briefs and records the human's answer.
+The two status blocks (`ops/status_blocks.py`) `block-drive` composes are `status-snapshot` (one-shot, journal-first digest: what is running where + what changed since `last_seen_by_human_at`, plus §5 stalled-driver and failed/abandoned anomaly detection) and `status-watch` (a blocking poll to terminal/anomaly, composing `monitor-flow` — which owns the throttled SSH spine and the §5 guaranteed terminal harvest). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The blocks are the whole execution** — the poll loop, lifecycle transitions, and harvest all live in code; you only relay the driver's briefs and record the human's answer.
 
 The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous agent invokes this skill directly.
 
@@ -22,21 +22,20 @@ The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous 
   ```
   Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those).
 
-## The block loop
+## The driver loop
 
-Repeat until a terminal block (`next_block` null and `needs_decision` false, or the human ends the run):
+`block-drive` drives the sequence in code; you translate at the rendezvous points it stops at. Each tick:
 
-1. **Invoke the block.** First iteration: `status-snapshot`. Later iterations: the verb the previous block's `next_block.verb` named, seeded from its `spec_hint`.
-2. **Relay the brief.** Render `reason` + `brief`: the snapshot's `running_where` / `changed_since_seen` / `stalled_runs` / `anomalies` rows, or the watch's terminal digest / anomaly evidence (counts, failed-wave ledger, the reporter's classified error, and a structured `recommendation` — proposed next-action DATA, never LLM-authored prose). Relay the code-drafted digest; never re-interpret the raw status.
-3. **Collect the answer.** A single `y` greenlights the suggested `next_block`; anything else is a nudge.
-4. **Journal the exchange:**
+1. **Invoke `block-drive`.** The first call starts the chain at `status-snapshot`; each later call consumes the approved spec from the journal's `resolved` and advances — or re-runs the block a nudge changed. The route is a **function of the spec** (design §4), computed in code — never a verb you pick.
+2. **Render the brief the driver returns as a proposal.** Relay `reason` + `brief`: the snapshot's `running_where` / `changed_since_seen` / `stalled_runs` / `anomalies` rows, or the watch's terminal digest / anomaly evidence (counts, failed-wave ledger, the reporter's classified error, and a structured `recommendation` — proposed next-action DATA, never LLM-authored prose). Relay the code-drafted digest; never re-interpret the raw status.
+3. **The human answers `y` or nudges.** A single `y` approves the proposed input spec; anything else is a nudge, which you fold into the block's **inputs** (never a hand-edited derived output) and re-present. Loop until `y`.
+4. **On `y`, commit the approved input spec to the journal's `resolved`, then invoke `block-drive` again to advance.** The commit *is* the approval (design §3, §5). Append the record:
    ```bash
    hpc-agent append-decision --spec <path> --experiment-dir <dir>
    ```
-   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text; on a greenlight, `resolved: {"next_block": "<next_block.verb>"}`.
-5. **Advance.** On `y`, invoke `next_block.verb`. On a nudge, fold it into the current block's spec and re-invoke the same block (it re-drafts a fresh brief). A `status-snapshot` with nothing live returns `next_block: null` and `needs_decision: false` — nothing to watch; surface and stop. A failed/abandoned anomaly or a stalled driver carries `next_block: null` and `needs_decision: true`: recovery (classify-then-resubmit, or reconcile-then-confirm before resubmit) is a human branch — surface the recommendation and let the nudge name the action.
+   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"`, and the approved input spec under `resolved` (a spec, never the nudge string). **Do not end your turn after committing without firing the next tick** — the decision-rendezvous Stop-hook (design §5) blocks the stop until the driver advances.
 
-A `status-watch` that reaches a clean `complete` returns `needs_decision: false` and a `next_block` of `submit-s4` (the guaranteed harvest already ran inside `monitor-flow`'s terminal path) — the hand-off to harvest. A `timeout` (budget elapsed, cluster jobs may run on) suggests `status-watch` again to keep watching.
+A `status-snapshot` with nothing live is terminal (`needs_decision: false`) — nothing to watch; surface and stop. A failed/abandoned anomaly or a stalled driver carries `needs_decision: true`: recovery (classify-then-resubmit, or reconcile-then-confirm before resubmit) is a human branch — the driver surfaces the recommendation and the nudge names the action. A `status-watch` that reaches a clean `complete` hands off to harvest (`submit-s4` — the guaranteed harvest already ran inside `monitor-flow`'s terminal path); a `timeout` (budget elapsed, cluster jobs may run on) keeps watching. **NEVER hand-compute a decision or interpret raw results:** code digests the status into the brief and the recommendation DATA; the human decides; you only translate at the rendezvous.
 
 ## Never-stall + session tail-loop
 

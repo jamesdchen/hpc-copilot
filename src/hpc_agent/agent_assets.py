@@ -77,6 +77,31 @@ def _build_stop_hook_command() -> str:
     return f"{_hook_python()} -m hpc_agent._kernel.hooks.skill_return_stop_guard"
 
 
+def _build_rendezvous_autofetch_command() -> str:
+    """The decision-rendezvous ``PostToolUse`` hook command, with a pre-filter.
+
+    Mirrors :func:`_build_hook_command`: ``matcher: "Bash"`` fires after every
+    Bash call, so a ``case`` pre-filter keeps the non-``block-drive`` common
+    path at bash-builtin cost — only a payload mentioning ``block-drive``
+    reaches Python (which then reads the freshly-parked brief back).
+    """
+    return (
+        'input=$(cat); case "$input" in *block-drive*) '
+        f"printf '%s' \"$input\" | {_hook_python()} "
+        "-m hpc_agent._kernel.hooks.decision_rendezvous_autofetch;; esac"
+    )
+
+
+def _build_rendezvous_stop_hook_command() -> str:
+    """The decision-rendezvous ``Stop`` guard command — no pre-filter.
+
+    Sibling of :func:`_build_stop_hook_command`: Stop fires once per turn, so
+    the interpreter start is paid rarely and the guard needs the journal probe
+    either way.
+    """
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
+
+
 # The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope the
 # moment the sub-skill's ``emit-skill-return`` Bash call commits it (see
 # :mod:`hpc_agent._kernel.hooks.skill_return_autofetch` for why the trigger is
@@ -110,6 +135,36 @@ _SKILL_RETURN_STOP_ENTRY: dict[str, Any] = {
         {
             "type": "command",
             "command": _STOP_HOOK_COMMAND,
+        }
+    ],
+}
+
+# The ``block-drive`` decision-rendezvous pair (see
+# :mod:`hpc_agent._kernel.hooks.decision_rendezvous_autofetch` /
+# ``decision_rendezvous_stop_guard``), generalizing the skill-return pair to the
+# §5 y/nudge boundary. The PostToolUse autofetch injects the brief a
+# ``block-drive`` tick just parked; the Stop guard blocks ending the turn once a
+# human ``y`` is committed but the driver has not advanced. Both merge additively
+# + idempotently, matched on the module-path needle.
+_RENDEZVOUS_AUTOFETCH_COMMAND = _build_rendezvous_autofetch_command()
+_RENDEZVOUS_AUTOFETCH_NEEDLE = "hpc_agent._kernel.hooks.decision_rendezvous_autofetch"
+_RENDEZVOUS_AUTOFETCH_ENTRY: dict[str, Any] = {
+    "matcher": "Bash",
+    "hooks": [
+        {
+            "type": "command",
+            "command": _RENDEZVOUS_AUTOFETCH_COMMAND,
+        }
+    ],
+}
+
+_RENDEZVOUS_STOP_COMMAND = _build_rendezvous_stop_hook_command()
+_RENDEZVOUS_STOP_NEEDLE = "hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
+_RENDEZVOUS_STOP_ENTRY: dict[str, Any] = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": _RENDEZVOUS_STOP_COMMAND,
         }
     ],
 }
@@ -580,6 +635,10 @@ def install_agent_assets(
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_stop_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
+            "settings_rendezvous_hook": {"settings_path": "...", "action": "added",
+                                         "wrote": <bool>},
+            "settings_rendezvous_stop_hook": {"settings_path": "...", "action": "added",
+                                              "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
@@ -659,6 +718,25 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Wire the block-drive decision-rendezvous pair (§5): the PostToolUse
+    # autofetch injects the brief a block-drive tick just parked; the Stop guard
+    # forces the driver to advance once a human y is committed but unconsumed.
+    # Same additive + idempotent merge, matched on their own module-path needles.
+    settings_rendezvous_hook = _merge_hook_entry(
+        target,
+        event="PostToolUse",
+        entry=_RENDEZVOUS_AUTOFETCH_ENTRY,
+        needle=_RENDEZVOUS_AUTOFETCH_NEEDLE,
+        dry_run=dry_run,
+    )
+    settings_rendezvous_stop_hook = _merge_hook_entry(
+        target,
+        event="Stop",
+        entry=_RENDEZVOUS_STOP_ENTRY,
+        needle=_RENDEZVOUS_STOP_NEEDLE,
+        dry_run=dry_run,
+    )
+
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
@@ -678,6 +756,8 @@ def install_agent_assets(
         "cleared_collisions": cleared,
         "settings_hook": settings_hook,
         "settings_stop_hook": settings_stop_hook,
+        "settings_rendezvous_hook": settings_rendezvous_hook,
+        "settings_rendezvous_stop_hook": settings_rendezvous_stop_hook,
         "settings_permissions": settings_permissions,
         "mcp_server": mcp_server,
         "wrote": not dry_run,

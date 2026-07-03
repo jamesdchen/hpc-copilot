@@ -1,0 +1,287 @@
+"""Tests for the ``block-drive`` decision-rendezvous hook pair (§5).
+
+The pair generalizes the skill-return Stop guard + PostToolUse autofetch to the
+``block-drive`` y/nudge boundary (``docs/design/block-drive.md`` §5):
+
+* ``decision_rendezvous_stop_guard`` — a ``Stop`` hook that forces the driver to
+  advance ONLY when a human ``y`` is committed to the decision journal but the
+  ``pending_decision`` marker is still set (Phase-4 stall). It stays **silent**
+  while the driver is merely awaiting the human (Phase 2/3a) — the whole §5
+  subtlety: never force continuation into a void.
+* ``decision_rendezvous_autofetch`` — a ``PostToolUse`` hook that injects the
+  brief a ``block-drive`` tick just parked so the LLM reliably renders it.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+
+import pytest
+
+from hpc_agent._kernel.hooks import decision_rendezvous_autofetch as fetch
+from hpc_agent._kernel.hooks import decision_rendezvous_stop_guard as guard
+from hpc_agent.state.decision_journal import append_decision
+from hpc_agent.state.journal import mark_pending_decision, upsert_run
+from hpc_agent.state.run_record import RunRecord
+
+_RUN_ID = "run-abc"
+_BLOCK = "s2"
+_WORKFLOW = "submit"
+_BRIEF = {"proposal": "canary looks good", "cost": 42}
+
+
+@pytest.fixture(autouse=True)
+def _journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Isolate the journal home (also isolates the skill-return breadcrumb the
+    # Stop guard scans, which lives under _current_homedir()).
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    return tmp_path
+
+
+def _record(run_id: str = _RUN_ID, *, status: str = "in_flight") -> RunRecord:
+    return RunRecord(
+        run_id=run_id,
+        profile="p",
+        cluster="hoffman2",
+        ssh_target="u@h",
+        remote_path="/remote",
+        job_name="j",
+        job_ids=["100"],
+        total_tasks=4,
+        submitted_at="2026-07-03T00:00:00+00:00",
+        experiment_dir="/exp",
+        status=status,
+    )
+
+
+def _park(exp: Path, run_id: str = _RUN_ID) -> None:
+    """Upsert an in-flight run and stamp its pending_decision marker + brief."""
+    upsert_run(exp, _record(run_id))
+    mark_pending_decision(
+        run_id,
+        block=_BLOCK,
+        workflow=_WORKFLOW,
+        brief=_BRIEF,
+        resume_cursor={
+            "workflow": _WORKFLOW,
+            "run_id": run_id,
+            "next_verb": "s3",
+            "current_verb": "s2",
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=exp,
+    )
+
+
+def _commit_y(exp: Path, run_id: str = _RUN_ID) -> None:
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block=_BLOCK,
+        response="y",
+        resolved={"approved": True},
+    )
+
+
+def _commit_nudge(exp: Path, run_id: str = _RUN_ID) -> None:
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block=_BLOCK,
+        response="cap the cost at 10",
+    )
+
+
+def _stop_payload(exp: Path, *, stop_hook_active: bool = False) -> dict:
+    return {
+        "hook_event_name": "Stop",
+        "stop_hook_active": stop_hook_active,
+        "cwd": str(exp),
+    }
+
+
+# ─── Stop guard: force continue only when marker + `y` both present ─────────
+
+
+def test_marker_plus_committed_y_forces_continue(tmp_path: Path) -> None:
+    _park(tmp_path)
+    _commit_y(tmp_path)
+
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+
+    assert out is not None
+    assert out["decision"] == "block"
+    assert _RUN_ID in out["reason"]
+    assert _BLOCK in out["reason"]
+    assert "block-drive" in out["reason"]
+    assert _WORKFLOW in out["reason"]
+
+
+# ─── the §5 subtlety: silent while genuinely awaiting the human ─────────────
+
+
+def test_parked_without_any_decision_is_silent(tmp_path: Path) -> None:
+    """Phase 2: parked, nothing committed → waiting for the human is a valid
+    stop. The guard must NOT force continuation into a void."""
+    _park(tmp_path)
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_parked_with_trailing_nudge_is_silent(tmp_path: Path) -> None:
+    """Phase 3a: the human nudged (latest decision is not a `y`) → still
+    awaiting a fresh `y`. Silent."""
+    _park(tmp_path)
+    _commit_nudge(tmp_path)
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_y_then_nudge_latest_wins_is_silent(tmp_path: Path) -> None:
+    """A `y` followed by a later nudge → latest is the nudge → silent (the
+    guard keys on the LATEST decision, not any historical `y`)."""
+    _park(tmp_path)
+    _commit_y(tmp_path)
+    _commit_nudge(tmp_path)
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_committed_y_but_no_marker_is_silent(tmp_path: Path) -> None:
+    """A `y` on the journal but no pending_decision marker means the driver
+    already advanced (marker cleared) → nothing to force."""
+    upsert_run(tmp_path, _record())
+    _commit_y(tmp_path)
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+# ─── loop safety & defensive no-ops ─────────────────────────────────────────
+
+
+def test_stop_hook_active_is_noop_even_when_armed(tmp_path: Path) -> None:
+    _park(tmp_path)
+    _commit_y(tmp_path)
+    assert guard.build_hook_output(_stop_payload(tmp_path, stop_hook_active=True)) is None
+
+
+def test_no_runs_is_noop(tmp_path: Path) -> None:
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_malformed_payload_is_noop() -> None:
+    bad_payloads: list[object] = [None, [], "string", 42]
+    for bad in bad_payloads:
+        assert guard.build_hook_output(bad) is None
+
+
+# ─── find_committed_unadvanced unit ─────────────────────────────────────────
+
+
+def test_find_committed_unadvanced_returns_block_and_workflow(tmp_path: Path) -> None:
+    _park(tmp_path)
+    _commit_y(tmp_path)
+    hit = guard.find_committed_unadvanced(tmp_path)
+    assert hit == {"run_id": _RUN_ID, "block": _BLOCK, "workflow": _WORKFLOW}
+
+
+def test_find_committed_unadvanced_none_when_only_nudge(tmp_path: Path) -> None:
+    _park(tmp_path)
+    _commit_nudge(tmp_path)
+    assert guard.find_committed_unadvanced(tmp_path) is None
+
+
+# ─── Stop guard main() stdin/stdout wrapper ─────────────────────────────────
+
+
+def _run_stop_main(monkeypatch, stdin_text: str) -> tuple[int, str]:
+    out_buf = io.StringIO()
+    monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
+    monkeypatch.setattr("sys.stdout", out_buf)
+    rc = guard.main([])
+    return rc, out_buf.getvalue()
+
+
+def test_stop_main_armed_prints_block(tmp_path: Path, monkeypatch) -> None:
+    _park(tmp_path)
+    _commit_y(tmp_path)
+    rc, out = _run_stop_main(monkeypatch, json.dumps(_stop_payload(tmp_path)))
+    assert rc == 0
+    assert json.loads(out)["decision"] == "block"
+
+
+def test_stop_main_waiting_prints_nothing(tmp_path: Path, monkeypatch) -> None:
+    _park(tmp_path)
+    rc, out = _run_stop_main(monkeypatch, json.dumps(_stop_payload(tmp_path)))
+    assert rc == 0
+    assert out == ""
+
+
+def test_stop_main_never_raises_on_core_error(tmp_path: Path, monkeypatch) -> None:
+    def _boom(_payload):
+        raise RuntimeError("simulated core failure")
+
+    monkeypatch.setattr(guard, "build_hook_output", _boom)
+    rc, out = _run_stop_main(monkeypatch, json.dumps(_stop_payload(tmp_path)))
+    assert rc == 0
+    assert out == ""
+
+
+# ─── PostToolUse autofetch: inject the parked brief ─────────────────────────
+
+
+def _bash_payload(command: str, *, cwd: str | None = None) -> dict:
+    payload: dict = {"tool_name": "Bash", "tool_input": {"command": command}}
+    if cwd is not None:
+        payload["cwd"] = cwd
+    return payload
+
+
+def test_autofetch_injects_brief_after_block_drive(tmp_path: Path) -> None:
+    _park(tmp_path)
+    cmd = f"hpc-agent block-drive --run-id {_RUN_ID} --experiment-dir {tmp_path}"
+    out = fetch.build_hook_output(_bash_payload(cmd, cwd=str(tmp_path)))
+
+    assert out is not None
+    hs = out["hookSpecificOutput"]
+    assert hs["hookEventName"] == "PostToolUse"
+    assert json.loads(hs["additionalContext"]) == _BRIEF
+
+
+def test_autofetch_experiment_dir_from_cwd_fallback(tmp_path: Path) -> None:
+    _park(tmp_path)
+    cmd = f"hpc-agent block-drive --run-id {_RUN_ID}"
+    out = fetch.build_hook_output(_bash_payload(cmd, cwd=str(tmp_path)))
+    assert out is not None
+    assert json.loads(out["hookSpecificOutput"]["additionalContext"]) == _BRIEF
+
+
+def test_autofetch_noop_when_not_parked(tmp_path: Path) -> None:
+    upsert_run(tmp_path, _record())  # in-flight but no marker
+    cmd = f"hpc-agent block-drive --run-id {_RUN_ID} --experiment-dir {tmp_path}"
+    assert fetch.build_hook_output(_bash_payload(cmd, cwd=str(tmp_path))) is None
+
+
+def test_autofetch_noop_on_non_bash(tmp_path: Path) -> None:
+    _park(tmp_path)
+    assert fetch.build_hook_output({"tool_name": "Read", "tool_input": {}}) is None
+
+
+def test_autofetch_noop_on_unrelated_bash(tmp_path: Path) -> None:
+    _park(tmp_path)
+    assert fetch.build_hook_output(_bash_payload("ls -la", cwd=str(tmp_path))) is None
+
+
+def test_autofetch_malformed_payload_is_noop() -> None:
+    bad_payloads: list[object] = [None, [], "string", 42]
+    for bad in bad_payloads:
+        assert fetch.build_hook_output(bad) is None
+
+
+def test_extract_drive_invocation_parses_run_id_and_dir() -> None:
+    cmd = "hpc-agent block-drive --run-id r-1 --experiment-dir '/tmp/exp'"
+    assert fetch.extract_drive_invocation(cmd) == ("r-1", "/tmp/exp")
+
+
+def test_extract_drive_invocation_none_without_block_drive() -> None:
+    assert fetch.extract_drive_invocation("hpc-agent doctor --run-id r-1") is None

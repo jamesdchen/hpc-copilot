@@ -36,6 +36,7 @@ __all__ = [
     "find_runs_by_campaign",
     "find_held_runs",
     "find_stalled_runs",
+    "find_parked_runs",
     "prune_terminal_runs",
 ]
 
@@ -229,6 +230,12 @@ def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[
     drafted recovery proposal. Runs with no ``next_tick_due`` stamped yet (never
     ticked) are not stalled — absence of a deadline is not a missed one.
 
+    **Parked ≠ stalled** (block-drive.md §5): a run carrying a
+    ``pending_decision`` marker is legitimately *awaiting a human decision* at a
+    block's y/nudge boundary — not ticking, but not dead. It is excluded here
+    (surfaced by :func:`find_parked_runs` instead) so ``doctor`` does not
+    false-alarm a parked driver as "stalled — re-arm?".
+
     Each entry carries the fields a recovery proposal needs::
 
         {"run_id", "status", "last_tick_at", "next_tick_due", "cluster", "ssh_target"}
@@ -241,6 +248,7 @@ def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[
     from pathlib import Path
 
     from hpc_agent.infra.time import parse_iso_utc_or_none
+    from hpc_agent.state.journal import is_awaiting_decision
 
     now_dt = parse_iso_utc_or_none(now_iso)
     if now_dt is None:
@@ -249,6 +257,9 @@ def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[
     ed = Path(experiment_dir) if experiment_dir is not None else Path.cwd()
     stalled: list[dict] = []
     for record in find_in_flight_runs(ed):
+        # Parked-on-decision runs are awaiting the human, not stalled (§5).
+        if is_awaiting_decision(record.run_id, experiment_dir=ed):
+            continue
         due_dt = parse_iso_utc_or_none(record.next_tick_due)
         if due_dt is None:
             continue  # never ticked / no deadline stamped — not a miss
@@ -264,6 +275,51 @@ def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[
                 }
             )
     return stalled
+
+
+def find_parked_runs(now_iso: str, experiment_dir: Path | None = None) -> list[dict]:
+    """Return live runs parked on a human decision (§5 "parked ≠ stalled").
+
+    A run is *parked* (not stalled) when it is still ``in_flight`` AND carries a
+    non-empty ``pending_decision`` marker — a ``block-drive`` span reached a
+    block's y/nudge boundary, wrote ``{block, brief, resume_cursor}``, and is
+    waiting for the human's ``y``/nudge (see
+    :func:`hpc_agent.state.journal.mark_pending_decision`). Such a driver is not
+    ticking but is not dead, so ``doctor`` reads it as "awaiting your decision
+    since T" rather than false-alarming a stalled driver.
+
+    Each entry carries what a parked-run read needs::
+
+        {"run_id", "status", "block", "workflow", "awaiting_since"}
+
+    *now_iso* is validated (ISO-8601 UTC, fail loud) for signature parity with
+    :func:`find_stalled_runs`; the parked read itself does not depend on a
+    deadline. *experiment_dir* defaults to the current working directory.
+    """
+    from pathlib import Path
+
+    from hpc_agent.infra.time import parse_iso_utc_or_none
+    from hpc_agent.state.journal import read_pending_decision
+
+    if parse_iso_utc_or_none(now_iso) is None:
+        raise ValueError(f"find_parked_runs: now_iso {now_iso!r} is not ISO-8601")
+
+    ed = Path(experiment_dir) if experiment_dir is not None else Path.cwd()
+    parked: list[dict] = []
+    for record in find_in_flight_runs(ed):
+        marker = read_pending_decision(record.run_id, experiment_dir=ed)
+        if not marker:
+            continue
+        parked.append(
+            {
+                "run_id": record.run_id,
+                "status": record.status,
+                "block": marker.get("block"),
+                "workflow": marker.get("workflow"),
+                "awaiting_since": marker.get("awaiting_since"),
+            }
+        )
+    return parked
 
 
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:

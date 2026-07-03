@@ -211,6 +211,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [aggregate-check](aggregate-check.md) | yes | ssh: `<cluster>` | `hpc-agent aggregate-check --spec <path> [--experiment-dir <dir>]` |
 | [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; sync-pull: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]` |
 | [aggregate-run](aggregate-run.md) | yes | ssh: `<cluster>`; sync-pull: `<ssh_target>:<remote_path>` | `hpc-agent aggregate-run --spec <path> [--experiment-dir <dir>]` |
+| [block-drive](block-drive.md) | yes | spawns-subprocess: `hpc-agent`; writes-journal: `<run_id>` | `hpc-agent block-drive --spec <path> [--experiment-dir <dir>]` |
 | [campaign-complete](campaign-complete.md) | yes | _none_ | `hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]` |
 | [campaign-greenlight](campaign-greenlight.md) | yes | writes-campaign-state: `<experiment_dir>/.hpc/campaigns/<campaign_id>/` | `hpc-agent campaign-greenlight --spec <path> [--experiment-dir <dir>]` |
 | [campaign-run](campaign-run.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-aggregate-output: `<experiment_dir>/_aggregated/<run_id>/` | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` |

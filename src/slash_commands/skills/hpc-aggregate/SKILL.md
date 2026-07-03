@@ -1,14 +1,14 @@
 ---
 name: hpc-aggregate
-description: "Start the aggregate blocks (`aggregate-check`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names. Check surfaces readiness + integrity issues (never auto-masked); a clean run's `next_block` is `aggregate-run`, the deterministic combine+reduce whose reducer — never the LLM — computes every aggregate number. The skill never resolves a decision and never interprets raw results."
+description: "Start the aggregate workflow with the code-driven chain (`block-drive`, first block `aggregate-check`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. Check surfaces readiness + integrity issues (never auto-masked); a clean run advances to `aggregate-run`, the deterministic combine+reduce whose reducer — never the LLM — computes every aggregate number. The skill never resolves a decision and never interprets raw results."
 allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Start the aggregate workflow by invoking the **`aggregate-check`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb`.
+Start the aggregate workflow by invoking the **`block-drive`** verb — the code-driven chain (design [§2](../../../../docs/design/human-amplification-blocks.md), [§6](../../../../docs/design/block-drive.md)). It starts at the **`aggregate-check`** block, chains the deterministic spans in code, and exits at each human decision point returning a **brief**. You are the translator at those rendezvous points **only**: render the brief as a proposal, take the human's `y` or nudge, and on `y` commit the approved input spec so the next `block-drive` tick advances. You do **not** read `next_block` and dispatch the next verb yourself — that sequencing is re-homed off the LLM into the driver's chaining table (design §6).
 
-The two aggregate blocks (`ops/aggregate_blocks.py`) are `aggregate-check` (readiness: run-terminal gate + `aggregate-preflight` — which reconciles a journal-only in-flight run against the cluster before refusing — plus the `verify-aggregation-complete` integrity gate, every violation surfaced as a **never-auto-masked** decision point with a conservative recommendation) and `aggregate-run` (the deterministic `aggregate-flow` pipeline: combine → reduce → a code-extracted results table). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The reducer is the whole execution and the sole source of every aggregate number.**
+The two aggregate blocks (`ops/aggregate_blocks.py`) `block-drive` composes are `aggregate-check` (readiness: run-terminal gate + `aggregate-preflight` — which reconciles a journal-only in-flight run against the cluster before refusing — plus the `verify-aggregation-complete` integrity gate, every violation surfaced as a **never-auto-masked** decision point with a conservative recommendation) and `aggregate-run` (the deterministic `aggregate-flow` pipeline: combine → reduce → a code-extracted results table). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The reducer is the whole execution and the sole source of every aggregate number.**
 
 The slash `/aggregate-hpc` is the human-interview wrapper; an external autonomous agent invokes this skill directly.
 
@@ -24,19 +24,20 @@ The slash `/aggregate-hpc` is the human-interview wrapper; an external autonomou
   ```
   Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those).
 
-## The block loop
+## The driver loop
 
-Repeat until a terminal block (the harvest brief) or the human ends the run:
+`block-drive` drives the sequence in code; you translate at the rendezvous points it stops at. Each tick:
 
-1. **Invoke the block.** First iteration: `aggregate-check`. On `y`, the verb its `next_block.verb` named (`aggregate-run`), seeded from `spec_hint`.
-2. **Relay the brief.** Render `reason` + `brief`: the check's readiness digest (record found, terminal status, combined/failed waves, `integrity_report`) and its `integrity_issues` (each with `auto_masked: false` and a recommendation), or the run's results table + error-sweep summary + harvest-ledger tail. Relay the code-extracted table; never re-interpret the raw metrics.
-3. **Collect the answer.** A single `y` greenlights the suggested `next_block`; anything else is a nudge.
-4. **Journal the exchange:**
+1. **Invoke `block-drive`.** The first call starts the chain at `aggregate-check`; each later call consumes the approved spec from the journal's `resolved` and advances (to `aggregate-run`) — or re-runs the block a nudge changed (e.g. an `allow_partial` decision on `missing_waves`). The route is a **function of the spec** (design §4), computed in code — never a verb you pick.
+2. **Render the brief the driver returns as a proposal.** Relay `reason` + `brief`: the check's readiness digest (record found, terminal status, combined/failed waves, `integrity_report`) and its `integrity_issues` (each with `auto_masked: false` and a recommendation), or the run's results table + error-sweep summary + harvest-ledger tail. Relay the code-extracted table; never re-interpret the raw metrics.
+3. **The human answers `y` or nudges.** A single `y` approves the proposed input spec; anything else is a nudge, which you fold into the block's **inputs** (never a hand-edited derived output) and re-present. Loop until `y`.
+4. **On `y`, commit the approved input spec to the journal's `resolved`, then invoke `block-drive` again to advance.** The commit *is* the approval (design §3, §5). Append the record:
    ```bash
    hpc-agent append-decision --spec <path> --experiment-dir <dir>
    ```
-   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text; on a greenlight, `resolved: {"next_block": "<next_block.verb>"}`. The block-gate (`ops/block_gate.py`) reads exactly this and refuses an `aggregate-run` that the human did not greenlight against the check brief — a loud, self-enforcing sequence.
-5. **Advance.** On `y`, invoke `next_block.verb`. On a nudge, fold it into the current block's spec (e.g. an `allow_partial` decision on `missing_waves`) and re-invoke the same block. A `not_ready` / `integrity_review` check carries `next_block: null` and `needs_decision: true` — a non-terminal run or a contamination/provenance/column violation is a human branch (keep watching, reconcile, or investigate); surface the recommendation and let the nudge name the action. An integrity issue is **never** auto-masked to proceed.
+   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"`, and the approved input spec under `resolved` (a spec, never the nudge string) — the block-gate (`ops/block_gate.py`) reads exactly this and refuses an `aggregate-run` the human did not greenlight against the check brief. **Do not end your turn after committing without firing the next tick** — the decision-rendezvous Stop-hook (design §5) blocks the stop until the driver advances.
+
+A `not_ready` / `integrity_review` check carries `needs_decision: true` — a non-terminal run or a contamination/provenance/column violation is a human branch (keep watching, reconcile, or investigate); the driver surfaces the recommendation and the nudge names the action. An integrity issue is **never** auto-masked to proceed. **NEVER hand-compute an aggregate metric or interpret raw results:** the `aggregate-run` reducer is the sole source of every number; the human decides.
 
 ## Never-stall
 

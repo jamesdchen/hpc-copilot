@@ -68,6 +68,37 @@ class StalledRunProposal(BaseModel):
     )
 
 
+class ParkedRunNote(BaseModel):
+    """One live run legitimately awaiting a human decision (§5 "parked ≠ stalled").
+
+    A parked run carries a ``pending_decision`` marker — a ``block-drive`` span
+    reached a block's y/nudge boundary and is waiting on the human. It is NOT a
+    stalled driver: the read is "awaiting your decision since T", never "driver
+    stalled — re-arm?". A parked run never appears in ``DoctorResult.stalled``.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="doctor parked-run note")
+
+    run_id: RunIdStrict
+    status: str = Field(description="Journal status of the parked run (always 'in_flight').")
+    block: str | None = Field(
+        default=None, description="The block whose decision the run is parked on, or null."
+    )
+    workflow: str | None = Field(
+        default=None, description="The workflow the parked block belongs to, or null."
+    )
+    awaiting_since: str | None = Field(
+        default=None,
+        description="When the run began awaiting the decision (ISO-8601 UTC), or null.",
+    )
+    note: str = Field(
+        description=(
+            "Human-facing read, e.g. 'awaiting your decision since <awaiting_since>'. "
+            "A parked driver is not stalled — doctor never proposes re-arming it."
+        )
+    )
+
+
 class DoctorResult(BaseModel):
     """Shape of the ``data`` field on a ``doctor`` envelope."""
 
@@ -78,4 +109,14 @@ class DoctorResult(BaseModel):
     stalled: list[StalledRunProposal] = Field(
         default_factory=list,
         description="One entry per stalled run, each with a drafted recovery proposal.",
+    )
+    parked_count: int = Field(
+        default=0, description="Number of live runs parked on a human decision (§5)."
+    )
+    parked: list[ParkedRunNote] = Field(
+        default_factory=list,
+        description=(
+            "One entry per run awaiting a human decision — distinct from stalled; "
+            "doctor surfaces the wait, never a re-arm proposal."
+        ),
     )

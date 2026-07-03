@@ -41,6 +41,7 @@ from hpc_agent._wire.workflows.submit_blocks import (
     SubmitS4Spec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.block_gate import assert_greenlit_target
@@ -96,17 +97,19 @@ def _detached_spec_dict(spec: Any) -> dict[str, Any]:
     return dumped
 
 
-def _next_block(verb: str, why: str, **spec_hint: Any) -> dict[str, Any]:
-    """Build the machine-computed next-block hint (``{verb, why, spec_hint}``).
+def _next_block(
+    current_verb: str, stage_reached: str, why: str, **spec_hint: Any
+) -> dict[str, Any] | None:
+    """Delegate to the ``block_chain`` successor table (design §6/§8).
 
-    The deterministic successor suggestion (design §2, the ``_next_step_hint``
-    pattern generalized): ``verb`` names the next block's CLI verb, ``why`` is the
-    one-line rationale the LLM surfaces, and ``spec_hint`` is the minimal
-    next-spec skeleton (run_id / canary ids / campaign_id). None is returned by
-    the callers directly at a terminal / human-branch terminator — this helper is
-    only invoked where a single deterministic successor exists.
+    The successor VERB is re-homed into ``block_chain.SUCCESSORS`` (single source
+    of truth for the deterministic chain); this thin helper keeps the emitted
+    ``{verb, why, spec_hint}`` shape unchanged — ``why`` is the one-line rationale
+    the LLM surfaces, ``spec_hint`` the minimal next-spec skeleton (run_id / canary
+    ids). Returns ``None`` at a terminal / human-branch terminator (no
+    deterministic successor for ``(current_verb, stage_reached)``).
     """
-    return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+    return next_block_hint(current_verb, stage_reached, why=why, **spec_hint)
 
 
 def _assert_canary_verified(experiment_dir: Path, base: SubmitFlowSpec) -> None:
@@ -292,7 +295,8 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
             reason="all submit inputs resolved (no ambiguities); greenlight to stage & canary.",
             brief=brief,
             next_block=_next_block(
-                "submit-s2",
+                "submit-s1",
+                "resolved",
                 "inputs resolved; stage & canary the run for review.",
             ),
         )
@@ -310,14 +314,14 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     # Only a CLEAN resolve (submit-flow spec built) has a single deterministic
     # successor (submit-s2). ``prior_run_found`` (resume-vs-fresh) and
     # ``needs_scaffold_interview`` are genuine human branches → next_block null.
-    next_block = (
-        _next_block(
-            "submit-s2",
-            "inputs resolved; stage & canary the run for review.",
-            run_id=rr.run_id,
-        )
-        if rr.stage_reached == "resolved"
-        else None
+    # The resolve leg passes ``rr.stage_reached`` straight into the table: a clean
+    # ``resolved`` chains to submit-s2, while ``prior_run_found`` /
+    # ``needs_scaffold_interview`` are human branches (table → None).
+    next_block = _next_block(
+        "submit-s1",
+        rr.stage_reached,
+        "inputs resolved; stage & canary the run for review.",
+        run_id=rr.run_id,
     )
     return SubmitBlockResult(
         block="s1",
@@ -449,7 +453,8 @@ def submit_s2(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
         run_id=sv.run_id,
         brief=brief,
         next_block=_next_block(
-            "submit-s3",
+            "submit-s2",
+            "canary_verified",
             "canary verified; launch the main array and watch to terminal.",
             run_id=sv.run_id,
             canary_run_id=sv.canary_run_id,
@@ -590,7 +595,8 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
             run_id=main.run_id,
             brief=brief,
             next_block=_next_block(
-                "submit-s4",
+                "submit-s3",
+                "watching_terminal",
                 "main array complete; harvest results and propose interpretations.",
                 run_id=main.run_id,
             ),
@@ -608,7 +614,8 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
             # Still in flight; the deterministic continuation is to keep watching
             # (status-watch), which re-arms the next tick. Not S4 — nothing terminal yet.
             next_block=_next_block(
-                "status-watch",
+                "submit-s3",
+                "watching_timeout",
                 "budget elapsed but jobs may run on; keep watching to a terminal state.",
                 run_id=main.run_id,
             ),

@@ -43,6 +43,7 @@ from hpc_agent._wire.workflows.status_blocks import (
     StatusWatchSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
@@ -58,14 +59,17 @@ if TYPE_CHECKING:
 __all__ = ["status_snapshot", "status_watch"]
 
 
-def _next_block(verb: str, why: str, **spec_hint: Any) -> dict[str, Any]:
-    """Build the machine-computed next-block hint (``{verb, why, spec_hint}``).
+def _next_block(
+    current_verb: str, stage_reached: str, why: str, **spec_hint: Any
+) -> dict[str, Any] | None:
+    """Delegate to the ``block_chain`` successor table (design §6/§8).
 
-    Mirrors ``ops/submit_blocks._next_block`` (design §2, the ``_next_step_hint``
-    pattern generalized). Callers pass None directly at a terminal / human-branch
-    terminator; this helper is only used where one deterministic successor exists.
+    Mirrors ``ops/submit_blocks._next_block``: the successor VERB is re-homed into
+    ``block_chain.SUCCESSORS``; this thin helper keeps the emitted
+    ``{verb, why, spec_hint}`` shape unchanged and returns ``None`` at a terminal /
+    human-branch terminator.
     """
-    return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+    return next_block_hint(current_verb, stage_reached, why=why, **spec_hint)
 
 
 # The per-task count keys the cluster-side reporter persists into a record's
@@ -269,9 +273,13 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         ),
         run_id=spec.run_id,
         brief=brief,
+        # Runtime-gated: the table's successor for a clean snapshot is status-watch,
+        # but only when a live run exists to watch (an all-terminal / empty fleet
+        # emits None). The ``if has_live`` guard applies that runtime condition.
         next_block=(
             _next_block(
-                "status-watch",
+                "status-snapshot",
+                "snapshot_clean",
                 "live run(s) in flight; watch to a terminal state.",
                 run_id=spec.run_id,
             )
@@ -387,7 +395,8 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             run_id=mon.run_id,
             brief=brief,
             next_block=_next_block(
-                "submit-s4",
+                "status-watch",
+                "watch_terminal",
                 "run complete; harvest results and propose interpretations.",
                 run_id=mon.run_id,
             ),
@@ -421,6 +430,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             # Still in flight → the deterministic continuation is to keep watching.
             next_block=_next_block(
                 "status-watch",
+                "watch_timeout",
                 "budget elapsed but jobs may run on; keep watching to a terminal state.",
                 run_id=mon.run_id,
             ),

@@ -22,6 +22,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'apply-safe-defaults': ('apply-safe-defaults', 'hpc_agent.ops.submit.apply_safe_defaults'),
     'axes-init': ('axes-init', 'hpc_agent.incorporation.axes_init'),
     'batch-status': ('batch-status', 'hpc_agent.ops.monitor.batch_status'),
+    'block-drive': ('block-drive', 'hpc_agent.ops.block_drive_op'),
     'build-executor': ('build-executor', 'hpc_agent.incorporation.build.executor'),
     'build-submit-spec': ('build-submit-spec', 'hpc_agent.incorporation.build.submit_spec'),
     'build-tasks-py': ('build-tasks-py', 'hpc_agent.incorporation.build.tasks_py'),

@@ -74,6 +74,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import hpc_agent
+from hpc_agent._kernel.extension.workflow_entries import WORKFLOW_ENTRIES_BY_PROMPT
 from hpc_agent.cli._dispatch import CliShape, _leaf_verb
 
 if TYPE_CHECKING:
@@ -120,7 +121,13 @@ _RESOURCES: dict[str, tuple[tuple[str, ...], str]] = {
 }
 
 # The four user-facing workflow slash commands, surfaced as MCP prompts.
-_PROMPT_NAMES = ("submit-hpc", "monitor-hpc", "aggregate-hpc", "campaign-hpc")
+# PROJECTED, not hand-listed (§6): the name set and each entry's
+# start-the-driver instruction are sourced from the single workflow-entry table
+# (:mod:`hpc_agent._kernel.extension.workflow_entries`) — the one canonical
+# source the Claude-Code slash AND this MCP prompt both project from. Adding a
+# workflow there surfaces it here with no edit; ``get_prompt`` still reads the
+# packaged command ``.md`` for the human description body.
+_PROMPT_NAMES = tuple(WORKFLOW_ENTRIES_BY_PROMPT)
 
 
 # A runner takes an hpc-agent argv (without the leading binary) and returns
@@ -128,7 +135,7 @@ _PROMPT_NAMES = ("submit-hpc", "monitor-hpc", "aggregate-hpc", "campaign-hpc")
 CliRunner = Callable[["list[str]"], "tuple[int, str, str]"]
 
 
-def _default_cli_runner(argv: list[str]) -> tuple[int, str, str]:
+def _subprocess_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     """Run ``python -m hpc_agent <argv...>`` in a SUBPROCESS and capture its envelope.
 
     ``sys.executable -m hpc_agent`` rather than a bare ``hpc-agent`` on PATH so
@@ -171,8 +178,38 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     and the return value. ``argparse`` error paths raise ``SystemExit`` (its code
     is the exit code, ``None`` → 0); any other uncaught exception is mapped to
     exit code 1 with the traceback on stderr, matching a subprocess whose Python
-    died on an uncaught exception. ``_default_cli_runner`` remains the isolated
-    fallback for tests / callers that want a separate process.
+    died on an uncaught exception. ``_subprocess_cli_runner`` remains the
+    isolated fallback for tests / callers that want a separate process.
+
+    State-leak audit (§7)
+    ---------------------
+    This runner reuses the process's module-global ``@primitive`` registry
+    across every tool call, so cross-call global-state leakage was audited. It
+    is CLEAN, for structural reasons:
+
+    * **The registry is populated idempotently, never mutated per call.**
+      ``register_primitives()`` is idempotent and runs once at ``build_server``;
+      ``main``/verb dispatch only *reads* it. No verb registers, edits, or
+      unregisters a primitive at invocation, so the shared registry cannot drift
+      between calls.
+    * **Per-call state is local, not module-global.** ``argv``, the captured
+      ``StringIO`` stdout/stderr, and ``code`` are all locals rebound every call;
+      nothing is stashed on a module attribute or default-argument object.
+    * **stdout/stderr are restored deterministically.**
+      ``contextlib.redirect_stdout``/``redirect_stderr`` are context managers
+      that restore the real streams on exit — including on the ``SystemExit`` /
+      broad-``Exception`` paths (the ``with`` unwinds before the ``except``
+      body runs), so a crashing verb cannot leave the process's streams
+      redirected into a dead ``StringIO`` for the next call.
+    * **Durable state (journal / filesystem / cwd) is the CLI's own contract**,
+      identical whether the verb runs in-process or in a subprocess — it is
+      *intended* cross-call state (the decision journal is how blocks chain),
+      not a leak. The subprocess runner shares it too.
+
+    Net: the only state shared between calls is the read-only registry and the
+    intended durable journal/filesystem; both are the same under the subprocess
+    runner, which is why the parity test holds across a mutating + a workflow
+    verb, not just ``find``.
     """
     import io
     import traceback
@@ -462,8 +499,10 @@ class McpServer:
         self._allow_mutations = allow_mutations
         self._catalog = catalog
         # Default to the WARM in-process runner (reuses this process's registry;
-        # no per-call interpreter cold-start). ``_default_cli_runner`` (subprocess
-        # isolation) stays injectable for tests / callers that want it.
+        # no per-call interpreter cold-start). ``_subprocess_cli_runner`` (full
+        # process isolation) is no longer the default but stays injectable as the
+        # isolation fallback + the parity oracle the in-process runner is checked
+        # against (tests/test_mcp_curated.py).
         self._runner = runner or _in_process_cli_runner
 
     # -- projection ---------------------------------------------------------
@@ -471,27 +510,66 @@ class McpServer:
     def _allowed(self) -> dict[str, PrimitiveMeta]:
         return allowed_primitives(self._registry, allow_mutations=self._allow_mutations)
 
-    def _curated_names(self) -> list[str]:
-        """The curated catalog's verb set: derived blocks ∪ the fixed extras.
+    def _cli_primitives(self) -> dict[str, PrimitiveMeta]:
+        """All primitives with a CLI shape, regardless of the mutation gate.
 
-        A block is any allowed verb whose Result model declares ``next_block``
-        (:func:`_declares_next_block`) — derived, not hardcoded. Unioned with the
-        stable recovery/opt-in extras (:data:`_CURATED_EXTRA_VERBS`) and
-        intersected with :meth:`_allowed` so mutation-gated extras (``kill`` /
-        ``submit-speculate``) drop out when ``allow_mutations`` is off.
+        The mutation-independent base for the ``curated`` catalog: curated is
+        itself a deliberate allowlist (its block verbs are all inherently
+        ``workflow``-typed), so it is NOT re-gated by ``--allow-mutations`` — see
+        :meth:`_curated_metas`.
         """
-        allowed = self._allowed()
-        names = {name for name, meta in allowed.items() if _declares_next_block(meta)}
-        names |= {v for v in _CURATED_EXTRA_VERBS if v in allowed}
-        return sorted(names)
+        return {
+            name: meta for name, meta in self._registry.items() if isinstance(meta.cli, CliShape)
+        }
+
+    def _curated_metas(self) -> dict[str, PrimitiveMeta]:
+        """The curated catalog's verb→meta map: derived blocks ∪ the fixed extras.
+
+        A block is any verb whose Result model declares ``next_block``
+        (:func:`_declares_next_block`) — derived, not hardcoded — unioned with
+        the stable recovery/opt-in extras (:data:`_CURATED_EXTRA_VERBS`).
+
+        Computed off :meth:`_cli_primitives`, NOT :meth:`_allowed`: the
+        ``--allow-mutations ∩ curated`` intersection was vestigial (design §7).
+        Curated is already the boundary — an authored allowlist of inherently
+        mutating block verbs — and the verb-level guards (greenlight gate, drift
+        guard, idempotency) still fire at invocation regardless of the flag, so
+        gating the *listing* on ``allow_mutations`` only mis-hid the read-only
+        ``workflow`` blocks (``status-snapshot`` / ``aggregate-check`` /
+        ``campaign-watch``). ``full``/``tiered`` stay gated by :meth:`_allowed`.
+        """
+        base = self._cli_primitives()
+        names = {name for name, meta in base.items() if _declares_next_block(meta)}
+        names |= {v for v in _CURATED_EXTRA_VERBS if v in base}
+        return {name: base[name] for name in sorted(names)}
+
+    def _curated_names(self) -> list[str]:
+        """The curated catalog's verb set (keys of :meth:`_curated_metas`)."""
+        return list(self._curated_metas())
+
+    def _invocable(self) -> dict[str, PrimitiveMeta]:
+        """Primitives this server may INVOKE, per the active catalog's boundary.
+
+        ``curated`` is its own allowlist (design §7 — see :meth:`_curated_metas`),
+        so its block verbs are callable regardless of ``--allow-mutations``; the
+        verb-level guards enforce. ``full``/``tiered`` invoke only what the
+        read/act policy (:meth:`_allowed`) permits. Keeping the *call* gate and
+        the *listing* on the same set means curated never advertises a tool it
+        would then refuse to run.
+        """
+        if self._catalog == "curated":
+            return self._curated_metas()
+        return self._allowed()
 
     def list_tools(self) -> list[dict[str, Any]]:
         allowed = self._allowed()
         if self._catalog == "curated":
             # A small, human-amplification-shaped surface: the block verbs
             # (derived from a ``next_block`` Result field) plus the recovery /
-            # opt-in extras — each as its own typed tool.
-            return [_tool_definition(name, allowed[name]) for name in self._curated_names()]
+            # opt-in extras — each as its own typed tool. NOT gated by
+            # ``allow_mutations`` (design §7 — curated is itself the allowlist).
+            curated = self._curated_metas()
+            return [_tool_definition(name, meta) for name, meta in curated.items()]
         if self._catalog == "tiered":
             # Mirror the CLI's find → describe → invoke discovery: advertise
             # only the explorers plus a generic invoker, keeping every
@@ -542,11 +620,13 @@ class McpServer:
                 raise _Invalid(f"{_RUN_PRIMITIVE_TOOL} 'arguments' must be an object")
             return self.call_tool(inner, inner_args)
 
-        meta = self._allowed().get(name)
+        meta = self._invocable().get(name)
         if meta is None:
             # Either the primitive does not exist or the safety policy forbids
-            # it (a mutating verb without ``allow_mutations``). Both are client
-            # contract errors, not tool failures.
+            # it (a mutating verb without ``allow_mutations`` under the
+            # full/tiered catalogs; the curated catalog is its own allowlist and
+            # does not gate on the flag). Both are client contract errors, not
+            # tool failures.
             raise _Invalid(
                 f"tool {name!r} is not available. It is either unknown or a "
                 "mutating verb that requires the server to be started with "
@@ -595,10 +675,17 @@ class McpServer:
     # -- prompts ------------------------------------------------------------
 
     def list_prompts(self) -> list[dict[str, Any]]:
+        # The prompt SET is projected from the workflow-entry table (§6); the
+        # human description body is still lifted from the packaged command .md,
+        # falling back to the entry's start-the-driver instruction when the .md
+        # is not installed — the table stays the source of truth either way.
         prompts: list[dict[str, Any]] = []
         for name in _PROMPT_NAMES:
+            entry = WORKFLOW_ENTRIES_BY_PROMPT[name]
             body = _read_command_md(name)
             if body is None:
+                desc = f"/{name} — start the {entry.name} workflow"
+                prompts.append({"name": name, "description": desc})
                 continue
             front, _rest = _strip_frontmatter(body)
             prompts.append({"name": name, "description": front.get("description", f"/{name}")})
@@ -607,9 +694,18 @@ class McpServer:
     def get_prompt(self, name: Any, _arguments: Mapping[str, Any]) -> dict[str, Any]:
         if name not in _PROMPT_NAMES:
             raise _Invalid(f"unknown prompt {name!r}")
+        entry = WORKFLOW_ENTRIES_BY_PROMPT[str(name)]
         body = _read_command_md(str(name))
         if body is None:
-            raise _Invalid(f"prompt {name!r} is not available in this install")
+            # No packaged slash body in this install — project the canonical
+            # entry's thin start-the-driver instruction from the table instead
+            # (§6: the MCP prompt is a projection of the same one source).
+            return {
+                "description": f"/{name} — start the {entry.name} workflow",
+                "messages": [
+                    {"role": "user", "content": {"type": "text", "text": entry.start_instruction}}
+                ],
+            }
         front, rest = _strip_frontmatter(body)
         return {
             "description": front.get("description", f"/{name}"),

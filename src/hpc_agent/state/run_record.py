@@ -113,6 +113,11 @@ _UPDATABLE_FIELDS = frozenset(
         "recent_resubmit_request_ids",
         "pending_resubmit",
         "pending_verdict",
+        # §5 "parked ≠ stalled": a run paused ON A DECISION (a block reached its
+        # y/nudge boundary), distinct from pending_verdict (paused on an
+        # escalation). Whitelisted so the value-overwriting update_run_status path
+        # the mark/clear setters use may set it.
+        "pending_decision",
         # Bumped by the auto-resume composite after each fired resubmit so the
         # gate's "count < cap" backstop tightens with every attempt (#299).
         "auto_resume_count",
@@ -190,6 +195,32 @@ class RunRecord:
     # to run to terminal and only then enters this hold — there is no
     # live-freeze state by design.
     pending_verdict: dict = dataclasses.field(default_factory=dict)
+    # ── §5 durable pending-DECISION marker ("parked ≠ stalled") ────────────────
+    # Set when a driver span reaches a block's y/nudge boundary and PARKS awaiting
+    # a human decision (block-drive.md §5). This is the "parked ON A DECISION"
+    # state — distinct from ``pending_verdict`` above, which is "parked ON AN
+    # ESCALATION" (the deterministic resolver could not act). A parked-on-decision
+    # run is neither stalled (the §5 watchdog reads a non-empty pending_decision as
+    # "awaiting your decision since <awaiting_since>", not "driver stalled — re-arm")
+    # nor terminal. Empty dict = not parked. Shape (caller-assembled to keep this
+    # layer pure I/O — no _wire import):
+    #   {
+    #     "block": str,          # the block verb that parked (e.g. "submit-s2")
+    #     "workflow": str,       # its workflow family ("submit"/"status"/...)
+    #     "brief": dict,         # the code-digested evidence for the y/nudge loop
+    #     "resume_cursor": {     # enough for a STATELESS tick to resume the driver
+    #        "workflow": str,    #   the workflow family
+    #        "run_id": str,      #   the run being driven
+    #        "next_verb": str | None,  # the deterministic successor, or None at a
+    #                                  #   human branch (block_chain.successor_verb)
+    #        "current_verb": str,      # the block that parked
+    #     },
+    #     "awaiting_since": <iso8601>,  # when the park began (the watchdog's clock)
+    #     "cmd_sha": str | None,        # the tree identity at park (§4 routing key)
+    #   }
+    # Cleared back to ``{}`` by ``clear_pending_decision`` once the driver advances
+    # (the human answered y/nudge and the next span consumed the resolved spec).
+    pending_decision: dict = dataclasses.field(default_factory=dict)
     # Append-only audit log of judgement verdicts enacted on this run (#234).
     # Each entry records the control-flow branch a non-deterministic decision
     # took AND why — the rationale the deterministic resolver could not supply.

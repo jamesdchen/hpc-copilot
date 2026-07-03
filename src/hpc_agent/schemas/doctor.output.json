@@ -27,9 +27,90 @@
       },
       "title": "Stalled",
       "type": "array"
+    },
+    "parked_count": {
+      "default": 0,
+      "description": "Number of live runs parked on a human decision (§5).",
+      "title": "Parked Count",
+      "type": "integer"
+    },
+    "parked": {
+      "description": "One entry per run awaiting a human decision — distinct from stalled; doctor surfaces the wait, never a re-arm proposal.",
+      "items": {
+        "$ref": "#/$defs/ParkedRunNote"
+      },
+      "title": "Parked",
+      "type": "array"
     }
   },
   "$defs": {
+    "ParkedRunNote": {
+      "additionalProperties": false,
+      "description": "One live run legitimately awaiting a human decision (§5 \"parked ≠ stalled\").\n\nA parked run carries a ``pending_decision`` marker — a ``block-drive`` span\nreached a block's y/nudge boundary and is waiting on the human. It is NOT a\nstalled driver: the read is \"awaiting your decision since T\", never \"driver\nstalled — re-arm?\". A parked run never appears in ``DoctorResult.stalled``.",
+      "properties": {
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "description": "Journal status of the parked run (always 'in_flight').",
+          "title": "Status",
+          "type": "string"
+        },
+        "block": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The block whose decision the run is parked on, or null.",
+          "title": "Block"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The workflow the parked block belongs to, or null.",
+          "title": "Workflow"
+        },
+        "awaiting_since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the run began awaiting the decision (ISO-8601 UTC), or null.",
+          "title": "Awaiting Since"
+        },
+        "note": {
+          "description": "Human-facing read, e.g. 'awaiting your decision since <awaiting_since>'. A parked driver is not stalled — doctor never proposes re-arming it.",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "note"
+      ],
+      "title": "doctor parked-run note",
+      "type": "object"
+    },
     "StalledRunProposal": {
       "additionalProperties": false,
       "description": "One stalled run + its drafted (never-enacted) recovery proposal.",

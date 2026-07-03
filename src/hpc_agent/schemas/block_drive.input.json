@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/block_drive.input.json",
+  "title": "block-drive input spec",
+  "description": "Inputs to one ``block-drive`` tick.\n\nBoth fields are optional so a bare tick can recover its position purely from\ndurable state: on a RESUME the ``run_id`` names the parked run whose\n``pending_decision`` + decision journal carry everything; on a FRESH start the\n``workflow`` names which chain (``submit`` / ``status`` / ``aggregate`` /\n``campaign``) to begin. ``dry_run`` prints the planned action without\nexecuting any span.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run being driven. On a RESUME this keys the pending_decision + decision-journal reads that recover the parked position; on a FRESH start it is the run the first span will operate on.",
+      "title": "Run Id"
+    },
+    "workflow": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The workflow family to drive (submit / status / aggregate / campaign). Required for a FRESH chain start (picks the first block from block_chain.ORDER); recovered from the resume cursor on a RESUME.",
+      "title": "Workflow"
+    },
+    "dry_run": {
+      "default": false,
+      "description": "Print the planned action and exit without executing any span.",
+      "title": "Dry Run",
+      "type": "boolean"
+    }
+  }
+}

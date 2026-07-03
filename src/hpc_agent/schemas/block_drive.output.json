@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/block_drive.output.json",
+  "title": "block-drive output data",
+  "description": "The ``data`` block one ``block-drive`` tick emits.\n\nRecords WHICH action the tick took (``action``) and the position it acted at\n(``current_verb`` → ``next_verb``), so a cron / ``/loop`` schedule leaves an\nauditable per-tick record. ``brief`` is the code-digested evidence carried\nforward when the tick parked on a decision (``action==\"awaiting_decision\"`` on\na re-entry, or the freshly written brief when a span reached a boundary);\n``reason`` is the one-line human-readable summary.",
+  "type": "object",
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "description": "What this tick did (decision-as-data, #231).",
+      "enum": [
+        "awaiting_decision",
+        "advanced",
+        "reran",
+        "chained",
+        "detached",
+        "terminal",
+        "skip"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run this tick drove (null when nothing was drivable).",
+      "title": "Run Id"
+    },
+    "workflow": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The workflow family driven this tick.",
+      "title": "Workflow"
+    },
+    "current_verb": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The block that parked / last ran (the position the tick acted at).",
+      "title": "Current Verb"
+    },
+    "next_verb": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The block the tick ran / will run next (the code-determined successor, the re-run target, or null at a terminal).",
+      "title": "Next Verb"
+    },
+    "stage_reached": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The terminator of the last executed span, when one ran.",
+      "title": "Stage Reached"
+    },
+    "brief": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Code-digested evidence for the y/nudge loop when the tick parked on (or is awaiting) a decision. Never interpreted raw by the LLM (§3).",
+      "title": "Brief"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the tick's outcome.",
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}

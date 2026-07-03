@@ -1311,6 +1311,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent block-drive --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "block_drive.input.json",
+    "name": "block-drive",
+    "output_schema": "block_drive.output.json",
+    "python": "hpc_agent.ops.block_drive_op.block_drive",
+    "side_effects": [
+      "spawns-subprocess",
+      "writes-journal"
+    ],
+    "summary": "block-drive (wave 4): one stateless resumable tick that DRIVES a block chain. Chains the deterministic spans in code (S1-resolve → decision; S2-canary → decision; …) and, at a human decision point, writes {brief, pending marker, resume cursor} to durable state and EXITS. On a resume it consumes the approved 'resolved' spec (never a nudge string) and routes by identity + ownership (§4): advance / rerun / advance_carrying. The LLM no longer executes the transition.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "campaign_complete.input.json",

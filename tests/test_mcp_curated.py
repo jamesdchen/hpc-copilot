@@ -45,11 +45,20 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     assert "clusters" not in names
 
 
-def test_curated_extras_gated_by_allow_mutations() -> None:
+def test_curated_ignores_allow_mutations() -> None:
+    """Design §7: the ``--allow-mutations ∩ curated`` intersection was vestigial
+    and is dropped. Curated is itself the allowlist (its block verbs are all
+    inherently ``workflow``-typed), so its listing is identical whether or not
+    mutations are opted in — the verb-level guards enforce at invocation. This
+    pins that dropping the intersection does not re-hide the mutating block verbs
+    (or the read-only ``workflow`` blocks the old intersection mis-classified)."""
     ro = _curated_names(allow_mutations=False)
-    # kill (mutate) and submit-speculate (workflow) require the mutation opt-in.
-    assert "kill" not in ro
-    assert "submit-speculate" not in ro
+    rw = _curated_names(allow_mutations=True)
+    assert ro == rw
+    # The block verbs (all `verb="workflow"`, i.e. mutating) and the mutating
+    # extras are listed even without the opt-in.
+    assert {"submit-s2", "submit-s3", "submit-s4"} <= ro
+    assert {"kill", "submit-speculate"} <= ro
 
 
 def test_declares_next_block_derivation_flips_with_the_field() -> None:
@@ -83,16 +92,36 @@ def test_build_server_defaults_to_in_process_runner() -> None:
     assert M.build_server()._runner is M._in_process_cli_runner
 
 
-def test_in_process_and_subprocess_runners_have_envelope_parity() -> None:
+def test_in_process_and_subprocess_runners_have_envelope_parity(tmp_path: Any) -> None:
     """The warm in-process runner reproduces the isolated subprocess runner's
     envelope + exit code exactly — the contract that made subprocess delegation
-    safe in the first place."""
-    ip = M.McpServer(registry=get_registry(), catalog="full", runner=M._in_process_cli_runner)
-    sp = M.McpServer(registry=get_registry(), catalog="full", runner=M._default_cli_runner)
+    safe in the first place.
 
-    a = ip.call_tool("find", {"query": "submit"})
-    b = sp.call_tool("find", {"query": "submit"})
+    Broadened past the read-only ``find`` (design §7) to also cover a MUTATING
+    verb (``append-decision``, ``verb="mutate"``) and a WORKFLOW/block verb
+    (``submit-s1``), so the parity oracle spans all three verb classes the
+    server invokes. Kept hermetic: each mutating/workflow case is driven with an
+    empty ``spec`` that fails schema validation deterministically (a
+    ``spec_invalid`` envelope), so no cluster, scheduler, or nondeterministic
+    state is touched — the two runners must still agree byte-for-byte."""
+    reg = get_registry()
+    ip = M.McpServer(
+        registry=reg, allow_mutations=True, catalog="full", runner=M._in_process_cli_runner
+    )
+    sp = M.McpServer(
+        registry=reg, allow_mutations=True, catalog="full", runner=M._subprocess_cli_runner
+    )
 
-    assert a["isError"] is False
-    assert b["isError"] is False
-    assert a["structuredContent"] == b["structuredContent"]
+    # (name, arguments, expected isError) — read-only, mutating, workflow/block.
+    cases: list[tuple[str, dict[str, Any], bool]] = [
+        ("find", {"query": "submit"}, False),
+        ("append-decision", {"spec": {}, "experiment_dir": str(tmp_path)}, True),
+        ("submit-s1", {"spec": {}, "experiment_dir": str(tmp_path)}, True),
+    ]
+    for name, arguments, expected_error in cases:
+        a = ip.call_tool(name, arguments)
+        b = sp.call_tool(name, arguments)
+        assert a["isError"] is expected_error, name
+        assert b["isError"] is expected_error, name
+        # Identical envelope AND identical exit code across the two runners.
+        assert a["structuredContent"] == b["structuredContent"], name

@@ -1,12 +1,12 @@
 ---
 name: hpc-campaign
-description: "Start the campaign blocks (`campaign-greenlight`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names. A campaign spec is greenlit ONCE at start; execution then runs fully asynchronously (reconcile ticks self-chain in code) with no per-iteration human boundary — only anomaly briefs and the completion brief. The skill never resolves a decision and never interprets raw results."
+description: "Start the campaign workflow with the code-driven chain (`block-drive`, first block `campaign-greenlight`) and relay each decision brief to the human for a `y`/nudge; on `y` commit the approved input spec to the journal's `resolved` and let the driver advance. A campaign spec is greenlit ONCE at start; execution then runs fully asynchronously (reconcile ticks self-chain in code) with no per-iteration human boundary — only anomaly briefs and the completion brief. The skill never resolves a decision and never interprets raw results."
 allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Start the campaign workflow by invoking the **`campaign-greenlight`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md), [§4](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb`.
+Start the campaign workflow by invoking the **`block-drive`** verb — the code-driven chain (design [§2](../../../../docs/design/human-amplification-blocks.md), [§4](../../../../docs/design/human-amplification-blocks.md), [§6](../../../../docs/design/block-drive.md)). It starts at the **`campaign-greenlight`** block and exits at each human touchpoint returning a **brief**. You are the translator at those rendezvous points **only**: render the brief as a proposal, take the human's `y` or nudge, and on `y` commit the approved input spec so the next `block-drive` tick advances. You do **not** read `next_block` and dispatch the next verb yourself — that sequencing is re-homed off the LLM into the driver's chaining table (design §6).
 
 A campaign is **not** a linear per-run chain. Its spec — goal, budget, strategy, stop criteria, anomaly policy, async-refill — is **greenlit once at start** and is the complete contract; execution then runs **fully asynchronously against the spec** (reconcile ticks self-chain in code while healthy; the strategy picks batches deterministically) with **no per-iteration human boundary** (design §4). So there are exactly three campaign blocks (`meta/campaign/blocks.py`), one per §4 touchpoint: `campaign-greenlight` (start), `campaign-watch` (a read-only health/anomaly digest of the async execution — it observes, it never runs a tick), and `campaign-complete` (the completion brief). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, campaign_id?}`.
 
@@ -22,17 +22,20 @@ The slash `/campaign-hpc` is the human-interview wrapper (path picking, slug, sp
   ```
   Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those).
 
-## The block loop
+## The driver loop
 
-1. **Greenlight (once).** Invoke `campaign-greenlight`. An un-greenlit manifest returns `needs_greenlight` with the digested spec brief. Relay it; collect the human's `y` or nudge. On a nudge, the human edits the spec (or you re-draft) and re-invoke `campaign-greenlight` for a fresh digest. On `y`, re-invoke `campaign-greenlight` with `confirm: true` — that path stamps the greenlight marker **and journals the human's decision itself** (the block composes `append-decision`); it hands back `next_block: campaign-watch`.
-2. **Watch (async surface).** Invoke `campaign-watch` — a pure read that digests the running campaign. `watching_healthy` (`continue` / `wait_in_flight` / `refill`) is **no boundary**: ticks self-chain, surface the health digest and let the human walk away. `watching_anomaly` (a §5 loud-fail guard tripped, or a budget halt) carries `needs_decision: true` and an `anomaly_brief` — surface it for a `y`/nudge and journal the answer. `watching_complete` (a stop criterion fired) hands off with `next_block: campaign-complete`.
-3. **Complete.** Invoke `campaign-complete` — the completion brief: spend vs budget, iterations, stop reason, a code-extracted per-iteration outcome table, and an empty `proposed_interpretations` slot. Relay it; the human chooses the interpretation. Journal the exchange.
+`block-drive` chains the three campaign touchpoints in code (`campaign-greenlight` → the async `campaign-watch` surface → `campaign-complete`); you translate at the rendezvous points it stops at. Each tick:
 
-**Journal each human touchpoint** the skill surfaces (the anomaly and completion briefs; the greenlight block journals its own `confirm`):
-```bash
-hpc-agent append-decision --spec <path> --experiment-dir <dir>
-```
-`scope_kind: "campaign"`, `scope_id: <campaign_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text.
+1. **Invoke `block-drive`.** The first call starts at `campaign-greenlight` — an un-greenlit manifest returns `needs_greenlight` with the digested spec brief. Later calls consume the approved spec from the journal's `resolved` and advance — or re-run `campaign-greenlight` for a fresh digest when a nudge edited the spec. The route is computed in code, never a verb you pick.
+2. **Render the brief the driver returns as a proposal.** At greenlight, the digested spec; at an anomaly, the `anomaly_brief` (a §5 loud-fail guard tripped, or a budget halt); at completion, spend vs budget, iterations, stop reason, a code-extracted per-iteration outcome table, and an empty `proposed_interpretations` slot. Relay the code-drafted digest; never re-interpret it.
+3. **The human answers `y` or nudges.** A single `y` approves the proposed input spec; a nudge edits the campaign spec (goal, budget, strategy, stop criteria) and re-presents. Loop until `y`.
+4. **On `y`, commit the approved input spec to the journal's `resolved`, then invoke `block-drive` again to advance.** The commit *is* the approval (design §3, §5). Append the record:
+   ```bash
+   hpc-agent append-decision --spec <path> --experiment-dir <dir>
+   ```
+   `scope_kind: "campaign"`, `scope_id: <campaign_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"`, and the approved input spec under `resolved` (a spec, never the nudge string). At greenlight, the `confirm: true` path stamps the marker **and journals its own decision** (the block composes `append-decision`). **Do not end your turn after committing without firing the next tick** — the decision-rendezvous Stop-hook (design §5) blocks the stop until the driver advances.
+
+A campaign is greenlit **once**, then runs asynchronously: `watching_healthy` (`continue` / `wait_in_flight` / `refill`) is **no boundary** — ticks self-chain in code; surface the health digest and let the human walk away. Only `watching_anomaly` and `watching_complete` are rendezvous points. **NEVER hand-compute a decision or interpret raw results:** code digests the campaign's durable state into each brief; the human decides.
 
 ## Never-stall
 

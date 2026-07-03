@@ -41,6 +41,10 @@ __all__ = [
     "mark_pending_verdict",
     "clear_pending_verdict",
     "is_held",
+    "mark_pending_decision",
+    "clear_pending_decision",
+    "read_pending_decision",
+    "is_awaiting_decision",
     "is_resubmittable_terminal",
     "stamp_tick",
     "mark_seen_by_human",
@@ -347,6 +351,107 @@ def is_held(record: RunRecord) -> bool:
     loop's perspective; it is waiting on a decision.
     """
     return bool(record.pending_verdict)
+
+
+def mark_pending_decision(
+    run_id: str,
+    *,
+    block: str,
+    workflow: str,
+    brief: dict[str, Any],
+    resume_cursor: dict[str, Any],
+    awaiting_since: str,
+    cmd_sha: str | None = None,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Park *run_id* on a human DECISION at a block's y/nudge boundary (§5).
+
+    The durable "parked ≠ stalled" marker (block-drive.md §5): a driver span
+    reached *block*'s decision boundary and is waiting for the human's ``y``/nudge.
+    Stores the ``{block, workflow, brief, resume_cursor, awaiting_since, cmd_sha}``
+    envelope in the record's ``pending_decision`` field (see
+    :class:`~hpc_agent.state.run_record.RunRecord` for the full shape). The §5
+    watchdog then reads a non-empty ``pending_decision`` as "awaiting your decision
+    since *awaiting_since*" rather than false-alarming a stalled driver, and
+    ``resume_cursor`` carries enough for a STATELESS tick (``doctor`` /
+    ``block-drive``) to resume the chain.
+
+    This is DISTINCT from :func:`mark_pending_verdict` (parked on an *escalation*
+    the deterministic resolver could not act on): a run may legitimately hold on a
+    decision without ever having escalated. The run's ``status`` is left untouched.
+
+    Locked read-modify-write via :func:`update_run_status`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id*. Mirrors the §5
+    watchdog setters' ``experiment_dir=None`` → cwd convention.
+    """
+    payload: dict[str, Any] = {
+        "block": block,
+        "workflow": workflow,
+        "brief": dict(brief),
+        "resume_cursor": dict(resume_cursor),
+        "awaiting_since": awaiting_since,
+        "cmd_sha": cmd_sha,
+    }
+    update_run_status(
+        _resolve_experiment_dir(experiment_dir),
+        run_id,
+        pending_decision=payload,
+    )
+
+
+def clear_pending_decision(
+    run_id: str,
+    *,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Release a run parked on a decision once the driver advances (§5).
+
+    Clears ``pending_decision`` back to ``{}``. Idempotent — clearing a run that
+    is not parked is a harmless no-op rewrite. Called when the human answered
+    ``y``/nudge and the next driver span consumed the resolved spec, so the run is
+    no longer awaiting a decision. Locked RMW via :func:`update_run_status`;
+    raises :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+    update_run_status(
+        _resolve_experiment_dir(experiment_dir),
+        run_id,
+        pending_decision={},
+    )
+
+
+def read_pending_decision(
+    run_id: str,
+    *,
+    experiment_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Return *run_id*'s ``pending_decision`` envelope, or ``{}`` if not parked.
+
+    A pure read used by the §5 watchdog / ``doctor`` / ``block-drive`` resume path
+    to recover the parked block, brief, and resume cursor. Returns ``{}`` when the
+    run is not parked on a decision OR when no record exists (a missing run is not
+    parked) — the caller distinguishes the two via :func:`load_run` when it needs
+    to.
+    """
+    record = load_run(_resolve_experiment_dir(experiment_dir), run_id)
+    if record is None:
+        return {}
+    return dict(record.pending_decision)
+
+
+def is_awaiting_decision(
+    run_id: str,
+    *,
+    experiment_dir: Path | None = None,
+) -> bool:
+    """True when *run_id* is parked on a human decision (§5 "parked ≠ stalled").
+
+    The holding state is the non-emptiness of ``pending_decision`` — the same
+    field-as-state idiom the journal uses for ``pending_verdict`` / ``is_held``. A
+    parked-on-decision run is neither live nor terminal from the driver's
+    perspective; it is waiting for the human's ``y``/nudge. False when the run is
+    not parked or has no record.
+    """
+    return bool(read_pending_decision(run_id, experiment_dir=experiment_dir))
 
 
 def is_resubmittable_terminal(record: RunRecord) -> bool:

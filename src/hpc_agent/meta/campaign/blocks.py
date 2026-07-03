@@ -38,6 +38,7 @@ from hpc_agent._wire.workflows.campaign_blocks import (
     CampaignWatchSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -54,15 +55,18 @@ _WATCH_ANOMALY: frozenset[str] = frozenset(
 )
 
 
-def _next_block(verb: str, why: str, **spec_hint: Any) -> dict[str, Any]:
-    """Build the machine-computed next-block hint (``{verb, why, spec_hint}``).
+def _next_block(
+    current_verb: str, stage_reached: str, why: str, **spec_hint: Any
+) -> dict[str, Any] | None:
+    """Delegate to the ``block_chain`` successor table (design §6/§8).
 
-    Mirrors ``ops/submit_blocks._next_block`` (design §2, the ``_next_step_hint``
-    pattern generalized). Callers pass None directly at a terminal / human-branch
-    terminator; a campaign has three §4 touchpoints, so the only deterministic
-    successors are greenlight→watch and watch(complete)→complete.
+    Mirrors ``ops/submit_blocks._next_block``: the successor VERB is re-homed into
+    ``block_chain.SUCCESSORS``; this thin helper keeps the emitted
+    ``{verb, why, spec_hint}`` shape unchanged and returns ``None`` at a terminal /
+    human-branch terminator. A campaign has three §4 touchpoints, so the only
+    deterministic successors are greenlight→watch and watch(complete)→complete.
     """
-    return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+    return next_block_hint(current_verb, stage_reached, why=why, **spec_hint)
 
 
 # ── greenlight helpers ───────────────────────────────────────────────────────
@@ -209,7 +213,8 @@ def campaign_greenlight(
             campaign_id=cid,
             brief=brief,
             next_block=_next_block(
-                "campaign-watch",
+                "campaign-greenlight",
+                "greenlit",
                 "greenlit; observe the asynchronous execution for health / anomalies.",
                 campaign_id=cid,
             ),
@@ -231,7 +236,8 @@ def campaign_greenlight(
             campaign_id=cid,
             brief=brief,
             next_block=_next_block(
-                "campaign-watch",
+                "campaign-greenlight",
+                "already_greenlit",
                 "already greenlit and running; observe the asynchronous execution.",
                 campaign_id=cid,
             ),
@@ -330,7 +336,8 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
             campaign_id=cid,
             brief=brief,
             next_block=_next_block(
-                "campaign-complete",
+                "campaign-watch",
+                "watching_complete",
                 "a stop criterion fired; build the completion brief.",
                 campaign_id=cid,
             ),

@@ -22,10 +22,15 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._wire.queries.doctor import DoctorResult, DoctorSpec, StalledRunProposal
+from hpc_agent._wire.queries.doctor import (
+    DoctorResult,
+    DoctorSpec,
+    ParkedRunNote,
+    StalledRunProposal,
+)
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
-from hpc_agent.state.index import find_stalled_runs
+from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 
 
 def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
@@ -65,6 +70,26 @@ def _draft_proposal(stalled: dict[str, Any], *, now: str) -> StalledRunProposal:
     )
 
 
+def _draft_parked_note(parked: dict[str, Any]) -> ParkedRunNote:
+    """Turn one ``find_parked_runs`` hit into a parked-run note (never a proposal)."""
+    awaiting_since = parked.get("awaiting_since")
+    since = awaiting_since or "an unknown time"
+    block = parked.get("block")
+    where = f" at block {block}" if block else ""
+    note = (
+        f"awaiting your decision since {since}{where}: the driver parked at a "
+        "y/nudge boundary and is not stalled — answer the proposal to advance it."
+    )
+    return ParkedRunNote(
+        run_id=parked["run_id"],
+        status=parked.get("status", "in_flight"),
+        block=block,
+        workflow=parked.get("workflow"),
+        awaiting_since=awaiting_since,
+        note=note,
+    )
+
+
 @primitive(
     name="doctor",
     verb="query",
@@ -94,7 +119,10 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     *spec.now* optionally overrides the evaluation instant (for deterministic
     testing); it defaults to the current UTC time. Each live run whose stamped
     ``next_tick_due`` is before that instant is a stalled driver — returned with
-    a drafted recovery proposal the human decides on. No side effects.
+    a drafted recovery proposal the human decides on. Runs *parked on a human
+    decision* (a ``pending_decision`` marker, §5 "parked ≠ stalled") are surfaced
+    separately in ``parked`` as an "awaiting your decision since T" read and
+    never appear in ``stalled``. No side effects.
 
     Raises :class:`errors.SpecInvalid` if *spec.now* is a non-ISO-8601 string.
     """
@@ -105,7 +133,20 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
 
     stalled = find_stalled_runs(now, experiment_dir=experiment_dir)
     proposals = [_draft_proposal(hit, now=now) for hit in stalled]
-    result = DoctorResult(now=now, stalled_count=len(proposals), stalled=proposals)
+
+    # Parked ≠ stalled (§5): runs awaiting a human decision are surfaced as a
+    # distinct read, never a re-arm proposal. find_stalled_runs already excludes
+    # them, so a parked run can never appear in both lists.
+    parked_hits = find_parked_runs(now, experiment_dir=experiment_dir)
+    parked_notes = [_draft_parked_note(hit) for hit in parked_hits]
+
+    result = DoctorResult(
+        now=now,
+        stalled_count=len(proposals),
+        stalled=proposals,
+        parked_count=len(parked_notes),
+        parked=parked_notes,
+    )
     dumped: dict[str, Any] = result.model_dump(mode="json")
 
     # Opt-in (§5): the OS-scheduled scan surfaces stalls as an OS notification

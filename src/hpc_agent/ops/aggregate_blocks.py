@@ -41,6 +41,7 @@ from hpc_agent._wire.workflows.aggregate_blocks import (
     AggregateRunSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.aggregate.invariants import verify_aggregation_complete
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
@@ -55,13 +56,17 @@ if TYPE_CHECKING:
 __all__ = ["aggregate_check", "aggregate_run"]
 
 
-def _next_block(verb: str, why: str, **spec_hint: Any) -> dict[str, Any]:
-    """Build the machine-computed next-block hint (``{verb, why, spec_hint}``).
+def _next_block(
+    current_verb: str, stage_reached: str, why: str, **spec_hint: Any
+) -> dict[str, Any] | None:
+    """Delegate to the ``block_chain`` successor table (design §6/§8).
 
-    Mirrors ``ops/submit_blocks._next_block`` (design §2). Callers pass None
-    directly at a terminal / human-branch terminator.
+    Mirrors ``ops/submit_blocks._next_block``: the successor VERB is re-homed into
+    ``block_chain.SUCCESSORS``; this thin helper keeps the emitted
+    ``{verb, why, spec_hint}`` shape unchanged and returns ``None`` at a terminal /
+    human-branch terminator.
     """
-    return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+    return next_block_hint(current_verb, stage_reached, why=why, **spec_hint)
 
 
 # ── check helpers ─────────────────────────────────────────────────────────────
@@ -363,7 +368,8 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
         run_id=run_id,
         brief=brief,
         next_block=_next_block(
-            "aggregate-run",
+            "aggregate-check",
+            "ready",
             "run is clean to reduce; combine, reduce, and extract the results table.",
             run_id=run_id,
         ),

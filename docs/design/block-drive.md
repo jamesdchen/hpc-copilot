@@ -154,13 +154,21 @@ The four-surface taxonomy (slash · skill · sub-skill · worker prompt) collaps
   translates at rendezvous points, so "answer `y` or nudge" migrates into the
   driver's **brief output**.
 
-Endpoint: **one `block-drive` verb + a thin entry prompt (slash = CC sugar, MCP
-prompt = agnostic) + the typed block tools as substrate**, all projected from
-one registry — not three hand-synced markdown copies (the drift risk
-`lint_skill_command_sync` exists to catch). **`next_block` is re-homed** from an
-LLM affordance to the driver's internal chaining table; the blocks remain the
-substrate the driver composes (+ direct/debug/MCP use). The sequencing moves to
-code; the SoT is projected, not copied.
+Endpoint: **one canonical entry (the workflow name + its thin start-the-driver
+instruction, in the registry) + the typed block tools as substrate.** Both the
+MCP prompt and the Claude-Code slash are **projections of that one source**, not
+hand-authored files. This is the clean test for the slash: a slash earns its
+place only if it carries something the canonical entry cannot — and after
+wave-4 it does not (its whole job is the entry gesture, which is exactly what
+the prompt is). So "humans like typing `/submit-hpc`" justifies a **generated
+alias**, never a hand-synced markdown body: a projected slash cannot drift; a
+bespoke slash file is the second copy `lint_skill_command_sync` exists to
+police. Therefore the wave-4 move is *not* "keep the slash as sugar" — it is
+**collapse to one source and project the slash from it (or drop it if it cannot
+be projected)**. **`next_block` is re-homed** from an LLM affordance to the
+driver's internal chaining table; the blocks remain the substrate the driver
+composes (+ direct/debug/MCP use). The sequencing moves to code; the SoT is
+projected, never copied.
 
 ## 7. Settled decisions since wave 3 (recorded; not all wave-4 build)
 
@@ -213,8 +221,9 @@ code; the SoT is projected, not copied.
    ownership for status/aggregate/campaign** (the load-bearing gap).
 4. Generalize the `skill-return` Stop-hook + PostToolUse-autofetch pair to the
    decision rendezvous (§5); the parked-≠-stalled marker into the `doctor` read.
-5. Surface consolidation (§6): slash → sugar, skill relay prose → brief, MCP
-   prompt as canonical entry.
+5. Surface consolidation (§6): one canonical entry in the registry; the MCP
+   prompt AND the slash are *projected* from it (or the slash is dropped if it
+   cannot be projected — never a hand-synced body); skill relay prose → brief.
 6. Polish from §7: rename the subprocess runner, drop `allow-mutations ∩
    curated`, state-leak audit, broaden the parity test.
 
