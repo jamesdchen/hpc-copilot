@@ -272,6 +272,19 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement parse_alive_output")
 
     @staticmethod
+    def build_cancel_cmd(job_ids: list[str]) -> str:
+        """Shell command that requests cancellation of *job_ids* on the scheduler.
+
+        The cancel affordance the ``kill`` mutator dispatches through the seam
+        (:func:`hpc_agent.ops.monitor.kill._attempt_backend_cancel`). It only
+        *requests* cancellation — confirmed-gone-ness is decided separately by
+        the alive-check verification (:meth:`build_alive_check_cmd` +
+        :meth:`parse_alive_output`), never by this command's exit code. Default
+        raises so an unmigrated backend is loud, matching the other builders.
+        """
+        raise NotImplementedError("backend does not implement build_cancel_cmd")
+
+    @staticmethod
     def build_scheduler_state_cmd(job_ids: list[str]) -> str:
         """Shell command whose stdout pairs each job id with its raw scheduler
         state (consumed by :meth:`parse_scheduler_states`).

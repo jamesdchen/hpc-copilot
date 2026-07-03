@@ -84,7 +84,22 @@ if TYPE_CHECKING:
                     "Loop-safety halt: stop when any task slot accrues this "
                     "many resubmit attempts across the campaign's runs. "
                     "Persisted into stop_criteria; read by campaign-advance. "
-                    "No framework default."
+                    "Omit to inherit the framework backstop (2 — the loud-fail "
+                    "default, design §5)."
+                ),
+            ),
+            CliArg(
+                "--on-anomaly",
+                type=str,
+                default=None,
+                choices=("surface", "park"),
+                help=(
+                    "anomaly_policy.on_anomaly: shape of the anomaly brief's "
+                    "recommended action when a loop-safety guard trips — "
+                    "'surface' drafts a decision brief (default posture), "
+                    "'park' recommends parking the campaign. Read by "
+                    "campaign-advance's anomaly_brief. Numeric thresholds "
+                    "stay on --circuit-breaker-failures / --max-task-resubmits."
                 ),
             ),
             CliArg("--strategy-name", type=str, default=None),
@@ -139,6 +154,7 @@ def campaign_init(
     max_task_resubmits: int | None = None,
     strategy_name: str | None = None,
     strategy_params_json: str | None = None,
+    on_anomaly: str | None = None,
     async_refill: bool = False,
     max_in_flight: int | None = None,
 ) -> dict[str, Any]:
@@ -210,6 +226,16 @@ def campaign_init(
             params = parsed
         strategy = {"name": strategy_name, "params": params}
 
+    # anomaly_policy carries only on_anomaly here: the numeric thresholds
+    # already have stop_criteria flags above, and mirroring them under a
+    # second manifest section would give the same knob two homes (the
+    # field-mirror discipline, manifest.py module docstring). greenlit is
+    # deliberately NOT an init flag — the greenlight is stamped by the
+    # campaign-greenlight block after the human's y, never at creation.
+    anomaly_policy: dict[str, Any] | None = None
+    if on_anomaly is not None:
+        anomaly_policy = {"on_anomaly": on_anomaly}
+
     path = write_manifest(
         experiment_dir,
         campaign_id=campaign_id,
@@ -217,6 +243,7 @@ def campaign_init(
         budget=budget,
         stop_criteria=stop_criteria,
         strategy=strategy,
+        anomaly_policy=anomaly_policy,
         async_refill=async_refill,
         max_in_flight=max_in_flight,
     )

@@ -354,13 +354,19 @@ See `docs/internals/skill-policy.md` for the full forcing rule.
    human-elicitation prose.
 
 2. **Workflow skills** (`src/slash_commands/skills/hpc-<workflow>/SKILL.md`)
-   — the decision layer. Four agent-autonomous skills (`hpc-submit`,
-   `hpc-status`, `hpc-aggregate`, `hpc-campaign`). Each composes
-   sub-skills (see below) to resolve every choice point, then shells
-   out to `hpc-agent run <workflow>` for execution. Invoked by the
-   matching slash after the interview, or directly by an external
-   autonomous agent (a MARs experiment-runner, notebook driver,
-   cron-spawned worker) with whatever spec it pre-resolved.
+   — under the **hpc-copilot fork** these are the **block-loop relay**
+   (see [`design/human-amplification-blocks.md`](design/human-amplification-blocks.md)
+   and [`internals/skill-policy.md`](internals/skill-policy.md)). Four
+   agent-autonomous skills (`hpc-submit`, `hpc-status`, `hpc-aggregate`,
+   `hpc-campaign`). Each starts the first **block verb**
+   (`submit-s1`, `status-snapshot`, `aggregate-check`,
+   `campaign-greenlight`) and runs the propose→`y`/nudge loop: render the
+   block's code-digested brief, collect the human's greenlight/nudge,
+   journal it (`append-decision`), and invoke exactly the block the
+   envelope's `next_block` named. The blocks ARE the execution — code
+   does SSH/submit/poll/harvest/reduce and digests the evidence; the skill
+   never resolves a decision or shells out to a worker. Invoked by the
+   matching slash, or directly by an external autonomous agent.
 
    **Sub-skills** (`src/slash_commands/skills/hpc-<topic>/SKILL.md`) —
    the same decision layer, finer grained. Three sub-skills
@@ -371,16 +377,14 @@ See `docs/internals/skill-policy.md` for the full forcing rule.
    `SKILL_ONLY_OK` in the lint.
 
 3. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`)
-   — the execution layer. The four host workflows (`submit`, `status`,
-   `aggregate`, `campaign`) delegated workers consume. A `claude -p
-   --bare` worker has no `Skill` tool, so
-   `_kernel/extension/spawn_prompt.py` inlines the prompt body
-   verbatim into `cacheable_prefix` (loaded via
-   `importlib.resources`). Worker prompts make NO decisions — every
-   choice was resolved in the decision layer; the worker just executes
-   the deterministic sequence (rsync, qsub, canary, journal). Snapshot
-   tests pin the rendered bytes so prompt-cache hit rates don't
-   silently regress.
+   — **STRANDED under the fork** (design §6). Pre-fork, these were the
+   execution layer: the four host workflows inlined into a `claude -p
+   --bare` worker by `_kernel/extension/spawn_prompt.py`. The fork removes
+   the headless worker from default routing — there is no LLM inside
+   execution to spawn; the **block verbs** (item 2) are the execution.
+   The prompt files + spawn machinery stay on disk untouched pending a
+   dedicated deletion pass (`strand ≠ delete`); their snapshot tests still
+   pin the rendered bytes. Do not route new work through them.
 
 `scripts/lint_skill_command_sync.py` pins the surfaces:
 `WORKFLOW_PAIRS` enumerates the four workflow (slash, skill) pairs;

@@ -41,6 +41,7 @@ What it intentionally does NOT do (in MVP)
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -54,6 +55,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import (
@@ -152,6 +154,50 @@ def _floor_poll_interval(requested: float) -> float:
     """
     floor = min(_MIN_POLL_INTERVAL_SECONDS, _MAX_ADAPTIVE_POLL_SECONDS)
     return max(float(requested), floor)
+
+
+#: Multiplier on the chosen inter-poll cadence used to derive the watchdog
+#: deadline (``next_tick_due``). The next poll is due in ``effective_interval``
+#: seconds; the deadline is set a little past that so a poll that is merely
+#: mid-round-trip at the boundary is not mistaken for a dead driver. A driver
+#: (or a detached child) that actually dies leaves the last stamp behind and the
+#: deadline lapses → the §5 doctor / ``find_stalled_runs`` flags it.
+_WATCHDOG_DEADLINE_GRACE: float = 3.0
+
+
+def _stamp_watchdog(experiment_dir: Path, run_id: str, next_tick_seconds: float) -> None:
+    """Stamp ``last_tick_at`` + ``next_tick_due`` on the journal record (§5).
+
+    Every in-flight poll stamps the driver dead-man's-switch fields so the §5
+    watchdog (in-session timer / out-of-session ``doctor``) covers a dead poller
+    — including a detached S3 / status child — via a lapsed ``next_tick_due``.
+    Best-effort and loud: a stamp failure must never break the poll loop (the
+    run keeps being monitored), but a missing stamp blinds the watchdog, so warn.
+    Mirrors ``ops/submit/runner.py``'s initial stamp and ``drive._stamp_driver_tick``.
+    """
+    try:
+        from datetime import timedelta
+
+        from hpc_agent.infra.time import utcnow
+        from hpc_agent.state.journal import stamp_tick
+
+        _now = utcnow()
+        deadline = _now + timedelta(seconds=next_tick_seconds + _WATCHDOG_DEADLINE_GRACE)
+        stamp_tick(
+            run_id,
+            last_tick_at=_now.isoformat(timespec="seconds"),
+            next_tick_due=deadline.isoformat(timespec="seconds"),
+            experiment_dir=experiment_dir,
+        )
+    except Exception:  # noqa: BLE001 — a watchdog stamp must never fail the poll loop
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "watchdog tick stamp failed for run %s — the doctor / find_stalled_runs "
+            "cannot see this poller until the next successful stamp",
+            run_id,
+            exc_info=True,
+        )
 
 
 # ``_status_fingerprint`` lives in
@@ -307,168 +353,234 @@ def monitor_flow(
     unchanged_count = 0
     last_fingerprint: str | None = None
 
-    while True:
-        state.ticks += 1
-        elapsed = _now() - started
+    terminal_cause: str | None = None
+    try:
+        while True:
+            state.ticks += 1
+            elapsed = _now() - started
 
-        # Poll.
-        record = record_status(
-            experiment_dir,
-            run_id,
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-            job_ids=list(record.job_ids),
-            job_name=record.job_name,
-            file_glob=file_glob,
-        )
-        last_status = dict(record.last_status or {})
-
-        # Compute diff against the prior tick (for the tick log).
-        prev_summary = state.last_summary
-        diff: dict[str, list[int]] = {
-            "newly_complete": [],
-            "newly_failed": [],
-            "newly_combined_waves": [],
-        }
-        # Tick 1 has no prior tick to diff against — leave the deltas
-        # empty rather than reporting the whole baseline count as a
-        # single-tick delta.
-        if state.ticks > 1:
-            for key in ("complete", "failed"):
-                cur = int(last_status.get(key, 0))
-                prv = int(prev_summary.get(key, 0))
-                if cur > prv:
-                    diff[f"newly_{key}"] = [cur - prv]  # delta count, not task IDs
-        state.last_summary = last_status
-
-        actions: list[dict[str, Any]] = []
-
-        # Combine newly-complete waves.
-        if auto_combine_waves and wave_map:
-            newly_done = _newly_complete_waves(
-                last_status=last_status,
-                wave_map=wave_map,
-                already_combined=set(state.last_combined_waves),
-            )
-            for wave in newly_done:
-                # Skip waves already escalated past combiner_max_retries
-                # (sentinel = 10**9). Without this, every tick would
-                # re-call combine_wave on a permanently failed
-                # wave, wasting SSH round-trips indefinitely.
-                if state.combiner_attempts.get(wave, 0) >= _COMBINER_GIVE_UP_SENTINEL:
-                    continue
-                attempt = state.combiner_attempts.get(wave, 0) + 1
-                state.combiner_attempts[wave] = attempt
-                ok, _stdout, stderr = combine_wave(
-                    experiment_dir,
-                    run_id,
-                    wave=wave,
-                    ssh_target=record.ssh_target,
-                    remote_path=record.remote_path,
-                    force=(attempt > 1),
-                )
-                if ok:
-                    actions.append({"kind": "combine_wave", "wave": wave, "attempt": attempt})
-                    state.last_combined_waves = sorted({*state.last_combined_waves, wave})
-                    # A wave that previously failed and now succeeds on retry
-                    # must drop off ``failed_waves`` — otherwise the returned
-                    # MonitorFlowResult reports the wave in BOTH lists and a
-                    # downstream consumer keying off the failure ledger
-                    # (escalation surfaces, campaign-loop auto-resubmit) acts
-                    # on a stale failure (v3 BUG-4V3-2).
-                    state.last_failed_waves = sorted(set(state.last_failed_waves) - {wave})
-                    diff["newly_combined_waves"].append(wave)
-                else:
-                    actions.append(
-                        {
-                            "kind": "combine_wave_failed",
-                            "wave": wave,
-                            "attempt": attempt,
-                            "stderr_tail": (stderr or "").strip()[-500:],
-                        }
-                    )
-                    state.last_failed_waves = sorted({*state.last_failed_waves, wave})
-                    if attempt > combiner_max_retries:
-                        # Escalate: stop combining this wave but keep
-                        # watching the rest of the run. The caller's
-                        # envelope will surface failed_waves.
-                        state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
-
-        # Terminal check.
-        terminal, esc_reason = _is_terminal(
-            last_status,
-            int(record.total_tasks),
-            partial_ok=_read_partial_ok(experiment_dir, run_id),
-        )
-        if terminal == LifecycleState.COMPLETE:
-            mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
-            _append_tick(
+            # Poll.
+            record = record_status(
                 experiment_dir,
                 run_id,
-                summary=last_status,
-                diff_from_prev=diff,
-                actions=actions,
-                lifecycle_state=LifecycleState.COMPLETE,
-                next_tick_seconds=None,
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                job_ids=list(record.job_ids),
+                job_name=record.job_name,
+                file_glob=file_glob,
             )
-            _ingest_runtime_at_terminal(experiment_dir, record=record)
-            # If combine_wave exhausted retries on any wave mid-flight,
-            # tasks completing afterward should not silence that
-            # failure. Surface ``failed_waves`` via ``escalation_reason``
-            # so callers branching on it (escalation surfaces, campaign
-            # auto-resubmit) see the partial-wave failure even on a
-            # COMPLETE return.
-            complete_escalation: str | None = None
-            if state.last_failed_waves:
-                complete_escalation = "combine_failed_waves:waves=" + ",".join(
-                    str(w) for w in state.last_failed_waves
-                )
-            return MonitorFlowResult(
-                run_id=run_id,
-                lifecycle_state=LifecycleState.COMPLETE,
-                last_status=last_status,
-                combined_waves=state.last_combined_waves,
-                failed_waves=state.last_failed_waves,
-                ticks=state.ticks,
-                elapsed_seconds=elapsed,
-                escalation_reason=complete_escalation,
-            )
-        if terminal == LifecycleState.FAILED:
-            # #294 Layer-2 auto-fire (#299): when the run opted into
-            # auto-resume, consult the gate BEFORE surfacing FAILED. On a
-            # "resume" verdict the preempted tasks are re-submitted from
-            # checkpoint and the run is live again — reload the record (extended
-            # job_ids + bumped count) and keep polling instead of marking
-            # terminal. On "escalate" (opt-out, OOM/error, or cap reached) fall
-            # through to the normal FAILED surface, enriching the reason so the
-            # escalation-as-data path (#234) carries why auto-resume declined.
-            if record.auto_resume_on_kill:
-                from hpc_agent.ops.auto_resume_flow import maybe_auto_resume
+            last_status = dict(record.last_status or {})
 
-                # The status reporter folds the fresh scheduler-side preempt
-                # signal (exit 130/143 / state PREEMPTED) into last_status, so
-                # pass it straight through — the composite then needs no second
-                # round-trip. Absent (older reporter / SGE without exit codes)
-                # → the composite falls back to a log-based fetch.
-                _preempted = last_status.get("preempted_task_ids")
-                outcome = maybe_auto_resume(
+            # Compute diff against the prior tick (for the tick log).
+            prev_summary = state.last_summary
+            diff: dict[str, list[int]] = {
+                "newly_complete": [],
+                "newly_failed": [],
+                "newly_combined_waves": [],
+            }
+            # Tick 1 has no prior tick to diff against — leave the deltas
+            # empty rather than reporting the whole baseline count as a
+            # single-tick delta.
+            if state.ticks > 1:
+                for key in ("complete", "failed"):
+                    cur = int(last_status.get(key, 0))
+                    prv = int(prev_summary.get(key, 0))
+                    if cur > prv:
+                        diff[f"newly_{key}"] = [cur - prv]  # delta count, not task IDs
+            state.last_summary = last_status
+
+            actions: list[dict[str, Any]] = []
+
+            # Combine newly-complete waves.
+            if auto_combine_waves and wave_map:
+                newly_done = _newly_complete_waves(
+                    last_status=last_status,
+                    wave_map=wave_map,
+                    already_combined=set(state.last_combined_waves),
+                )
+                for wave in newly_done:
+                    # Skip waves already escalated past combiner_max_retries
+                    # (sentinel = 10**9). Without this, every tick would
+                    # re-call combine_wave on a permanently failed
+                    # wave, wasting SSH round-trips indefinitely.
+                    if state.combiner_attempts.get(wave, 0) >= _COMBINER_GIVE_UP_SENTINEL:
+                        continue
+                    attempt = state.combiner_attempts.get(wave, 0) + 1
+                    state.combiner_attempts[wave] = attempt
+                    ok, _stdout, stderr = combine_wave(
+                        experiment_dir,
+                        run_id,
+                        wave=wave,
+                        ssh_target=record.ssh_target,
+                        remote_path=record.remote_path,
+                        force=(attempt > 1),
+                    )
+                    if ok:
+                        actions.append({"kind": "combine_wave", "wave": wave, "attempt": attempt})
+                        state.last_combined_waves = sorted({*state.last_combined_waves, wave})
+                        # A wave that previously failed and now succeeds on retry
+                        # must drop off ``failed_waves`` — otherwise the returned
+                        # MonitorFlowResult reports the wave in BOTH lists and a
+                        # downstream consumer keying off the failure ledger
+                        # (escalation surfaces, campaign-loop auto-resubmit) acts
+                        # on a stale failure (v3 BUG-4V3-2).
+                        state.last_failed_waves = sorted(set(state.last_failed_waves) - {wave})
+                        diff["newly_combined_waves"].append(wave)
+                    else:
+                        actions.append(
+                            {
+                                "kind": "combine_wave_failed",
+                                "wave": wave,
+                                "attempt": attempt,
+                                "stderr_tail": (stderr or "").strip()[-500:],
+                            }
+                        )
+                        state.last_failed_waves = sorted({*state.last_failed_waves, wave})
+                        if attempt > combiner_max_retries:
+                            # Escalate: stop combining this wave but keep
+                            # watching the rest of the run. The caller's
+                            # envelope will surface failed_waves.
+                            state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
+
+            # Terminal check.
+            terminal, esc_reason = _is_terminal(
+                last_status,
+                int(record.total_tasks),
+                partial_ok=_read_partial_ok(experiment_dir, run_id),
+            )
+            if terminal == LifecycleState.COMPLETE:
+                mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=last_status,
+                    diff_from_prev=diff,
+                    actions=actions,
+                    lifecycle_state=LifecycleState.COMPLETE,
+                    next_tick_seconds=None,
+                )
+                _ingest_runtime_at_terminal(experiment_dir, record=record)
+                # If combine_wave exhausted retries on any wave mid-flight,
+                # tasks completing afterward should not silence that
+                # failure. Surface ``failed_waves`` via ``escalation_reason``
+                # so callers branching on it (escalation surfaces, campaign
+                # auto-resubmit) see the partial-wave failure even on a
+                # COMPLETE return.
+                complete_escalation: str | None = None
+                if state.last_failed_waves:
+                    complete_escalation = "combine_failed_waves:waves=" + ",".join(
+                        str(w) for w in state.last_failed_waves
+                    )
+                terminal_cause = "complete"
+                return MonitorFlowResult(
+                    run_id=run_id,
+                    lifecycle_state=LifecycleState.COMPLETE,
+                    last_status=last_status,
+                    combined_waves=state.last_combined_waves,
+                    failed_waves=state.last_failed_waves,
+                    ticks=state.ticks,
+                    elapsed_seconds=elapsed,
+                    escalation_reason=complete_escalation,
+                )
+            if terminal == LifecycleState.FAILED:
+                # #294 Layer-2 auto-fire (#299): when the run opted into
+                # auto-resume, consult the gate BEFORE surfacing FAILED. On a
+                # "resume" verdict the preempted tasks are re-submitted from
+                # checkpoint and the run is live again — reload the record (extended
+                # job_ids + bumped count) and keep polling instead of marking
+                # terminal. On "escalate" (opt-out, OOM/error, or cap reached) fall
+                # through to the normal FAILED surface, enriching the reason so the
+                # escalation-as-data path (#234) carries why auto-resume declined.
+                if record.auto_resume_on_kill:
+                    from hpc_agent.ops.auto_resume_flow import maybe_auto_resume
+
+                    # The status reporter folds the fresh scheduler-side preempt
+                    # signal (exit 130/143 / state PREEMPTED) into last_status, so
+                    # pass it straight through — the composite then needs no second
+                    # round-trip. Absent (older reporter / SGE without exit codes)
+                    # → the composite falls back to a log-based fetch.
+                    _preempted = last_status.get("preempted_task_ids")
+                    outcome = maybe_auto_resume(
+                        experiment_dir,
+                        run_id,
+                        record=record,
+                        preempted_task_ids=_preempted if isinstance(_preempted, list) else None,
+                    )
+                    if outcome.action == "resume":
+                        actions.append(
+                            {
+                                "kind": "auto_resume",
+                                "task_ids": list(outcome.task_ids),
+                                "resubmitted": outcome.resubmitted,
+                                "auto_resume_count": outcome.auto_resume_count,
+                            }
+                        )
+                        # Reset adaptive backoff — the run state just changed
+                        # materially (a fresh array is queued) so the next poll
+                        # should run at the floor, not a backed-off interval.
+                        unchanged_count = 0
+                        last_fingerprint = None
+                        effective_interval = float(poll_interval_seconds)
+                        _append_tick(
+                            experiment_dir,
+                            run_id,
+                            summary=last_status,
+                            diff_from_prev=diff,
+                            actions=actions,
+                            lifecycle_state="in_flight",
+                            next_tick_seconds=effective_interval,
+                        )
+                        # §5 watchdog: stamp the next-poll deadline (as on the
+                        # normal in-flight tick) so a dead poller is doctor-visible.
+                        _stamp_watchdog(experiment_dir, run_id, effective_interval)
+                        refreshed = load_run(experiment_dir, run_id)
+                        if refreshed is not None:
+                            record = refreshed
+                        _sleep(effective_interval)
+                        continue
+                    esc_reason = outcome.reason
+
+                # #240 live wiring of the #234 deterministic resolver — the
+                # resolve-and-recover composite, mirrored on the auto-resume hook
+                # above (#315 stacks this on that composite). Auto-resume owns
+                # ``preempted`` clusters (and on a "resume" verdict ``continue``s the
+                # loop before reaching here); this composite deliberately SKIPS
+                # ``preempted`` (its ``_DETERMINISTIC`` set excludes it), so the two
+                # never double-handle a cluster — they partition the FAILED tick:
+                # preempted → auto-resume, everything else → resolve-and-recover.
+                # Opt-in OFF by default (``auto_recover_on_failure``): a run that did
+                # not opt in computes the verdict-as-data and takes NO side effect
+                # (no resubmit, no park), so this wiring is behavior-neutral until a
+                # run opts in.
+                recover_outcome = maybe_resolve_and_recover(
                     experiment_dir,
                     run_id,
                     record=record,
-                    preempted_task_ids=_preempted if isinstance(_preempted, list) else None,
                 )
-                if outcome.action == "resume":
+                if recover_outcome.clusters:
                     actions.append(
                         {
-                            "kind": "auto_resume",
-                            "task_ids": list(outcome.task_ids),
-                            "resubmitted": outcome.resubmitted,
-                            "auto_resume_count": outcome.auto_resume_count,
+                            "kind": "resolve_and_recover",
+                            "run_id": recover_outcome.run_id,
+                            "clusters": [
+                                {
+                                    "fingerprint": c.fingerprint,
+                                    "error_class": c.error_class,
+                                    "task_ids": list(c.task_ids),
+                                    "disposition": c.disposition,
+                                    "decided_by": c.decided_by,
+                                    "reason": c.reason,
+                                }
+                                for c in recover_outcome.clusters
+                            ],
+                            "auto_recover_count": recover_outcome.auto_recover_count,
                         }
                     )
-                    # Reset adaptive backoff — the run state just changed
-                    # materially (a fresh array is queued) so the next poll
-                    # should run at the floor, not a backed-off interval.
+                # When the composite actually resubmitted a cluster (opt-in ON +
+                # code verdict under cap) the run is live again — reload the record
+                # (extended job_ids + bumped count) and keep polling, exactly as the
+                # auto-resume "resume" branch does, rather than surfacing FAILED.
+                if recover_outcome.resubmitted:
                     unchanged_count = 0
                     last_fingerprint = None
                     effective_interval = float(poll_interval_seconds)
@@ -486,144 +598,138 @@ def monitor_flow(
                         record = refreshed
                     _sleep(effective_interval)
                     continue
-                esc_reason = outcome.reason
-
-            # #240 live wiring of the #234 deterministic resolver — the
-            # resolve-and-recover composite, mirrored on the auto-resume hook
-            # above (#315 stacks this on that composite). Auto-resume owns
-            # ``preempted`` clusters (and on a "resume" verdict ``continue``s the
-            # loop before reaching here); this composite deliberately SKIPS
-            # ``preempted`` (its ``_DETERMINISTIC`` set excludes it), so the two
-            # never double-handle a cluster — they partition the FAILED tick:
-            # preempted → auto-resume, everything else → resolve-and-recover.
-            # Opt-in OFF by default (``auto_recover_on_failure``): a run that did
-            # not opt in computes the verdict-as-data and takes NO side effect
-            # (no resubmit, no park), so this wiring is behavior-neutral until a
-            # run opts in.
-            recover_outcome = maybe_resolve_and_recover(
-                experiment_dir,
-                run_id,
-                record=record,
-            )
-            if recover_outcome.clusters:
-                actions.append(
-                    {
-                        "kind": "resolve_and_recover",
-                        "run_id": recover_outcome.run_id,
-                        "clusters": [
-                            {
-                                "fingerprint": c.fingerprint,
-                                "error_class": c.error_class,
-                                "task_ids": list(c.task_ids),
-                                "disposition": c.disposition,
-                                "decided_by": c.decided_by,
-                                "reason": c.reason,
-                            }
-                            for c in recover_outcome.clusters
-                        ],
-                        "auto_recover_count": recover_outcome.auto_recover_count,
-                    }
-                )
-            # When the composite actually resubmitted a cluster (opt-in ON +
-            # code verdict under cap) the run is live again — reload the record
-            # (extended job_ids + bumped count) and keep polling, exactly as the
-            # auto-resume "resume" branch does, rather than surfacing FAILED.
-            if recover_outcome.resubmitted:
-                unchanged_count = 0
-                last_fingerprint = None
-                effective_interval = float(poll_interval_seconds)
+                # Otherwise (held / verdict-only / nothing resolvable) fall through
+                # to the FAILED surface. Enrich the escalation reason the same way
+                # auto-resume does, so the escalation-as-data path (#234) carries
+                # why the held clusters were parked.
+                if recover_outcome.held:
+                    held_reason = "; ".join(
+                        f"{c.error_class or c.fingerprint}: {c.reason}"
+                        for c in recover_outcome.held
+                    )
+                    esc_reason = (
+                        f"{esc_reason}; auto_recover_held: {held_reason}"
+                        if esc_reason
+                        else f"auto_recover_held: {held_reason}"
+                    )
+                mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
                 _append_tick(
                     experiment_dir,
                     run_id,
                     summary=last_status,
                     diff_from_prev=diff,
                     actions=actions,
-                    lifecycle_state="in_flight",
-                    next_tick_seconds=effective_interval,
+                    lifecycle_state=LifecycleState.FAILED,
+                    next_tick_seconds=None,
                 )
-                refreshed = load_run(experiment_dir, run_id)
-                if refreshed is not None:
-                    record = refreshed
-                _sleep(effective_interval)
-                continue
-            # Otherwise (held / verdict-only / nothing resolvable) fall through
-            # to the FAILED surface. Enrich the escalation reason the same way
-            # auto-resume does, so the escalation-as-data path (#234) carries
-            # why the held clusters were parked.
-            if recover_outcome.held:
-                held_reason = "; ".join(
-                    f"{c.error_class or c.fingerprint}: {c.reason}" for c in recover_outcome.held
+                _ingest_runtime_at_terminal(experiment_dir, record=record)
+                terminal_cause = "failed"
+                return MonitorFlowResult(
+                    run_id=run_id,
+                    lifecycle_state=LifecycleState.FAILED,
+                    last_status=last_status,
+                    combined_waves=state.last_combined_waves,
+                    failed_waves=state.last_failed_waves,
+                    ticks=state.ticks,
+                    elapsed_seconds=elapsed,
+                    escalation_reason=esc_reason,
                 )
-                esc_reason = (
-                    f"{esc_reason}; auto_recover_held: {held_reason}"
-                    if esc_reason
-                    else f"auto_recover_held: {held_reason}"
+
+            # Any other terminal verdict (``abandoned`` — no on-disk evidence —
+            # or a future terminal lifecycle state). ``classify_polling`` does
+            # not emit these today, so this branch is behavior-neutral for the
+            # current classifier; it exists so that if the poll loop EVER
+            # observes a non-complete/failed terminal state it flows through the
+            # SAME mark-terminal + guaranteed-harvest path (design §5 gap (a):
+            # abandoned must not skip the harvest) instead of silently falling
+            # through to the budget check and polling a dead run to timeout.
+            if terminal is not None:
+                mark_terminal(experiment_dir, run_id, status=terminal)
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=last_status,
+                    diff_from_prev=diff,
+                    actions=actions,
+                    lifecycle_state=terminal,
+                    next_tick_seconds=None,
                 )
-            mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
+                _ingest_runtime_at_terminal(experiment_dir, record=record)
+                terminal_cause = terminal
+                return MonitorFlowResult(
+                    run_id=run_id,
+                    lifecycle_state=terminal,
+                    last_status=last_status,
+                    combined_waves=state.last_combined_waves,
+                    failed_waves=state.last_failed_waves,
+                    ticks=state.ticks,
+                    elapsed_seconds=elapsed,
+                    escalation_reason=esc_reason,
+                )
+
+            # Budget check.
+            if elapsed >= wall_clock_budget_seconds:
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=last_status,
+                    diff_from_prev=diff,
+                    actions=actions,
+                    lifecycle_state=LifecycleState.TIMEOUT,
+                    next_tick_seconds=None,
+                )
+                _ingest_runtime_at_terminal(experiment_dir, record=record)
+                terminal_cause = "cap-overrun"
+                return MonitorFlowResult(
+                    run_id=run_id,
+                    lifecycle_state=LifecycleState.TIMEOUT,
+                    last_status=last_status,
+                    combined_waves=state.last_combined_waves,
+                    failed_waves=state.last_failed_waves,
+                    ticks=state.ticks,
+                    elapsed_seconds=elapsed,
+                    escalation_reason=None,
+                )
+
+            # Still in flight; update adaptive backoff and record the tick.
+            # Fingerprint covers the entire status snapshot (counts, scheduler
+            # state, waves block) so any change snaps us back to the floor.
+            fingerprint = _status_fingerprint(last_status)
+            if last_fingerprint is not None and fingerprint == last_fingerprint:
+                unchanged_count += 1
+                if unchanged_count >= _UNCHANGED_POLLS_BEFORE_BACKOFF:
+                    effective_interval = min(effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS)
+            else:
+                unchanged_count = 0
+                effective_interval = float(poll_interval_seconds)
+            last_fingerprint = fingerprint
+
             _append_tick(
                 experiment_dir,
                 run_id,
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state=LifecycleState.FAILED,
-                next_tick_seconds=None,
+                lifecycle_state="in_flight",
+                next_tick_seconds=effective_interval,
             )
-            _ingest_runtime_at_terminal(experiment_dir, record=record)
-            return MonitorFlowResult(
-                run_id=run_id,
-                lifecycle_state=LifecycleState.FAILED,
-                last_status=last_status,
-                combined_waves=state.last_combined_waves,
-                failed_waves=state.last_failed_waves,
-                ticks=state.ticks,
-                elapsed_seconds=elapsed,
-                escalation_reason=esc_reason,
-            )
+            # §5 watchdog: stamp the deadline for the NEXT poll so a dead poller
+            # (incl. a detached S3 child) is caught by the doctor via a lapse.
+            _stamp_watchdog(experiment_dir, run_id, effective_interval)
+            _sleep(effective_interval)
 
-        # Budget check.
-        if elapsed >= wall_clock_budget_seconds:
-            _append_tick(
+    finally:
+        # Guaranteed harvest (design §5): every terminal path AND any
+        # abnormal exit (exception / session-death) lands here exactly once.
+        # When a clean terminal branch was reached we harvest for that cause;
+        # otherwise the loop is unwinding on an exception (or a break that
+        # never set a cause) and we harvest under the abnormal-exit sentinel.
+        # harvest_on_terminal never raises, so a live exception propagates
+        # untouched (the harvest is additive, never a mask of the cause).
+        with contextlib.suppress(Exception):
+            harvest_on_terminal(
                 experiment_dir,
                 run_id,
-                summary=last_status,
-                diff_from_prev=diff,
-                actions=actions,
-                lifecycle_state=LifecycleState.TIMEOUT,
-                next_tick_seconds=None,
+                terminal_cause=terminal_cause or "abnormal-exit",
+                record=record,
             )
-            _ingest_runtime_at_terminal(experiment_dir, record=record)
-            return MonitorFlowResult(
-                run_id=run_id,
-                lifecycle_state=LifecycleState.TIMEOUT,
-                last_status=last_status,
-                combined_waves=state.last_combined_waves,
-                failed_waves=state.last_failed_waves,
-                ticks=state.ticks,
-                elapsed_seconds=elapsed,
-                escalation_reason=None,
-            )
-
-        # Still in flight; update adaptive backoff and record the tick.
-        # Fingerprint covers the entire status snapshot (counts, scheduler
-        # state, waves block) so any change snaps us back to the floor.
-        fingerprint = _status_fingerprint(last_status)
-        if last_fingerprint is not None and fingerprint == last_fingerprint:
-            unchanged_count += 1
-            if unchanged_count >= _UNCHANGED_POLLS_BEFORE_BACKOFF:
-                effective_interval = min(effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS)
-        else:
-            unchanged_count = 0
-            effective_interval = float(poll_interval_seconds)
-        last_fingerprint = fingerprint
-
-        _append_tick(
-            experiment_dir,
-            run_id,
-            summary=last_status,
-            diff_from_prev=diff,
-            actions=actions,
-            lifecycle_state="in_flight",
-            next_tick_seconds=effective_interval,
-        )
-        _sleep(effective_interval)

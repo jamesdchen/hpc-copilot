@@ -1,268 +1,65 @@
 ---
 name: hpc-submit
-description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off via `hpc-agent run --workflow submit`. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults via `apply-safe-defaults`) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
-allowed-tools: Bash Read Write Skill Agent
+description: "Start the submit block chain (`submit-s1`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names — until a terminal block. The blocks ARE the execution (code does SSH, staging, canary, submit, watch, harvest); this skill never resolves a decision point and never interprets raw results."
+allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer for HPC submission. Walks the choice points (cluster, executor, axis classification) and resolves each from caller-supplied input, autonomous heuristics, or composed sub-skill. Once resolved, shells out to **`hpc-agent run --workflow submit`** (Step 9), which spawns a fresh-context worker running `worker_prompts/submit.md` (the [submit-flow](../../../../docs/primitives/submit-flow.md) primitive). `hpc-agent run` is the ONLY handoff verb — never invoke `submit-flow` directly.
+Start the submit workflow by invoking the **`submit-s1`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb` — never a hardcoded sequence, never a verb the envelope did not name — until a terminal block.
 
-The slash `/submit-hpc` is the human-interview wrapper; external autonomous agents (MARs experiment-runner, notebook driver) invoke this skill directly with pre-resolved fields.
+The four submit blocks (`ops/submit_blocks.py`) are `submit-s1` (resolve) → `submit-s2` (stage & canary) → `submit-s3` (submit & watch) → `submit-s4` (harvest). Each is a code primitive that chains deterministically as far as code can, terminates at the first human decision point, and hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The blocks are the whole execution — there is no LLM inside them and no worker to hand off to.** This skill is the relay: it renders the brief, takes the human's answer, records it, and fires the next block.
 
-## Execution style
+The slash `/submit-hpc` is the human-interview wrapper; an external autonomous agent (MARs experiment-runner, notebook driver) invokes this skill directly. Either way the loop is the same — the difference is only who types the `y`/nudge.
 
-- **Batch independent tool calls into one assistant message.** "Parallel" = **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** (harness runs them concurrently). NOT shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — that trips the permission classifier as a compound command. Independent reads/greps/`hpc-agent describe` lookups each go in their own tool-call block in the same message.
-- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Saves a round-trip + permission prompt per chained call. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The `&&` block on the spawned `hpc-worker` subagent's `PreToolUse` hook does NOT apply to this orchestrator skill.)
-- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
-- **Don't preemptively override the invoker default — but DO auto-retry inline on a real spawn failure.** Hand off with plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker (the framework refuses an agent-supplied `--inline` when worker credentials exist, #155). **However:** when the spawn fails and the returned `internal` error includes the framework's `Fallback: …HPC_AGENT_INVOKER=inline…` remediation hint, AUTOMATICALLY set `HPC_AGENT_INVOKER=inline` in the env and retry — the env var is the documented operator-opt-in form and the framework's hint is the signal. Do NOT pause to ask. Shell-level set: PowerShell `$env:HPC_AGENT_INVOKER = "inline"`, bash `export HPC_AGENT_INVOKER=inline`.
-- **No narration at sub-skill boundaries.** When a composed sub-skill (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`, `axes-init`, etc.) returns control, IMMEDIATELY chain to the next resolution step without emitting a summary message. Writing "X returned" or "Now resolving Y" reads as an end-of-turn signal to the harness and yields control back to the user — but the procedure has more steps to walk, so just continue tool-calling. The user sees only the final envelope (success, `needs_resolution`, or `spec_invalid`).
-- **Read sub-skill returns from the file primitive, not from the Skill tool result.** Sub-skills (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`) emit their envelope to `<experiment_dir>/.hpc/_returns/<skill>.json` and write no chat message. After every `Skill(<sub>)` returns, the FIRST follow-up MUST be `hpc-agent fetch-skill-return --skill <sub> --experiment-dir <experiment_dir>` — reads, re-validates, prints to stdout, deletes. Parse the JSON stdout as the sub-skill's return value. If `fetch-skill-return` returns `precondition_failed` with `failure_features.error_class_raw == "skill_return_missing"`, the sub-skill never emitted — re-invoke or surface to caller.
-- **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns regardless of `allow` rules. To read a JSON file (submit_spec, sidecar, `interview.json`, `axes.yaml`, anything under `.hpc/`): `Read`. To search filenames: `Glob`. To grep contents: `Grep`. For cluster/framework state, call a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `inspect-runs`, `verify-canary`, `reconcile`). **Unsure of the exact verb name?** Run `hpc-agent find "<intent>"` first — it returns a thin candidate list (`{name, verb, cli, summary}`) to pick from, then `hpc-agent describe <name>` for the one full contract. This is a *sequential* `find → describe` pair (the second call needs the first's result), distinct from the parallel independent-lookup batching above. The ONLY Bash this skill issues is the `hpc-agent` calls in the Steps (plus `git` if committing a scaffolded file).
+## Invocation surface
+
+- **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
+- **MCP-first (preferred).** When the harness has the registry-projected MCP server (`hpc-agent mcp-serve`), invoke each block as its typed tool (`submit-s1`, `submit-s2`, …) straight from the wire schema — no shell affordance, and cancel / raw-submit are structurally unreachable.
+- **CLI fallback** (harnesses without MCP): one call per block, spec written to a file:
+  ```bash
+  hpc-agent submit-s1 --spec <path> --experiment-dir <dir>
+  ```
+  Write the spec JSON with the `Write` tool and pass `--spec <path>` (never inline a shell-hostile JSON string). Parse the block envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those).
+
+## The block loop
+
+Repeat until a terminal block (`next_block` is null **and** `needs_decision` is false, or the human ends the run):
+
+1. **Invoke the block.** First iteration: `submit-s1`. Every later iteration: the verb named by the *previous* block's `next_block.verb`, seeded from its `spec_hint`. Only the block the envelope named is ever invoked.
+2. **Relay the brief.** Render the envelope's `reason` + `brief` (the code-digested evidence — resolved fields with pre-filled recommendations at S1, "canary green, est. N core-hours" at S2, the terminal status digest at S3, the code-extracted results table at S4) and the `next_block` suggestion (its `verb` + `why`), the way `/sync` is proposed at the end of a work chunk. Never re-compute or re-interpret the brief's numbers — relay what code drafted.
+3. **Collect the answer.** A single `y` greenlights the suggested `next_block`; anything else is a nudge (natural language — "no, halve the grid and re-canary").
+4. **Journal the exchange** (design §2 — the decision record, not the chat scroll, is the source of truth). Write the record spec and append it:
+   ```bash
+   hpc-agent append-decision --spec <path> --experiment-dir <dir>
+   ```
+   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <the block that terminated>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text. On a greenlight, put the greenlit verb under `resolved.next_block` (`resolved: {"next_block": "<next_block.verb>"}`) — the block-gate (`ops/block_gate.py`, `assert_greenlit_target`) reads exactly this and refuses a mis-sequenced block loudly, so the record is load-bearing, not bookkeeping.
+5. **Advance.** On `y`, invoke `next_block.verb`. On a nudge, fold the nudge into the current block's spec and re-invoke the **same** block — it re-drafts a fresh brief; loop back to step 2. Anomaly terminators (`stage_reached` = `canary_failed` / `watching_anomaly`) carry `next_block: null` because recovery is a genuine human branch (resubmit-failed / reconcile / kill) with no single deterministic successor — surface the anomaly brief and let the human's nudge name the recovery action.
+
+The greenlight gate makes the sequence self-enforcing: `submit-s2`/`s3`/`s4` each refuse unless the latest journaled decision for the run is a `y` naming *that* verb. Prose therefore never hardcodes the chain (design §2: "a guard the LLM itself satisfies is not a guard") — you invoke what the envelope named and the human greenlit, and code checks it.
+
+## Never-stall contract (blocks never block the chat)
+
+Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait) and `submit-s3` (main-array watch) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification and rides the in-session tail-loop (see below). In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.
+
+While a run is live, spawn a background tail of the local supervisor's output so the human sees liveness without asking (design §5 session tail-loop); if the session dies, output is recovered from the cluster by the guaranteed harvest on re-arm.
+
+## Speculative canary (opt-in)
+
+To overlap the S1 review with the canary, invoke `submit-speculate` during the S1 `y`/nudge round — it runs S2's canary early under the recommended defaults, so a plain `y` finds S2 already done. Nudges **never** cancel a speculative canary (design §3): a spec-changing nudge moves the `cmd_sha`, the stale canary drains and is ignored, and the next canary is fresh; an unchanged spec keeps the result. Budget is one speculative canary per pending brief, enforced by the canary TTL cache — no kill path.
 
 ## Inputs
 
 | Field | Source |
 |---|---|
 | `experiment_dir` | Required (absolute path) |
-| `cluster` | Caller, or auto-resolve from `clusters.yaml` (single configured → use it; multiple → ambiguous) |
-| `entry_point` (kind + path + run_name) | Caller, or invoke `hpc-wrap-entry-point` sub-skill if no `@register_run` on disk |
-| `data_axis` | Caller, or invoke `hpc-classify-axis` sub-skill if no classification for current run_signature_sha |
-| `homogeneous_axes` | Caller, or invoke `hpc-build-executor` (axes-init companion) if no `.hpc/axes.yaml` |
-| `frozen_configs` | Caller, or detect from `configs/*.yaml` |
-| `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented). Adaptive sweeps (Optuna ask-tell / PBT / Hyperband) are NOT a `task_generator` → route to `hpc-campaign` + `scaffold-strategy`. |
-| `on_task_generator_mismatch` | Caller (default `fail`; `refresh` is the explicit opt-in — see Step 3) |
-| `walltime_sec` | Caller, or auto-resolve from runtime priors (p95 × safety_mult) |
-| `gpu_type` | Caller, or first GPU in `clusters.<cluster>.gpu_types` |
+| `cluster` | Caller, else surfaced as an S1 recommendation from `clusters.yaml` |
+| `task_generator` | Caller (surfaced as a required S1 field when no `tasks.py` exists — it cannot be auto-invented; the human supplies it via nudge) |
 | `no_canary` | Caller (default `false`) |
 | `campaign_id` | Caller (pass-through) |
 
-## The resolution contract
-
-The skill walks every resolution step in dependency order. Each step does ONE of:
-
-- **Resolve from input** — caller supplied the field; accept it as authoritative.
-- **Auto-resolve** — apply a deterministic rule or compose a sub-skill that resolves it.
-- **Add to ambiguities** — record the unresolved field with candidates + dependency info + safe_default, and continue walking subsequent steps.
-
-When all steps are done, the skill behaves as follows:
-
-- **No ambiguities accumulated** → all fields resolved → proceed to Step 8 (handoff to worker).
-- **Ambiguities accumulated** → return `needs_resolution` envelope with the full list (Step 7).
-
-This means **one round-trip per workflow invocation** — the caller resolves every ambiguity in the returned list at once and re-invokes. No N-way escalation loop.
-
-## Steps
-
-### 0. Top-of-skill preflight (install + load + cluster-connectivity)
-
-```bash
-hpc-agent submit-preflight --experiment-dir <experiment_dir> [--cluster <cluster>]
-```
-
-Composite verb that runs `install-commands` → `load-context` → (when `--cluster` is supplied) `check-preflight` in sequence. Folds the production-ssh-path check the bare TCP probe missed (TCP :22 open but the `rsync`-based push failing mid-submit with `getsockname failed: Not a socket`).
-
-The composite's `data` carries:
-
-- `data.install_commands.envelope` — same shape the standalone Step 0 produced; `data.cleared_collisions` lists any 0-byte sentinels the install-commands cleaned up at `~/.claude/{commands,skills,agents}/`.
-- `data.load_context.envelope` — same shape the standalone Step 1 produced; **branch on `data.load_context.envelope.data.next_step_hint` exactly as the prior prose described** (see Step 1b).
-- `data.check_preflight.envelope` — `{all_ok, checks}` shape. With `--cluster`, includes cluster reachability probes (`cluster_tcp_22` + `cluster_ssh_echo`, an actual `ssh <host> echo ok` round-trip through the production ssh path). Without `--cluster`, only local-env checks fire (ssh agent, ssh/rsync on PATH, clusters.yaml parses). A non-green `cluster_ssh_echo` means the submit path will fail — surface and stop before assembling the spec.
-
-On `overall: "fail"`, surface the failing sub-envelope's `error_code` + `remediation` (preserved under `data.<subcall>.envelope`) and stop — the parallel siblings' results are kept, so a re-run can target only the failing piece via `--skip`. On `overall: "pass"`, proceed to Step 1b when `data.load_context.envelope.data.next_step_hint == "monitor"` (otherwise jump to Step 2).
-
-If `--cluster` is not yet known at this point (caller's input is ambiguous), invoke the composite without it now and re-run `hpc-agent preflight --cluster <name>` after Step 2 — the local-env checks pass first, the SSH probe is the only thing deferred.
-
-Replaces the prose-discipline contract where the agent had to remember Step 0 (whose omission motivated the entire 0.10.2 release).
-
-#### 1b. Reconcile the in-flight run against the cluster
-
-```bash
-hpc-agent reconcile --run-id <in_flight_run_id> --scheduler <sge|slurm|pbspro|torque> --experiment-dir <experiment_dir>
-```
-
-`reconcile` polls the cluster once and updates the journal — a single call also settles the run's paired `-canary` sibling, so you never need a second reconcile with the `-canary` suffix (#258). Branch on `data.lifecycle_state`:
-
-- **terminal** (`complete` / `failed` / `timeout`) — the prior run actually finished; the journal is now marked terminal and the `already_in_flight` blocker is gone. **Proceed with this submit.**
-- **`abandoned`** — recorded `job_ids` exist but none are alive on the scheduler (scratch wiped, job manually cancelled, scheduler retention purged the record). The journal is now marked `abandoned`, freeing the `cmd_sha` to claim. **Proceed with this submit.**
-- **`no_run_record`** (#356) — the prior run is crashed-submit residue: a valid jobless sidecar (written at Step 6d) with no journal record, because the process died before `submit_and_record` minted the record. Nothing ever reached the scheduler. This is benign, **not** `journal_corrupt`. **Proceed with this submit** — it discards/overwrites the orphan (the runner's `cmd_sha` dedup treats a jobless sidecar as an orphan and falls through to a real submit). Do NOT hand-`rm` anything; `prune-orphan-sidecars` cleans up the residue.
-- **still in-flight** (cluster confirms work running) — return `spec_invalid: already_in_flight` with the run_id (state conflict, not ambiguity). Remediation lists three recovery paths: (a) `/monitor-hpc` to drive to terminal (**primary** — the prior submit is still running); (b) `hpc-agent reconcile --run-id <id> --scheduler <sge|slurm|pbspro|torque>` for a later manual recheck; (c) `--no-canary` ONLY when the in-flight one is the prior run's *canary* and the operator confirmed it succeeded. Do NOT skip canary as a generic workaround — reconcile is the right tool.
-- **`unable_to_verify`** (#258) — the cluster alive-check itself failed (SSH / auth / network — e.g. an expired Duo cache), so the run's true state is unknown. Do NOT proceed (you cannot confirm the blocker is gone) and do NOT claim it abandoned. Return `spec_invalid: already_in_flight` but point the remediation at the connectivity failure (surface `data.last_status`): fix SSH/auth and re-run reconcile. This is distinct from "still in-flight" — there the cluster *answered*; here it didn't.
-
-The skill **never** refuses `already_in_flight` from `next_step_hint` alone — only after reconcile has *confirmed against the cluster* that the run is genuinely still in-flight. Skip Step 1b when `load-context` already shows a terminal run for the profile (the normal post-monitor path) — there's nothing to reconcile.
-
-### 2. Resolve cluster
-
-- Caller supplied → use.
-- Else single configured cluster in `clusters.yaml` → use.
-- Else (multiple, no pick) → add to ambiguities:
-  ```json
-  {"field": "cluster", "candidates": [...], "depends_on": [], "safe_default": "<first lexicographically>"}
-  ```
-
-### 3. Resolve entry point
-
-Check for `@register_run` on disk and for `interview.json`. If either, the entry_point is resolved.
-
-**Before short-circuiting on a cached `interview.json`, reconcile its `task_generator` against the caller-supplied one.** A stale cached generator (e.g. 8 seeds) would silently win over a caller-passed one (e.g. 100 seeds), violating "caller-supplied fields are always authoritative." Guard it:
-
-1. **Caller did NOT supply a `task_generator` this invocation** → the cached interview is authoritative; continue.
-2. **Both exist** → compare by canonical content with one verb:
-   ```bash
-   hpc-agent check-task-generator-mismatch --caller-task-generator '<caller JSON>' --cached-task-generator '<interview.json task_generator JSON>'
-   ```
-   The verb canonicalizes both (key-sorted, whitespace-free) and returns `data.match` plus both shapes' `canonical` + `sha256`. When the caller has no cached generator to compare against, omit `--cached-task-generator` (the verb returns `match: true`, `reason: no_cached_generator`).
-   - **`data.match: true`** (`reason: identical`) → short-circuit as before; continue.
-   - **`data.match: false`** (`reason: divergent`) → do NOT silently use the cached one. Branch on `on_task_generator_mismatch`:
-     - `fail` (**default**) → return `spec_invalid: task_generator_mismatch`, surfacing BOTH shapes (the verb's `data.cached` from `interview.json`, `data.caller` from this invocation) and their resulting task counts, with remediation: re-invoke with `on_task_generator_mismatch=refresh`, or clear `.hpc/` to start fresh.
-     - `refresh` → rewrite `interview.json` (and regenerate `.hpc/tasks.py`) from the caller's `task_generator` via `hpc-wrap-entry-point`, then continue with the caller's.
-
-   The silent "cached wins" behavior is removed — a divergent count must be surfaced, not dropped on the floor. There is deliberately no submit-without-rewriting mode: it would leave the stale `interview.json` in place, so the same divergence would re-fire on every subsequent submit. Either the interview is wrong (→ `refresh` it) or the caller is (→ `fail` and fix the request).
-
-Otherwise (no `@register_run` and no `interview.json`), invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generator, experiment_dir}`. The sub-skill itself follows the same contract — if it can't resolve (e.g., multiple entry-point candidates), it returns its own ambiguities. Propagate them into this skill's list:
-
-```json
-{"field": "entry_point", "candidates": ["train.py", "main.py"], "depends_on": [], "safe_default": "<first match>"}
-```
-
-Immediately after `Skill(hpc-wrap-entry-point)` returns, read its envelope from the file primitive:
-
-```bash
-hpc-agent fetch-skill-return --skill hpc-wrap-entry-point --experiment-dir <experiment_dir>
-```
-
-The verb prints the sub-skill's return envelope to stdout (and deletes it). Parse the JSON to pick up `entry_point_kind`, `run_name`, `tasks_py_path`, `interview_json_path`, `wrapper_path?`, `total_tasks`, `cmd_sha`. A `precondition_failed` / `skill_return_missing` envelope means the sub-skill never emitted — surface as `spec_invalid: skill_return_missing` or re-invoke.
-
-### 3b. Cover non-axis required executor params
-
-Once the entry point is resolved, cross-check its signature against the `task_generator`'s axes (this is what `validate-executor-signatures` gates on at submit — `uncovered_required_param`). A param that is **required** (no default in the executor's CLI surface) and **not a swept axis** must be given a constant, or every cluster task crashes at argparse (#195).
-
-- Resolved automatically when `wrap-entry-point` already wrote `fixed_params` (Step 5b), or the param has an argparse default.
-- Else add to ambiguities — the value can't be invented:
-  ```json
-  {"field": "uncovered_param", "candidates": ["samples"], "depends_on": ["entry_point"], "safe_default": {"samples": <argparse default if any, else null>}, "context": {"executor": "<run_name>", "required_no_default": ["samples"]}}
-  ```
-  The caller resolves to a `{param: value}` map; it's threaded into `entry_point.fixed_params` and baked into every `tasks.resolve(i)`. `depends_on: ["entry_point"]` — the signature isn't known until the entry point is.
-
-### 4. Resolve data axis
-
-Check `.hpc/axes.yaml` for `executors.<run_name>` matching the current sha. If present, resolved — continue.
-
-Otherwise, invoke `hpc-classify-axis` sub-skill. After `Skill(hpc-classify-axis)` returns, fetch its envelope via `hpc-agent fetch-skill-return --skill hpc-classify-axis --experiment-dir <experiment_dir>` and parse `run_name` / `run_signature_sha` / `data_axis` / `classified_by` from stdout. If it returns ambiguities (Error branch), propagate. Sub-skill's own safe_default (`Sequential` for ambiguous trees) populates the entry's `safe_default`.
-
-```json
-{"field": "data_axis", "candidates": null, "depends_on": ["entry_point"], "safe_default": {"kind": "sequential"}}
-```
-
-Note the `depends_on: ["entry_point"]` — the data_axis dialog needs to know which `@register_run` function is being classified, which depends on the entry_point being resolved first.
-
-### 5. Resolve homogeneous axes (cold-start only)
-
-Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, invoke `hpc-build-executor` sub-skill (axes-init companion). After `Skill(hpc-build-executor)` returns, fetch its envelope via `hpc-agent fetch-skill-return --skill hpc-build-executor --experiment-dir <experiment_dir>` and parse `executor_path` / `axes_path` / `homogeneous_axes` from stdout. Propagate ambiguities.
-
-### 6. Resolve walltime, gpu_type, partition
-
-One verb resolves all three resources — `walltime_sec`, `gpu_type`, and `partition` — each from a caller override first, then an auto-resolution rule:
-
-```bash
-hpc-agent resolve-resources --cluster <cluster> --experiment-dir <experiment_dir> [--profile <run_name>] [--cmd-sha <sha>] [--walltime-sec <caller_override>] [--gpu-type <caller_override>] [--partition <caller_override>] [--user-preferred-partition <pref>]
-```
-
-`data` carries the resolved `{walltime_sec, gpu_type, partition}` plus a `provenance` map recording how each was resolved:
-
-- **`walltime_sec`** — caller (`--walltime-sec`), else the optional `read-runtime-prior` verb's `p95 × 1.30` (default safety_mult). `read-runtime-prior` is an **optional-plugin-only** verb — on a core install (e.g. plain PyPI `hpc-agent`) it does not exist, and on the very first submit there is no prior anyway. `resolve-resources` treats a missing/erroring verb (and a verb that reports `needs_canary`) as **cold-start**: `data.walltime_sec` comes back `null` with `provenance.walltime_sec` one of `cold_start_no_profile` / `cold_start_no_samples` / `cold_start_prior_verb_unavailable`. A missing prior is **never** an error.
-- **`gpu_type`** — caller (`--gpu-type`), else `clusters.<cluster>.gpu_types[0]` (`provenance` `cluster_default`), or `null` when the cluster declares none.
-- **`partition`** — caller (`--partition`), else the `recommend-partition` primitive (reused, not reimplemented), carried under `provenance.partition` as `recommend_partition:<rationale>`. `null` (`no_partitions_supplied`) when no partition config is available.
-
-**On cold-start `walltime_sec: null`, fall back to the cluster cold-start walltime**, which **always resolves** — `clusters.<cluster>.default_walltime_sec` when the operator set it, otherwise a conservative built-in default (4h) clamped to `max_walltime_sec`. The `get_default_walltime_sec` resolver (`hpc_agent.infra.clusters`) guarantees a value, so a core install never stalls on the optional verb.
-
-These never go into the ambiguities list and the missing optional verb is never an ambiguity — they always auto-resolve to a conservative default.
-
-### 7. Return ambiguities if any
-
-If the ambiguities list is non-empty:
-
-```json
-{
-  "ok": false,
-  "error_code": "needs_resolution",
-  "data": {
-    "resolved": {
-      "experiment_dir": "/path/to/exp",
-      "cluster": "hoffman2",
-      "task_generator": {"kind": "items_x_seeds", "params": {...}},
-      "walltime_sec": 7200,
-      "gpu_type": "a100"
-    },
-    "ambiguities": [
-      {"field": "entry_point", "candidates": [...], "depends_on": [], "safe_default": "..."},
-      {"field": "data_axis", "candidates": null, "depends_on": ["entry_point"], "safe_default": "..."}
-    ]
-  }
-}
-```
-
-The caller resolves every entry and re-invokes this skill with the augmented spec. The **slash** path walks user dialogs. The **autonomous** path runs the deterministic resolution verbs rather than hand-filling: `walk-submit-ambiguities` produces the `{resolved, ambiguities}` envelope, then `apply-safe-defaults` fills each ambiguity from its `safe_default`. The single field partition (`ops/submit/field_partition.py`) gives `goal` and `task_generator` **no** `safe_default`, so `apply-safe-defaults` structurally cannot fabricate them — an unresolved `goal`/`task_generator` stays `spec_invalid` and escalates (the incident-1b lock: the framework never invents a sweep). The skill then walks the same steps; caller-supplied fields short-circuit Steps 2-5; the ambiguities list comes back empty; proceed to Step 8.
-
-### 8. Build the fields JSON
-
-Assemble every resolved value:
-
-```json
-{
-  "experiment_dir": "<abs path>",
-  "cluster": "<resolved>",
-  "profile": "<run_name>",
-  "data_axis": {...},
-  "homogeneous_axes": [...],
-  "task_generator": {...},
-  "walltime_sec": 7200,
-  "gpu_type": "a100",
-  "no_canary": false,
-  "campaign_id": null
-}
-```
-
-### 9. Hand off — invoke `hpc-agent run --workflow submit`
-
-```bash
-hpc-agent run --workflow submit --fields-json '<fields>'
-```
-
-Or, when the JSON contains Windows paths or other shell-hostile escapes, write it to a tempfile and pass `--fields-file <path>` instead — `hpc-agent run` accepts either.
-
-**This is the ONLY handoff verb for this skill.** `hpc-agent run` spawns a fresh-context bare worker that runs `worker_prompts/submit.md` and returns its envelope. You consume `data.report` from that envelope. Done.
-
-**⚠ Do NOT call `hpc-agent submit-flow` from this skill.** That primitive is the low-level pipeline atom the *worker* invokes internally (after building its own `run_id`, sidecar, and spec). The catalog lists it as `agent_facing: true` because the worker is also an agent — not because this decision-layer skill calls it. Calling `submit-flow` here skips the worker's pre-flight, context loading, and report shaping, and forces you to fabricate inputs (`run_id`, `script`, full submit spec) the worker would have built for you.
-
-**⚠ Do NOT pass `--inline` or set `HPC_AGENT_INVOKER=inline` yourself.** Inline is a *user* opt-in (see *Execution style*). `hpc-agent run` refuses an agent-supplied `--inline` when a spawning worker can authenticate (#155). If the default spawn errors with `worker authentication unavailable` or a worker-launch `internal` error, **escalate to the caller** — return a `needs_resolution`-style anomaly. Do NOT retry with `HPC_AGENT_INVOKER=inline` to "work around" it; that flips an explicit user-only knob behind the user's back.
-
-#### Inline branch — only reached when the *user* set `HPC_AGENT_INVOKER=inline`
-
-If the envelope you got back has `data.mode == "inline"` (instead of `data.mode == "spawn"` and `data.report`), the user opted into inline mode. The envelope carries the same canonical procedure the spawned worker would have run as EITHER `data.prompt` (embedded inline, for a small procedure) OR `data.prompt_path` (an absolute path to the procedure on disk, used when it is large — #262B); exactly one is present. It also carries `data.instructions`. Your job is to produce the worker report `{result, decisions, anomalies}` and return an envelope shaped like the spawn path: `data.report` = that JSON, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline".
-
-**How you run it is capability-gated — check in this order:**
-
-1. **You have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or your harness's equivalent).** → **Dispatch exactly ONE subagent** with the procedure as its whole task; return the report it produces. **If `data.prompt_path` is present, pass that PATH to the subagent and instruct it to `Read` the file as its FIRST action — do NOT `Read` the prompt file into THIS context** (that re-floods the orchestrator the path-forwarding was built to spare, #262B). Else pass `data.prompt` verbatim. This is the default inline path in Claude Code and **not optional when the `Agent` tool exists** — running the procedure in your own context defeats the whole point of inline mode (it floods this session with the rsync/qsub transcript that spawn-mode isolation would have kept out). If you find yourself about to execute step 1 of the procedure in this session while the `Agent` tool is listed in your toolset, stop and dispatch instead.
-2. **You have no such tool.** → Run the procedure yourself in this session (full tools + credentials). This is the harness-fallback path, not the default.
-
-Either path stays in-session: do NOT start another `claude -p` worker, do NOT re-invoke `hpc-agent run`, and the subagent (when used) is the leaf — it runs every step and spawns nothing further.
-
-**Never shell out to extract or relay `data.prompt`, and never go to disk for it (#262).** Do NOT pipe the envelope through `python -c`, `bash -c`, `jq`, `powershell -Command`, `pwsh -Command`, `cmd /c`, or **any** shell-via-flag that takes a code string as an argument — the auto-mode classifier denies these as compound / code-injection commands, costing a rejected round-trip before you even start. And NEVER read the harness's internal `.claude/projects/…/tool-results/*.txt` files to recover the prompt: that path is harness-managed, undocumented, and unstable. `data.prompt` is the **subagent's** task, not something the orchestrator must hold, transform, or reconstruct — pass it (or the envelope reference you already have) to the subagent and let IT read what it needs. If the prompt seems "too large to read directly," that is precisely the signal to forward it to the subagent, not to improvise a shell extraction.
-
-<!-- decision-content:inline-isolation-ceiling start -->
-**Isolation ceiling:** a subagent recovers *context* isolation but not *environment* isolation — it shares this session's sandbox posture and auto-loads project CLAUDE.md, unlike the default `--bare` spawn (sandbox forced off, CLAUDE.md stripped). If a sandboxed session would block the cluster SSH, or project memory must not color the run, that's a sign the *user* wants the default spawn, not inline.
-<!-- decision-content:inline-isolation-ceiling end -->
-
-**Sandbox-blocks-SSH is structural, so detect it FIRST (#265).** When inline mode runs in a sandboxed session AND the workflow needs cluster SSH (submit / status / aggregate), the SSH is blocked no matter how cleanly the local prep runs — and the worker would otherwise burn all the local prep (interview, classify, build-submit-spec) before hitting the wall, then return a misleading near-success. The worker's procedure runs a one-shot cluster-SSH preflight (`hpc-agent check-preflight --cluster <cluster>`) as its Step 0 and, on a sandbox-consistent block, returns `spec_invalid: sandbox_blocks_cluster_ssh` immediately (`ok: false`, no prep wasted), with remediation: *re-run as the default `--bare` spawn (set `ANTHROPIC_API_KEY`) or disable the session sandbox*. Treat that `sandbox_blocks_cluster_ssh` envelope as a hard stop, NOT a partial success — nothing was submitted.
-
-### 10. Propagate worker ambiguities (if any)
-
-The worker may surface its own mid-flight needs_resolution — e.g., `co_tenant_exclusion`, `submit_now_vs_wait`, `walltime_split_confirm`. The worker's envelope carries them in the same shape (`{error_code: "needs_resolution", data: {resolved, ambiguities}}`), each ambiguity with its own `safe_default`. Surface verbatim to this skill's caller; the same one-round-trip resolution contract applies.
-
 ## Notes
 
-- **One round-trip per call** (when ambiguities have no dependencies among each other). At most 2-3 round-trips if dependencies cascade (e.g., entry_point must be resolved before data_axis dialog can be asked). The depth is bounded by the dependency DAG, not by the number of ambiguities.
-- **The worker is the experiment-agnostic execution layer.** Decisions about *this experiment* (executor, axis, walltime) live in this skill. Decisions about *workflow plumbing* (is there an in-flight run? is the spec cached?) live in the worker. The seam is clean.
-- **Idempotent on `cmd_sha`.** Re-invoking with the same resolved fields produces the same `cmd_sha`; the submit-flow primitive dedupes against the journal.
-- **Caller-supplied fields are always authoritative.** This skill's auto-resolution never overrides a value the caller passed in. The slash uses this to pass user-confirmed values; MARs's experiment-runner uses this to pass pre-resolved values. **This includes `task_generator` vs. a cached `interview.json`** (Step 3): a divergent cached generator must surface as `spec_invalid: task_generator_mismatch` (default), never silently shrink a 100-task request to a stale 8-task submission.
-- **No `[Y/n]` in this skill body.** Every choice point either resolves from caller-supplied input, autonomously, or via a sub-skill (which is also `[Y/n]`-free). The dialog prose lives in the `/submit-hpc` slash wrapper.
+- **The skill never resolves a decision and never interprets raw results.** Code (the blocks) digests evidence and drafts the brief; the human decides; you relay both directions. This extends the #355 doctrine ("results are never computed by an LLM") from computing to *concluding*: at S4 the code hands over an empty `proposed_interpretations` slot and a results table — the human chooses the interpretation.
+- **`apply-safe-defaults` is dead as a silent actor.** Each S1 ambiguity's old safe-default survives only as a pre-filled `recommendation` inside the brief that the human greenlights or nudges — nothing is auto-applied into the resolved plan.
+- **Every `y`/nudge is journaled**, including each nudge round (append-only, one record per exchange) — so the trail shows the sequence of nudges that shaped the run, not just the endpoint.

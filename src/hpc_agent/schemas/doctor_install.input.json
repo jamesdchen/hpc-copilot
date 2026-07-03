@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/doctor_install.input.json",
+  "title": "doctor-install input spec",
+  "description": "Input spec for the ``doctor-install`` verb.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "interval_minutes": {
+      "default": 15,
+      "description": "How often (minutes) the OS scheduler runs `hpc-agent doctor`. Cheap local filesystem scan; 15 is a sane default.",
+      "minimum": 1,
+      "title": "Interval Minutes",
+      "type": "integer"
+    },
+    "uninstall": {
+      "default": false,
+      "description": "Remove the scheduled doctor task for this experiment dir instead of installing it. Idempotent: removing an absent task is a no-op.",
+      "title": "Uninstall",
+      "type": "boolean"
+    },
+    "notify": {
+      "default": true,
+      "description": "Bake `notify=true` into the durable doctor spec so the scheduled scan raises an OS notification (never just prints JSON nobody reads) when it finds a stalled/orphaned run. Notify only — never acts.",
+      "title": "Notify",
+      "type": "boolean"
+    }
+  }
+}

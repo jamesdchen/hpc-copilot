@@ -79,6 +79,36 @@
       ],
       "default": null
     },
+    "anomaly_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_AnomalyPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "greenlit": {
+      "default": false,
+      "description": "Provenance marker: the campaign spec was greenlit once at start (design §4 — 'drafted and greenlit once, at campaign start'). A durable DATA flag, NOT an execution gate — no primitive blocks on it; it records that the greenlight happened. Stamped via ``manifest.mark_greenlit``. Default ``False`` leaves a non-greenlit manifest's bytes unchanged.",
+      "title": "Greenlit",
+      "type": "boolean"
+    },
+    "greenlit_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ISO-8601 UTC timestamp the spec was greenlit; ``None`` until ``manifest.mark_greenlit`` stamps it.",
+      "title": "Greenlit At"
+    },
     "async_refill": {
       "default": false,
       "description": "Opt into continuous-async refill (#362). When set, the campaign keeps up to ``max_in_flight`` iterations in flight, telling results as they land and refilling empty slots, instead of the default staged barrier (one iteration drains before the next is proposed). ``campaign-advance`` emits a ``refill`` decision and ``load-context`` routes a decide/refill step even while runs are in flight. Default ``False`` keeps today's synchronous behavior byte-identical.",
@@ -101,6 +131,52 @@
     }
   },
   "$defs": {
+    "_AnomalyPolicy": {
+      "additionalProperties": false,
+      "description": "Campaign anomaly-handling policy (design §4: the greenlit spec's\n``anomaly policy``).\n\nEvery field mirrors a control ``campaign-advance`` already enforces —\nno speculative knobs. The block is written once at campaign start and\nread (never mutated) by ``campaign-advance``.",
+      "properties": {
+        "on_anomaly": {
+          "default": "surface",
+          "description": "How ``campaign-advance`` frames a tripped loud-fail guard in its ``anomaly_brief``: ``surface`` (default) recommends surfacing the drafted brief for a human ``y``/nudge decision; ``park`` recommends halting until a human intervenes. Data only — the framework never acts autonomously on either; it only shapes the brief's recommendation.",
+          "enum": [
+            "surface",
+            "park"
+          ],
+          "title": "On Anomaly",
+          "type": "string"
+        },
+        "resubmit_cap": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-task campaign resubmit backstop, mirroring ``stop_criteria.max_task_resubmits``. Consulted by ``campaign-advance`` only when neither the explicit ``--max-task-resubmits`` nor ``stop_criteria.max_task_resubmits`` is set; when it too is absent the framework backstop (2) still fires. Set it to raise/lower the backstop.",
+          "title": "Resubmit Cap"
+        },
+        "circuit_breaker_failures": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Consecutive-failure circuit breaker, mirroring ``stop_criteria.circuit_breaker_failures``. Consulted by ``campaign-advance`` only when neither the explicit arg nor ``stop_criteria.circuit_breaker_failures`` is set. No framework default — omitted keeps the breaker off.",
+          "title": "Circuit Breaker Failures"
+        }
+      },
+      "title": "_AnomalyPolicy",
+      "type": "object"
+    },
     "_CampaignBudget": {
       "additionalProperties": false,
       "properties": {

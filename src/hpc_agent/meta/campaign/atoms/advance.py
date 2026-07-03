@@ -20,6 +20,9 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.meta.campaign.atoms._concurrency import (
     DEFAULT_MAX_IN_FLIGHT as _DEFAULT_MAX_IN_FLIGHT,
 )
+from hpc_agent.meta.campaign.atoms.resubmit_cap import (
+    DEFAULT_MAX_TASK_RESUBMITS as _DEFAULT_MAX_TASK_RESUBMITS,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -80,8 +83,11 @@ if TYPE_CHECKING:
                     "Loop-safety halt: stop the campaign when any single task "
                     "slot has accrued this many resubmit attempts summed across "
                     "all the campaign's runs (the campaign-level extension of "
-                    "the within-run auto-retry cap). No framework default — "
-                    "omitted means no cap."
+                    "the within-run auto-retry cap). Defaults from the manifest "
+                    "(stop_criteria.max_task_resubmits or "
+                    "anomaly_policy.resubmit_cap), then the framework backstop "
+                    f"({_DEFAULT_MAX_TASK_RESUBMITS}) — the loud-fail default "
+                    "fires even when the manifest is silent."
                 ),
             ),
             CliArg(
@@ -171,11 +177,21 @@ def campaign_advance(
 
     Returns the underlying ``status``, ``converged``, ``budget``,
     ``circuit_breaker``, and ``resubmit_cap`` payloads so the agent can
-    drill in without a second CLI call.
+    drill in without a second CLI call, plus ``anomaly_brief`` — a drafted
+    what-tripped / evidence / recommendation block, non-``None`` only on a
+    loud-fail terminator (``stop_circuit_breaker`` / ``stop_resubmit_cap``),
+    for the human ``y``/nudge decision (design §5). Data only; never acted on.
 
     Manifest defaulting: ``circuit_breaker_failures`` and
-    ``max_task_resubmits`` fall back to the manifest's ``stop_criteria``
-    when omitted, matching the budget/convergence caps.
+    ``max_task_resubmits`` fall back to the manifest's ``stop_criteria``,
+    then to ``anomaly_policy`` (``circuit_breaker_failures`` /
+    ``resubmit_cap``), matching the budget/convergence caps. The resubmit cap
+    additionally defaults to the framework backstop
+    (:data:`~hpc_agent.meta.campaign.atoms.resubmit_cap.DEFAULT_MAX_TASK_RESUBMITS`)
+    so the loud-fail guard fires even when the manifest is silent — the only
+    loop-safety halt that is on by default (the circuit breaker stays opt-in).
+    ``anomaly_policy.on_anomaly`` (``surface`` | ``park``) shapes the
+    ``anomaly_brief`` recommendation without changing the decision.
     """
     from hpc_agent._kernel.decision import decide
     from hpc_agent._wire.fixtures.escalation import CandidateAction
@@ -187,10 +203,26 @@ def campaign_advance(
     from hpc_agent.meta.campaign.budget_ack import ack_covers_spend, read_budget_ack
     from hpc_agent.state.index import find_runs_by_campaign
 
+    # Anomaly policy (design §4): the greenlit spec's anomaly-handling block.
+    # ``on_anomaly`` shapes the anomaly brief's recommendation; its resubmit /
+    # breaker thresholds are a fallback default source below.
+    policy = _manifest_anomaly_policy(experiment_dir, campaign_id)
+    on_anomaly = str(policy.get("on_anomaly", "surface")) if policy else "surface"
+
     if circuit_breaker_failures is None:
         circuit_breaker_failures = _manifest_circuit_breaker_failures(experiment_dir, campaign_id)
+    if circuit_breaker_failures is None and policy is not None:
+        circuit_breaker_failures = _as_positive_int(policy.get("circuit_breaker_failures"))
+
     if max_task_resubmits is None:
         max_task_resubmits = _manifest_max_task_resubmits(experiment_dir, campaign_id)
+    if max_task_resubmits is None and policy is not None:
+        max_task_resubmits = _as_positive_int(policy.get("resubmit_cap"))
+    if max_task_resubmits is None:
+        # Loud-fail default (design §5): the resubmit backstop fires even when the
+        # manifest is silent — ">2× same task → stop and surface" — overridable by
+        # an explicit arg / manifest value resolved above.
+        max_task_resubmits = _DEFAULT_MAX_TASK_RESUBMITS
     # Async-refill opt-in. ``--async-refill`` is a store_true (default False,
     # not None), so we can't use the None-sentinel default pattern: instead the
     # CLI flag force-enables, and an absent flag falls back to the manifest.
@@ -396,6 +428,12 @@ def campaign_advance(
     if outcome.chosen.action == "refill":
         refill_count = (outcome.chosen.params or {}).get("refill_count")
 
+    # Anomaly brief (design §5): when a loud-fail guard terminates the block,
+    # package what-tripped + evidence counts + a drafted recommendation the
+    # caller can surface for a human y/nudge (or a park, per on_anomaly). Data
+    # only — None on every non-anomaly decision; campaign-advance never acts.
+    anomaly_brief = _anomaly_brief(outcome.chosen.action, breaker, resubmit_cap, on_anomaly)
+
     return {
         "campaign_id": campaign_id,
         "decision": outcome.chosen.action,
@@ -404,12 +442,113 @@ def campaign_advance(
         # call campaign-acknowledge-budget before it can continue (#224).
         "needs_acknowledgement": outcome.chosen.action == "stop_over_budget",
         "refill_count": refill_count,
+        # Non-None only on a loud-fail terminator (stop_circuit_breaker /
+        # stop_resubmit_cap); the drafted brief for the human decision point.
+        "anomaly_brief": anomaly_brief,
         "status": status,
         "converged": converged,
         "budget": budget,
         "circuit_breaker": breaker,
         "resubmit_cap": resubmit_cap,
     }
+
+
+def _as_positive_int(value: Any) -> int | None:
+    """Coerce a manifest field to a positive int, or ``None``.
+
+    ``bool`` is excluded explicitly (``isinstance(True, int)`` is ``True``) so a
+    stray boolean never reads as a cap/threshold.
+    """
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _anomaly_brief(
+    decision: str,
+    breaker: dict[str, Any],
+    resubmit_cap: dict[str, Any],
+    on_anomaly: str,
+) -> dict[str, Any] | None:
+    """Build the structured anomaly brief for a tripped loud-fail guard.
+
+    Emitted only when *decision* is a loud-fail terminator
+    (``stop_circuit_breaker`` / ``stop_resubmit_cap``) — the anomalies design §5
+    treats as block terminators. Data only: it packages *what tripped*, the
+    *evidence counts*, and a *drafted recommendation* for a human ``y``/nudge
+    (or a park, per ``anomaly_policy.on_anomaly``). No LLM, no autonomous
+    action — ``campaign-advance`` never acts on it; the caller surfaces it.
+
+    Returns ``None`` for every non-anomaly decision.
+    """
+    recommended_action = "park_campaign" if on_anomaly == "park" else "surface_for_decision"
+    framing = "park the campaign" if on_anomaly == "park" else "surface for a y/nudge decision"
+
+    if decision == "stop_resubmit_cap":
+        task_id = resubmit_cap["task_id"]
+        count = resubmit_cap["count"]
+        threshold = resubmit_cap["threshold"]
+        return {
+            "tripped": "resubmit_cap",
+            "decision": decision,
+            "on_anomaly": on_anomaly,
+            "recommended_action": recommended_action,
+            "evidence": {
+                "count": count,
+                "threshold": threshold,
+                "task_id": task_id,
+                "per_task": resubmit_cap["per_task"],
+            },
+            "recommendation": (
+                f"Task {task_id!r} accrued {count} resubmit attempt(s) across the "
+                f"campaign, meeting the cap ({threshold}). Recommend: {framing} — "
+                "inspect this slot's failure mode before authorising any further resubmit."
+            ),
+        }
+    if decision == "stop_circuit_breaker":
+        count = breaker["count"]
+        threshold = breaker["threshold"]
+        run_ids = breaker.get("run_ids", [])
+        return {
+            "tripped": "circuit_breaker",
+            "decision": decision,
+            "on_anomaly": on_anomaly,
+            "recommended_action": recommended_action,
+            "evidence": {
+                "count": count,
+                "threshold": threshold,
+                "run_ids": run_ids,
+                "last_status": breaker.get("last_status"),
+            },
+            "recommendation": (
+                f"{count} consecutive iteration failure(s) met the circuit breaker "
+                f"({threshold}); failing runs (newest-first): {run_ids}. "
+                f"Recommend: {framing} — diagnose the shared failure before resuming."
+            ),
+        }
+    return None
+
+
+def _manifest_anomaly_policy(experiment_dir: Path, campaign_id: str) -> dict[str, Any] | None:
+    """Read the top-level ``anomaly_policy`` block from the manifest.
+
+    Mirrors :func:`_manifest_async_refill` (a top-level field, not under
+    ``stop_criteria``). A missing / malformed manifest — or a non-dict
+    ``anomaly_policy`` — yields ``None`` (policy defaults apply) rather than
+    crashing the advance read.
+    """
+    import json
+
+    import jsonschema
+
+    from hpc_agent.meta.campaign.manifest import read_manifest
+
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError):
+        return None
+    if manifest is None:
+        return None
+    value = manifest.get("anomaly_policy")
+    return value if isinstance(value, dict) else None
 
 
 def _manifest_circuit_breaker_failures(experiment_dir: Path, campaign_id: str) -> int | None:

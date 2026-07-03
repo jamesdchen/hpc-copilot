@@ -87,6 +87,29 @@ def _verb_from_schema_path(path: Path) -> str:
 # updates the inventory.
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
+        # Human-amplification block verbs + kill/doctor/decision verbs that
+        # gained a ``--spec`` surface (2026-07). Added to track the live CLI.
+        "aggregate-check",
+        "aggregate-run",
+        "append-decision",
+        "campaign-complete",
+        "campaign-greenlight",
+        "campaign-watch",
+        "doctor",
+        # doctor-install accepts an all-optional spec, so it IS a live --spec
+        # verb (kept here so the inventory matches the CLI) but ``{}`` is VALID
+        # and probing it would EXECUTE an OS-scheduler mutation — it is excluded
+        # from the destructive parametrized probes in ``_verb_targets`` below.
+        "doctor-install",
+        "kill",
+        "read-decisions",
+        "status-snapshot",
+        "status-watch",
+        "submit-s1",
+        "submit-s2",
+        "submit-s3",
+        "submit-s4",
+        "submit-speculate",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -182,6 +205,7 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "submit-flow",
     "submit",
     "submit-and-verify",
+    "submit-speculate",
     "submit-flow-batch",
     "monitor-flow",
     "aggregate-flow",
@@ -219,6 +243,24 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "walk-submit-ambiguities",
     "apply-safe-defaults",
     "classify-axis-auto",
+    # Human-amplification block verbs + kill/doctor/decision verbs: new
+    # spec-taking composites/mutators; like the other composites they do not
+    # yet thread failure_features into their spec_invalid envelope (WS3).
+    "aggregate-check",
+    "aggregate-run",
+    "append-decision",
+    "campaign-complete",
+    "campaign-greenlight",
+    "campaign-watch",
+    "doctor",
+    "kill",
+    "read-decisions",
+    "status-snapshot",
+    "status-watch",
+    "submit-s1",
+    "submit-s2",
+    "submit-s3",
+    "submit-s4",
 }
 
 
@@ -264,6 +306,12 @@ def _verb_targets() -> list[tuple[str, Path]]:
     for schema_path in _input_schemas():
         verb = _verb_from_schema_path(schema_path)
         if verb not in _SPEC_VERBS:
+            continue
+        if verb == "doctor-install":
+            # All-optional spec → ``{}`` is a VALID spec that EXECUTES the verb,
+            # which mutates the OS scheduler (schtasks / crontab). Kept in
+            # _SPEC_VERBS for the inventory-drift contract, but never probed with
+            # a fabricated bad spec here — that would install a real task.
             continue
         pairs.append((verb, schema_path))
     return pairs

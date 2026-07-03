@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/doctor_install.output.json",
+  "title": "doctor-install output data",
+  "description": "Shape of the ``data`` field on a ``doctor-install`` envelope.",
+  "type": "object",
+  "required": [
+    "status",
+    "platform",
+    "task_name",
+    "command",
+    "interval_minutes",
+    "spec_path",
+    "notify"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "description": "installed — a new scheduled task was created; already_installed — a task with the same name was already present (no duplicate); uninstalled — an existing task was removed; not_installed — uninstall requested but nothing was scheduled.",
+      "enum": [
+        "installed",
+        "already_installed",
+        "uninstalled",
+        "not_installed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "platform": {
+      "description": "Which scheduler backend handled the request (Task Scheduler vs crontab).",
+      "enum": [
+        "windows",
+        "posix"
+      ],
+      "title": "Platform",
+      "type": "string"
+    },
+    "task_name": {
+      "description": "Scheduler task name / cron marker, `hpc-agent-doctor-<repo_hash>`.",
+      "title": "Task Name",
+      "type": "string"
+    },
+    "command": {
+      "description": "The exact non-interactive command the scheduler runs each interval.",
+      "title": "Command",
+      "type": "string"
+    },
+    "interval_minutes": {
+      "description": "The scan cadence the task was (or would be) set to.",
+      "title": "Interval Minutes",
+      "type": "integer"
+    },
+    "spec_path": {
+      "description": "Durable doctor spec the scheduled command reads (under the journal home).",
+      "title": "Spec Path",
+      "type": "string"
+    },
+    "notify": {
+      "description": "Whether the durable spec carries notify=true (scheduled scan alerts on stalls).",
+      "title": "Notify",
+      "type": "boolean"
+    }
+  }
+}

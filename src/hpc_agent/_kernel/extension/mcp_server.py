@@ -96,6 +96,16 @@ _MUTATING_VERBS = frozenset({"mutate", "submit", "scaffold", "workflow"})
 # The synthetic tool that preserves CLI-style tiered discovery under MCP.
 _RUN_PRIMITIVE_TOOL = "run-primitive"
 
+# The ``curated`` catalog's fixed extras: the recovery verbs (``doctor`` detects
+# stalled/orphaned runs, ``kill`` the request→confirm kill) plus the ``submit-
+# speculate`` opt-in touchpoint. These are stable human-amplification surfaces
+# that are NOT blocks (their Result models carry no ``next_block``), so they are
+# unioned in explicitly. Everything else in ``curated`` is DERIVED (see
+# :func:`_declares_next_block`) — a block is any verb whose Result model declares
+# a ``next_block`` field, so adding/removing that field moves a verb in/out of
+# the curated set with no edit here.
+_CURATED_EXTRA_VERBS = frozenset({"doctor", "kill", "submit-speculate"})
+
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.
 _RESOURCES: dict[str, tuple[tuple[str, ...], str]] = {
@@ -119,12 +129,19 @@ CliRunner = Callable[["list[str]"], "tuple[int, str, str]"]
 
 
 def _default_cli_runner(argv: list[str]) -> tuple[int, str, str]:
-    """Run ``python -m hpc_agent <argv...>`` and capture its envelope.
+    """Run ``python -m hpc_agent <argv...>`` in a SUBPROCESS and capture its envelope.
 
     ``sys.executable -m hpc_agent`` rather than a bare ``hpc-agent`` on PATH so
     the server drives the *same* interpreter/install it was launched from —
     no dependency on the console script being on PATH, and no version skew
     between the registry this process projected and the binary it invokes.
+
+    This is the fully-isolated runner (its own process, its own cwd/globals). It
+    is kept available for tests and callers that want process isolation, but the
+    server DEFAULTS to :func:`_in_process_cli_runner` for latency (no per-call
+    interpreter cold-start + registry walk). The two are parity-checked
+    (``tests/test_mcp_server.py``): the same tool call through either yields an
+    identical envelope + exit code.
     """
     proc = subprocess.run(
         [sys.executable, "-m", "hpc_agent", *argv],
@@ -135,6 +152,43 @@ def _default_cli_runner(argv: list[str]) -> tuple[int, str, str]:
         check=False,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
+    """Dispatch ``hpc-agent <argv...>`` IN-PROCESS via :func:`cli.dispatch.main`.
+
+    The server process already holds the warm ``@primitive`` registry it
+    projected; the subprocess runner re-paid Python cold-start + the full
+    registry walk on every single tool call. This runner reuses the imported
+    registry (``register_primitives`` is idempotent) and drives the SAME
+    ``cli.dispatch.main(argv)`` code path, so the ``(exit_code, stdout-envelope,
+    stderr)`` contract — and therefore the ``error_code`` / ``category`` /
+    ``retry_safe`` / ``exit_code`` the envelope carries — is reproduced exactly,
+    just without a subprocess.
+
+    Parity mechanics: ``main`` prints the single-line JSON envelope to stdout and
+    diagnostics to stderr and returns the int exit code; we capture both streams
+    and the return value. ``argparse`` error paths raise ``SystemExit`` (its code
+    is the exit code, ``None`` → 0); any other uncaught exception is mapped to
+    exit code 1 with the traceback on stderr, matching a subprocess whose Python
+    died on an uncaught exception. ``_default_cli_runner`` remains the isolated
+    fallback for tests / callers that want a separate process.
+    """
+    import io
+    import traceback
+
+    from hpc_agent.cli.dispatch import main as _cli_main
+
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = _cli_main(list(argv))
+    except SystemExit as exc:  # argparse / explicit sys.exit inside a verb
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except Exception:  # noqa: BLE001 — parity: an uncaught crash is exit 1 + traceback on stderr
+        err.write(traceback.format_exc())
+        code = 1
+    return int(code), out.getvalue(), err.getvalue()
 
 
 class _Invalid(Exception):
@@ -210,6 +264,34 @@ def _tool_input_schema(name: str, shape: CliShape) -> dict[str, Any]:
     # level is closed.
     schema["additionalProperties"] = False
     return schema
+
+
+def _declares_next_block(meta: PrimitiveMeta) -> bool:
+    """True when *meta*'s primitive returns a Result model declaring ``next_block``.
+
+    The structural definition of a **block** (design §2/§3): a verb whose Result
+    model carries the machine-computed ``next_block`` field. Derived — never a
+    hardcoded verb list — so the curated MCP catalog tracks exactly the block
+    verbs N marked, and adding/removing a ``next_block`` field on a Result model
+    moves the verb in/out of the curated set automatically.
+
+    Resolution is deliberately narrow to stay robust under ``from __future__
+    import annotations``: the return annotation is a bare model NAME string
+    (e.g. ``"SubmitBlockResult"``) resolved ONLY against the function's own
+    module globals — NEVER ``typing.get_type_hints`` over the whole signature,
+    which would choke on ``TYPE_CHECKING``-only param annotations (``Path``) that
+    the block funcs use. A non-name return (``dict[str, Any]``) resolves to None
+    → not a block.
+    """
+    func = meta.func
+    ret = getattr(func, "__annotations__", {}).get("return")
+    model: Any = None
+    if isinstance(ret, str):
+        model = getattr(func, "__globals__", {}).get(ret)
+    elif isinstance(ret, type):
+        model = ret
+    fields = getattr(model, "model_fields", None)
+    return isinstance(fields, dict) and "next_block" in fields
 
 
 def _tool_definition(name: str, meta: PrimitiveMeta) -> dict[str, Any]:
@@ -374,20 +456,42 @@ class McpServer:
         catalog: str = "full",
         runner: CliRunner | None = None,
     ) -> None:
-        if catalog not in ("full", "tiered"):
-            raise ValueError(f"catalog must be 'full' or 'tiered', got {catalog!r}")
+        if catalog not in ("full", "tiered", "curated"):
+            raise ValueError(f"catalog must be 'full', 'tiered', or 'curated', got {catalog!r}")
         self._registry = registry
         self._allow_mutations = allow_mutations
         self._catalog = catalog
-        self._runner = runner or _default_cli_runner
+        # Default to the WARM in-process runner (reuses this process's registry;
+        # no per-call interpreter cold-start). ``_default_cli_runner`` (subprocess
+        # isolation) stays injectable for tests / callers that want it.
+        self._runner = runner or _in_process_cli_runner
 
     # -- projection ---------------------------------------------------------
 
     def _allowed(self) -> dict[str, PrimitiveMeta]:
         return allowed_primitives(self._registry, allow_mutations=self._allow_mutations)
 
+    def _curated_names(self) -> list[str]:
+        """The curated catalog's verb set: derived blocks ∪ the fixed extras.
+
+        A block is any allowed verb whose Result model declares ``next_block``
+        (:func:`_declares_next_block`) — derived, not hardcoded. Unioned with the
+        stable recovery/opt-in extras (:data:`_CURATED_EXTRA_VERBS`) and
+        intersected with :meth:`_allowed` so mutation-gated extras (``kill`` /
+        ``submit-speculate``) drop out when ``allow_mutations`` is off.
+        """
+        allowed = self._allowed()
+        names = {name for name, meta in allowed.items() if _declares_next_block(meta)}
+        names |= {v for v in _CURATED_EXTRA_VERBS if v in allowed}
+        return sorted(names)
+
     def list_tools(self) -> list[dict[str, Any]]:
         allowed = self._allowed()
+        if self._catalog == "curated":
+            # A small, human-amplification-shaped surface: the block verbs
+            # (derived from a ``next_block`` Result field) plus the recovery /
+            # opt-in extras — each as its own typed tool.
+            return [_tool_definition(name, allowed[name]) for name in self._curated_names()]
         if self._catalog == "tiered":
             # Mirror the CLI's find → describe → invoke discovery: advertise
             # only the explorers plus a generic invoker, keeping every
@@ -516,12 +620,19 @@ class McpServer:
 
     def _initialize(self, params: Mapping[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
-        catalog_note = (
-            "Tiered catalog: use the `find` and `describe` tools to discover "
-            "primitives, then `run-primitive` to invoke one."
-            if self._catalog == "tiered"
-            else "Each read-only primitive is exposed as its own typed tool."
-        )
+        if self._catalog == "tiered":
+            catalog_note = (
+                "Tiered catalog: use the `find` and `describe` tools to discover "
+                "primitives, then `run-primitive` to invoke one."
+            )
+        elif self._catalog == "curated":
+            catalog_note = (
+                "Curated catalog: only the human-amplification block verbs (each "
+                "returns a next_block suggestion) plus the recovery/opt-in verbs "
+                "(doctor, kill, submit-speculate) are exposed as typed tools."
+            )
+        else:
+            catalog_note = "Each read-only primitive is exposed as its own typed tool."
         mutation_note = (
             "Mutating verbs (submit/aggregate/scaffold) ARE exposed."
             if self._allow_mutations

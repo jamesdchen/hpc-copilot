@@ -1,140 +1,114 @@
-"""Prose-contract guards for the two state-reconciliation skill fixes.
+"""Prose-contract guards for the four workflow skills under the fork.
 
 Skills are LLM-facing procedures, so the verification here is that the
-load-bearing guidance is present (and named with the exact error codes /
-verbs callers branch on) — the same drift-guard philosophy as
-``test_lint_skill_md_literal_drift``. These fail loudly if a future edit
-drops the reconcile branch (#248) or the task_generator-mismatch guard
-(#247), the way both gaps originally shipped.
+load-bearing guidance is present (and named with the exact verbs /
+fields callers branch on) — the same drift-guard philosophy as
+``test_lint_skill_md_literal_drift``.
+
+Rewritten for the **hpc-copilot human-amplification fork**
+(``docs/design/human-amplification-blocks.md``). The pre-fork guards in
+this file pinned reconcile / inline-worker / sandbox-preflight prose that
+lived *inside* the skill bodies. That prose is gone: the workflow skills
+are now the **block-loop relay** — they start a block verb, relay its
+code-digested brief, collect the human's ``y``/nudge, journal it via
+``append-decision``, and invoke exactly the block the envelope's
+``next_block`` names. The reconcile / preflight / harvest mechanics moved
+*inside* the block verbs (``ops/*_blocks.py``); the skill no longer
+carries them. These guards pin the new contract and fail loudly if a
+future edit regresses a skill back toward resolving decisions itself or
+re-introduces the stranded ``hpc-agent run`` worker handoff.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SKILLS = REPO_ROOT / "src" / "slash_commands" / "skills"
+
+# (skill_id, first block verb the relay must start).
+_FIRST_BLOCK = {
+    "hpc-submit": "submit-s1",
+    "hpc-status": "status-snapshot",
+    "hpc-aggregate": "aggregate-check",
+    "hpc-campaign": "campaign-greenlight",
+}
 
 
 def _read(skill: str) -> str:
     return (_SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
 
 
-def test_aggregate_skill_reconciles_before_nothing_to_aggregate():
-    # #248: the aggregate skill must reconcile a journal-only in-flight run
-    # against the cluster before refusing, and surface an abandoned run as
-    # run_abandoned rather than an indefinite "nothing to aggregate".
-    text = _read("hpc-aggregate")
-    assert "hpc-agent reconcile" in text, "aggregate skill must call `hpc-agent reconcile`"
-    assert "run_abandoned" in text, "aggregate skill must surface spec_invalid: run_abandoned"
-    assert "lifecycle_state" in text, "aggregate skill must branch on reconcile's lifecycle_state"
-    # The trigger condition the bug missed: trusting next_step_hint == monitor.
-    assert "next_step_hint" in text and "in_flight" in text
-    # Symmetric to the submit path's existing reconcile.
-    assert "abandoned" in text
+@pytest.mark.parametrize("skill,first_block", sorted(_FIRST_BLOCK.items()))
+def test_skill_starts_its_first_block_verb(skill: str, first_block: str) -> None:
+    # Deliverable 1: each workflow skill shrinks to a block-loop relay that
+    # starts the FIRST block verb and drives the y/nudge loop.
+    text = _read(skill)
+    assert first_block in text, f"{skill} must start the {first_block!r} block verb"
 
 
-def test_aggregate_nothing_to_aggregate_is_cluster_confirmed():
-    # The bare-journal "zero terminal runs → nothing_to_aggregate" return must
-    # be gated on the reconcile step, not the journal alone.
-    text = _read("hpc-aggregate")
-    # The reconcile step is referenced from the resolve-run decision.
-    assert "Step 1b" in text
-    assert (
-        "confirmed against the cluster" in text.lower() or "confirmed against the cluster" in text
+@pytest.mark.parametrize("skill", sorted(_FIRST_BLOCK))
+def test_skill_runs_the_propose_loop(skill: str) -> None:
+    # The relay contract (design §2): surface the brief, collect y/nudge,
+    # journal via append-decision, and invoke exactly next_block.verb.
+    text = _read(skill)
+    assert "next_block" in text, f"{skill} must invoke the envelope's next_block, not a fixed chain"
+    assert "append-decision" in text, f"{skill} must journal every y/nudge exchange"
+    assert "nudge" in text, f"{skill} must document the y/nudge interaction primitive"
+
+
+@pytest.mark.parametrize("skill", sorted(_FIRST_BLOCK))
+def test_skill_never_resolves_or_interprets(skill: str) -> None:
+    # The hard rule (design §1): the LLM never resolves a decision point and
+    # never interprets raw results — code digests, the human decides.
+    text = _read(skill).lower()
+    assert "never resolves a decision" in text
+    assert "never interpret" in text or "never re-interpret" in text
+
+
+@pytest.mark.parametrize("skill", sorted(_FIRST_BLOCK))
+def test_worker_handoff_is_stranded(skill: str) -> None:
+    # Deliverable 4: the `hpc-agent run --workflow` worker handoff and the
+    # inline-worker (HPC_AGENT_INVOKER) branch are removed from the skill
+    # bodies — the blocks ARE the execution now (design §6).
+    text = _read(skill)
+    assert "hpc-agent run --workflow" not in text, (
+        f"{skill} must not hand off to the stranded worker"
     )
+    assert "HPC_AGENT_INVOKER" not in text, f"{skill} must not carry the inline-worker branch"
 
 
-def test_submit_skill_reconciles_before_already_in_flight():
-    # #257: the submit skill must reconcile a journal-only in-flight run against
-    # the cluster BEFORE refusing `already_in_flight` — the symmetric gap to
-    # #248 (aggregate). It must never refuse from `next_step_hint` alone.
+def test_submit_speculative_canary_opt_in() -> None:
+    # Deliverable 5: the submit skill documents the speculative-canary opt-in
+    # (submit-speculate during S1 review; nudges never cancel).
     text = _read("hpc-submit")
-    assert "hpc-agent reconcile" in text, "submit skill must call `hpc-agent reconcile`"
-    assert "lifecycle_state" in text, "submit skill must branch on reconcile's lifecycle_state"
-    assert "Step 1b" in text, "submit skill must add a reconcile Step 1b"
-    assert "already_in_flight" in text
-    # The trigger condition the gap missed: trusting next_step_hint == monitor.
-    assert "next_step_hint" in text
-    # Reconcile must surface an abandoned run (frees the cmd_sha to proceed).
-    assert "abandoned" in text
-    assert "confirmed against the cluster" in text.lower()
+    assert "submit-speculate" in text
+    assert "never" in text.lower() and "cancel" in text.lower()
 
 
-def test_submit_already_in_flight_is_cluster_confirmed():
-    # The `already_in_flight` refusal must be gated on the reconcile step
-    # (Step 1b), not the journal's next_step_hint alone.
-    text = _read("hpc-submit")
-    # The reconcile section precedes the (now cluster-confirmed) refusal.
-    assert "1b" in text
-    assert "never" in text.lower() and "next_step_hint" in text
+def test_status_session_tail_loop() -> None:
+    # Deliverable 5: the status skill instructs a background tail of the local
+    # supervisor output while a run is live (design §5).
+    text = _read("hpc-status").lower()
+    assert "tail" in text and "supervisor" in text
+    assert "status-watch" in _read("hpc-status")
 
 
-def test_wrap_entry_point_scopes_data_axis_hint_to_shell_command():
-    # #260: data_axis_hint is only valid on shell_command entries; the skill
-    # must say so explicitly, else the agent emits it on a register_run spec
-    # and eats a schema-validate / retry round-trip.
-    text = _read("hpc-wrap-entry-point")
-    assert "data_axis_hint" in text
-    # The kind constraint must be explicit and name both shapes.
-    assert "shell_command" in text and "register_run" in text
-    assert "only on `entry_point.kind: shell_command`" in text
+def test_aggregate_reducer_is_sole_source_of_metrics() -> None:
+    # The #355 doctrine survives the rewrite: the reducer computes every
+    # aggregate number; the skill never fabricates one.
+    text = _read("hpc-aggregate")
+    assert "NEVER compute" in text or "never compute" in text.lower()
+    assert "reducer" in text
+    assert "aggregate-run" in text
 
 
-def test_submit_inline_branch_forbids_shell_and_disk_prompt_extraction():
-    # #262: the inline branch must forbid shell-extraction of data.prompt
-    # (including PowerShell/pwsh/cmd) and reading internal tool-results files.
-    text = _read("hpc-submit")
-    assert "powershell" in text.lower()
-    assert "pwsh" in text.lower()
-    assert "tool-results" in text
-    # Anchored to the inline prompt-forwarding guidance.
-    assert "data.prompt" in text
-
-
-def test_submit_inline_branch_handles_prompt_path_forwarding():
-    # #262B/C: the inline branch must document data.prompt_path (large prompts
-    # forwarded by reference) and tell the subagent to Read it — without the
-    # orchestrator reading it into its own context.
-    text = _read("hpc-submit")
-    assert "prompt_path" in text
-    assert "Read" in text
-    # Both shapes are named.
-    assert "data.prompt" in text
-
-
-def test_sandbox_ssh_preflight_surfaced_in_worker_and_skill():
-    # #265: an inline worker in a sandboxed session must detect the structural
-    # cluster-SSH block UP FRONT (Step-0 preflight) and surface
-    # sandbox_blocks_cluster_ssh, not run all local prep then return a buried
-    # near-success.
-    skill = _read("hpc-submit")
-    assert "sandbox_blocks_cluster_ssh" in skill
-    worker = (
-        REPO_ROOT / "src" / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / "submit.md"
-    ).read_text(encoding="utf-8")
-    assert "sandbox_blocks_cluster_ssh" in worker
-    assert "check-preflight" in worker  # the upfront preflight verb
-
-
-def test_submit_skill_guards_task_generator_mismatch():
-    # #247: a cached interview.json must not silently override a divergent
-    # caller-supplied task_generator (the 8-vs-100 drift).
-    text = _read("hpc-submit")
-    assert "task_generator_mismatch" in text, "submit skill must surface task_generator_mismatch"
-    assert "on_task_generator_mismatch" in text, "submit skill must document the mismatch field"
-    # Both documented behaviours must be named.
-    for behaviour in ("fail", "refresh"):
-        assert behaviour in text, (
-            f"submit skill must document on_task_generator_mismatch={behaviour}"
-        )
-    # `prefer-caller` was removed: it submitted the caller's generator
-    # WITHOUT rewriting interview.json, so the divergence re-fired on every
-    # subsequent submit — leniency that manufactured recurring dialogs.
-    assert "prefer-caller" not in text, (
-        "on_task_generator_mismatch=prefer-caller was removed; do not reintroduce it"
-    )
-    # The guard sits at the interview.json short-circuit.
-    assert "interview.json" in text
-    # `fail` is the default (loud), not silent.
-    assert "default" in text.lower()
+def test_campaign_greenlit_once_then_async() -> None:
+    # Design §4: the campaign spec is greenlit once at start; execution then
+    # runs fully asynchronously with no per-iteration human boundary.
+    text = _read("hpc-campaign").lower()
+    assert "greenlit" in text and "once" in text
+    assert "asynchronous" in text or "async" in text
+    assert "no per-iteration" in text

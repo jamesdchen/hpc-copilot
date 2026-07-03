@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_block.output.json",
+  "title": "aggregate-block output data",
+  "description": "Shared ``data`` block for every aggregate block (check / run).\n\nThe ``brief`` is the code-digested evidence the LLM drafts a proposal over\n(§2): the readiness + integrity digest for ``aggregate-check`` (each\nintegrity issue carrying a conservative ``recommendation``, never\nauto-masked), the results table + error-sweep summary + empty\ninterpretation slot for ``aggregate-run``. ``needs_decision`` marks a\n``y``/nudge terminator (True for every readiness/integrity block and for\nboth harvest terminators; False only when ``aggregate-check`` finds the run\nclean and simply suggests ``aggregate-run``).",
+  "type": "object",
+  "required": [
+    "block",
+    "stage_reached",
+    "needs_decision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "block": {
+      "description": "Which aggregate block produced this result.",
+      "enum": [
+        "check",
+        "run"
+      ],
+      "title": "Block",
+      "type": "string"
+    },
+    "stage_reached": {
+      "description": "The terminator the block stopped at (decision-as-data, #231).",
+      "enum": [
+        "ready",
+        "not_ready",
+        "integrity_review",
+        "harvested",
+        "harvest_partial"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True when a human must answer here (the y/nudge terminator). False only when aggregate-check found the run clean (ready) and simply suggests aggregate-run.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the terminator.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run this block operated on, when one exists yet.",
+      "title": "Run Id"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "Code-digested evidence the LLM drafts a proposal over (§2). Shape varies per block; never interpreted raw by the LLM.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — ``{verb, why, spec_hint}`` — or null at a terminal / human-branch terminator (design §2, the ``_next_step_hint`` pattern generalized). ``verb`` names the next block's CLI verb; ``spec_hint`` carries the minimal next-spec skeleton (run_id etc.). Surfaced, greenlit, journaled under ``resolved.next_block``, and enforced by the successor gate — never free-prose.",
+      "title": "Next Block"
+    }
+  }
+}

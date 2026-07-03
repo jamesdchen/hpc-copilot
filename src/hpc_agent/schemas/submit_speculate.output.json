@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_speculate.output.json",
+  "title": "submit-speculate output data",
+  "description": "Result of ``submit-speculate``.\n\n``speculated`` is False on the budget-dedup no-op path (a validated-fresh\ncanary already exists for this ``(cmd_sha, version)`` — S2 will reuse it) and\nTrue when a fresh speculative canary fired. ``verified`` mirrors the canary\nverification outcome. This is NOT a sequenced block, so it carries no\n``next_block`` — S1's brief owns the next-block suggestion.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "speculated",
+    "verified"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The (canary) run this speculation operated on.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "speculated": {
+      "description": "True when a fresh speculative canary fired; False on the budget no-op (a validated-fresh canary already exists — S2 will reuse it).",
+      "title": "Speculated",
+      "type": "boolean"
+    },
+    "verified": {
+      "description": "True when the speculative canary verified (or a fresh one is already validated).",
+      "title": "Verified",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "One-line summary of the outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "canary_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The speculative canary's run_id, when one fired.",
+      "title": "Canary Run Id"
+    },
+    "canary_job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The speculative canary's scheduler ids, when one fired.",
+      "title": "Canary Job Ids"
+    },
+    "failure_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The verify failure kind when the speculative canary failed.",
+      "title": "Failure Kind"
+    },
+    "started": {
+      "default": false,
+      "description": "Detach-by-contract handle (design §3): True when the speculative canary was handed to a durable detached worker and this call returned immediately. ``verified`` is not yet known (the poll runs in the worker) — read the outcome from the journal. False on the synchronous path and on the budget no-op.",
+      "title": "Started",
+      "type": "boolean"
+    },
+    "watch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How to learn the detached canary's outcome — ``\"journal\"`` when ``started`` is True. None otherwise.",
+      "title": "Watch"
+    },
+    "detached_pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The detached worker's OS process id (informational). None otherwise.",
+      "title": "Detached Pid"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/watcher_install.input.json",
+  "title": "watcher-install input spec",
+  "description": "Input spec for the ``watcher-install`` verb.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "scheduler"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run to watch. Its journal record supplies ssh_target + remote_path.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "action": {
+      "default": "install",
+      "description": "install (default) runs the probe ladder; uninstall reverses it; status reports what is currently installed.",
+      "enum": [
+        "install",
+        "uninstall",
+        "status"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "scheduler": {
+      "description": "Backend/scheduler name — gates the scrontab rung (Slurm only) and supplies the submit binary for the self-resubmitting-job rung, both through the backend seam (never a concrete-backend import).",
+      "title": "Scheduler",
+      "type": "string"
+    },
+    "stale_sec": {
+      "default": 1800,
+      "description": "Alarm threshold: the watcher raises an ALARM when the client's .hpc_last_read marker is missing or older than this many seconds.",
+      "minimum": 1,
+      "title": "Stale Sec",
+      "type": "integer"
+    },
+    "interval_min": {
+      "default": 10,
+      "description": "How often the watcher fires (minutes) — the cron/scrontab cadence and the self-resubmitting job's sleep interval.",
+      "minimum": 1,
+      "title": "Interval Min",
+      "type": "integer"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/doctor.input.json",
+  "title": "doctor input spec",
+  "description": "Input spec for the ``doctor`` verb.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "now": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional ISO-8601 UTC 'now' override for deterministic testing. When omitted, the current time is used. A stalled run is one whose next_tick_due is before this instant.",
+      "title": "Now"
+    },
+    "notify": {
+      "default": false,
+      "description": "Opt-in: when True and stalled runs are found, raise an OS notification carrying the drafted re-arm proposal (notify only, never acts). Default False keeps the plain in-session verb unchanged; the OS-scheduled installer bakes notify=true into its durable spec so the out-of-session scan alerts instead of printing JSON nobody reads (design §5).",
+      "title": "Notify",
+      "type": "boolean"
+    }
+  }
+}

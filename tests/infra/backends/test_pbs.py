@@ -155,6 +155,14 @@ def test_pbs_live_cmds_use_explicit_ids_not_wide_u_format(family):
     assert cls.build_scheduler_state_cmd([]) == "true"
 
 
+@pytest.mark.parametrize("family", ["pbspro", "torque"])
+def test_pbs_build_cancel_cmd_uses_qdel(family):
+    # PBS (like SGE) cancels via ``qdel <id> <id> ...``; empty ids short-circuit.
+    cls = get_backend_class(family)
+    assert cls.build_cancel_cmd(["12345", "12346"]) == "qdel 12345 12346"
+    assert cls.build_cancel_cmd([]) == "true"
+
+
 # --- qstat -t parsing (brief format; id is <seq>.<server>[<idx>]) ----------
 # Matches PBS's *brief* listing (the format emitted when ids are passed),
 # where the single-letter state sits at column index 4.

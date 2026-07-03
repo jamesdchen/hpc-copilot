@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_block.output.json",
+  "title": "campaign-block output data",
+  "description": "Shared ``data`` block for every campaign block.\n\nThe ``brief`` is the code-digested evidence the LLM drafts a proposal over\n(§2): the digested spec for greenlight, the ``campaign-advance`` health /\nanomaly evidence for watch, the spend-vs-budget + outcome table for\ncomplete. ``needs_decision`` marks a ``y``/nudge terminator — True for the\ngreenlight brief, an anomaly / budget halt, and the completion brief;\nFalse for an idempotent already-greenlit re-read, a healthy watch, and a\nwatch that merely hands off to ``campaign-complete``.",
+  "type": "object",
+  "required": [
+    "block",
+    "stage_reached",
+    "needs_decision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "block": {
+      "description": "Which campaign block produced this result.",
+      "enum": [
+        "greenlight",
+        "watch",
+        "complete"
+      ],
+      "title": "Block",
+      "type": "string"
+    },
+    "stage_reached": {
+      "description": "The terminator the block stopped at (decision-as-data, #231).",
+      "enum": [
+        "needs_greenlight",
+        "greenlit",
+        "already_greenlit",
+        "watching_healthy",
+        "watching_anomaly",
+        "watching_complete",
+        "complete"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True when a human must answer here (the y/nudge terminator): the greenlight brief, an anomaly / budget halt, or the completion brief. False for an already-greenlit re-read, a healthy watch, or a hand-off-to-complete watch.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the terminator.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The campaign this block operated on.",
+      "title": "Campaign Id"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "Code-digested evidence the LLM drafts a proposal over (§2). Shape varies per block; never interpreted raw by the LLM.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The DETERMINISTICALLY-computed next block — ``{verb, why, spec_hint}`` — or null at a terminal / human-branch terminator (design §2, the ``_next_step_hint`` pattern generalized). ``verb`` names the next block's CLI verb; ``spec_hint`` carries the minimal next-spec skeleton (campaign_id). Surfaced, greenlit, journaled, and enforced — never free-prose.",
+      "title": "Next Block"
+    }
+  }
+}

@@ -1,20 +1,53 @@
 ---
 name: hpc-campaign
-description: "Drive one tick of a closed-loop campaign — the per-iteration submit-flow → monitor-flow → aggregate-flow loop whose tasks.py adapts to prior results. Composes hpc-submit / hpc-status / hpc-aggregate for the per-phase mechanics; interprets validate-campaign findings; accumulates ambiguities into a single envelope."
-allowed-tools: Bash Read Skill Agent
+description: "Start the campaign blocks (`campaign-greenlight`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names. A campaign spec is greenlit ONCE at start; execution then runs fully asynchronously (reconcile ticks self-chain in code) with no per-iteration human boundary — only anomaly briefs and the completion brief. The skill never resolves a decision and never interprets raw results."
+allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[campaign](../../../../docs/primitives/campaign-advance.md) workflow**. Drives one tick — submits a new iteration, monitors it, aggregates, decides whether to advance or stop. Composes the per-phase workflow skills.
+Start the campaign workflow by invoking the **`campaign-greenlight`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md), [§4](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb`.
 
-## Execution style
+A campaign is **not** a linear per-run chain. Its spec — goal, budget, strategy, stop criteria, anomaly policy, async-refill — is **greenlit once at start** and is the complete contract; execution then runs **fully asynchronously against the spec** (reconcile ticks self-chain in code while healthy; the strategy picks batches deterministically) with **no per-iteration human boundary** (design §4). So there are exactly three campaign blocks (`meta/campaign/blocks.py`), one per §4 touchpoint: `campaign-greenlight` (start), `campaign-watch` (a read-only health/anomaly digest of the async execution — it observes, it never runs a tick), and `campaign-complete` (the completion brief). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, campaign_id?}`.
 
-- **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
-- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Each separate Bash tool call costs a round-trip + permission prompt; chaining unconditionally-sequential dependent invocations into one block saves both at no cost. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The framework's dispatched `hpc-worker` subagent blocks `&&` by a `PreToolUse` hook — one verb per envelope is its decision-boundary contract — but that block applies only to the spawned worker, NOT to this orchestrator skill.)
-- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
-- **Read sub-skill returns from the file primitive, not from the Skill tool result.** The composed workflow skills (`hpc-status`, `hpc-aggregate`) emit their return envelope to `<experiment_dir>/.hpc/_returns/<skill>.json` and intentionally do NOT write a closing chat message — that would fire an end-of-turn signal and stall this skill mid-tick. After every `Skill(<sub>)` tool call returns, the FIRST follow-up action MUST be `hpc-agent fetch-skill-return --skill <sub> --experiment-dir <experiment_dir>` — that verb reads, re-validates, and prints the sub-skill's envelope (and deletes it). Parse the JSON the verb emits to stdout; that's the sub-skill's return value. If `fetch-skill-return` returns `precondition_failed` with `failure_features.error_class_raw == "skill_return_missing"`, the sub-skill never emitted — re-invoke it or surface the missing-envelope error to the caller. (`hpc-submit` does not currently emit a return file — read its result from the Skill tool result as today; that path is unchanged.)
-- **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns (`python -c`, `bash -c`, command substitution, pipes) **regardless of `allow` rules** — issuing one stalls the workflow on a non-bypassable prompt. To read a JSON file (sidecar, `runs/<id>.json`, `axes.yaml`, anything under `.hpc/` or `_campaigns/`): use the `Read` tool. To search filenames: `Glob`. To grep contents: `Grep`. If you need a value computed from cluster or framework state, there is almost always a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `inspect-runs`, `validate-campaign`) — call that. The ONLY Bash this skill should issue is the `hpc-agent` calls listed in the Steps below (plus `git` if you commit a scaffolded file).
+The slash `/campaign-hpc` is the human-interview wrapper (path picking, slug, spec authoring); an external autonomous agent invokes this skill directly.
+
+## Invocation surface
+
+- **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
+- **MCP-first (preferred):** the typed `campaign-greenlight` / `campaign-watch` / `campaign-complete` tools from `hpc-agent mcp-serve`.
+- **CLI fallback:** one call per block, spec written to a file with the `Write` tool:
+  ```bash
+  hpc-agent campaign-greenlight --spec <path> --experiment-dir <dir>
+  ```
+  Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those).
+
+## The block loop
+
+1. **Greenlight (once).** Invoke `campaign-greenlight`. An un-greenlit manifest returns `needs_greenlight` with the digested spec brief. Relay it; collect the human's `y` or nudge. On a nudge, the human edits the spec (or you re-draft) and re-invoke `campaign-greenlight` for a fresh digest. On `y`, re-invoke `campaign-greenlight` with `confirm: true` — that path stamps the greenlight marker **and journals the human's decision itself** (the block composes `append-decision`); it hands back `next_block: campaign-watch`.
+2. **Watch (async surface).** Invoke `campaign-watch` — a pure read that digests the running campaign. `watching_healthy` (`continue` / `wait_in_flight` / `refill`) is **no boundary**: ticks self-chain, surface the health digest and let the human walk away. `watching_anomaly` (a §5 loud-fail guard tripped, or a budget halt) carries `needs_decision: true` and an `anomaly_brief` — surface it for a `y`/nudge and journal the answer. `watching_complete` (a stop criterion fired) hands off with `next_block: campaign-complete`.
+3. **Complete.** Invoke `campaign-complete` — the completion brief: spend vs budget, iterations, stop reason, a code-extracted per-iteration outcome table, and an empty `proposed_interpretations` slot. Relay it; the human chooses the interpretation. Journal the exchange.
+
+**Journal each human touchpoint** the skill surfaces (the anomaly and completion briefs; the greenlight block journals its own `confirm`):
+```bash
+hpc-agent append-decision --spec <path> --experiment-dir <dir>
+```
+`scope_kind: "campaign"`, `scope_id: <campaign_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text.
+
+## Never-stall
+
+Campaign execution is asynchronous by design — after the greenlight there is **no** per-iteration wait. `campaign-watch` is a cheap read; poll it on a schedule (`/loop <interval> /campaign-hpc`, or a cron-scheduled tick) rather than blocking. Anomaly and completion briefs arrive as notifications from the async driver.
+
+## Strategy authoring (path B — before greenlight)
+
+A closed-loop campaign's `.hpc/tasks.py` **is** the strategy. Scaffold it with `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir <experiment_dir>` — never hand-roll a controller, and never `Read` the framework's `optuna_strategy.py` / `pbt_strategy.py` from site-packages to learn the contract. The load-bearing invariants the template already wires (you customize only the search space):
+
+- **ask/tell run ONLY on the orchestrator; compute nodes call ONLY `resolve(task_id)`.** The optimizer import is local to `_propose`; proposals are indexed by completed count (load-idempotent).
+- **`trial_token` is the reconciliation key** — stripped from `cmd_sha` (never busts dedup) but exported as `$HPC_KW_TRIAL_TOKEN` and re-paired with results; opaque bytes the framework never interprets.
+- **`_optuna_trial_number` (or equivalent unique marker) is mandatory on path B** — without it repeat params collide on `cmd_sha`, the second iteration dedupes, and the campaign silently collapses. `campaign-greenlight`'s validation surfaces `missing_stochastic_marker` as a hard gate.
+- **Custom reduce is an `aggregate_cmd` on the sidecar, run cluster-side** (env-var I/O; pulls back one JSON).
+
+See [campaign-lifecycle.md](../../../../docs/internals/campaign-lifecycle.md) and [campaign-seam.md](../../../../docs/design/campaign-seam.md).
 
 ## Inputs
 
@@ -22,122 +55,10 @@ Agent-facing decision layer over the **[campaign](../../../../docs/primitives/ca
 |---|---|
 | `experiment_dir` | Required |
 | `campaign_id` | Required |
-| `path` | Caller (default `"A"` for manual grid; `"B"` for strategy-driven) |
-| `allow_warnings` | Caller (default `true` — proceed past validate-campaign warnings; `false` blocks on warnings too) |
-
-## The resolution contract
-
-Same shape: walk every step, accumulate ambiguities, return all in one envelope OR proceed.
-
-## Steps
-
-### 1. Load context
-
-```bash
-hpc-agent load-context --experiment-dir <experiment_dir>
-```
-
-If `data.campaigns[campaign_id]` doesn't exist → return `spec_invalid: unknown_campaign` with the list of known campaigns.
-
-### 2. Determine the next step
-
-Read the campaign driver's proposed next step from on-disk state (the driver advances exactly one step per tick).
-
-| Step | Skill behaviour |
-|---|---|
-| `submit` | Steps 3-4: validate, then compose hpc-submit. |
-| `monitor` | Compose `hpc-status` with the campaign's latest in-flight run_id. After `Skill(hpc-status)` returns, read its envelope via `hpc-agent fetch-skill-return --skill hpc-status --experiment-dir <experiment_dir>` — parse `run_id` / `lifecycle_state` / `next_step_hint` / `failed_task_ids?` / `resubmit_run_id?` from stdout. |
-| `aggregate` | Compose `hpc-aggregate` with the campaign's latest terminal run_id. After `Skill(hpc-aggregate)` returns, read its envelope via `hpc-agent fetch-skill-return --skill hpc-aggregate --experiment-dir <experiment_dir>` — parse `run_id` / `profile` / `stage` / `metrics_path?` / `allow_partial` from stdout. |
-| `decide` | A judgement-call step — add to ambiguities (caller resolves). |
-
-### 3. Validate the next iteration
-
-Before any `submit`, run `validate-campaign`:
-
-```bash
-hpc-agent validate-campaign --spec spec.json --experiment-dir <dir>
-```
-
-Interpret findings (deterministic):
-
-| Severity | Behaviour |
-|---|---|
-| `error` | Return `spec_invalid: validate_campaign_failed` with the findings list. Block. |
-| `warning` | If `allow_warnings: true`, proceed and record in decisions. Else add to ambiguities (let the caller decide). |
-| `info` | Always proceed; record in decisions. |
-
-Path B addendum: missing `_optuna_trial_number` (or equivalent unique marker) trips `missing_stochastic_marker` as an `error` — block.
-
-### 4. Compose hpc-submit for the iteration
-
-Invoke `hpc-submit` via the Skill tool with the campaign-tagged spec:
-
-```json
-{
-  "experiment_dir": "<dir>",
-  "campaign_id": "<id>"
-}
-```
-
-The submit skill returns either its own ambiguities (propagate them as `entry_point`, `data_axis`, etc. ambiguities up to this skill's list — preserving the depends_on relationships) or the final run_id.
-
-### 5. Record the iteration
-
-```bash
-hpc-agent campaign advance --campaign-id <id> --run-id <new-run-id> --experiment-dir <dir>
-```
-
-### 6. Handle `decide` steps
-
-The driver may surface decision points (budget gates, convergence gates, early-stop). Each comes with the driver's heuristic `default_decision`. Add to ambiguities:
-
-```json
-{
-  "field": "decide_response",
-  "candidates": ["continue", "stop", "increase_budget"],
-  "depends_on": [],
-  "safe_default": "<driver's default_decision>",
-  "context": {"question": "...", "evidence": {...}}
-}
-```
-
-If the driver supplies no default → return `spec_invalid: decide_required` (campaign config oversight; this skill shouldn't guess).
-
-### 7. Return ambiguities or final envelope
-
-If ambiguities accumulated, return `needs_resolution`. Else return the tick's result:
-
-```json
-{
-  "ok": true,
-  "data": {
-    "step": "submit" | "monitor" | "aggregate" | "decide",
-    "run_id": "...",
-    "lifecycle_state": "...",
-    "cursor_position": N,
-    "next_step_hint": "..."
-  }
-}
-```
-
-## Strategy authoring contract
-
-A closed-loop (path `"B"`) campaign's `.hpc/tasks.py` **is** the strategy. Get it by running `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir <experiment_dir>` (see [scaffold-strategy](../../../../docs/primitives/scaffold-strategy.md)) — never hand-roll an `sbatch` controller, and **never `Read` the framework's `optuna_strategy.py` / `pbt_strategy.py` from site-packages to learn the contract.** It is stated here, load-bearing. The scaffolded template already wires every invariant below; you customize **only the search space**.
-
-1. **ask/tell run ONLY on the orchestrator; compute nodes call ONLY `resolve(task_id)`.** The orchestrator's `_propose` does `study.tell(finished)` → `study.ask()` → persist strategy state (Optuna SQLite under `.hpc/campaigns/<cid>/`). The optimizer import is **local to `_propose`** so a compute node never imports it; the compute node reads the already-decided proposal file and never `ask`s. Indexing proposals by *completed count* (not by counting on-disk artifacts) keeps `_propose` load-idempotent — `validate-campaign`, `dry-run-local`, and `compute_cmd_sha` all import the module and would otherwise mint a phantom trial per load.
-
-2. **`.hpc/tasks.py` IS the strategy; `trial_token` is the reconciliation key.** Whatever `resolve(i)` returns reaches the executor as `HPC_KW_*` env vars (e.g. `{"lr": 1e-3}` → `$HPC_KW_LR`). The one reserved key is `trial_token`: it is **stripped from `cmd_sha`** (parameter identity, so it never busts dedup) but **still exported** as `$HPC_KW_TRIAL_TOKEN`, round-tripped to the run sidecar, and re-paired with that iteration's results. It is the out-of-order `tell` key — opaque bytes the framework never interprets (`trial.number` for Optuna; `[generation, member]` for PBT).
-
-3. **Custom reduce is an `aggregate_cmd` on the sidecar, run cluster-side.** When the fold needs experiment-specific logic, set an `aggregate_cmd` (env-var I/O: it reads `$HPC_RUN_ID`, writes its one JSON to `$HPC_AGGREGATED_OUTPUT`). It runs on the cluster and pulls back **one** JSON — the per-trial-metrics fold — so there is no N-task rsync back to the orchestrator.
-
-4. **Batch case (B trials per iteration): the strategy owns ask/tell internally.** `total()` returns B (e.g. PBT's `_POP` members per generation); the strategy reads the prior batch's results, `tell`s all B, then `ask`s the next B. The per-iteration reduce must therefore emit **per-trial metrics keyed by `trial_token`**, NOT one scalar — that is what lets the next `_propose` reconcile each trial.
-
-5. **The campaign loop is synchronous-batched BY DESIGN.** Per [campaign-lifecycle.md](../../../../docs/internals/campaign-lifecycle.md) (TL;DR): the driver advances **exactly one step per invocation**, reconstructs all state from `.hpc/` each tick, and survives crashes (memory-stateless tick model). The default is synchronous-batched; concurrency **within a batch** comes from `decide-concurrency`, not from the strategy. Continuous-async refill (keep the cluster full by submitting new trials as others finish) is a **separate, deferred feature tracked in issue #362** — do NOT implement async here.
+| `path` | Caller (`"A"` manual grid; `"B"` strategy-driven) |
 
 ## Notes
 
-- **One tick per invocation.** The skill does NOT loop. The caller (slash, cron, or MARs experiment-runner) drives ticks.
-- **Composes workflow skills.** `hpc-submit`, `hpc-status`, `hpc-aggregate` are invoked per phase. Their ambiguities propagate up — the campaign skill's `needs_resolution` envelope may include ambiguities from any composed skill, plus its own (decide-response, allow-warnings).
-- **Path B `_optuna_trial_number` is load-bearing.** Without a unique marker per iteration, `cmd_sha` collides → submit-flow dedupes → campaign silently collapses. `validate-campaign`'s `missing_stochastic_marker` is the hard gate.
-- **Warm-start is yours, not the framework's.** Each iteration's resolved params persist on the sidecar as `trial_params` (the `cmd_sha` pre-image) and re-surface via `prior_records()` paired with `metrics`. Seeding a fresh study from a prior corpus (`study.add_trial(...)`) is a ~10-line strategy bolt-on you own — the framework hands back bytes but cannot judge relevance (structural compatibility ≠ transferability). See [campaign-seam.md](../../../../docs/design/campaign-seam.md#trial_params--opaque-params-provenance-and-the-warm-start-hook).
-- **No `[Y/n]`. No mode flag.**
+- **The skill never resolves a decision and never interprets raw results.** Code digests the campaign's durable state (manifest, sidecars, budget join, stop reason) into each brief; the human decides the greenlight, any anomaly, and the final interpretation.
+- **Greenlit once, then asynchronous.** There is no per-iteration human loop by design; async-refill correctness (drain-before-stop, budget headroom) is the driver's job, not a decision the skill relays.
+- **Every `y`/nudge is journaled** under the campaign scope (append-only, one record per exchange) — the greenlight decision, the anomaly acknowledgements, and the completion interpretation.

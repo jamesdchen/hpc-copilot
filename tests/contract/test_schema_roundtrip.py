@@ -60,6 +60,24 @@ pytestmark = pytest.mark.contract
 # need every collection to match.
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
+        # Human-amplification block verbs + kill/doctor/decision verbs that
+        # gained a ``--spec`` surface (2026-07). Added to track the live CLI.
+        "aggregate-check",
+        "aggregate-run",
+        "append-decision",
+        "campaign-complete",
+        "campaign-greenlight",
+        "campaign-watch",
+        "doctor",
+        "kill",
+        "read-decisions",
+        "status-snapshot",
+        "status-watch",
+        "submit-s1",
+        "submit-s2",
+        "submit-s3",
+        "submit-s4",
+        "submit-speculate",
         "aggregate-flow",
         "build-submit-spec",
         "build-tasks-py",
@@ -166,6 +184,7 @@ XFAIL_NEEDS_FIXTURE: set[str] = {
     "submit-flow",
     "submit",
     "submit-and-verify",
+    "submit-speculate",
     "submit-flow-batch",
     "monitor-flow",
     "aggregate-flow",

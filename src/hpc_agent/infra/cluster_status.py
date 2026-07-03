@@ -62,6 +62,35 @@ def _reporter_error_from_stdout(stdout: str) -> str | None:
     return f"{code}: {detail}" if detail else (str(code) if code else None)
 
 
+# Sentinel that separates the reporter's JSON stdout from the piggy-backed
+# watcher-ALARM trailer (see ``watcher_run_dir`` below). Chosen so it can never
+# collide with the reporter's JSON body.
+_WATCHER_ALARM_SENTINEL = "<<<HPC_WATCHER_ALARM>>>"
+
+
+def _wrap_with_watcher_probe(base_cmd: str, watcher_run_dir: str) -> str:
+    """Fold the hybrid-monitor client half into the reporter command (zero round-trip).
+
+    Design §5: on every status read the laptop client (a) stamps a
+    ``.hpc_last_read`` marker cluster-side so the watcher can tell the client is
+    alive, and (b) surfaces the watcher's ``.hpc_watcher_ALARM`` if one exists.
+    Both ride the SAME ssh call as the reporter — no extra round-trip.
+
+    The reporter's exit code is preserved (``exit $__hpc_rc``) so the trailing
+    ``touch`` / ``cat`` (a missing ALARM ``cat`` exits non-zero) cannot flip a
+    healthy report into a spurious failure. The ALARM contents follow a sentinel
+    line so :func:`ssh_status_report` can split them off before JSON parsing.
+    """
+    d = shlex.quote(watcher_run_dir.rstrip("/"))
+    return (
+        f"{base_cmd}; __hpc_rc=$?; "
+        f"touch {d}/.hpc_last_read 2>/dev/null; "
+        f"printf '\\n%s\\n' {shlex.quote(_WATCHER_ALARM_SENTINEL)}; "
+        f"cat {d}/.hpc_watcher_ALARM 2>/dev/null; "
+        f"exit $__hpc_rc"
+    )
+
+
 def ssh_status_report(
     *,
     ssh_target: str,
@@ -73,6 +102,7 @@ def ssh_status_report(
     file_glob: str = "*",
     min_rows: int = 0,
     remote_activation: str = "",
+    watcher_run_dir: str | None = None,
 ) -> dict:
     """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
 
@@ -86,6 +116,14 @@ def ssh_status_report(
     than ``min_rows`` data rows beyond the header is demoted
     ``complete`` → ``failed``. The default ``0`` accepts header-only
     CSVs (legitimately-empty results).
+
+    ``watcher_run_dir`` (design §5 hybrid monitor) opts the caller into the
+    client half of the cluster-side watcher: when set, the SAME ssh call also
+    stamps ``<dir>/.hpc_last_read`` (the client-alive marker the watcher checks)
+    and reads back ``<dir>/.hpc_watcher_ALARM`` if present — surfaced in the
+    returned dict under ``watcher_alarm`` (``None`` when absent). Zero extra
+    round-trip; callers that leave it ``None`` get the byte-identical command
+    and no ``watcher_alarm`` key.
     """
     job_ids_csv = ",".join(job_ids)
     cmd = (
@@ -99,18 +137,31 @@ def ssh_status_report(
         f"--file-glob {shlex.quote(file_glob)} "
         f"--min-rows {shlex.quote(str(int(min_rows)))}"
     )
+    if watcher_run_dir is not None:
+        cmd = _wrap_with_watcher_probe(cmd, watcher_run_dir)
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
+    # Split the watcher-ALARM trailer off before touching the JSON (only present
+    # when ``watcher_run_dir`` was set; the sentinel can't occur in reporter JSON).
+    json_stdout = proc.stdout
+    watcher_alarm: str | None = None
+    if watcher_run_dir is not None and _WATCHER_ALARM_SENTINEL in (proc.stdout or ""):
+        head, _, tail = proc.stdout.partition(f"\n{_WATCHER_ALARM_SENTINEL}\n")
+        json_stdout = head
+        watcher_alarm = tail.strip() or None
     if proc.returncode != 0:
         # Prefer the reporter's own structured error (on stdout) over the stderr
         # noise (Lmod reload notices) that otherwise masks the real cause.
-        structured = _reporter_error_from_stdout(proc.stdout)
+        structured = _reporter_error_from_stdout(json_stdout)
         stderr = proc.stderr.strip()[:200]
         if structured and stderr:
             detail = f"{structured} [stderr: {stderr}]"
         else:
             detail = structured or stderr or "(no output)"
         raise RemoteCommandFailed(f"status reporter failed (rc={proc.returncode}): {detail}")
-    return parse_remote_json(proc.stdout, source_label="status reporter")
+    report = parse_remote_json(json_stdout, source_label="status reporter")
+    if watcher_run_dir is not None:
+        report["watcher_alarm"] = watcher_alarm
+    return report
 
 
 def ssh_batch_scheduler_states(

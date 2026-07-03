@@ -1,0 +1,228 @@
+"""Guaranteed terminal-harvest guard (design §5, "Guaranteed harvest").
+
+Every terminal path of the monitor — completion, failure, timeout /
+cap-overrun, abandoned, partial-kill — AND any abnormal exit from the
+poll loop (an unhandled exception, a dead chat session) must end in a
+best-effort code-harvest of whatever exists: the metrics envelope plus a
+per-wave error sweep. *No path ends in silence.*
+
+:func:`harvest_on_terminal` is that guarantee. It is:
+
+* **best-effort** — every step is guarded independently. A cluster that
+  is unreachable, a run with nothing combined yet, a corrupt sidecar all
+  degrade to a *recorded* non-fatal outcome, never a raise.
+* **loud** — success OR failure, it appends a durable marker line to
+  ``<run_id>.harvest.jsonl`` under the journal run dir, and logs a
+  warning on any partial failure. A silent swallow is a bug
+  (``docs/internals/engineering-principles.md`` — a primitive fails
+  loudly); a harvest that could not run records *why*, it does not
+  vanish.
+* **cause-preserving** — it NEVER raises and NEVER masks the terminal
+  cause that led here. It is designed to be called from a ``finally``
+  while an exception is in flight, so it must let that exception
+  propagate untouched: it does not swallow ``KeyboardInterrupt`` /
+  ``SystemExit`` (only operational ``Exception`` s from the harvest
+  itself), and it returns rather than re-raising.
+
+The metrics harvest deliberately invokes the SAME aggregate entry the
+driver routes to downstream (``aggregate-flow``), so a driver that stops
+after the terminal tick — the crash / session-death gap (§5 gap (d)) —
+still produces a metrics + error envelope inline. It runs with
+``ensure_all_combined=False``: harvest whatever already exists without
+forcing a fresh cluster combine (idempotent, cheap) and without the
+terminal-status precondition gate, so an abnormal mid-flight exit still
+harvests partial data.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.run_record import runs_dir
+
+__all__ = ["TERMINAL_CAUSES", "harvest_marker_path", "harvest_on_terminal"]
+
+_log = logging.getLogger(__name__)
+
+#: The named terminal causes the design enumerates (§5). Free-form causes
+#: are still accepted — the guard never rejects a caller — but these are the
+#: vocabulary a reader should expect, and ``"abnormal-exit"`` is the sentinel
+#: the poll-loop ``finally`` uses when no clean terminal branch was reached.
+TERMINAL_CAUSES = frozenset(
+    {
+        "complete",
+        "failed",
+        "timeout",
+        "cap-overrun",
+        "abandoned",
+        "partial-kill",
+        "abnormal-exit",
+    }
+)
+
+
+def harvest_marker_path(experiment_dir: Path, run_id: str) -> Path:
+    """Durable per-run harvest ledger (``<run_id>.harvest.jsonl``).
+
+    Lives beside the ``<run_id>.monitor.jsonl`` tick log under the journal
+    run dir. Append-only: one JSON line per harvest attempt, so re-arming a
+    run (idempotent by design) accretes evidence rather than clobbering it.
+    """
+    return runs_dir(experiment_dir) / f"{run_id}.harvest.jsonl"
+
+
+def harvest_on_terminal(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    terminal_cause: str,
+    record: Any | None = None,
+    _aggregate: Callable[[Path, str], Any] | None = None,
+    _sweep: Callable[[str], dict[int, list[str]]] | None = None,
+) -> dict[str, Any]:
+    """Best-effort, loud, guaranteed code-harvest at any terminal path.
+
+    Given a run that reached ANY terminal condition (``terminal_cause`` one
+    of :data:`TERMINAL_CAUSES`) or an abnormal loop exit
+    (``terminal_cause="abnormal-exit"``), attempt in order, each step
+    independently guarded:
+
+    (a) the metrics harvest (invoke ``aggregate-flow``),
+    (b) an error sweep (the combiner's per-wave read-error ledger),
+    (c) a durable, loud marker recording what was harvested.
+
+    Returns the marker dict (also written to disk). NEVER raises and NEVER
+    masks the terminal cause. ``_aggregate`` / ``_sweep`` are injected seams
+    for tests; production callers leave them at the defaults.
+    """
+    marker: dict[str, Any] = {
+        "harvested_at": utcnow_iso(),
+        "run_id": run_id,
+        "terminal_cause": terminal_cause,
+        "metrics_harvested": False,
+        "metrics_error": None,
+        "aggregated_metric_keys": [],
+        "escalation_reason": None,
+        "error_sweep_ran": False,
+        "error_sweep_error": None,
+        "waves_with_errors": {},
+        "harvest_ok": False,
+    }
+    combiner_dir: str | None = None
+
+    # (a) Metrics harvest — the same aggregate entry the driver routes to,
+    #     so a crash / session-death after the terminal tick still yields a
+    #     metrics envelope. Operational failures (SSH down, nothing to
+    #     combine, corrupt sidecar) are recorded LOUDLY, never swallowed.
+    #     KeyboardInterrupt / SystemExit are NOT caught — a user force-quit
+    #     mid-harvest must still propagate.
+    aggregate = _aggregate if _aggregate is not None else _default_aggregate
+    try:
+        result = aggregate(experiment_dir, run_id)
+        marker["metrics_harvested"] = True
+        agg_metrics = getattr(result, "aggregated_metrics", None) or {}
+        marker["aggregated_metric_keys"] = sorted(str(k) for k in agg_metrics)
+        marker["escalation_reason"] = getattr(result, "escalation_reason", None)
+        cdl = getattr(result, "combiner_dir_local", None)
+        combiner_dir = str(cdl) if cdl else None
+    except Exception as exc:  # noqa: BLE001 — safety net must record, not mask
+        marker["metrics_error"] = f"{type(exc).__name__}: {exc}"
+        _log.warning(
+            "terminal harvest: metrics harvest failed for run %s (cause=%s): %s",
+            run_id,
+            terminal_cause,
+            marker["metrics_error"],
+        )
+
+    # (b) Error sweep — the per-wave read-error ledger the combiner recorded.
+    #     Falls back to the default aggregate output dir when the metrics
+    #     harvest could not report a combiner dir, so partial artifacts that
+    #     already landed locally are still swept.
+    sweep = _sweep if _sweep is not None else _default_sweep
+    sweep_dir = combiner_dir or str(experiment_dir / "_aggregated" / run_id / "_combiner")
+    try:
+        errs = sweep(sweep_dir)
+        marker["error_sweep_ran"] = True
+        marker["waves_with_errors"] = {str(w): [str(e) for e in v] for w, v in (errs or {}).items()}
+    except Exception as exc:  # noqa: BLE001 — safety net must record, not mask
+        marker["error_sweep_error"] = f"{type(exc).__name__}: {exc}"
+        _log.warning(
+            "terminal harvest: error sweep failed for run %s (dir=%s): %s",
+            run_id,
+            sweep_dir,
+            marker["error_sweep_error"],
+        )
+
+    marker["harvest_ok"] = marker["metrics_error"] is None and marker["error_sweep_error"] is None
+
+    # (c) Durable, loud marker — no terminal path is silent.
+    _write_marker(experiment_dir, run_id, marker)
+    if not marker["harvest_ok"]:
+        _log.warning(
+            "terminal harvest for run %s (cause=%s) completed with errors: %s",
+            run_id,
+            terminal_cause,
+            marker,
+        )
+    return marker
+
+
+def _default_aggregate(experiment_dir: Path, run_id: str) -> Any:
+    """Invoke the real ``aggregate-flow`` harvest (metrics + escalation sweep).
+
+    Imported lazily so importing this guard (and thus the monitor hot path)
+    does not drag in the aggregate stack's heavy transitive imports.
+    ``ensure_all_combined=False`` → harvest whatever already combined,
+    bypassing the terminal-status precondition gate and the pre-pull combine.
+    """
+    from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
+
+    # Import the top-level ``aggregate-flow`` COMPOSITE via the package alias
+    # form (``from hpc_agent.ops import <module>``). This guard lives in the
+    # ``monitor`` subject; the direct ``from hpc_agent.ops.aggregate_flow
+    # import ...`` form trips the subject-import lint, which cannot tell a
+    # top-level ops composite from a sibling-subject directory. The alias form
+    # is the sanctioned spelling for a subject file reaching a top-level ops
+    # module (see ``scripts/lint_subject_imports.py`` — alias-derived names are
+    # checked against real subject dirs, and ``aggregate_flow`` is a module,
+    # not a subject). aggregate-flow is a composite, not a monitor internal.
+    from hpc_agent.ops import aggregate_flow as aggregate_flow_module
+
+    return aggregate_flow_module.aggregate_flow(
+        experiment_dir,
+        spec=AggregateFlowSpec(run_id=run_id, ensure_all_combined=False),
+    )
+
+
+def _default_sweep(combiner_dir: str) -> dict[int, list[str]]:
+    """Map wave → per-task read errors the combiner recorded (missing dir → {})."""
+    from hpc_agent.execution.mapreduce.reduce.metrics import collect_wave_errors
+
+    return collect_wave_errors(combiner_dir)
+
+
+def _write_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
+    """Append one JSON line to the durable harvest ledger (best-effort, loud).
+
+    Even the marker write is guarded: if it cannot be recorded we log
+    LOUDLY rather than let the guard raise into a caller's ``finally`` and
+    mask the terminal cause.
+    """
+    try:
+        path = harvest_marker_path(experiment_dir, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(marker, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001 — last-resort: log, never raise
+        with contextlib.suppress(Exception):
+            _log.warning(
+                "terminal harvest: could not write harvest marker for run %s: %s",
+                run_id,
+                exc,
+            )

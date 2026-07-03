@@ -38,6 +38,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 __all__ = [
@@ -46,6 +47,8 @@ __all__ = [
     "detached_drive_supported",
     "build_status_pipeline_spec",
     "launch_status_pipeline_detached",
+    "SUPPORTED_DETACHED_BLOCK_VERBS",
+    "launch_submit_block_detached",
 ]
 
 # Workflows the detached deterministic runner can drive today. ``status`` is the
@@ -53,6 +56,19 @@ __all__ = [
 # ``aggregate`` are deferred (see the module docstring / design doc): they keep
 # the default worker.
 _SUPPORTED = frozenset({"status"})
+
+# The human-amplification block verbs whose wall-clock is scheduler-bound and so
+# detach-by-contract (docs/design/human-amplification-blocks.md §3, "Blocks never
+# block the chat"): the S2 canary-wait, the S3 main-array watch, and the
+# speculative canary. Each is spawned as a DETACHED ``hpc-agent <verb>``
+# subprocess running the SAME verb body with its ``detach`` spec field flipped
+# OFF, so the child owns the SSH poll to terminal (stamping the journal as it
+# goes — monitor-flow refreshes ``last_status`` and stamps ``next_tick_due`` each
+# tick, so the §5 doctor/watchdog covers a dead child via a lapsed deadline) while
+# the parent returns immediately with a handle envelope. NO ``claude -p`` worker,
+# no LLM in the poll loop — the same deterministic-drive principle as the status
+# path above, carried to the submit blocks.
+SUPPORTED_DETACHED_BLOCK_VERBS = frozenset({"submit-s2", "submit-s3", "submit-speculate"})
 
 
 class DriveModeError(ValueError):
@@ -193,10 +209,20 @@ def launch_status_pipeline_detached(
         "--experiment-dir",
         experiment_dir,
     ]
-    # Detached: no stdin (DEVNULL so a poll can never block on a tty), and
-    # stdout/stderr captured to a log so the composite's envelope + diagnostics
-    # survive without the orchestrator reading them live. The orchestrator
-    # learns the outcome from the JOURNAL, not this pipe.
+    return _spawn_detached(run_id=run_id, argv=argv, log_path=log_path, cwd=experiment_dir)
+
+
+def _spawn_detached(*, run_id: str, argv: list[str], log_path: Path, cwd: str) -> DetachedLaunch:
+    """``Popen`` *argv* fully detached, capturing stdout/stderr to *log_path*.
+
+    The one place the platform-detach + log-capture is done, shared by the
+    status-pipeline path and the submit-block path so they can never drift on
+    the detach flags (the child must OUTLIVE the orchestrator's session — the
+    exact 0.10.63 failure) or the tty-safe stdin. Detached: no stdin (DEVNULL so
+    a poll can never block on a tty), stdout/stderr captured to a log so the
+    child's envelope + diagnostics survive without the orchestrator reading them
+    live. The orchestrator learns the outcome from the JOURNAL, not this pipe.
+    """
     log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
     try:
         proc = subprocess.Popen(
@@ -204,7 +230,7 @@ def launch_status_pipeline_detached(
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            cwd=experiment_dir,
+            cwd=cwd,
             env={**os.environ},
             **_detach_popen_kwargs(),
         )
@@ -219,3 +245,82 @@ def launch_status_pipeline_detached(
         log_path=str(log_path.resolve()),
         argv=argv,
     )
+
+
+def _block_spec_run_id(spec: dict[str, Any]) -> str:
+    """Dig the run_id out of a submit-block spec dict (for the detach handle).
+
+    S2 / S3 / speculate all embed the submit-and-verify spec under
+    ``submit.submit`` with the ``run_id`` on the inner submit-flow spec. The
+    run_id is what the parent hands back as the journal-poll key, so it must be
+    present before the detach. Raises :class:`DriveModeError` when it can't be
+    found — a detached block that can't name its run can't be polled.
+    """
+    submit = spec.get("submit")
+    inner = submit.get("submit") if isinstance(submit, dict) else None
+    run_id = inner.get("run_id") if isinstance(inner, dict) else None
+    if not isinstance(run_id, str) or not run_id:
+        raise DriveModeError(
+            "detached submit-block drive requires a string run_id at "
+            f"spec.submit.submit.run_id; got {run_id!r}. The detached worker polls "
+            "the journal by run_id, so it must be resolved before the detach."
+        )
+    return run_id
+
+
+def launch_submit_block_detached(
+    *,
+    verb: str,
+    experiment_dir: str,
+    spec: dict[str, Any],
+    hpc_agent_bin: str | None = None,
+) -> DetachedLaunch:
+    """Launch a submit block (``submit-s2`` / ``submit-s3`` / ``submit-speculate``)
+    as a DETACHED ``hpc-agent <verb>`` subprocess (design §3, detach-by-contract).
+
+    The parent verb has ALREADY run its synchronous gate + drift guards (the
+    ordering the caller enforces: gate → drift → detach) and forced ``detach``
+    OFF in *spec*, so the spawned child runs the SAME verb body synchronously —
+    owning the SSH poll to terminal and stamping the journal as it goes — while
+    the parent returns the :class:`DetachedLaunch` handle immediately. NO
+    ``claude -p`` worker is spawned anywhere on this path; the child is the same
+    deterministic composite the synchronous path runs, just in its own detached
+    process (survives session death, unlike harness backgrounding).
+
+    *verb* must be one of :data:`SUPPORTED_DETACHED_BLOCK_VERBS`. The spec is
+    written to the journal home's ``_detached/`` dir (always present/writable,
+    never pollutes the experiment tree) and the child reads it back with
+    ``--spec``. Raises :class:`DriveModeError` for an unsupported verb, a spec
+    that still has ``detach`` truthy (a guard against detaching a child that would
+    itself re-detach into an infinite fork), or a missing run_id.
+    """
+    from hpc_agent.state.run_record import _current_homedir
+
+    if verb not in SUPPORTED_DETACHED_BLOCK_VERBS:
+        raise DriveModeError(
+            f"detached block drive is only supported for {sorted(SUPPORTED_DETACHED_BLOCK_VERBS)}; "
+            f"got {verb!r}."
+        )
+    if spec.get("detach"):
+        raise DriveModeError(
+            "the spec handed to launch_submit_block_detached must have detach=False "
+            "(the child runs synchronously); a truthy detach would fork forever."
+        )
+    run_id = _block_spec_run_id(spec)
+
+    detached_dir = _current_homedir() / "_detached"
+    detached_dir.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex[:8]
+    spec_path = detached_dir / f"{verb}-{run_id}-{token}.spec.json"
+    log_path = detached_dir / f"{verb}-{run_id}-{token}.log"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    argv = [
+        hpc_agent_bin or "hpc-agent",
+        verb,
+        "--spec",
+        str(spec_path),
+        "--experiment-dir",
+        experiment_dir,
+    ]
+    return _spawn_detached(run_id=run_id, argv=argv, log_path=log_path, cwd=experiment_dir)

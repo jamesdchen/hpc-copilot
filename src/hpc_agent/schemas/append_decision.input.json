@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/append_decision.input.json",
+  "title": "append-decision input spec",
+  "description": "One ``y``/nudge exchange to append to a scope's decision journal.\n\nEverything the design §2 schema persists, minus the two fields the\nprimitive/state layer owns: ``ts`` (auto-stamped UTC ISO-8601) and\n``schema_version`` (a constant). The agent supplies only what it\nresolved at the touchpoint.",
+  "type": "object",
+  "required": [
+    "scope_kind",
+    "scope_id",
+    "block",
+    "response"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope_kind": {
+      "enum": [
+        "run",
+        "campaign"
+      ],
+      "title": "Scope Kind",
+      "type": "string"
+    },
+    "scope_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Scope Id",
+      "type": "string"
+    },
+    "block": {
+      "minLength": 1,
+      "title": "Block",
+      "type": "string"
+    },
+    "evidence_digest": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      ],
+      "default": "",
+      "title": "Evidence Digest"
+    },
+    "proposal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      ],
+      "default": "",
+      "title": "Proposal"
+    },
+    "response": {
+      "minLength": 1,
+      "title": "Response",
+      "type": "string"
+    },
+    "resolved": {
+      "additionalProperties": true,
+      "title": "Resolved",
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    }
+  }
+}

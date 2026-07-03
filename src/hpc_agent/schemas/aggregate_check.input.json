@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_check.input.json",
+  "title": "aggregate-check input spec",
+  "description": "Inputs to ``aggregate-check`` (readiness + integrity).\n\nRuns the aggregate preflight (install ∥ load-context, optional reconcile),\nthe terminal-status readiness gate, and — when a local ``_combiner/`` has\nalready been pulled — the ``verify-aggregation-complete`` integrity gate.\nEvery integrity issue is surfaced in the brief as a NEVER-auto-masked\ndecision point with a conservative ``recommendation``.",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_preflight": {
+      "default": true,
+      "description": "Run aggregate-preflight (install-commands ∥ load-context, optional reconcile) before the gates and fold its overall pass/fail into the brief. Disable for a pure local readiness+integrity check.",
+      "title": "Run Preflight",
+      "type": "boolean"
+    },
+    "reconcile_scheduler": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Forwarded to aggregate-preflight. When supplied AND load-context reports next_step_hint == 'monitor', reconcile the journal-only in-flight run against the cluster before the readiness gate trusts the journal. Omit to skip reconcile.",
+      "title": "Reconcile Scheduler"
+    },
+    "allow_partial": {
+      "default": false,
+      "description": "The operator's stance on a partial aggregate. When False (default), missing waves are a blocking integrity decision (partial usually masks a real cluster failure); when True, the missing-waves issue is still SURFACED (never auto-masked) but its recommendation reflects the operator's explicit choice to proceed. Contamination / provenance / column issues block regardless.",
+      "title": "Allow Partial",
+      "type": "boolean"
+    }
+  }
+}

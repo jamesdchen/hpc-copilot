@@ -344,6 +344,77 @@ def test_cli_detached_refused_for_snapshot_status(_journal, monkeypatch, capsys)
     assert env["error_code"] == "spec_invalid"
 
 
+# ─── submit-block detached launch (design §3 detach-by-contract) ────────────
+
+
+def _block_spec(run_id="ml-blk1", *, detach=False):
+    """A submit-s2-shaped dict spec (submit.submit.run_id is the poll key)."""
+    return {"submit": {"submit": {"run_id": run_id}}, "detach": detach}
+
+
+def test_launch_submit_block_detached_writes_spec_and_detaches(_journal, monkeypatch):
+    from hpc_agent._kernel.lifecycle import detached
+
+    captured = {}
+
+    def _fake_popen(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return _FakePopen(argv, **kwargs)
+
+    monkeypatch.setattr(detached.subprocess, "Popen", _fake_popen)
+
+    launch = detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-blk1", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+
+    assert launch.run_id == "ml-blk1"
+    assert launch.pid == 4242
+    # The child runs the SAME verb (its detach forced off), NOT a claude worker.
+    assert captured["argv"][0] == "hpc-agent-stub"
+    assert captured["argv"][1] == "submit-s2"
+    assert "--spec" in captured["argv"]
+    assert "claude" not in " ".join(captured["argv"])
+    kw = captured["kwargs"]
+    assert ("start_new_session" in kw) or ("creationflags" in kw)
+    assert kw["stdin"] == detached.subprocess.DEVNULL
+    # The written spec has detach=False so the child never re-detaches.
+    spec_idx = captured["argv"].index("--spec") + 1
+    written = json.loads(Path(captured["argv"][spec_idx]).read_text(encoding="utf-8"))
+    assert written["detach"] is False
+
+
+def test_launch_submit_block_refuses_unsupported_verb(_journal):
+    from hpc_agent._kernel.lifecycle.detached import DriveModeError, launch_submit_block_detached
+
+    with pytest.raises(DriveModeError, match="only supported"):
+        launch_submit_block_detached(
+            verb="submit-s1", experiment_dir=str(_journal), spec=_block_spec()
+        )
+
+
+def test_launch_submit_block_refuses_truthy_detach(_journal):
+    """A spec still carrying detach=True would fork forever — refuse it."""
+    from hpc_agent._kernel.lifecycle.detached import DriveModeError, launch_submit_block_detached
+
+    with pytest.raises(DriveModeError, match="detach=False"):
+        launch_submit_block_detached(
+            verb="submit-s2", experiment_dir=str(_journal), spec=_block_spec(detach=True)
+        )
+
+
+def test_launch_submit_block_requires_run_id(_journal):
+    from hpc_agent._kernel.lifecycle.detached import DriveModeError, launch_submit_block_detached
+
+    with pytest.raises(DriveModeError, match="run_id"):
+        launch_submit_block_detached(
+            verb="submit-s2", experiment_dir=str(_journal), spec={"submit": {"submit": {}}}
+        )
+
+
 def test_cli_default_still_spawns_worker(_journal, monkeypatch, capsys):
     """No flag, no env → the default `claude -p` worker path, unchanged."""
     import types

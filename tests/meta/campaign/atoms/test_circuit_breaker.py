@@ -172,6 +172,36 @@ def test_advance_in_flight_takes_precedence_over_breaker(
     assert out["decision"] == "wait_in_flight"
 
 
+def test_advance_breaker_defaults_from_anomaly_policy(_journal_home: Path, tmp_path: Path) -> None:
+    """``anomaly_policy.circuit_breaker_failures`` is a fallback default source
+    (after an explicit arg / ``stop_criteria``)."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
+    _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
+    write_manifest(tmp_path, campaign_id="A", anomaly_policy={"circuit_breaker_failures": 2})
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A")
+    assert out["decision"] == "stop_circuit_breaker"
+
+
+def test_advance_emits_circuit_breaker_anomaly_brief(_journal_home: Path, tmp_path: Path) -> None:
+    """A circuit-breaker trip emits a structured anomaly brief: what tripped,
+    evidence counts (incl. the failing run ids), and a drafted recommendation."""
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", status="failed")
+    _seed_iteration(tmp_path, run_id="r1", campaign_id="A", status="failed")
+    _seed_iteration(tmp_path, run_id="r2", campaign_id="A", status="failed")
+
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A", circuit_breaker_failures=3)
+    brief = out["anomaly_brief"]
+    assert brief is not None
+    assert brief["tripped"] == "circuit_breaker"
+    assert brief["decision"] == "stop_circuit_breaker"
+    assert brief["evidence"]["count"] == 3
+    assert brief["evidence"]["threshold"] == 3
+    assert brief["evidence"]["run_ids"] == ["r2", "r1", "r0"]  # newest-first
+    assert brief["recommended_action"] == "surface_for_decision"
+
+
 def test_init_persists_circuit_breaker(tmp_path: Path) -> None:
     from hpc_agent.meta.campaign.atoms.init import campaign_init
     from hpc_agent.meta.campaign.manifest import read_manifest

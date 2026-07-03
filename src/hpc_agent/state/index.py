@@ -35,6 +35,7 @@ __all__ = [
     "find_in_flight_runs",
     "find_runs_by_campaign",
     "find_held_runs",
+    "find_stalled_runs",
     "prune_terminal_runs",
 ]
 
@@ -216,6 +217,53 @@ def find_held_runs(experiment_dir: Path, campaign_id: str | None = None) -> list
         held.append((_safe_mtime(path), record))
     held.sort(key=lambda item: item[0], reverse=True)
     return [r for _, r in held]
+
+
+def find_stalled_runs(now_iso: str, experiment_dir: Path | None = None) -> list[dict]:
+    """Return live runs whose driver missed its tick deadline (§5 watchdog).
+
+    A run is *stalled* when it is still ``in_flight`` AND carries a
+    ``next_tick_due`` that is now in the past — the driver stamped a deadline via
+    :func:`hpc_agent.state.journal.stamp_tick` and the next tick never landed by
+    it. This is detection only; the ``doctor`` verb surfaces each hit as a
+    drafted recovery proposal. Runs with no ``next_tick_due`` stamped yet (never
+    ticked) are not stalled — absence of a deadline is not a missed one.
+
+    Each entry carries the fields a recovery proposal needs::
+
+        {"run_id", "status", "last_tick_at", "next_tick_due", "cluster", "ssh_target"}
+
+    *experiment_dir* defaults to the current working directory to mirror the
+    pinned cross-unit signature ``find_stalled_runs(now_iso)`` (the ``doctor``
+    verb passes its own dir). *now_iso* must be an ISO-8601 UTC string; a
+    malformed value raises :class:`ValueError` (fail loud, not a silent empty).
+    """
+    from pathlib import Path
+
+    from hpc_agent.infra.time import parse_iso_utc_or_none
+
+    now_dt = parse_iso_utc_or_none(now_iso)
+    if now_dt is None:
+        raise ValueError(f"find_stalled_runs: now_iso {now_iso!r} is not ISO-8601")
+
+    ed = Path(experiment_dir) if experiment_dir is not None else Path.cwd()
+    stalled: list[dict] = []
+    for record in find_in_flight_runs(ed):
+        due_dt = parse_iso_utc_or_none(record.next_tick_due)
+        if due_dt is None:
+            continue  # never ticked / no deadline stamped — not a miss
+        if due_dt < now_dt:
+            stalled.append(
+                {
+                    "run_id": record.run_id,
+                    "status": record.status,
+                    "last_tick_at": record.last_tick_at,
+                    "next_tick_due": record.next_tick_due,
+                    "cluster": record.cluster,
+                    "ssh_target": record.ssh_target,
+                }
+            )
+    return stalled
 
 
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:

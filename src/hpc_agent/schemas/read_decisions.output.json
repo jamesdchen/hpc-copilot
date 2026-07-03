@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/read_decisions.output.json",
+  "title": "read-decisions output data",
+  "description": "A scope's decision journal, oldest first.",
+  "type": "object",
+  "required": [
+    "path",
+    "records",
+    "count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "records": {
+      "items": {
+        "$ref": "#/$defs/DecisionRecord"
+      },
+      "title": "Records",
+      "type": "array"
+    },
+    "count": {
+      "minimum": 0,
+      "title": "Count",
+      "type": "integer"
+    }
+  },
+  "$defs": {
+    "DecisionRecord": {
+      "additionalProperties": true,
+      "description": "One persisted decision-journal line, as read back from disk.\n\n``extra=\"allow\"`` so an additive schema bump (a new field written by a\nnewer writer) does not break an older reader — the same forward-compat\nposture ``load-context``'s nested rows take against evolving sidecar\nschemas.",
+      "properties": {
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "ts": {
+          "title": "Ts",
+          "type": "string"
+        },
+        "scope_kind": {
+          "enum": [
+            "run",
+            "campaign"
+          ],
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "block": {
+          "title": "Block",
+          "type": "string"
+        },
+        "response": {
+          "title": "Response",
+          "type": "string"
+        },
+        "evidence_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          ],
+          "default": "",
+          "title": "Evidence Digest"
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          ],
+          "default": "",
+          "title": "Proposal"
+        },
+        "resolved": {
+          "additionalProperties": true,
+          "title": "Resolved",
+          "type": "object"
+        },
+        "provenance": {
+          "additionalProperties": true,
+          "title": "Provenance",
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "ts",
+        "scope_kind",
+        "scope_id",
+        "block",
+        "response"
+      ],
+      "title": "decision journal record",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/status_snapshot.input.json",
+  "title": "status-snapshot input spec",
+  "description": "Inputs to ``status-snapshot`` (one-shot digest).\n\nJournal-first and cluster-free by default: it digests durable state (the §5\ntask-state contract) into \"what is running where / what changed since the\nhuman last looked\". Set ``reconcile`` to re-derive ground truth from the\ncluster first (the only path that touches SSH) — that requires ``run_id`` and\n``scheduler``.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The run to digest. Null → a fleet digest over every in-flight run (what is running where, right now).",
+      "title": "Run Id"
+    },
+    "reconcile": {
+      "default": false,
+      "description": "Re-derive ground truth from the cluster (reconcile-journal) before digesting — the only path that touches SSH. Requires run_id + scheduler.",
+      "title": "Reconcile",
+      "type": "boolean"
+    },
+    "scheduler": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Backend name — required only when reconcile=True (to query alive job IDs).",
+      "title": "Scheduler"
+    },
+    "now_iso": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ISO-8601 UTC 'now' for the stalled-driver watchdog check and the attention watermark. Defaults to the current UTC time.",
+      "title": "Now Iso"
+    },
+    "mark_seen": {
+      "default": true,
+      "description": "Stamp last_seen_by_human_at on each digested run AFTER computing the changed-since-seen delta, so the next snapshot's delta is measured from this look. Disable for a peek that must not move the watermark.",
+      "title": "Mark Seen",
+      "type": "boolean"
+    }
+  }
+}

@@ -545,6 +545,26 @@ class ProfileBackend(HPCBackend):
         return alive_sge
 
     @classmethod
+    def build_cancel_cmd(cls, job_ids: list[str]) -> str:
+        """Shell command that requests cancellation of *job_ids* (kill seam).
+
+        SLURM cancels via ``scancel <id> <id> ...``; SGE and the PBS family
+        (pbspro / torque) all cancel via ``qdel <id> <id> ...``. Ids are
+        quoted individually (mirroring :meth:`build_alive_check_cmd`'s PBS
+        branch). An empty id list short-circuits to a ``true`` no-op — matching
+        the alive/state builders — so no bare ``scancel``/``qdel`` with no args
+        is ever dispatched. The command only *requests* cancellation: gone-ness
+        is confirmed by the alive-check verification, not by its exit code.
+        """
+        if not job_ids:
+            return "true"
+        ids = " ".join(shlex.quote(str(j)) for j in job_ids)
+        if cls.profile.family == "slurm":
+            return f"scancel {ids}"
+        # sge / pbspro / torque all cancel via ``qdel <id> <id> ...``.
+        return f"qdel {ids}"
+
+    @classmethod
     def build_scheduler_state_cmd(cls, job_ids: list[str]) -> str:
         """Shell command pairing each live job id with its raw state."""
         if not job_ids:

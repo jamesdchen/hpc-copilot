@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/kill.input.json",
+  "title": "kill input spec",
+  "description": "Input spec for the ``kill`` verb.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "scheduler"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run whose scheduler jobs should be killed.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scheduler": {
+      "description": "Backend/scheduler name — needed to query the run's alive job IDs and (when the seam grows one) to build the cancel command.",
+      "title": "Scheduler",
+      "type": "string"
+    }
+  }
+}

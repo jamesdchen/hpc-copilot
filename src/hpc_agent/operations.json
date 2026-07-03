@@ -1,6 +1,20 @@
 [
   {
     "agent_facing": true,
+    "cli": "hpc-agent append-decision --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "append_decision.input.json",
+    "name": "append-decision",
+    "output_schema": "append_decision.output.json",
+    "python": "hpc_agent.ops.decision.journal.append_decision",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Append one y/nudge exchange to a run's or campaign's decision journal (append-only JSONL). The decision record — not the chat scroll — is the source of truth for why a run took the shape it did (design §2).",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]",
     "idempotent": true,
     "input_schema": null,
@@ -47,6 +61,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "doctor_install.input.json",
+    "name": "doctor-install",
+    "output_schema": "doctor_install.output.json",
+    "python": "hpc_agent.ops.recover.doctor_install.doctor_install",
+    "side_effects": [
+      "file_write",
+      "scheduler"
+    ],
+    "summary": "Install (or uninstall) an OS-scheduled `hpc-agent doctor` scan for this experiment dir — the out-of-session half of the driver dead-man's switch (design §5). Opt-in, never auto-installed. Windows → Task Scheduler (schtasks); POSIX → crontab. Writes a durable doctor spec under the journal home and points the scheduler at it with notify=true, so the scan alerts (OS notification) when it finds a stalled/orphaned run. Idempotent: re-running never duplicates the task. It only schedules the DETECTOR — it never re-arms a run.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>",
     "idempotent": true,
     "input_schema": null,
@@ -57,6 +86,21 @@
       "filesystem"
     ],
     "summary": "Validate the staged sub-skill return envelope at <experiment_dir>/.hpc/_returns/<skill>.staged.json against the per-skill schema, then atomically rename to <skill>.json. Use as the sub-skill's FINAL tool call to hand off to the parent skill without firing an end-of-turn chat message.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent kill --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "kill.input.json",
+    "name": "kill",
+    "output_schema": "kill.output.json",
+    "python": "hpc_agent.ops.monitor.kill.kill",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "summary": "Kill a run's scheduler jobs: journal the intent, attempt cancellation through the backend seam (if one exists), verify against the scheduler, journal the verified-gone subset, and report 'N requested, N confirmed gone'. Request -> journaled -> verified.",
     "verb": "mutate"
   },
   {
@@ -143,6 +187,21 @@
       "ssh"
     ],
     "summary": "",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent watcher-install [--experiment-dir <dir>] --run-id <run_id> [--action <action>] --scheduler <scheduler> [--stale-sec <stale_sec>] [--interval-min <interval_min>]",
+    "idempotent": true,
+    "input_schema": "watcher_install.input.json",
+    "name": "watcher-install",
+    "output_schema": "watcher_install.output.json",
+    "python": "hpc_agent.ops.monitor.watcher_install.watcher_install",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh"
+    ],
+    "summary": "Install/uninstall/status a cluster-side heartbeat watcher for a run via an install-time probe ladder (crontab -> scrontab -> self-resubmitting job -> none, loud). The watcher survives the laptop and alarms when the client stops reading status.",
     "verb": "mutate"
   },
   {
@@ -463,6 +522,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent doctor --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "doctor.input.json",
+    "name": "doctor",
+    "output_schema": "doctor.output.json",
+    "python": "hpc_agent.ops.recover.doctor.doctor",
+    "side_effects": [],
+    "summary": "Driver watchdog (dead-man's switch). Scan live runs for a missed driver-tick deadline and surface each as a DRAFTED recovery proposal plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts or re-arms anything — detection is its whole job; safe recovery is guaranteed by tick idempotency. Run it out-of-session from an OS scheduler (Task Scheduler / cron).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]",
     "idempotent": true,
     "input_schema": null,
@@ -614,6 +685,18 @@
       "writes-journal"
     ],
     "summary": "Poll cluster status for a run_id; one-shot, returns snapshot.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "read_decisions.input.json",
+    "name": "read-decisions",
+    "output_schema": "read_decisions.output.json",
+    "python": "hpc_agent.ops.decision.journal.read_decisions",
+    "side_effects": [],
+    "summary": "Read a run's or campaign's decision journal — the append-ordered y/nudge audit trail (design §2).",
     "verb": "query"
   },
   {
@@ -846,7 +929,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>] [--async-refill] [--max-in-flight <max_in_flight>]",
+    "cli": "hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--on-anomaly <on_anomaly>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>] [--async-refill] [--max-in-flight <max_in_flight>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-init",
@@ -1183,6 +1266,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent aggregate-check --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "aggregate_check.input.json",
+    "name": "aggregate-check",
+    "output_schema": null,
+    "python": "hpc_agent.ops.aggregate_blocks.aggregate_check",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Aggregate block CHECK (readiness + integrity): aggregate-preflight + the terminal-status readiness gate + the verify-aggregation-complete integrity gate. Brief = which waves combined, what's missing, integrity issues found — each surfaced as a decision point with a conservative recommendation, NEVER auto-masked. Terminates → y/nudge when a gate fails or an issue exists; else 'ready' → run.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]",
     "idempotent": true,
     "input_schema": "aggregate_flow.input.json",
@@ -1199,6 +1296,47 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent aggregate-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "aggregate_run.input.json",
+    "name": "aggregate-run",
+    "output_schema": null,
+    "python": "hpc_agent.ops.aggregate_blocks.aggregate_run",
+    "side_effects": [
+      "ssh",
+      "sync-pull"
+    ],
+    "summary": "Aggregate block RUN (combine + reduce + extract): the deterministic aggregate-flow pipeline → a code-extracted results table + error-sweep summary + an EMPTY proposed_interpretations slot the LLM fills at the terminator. Owns the terminal-or-explicitly-partial invariant via aggregate-flow's gate (never assumes aggregate-check ran). Terminates → y/nudge (harvested / harvest_partial).",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_complete.input.json",
+    "name": "campaign-complete",
+    "output_schema": null,
+    "python": "hpc_agent.meta.campaign.blocks.campaign_complete",
+    "side_effects": [],
+    "summary": "Campaign block (end): the completion brief — spend vs budget, iterations, stop reason, and a code-extracted per-iteration outcome table — plus an EMPTY proposed_interpretations slot the LLM fills at the y/nudge boundary (code extracts outcomes; the human concludes). Terminates → y/nudge.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign-greenlight --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_greenlight.input.json",
+    "name": "campaign-greenlight",
+    "output_schema": null,
+    "python": "hpc_agent.meta.campaign.blocks.campaign_greenlight",
+    "side_effects": [
+      "writes-campaign-state"
+    ],
+    "summary": "Campaign block (start): digest the greenlit-once campaign spec (goal / budget / strategy / stop_criteria / anomaly_policy / async_refill) into a brief for y/nudge. An un-greenlit manifest digests to needs_greenlight (nothing stamped); --spec confirm=true (the post-`y` re-invocation) stamps mark_greenlit + journals the decision; an already-greenlit manifest is an idempotent re-read.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "campaign_run.input.json",
@@ -1211,6 +1349,18 @@
       "writes-aggregate-output"
     ],
     "summary": "One campaign iteration's spine in one call: submit-pipeline → status-pipeline → aggregate-flow. Reports one typed stage_reached outcome; sets needs_decision only on the failure / budget stages. Does NOT advance the campaign cursor — that stays a driver judgement.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_watch.input.json",
+    "name": "campaign-watch",
+    "output_schema": null,
+    "python": "hpc_agent.meta.campaign.blocks.campaign_watch",
+    "side_effects": [],
+    "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
     "verb": "workflow"
   },
   {
@@ -1255,6 +1405,35 @@
       "writes-tick-log"
     ],
     "summary": "Deterministic status spine in one call: monitor-flow (wait to terminal/budget) → lifecycle_state dispatch. Reports one typed stage_reached outcome; sets needs_decision only on failed / abandoned.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "status_snapshot.input.json",
+    "name": "status-snapshot",
+    "output_schema": null,
+    "python": "hpc_agent.ops.status_blocks.status_snapshot",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Status block (snapshot): a one-shot, journal-first digest of what is running where and what changed since the human last looked. Computes the changed-since delta against last_seen_by_human_at, then re-stamps the watermark. Sets needs_decision only on evidence — a stalled driver or a failed/abandoned run. Optional reconcile re-derives ground truth from the cluster first (the only SSH path). Terminates → y/nudge.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent status-watch --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "status_watch.input.json",
+    "name": "status-watch",
+    "output_schema": null,
+    "python": "hpc_agent.ops.status_blocks.status_watch",
+    "side_effects": [
+      "ssh",
+      "writes-tick-log"
+    ],
+    "summary": "Status block (watch): blocking poll to terminal or anomaly via monitor-flow (which owns the throttled SSH spine and the guaranteed terminal harvest). A clean terminal hands off to the harvest block (needs_decision=False); a failed/abandoned anomaly or a timeout raises the y/nudge boundary with a drafted-evidence brief. A timeout arms the next tick when an invocation_argv is supplied.",
     "verb": "workflow"
   },
   {
@@ -1318,6 +1497,79 @@
       "writes-followup-specs"
     ],
     "summary": "Deterministic submit spine in one call: submit-and-verify (the canary gate) → verify-submitted (post-qsub health) → prepare-followup-specs. Reports one typed stage_reached outcome; sets needs_decision only on the genuine gate failures.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-s1 --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_s1.input.json",
+    "name": "submit-s1",
+    "output_schema": null,
+    "python": "hpc_agent.ops.submit_blocks.submit_s1",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Submit block S1 (resolve): preflight + walk-submit-ambiguities to the decision boundary. Brief = the {resolved, ambiguities} envelope with each ambiguity's safe_default surfaced as a RECOMMENDATION (never auto-applied). When the walk is clean and a resolve spec is supplied, chains resolve-submit-inputs. Terminates → y/nudge.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-s2 --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_s2.input.json",
+    "name": "submit-s2",
+    "output_schema": null,
+    "python": "hpc_agent.ops.submit_blocks.submit_s2",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh"
+    ],
+    "summary": "Submit block S2 (stage & canary): submit-and-verify STOPPED after a verified canary (the main array does NOT launch), plus the estimate-core-hours footprint. Brief = 'canary green, est N core-hours'. Terminates → y/nudge; S3 launches the main array.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-s3 --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_s3.input.json",
+    "name": "submit-s3",
+    "output_schema": null,
+    "python": "hpc_agent.ops.submit_blocks.submit_s3",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh"
+    ],
+    "summary": "Submit block S3 (submit & watch): launch the main array (Phase-2 of the two-phase gate — canary verified in S2), monitor to terminal/anomaly, and arm the next monitor tick. Runs UNATTENDED — no human boundary inside; an anomaly is a block terminator.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-s4 --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_s4.input.json",
+    "name": "submit-s4",
+    "output_schema": null,
+    "python": "hpc_agent.ops.submit_blocks.submit_s4",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Submit block S4 (harvest): aggregate-flow → a code-extracted results table + a slot for proposed interpretations. Terminates → y/nudge. (Calls the existing aggregate entry; Unit B's harvest_on_terminal guarantee is a parallel add.)",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-speculate --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_speculate.input.json",
+    "name": "submit-speculate",
+    "output_schema": "submit_speculate.output.json",
+    "python": "hpc_agent.ops.submit_speculate.submit_speculate",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh"
+    ],
+    "summary": "Speculative canary (design §3): run S2's canary EARLY, under the S1 recommended defaults, while the human reviews the brief. Composes submit-and-verify(stop_after_canary=True) — only the 1-task canary enters the queue; the main array never launches. Budget = 1 per brief and nudge-invalidation come free from the (cmd_sha, version) canary TTL cache: a validated-fresh canary is refused (S2 reuses it). Never cancels anything.",
     "verb": "workflow"
   },
   {

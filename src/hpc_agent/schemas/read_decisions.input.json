@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/read_decisions.input.json",
+  "title": "read-decisions input spec",
+  "description": "Which scope's decision journal to read.",
+  "type": "object",
+  "required": [
+    "scope_kind",
+    "scope_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope_kind": {
+      "enum": [
+        "run",
+        "campaign"
+      ],
+      "title": "Scope Kind",
+      "type": "string"
+    },
+    "scope_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Scope Id",
+      "type": "string"
+    }
+  }
+}

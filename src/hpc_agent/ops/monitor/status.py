@@ -170,9 +170,20 @@ def record_status(
             file_glob=file_glob,
             min_rows=min_rows,
             remote_activation=remote_activation_for_sidecar(_sidecar),
+            # Hybrid-monitor client half (§5): piggyback on this SAME ssh call to
+            # stamp the cluster-side ``.hpc_last_read`` marker the watcher checks
+            # for client liveness, and read back its ``.hpc_watcher_ALARM`` if the
+            # watcher raised one. The run dir the watcher is pointed at is the
+            # project root ``remote_path``. Zero extra round-trip.
+            watcher_run_dir=remote_path,
         )
         summary = dict(report.get("summary", {}))
         summary["checked_at"] = utcnow_iso()
+        # Surface the cluster-side watcher's ALARM (client stopped reading / the
+        # watcher wrote a staleness alarm) so the caller/brief layers render it.
+        # Present only when the watcher raised one; absent otherwise.
+        if report.get("watcher_alarm"):
+            summary["watcher_alarm"] = report["watcher_alarm"]
         # Carry per-wave breakdown into the persisted last_status when the
         # cluster-side reporter emitted one (sidecar carried a wave_map).
         if isinstance(report.get("waves"), dict) and report["waves"]:

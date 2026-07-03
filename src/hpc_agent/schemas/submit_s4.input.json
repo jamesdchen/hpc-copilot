@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_s4.input.json",
+  "title": "submit-s4 input spec",
+  "description": "Inputs to ``submit-s4`` (harvest).\n\nRuns the existing aggregate path to produce a code-extracted results table.\n(Unit B is adding a ``harvest_on_terminal`` guarantee in parallel; S4 calls\nthe EXISTING ``aggregate-flow`` entry until that lands.)",
+  "type": "object",
+  "required": [
+    "aggregate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "aggregate": {
+      "$ref": "#/$defs/AggregateFlowSpec",
+      "description": "The aggregate-flow spec — ensures waves combined, pulls partials, reduces."
+    }
+  },
+  "$defs": {
+    "AggregateFlowSpec": {
+      "additionalProperties": false,
+      "description": "Spec passed to ``hpc-agent aggregate-flow --spec <file>``.\n\nWorkflow atom that ensures every wave is combined on the cluster,\npulls the per-wave partials locally, and merges them into a\nsingle aggregated-metrics dict via reduce_partials. Pairs with\nsubmit-flow + monitor-flow as the third workflow atom in the\ncampaign composition pattern.",
+      "properties": {
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local destination for pulled artifacts. Null defaults to `<experiment_dir>/_aggregated/<run_id>/`. The combiner partials land under `<output_dir>/_combiner/`.",
+          "title": "Output Dir"
+        },
+        "ensure_all_combined": {
+          "default": true,
+          "description": "Before pulling, invoke combine-wave for every wave in the sidecar's wave_map that isn't yet in combined_waves. Disable when monitor-flow already combined everything in flight (idempotent either way; this just saves SSH round-trips).",
+          "title": "Ensure All Combined",
+          "type": "boolean"
+        },
+        "combiner_max_retries": {
+          "default": 1,
+          "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and surfaces in failed_waves; aggregate-flow continues with whichever waves DID combine.",
+          "minimum": 0,
+          "title": "Combiner Max Retries",
+          "type": "integer"
+        },
+        "pull_summaries": {
+          "default": false,
+          "description": "After pulling _combiner/, also rsync result summary files matching summary_glob from the cluster's results/ directory.",
+          "title": "Pull Summaries",
+          "type": "boolean"
+        },
+        "summary_glob": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required when pull_summaries=true. Rsync include pattern (e.g. 'metrics.json', 'qlike.json'). Ignored when pull_summaries=false.",
+          "title": "Summary Glob"
+        },
+        "results_subdir": {
+          "default": "results",
+          "description": "Cluster-side subdir under remote_path that holds the per-task result trees. Defaults to 'results' to match the framework convention.",
+          "title": "Results Subdir",
+          "type": "string"
+        },
+        "min_rows": {
+          "default": 0,
+          "description": "Non-empty-rows gate. When > 0, after combining + pulling, aggregate-flow runs the cluster-side status reporter with --min-rows: any task whose CSV result has fewer than this many data rows beyond the header is reported as a failing task id in `nonempty_failing_task_ids`. 0 (default) skips the gate — header-only CSVs are accepted.",
+          "minimum": 0,
+          "title": "Min Rows",
+          "type": "integer"
+        },
+        "mode": {
+          "default": "auto",
+          "description": "Routing mode. 'auto' (default) picks cluster-reduce when the sidecar's aggregate_defaults.aggregate_cmd is set, otherwise combiner-only. 'cluster-reduce' forces the cluster-side reducer (raises if no aggregate_cmd is available). 'combiner-only' bypasses the reducer, pulls _combiner/ partials and reduces locally.",
+          "enum": [
+            "auto",
+            "cluster-reduce",
+            "combiner-only"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "reconcile_terminal": {
+          "default": false,
+          "description": "Skip-monitor escape hatch. When the journal still says in_flight (the caller went straight to aggregate on a short run without running monitor-flow), poll the cluster once and, if it confirms the run is done, mark the journal terminal before the terminal-state gate — using the SAME completion logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). If the cluster shows the run still genuinely running, the gate still fires. Default false preserves the strict gate: aggregate never silently reconciles unless the caller opts in.",
+          "title": "Reconcile Terminal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "aggregate-flow input spec",
+      "type": "object"
+    }
+  }
+}

@@ -1,147 +1,59 @@
 ---
 name: hpc-status
-description: "Poll an in-flight HPC run's status and decide what to do about it — wait, resubmit failed tasks, mark terminal. Walks resolution steps, accumulates ambiguities into a single envelope. Branches on wait_terminal: snapshot calls the status primitive directly (no worker spawn); blocking poll hands off to the bare worker for context-isolated polling."
-allowed-tools: Bash Read Skill Agent
+description: "Start the status blocks (`status-snapshot`) and relay each block's code-digested brief to the human for a `y`/nudge, journaling every exchange and invoking exactly the block the envelope's `next_block` names. Snapshot is a cheap journal-first digest of what is running where and what changed since the human last looked; a live run's `next_block` is `status-watch`, a detached blocking poll to terminal or anomaly. The skill never resolves a decision and never interprets raw results."
+allowed-tools: Bash Read Write
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[monitor-flow](../../../../docs/primitives/monitor-flow.md) workflow**. Resolves which run to poll, what cadence, and how to handle failures.
+Start the status workflow by invoking the **`status-snapshot`** block, then run the propose→`y`/nudge loop (design [§2](../../../../docs/design/human-amplification-blocks.md)): surface each block's code-digested **brief** plus its machine-computed **`next_block`** suggestion to the human, collect a `y` or a natural-language nudge, journal the exchange, and on `y` invoke **exactly** `next_block.verb` — never a hardcoded sequence, never a verb the envelope did not name.
 
-## Execution style
+The two status blocks (`ops/status_blocks.py`) are `status-snapshot` (one-shot, journal-first digest: what is running where + what changed since `last_seen_by_human_at`, plus §5 stalled-driver and failed/abandoned anomaly detection) and `status-watch` (a blocking poll to terminal/anomaly, composing `monitor-flow` — which owns the throttled SSH spine and the §5 guaranteed terminal harvest). Each hands back `{block, stage_reached, needs_decision, reason, brief, next_block?, run_id?}`. **The blocks are the whole execution** — the poll loop, lifecycle transitions, and harvest all live in code; this skill only relays briefs and records the human's answer.
 
-- **Batch independent tool calls into one assistant message.** "Parallel" here means **multiple Bash / Read / Grep / Glob tool-call blocks in a single message** — the harness runs them concurrently. It does NOT mean shell-level concurrency inside one Bash call (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`), which trips the permission classifier as a compound command and complicates output parsing. Multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should each be their own tool-call block in the same message, not chained inside a single shell invocation.
-- **Chain sequential `hpc-agent` calls with `&&` in one Bash block when the next call does NOT branch on prior structured output** (e.g. `hpc-agent install-commands && hpc-agent load-context --experiment-dir .`). Each separate Bash tool call costs a round-trip + permission prompt; chaining unconditionally-sequential dependent invocations into one block saves both at no cost. Do NOT chain past a call whose envelope the next call's args depend on — read the envelope first, then issue the dependent call as its own block. (The framework's dispatched `hpc-worker` subagent blocks `&&` by a `PreToolUse` hook — one verb per envelope is its decision-boundary contract — but that block applies only to the spawned worker, NOT to this orchestrator skill.)
-- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
-- **Don't preemptively override the invoker default — but DO auto-retry inline on a real spawn failure.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. The framework refuses an agent-supplied `--inline` flag when worker credentials exist (#155 guard), and that refusal is by design. **However:** when the spawn actually fails and the returned `internal` error message includes the framework's `Fallback: …HPC_AGENT_INVOKER=inline…` remediation hint, AUTOMATICALLY set `HPC_AGENT_INVOKER=inline` in the env and retry — the env var bypasses the #155 guard because it is the documented operator-opt-in form, and the framework's own hint is the signal that inline is the correct recovery path. Do NOT pause to ask the user. PowerShell `$env:HPC_AGENT_INVOKER = "inline"`, bash `export HPC_AGENT_INVOKER=inline`.
-- **No narration at sub-skill boundaries.** When a composed sub-skill returns control, IMMEDIATELY chain to the next resolution step without emitting a summary message. Writing "X returned" or "Now resolving Y" reads as an end-of-turn signal to the harness and yields control back to the user — but the procedure has more steps to walk, so just continue tool-calling. The user sees only the final envelope.
-- **Return via the emit-skill-return file primitive — never via chat.** This skill is composed by `hpc-campaign`; the parent reads your return envelope from `<experiment_dir>/.hpc/_returns/hpc-status.json`, not from any closing chat message. Step 7 below stages the envelope and invokes `hpc-agent emit-skill-return` as the LAST tool call. The schema lives at `hpc_agent/schemas/skill_returns/hpc-status.json` and is enforced by the emit verb.
-- **Inspect files with `Read`/`Grep`/`Glob` — never shell `python -c`, `bash -c`, `jq`, `cat`, `head`, `grep`, or `find`.** Auto-mode's permission classifier hard-blocks arbitrary-code patterns (`python -c`, `bash -c`, command substitution, pipes) **regardless of `allow` rules** — issuing one stalls the workflow on a non-bypassable prompt, breaking the no-narration / no-pause invariants above. To read a JSON file (sidecar, `runs/<id>.json`, `axes.yaml`, anything under `.hpc/`): use the `Read` tool. To search filenames: `Glob`. To grep contents: `Grep`. If you need a value computed from cluster or framework state, there is almost always a specific `hpc-agent <verb>` (`describe`, `discover-runs`, `load-context`, `inspect-runs`, `verify-canary`, `reconcile`) — call that. The ONLY Bash this skill should issue is the `hpc-agent` calls listed in the Steps below (plus `git` if you commit a scaffolded file).
+The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous agent invokes this skill directly.
+
+## Invocation surface
+
+- **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
+- **MCP-first (preferred):** the typed `status-snapshot` / `status-watch` tools from `hpc-agent mcp-serve`.
+- **CLI fallback:** one call per block, spec written to a file with the `Write` tool:
+  ```bash
+  hpc-agent status-snapshot --spec <path> --experiment-dir <dir>
+  ```
+  Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those).
+
+## The block loop
+
+Repeat until a terminal block (`next_block` null and `needs_decision` false, or the human ends the run):
+
+1. **Invoke the block.** First iteration: `status-snapshot`. Later iterations: the verb the previous block's `next_block.verb` named, seeded from its `spec_hint`.
+2. **Relay the brief.** Render `reason` + `brief`: the snapshot's `running_where` / `changed_since_seen` / `stalled_runs` / `anomalies` rows, or the watch's terminal digest / anomaly evidence (counts, failed-wave ledger, the reporter's classified error, and a structured `recommendation` — proposed next-action DATA, never LLM-authored prose). Relay the code-drafted digest; never re-interpret the raw status.
+3. **Collect the answer.** A single `y` greenlights the suggested `next_block`; anything else is a nudge.
+4. **Journal the exchange:**
+   ```bash
+   hpc-agent append-decision --spec <path> --experiment-dir <dir>
+   ```
+   `scope_kind: "run"`, `scope_id: <run_id>`, `block: <terminated block>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"` or the nudge text; on a greenlight, `resolved: {"next_block": "<next_block.verb>"}`.
+5. **Advance.** On `y`, invoke `next_block.verb`. On a nudge, fold it into the current block's spec and re-invoke the same block (it re-drafts a fresh brief). A `status-snapshot` with nothing live returns `next_block: null` and `needs_decision: false` — nothing to watch; surface and stop. A failed/abandoned anomaly or a stalled driver carries `next_block: null` and `needs_decision: true`: recovery (classify-then-resubmit, or reconcile-then-confirm before resubmit) is a human branch — surface the recommendation and let the nudge name the action.
+
+A `status-watch` that reaches a clean `complete` returns `needs_decision: false` and a `next_block` of `submit-s4` (the guaranteed harvest already ran inside `monitor-flow`'s terminal path) — the hand-off to harvest. A `timeout` (budget elapsed, cluster jobs may run on) suggests `status-watch` again to keep watching.
+
+## Never-stall + session tail-loop
+
+`status-watch` is **detached by contract** (design §3): it returns a handle immediately after spawning a durable detached watcher rather than blocking on the poll; the terminal/anomaly brief arrives as a notification. In the CLI fallback, run it through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; the doctor scan re-arms an orphaned run from the journal losslessly.
+
+While a run is live, **spawn a background tail of the local supervisor's output** (design §5 session tail-loop) so the human sees liveness without polling. If the chat session dies, job output is recovered from the cluster afterward by the guaranteed harvest once re-armed.
 
 ## Inputs
 
 | Field | Source |
 |---|---|
 | `experiment_dir` | Required |
-| `run_id` | Caller, or auto-resolve from `load-context.data.in_flight` |
-| `wait_terminal` | Caller (default `false` for snapshot; `true` for blocking poll) |
-| `resubmit_failed_threshold` | Caller (default `0.0` — every failure escalates; pass a value > 0 to opt into auto-resubmit) |
-
-## The resolution contract
-
-Same as `hpc-submit`: walk every step, accumulate ambiguities (no early-return), return them all in one envelope OR proceed to execution if none.
-
-## Steps
-
-### 0. Run the status-preflight composite (install + load)
-
-```bash
-hpc-agent status-preflight --experiment-dir <experiment_dir>
-```
-
-Single verb that runs `install-commands` then `load-context` as one deterministic state machine — replaces the two-step Step 0 (`install-commands`) + Step 1 (`load-context`) pattern this skill carried through 0.10.6. Sequential by design: install must succeed before load-context can resolve framework paths. The composite's `data` carries both sub-envelopes verbatim under `data.install_commands.envelope` and `data.load_context.envelope` — same shapes the steps had individually, so downstream branching on `data.in_flight` etc. is unchanged. Skipped (`null`) slots are visible per-call so a re-run can target only the failing piece.
-
-On `overall: fail`, the failing sub-envelope's `error_code` + `remediation` is one parse away under `data.<subcall>.envelope`; surface that to the caller and stop. On `overall: pass`, proceed to Step 2. The old Step 0's `install-commands` collision handling (cleared 0-byte sentinel files, `FileExistsError` on non-empty collisions) still applies and is reported under `data.install_commands.envelope.data.cleared_collisions`.
-
-Replaces the prose-discipline contract where the agent had to remember Step 0 (whose omission motivated the entire 0.10.2 release).
-
-#### 0b. Honor a pre-staged spec (skip the interview)
-
-`hpc-submit` pre-stages `<experiment_dir>/monitor_spec.json` (`prepare-followup-specs`, #278) so a submit→monitor handoff skips the run_id round-trip. Use the `Read` tool on `<experiment_dir>/monitor_spec.json`, then branch on a **`cmd_sha` staleness gate** computed against the Step-0 `status-preflight` / `load-context` output — that gate is the only thing that makes adopting a pre-staged run_id safe (a re-submit must NOT silently inherit the old run):
-
-- **absent →** no pre-staged spec; fall through to *2. Resolve run_id* (today's path).
-- **stale →** the spec's `cmd_sha` matches no current journal run for its `run_id` (a re-submit landed a new `cmd_sha`, or it targets a different run): treat the file as stale, ignore it, and fall through to *2. Resolve run_id* — including its `spec_invalid` / `needs_resolution` outcomes.
-- **fresh →** the spec's `cmd_sha` matches the current journal run for that `run_id` (compare against `data.latest_run.cmd_sha` for the run named in `data.in_flight`): adopt the spec's `run_id` directly. *2. Resolve run_id* is satisfied — do NOT raise a run_id ambiguity — and proceed with `wait_terminal` from the caller (default `false`), leaving the spec's `null` sentinel untouched.
-
-### 2. Resolve run_id
-
-- Caller supplied → use.
-- Else exactly one in-flight run → use.
-- Else multiple in-flight, no pick → add to ambiguities:
-  ```json
-  {"field": "run_id", "candidates": [<run_id list>], "depends_on": [], "safe_default": "<most recent by submitted_at_iso>"}
-  ```
-- Else zero in-flight → return `spec_invalid: no_in_flight_run` (this isn't an ambiguity — there's literally nothing to monitor).
-
-### 3. Return ambiguities if any
-
-If accumulated, return `needs_resolution` envelope per the standard shape. Caller resolves and re-invokes.
-
-### 4. Branch on wait_terminal
-
-The worker spawn is only justified when the workflow has more than one LLM-driven step — i.e., when there's a poll loop or lifecycle dispatch that would otherwise accumulate intermediate state in the caller's context.
-
-**If `wait_terminal == false` (snapshot)**:
-
-```bash
-hpc-agent status --run-id <id>
-```
-
-Single primitive call. Returns one envelope. No worker spawn. The caller's context grows by ~1 KB (the envelope).
-
-**If `wait_terminal == true` (blocking poll)**:
-
-```bash
-hpc-agent run --workflow status --fields-json '{"run_id": "<id>", "wait_terminal": true}'
-```
-
-Spawns a fresh-context bare worker that reads `worker_prompts/status.md`. The worker contains the poll loop (sacct queries every 60s, lifecycle transitions, sidecar updates) in its private context. Returns the final terminal envelope. The caller's context grows by ~1 KB regardless of how long the poll ran.
-
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When set, `hpc-agent run` does NOT spawn a `claude -p` worker: its envelope carries `data.mode == "inline"`, `data.prompt` (the canonical `worker_prompts/status.md` procedure), and `data.instructions`. Produce the procedure's `{result, decisions, anomalies}` JSON, then return the spawn-shaped envelope: `data.report` = that JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". **How you run it is capability-gated:** if you have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or equivalent), dispatch exactly ONE subagent with `data.prompt` as its whole task and return its report — the poll loop's transcript then lands in the subagent's context, recovering the isolation inline would otherwise trade away. If you have no such tool, run the poll loop yourself in this session. Either path stays in-session — don't start another `claude -p` worker or re-invoke `hpc-agent run`; the subagent (when used) is the leaf. When `data.mode == "spawn"` (the default), consume `data.report` as before.
-
-<!-- decision-content:inline-isolation-ceiling start -->
-**Isolation ceiling:** a subagent recovers *context* isolation but not *environment* isolation — it shares this session's sandbox posture and auto-loads project CLAUDE.md, unlike the default `--bare` spawn (sandbox forced off, CLAUDE.md stripped). If a sandboxed session would block the cluster SSH, or project memory must not color the run, that's a sign the *user* wants the default spawn, not inline.
-<!-- decision-content:inline-isolation-ceiling end -->
-
-This split saves the worker-spawn overhead on the common single-call case while preserving context isolation on the multi-step case. The principle: **a workflow skill hands off to a bare worker when (and only when) the workflow has more than one LLM-driven step.**
-
-### 5. Handle the result
-
-Branch on the envelope's `data.lifecycle_state` (or `data.report.result.lifecycle_state` on the worker path):
-
-| State | Skill behaviour |
-|---|---|
-| `running`, `pending` | Return envelope as-is. (Snapshot mode; the caller polls again later.) |
-| `complete` | Return envelope. Add `next_step_hint: "aggregate"` in decisions. |
-| `terminal_with_failures` | Apply resubmit policy below. |
-| `terminal_no_progress` | Return `spec_invalid: terminal_no_progress`. The run is stuck — caller decides whether to resubmit-from-scratch or investigate. |
-
-### 6. Resubmit policy (terminal_with_failures)
-
-`failed_fraction = failed_task_ids.length / total_tasks`
-
-Compute the decision with the `decide-resubmit` verb, not by hand. The default threshold is `0.0` — **auto-resubmit is an explicit caller opt-in**, never the default: a caller that wants silent re-runs declares how much loss it may absorb by passing `resubmit_failed_threshold > 0`.
-
-- `failed_fraction == 0` → lifecycle is actually `complete`.
-- `failed_fraction ≤ resubmit_failed_threshold` (only reachable when the caller opted in) → auto-invoke `hpc-agent resubmit --run-id <id> --task-ids <failed-list>`. Record in decisions; return the new resubmit run_id.
-- `failed_fraction > resubmit_failed_threshold` (under the default, any failure) → add to ambiguities (decision needs caller resolution):
-  ```json
-  {
-    "field": "high_failure_rate_action",
-    "candidates": ["resubmit", "investigate", "abandon"],
-    "depends_on": [],
-    "safe_default": "investigate",
-    "context": {"failed_count": N, "total": M, "sample_errors": [...]}
-  }
-  ```
-  Auto-resubmitting can silently re-run the same bug. The safe_default is `investigate` — don't auto-resubmit.
-
-### 7. Emit the return envelope (final tool call)
-
-The parent skill reads the return envelope from `<experiment_dir>/.hpc/_returns/hpc-status.json`. Stage it, then emit:
-
-1. Use the `Write` tool to write the envelope to `<experiment_dir>/.hpc/_returns/hpc-status.staged.json`. Required fields on the Success branch: `ok: true`, `skill: "hpc-status"`, `run_id`, `lifecycle_state` (from `data.lifecycle_state` on the snapshot branch or `data.report.result.lifecycle_state` on the worker branch). Optional: `next_step_hint` (e.g. `"aggregate"` when complete), `failed_task_ids` (on `terminal_with_failures`), `resubmit_run_id` (when Step 6 auto-resubmitted), `decisions` (the accumulated decisions list). On a fatal error, write the standard `ErrorEnvelope` shape.
-
-2. Invoke as your FINAL tool call:
-
-   ```bash
-   hpc-agent emit-skill-return --skill hpc-status --experiment-dir <experiment_dir>
-   ```
-
-   The verb validates against `hpc_agent/schemas/skill_returns/hpc-status.json` and atomically renames `.staged.json` → `.json`. Then **hand control back to the parent without ending your turn** — emit no summary or closing message. The parent's next action is `hpc-agent fetch-skill-return --skill hpc-status`.
+| `run_id` | Caller, else the snapshot digests the whole in-flight fleet |
+| `wait_terminal` | Caller — when the human asks to wait, greenlight straight to `status-watch` from the snapshot |
 
 ## Notes
 
-- **Snapshot vs blocking is the worker-spawn boundary.** Single-step → primitive. Multi-step (the poll loop) → worker. This matches the general rule.
-- **MARs polling pattern**: invoke with `wait_terminal: true` ONCE; let the worker block; receive the terminal envelope. Avoids accumulating ~N poll-envelopes in experiment-runner's context.
-- **No `[Y/n]`. No mode flag.** Caller-supplied authoritative; ambiguities returned in one envelope.
+- **The skill never resolves a decision and never interprets raw results.** Code digests the status into the brief and drafts the recommendation DATA; the human decides.
+- **Auto-resubmit is never the default.** A failed run surfaces as an anomaly whose recommendation is classify-then-resubmit — the human greenlights it; silent auto-resubmit (re-running the same bug) is not a code path.
+- **Every `y`/nudge is journaled** (append-only, one record per exchange).

@@ -33,11 +33,135 @@ from hpc_agent._wire.workflows.submit_and_verify import (
 )
 from hpc_agent._wire.workflows.verify_canary import VerifyCanaryResult
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.submit_flow import submit_flow
+from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow
 from hpc_agent.ops.verify_canary import verify_canary
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+
+__all__ = ["launch_main_array", "submit_and_verify"]
+
+
+def _launch_main_array(experiment_dir: Path, base: SubmitFlowSpec) -> SubmitFlowResult:
+    """Phase-2 of the two-phase gate: launch the main array after a verified canary.
+
+    Extracted so both the fused path (``submit_and_verify`` continuing past the
+    canary) and the block-split S3 path (:func:`launch_main_array`) issue the
+    IDENTICAL deterministic Phase-2 submit-flow call: canary off, and skip the
+    rsync+deploy+preflight Phase 1 already paid (#185/#275/#283). Those skips
+    ride internal operator-trusted kwargs — "Phase 1 just deployed this tree" is
+    a structural fact the code knows here — never agent-visible spec fields.
+    """
+    return submit_flow(
+        experiment_dir,
+        spec=base.model_copy(update={"canary": False, "canary_only": False}),
+        _skip_preflight=True,
+        _skip_rsync_deploy=True,
+    )
+
+
+def _assert_no_post_greenlight_drift(experiment_dir: Path, base: SubmitFlowSpec) -> None:
+    """Refuse the S3 main-array launch if the tree drifted since the S2 greenlight.
+
+    The S2→S3 seam has a human review gap: S2 verified a canary against the tree
+    as it stood then and recorded that tree's identity onto the run's durable
+    per-experiment SIDECAR (``.hpc/runs/<run_id>.json`` — ``tasks_py_sha`` /
+    ``executor``). S3 skips rsync+deploy (Phase 1 already shipped that tree), so a
+    local edit to ``.hpc/tasks.py`` AFTER the greenlight would silently launch the
+    full array on code the canary NEVER verified. This guard closes that gap.
+
+    The journal holds NO main-run record at S3 (the record is minted only when
+    ``submit_and_record`` runs, inside the launch we are about to gate), so the
+    canary-time baseline is read from the sidecar. Current values are freshly
+    derived, mirroring the layer-1 dedup gate (``ops/submit/runner.py``): the
+    ``tasks.py`` drift sha is recomputed from ``<experiment_dir>/.hpc/tasks.py``,
+    and the current executor is the sidecar's own recorded command (the one S3
+    will dispatch — the sidecar is not rewritten between S2 and S3). The
+    comparison routes through the single drift predicate
+    (:func:`hpc_agent.state.code_drift.detect_code_drift`) — never an inline sha
+    compare — whose symmetric rule disables any dimension whose baseline is
+    absent (absence ≠ drift), so a missing sidecar / tasks.py just launches.
+    """
+    import json
+
+    from hpc_agent.state.code_drift import detect_code_drift
+    from hpc_agent.state.run_sha import compute_tasks_py_sha
+    from hpc_agent.state.runs import read_run_sidecar
+
+    run_id = base.run_id
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
+        # No readable canary-time baseline → cannot prove drift → launch.
+        return
+
+    recorded_executor = str(sidecar.get("executor") or "") or None
+    recorded_tasks_py_sha = str(sidecar.get("tasks_py_sha") or "") or None
+
+    # Current executor: the sidecar-recorded command S3 dispatches (mirrors
+    # layer-1's self-sidecar read). Unchanged between S2 and S3, so this
+    # dimension is disabled by the symmetric rule unless the sidecar itself
+    # changed — the fireable dimension here is the tasks.py sha below.
+    current_executor = recorded_executor
+    tasks_py = experiment_dir / ".hpc" / "tasks.py"
+    current_tasks_py_sha: str | None = None
+    if tasks_py.is_file():
+        try:
+            current_tasks_py_sha = compute_tasks_py_sha(tasks_py)
+        except OSError:
+            current_tasks_py_sha = None
+
+    drift = detect_code_drift(
+        recorded_executor=recorded_executor,
+        recorded_tasks_py_sha=recorded_tasks_py_sha,
+        current_executor=current_executor,
+        current_tasks_py_sha=current_tasks_py_sha,
+    )
+    if drift.drifted:
+        raise errors.SpecInvalid(
+            "tasks.py/executor drifted since the canary greenlight — re-run "
+            "submit-s2 so the canary verifies the current tree "
+            f"(run_id={run_id!r})."
+        )
+
+
+def launch_main_array(
+    experiment_dir: Path,
+    *,
+    spec: SubmitAndVerifySpec,
+    canary_run_id: str | None = None,
+    canary_job_ids: list[str] | None = None,
+) -> SubmitAndVerifyResult:
+    """Launch the main array after a canary was ALREADY verified — the S3 seam.
+
+    The two-phase gate, split across the human boundary (docs/design/
+    human-amplification-blocks.md §3): S2 ran ``submit_and_verify(...,
+    stop_after_canary=True)`` and handed the human "canary green, est N
+    core-hours"; on greenlight, S3 calls this to launch the main array. This
+    path does NOT re-verify — the caller asserts the canary passed (that is what
+    the human greenlit), so ``verified`` is True. ``canary_run_id`` /
+    ``canary_job_ids`` from S2 are threaded onto the result for provenance.
+
+    Before launching, a loud drift guard (:func:`_assert_no_post_greenlight_drift`)
+    refuses the launch if ``tasks.py`` drifted since the greenlight — S3 skips
+    rsync+deploy, so a post-greenlight local edit would otherwise run the full
+    array on code the canary never verified.
+    """
+    _assert_no_post_greenlight_drift(experiment_dir, spec.submit)
+    main_submit = _launch_main_array(experiment_dir, spec.submit)
+    return SubmitAndVerifyResult(
+        run_id=main_submit.run_id,
+        job_ids=list(main_submit.job_ids),
+        total_tasks=main_submit.total_tasks,
+        deduped=main_submit.deduped,
+        canary_run_id=canary_run_id,
+        canary_job_ids=(list(canary_job_ids) if canary_job_ids else None),
+        verified=True,
+        failure_kind=None,
+        verify_result=None,
+    )
 
 
 @primitive(
@@ -75,6 +199,7 @@ def submit_and_verify(
     experiment_dir: Path,
     *,
     spec: SubmitAndVerifySpec,
+    stop_after_canary: bool = False,
 ) -> SubmitAndVerifyResult:
     """Two-phase canary gate (#160): submit the canary, verify it, then launch
     the main array ONLY on a verified canary — never before.
@@ -82,6 +207,14 @@ def submit_and_verify(
     Phase 1 submits the canary alone (``canary_only=True``); on a verified
     canary, Phase 2 submits the main array (``canary=False``). A failed canary
     returns ``verified=False`` with empty ``job_ids`` — the main NEVER launches.
+
+    ``stop_after_canary`` inserts the human boundary of the block decomposition
+    (docs/design/human-amplification-blocks.md §3): when True, a VERIFIED canary
+    returns immediately with ``verified=True`` and EMPTY ``job_ids`` — the main
+    array is NOT launched. The human reviews "canary green, est N core-hours"
+    (submit-s2) and, on greenlight, S3 launches the main array via
+    :func:`launch_main_array`. The default (False) preserves the fused behavior
+    for every existing caller: Phase 1 flows straight into Phase 2 in one call.
     """
     base = spec.submit
 
@@ -157,27 +290,31 @@ def submit_and_verify(
             verify_result=verify_result,
         )
 
+    # Canary verified. The block boundary (submit-s2): STOP before the main
+    # array so the human can review "canary green, est N core-hours" and
+    # greenlight (§3). ``verified=True`` but ``job_ids`` is empty — the main did
+    # NOT launch; S3 launches it post-greenlight via ``launch_main_array``.
+    if stop_after_canary:
+        return SubmitAndVerifyResult(
+            run_id=canary_submit.run_id,
+            job_ids=[],
+            total_tasks=canary_submit.total_tasks,
+            deduped=False,
+            canary_run_id=canary_submit.canary_run_id,
+            canary_job_ids=canary_job_ids,
+            verified=True,
+            failure_kind=None,
+            verify_result=verify_result,
+        )
+
     # Phase 2 — canary verified → launch the main array. The deterministic
     # Phase-2 flips (#279, mirrored by the prepare-phase2-spec primitive): no
     # canary, launch main, and skip the rsync+deploy Phase 1 already did (#185).
-    # No ``skip_preflight`` here — preflight is operator-gated now (#275 Fix 2);
-    # Phase 1's probe plus the #255 TTL cache already cover the re-check cheaply.
-    main_submit = submit_flow(
-        experiment_dir,
-        spec=base.model_copy(update={"canary": False, "canary_only": False}),
-        # #275: skip_preflight is no longer a spec field. Phase 1 (the canary
-        # submit) already paid the preflight, so the main-array launch skips the
-        # redundant probe via the internal operator-trusted kwarg — not an
-        # agent-visible spec field an agent could set to silence the runtime probe.
-        _skip_preflight=True,
-        # #185/#283: Phase 1 just rsync+deployed the SAME tree moments ago, so
-        # the main launch skips the redundant rsync+deploy. This is the trusted
-        # in-process caller — "Phase 1 just deployed" is a structural fact the
-        # code knows here, not an assertion. It is threaded via the internal
-        # ``_skip_rsync_deploy`` kwarg, NOT a wire spec field an agent could
-        # hand-author against a tree that drifted since the last deploy.
-        _skip_rsync_deploy=True,
-    )
+    # No ``skip_preflight`` as a spec field — preflight is operator-gated now
+    # (#275 Fix 2); Phase 1's probe plus the #255 TTL cache cover the re-check.
+    # The same deterministic call backs the block-split S3 path, so both share
+    # ``_launch_main_array``.
+    main_submit = _launch_main_array(experiment_dir, base)
     return SubmitAndVerifyResult(
         run_id=main_submit.run_id,
         job_ids=list(main_submit.job_ids),

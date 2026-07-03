@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_watch.input.json",
+  "title": "campaign-watch input spec",
+  "description": "Inputs to ``campaign-watch`` (async execution surface).\n\nJust the campaign id: the greenlit manifest is the complete contract (§4),\nso budget / stop / anomaly thresholds all default from it — watch reads,\nit never re-specifies them. Pure read; runs no tick.",
+  "type": "object",
+  "required": [
+    "campaign_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "The running campaign to digest for a health / anomaly brief.",
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    }
+  }
+}

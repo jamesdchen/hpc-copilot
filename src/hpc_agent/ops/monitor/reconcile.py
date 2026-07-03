@@ -17,6 +17,7 @@ from hpc_agent.infra import remote
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.classify import settle
+from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import load_run, mark_run, update_run_status
 
@@ -460,6 +461,12 @@ def _reconcile_one(
         )
         raise errors.JournalCorrupt(f"no run record for {run_id!r}.{hint}")
 
+    # Capture the PRE-reconcile journal status so the settle-arm harvest can
+    # fire only on a real verdict TRANSITION (see the gate below). ``record`` is
+    # never reassigned in this function (only ``updated`` is), so this stays the
+    # status as loaded even after ``update_run_status`` writes fresh fields.
+    pre_reconcile_status = str(record.status)
+
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)
     except (OSError, json.JSONDecodeError, errors.HpcError):
@@ -622,6 +629,24 @@ def _reconcile_one(
         else:
             update_run_status(experiment_dir, run_id, last_status=recorded)
             updated = mark_run(experiment_dir, run_id, status=str(decision.verdict))
+        # Guaranteed harvest (§5), gated on a verdict TRANSITION. reconcile's
+        # settle arms are terminal transitions the poll loop's own finally never
+        # sees (reconcile is invoked directly by drivers / the skill), so the "no
+        # path ends in silence" sweep must fire HERE too — but ONLY when the
+        # verdict actually changed from the pre-reconcile status. An idempotent
+        # re-reconcile (same verdict) must NOT re-fire the harvest (each fire
+        # pays an rsync pull + reduce + a ledger append). This is NOT a "terminal
+        # is sticky" guard — the verdict stays revisable (engineering-principles):
+        # a legit complete→failed downgrade IS a transition and still harvests.
+        # Best-effort and loud by contract — never raises, never masks the
+        # verdict just recorded.
+        if str(decision.verdict) != pre_reconcile_status:
+            harvest_on_terminal(
+                experiment_dir,
+                run_id,
+                terminal_cause=str(decision.verdict),
+                record=updated,
+            )
     return updated, alive_check_failed
 
 

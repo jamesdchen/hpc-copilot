@@ -581,6 +581,61 @@ def test_malformed_sidecar_stays_journal_corrupt_not_benign(tmp_path, monkeypatc
     assert "no run record" in str(exc.value)
 
 
+# ---------------------------------------------------------------------------
+# FIX-3 — the settle-arm harvest fires only on a verdict TRANSITION. An
+# idempotent re-reconcile (same verdict) must NOT re-pay the rsync-pull +
+# reduce + ledger append; a legit complete→failed downgrade still harvests
+# (the verdict is revisable — engineering-principles).
+# ---------------------------------------------------------------------------
+
+
+def _count_harvests(monkeypatch) -> list[str]:
+    calls: list[str] = []
+
+    def _fake(experiment_dir, run_id, *, terminal_cause, record=None, **_kw):
+        calls.append(terminal_cause)
+        return {}
+
+    monkeypatch.setattr(recon, "harvest_on_terminal", _fake)
+    return calls
+
+
+def test_idempotent_reconcile_does_not_reharvest(tmp_path, monkeypatch):
+    harvests = _count_harvests(monkeypatch)
+    upsert_run(tmp_path, _record("done_once", job_ids=["1"], total_tasks=10))
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),
+        summary={"complete": 10, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+    )
+
+    # First reconcile: in_flight → complete is a TRANSITION → harvest fires once.
+    recon.reconcile(tmp_path, "done_once", scheduler="sge")
+    assert harvests == ["complete"]
+
+    # Second reconcile: already complete, SAME verdict → NO second harvest.
+    recon.reconcile(tmp_path, "done_once", scheduler="sge")
+    assert harvests == ["complete"]
+
+
+def test_verdict_downgrade_reharvests(tmp_path, monkeypatch):
+    harvests = _count_harvests(monkeypatch)
+    # A run the journal already marked complete (a premature verdict).
+    upsert_run(tmp_path, _record("was_complete", status="complete", job_ids=["2"], total_tasks=1))
+    # New evidence: the single task actually FAILED → complete→failed downgrade.
+    monkeypatch.setattr("hpc_agent.infra.cluster_logs.fetch_task_logs", lambda **_kw: [])
+    _stub_cluster(
+        monkeypatch,
+        alive=set(),
+        summary={"complete": 0, "running": 0, "pending": 0, "failed": 1, "unknown": 0},
+    )
+
+    result = recon.reconcile(tmp_path, "was_complete", scheduler="sge")
+    assert result.status == "failed"
+    # complete → failed IS a transition (the verdict is revisable) → harvest fires.
+    assert harvests == ["failed"]
+
+
 def test_registered_inconsistent_run_still_abandoned_not_orphaned(tmp_path, monkeypatch):
     """A REGISTERED run with no alive jobs and an incomplete reporter summary is
     an ``abandoned`` verdict (existing path) — the benign-orphan branch only

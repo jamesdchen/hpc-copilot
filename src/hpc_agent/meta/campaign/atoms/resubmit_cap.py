@@ -13,8 +13,11 @@ Each ``RunRecord.retries`` maps ``task_id -> {attempts, ...}`` where
 ``attempts`` counts resubmits (a clean first submit records no entry), so
 summing ``attempts`` per ``task_id`` across the campaign's runs yields the
 campaign-wide resubmit count for that slot. ``campaign-advance`` emits the
-``stop_resubmit_cap`` terminal decision when the worst slot meets the
-supplied cap.
+``stop_resubmit_cap`` terminal decision when the worst slot meets the cap —
+which now **defaults to** :data:`DEFAULT_MAX_TASK_RESUBMITS` so the loud-fail
+backstop fires even when the manifest is silent (human-amplification design §5:
+"same task resubmitted >2× → stop and surface"), overridable by an explicit
+``--max-task-resubmits`` or a manifest value.
 
 **On the grain.** Task ids restart at 0 in each run, so summing by id
 folds the slot-N of every iteration together. For a runaway that keeps
@@ -32,7 +35,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
-__all__ = ["max_task_resubmits"]
+__all__ = ["DEFAULT_MAX_TASK_RESUBMITS", "max_task_resubmits"]
+
+# Framework-default per-task campaign resubmit backstop. ``campaign-advance``
+# applies this when neither an explicit ``--max-task-resubmits`` nor a manifest
+# value (``stop_criteria.max_task_resubmits`` / ``anomaly_policy.resubmit_cap``)
+# is set, so the loud-fail guard is a DEFAULT rather than opt-in. A manifest /
+# CLI value always overrides it.
+DEFAULT_MAX_TASK_RESUBMITS = 2
 
 
 def max_task_resubmits(runs: list[RunRecord]) -> dict[str, Any]:

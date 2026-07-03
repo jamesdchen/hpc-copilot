@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -157,6 +158,75 @@ def plan_action(
     return {"action": "skip", "reason": f"unknown delegate kind {kind!r}"}
 
 
+# Fallback watchdog deadline (seconds) when the tick left no cadence hint — a
+# generous default so a cron/`/loop` schedule that ticks less often than a
+# monitor poll does not false-alarm the ``doctor`` verb (§5).
+_DEFAULT_DRIVER_TICK_CADENCE_SECONDS = 900.0
+
+
+def _driver_tick_cadence_seconds(experiment_dir: Path, run_id: str) -> float:
+    """Best-effort read of the cadence the last monitor tick chose for *run_id*.
+
+    Reads ``next_tick_seconds`` from the tail of the run's
+    ``<run_id>.monitor.jsonl`` tick log (the only durable cadence signal in the
+    system, written by the monitor step this driver tick just ran). Falls back
+    to :data:`_DEFAULT_DRIVER_TICK_CADENCE_SECONDS` when absent, non-positive, or
+    unreadable — deriving the watchdog deadline from the pace the tick itself set
+    (design §5) rather than a fixed constant. Never raises.
+    """
+    try:
+        from hpc_agent.state.run_record import runs_dir
+
+        path = runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
+        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            nxt = json.loads(stripped).get("next_tick_seconds")
+            if isinstance(nxt, (int, float)) and not isinstance(nxt, bool) and nxt > 0:
+                return float(nxt)
+            break  # last record carried no cadence hint → default
+    except Exception:  # noqa: BLE001 — cadence read is best-effort
+        return _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
+    return _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
+
+
+def _stamp_driver_tick(experiment_dir: Path, run_id: str) -> None:
+    """Stamp the driver dead-man's-switch fields for *run_id* (§5 watchdog).
+
+    Every tick records ``last_tick_at`` + ``next_tick_due`` in the journal so an
+    independent failure domain (the in-session timer, or the OS-scheduled
+    ``doctor`` verb) can detect a stalled driver. ``next_tick_due`` is derived
+    from the cadence the tick itself chose (see
+    :func:`_driver_tick_cadence_seconds`). Best-effort and fully guarded: the
+    journal record is the primary state and a stamping failure (no record yet,
+    lock contention, clock issue) must never crash the tick.
+    """
+    try:
+        from datetime import timedelta
+
+        from hpc_agent.infra.time import utcnow
+        from hpc_agent.state.journal import stamp_tick
+
+        now_dt = utcnow()
+        cadence = _driver_tick_cadence_seconds(experiment_dir, run_id)
+        due = (now_dt + timedelta(seconds=cadence)).isoformat(timespec="seconds")
+        stamp_tick(
+            run_id,
+            last_tick_at=now_dt.isoformat(timespec="seconds"),
+            next_tick_due=due,
+            experiment_dir=experiment_dir,
+        )
+    except Exception:  # noqa: BLE001 — stamping must never crash the tick
+        # ... but a failing stamp blinds the watchdog (the doctor reads these
+        # fields), and "either side dying is loud" (§5). Warn, don't vanish.
+        logging.getLogger(__name__).warning(
+            "watchdog stamp failed for run %s — doctor cannot see this driver until a stamp lands",
+            run_id,
+            exc_info=True,
+        )
+
+
 def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
     """Run a deterministic ``hpc-agent`` workflow verb for *run_id*.
 
@@ -255,7 +325,12 @@ def drive_once(
     if dry_run or plan["action"] == "skip":
         return 0
     if plan["action"] == "cli":
-        return _run_cli_step(plan["verb"], plan["run_id"], experiment_dir)
+        exit_code = _run_cli_step(plan["verb"], plan["run_id"], experiment_dir)
+        # Stamp the dead-man's switch AFTER the step, so the cadence it chose is
+        # already on disk to derive next_tick_due from (§5). Guarded — never
+        # perturbs the step's own exit code.
+        _stamp_driver_tick(experiment_dir, plan["run_id"])
+        return exit_code
     if plan["action"] == "agent":
         return _run_agent_step(plan["spawn_request"], experiment_dir, resolver)
     return 0

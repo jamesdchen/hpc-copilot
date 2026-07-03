@@ -47,6 +47,17 @@ Every human touchpoint has one shape:
 4. On a nudge, the LLM digests it, re-drafts, and re-presents. Loop until `y`.
 
 Notes:
+- **The next-block suggestion is computed, journaled, and enforced — never
+  free-prose** (decided 2026-07-03). Each block's envelope carries a
+  machine-computed `next_block` (verb + why + spec hint — the campaign
+  driver's `_next_step_hint` pattern, generalized). The LLM surfaces it the
+  way `/sync` gets proposed at the end of a work chunk; the human's `y`
+  greenlights *that named verb*; the journaled decision records it; and the
+  next block's precondition gate verifies (a) its predecessor's code-written
+  artifacts and (b) that the latest journaled greenlight names *it*. A
+  mis-sequenced call fails loudly. Prose never hardcodes a sequence — the
+  affordance is removed, not documented ("a guard the LLM itself satisfies
+  is not a guard").
 - Palatable status rendering is **syntactic sugar** — nice, never load-bearing.
   The load-bearing surfaces are (a) error digestion → proposed fix and
   (b) code-extracted results → proposed interpretations.
@@ -77,6 +88,22 @@ spine (#346) — are non-negotiable code paths. Bespoke one-off ssh by the agent
 at the edges is acceptable; blocks should be complete enough that the agent
 never reverse-engineers the machinery mid-run.
 
+**Blocks never block the chat (decided 2026-07-03).** A block verb whose
+wall-clock is scheduler-bound (canary wait, main-array watch, speculation)
+returns *immediately* after spawning a durable detached worker
+(`_kernel/lifecycle/detached.py`), handing back `{started, run_id, watch:
+journal}`; the journal is the state, completion rides the tail-loop / doctor /
+cluster-watcher, and detach survives session death (harness-level backgrounding
+never did). Prose is never the mechanism that prevents a stall — the verb's
+contract is.
+
+The **invocation surface, enforcement, latency, and curated-tool** decisions
+that follow from this (MCP-preferred but enforcement-in-the-verb-not-the-surface;
+the CLI as invariant substrate; the warm in-process runner; the `next_block`-derived
+curated catalog) are specified in [`block-drive.md`](block-drive.md) §6–§7 —
+where the wave-4 code-driven chain that supersedes LLM-executed transitions also
+lives (§9).
+
 ### Submit, decomposed
 
 - **S1 — resolve:** preflight → detect entry point → walk ambiguities,
@@ -91,7 +118,7 @@ never reverse-engineers the machinery mid-run.
 - **S4 — harvest:** guaranteed (§5) — code-extracted results table → proposed
   interpretations → `y`/nudge.
 
-### Block parallelism (latency opportunity — stub)
+### Block parallelism (latency opportunity)
 
 Blocks create an interleaving opportunity:
 
@@ -103,8 +130,22 @@ Blocks create an interleaving opportunity:
 - **Cross-run pipelining:** blocks of different runs interleave freely (the
   journal is per-run).
 
-TODO: interleaving rules — what may touch the cluster before a greenlight,
-speculation budget caps, cancellation semantics on nudge.
+Interleaving rules (decided 2026-07-03):
+
+- **Pre-greenlight cluster-touch policy:** read-only probes, staging rsync,
+  AND the speculative canary may all run before a `y`. Rationale: the canary
+  is a single-task array; the cluster self-cleans and the operator sweeps it
+  periodically, so a stale speculative canary is queue noise, not damage.
+  Nothing beyond the canary — no main array — ever enters the queue before a
+  greenlight.
+- **Speculation budget:** at most **one** speculative canary in flight per
+  pending brief. Submit-scope only — campaign ticks never speculate. No
+  core-hour accounting needed at this bound.
+- **Nudge-cancellation:** speculative work is **never cancelled** on a nudge.
+  If the nudge changed the spec (cmd_sha differs from what the canary
+  launched under), the stale canary drains naturally and its result is
+  ignored; an unchanged spec keeps the canary result and S2 is already done.
+  No kill machinery on this path.
 
 ## 4. Campaigns: greenlit spec, then fully asynchronous
 
@@ -125,20 +166,33 @@ These are one recovery machine, not separate features:
 **Hybrid monitor.** A cluster-side watcher (a job/cron on the cluster — it
 survives the laptop) writes a status file; a light client-side supervisor reads
 it cheaply over the throttled spine and notifies. Either side dying is **loud**.
+Watcher form (decided 2026-07-03): an **install-time probe ladder**, never
+encoded site policy — try user `crontab` → `scrontab` (Slurm) → a
+self-resubmitting minimal watcher job → none available, in which case install
+nothing and say so loudly in the install envelope ("no cluster-side watcher;
+overnight blindness persists"). The watcher script is stdlib-only and
+short-lived per firing (write `status.json`, check `last_read` staleness) —
+inside every center's cron-use policy pattern.
 
 **Session tail-loop.** While the chat session is live, the LLM spawns a loop
 tailing the local supervisor's output — the human sees liveness without asking.
 If the chat session dies, job output is recovered from the cluster afterward.
 
-> **TODO (James):** exact session-death recovery mechanics — e.g. a successor
-> session (or the OS-scheduled doctor, below) locates orphaned runs via the
-> journal and re-arms tail + harvest from cluster state. Details deliberately
-> open.
+> **Decided (James, 2026-07-03):** session-death recovery rides the doctor.
+> The OS-scheduled `doctor` scan (below) also detects **orphaned runs**
+> (in_flight + stale `next_tick_due` + no live driver) and raises a
+> notification carrying a drafted re-arm proposal; a successor session (or
+> the human directly) answers `y`/nudge. One mechanism covers both stall and
+> session death — no separate machinery. Job output is recovered from the
+> cluster by the ordinary guaranteed harvest once re-armed (tick idempotency
+> makes the re-arm lossless).
 
 **Idempotent reconcile ticks.** The driver primitive. Durable state only
 (journal + filesystem + study DB); each tick harvests → records → resubmits
 actually-dead work → refills to K; safe to re-run; no double-submit; loud-fail
-guards (same task resubmitted >2× → stop and surface). Idempotency is what
+guards (a task slot accruing ≥2 resubmits campaign-wide → stop and surface,
+matching the within-run auto-retry cap; manifest-overridable). Idempotency is
+what
 makes every recovery below trivial: **re-arming loses nothing**.
 
 **Driver watchdog (dead-man's switch).** The driver itself must be watched:
@@ -172,6 +226,19 @@ now that the need is proven:
   surfaced as "N requested, N confirmed gone".
 - Tick telemetry legibility is lintable: every field labeled cumulative vs
   per-tick delta (the `told 0 · complete 39/40` confusion class).
+
+**No watcher is load-bearing; reconcile is the backstop.** Because an
+idempotent reconcile tick re-derives ground truth from the cluster (`squeue` +
+on-disk results) on *any* invocation, correctness never depends on a watcher
+running. Watchers only shrink the *detection-latency* window — how long until
+someone notices a given failure — they do not protect state. So the number of
+watchers is a preference, not a requirement: the cheap default is the
+in-session tail-loop (chat alive) + the OS-scheduled `doctor` (chat dead,
+client up), which bottom out cleanly at the OS scheduler; the cluster-side
+watcher (client vanished — overnight laptop sleep) is a genuinely distinct
+domain but its marginal value over reconstruct-on-wake is thin, so it stays
+**opt-in**, never default. Do not add a fourth watcher; add a failure domain's
+proactive alarm only when reconstruct-on-next-look is too slow for it.
 
 ## 6. What this kills (in the fork)
 
@@ -209,14 +276,41 @@ Non-problems (explicitly not designed around): palatable status formatting
 (sugar); LLM heartbeat gaps between notifications (harness hiccups); bespoke
 one-off ssh at the edges (fine when blocks are complete enough).
 
-## 8. Open TODOs
+## 8. TODOs (status as of 2026-07-03)
 
-- [ ] Session-death recovery mechanics (§5 stub — James).
-- [ ] Block interleaving rules: pre-greenlight cluster-touch policy,
-      speculation budgets, nudge-cancellation semantics (§3 stub).
-- [ ] `doctor` verb spec + OS-scheduler installation story (§5).
-- [ ] Decision-journal schema: what a recorded `y`/nudge exchange persists (§2).
-- [ ] Block decomposition of status/aggregate/campaign flows to the same grain
-      as submit S1–S4 (§3).
-- [ ] Which upstream surfaces to physically delete vs strand (§6), and the
-      skill-prose rewrite to single-sentence block starts.
+- [x] Session-death recovery mechanics — **decided:** doctor surfaces orphans
+      (§5).
+- [x] Block interleaving rules — **decided:** speculative canary allowed
+      pre-greenlight, budget = 1 per pending brief, nudges never cancel (§3).
+- [x] `doctor` verb — **built** (`hpc-agent doctor`, detection-only).
+      OS-scheduler installation — **decided:** opt-in install verb
+      (`doctor --install` → Task Scheduler / cron), never auto-installed;
+      implementation pending.
+- [x] Decision-journal schema — **built:** `append-decision` /
+      `read-decisions` over per-scope `decisions.jsonl`; the schema prose
+      lives in `docs/primitives/append-decision.md` (one record per
+      exchange, append-only, `y` sentinel vs nudge text).
+- [x] Block decomposition of status/aggregate/campaign flows — **built** to
+      the submit S1–S4 grain (status-snapshot/status-watch,
+      aggregate-check/aggregate-run,
+      campaign-greenlight/campaign-watch/campaign-complete).
+- [ ] Which upstream surfaces to physically delete vs strand (§6) —
+      **decided: strand now, delete later.** The worker is removed from
+      default routing; physical deletion happens in one dedicated pass once
+      the blocks are proven on a real run. The skill-prose rewrite to
+      single-sentence block starts rides that pass.
+
+## 9. Wave 4 — the code-driven chain
+
+The first three waves left the LLM still *executing* the deterministic
+block→block transition (it reads `next_block` and calls the next verb), which
+contradicts §1 and bloats the loop. The next deliberate step moves the
+sequencing into code — a stateless `block-drive` tick that chains the
+deterministic spans and pauses at decision points, with the LLM collapsed to a
+translator that renders briefs and commits an approved spec (never a `y`/nudge
+sentiment the code parses). It also consolidates every design decision taken
+since wave 3 (MCP-vs-CLI, curated surface, watchers, surface consolidation).
+
+**Full spec:** [`block-drive.md`](block-drive.md). Gated on the proving run; a
+refactor, not a tweak. Nothing from waves 1–3 is deleted by it (the §6 worker
+deletion remains its own separate pass).

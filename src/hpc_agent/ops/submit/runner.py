@@ -554,6 +554,44 @@ def submit_and_record(
         tasks_py_sha=resolved_tasks_py_sha or "",
     )
     upsert_run(experiment_dir, record)
+
+    # Stamp an INITIAL watchdog deadline the moment the in_flight record lands,
+    # so a run whose driver dies BEFORE its first monitor tick is still
+    # detectable as stalled (§5). Without it, ``next_tick_due`` stays unset until
+    # the first tick and :func:`hpc_agent.state.index.find_stalled_runs`
+    # permanently skips a never-ticked run — an undetectable stall. INITIAL_GRACE
+    # reuses the driver's fallback cadence
+    # (``_kernel.lifecycle.drive._DEFAULT_DRIVER_TICK_CADENCE_SECONDS``): the
+    # deadline by which the first real tick must have landed. Best-effort and
+    # loud, mirroring ``drive._stamp_driver_tick``: a stamp failure must never
+    # fail the submit, but a missing stamp blinds the watchdog, so warn.
+    try:
+        from datetime import timedelta
+
+        from hpc_agent._kernel.lifecycle.drive import _DEFAULT_DRIVER_TICK_CADENCE_SECONDS
+        from hpc_agent.infra.time import utcnow
+        from hpc_agent.state.journal import stamp_tick
+
+        _now = utcnow()
+        stamp_tick(
+            run_id,
+            last_tick_at=_now.isoformat(timespec="seconds"),
+            next_tick_due=(
+                _now + timedelta(seconds=_DEFAULT_DRIVER_TICK_CADENCE_SECONDS)
+            ).isoformat(timespec="seconds"),
+            experiment_dir=experiment_dir,
+        )
+    except Exception:  # noqa: BLE001 — the initial stamp must never fail the submit
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "initial watchdog stamp failed for run %s — the doctor / "
+            "find_stalled_runs cannot see this driver until a tick lands "
+            "next_tick_due",
+            run_id,
+            exc_info=True,
+        )
+
     # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids
     # we just got back. This is what distinguishes a real run from the
     # half-baked sidecar Step 6d of /submit-hpc writes before rsync — see

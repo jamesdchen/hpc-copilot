@@ -173,3 +173,53 @@ def test_malformed_jsonl_line_skipped(tmp_path: Path, journal_home: Path) -> Non
 def test_empty_run_id_raises(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid, match="non-empty"):
         monitor_summary(tmp_path, run_id="")
+
+
+# ── §5 kill telemetry on the summary surface ──────────────────────────────────
+
+
+def test_kill_line_rendered_when_kill_requested(tmp_path: Path, journal_home: Path) -> None:
+    """A run whose record carries a kill request surfaces the honest
+    "N requested, M confirmed gone" (M ≤ N) in the human-facing body."""
+    _seed(
+        tmp_path,
+        job_ids=["job_1", "job_2", "job_3"],
+        kill_requested_at="2026-01-01T01:00:00+00:00",
+        kill_requested_job_ids=["job_1", "job_2", "job_3"],
+        kill_confirmed_job_ids=["job_1", "job_2"],
+    )
+    _write_ticks(
+        tmp_path,
+        "r1",
+        {
+            "tick_id": "t",
+            "run_id": "r1",
+            "summary": {"complete": 0, "running": 3, "pending": 7, "failed": 0},
+            "diff_from_prev": {},
+            "actions": [],
+            "lifecycle_state": "in_flight",
+            "next_tick_seconds": 60,
+        },
+    )
+    out = monitor_summary(tmp_path, run_id="r1")
+    assert "kill: 3 requested, 2 confirmed gone" in out["body"]
+
+
+def test_no_kill_line_without_a_kill_request(tmp_path: Path, journal_home: Path) -> None:
+    """No kill telemetry noise on a run that was never killed."""
+    _seed(tmp_path)
+    _write_ticks(
+        tmp_path,
+        "r1",
+        {
+            "tick_id": "t",
+            "run_id": "r1",
+            "summary": {"complete": 10, "running": 0, "pending": 0, "failed": 0},
+            "diff_from_prev": {},
+            "actions": [],
+            "lifecycle_state": "complete",
+            "next_tick_seconds": None,
+        },
+    )
+    out = monitor_summary(tmp_path, run_id="r1")
+    assert "kill:" not in out["body"]

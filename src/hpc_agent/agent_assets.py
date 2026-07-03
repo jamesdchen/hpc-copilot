@@ -114,6 +114,97 @@ _SKILL_RETURN_STOP_ENTRY: dict[str, Any] = {
     ],
 }
 
+# The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
+# shell-free invocation surface for blocks (design §3, "The tool surface subsumes
+# the shell"). Registered venv-pinned via the current interpreter so it does not
+# depend on ``hpc-agent`` being on PATH. ``--allow-mutations`` exposes the
+# submit/aggregate verbs (cancel/raw-submit are never registry primitives, so they
+# stay unreachable either way); ``--catalog curated`` advertises exactly the
+# human-amplification block verbs (those returning a next_block) plus the
+# recovery/opt-in verbs (doctor, kill, submit-speculate), keeping the rest of the
+# catalog out of the model's context.
+_MCP_SERVER_NAME = "hpc-agent"
+_MCP_SERVER_ENTRY: dict[str, Any] = {
+    "type": "stdio",
+    "command": sys.executable,
+    "args": ["-m", "hpc_agent", "mcp-serve", "--allow-mutations", "--catalog", "curated"],
+}
+
+
+def _mcp_config_path(claude_dir: Path) -> Path:
+    """Where Claude Code reads user-global MCP servers from: ``.claude.json``.
+
+    Claude Code discovers user-global MCP servers in ``~/.claude.json`` (the
+    top-level ``mcpServers`` object), a SIBLING of the ``~/.claude`` config dir —
+    not inside it. So the path is derived from *claude_dir*'s parent, which makes
+    it hermetic under a test-supplied ``claude_dir`` (``tmp/.claude`` →
+    ``tmp/.claude.json``) while resolving to ``~/.claude.json`` for the default
+    install. (A user who relocates the whole config via ``CLAUDE_CONFIG_DIR`` and
+    passes that as ``claude_dir`` gets ``.claude.json`` alongside it, which is the
+    same sibling relationship.)
+    """
+    return claude_dir.parent / ".claude.json"
+
+
+def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
+    """Additively, idempotently register the ``hpc-agent`` MCP server in
+    ``.claude.json``'s ``mcpServers`` object.
+
+    Same contract as :func:`_merge_hook_entry`, targeting ``mcpServers`` in
+    ``.claude.json`` rather than ``hooks`` in ``settings.json``: creates an empty
+    ``{}`` model when the file is absent/unreadable, refuses to clobber a present
+    file that is not a JSON object (``skipped-unparseable``), and only ever adds
+    or in-place heals our one ``hpc-agent`` entry — every other server and key is
+    preserved verbatim. Idempotent: a byte-equal entry is ``already-present``; a
+    stale entry (e.g. a moved venv changing the interpreter path) is ``updated``.
+
+    Returns ``{config_path, action, wrote}`` where ``action`` is ``"added"`` /
+    ``"updated"`` / ``"already-present"`` / ``"skipped-unparseable"`` /
+    ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
+    """
+    config_path = _mcp_config_path(claude_dir)
+
+    config: dict[str, Any]
+    if config_path.exists():
+        try:
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {
+                "config_path": str(config_path),
+                "action": "skipped-unparseable",
+                "wrote": False,
+            }
+        if not isinstance(loaded, dict):
+            return {
+                "config_path": str(config_path),
+                "action": "skipped-unparseable",
+                "wrote": False,
+            }
+        config = loaded
+    else:
+        config = {}
+
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+
+    existing = servers.get(_MCP_SERVER_NAME)
+    if existing == _MCP_SERVER_ENTRY:
+        return {"config_path": str(config_path), "action": "already-present", "wrote": False}
+
+    if dry_run:
+        action = "dry-run-would-update" if existing is not None else "dry-run-would-add"
+        return {"config_path": str(config_path), "action": action, "wrote": False}
+
+    servers = dict(servers)
+    action = "updated" if existing is not None else "added"
+    servers[_MCP_SERVER_NAME] = _MCP_SERVER_ENTRY
+    config["mcpServers"] = servers
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    return {"config_path": str(config_path), "action": action, "wrote": True}
+
 
 def DEFAULT_CLAUDE_DIR() -> Path:
     """Return ``~/.claude`` (does not create the directory)."""
@@ -491,8 +582,13 @@ def install_agent_assets(
             "settings_stop_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
+            "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
             "wrote": <bool>,
         }
+
+    ``mcp_server`` reports the additive, idempotent registration of the
+    ``hpc-agent`` MCP server into ``.claude.json``'s ``mcpServers`` — see
+    :func:`_register_mcp_server`.
 
     ``cleared_collisions`` lists any pre-existing 0-byte files at
     ``<claude>/commands``/``skills``/``agents`` that were silently
@@ -563,6 +659,11 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
+    # preferred shell-free block-invocation surface (design §3) — additive +
+    # idempotent into .claude.json's mcpServers, never clobbering other servers.
+    mcp_server = _register_mcp_server(target, dry_run=dry_run)
+
     # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
     # classifier stops silently denying the first /submit-hpc → Skill(hpc-submit)
     # call. Same additive + idempotent + skip-unparseable contract as the hook
@@ -578,5 +679,6 @@ def install_agent_assets(
         "settings_hook": settings_hook,
         "settings_stop_hook": settings_stop_hook,
         "settings_permissions": settings_permissions,
+        "mcp_server": mcp_server,
         "wrote": not dry_run,
     }

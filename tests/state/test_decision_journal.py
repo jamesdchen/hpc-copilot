@@ -1,0 +1,165 @@
+"""Tests for the decision-journal state layer (``state/decision_journal.py``).
+
+Covers the append→read round-trip (order preserved), append-only
+discipline (a second append never clobbers the first), valid JSONL
+line-per-record on disk, both run and campaign scopes, and the ``y`` vs
+nudge-text ``response`` persistence.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+import pytest
+
+from hpc_agent import errors
+from hpc_agent.state.decision_journal import (
+    append_decision,
+    decisions_path,
+    read_decisions,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def test_append_then_read_round_trip_preserves_order(tmp_path: Path) -> None:
+    for block, response in [
+        ("submit.S1", "no — hold walltime, halve the grid"),
+        ("submit.S1", "y"),
+        ("harvest", "y"),
+    ]:
+        append_decision(
+            tmp_path,
+            scope_kind="run",
+            scope_id="20260101-000000-deadbee",
+            block=block,
+            response=response,
+            evidence_digest={"status": "canary green"},
+            proposal=["option A", "option B"],
+        )
+
+    records = read_decisions(tmp_path, "run", "20260101-000000-deadbee")
+    assert [(r["block"], r["response"]) for r in records] == [
+        ("submit.S1", "no — hold walltime, halve the grid"),
+        ("submit.S1", "y"),
+        ("harvest", "y"),
+    ]
+    # Every record carries the full design-§2 schema.
+    for r in records:
+        assert set(r) >= {
+            "schema_version",
+            "ts",
+            "scope_kind",
+            "scope_id",
+            "block",
+            "evidence_digest",
+            "proposal",
+            "response",
+            "resolved",
+            "provenance",
+        }
+        assert r["scope_kind"] == "run"
+
+
+def test_append_is_append_only(tmp_path: Path) -> None:
+    """A second append never clobbers the first."""
+    first = append_decision(
+        tmp_path, scope_kind="run", scope_id="run-x", block="submit.S1", response="y"
+    )
+    append_decision(tmp_path, scope_kind="run", scope_id="run-x", block="anomaly", response="stop")
+    records = read_decisions(tmp_path, "run", "run-x")
+    assert len(records) == 2
+    # The first record is byte-preserved (ts + payload) after the second append.
+    assert records[0] == first
+
+
+def test_disk_format_is_one_json_object_per_line(tmp_path: Path) -> None:
+    append_decision(tmp_path, scope_kind="run", scope_id="run-y", block="submit.S2", response="y")
+    append_decision(tmp_path, scope_kind="run", scope_id="run-y", block="harvest", response="y")
+    path = decisions_path(tmp_path, "run", "run-y")
+    assert path == tmp_path / ".hpc" / "runs" / "run-y.decisions.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    for line in lines:
+        obj = json.loads(line)  # each line is a standalone JSON object
+        assert isinstance(obj, dict)
+
+
+def test_campaign_scope_locality_and_round_trip(tmp_path: Path) -> None:
+    append_decision(
+        tmp_path,
+        scope_kind="campaign",
+        scope_id="camp-42",
+        block="campaign.spec",
+        response="y",
+        resolved={"strategy": "tpe", "budget": 1000},
+    )
+    path = decisions_path(tmp_path, "campaign", "camp-42")
+    assert path == tmp_path / ".hpc" / "campaigns" / "camp-42" / "decisions.jsonl"
+    records = read_decisions(tmp_path, "campaign", "camp-42")
+    assert len(records) == 1
+    assert records[0]["scope_kind"] == "campaign"
+    assert records[0]["resolved"] == {"strategy": "tpe", "budget": 1000}
+
+
+def test_run_and_campaign_scopes_are_separate_stores(tmp_path: Path) -> None:
+    append_decision(
+        tmp_path, scope_kind="run", scope_id="shared-id", block="submit.S1", response="y"
+    )
+    append_decision(
+        tmp_path, scope_kind="campaign", scope_id="shared-id", block="campaign.spec", response="y"
+    )
+    run_records = read_decisions(tmp_path, "run", "shared-id")
+    camp_records = read_decisions(tmp_path, "campaign", "shared-id")
+    assert len(run_records) == 1
+    assert len(camp_records) == 1
+    assert run_records[0]["block"] == "submit.S1"
+    assert camp_records[0]["block"] == "campaign.spec"
+
+
+def test_y_and_nudge_both_persist(tmp_path: Path) -> None:
+    append_decision(tmp_path, scope_kind="run", scope_id="r", block="submit.S1", response="y")
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="r",
+        block="submit.S1",
+        response="no — cut the batch to 8",
+    )
+    responses = [r["response"] for r in read_decisions(tmp_path, "run", "r")]
+    assert responses == ["y", "no — cut the batch to 8"]
+
+
+def test_read_missing_journal_returns_empty(tmp_path: Path) -> None:
+    assert read_decisions(tmp_path, "run", "never-written") == []
+
+
+def test_ts_is_auto_stamped_when_omitted(tmp_path: Path) -> None:
+    rec = append_decision(tmp_path, scope_kind="run", scope_id="r", block="b", response="y")
+    assert rec["ts"]  # non-empty ISO string
+    assert rec["schema_version"] == 1
+
+
+@pytest.mark.parametrize(
+    ("scope_kind", "scope_id", "block", "response"),
+    [
+        ("bogus", "r", "b", "y"),  # unknown scope_kind
+        ("run", "", "b", "y"),  # empty scope_id
+        ("run", "../escape", "b", "y"),  # path-escaping scope_id
+        ("run", "r", "", "y"),  # empty block
+        ("run", "r", "b", ""),  # empty response
+    ],
+)
+def test_append_rejects_invalid_input(
+    tmp_path: Path, scope_kind: str, scope_id: str, block: str, response: str
+) -> None:
+    with pytest.raises(errors.SpecInvalid):
+        append_decision(
+            tmp_path,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            block=block,
+            response=response,
+        )

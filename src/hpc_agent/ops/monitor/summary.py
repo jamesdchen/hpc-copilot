@@ -17,7 +17,7 @@ from anywhere (slash command, external orchestrator, debug shell).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
@@ -30,6 +30,114 @@ if TYPE_CHECKING:
 # Derived from the LifecycleStateTerminal Literal (the SoT in _wire/_shared.py)
 # so the terminal-state set stays in lock-step instead of being re-hardcoded.
 _TERMINAL_LIFECYCLE_STATES: frozenset[str] = frozenset(get_args(LifecycleStateTerminal))
+
+FieldKind = Literal["cumulative", "delta", "label"]
+
+# Single source of truth for telemetry-field legibility (design §5). Every
+# field emitted in the tick record (``ops/monitor/tick_log.py::_append_tick``)
+# and every count field the renderers below consume is declared here with its
+# kind:
+#
+#   * ``cumulative`` — a running total, a snapshot of the whole run so far
+#     (``complete=39`` of ``total=40``).
+#   * ``delta``      — a per-tick change since the previous tick (``+0`` newly
+#     complete → the "told 0" reading of the same underlying quantity).
+#   * ``label``      — identifier / lifecycle state / scheduling metadata,
+#     neither a running total nor a per-tick change.
+#
+# Rendering routes through :func:`_render_scalar`, which derives the marker
+# from the declared kind — so a cumulative count can never masquerade as a
+# delta and a delta always carries its ``+`` marker. The lint
+# ``scripts/lint_telemetry_labels.py`` fails CI if any emitted field is absent
+# here: that is the mechanized form of the ``told 0 · complete 39/40``
+# confusion contract (a cumulative read as a delta, or vice-versa).
+FIELD_KIND: dict[str, FieldKind] = {
+    # cumulative running totals — the ``summary`` block + the derived total
+    "complete": "cumulative",
+    "running": "cumulative",
+    "pending": "cumulative",
+    "failed": "cumulative",
+    "total": "cumulative",
+    # cumulative kill counts — the §5 first-class kill telemetry, rendered from
+    # the run record's kill ledger (``kill_requested_job_ids`` /
+    # ``kill_confirmed_job_ids``). Both are running totals ("N requested, M
+    # confirmed gone"), never per-tick deltas.
+    "kill_requested": "cumulative",
+    "kill_confirmed": "cumulative",
+    # per-tick deltas — the ``diff_from_prev`` block
+    "newly_complete": "delta",
+    "newly_failed": "delta",
+    "newly_combined_waves": "delta",
+    # labels / metadata — top-level tick-record fields that are neither a
+    # running total nor a per-tick change (``summary`` / ``diff_from_prev`` are
+    # the containers that hold the cumulative / delta blocks respectively).
+    "tick_id": "label",
+    "run_id": "label",
+    "summary": "label",
+    "diff_from_prev": "label",
+    "preflight": "label",
+    "actions": "label",
+    "lifecycle_state": "label",
+    "next_tick_seconds": "label",
+    "console_emitted": "label",
+}
+
+_DELTA_MARKER = "+"
+
+
+def _render_scalar(name: str, value: object) -> str:
+    """Render one telemetry scalar with the marker its declared kind requires.
+
+    The *kind* (from :data:`FIELD_KIND`), not the call site, fixes the marker:
+    a ``cumulative`` field renders ``name=value`` and can never acquire the
+    ``+`` delta marker; a ``delta`` field renders ``+value label`` and can
+    never lose it. This is the runtime half of the cumulative-vs-delta
+    contract that ``scripts/lint_telemetry_labels.py`` enforces statically —
+    the ``told 0 · complete 39/40`` confusion class.
+
+    A field absent from the registry (or one declared ``label``) is not a
+    renderable scalar and raises, mirroring the lint's fire condition at
+    runtime for a field that slipped past CI.
+    """
+    kind = FIELD_KIND.get(name)
+    if kind == "cumulative":
+        return f"{name}={value}"
+    if kind == "delta":
+        # The delta label is the cumulative field it tracks (``newly_complete``
+        # → ``complete``), so ``+N complete`` pairs visually with ``complete=M``.
+        label = name.removeprefix("newly_")
+        return f"{_DELTA_MARKER}{value} {label}"
+    raise errors.SpecInvalid(
+        f"telemetry field {name!r} has kind {kind!r}; only cumulative/delta "
+        f"fields render as scalars — declare it in FIELD_KIND"
+    )
+
+
+#: Human phrasing per kill-count field (§5 kill semantics: "N requested, N
+#: confirmed gone"). Keyed by the FIELD_KIND field name so the lint's render-fn
+#: scan of :func:`_format_kill_count` reaches a declared telemetry field.
+_KILL_PHRASE: dict[str, str] = {
+    "kill_requested": "requested",
+    "kill_confirmed": "confirmed gone",
+}
+
+
+def _format_kill_count(field: str, value: int) -> str:
+    """Render one cumulative kill-count field with its human phrasing.
+
+    Like :func:`_render_scalar`, the *kind* comes from :data:`FIELD_KIND` — a
+    kill count is a cumulative running total and can never be read as a per-tick
+    delta. Routing through this named helper (not an inline f-string) is what lets
+    ``scripts/lint_telemetry_labels.py`` see the field and require its
+    declaration; an undeclared kill field raises, mirroring the lint at runtime.
+    """
+    kind = FIELD_KIND.get(field)
+    if kind != "cumulative":
+        raise errors.SpecInvalid(
+            f"kill telemetry field {field!r} has kind {kind!r}; kill counts are "
+            "cumulative running totals — declare it cumulative in FIELD_KIND"
+        )
+    return f"{value} {_KILL_PHRASE[field]}"
 
 
 def _read_last_tick(jsonl_path: Path) -> dict[str, Any] | None:
@@ -53,16 +161,30 @@ def _read_last_tick(jsonl_path: Path) -> dict[str, Any] | None:
 
 
 def _format_counts(summary: dict[str, int], total: int) -> str:
-    """Render ``complete=4 running=2 pending=10 failed=0 / total=16``."""
+    """Render ``complete=4 running=2 pending=10 failed=0 / total=16``.
+
+    Every field is a *cumulative* running total; routing through
+    :func:`_render_scalar` keeps the delta marker off them (FIELD_KIND
+    declares each ``"cumulative"``).
+    """
     c = int(summary.get("complete") or 0)
     r = int(summary.get("running") or 0)
     p = int(summary.get("pending") or 0)
     f = int(summary.get("failed") or 0)
-    return f"complete={c} running={r} pending={p} failed={f} / total={total}"
+    return (
+        f"{_render_scalar('complete', c)} {_render_scalar('running', r)} "
+        f"{_render_scalar('pending', p)} {_render_scalar('failed', f)} "
+        f"/ {_render_scalar('total', total)}"
+    )
 
 
 def _format_diff(diff: dict[str, Any]) -> str | None:
-    """Render the ``newly_*`` fields of a tick's ``diff_from_prev`` block."""
+    """Render the ``newly_*`` fields of a tick's ``diff_from_prev`` block.
+
+    Each per-tick delta routes through :func:`_render_scalar`, whose marker is
+    fixed by FIELD_KIND — a delta always carries the ``+`` marker and can never
+    be misread as a cumulative count (the ``told 0 · complete 39/40`` class).
+    """
     parts: list[str] = []
     nc = diff.get("newly_complete") or []
     nf = diff.get("newly_failed") or []
@@ -72,10 +194,13 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     # monitor_flow._tick: ``diff[f"newly_{key}"] = [cur - prv]``).
     # Use the value, not the list length.
     if nc:
-        parts.append(f"+{int(nc[0])} complete")
+        parts.append(_render_scalar("newly_complete", int(nc[0])))
     if nf:
-        parts.append(f"+{int(nf[0])} failed")
+        parts.append(_render_scalar("newly_failed", int(nf[0])))
     if nw:
+        # newly_combined_waves is a *set* delta (wave IDs), not a count —
+        # rendered as an explicit phrase, still declared ``delta`` in
+        # FIELD_KIND so it can never be re-read as a cumulative snapshot.
         parts.append(f"combined waves {sorted(nw)}")
     return ", ".join(parts) if parts else None
 
@@ -189,6 +314,16 @@ def monitor_summary(
         body_lines.append(f"combined_waves: {sorted(record.combined_waves)}")
     if record.failed_waves:
         body_lines.append(f"failed_waves: {sorted(record.failed_waves)}")
+    # §5 first-class kill telemetry: once a kill has been requested on this run,
+    # surface the honest "N requested, M confirmed gone" from the journal's kill
+    # ledger (M ≤ N — kill.py only counts scheduler-confirmed-gone job ids).
+    if getattr(record, "kill_requested_at", None):
+        n_req = len(record.kill_requested_job_ids)
+        n_conf = len(record.kill_confirmed_job_ids)
+        body_lines.append(
+            f"kill: {_format_kill_count('kill_requested', n_req)}, "
+            f"{_format_kill_count('kill_confirmed', n_conf)}"
+        )
 
     armed_hint = (
         None

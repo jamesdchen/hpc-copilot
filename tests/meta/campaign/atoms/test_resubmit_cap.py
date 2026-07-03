@@ -140,12 +140,79 @@ def test_advance_under_cap_continues(_journal_home: Path, tmp_path: Path) -> Non
     assert out["resubmit_cap"]["count"] == 2
 
 
-def test_advance_no_cap_arg_never_fires(_journal_home: Path, tmp_path: Path) -> None:
-    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 9}})
+def test_advance_default_cap_fires_when_silent(_journal_home: Path, tmp_path: Path) -> None:
+    """Loud-fail DEFAULT (design §5): with no CLI arg and a silent manifest the
+    resubmit backstop still fires at the framework default (2) — it is on by
+    default, not opt-in."""
+    from hpc_agent.meta.campaign.atoms.resubmit_cap import DEFAULT_MAX_TASK_RESUBMITS
+
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
+
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A")
+    assert out["decision"] == "stop_resubmit_cap"
+    assert out["resubmit_cap"]["threshold"] == DEFAULT_MAX_TASK_RESUBMITS == 2
+
+
+def test_advance_below_default_cap_continues(_journal_home: Path, tmp_path: Path) -> None:
+    """One resubmit is under the default backstop (2) → continue, not a halt."""
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 1}})
 
     out = campaign_advance(experiment_dir=tmp_path, campaign_id="A")
     assert out["decision"] == "continue"
-    assert out["resubmit_cap"]["threshold"] is None
+    assert out["resubmit_cap"]["threshold"] == 2
+    assert out["anomaly_brief"] is None
+
+
+def test_advance_resubmit_cap_defaults_from_anomaly_policy(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """``anomaly_policy.resubmit_cap`` is a fallback default source (after an
+    explicit arg / ``stop_criteria`` and before the framework backstop)."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 4}})
+    # Raise the cap above the framework default via the anomaly policy → 4 < 5.
+    write_manifest(tmp_path, campaign_id="A", anomaly_policy={"resubmit_cap": 5})
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A")
+    assert out["decision"] == "continue"
+    assert out["resubmit_cap"]["threshold"] == 5
+
+
+def test_advance_emits_resubmit_anomaly_brief(_journal_home: Path, tmp_path: Path) -> None:
+    """A resubmit-cap trip emits a structured anomaly brief: what tripped,
+    evidence counts, a drafted recommendation, and the surface/park action."""
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 3}})
+
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A", max_task_resubmits=3)
+    brief = out["anomaly_brief"]
+    assert brief is not None
+    assert brief["tripped"] == "resubmit_cap"
+    assert brief["decision"] == "stop_resubmit_cap"
+    assert brief["evidence"]["count"] == 3
+    assert brief["evidence"]["threshold"] == 3
+    assert brief["evidence"]["task_id"] == "0"
+    # Default policy is "surface": recommend a y/nudge decision, never autonomy.
+    assert brief["on_anomaly"] == "surface"
+    assert brief["recommended_action"] == "surface_for_decision"
+    assert "'0'" in brief["recommendation"]
+
+
+def test_advance_park_policy_shapes_brief_recommendation(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """``anomaly_policy.on_anomaly='park'`` shapes the brief's recommendation to
+    a park (data only) WITHOUT changing the decision."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_iteration(tmp_path, run_id="r0", campaign_id="A", retries={"0": {"attempts": 2}})
+    write_manifest(tmp_path, campaign_id="A", anomaly_policy={"on_anomaly": "park"})
+
+    out = campaign_advance(experiment_dir=tmp_path, campaign_id="A")
+    assert out["decision"] == "stop_resubmit_cap"  # unchanged by the policy
+    brief = out["anomaly_brief"]
+    assert brief["on_anomaly"] == "park"
+    assert brief["recommended_action"] == "park_campaign"
+    assert "park" in brief["recommendation"]
 
 
 def test_advance_resubmit_cap_defaults_from_manifest(_journal_home: Path, tmp_path: Path) -> None:

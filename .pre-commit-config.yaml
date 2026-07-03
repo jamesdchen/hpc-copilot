@@ -145,6 +145,13 @@ repos:
         pass_filenames: false
         files: '^(src/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_raw_ssh\.py)$'
 
+      - id: lint-telemetry-labels
+        name: every emitted telemetry field declares cumulative vs per-tick delta
+        entry: python scripts/lint_telemetry_labels.py
+        language: python
+        pass_filenames: false
+        files: '^(src/hpc_agent/ops/monitor/(summary|tick_log)\.py|scripts/lint_telemetry_labels\.py)$'
+
       - id: lint-no-blocklisted-commands
         name: agent-facing prose never authors a harness-block-listed command (autonomous-stall guard)
         entry: python scripts/lint_no_blocklisted_commands.py

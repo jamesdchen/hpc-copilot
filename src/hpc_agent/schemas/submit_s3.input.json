@@ -1,0 +1,632 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_s3.input.json",
+  "title": "submit-s3 input spec",
+  "description": "Inputs to ``submit-s3`` (submit & watch).\n\nLaunches the main array (Phase-2 of the two-phase gate — the canary was\nalready verified in S2), then monitors to a terminal/anomaly state and arms\nthe next monitor tick. No human boundary inside.",
+  "type": "object",
+  "required": [
+    "submit",
+    "monitor",
+    "invocation_argv"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "submit": {
+      "$ref": "#/$defs/SubmitAndVerifySpec",
+      "description": "The SAME submit-and-verify spec S2 used. S3 launches its main array via the Phase-2 path (canary off; rsync/deploy/preflight already paid by S2's canary submit)."
+    },
+    "canary_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The verified canary's run_id from S2 (threaded onto the result).",
+      "title": "Canary Run Id"
+    },
+    "canary_job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The verified canary's scheduler ids from S2.",
+      "title": "Canary Job Ids"
+    },
+    "monitor": {
+      "$ref": "#/$defs/MonitorFlowSpec",
+      "description": "The monitor-flow spec used to watch the main array to terminal/timeout."
+    },
+    "invocation_argv": {
+      "description": "The exact /monitor-hpc argv the next tick should re-invoke; stamped into decide-monitor-arm's cron args.",
+      "minLength": 1,
+      "title": "Invocation Argv",
+      "type": "string"
+    },
+    "user_invoked_via_loop": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "True iff this tick runs under /loop (the user drives cadence; no cron armed).",
+      "title": "User Invoked Via Loop"
+    },
+    "detach": {
+      "default": true,
+      "description": "Detach-by-contract (design §3): default ON — never-stall is the norm. When True the greenlight gate + canary-validated gate + tree-drift guard ALL fire synchronously (gate → drift → detach) BEFORE the main array launches, then S3 spawns a durable detached worker that owns the launch + monitor-to-terminal poll and returns immediately with a {started, watch: journal, detached_pid} handle. The detached worker stamps the journal each poll so the §5 doctor/watchdog covers its death via a lapsed next_tick_due. Set False to run launch+monitor synchronously in-process (the current path — tests / CI).",
+      "title": "Detach",
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "MonitorFlowSpec": {
+      "additionalProperties": false,
+      "description": "Spec passed to ``hpc-agent monitor-flow --spec <file>``.\n\nWorkflow atom that polls a run to terminal state, auto-combines\nwaves as they finish, and writes the same .monitor.jsonl tick log\nthat /monitor-hpc writes — so summary mode works regardless of\nwhich surface drove monitoring. MVP does NOT auto-resubmit failed\ntasks (caller decides — escalation surfaces in the envelope's\nlifecycle_state and escalation_reason).",
+      "properties": {
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "poll_interval_seconds": {
+          "default": 60,
+          "description": "Seconds to sleep between status polls. Match to expected per-task runtime — 60s is fine for 10-min tasks; 300s for hour-scale tasks.",
+          "minimum": 5,
+          "title": "Poll Interval Seconds",
+          "type": "number"
+        },
+        "wall_clock_budget_seconds": {
+          "default": 86400,
+          "description": "Hard cap on total monitoring time. When exceeded, monitor-flow returns with lifecycle_state='timeout' and the cluster jobs continue running. Caller may re-invoke to keep watching.",
+          "minimum": 0,
+          "title": "Wall Clock Budget Seconds",
+          "type": "number"
+        },
+        "auto_combine_waves": {
+          "default": true,
+          "description": "Invoke combine-wave for each newly-complete wave during the poll loop. Disable when the caller wants to defer aggregation (e.g. campaign sweep that combines all waves once at the end).",
+          "title": "Auto Combine Waves",
+          "type": "boolean"
+        },
+        "combiner_max_retries": {
+          "default": 1,
+          "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and stays in failed_waves; monitor-flow continues watching the rest of the run.",
+          "minimum": 0,
+          "title": "Combiner Max Retries",
+          "type": "integer"
+        },
+        "file_glob": {
+          "default": "*",
+          "description": "File pattern passed to the cluster-side reporter for per-task result-file presence checks. Override to e.g. 'metrics_chunk_*.json' for stricter completion detection.",
+          "title": "File Glob",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "monitor-flow input spec",
+      "type": "object"
+    },
+    "MpiSpec": {
+      "additionalProperties": false,
+      "description": "Multi-rank job shape: N ranks across M nodes as ONE unit of work (#293).\n\nhpc-agent's default axis is independent-task fan-out (one task = one\nprocess). An MPI solve breaks that shape — a single computation spans\n``ranks`` processes that coordinate via the MPI library, and the whole\nmulti-rank job is one unit of work. This block, hung on\n:class:`SubmitResources`, carries the rank/topology controls; the\nbackend's ``resource_flags`` translates them into scheduler directives\n(``--ntasks`` / ``-pe`` / ``select=``) and the ``mpi`` job template wraps\nthe executor in the chosen ``launcher``.\n\nEvery field but ``ranks`` is optional. ``ranks_per_node`` left null lets\nthe scheduler pack ranks onto nodes; set it to pin the decomposition\n(then ``nodes = ranks / ranks_per_node`` and the divisibility guard\nbelow fires on an incoherent combo).",
+      "properties": {
+        "ranks": {
+          "description": "Total MPI ranks (processes) for the job. SLURM --ntasks / SGE -pe <pe> N.",
+          "minimum": 1,
+          "title": "Ranks",
+          "type": "integer"
+        },
+        "ranks_per_node": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ranks packed onto each node. Null lets the scheduler decide. When set, must divide ``ranks`` evenly so node count is integral.",
+          "title": "Ranks Per Node"
+        },
+        "threads_per_rank": {
+          "default": 1,
+          "description": "OpenMP threads per rank (hybrid MPI+OpenMP). SLURM --cpus-per-task.",
+          "minimum": 1,
+          "title": "Threads Per Rank",
+          "type": "integer"
+        },
+        "launcher": {
+          "description": "How the job template launches the ranks: srun / mpirun / aprun.",
+          "enum": [
+            "srun",
+            "mpirun",
+            "aprun"
+          ],
+          "title": "Launcher",
+          "type": "string"
+        },
+        "pe_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SGE parallel environment to request (``-pe <pe_name> <ranks>``). Resolved from inspect-cluster's parallel_environments (kind=mpi). Required for SGE; ignored by SLURM/PBS.",
+          "title": "Pe Name"
+        }
+      },
+      "required": [
+        "ranks",
+        "launcher"
+      ],
+      "title": "mpi spec",
+      "type": "object"
+    },
+    "SubmitAndVerifySpec": {
+      "additionalProperties": false,
+      "description": "Spec passed to ``hpc-agent submit-and-verify --spec <file>``.",
+      "properties": {
+        "submit": {
+          "$ref": "#/$defs/SubmitFlowSpec",
+          "description": "The submit-flow spec the run will execute. Must have canary=True for verification to run; canary=False makes the workflow degenerate to a bare submit-flow call."
+        },
+        "expect_output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path (relative to remote_path or absolute) the canary should have written. Forwarded to verify-canary; None skips the output-existence check.",
+          "title": "Expect Output"
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative path under the canary's result_dir of a file to SHA256 over SSH. Forwarded to verify-canary; None skips fingerprinting.",
+          "title": "Fingerprint"
+        },
+        "checkpoint_result_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Checkpoint canary (#294 PR4) override: the canary task-0 result dir (relative to remote_path or absolute) whose _checkpoints/ the round-trip probe inspects. Only consulted when submit.auto_resume_on_kill is true (which auto-enables checkpoint verification). None derives it from the canary sidecar's result_dir_template — pass it explicitly only when that template references per-task kwargs that can't be rendered locally.",
+          "title": "Checkpoint Result Dir"
+        },
+        "poll_interval_sec": {
+          "default": 10,
+          "description": "Adaptive poll interval for the canary wait, in seconds.",
+          "minimum": 1,
+          "title": "Poll Interval Sec",
+          "type": "integer"
+        },
+        "wait_budget_sec": {
+          "default": 1800,
+          "description": "Total seconds to wait for the canary to land terminal before giving up with failure_kind='timeout'.",
+          "minimum": 1,
+          "title": "Wait Budget Sec",
+          "type": "integer"
+        },
+        "log_dir": {
+          "default": "logs",
+          "description": "Cluster-side log directory for the canary stderr scan.",
+          "title": "Log Dir",
+          "type": "string"
+        },
+        "file_glob": {
+          "default": "*",
+          "description": "Cluster-side log file glob for the canary stderr scan.",
+          "title": "File Glob",
+          "type": "string"
+        }
+      },
+      "required": [
+        "submit"
+      ],
+      "title": "submit-and-verify input spec",
+      "type": "object"
+    },
+    "SubmitFlowSpec": {
+      "additionalProperties": false,
+      "description": "Spec passed to ``hpc-agent submit-flow --spec <file>``.\n\nWorkflow atom that does pre-flight + rsync + deploy + optional\ncanary + qsub + record in one shot. All judgment (which\nconstraint, which walltime, which executor, scaffold tasks.py)\nis the caller's responsibility — this atom takes resolved values\nand executes.",
+      "properties": {
+        "profile": {
+          "minLength": 1,
+          "title": "Profile",
+          "type": "string"
+        },
+        "cluster": {
+          "minLength": 1,
+          "title": "Cluster",
+          "type": "string"
+        },
+        "ssh_target": {
+          "pattern": "^[^@]+@[^@]+$",
+          "title": "Ssh Target",
+          "type": "string"
+        },
+        "remote_path": {
+          "minLength": 1,
+          "title": "Remote Path",
+          "type": "string"
+        },
+        "job_name": {
+          "minLength": 1,
+          "title": "Job Name",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "total_tasks": {
+          "minimum": 1,
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "script": {
+          "description": "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/cpu_array.sh). deploy_runtime places these under remote_path/.hpc/templates/.",
+          "title": "Script",
+          "type": "string"
+        },
+        "job_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Env vars forwarded into the cluster job. Caller is responsible for setting EXECUTOR, HPC_RUN_ID, HPC_CMD_SHA, HPC_TASK_COUNT, REPO_DIR, MODULES, CONDA_SOURCE/CONDA_ENV (as needed), HPC_RUNTIME (if uv), HPC_CAMPAIGN_ID (if part of a campaign).",
+          "title": "Job Env",
+          "type": "object"
+        },
+        "pass_env_keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SGE-only: which job_env keys to forward via qsub -v. Null (or omit) = forward every key in job_env; pass a list to restrict to those keys. An EMPTY list is refused — it would forward zero vars and produce a broken job. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...).",
+          "title": "Pass Env Keys"
+        },
+        "slurm_account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SLURM-only: account to charge (sbatch --account). Defaults to whatever SLURM picks for the user.",
+          "title": "Slurm Account"
+        },
+        "slurm_cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this.",
+          "title": "Slurm Cluster"
+        },
+        "scheduler_profile": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pinned SchedulerProfile (as a dict) for a cluster whose scheduler differs from the golden slurm/sge defaults. When set, the backend is built bound to this profile: its 'family' (slurm/sge) selects the command grammar and its data (job_id_regex, scripts, error_states) overrides the golden default. Null = use the golden profile for 'backend'. Typically sourced from the cluster's clusters.yaml 'scheduler_profile' entry.",
+          "title": "Scheduler Profile"
+        },
+        "canary": {
+          "default": true,
+          "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good.",
+          "title": "Canary",
+          "type": "boolean"
+        },
+        "canary_only": {
+          "default": false,
+          "description": "Two-phase canary gate (#160): submit ONLY the canary, do NOT launch the main array, and return main_launched=false. The caller then verifies the canary (hpc-agent verify-canary) and re-invokes submit-flow with canary=false to launch the main array only on success — so a broken dispatch can't sail past the canary into the full run. Requires canary=true.",
+          "title": "Canary Only",
+          "type": "boolean"
+        },
+        "canary_skip_threshold": {
+          "default": 4,
+          "description": "Auto-skip the canary when total_tasks <= this threshold (#263): for a tiny batch the main array's own first tasks catch a broken executor as fast as a canary would, so the canary is pure friction. Default 4. Set 0 to always canary. Env HPC_CANARY_SKIP_THRESHOLD overrides per-invocation. Ignored when canary_only=true (an explicit two-phase gate) or force_canary=true.",
+          "minimum": 0,
+          "title": "Canary Skip Threshold",
+          "type": "integer"
+        },
+        "force_canary": {
+          "default": false,
+          "description": "Always submit a canary, overriding both the total_tasks<=threshold auto-skip (#263) and the cached-cmd_sha skip (#249). For the rare small-but-expensive batch where the extra safety is worth it.",
+          "title": "Force Canary",
+          "type": "boolean"
+        },
+        "enable_afterok_dependency": {
+          "default": false,
+          "description": "Gate the main array on the canary SUCCEEDING via a scheduler-level afterok dependency (#250) instead of the canary running independently of main. When the canary fires AND the scheduler supports afterok (SLURM / PBS; SGE has no native afterok and is left un-gated), the main array is submitted immediately holding on afterok:<canary_job_id> — the scheduler drops main if the canary fails — so there is no orchestrator wait+verify+resubmit round-trip. Opt-in (default off).",
+          "title": "Enable Afterok Dependency",
+          "type": "boolean"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
+        },
+        "parents": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[A-Za-z0-9._\\-]+$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Run_ids whose outputs this run consumes (DAG lineage, docs/design/dag-kernel.md). Each must have a local sidecar under .hpc/runs/. The framework records them as parent_run_ids on this run's sidecar and derives node_sha = compose_node_sha(cmd_sha, parent identities) so dedup keys on params AND ancestry — a parent re-run with changed params can never silently replay this child's stale results. Opaque lineage only: the framework hands paths across the edge (parent_records()), never interprets them. Readiness is NOT checked by submit-flow itself — submit-pipeline composes validate-parents-ready mechanically when parents is set; bare submit-flow callers compose it themselves. Callers that need the lineage cluster-side forward it via job_env (HPC_PARENT_RUN_IDS), same convention as HPC_CAMPAIGN_ID.",
+          "title": "Parents"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "const": "uv",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "input_datasets": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Declared input-dataset path(s) for DATA provenance (#222/#312) — the same path(s) a validate-input-dataset gate names as dataset_path. When set, submit-flow auto-captures data_sha = compute_data_sha(input_datasets) on this run's sidecar at sidecar-write time, exactly as env_hash is auto-captured — no manual write-run-sidecar step. Relative paths resolve against the experiment dir; a DVC-tracked path uses the .dvc pointer's recorded md5; a declared-but-missing path contributes the 'absent' sentinel (the absence IS the provenance fact). When unset, data_sha stays null — 'not captured' is distinguishable from any real digest. Provenance only: never part of the dedup identity.",
+          "title": "Input Datasets"
+        },
+        "auto_resume_on_kill": {
+          "default": false,
+          "description": "Opt-in automatic checkpoint-resume on a preemption/walltime kill (#294 Layer 2 / #299). Default OFF: a run that does not set this is NEVER auto-resubmitted. When ON, the monitor's terminal-FAILED hook consults the auto-resume gate — and ONLY on an explicit per-task preempt mark (the dispatcher's SIGTERM signal; exit 130). OOM (137) and executor errors carry no mark and always escalate instead of looping. Requires checkpoint-writing executors to make progress; a task with no checkpoint just restarts from scratch on resume.",
+          "title": "Auto Resume On Kill",
+          "type": "boolean"
+        },
+        "max_auto_resumes": {
+          "default": 2,
+          "description": "Hard cap on automatic resumes for this run when auto_resume_on_kill is set (#299). The ultimate backstop: even total misclassification can waste at most this many resubmits before the gate escalates with 'cap reached'. Ignored when auto_resume_on_kill is false.",
+          "minimum": 1,
+          "title": "Max Auto Resumes",
+          "type": "integer"
+        },
+        "auto_recover_on_failure": {
+          "default": false,
+          "description": "Opt-in automatic deterministic recovery on a non-preempt FAILED tick (#240 / #234). Default OFF: a run that does not set this is NEVER auto-recovered — the monitor's resolve-and-recover hook still computes and surfaces the verdict-as-data (#283) but takes no side effect. When ON, a ``decided_by=\"code\"`` verdict under the cap is auto-resubmitted with the resolver's refined overrides; a ``decided_by=\"judgement\"`` verdict is always parked, never auto-acted. Independent of auto_resume_on_kill (which stays preempt-only) — enabling general auto-recovery is a deliberate separate choice.",
+          "title": "Auto Recover On Failure",
+          "type": "boolean"
+        },
+        "max_auto_recovers": {
+          "default": 2,
+          "description": "Hard cap on automatic code-verdict resubmits for this run when auto_recover_on_failure is set (#240). The ultimate backstop: even total misclassification can waste at most this many resubmits before the composite parks with 'cap reached'. Ignored when auto_recover_on_failure is false.",
+          "minimum": 1,
+          "title": "Max Auto Recovers",
+          "type": "integer"
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubmitResources"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Scheduler resource asks (walltime/mem/cpus) emitted as qsub/sbatch flags. Null/empty = no resource flags; the job template directives and cluster defaults apply unchanged."
+        },
+        "result_dir_template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-task result-dir template (e.g. 'results/{run_id}/task_{task_id}'). The cluster dispatcher hard-requires this (it reads it from the per-run sidecar). Supplying it lets submit-flow GUARANTEE the sidecar exists at rsync time — it synthesizes the sidecar from the spec when a prior step (write_run_sidecar / Step 6d) did not already write one, instead of shipping an empty .hpc/runs/ that dooms every cluster task. Null = rely on a pre-written sidecar.",
+          "title": "Result Dir Template"
+        },
+        "rsync_excludes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
+          "title": "Rsync Excludes"
+        },
+        "partial_ok": {
+          "default": false,
+          "description": "When true, the sidecar records partial_ok=True under the `extra` pocket. monitor-flow consults this on terminal classification: a wave with at least one success is reported as `complete` (instead of `failed`) when partial_ok=true, and a `<run_id>.failed.json` ledger lists the failed task IDs. aggregate-flow honors the same ledger by skipping those task IDs and reporting `partial_failures`.",
+          "title": "Partial Ok",
+          "type": "boolean"
+        },
+        "invalidate_on_code_change": {
+          "default": false,
+          "description": "Opt-in code-iteration safety (#207). cmd_sha (the dedup key, carried in job_env['HPC_CMD_SHA']) is PARAMETER identity only: editing the executor body without changing any swept parameter keeps the same cmd_sha, so a cross-machine resubmit (journal wiped, sidecar surviving) would dedup against — and silently replay — the prior run's OLD code. When true, the run's tasks.py drift sha (already recorded on the sidecar as tasks_py_sha) is folded into the cmd_sha dedup fallback so a code-only change forces a fresh run. Default false leaves the param-only dedup key untouched; a detected drift still warns regardless of this flag. Threads through to submit_and_record.",
+          "title": "Invalidate On Code Change",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "profile",
+        "cluster",
+        "ssh_target",
+        "remote_path",
+        "job_name",
+        "run_id",
+        "total_tasks",
+        "backend",
+        "script",
+        "job_env"
+      ],
+      "title": "submit-flow input spec",
+      "type": "object"
+    },
+    "SubmitResources": {
+      "additionalProperties": false,
+      "description": "Scheduler resource asks emitted as qsub/sbatch flags.\n\nFirst-class in the submit spec (#146): the planning/validation layer\nalready resolves and validates walltime against history + cluster\nceilings, but before this the submission layer had nowhere to put the\nresult, so the resolved walltime was silently dropped and the job ran\non the cluster default. Every field is optional and opt-in — an\nomitted/empty ``resources`` block emits NO new scheduler flags, so the\ntemplate directives (and the cluster default) apply exactly as before.\n\nThe backend translates each set field into its scheduler's flag:\n\n* ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``\n* ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``\n* ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``\n\nThese override the corresponding directive baked into the job\ntemplate (a command-line flag beats a ``#$``/``#SBATCH`` line), which\nis the only way to vary a per-submission resource since SGE ``#$``\ndirectives cannot read env vars.",
+      "properties": {
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wall-clock limit in seconds. SGE -l h_rt / SLURM --time.",
+          "title": "Walltime Sec"
+        },
+        "mem_mb": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Memory ask in MB. SGE -l h_data (per-slot) / SLURM --mem.",
+          "title": "Mem Mb"
+        },
+        "cpus": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPU cores. SGE -pe shared <n> / SLURM --cpus-per-task.",
+          "title": "Cpus"
+        },
+        "mpi": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MpiSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Multi-rank (MPI) job shape (#293). When set, the job is ONE multi-rank unit of work rather than a fan-out of single-process tasks: the backend emits multi-node directives (--ntasks / -pe / select=) and the mpi template wraps the executor in the launcher. Null = ordinary single-process task (cpus/mem/walltime apply as before)."
+        }
+      },
+      "title": "submit resources",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/doctor.output.json",
+  "title": "doctor output data",
+  "description": "Shape of the ``data`` field on a ``doctor`` envelope.",
+  "type": "object",
+  "required": [
+    "now",
+    "stalled_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "now": {
+      "description": "The instant the scan was evaluated against (ISO-8601 UTC).",
+      "title": "Now",
+      "type": "string"
+    },
+    "stalled_count": {
+      "description": "Number of live runs past their tick deadline.",
+      "title": "Stalled Count",
+      "type": "integer"
+    },
+    "stalled": {
+      "description": "One entry per stalled run, each with a drafted recovery proposal.",
+      "items": {
+        "$ref": "#/$defs/StalledRunProposal"
+      },
+      "title": "Stalled",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "StalledRunProposal": {
+      "additionalProperties": false,
+      "description": "One stalled run + its drafted (never-enacted) recovery proposal.",
+      "properties": {
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "description": "Journal status of the stalled run (always 'in_flight').",
+          "title": "Status",
+          "type": "string"
+        },
+        "last_tick_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the driver last ticked (ISO-8601 UTC), or null if unknown.",
+          "title": "Last Tick At"
+        },
+        "next_tick_due": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The missed deadline: when the next tick was due (ISO-8601 UTC).",
+          "title": "Next Tick Due"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Cluster the run was submitted to.",
+          "title": "Cluster"
+        },
+        "ssh_target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SSH target for the run's cluster.",
+          "title": "Ssh Target"
+        },
+        "proposal": {
+          "description": "Human-facing DRAFTED recovery proposal, e.g. 'driver stalled since <last_tick_at>, status in_flight, re-arm?'. Surfaced for a y/nudge decision — doctor NEVER enacts it.",
+          "title": "Proposal",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "The detection evidence (deadline, now, seconds overdue) behind the proposal.",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "proposal",
+        "evidence"
+      ],
+      "title": "doctor stalled-run proposal",
+      "type": "object"
+    }
+  }
+}

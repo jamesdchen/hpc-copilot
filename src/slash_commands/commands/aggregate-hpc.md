@@ -1,72 +1,40 @@
-`/aggregate-hpc` is the **human-interview wrapper** around the `hpc-aggregate` skill — the agent-autonomous decision layer that combines a terminal HPC run's per-task results into a final metrics envelope.
+`/aggregate-hpc` is the **human-interview wrapper** around the `hpc-aggregate` skill — the block-loop relay that starts with `aggregate-check` (readiness + integrity, never auto-masking a problem) and, on a clean run, reduces via `aggregate-run` (whose reducer — never the LLM — computes every aggregate number). The slash parses arguments, invokes the skill, and relays each brief.
 
-## Execution style
+## The flow
 
-- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
-- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+1. **Parse `$ARGUMENTS`** — optional `profile`, `run_id`, and whether the user pre-approved partial aggregation.
+2. **Invoke the skill.** It runs `aggregate-check` and hands back the readiness/integrity brief.
+3. **Relay the brief, collect `y` or a nudge.** Show the readiness digest (terminal status, combined/failed waves) and any `integrity_issues` — each carries `auto_masked: false` and a conservative recommendation. Plus the `next_block` suggestion (`aggregate-run` when clean). The user greenlights with a `y` or nudges (e.g. approve `allow_partial` on `missing_waves`). No per-field `[Y/n]` dialogs.
+4. **Loop.** On `y`, the skill journals the greenlight and fires `aggregate-run`; relay its results-table brief. The user chooses the interpretation — do not re-compute or interpret the numbers.
 
 ## Invocation
 
-Invoke the `hpc-aggregate` skill via the Skill tool with the initial spec:
+Invoke the `hpc-aggregate` skill via the Skill tool (only the fields the user pinned):
 
 ```
 Skill("hpc-aggregate", {
   experiment_dir: ".",
   profile: <if user stated>,
   run_id: <if user stated>,
-  allow_partial: <if user requested>
+  allow_partial: <if user pre-approved>
 })
 ```
 
-The skill auto-discovers profile/run/stage from on-disk state; only fields the user pinned go in the initial spec.
+The block auto-discovers profile / run / stage from on-disk state.
 
-## Parallel startup
+## Relaying a brief
 
-The aggregate dispatch spends its startup on load-context + reconcile + the cluster rsync-pull. **Dispatch the `hpc-aggregate` skill in the background** (Claude Code's `Agent` tool `run_in_background: true`) and, in parallel, do the local work (#286):
+- **Multiple profiles with terminal runs:** the check brief lists them; ask which and fold into the nudge.
+- **`missing_waves`:** surfaced as a decision with the safe recommendation to investigate (a partial usually masks a real cluster failure). The user explicitly greenlights `allow_partial` after seeing what's missing.
+- **A contamination / provenance / column-schema integrity issue** is never auto-masked and carries `next_block: null` — surface it; investigation is the user's branch, not a proceed-anyway default.
 
-- **Summarise the local results tree.** Show what's already under `<experiment_dir>/_aggregated/<run_id>/` (prior pulls, partial combiner output) so the user has context while the pull runs.
-- **Canvass `allow_partial`.** When the run is terminal-with-failures the skill will ask whether to aggregate on partial data; pull that question forward so the answer rides the join.
+## `spec_invalid` from the skill
 
-Await the dispatch at the join — immediate when the results are already pulled/cached. An `allow_partial` answer folds in (it changes how the worker reduces, not what it pulls). Same shape as `/submit-hpc`'s parallel startup, ported per #286.
-
-## On `needs_resolution` — walking ambiguities
-
-### Dialog: `profile`
-
-Multiple profiles with terminal runs. Show candidates from the envelope:
-
-```
-Multiple profiles have terminal runs:
-  1. ml_ridge — 3 runs, latest <run_id> (complete, 100/100)
-  2. dl_patchts — 1 run, <run_id> (terminal_with_failures, 22/24)
-Which profile?
-```
-
-### Dialog: `allow_partial`
-
-```
-Run <id> has <N>/<M> waves complete (<count> still running or failed). Aggregate on partial data?
-  [Y]  proceed; mark envelope partial: true
-  [n]  refuse; wait for the remaining waves (default)
-```
-
-Default **n** — partial aggregation usually masks real cluster issues.
-
-## On final envelope
-
-Surface to the user:
-- `data.report.result.aggregated_metrics`
-- `data.report.result.partial` flag if applicable
-- `data.report.result.ingested_runtime_samples`
-- `data.report.decisions`
-- `data.report.anomalies`
-
-## On `spec_invalid` (not `needs_resolution`)
-
-- `nothing_to_aggregate`: "Nothing to aggregate — no terminal runs."
-- `integrity_violation`: surface the code + evidence. Do NOT auto-proceed — these need investigation.
+- `nothing_to_aggregate` (cluster-confirmed via the check's reconcile): "Nothing to aggregate — no terminal runs."
+- A run that ran-and-failed surfaces the classified error; an `abandoned` run surfaces a re-submit / combiner-only remediation.
 
 ## Notes
 
 - **Refuse partial by default.** Aggregating on incomplete waves silently produces wrong final metrics.
+- **The reducer computes every number.** Never hand-assemble `metrics.json`, even for a mean of ten numbers.
 - **Idempotent.** Re-aggregating produces byte-identical output.

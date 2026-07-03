@@ -80,6 +80,53 @@ class _Strategy(BaseModel):
     )
 
 
+class _AnomalyPolicy(BaseModel):
+    """Campaign anomaly-handling policy (design §4: the greenlit spec's
+    ``anomaly policy``).
+
+    Every field mirrors a control ``campaign-advance`` already enforces —
+    no speculative knobs. The block is written once at campaign start and
+    read (never mutated) by ``campaign-advance``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    on_anomaly: Literal["surface", "park"] = Field(
+        default="surface",
+        description=(
+            "How ``campaign-advance`` frames a tripped loud-fail guard in its "
+            "``anomaly_brief``: ``surface`` (default) recommends surfacing the "
+            "drafted brief for a human ``y``/nudge decision; ``park`` recommends "
+            "halting until a human intervenes. Data only — the framework never "
+            "acts autonomously on either; it only shapes the brief's "
+            "recommendation."
+        ),
+    )
+    resubmit_cap: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Per-task campaign resubmit backstop, mirroring "
+            "``stop_criteria.max_task_resubmits``. Consulted by "
+            "``campaign-advance`` only when neither the explicit "
+            "``--max-task-resubmits`` nor ``stop_criteria.max_task_resubmits`` is "
+            "set; when it too is absent the framework backstop (2) still fires. "
+            "Set it to raise/lower the backstop."
+        ),
+    )
+    circuit_breaker_failures: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Consecutive-failure circuit breaker, mirroring "
+            "``stop_criteria.circuit_breaker_failures``. Consulted by "
+            "``campaign-advance`` only when neither the explicit arg nor "
+            "``stop_criteria.circuit_breaker_failures`` is set. No framework "
+            "default — omitted keeps the breaker off."
+        ),
+    )
+
+
 class CampaignManifest(BaseModel):
     """Schema for ``<campaign_dir>/manifest.json``."""
 
@@ -98,6 +145,25 @@ class CampaignManifest(BaseModel):
     budget: _CampaignBudget | None = None
     stop_criteria: _StopCriteria | None = None
     strategy: _Strategy | None = None
+    anomaly_policy: _AnomalyPolicy | None = None
+    greenlit: bool = Field(
+        default=False,
+        description=(
+            "Provenance marker: the campaign spec was greenlit once at start "
+            "(design §4 — 'drafted and greenlit once, at campaign start'). A "
+            "durable DATA flag, NOT an execution gate — no primitive blocks on "
+            "it; it records that the greenlight happened. Stamped via "
+            "``manifest.mark_greenlit``. Default ``False`` leaves a non-greenlit "
+            "manifest's bytes unchanged."
+        ),
+    )
+    greenlit_at: str | None = Field(
+        default=None,
+        description=(
+            "ISO-8601 UTC timestamp the spec was greenlit; ``None`` until "
+            "``manifest.mark_greenlit`` stamps it."
+        ),
+    )
     async_refill: bool = Field(
         default=False,
         description=(

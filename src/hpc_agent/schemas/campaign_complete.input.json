@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_complete.input.json",
+  "title": "campaign-complete input spec",
+  "description": "Inputs to ``campaign-complete`` (end).\n\nJust the campaign id: the completion brief is a code digest over the\ncampaign's own durable state (manifest + sidecars + runtime-prior spend).",
+  "type": "object",
+  "required": [
+    "campaign_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "The campaign to build the completion brief for.",
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    }
+  }
+}

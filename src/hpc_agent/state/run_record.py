@@ -119,6 +119,17 @@ _UPDATABLE_FIELDS = frozenset(
         # Bumped by the resolve-and-recover composite after each auto-acted
         # code-verdict resubmit so its "count < cap" backstop tightens (#240).
         "auto_recover_count",
+        # ── §5 driver watchdog (dead-man's switch) + kill semantics ──────────
+        # Stamped by the journal setters ``stamp_tick`` / ``mark_seen_by_human``
+        # / ``record_kill_request`` / ``record_kill_confirmed``; whitelisted so
+        # the value-overwriting ``update_run_status`` path may also set them.
+        "last_tick_at",
+        "next_tick_due",
+        "last_seen_by_human_at",
+        "kill_requested_at",
+        "kill_confirmed_at",
+        "kill_requested_job_ids",
+        "kill_confirmed_job_ids",
     }
 )
 
@@ -247,6 +258,31 @@ class RunRecord:
     # "cannot prove drift" — never a false invalidation.
     executor: str = ""
     tasks_py_sha: str = ""
+    # ── §5 driver watchdog (dead-man's switch) ────────────────────────────────
+    # Stamped by ``stamp_tick`` every driver tick: when this tick ran
+    # (``last_tick_at``) and the absolute deadline the NEXT tick must run by
+    # (``next_tick_due``, computed from the cadence the tick itself chose). A
+    # ``next_tick_due`` in the past on a live (in_flight) run is a STALLED driver
+    # — ``find_stalled_runs`` / the ``doctor`` verb surface it for a human re-arm
+    # decision. The watchdog never restarts anything (design §5). Both are
+    # ISO-8601 UTC strings (same format as ``submitted_at``); None until the
+    # first tick. Harmless None defaults: a pre-watchdog record loads unchanged.
+    last_tick_at: str | None = None
+    next_tick_due: str | None = None
+    # Set by ``mark_seen_by_human`` when the human last looked at this run, so
+    # the journal can answer "what changed since the human last looked" (§5).
+    last_seen_by_human_at: str | None = None
+    # ── §5 first-class kill semantics: request → journaled → verified ──────────
+    # ``record_kill_request`` stamps the intent (when + which job_ids were
+    # targeted) BEFORE any scheduler mutation, so a crash mid-kill still leaves a
+    # durable record of what was asked. ``record_kill_confirmed`` stamps the
+    # subset verified gone against the scheduler afterwards. The pair backs the
+    # "N requested, N confirmed gone" honesty contract (§5). None / [] until a
+    # kill is requested.
+    kill_requested_at: str | None = None
+    kill_confirmed_at: str | None = None
+    kill_requested_job_ids: list[str] = dataclasses.field(default_factory=list)
+    kill_confirmed_job_ids: list[str] = dataclasses.field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

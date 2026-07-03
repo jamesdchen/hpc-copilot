@@ -15,6 +15,7 @@ Pure scan / rebuild / query helpers live in :mod:`.index`.
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._kernel.contract.vocabulary import TERMINAL_STATUSES, JournalStatus
@@ -30,7 +31,6 @@ from hpc_agent.state.run_record import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 __all__ = [
     "load_run",
@@ -42,6 +42,10 @@ __all__ = [
     "clear_pending_verdict",
     "is_held",
     "is_resubmittable_terminal",
+    "stamp_tick",
+    "mark_seen_by_human",
+    "record_kill_request",
+    "record_kill_confirmed",
 ]
 
 # Terminal journal statuses from which a fresh submit should PROCEED rather than
@@ -142,6 +146,110 @@ def update_run_record(
         _atomic_write_json(path, record.to_dict())
     _refresh_index_entry(experiment_dir, record.run_id, record.status)
     return record
+
+
+def _resolve_experiment_dir(experiment_dir: Path | None) -> Path:
+    """Journal home for the §5 watchdog / kill setters.
+
+    Their pinned cross-unit signatures deliberately omit ``experiment_dir`` (so
+    other units call ``stamp_tick(run_id, last_tick_at=..., next_tick_due=...)``
+    directly). The journal is per-experiment-dir, and these setters fire from
+    within that dir's context — the campaign driver, the ``doctor``/``kill``
+    verbs, and ``drive_once`` all run in it — so ``None`` resolves to the current
+    working directory. An explicit dir (``drive_once`` passes its own) overrides.
+    """
+    return Path(experiment_dir) if experiment_dir is not None else Path.cwd()
+
+
+def stamp_tick(
+    run_id: str,
+    *,
+    last_tick_at: str,
+    next_tick_due: str,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Stamp the driver dead-man's-switch fields on *run_id* (§5 watchdog).
+
+    Records the pace the driver tick chose: ``last_tick_at`` (when this tick
+    ran) and ``next_tick_due`` (the absolute deadline by which the next tick
+    must run, the caller having derived it from the cadence the tick itself
+    picked). A ``next_tick_due`` in the past on a live run is what
+    :func:`hpc_agent.state.index.find_stalled_runs` / the ``doctor`` verb read to
+    detect a stalled driver. Both are ISO-8601 UTC strings.
+
+    Locked read-modify-write via :func:`update_run_record`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.last_tick_at = last_tick_at
+        record.next_tick_due = next_tick_due
+
+    update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+def mark_seen_by_human(
+    run_id: str,
+    *,
+    at: str,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Stamp when the human last looked at *run_id* (§5 attention marker).
+
+    Lets the journal answer "what changed since the human last looked". *at* is
+    an ISO-8601 UTC string. Locked RMW via :func:`update_run_record`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.last_seen_by_human_at = at
+
+    update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+def record_kill_request(
+    run_id: str,
+    *,
+    requested_at: str,
+    job_ids: list[str],
+    experiment_dir: Path | None = None,
+) -> None:
+    """Journal a kill's INTENT before any scheduler mutation (§5 kill semantics).
+
+    Stamps *requested_at* and the *job_ids* targeted, so a crash mid-kill still
+    leaves a durable record of what was asked — the first half of the
+    "request → journaled → verified" contract. Locked RMW via
+    :func:`update_run_record`; raises :class:`FileNotFoundError` if no record
+    exists for *run_id*.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.kill_requested_at = requested_at
+        record.kill_requested_job_ids = list(job_ids)
+
+    update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+def record_kill_confirmed(
+    run_id: str,
+    *,
+    confirmed_at: str,
+    job_ids: list[str],
+    experiment_dir: Path | None = None,
+) -> None:
+    """Journal the subset of a kill's job_ids VERIFIED gone (§5 kill semantics).
+
+    Stamps *confirmed_at* and the *job_ids* the scheduler confirms are no longer
+    known to it — the second half of the "N requested, N confirmed gone" honesty
+    contract. Locked RMW via :func:`update_run_record`; raises
+    :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+
+    def _mutate(record: RunRecord) -> None:
+        record.kill_confirmed_at = confirmed_at
+        record.kill_confirmed_job_ids = list(job_ids)
+
+    update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
 
 
 def mark_run(

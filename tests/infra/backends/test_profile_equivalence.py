@@ -281,6 +281,17 @@ class TestAliveAndStateCommands:
         assert cls.build_scheduler_state_cmd(["1"]) == 'qstat -u "$USER" 2>/dev/null || true'
         assert cls.build_scheduler_state_cmd([]) == "true"
 
+    def test_slurm_build_cancel_cmd(self):
+        cls = get_backend_class("slurm")
+        assert cls.build_cancel_cmd(["1", "2"]) == "scancel 1 2"
+        # Empty ids short-circuit to a no-op — matching the alive/state builders.
+        assert cls.build_cancel_cmd([]) == "true"
+
+    def test_sge_build_cancel_cmd(self):
+        cls = get_backend_class("sge")
+        assert cls.build_cancel_cmd(["1", "2"]) == "qdel 1 2"
+        assert cls.build_cancel_cmd([]) == "true"
+
 
 class TestParseAliveOutput:
     def test_slurm_strips_array_and_dot_suffixes(self):

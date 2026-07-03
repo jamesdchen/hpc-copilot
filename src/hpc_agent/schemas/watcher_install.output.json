@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/watcher_install.output.json",
+  "title": "watcher-install output data",
+  "description": "Shape of the ``data`` field on a ``watcher-install`` envelope.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "action",
+    "installed",
+    "mechanism",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "install",
+        "uninstall",
+        "status"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "installed": {
+      "description": "Whether a cluster-side watcher is installed after this call (install: a rung took; uninstall: always false; status: whether one is present).",
+      "title": "Installed",
+      "type": "boolean"
+    },
+    "mechanism": {
+      "description": "Which rung of the ladder is in effect — cron / scrontab / job / none.",
+      "enum": [
+        "cron",
+        "scrontab",
+        "job",
+        "none"
+      ],
+      "title": "Mechanism",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Human-readable outcome. On mechanism='none' this is the LOUD 'overnight blindness persists' message.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "detail": {
+      "default": "",
+      "description": "Mechanism-specific detail: the cron marker line, the submitted job id, or the probe failures that sank each rung.",
+      "title": "Detail",
+      "type": "string"
+    },
+    "probes": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Per-rung probe verdicts (crontab / scrontab / job), for legibility and debugging why a given rung was or was not selected.",
+      "title": "Probes",
+      "type": "object"
+    }
+  }
+}

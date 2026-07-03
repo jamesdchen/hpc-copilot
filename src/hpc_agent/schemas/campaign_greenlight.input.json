@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_greenlight.input.json",
+  "title": "campaign-greenlight input spec",
+  "description": "Inputs to ``campaign-greenlight`` (start).\n\nA pure read on the first pass (digest the spec → ``needs_greenlight``). On\nthe re-invocation the caller makes AFTER the human answered ``y``, set\n``confirm=True`` — the block stamps ``mark_greenlit`` onto the manifest and\njournals the decision (``response`` / ``proposal``). The verb never decides\non its own: it digests, or records a caller-supplied greenlight.",
+  "type": "object",
+  "required": [
+    "campaign_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "The campaign whose manifest (the greenlit-once spec) to digest.",
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "confirm": {
+      "default": false,
+      "description": "Set on the post-`y` re-invocation to RECORD the human's greenlight: stamp mark_greenlit onto the manifest + journal the decision. Left False, the block only DIGESTS the spec (nothing is stamped).",
+      "title": "Confirm",
+      "type": "boolean"
+    },
+    "response": {
+      "default": "y",
+      "description": "The human's answer to journal when confirm is set ('y' for a plain greenlight, or the nudge text that shaped the final spec). Ignored when confirm is False.",
+      "title": "Response",
+      "type": "string"
+    },
+    "proposal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The LLM's drafted proposal over the spec brief, journaled verbatim alongside the response when confirm is set. Optional.",
+      "title": "Proposal"
+    },
+    "journal": {
+      "default": true,
+      "description": "When confirm is set, also append the greenlight to the campaign decision journal. Disable only to stamp the marker without a decision record (e.g. a re-stamp).",
+      "title": "Journal",
+      "type": "boolean"
+    }
+  }
+}

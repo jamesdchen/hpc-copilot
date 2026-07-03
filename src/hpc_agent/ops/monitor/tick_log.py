@@ -80,6 +80,11 @@ def _append_tick(
     Holds an exclusive flock for the duration of the append so a
     concurrent slash-command writer can't interleave bytes mid-line.
     """
+    # Every key below is a telemetry field: it MUST be declared in
+    # ``ops/monitor/summary.py::FIELD_KIND`` (cumulative | delta | label) or
+    # ``scripts/lint_telemetry_labels.py`` fails CI. ``summary`` holds the
+    # cumulative counts, ``diff_from_prev`` the per-tick deltas; the rest are
+    # labels/metadata. This is the ``told 0 · complete 39/40`` contract (§5).
     record = {
         "tick_id": utcnow_iso(),
         "run_id": run_id,

@@ -5,7 +5,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## 0.10.65 — 2026-06-24
+## [Unreleased] — hpc-copilot fork: human-amplification block architecture
+
+First implementation wave of the fork's guiding design
+([`docs/design/human-amplification-blocks.md`](docs/design/human-amplification-blocks.md)):
+workflows decompose into **blocks** that chain deterministically in code and
+terminate at human decision points with code-digested **briefs**. No decision
+point is resolved by the LLM; the LLM only drafts proposals over code-digested
+evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
+
+### Added — block verbs (thin orchestrators over the existing rings)
+
+- **`submit-s1..s4`** — resolve (the ambiguity envelope surfaced as a brief;
+  old `apply-safe-defaults` output becomes a **pre-filled recommendation**, never
+  auto-applied) · stage & canary (stops at "canary green, est. N core-hours";
+  core-hours wired from `infra/cost`) · submit & watch (post-greenlight main
+  launch via `launch_main_array`, guarded by a code-drift check against the
+  canary-time sidecar so "what runs" can't silently diverge from "what the human
+  greenlit") · harvest. `submit_and_verify` gains `stop_after_canary` (default
+  `False` — fused behavior byte-identical for existing callers).
+- **`status-snapshot` / `status-watch`**, **`aggregate-check` / `aggregate-run`**
+  (integrity issues surfaced, never auto-masked), **`campaign-greenlight` /
+  `campaign-watch` / `campaign-complete`** (spec greenlit once, then async).
+- **`next_block`** on every block Result — a machine-computed next-step
+  suggestion (verb + why + spec hint); the human greenlights the *named* verb and
+  `ops/block_gate.py` verifies the journaled greenlight names it, so a
+  mis-sequenced call fails loudly. **`submit-speculate`** runs a speculative
+  canary during S1 review (budget of 1, nudge-invalidation both free via the
+  canary TTL cache).
+
+### Added — §5 recovery machine
+
+- **Watchdog / dead-man's switch:** every driver + monitor tick stamps
+  `last_tick_at`/`next_tick_due` (initial deadline stamped at submit, so a
+  never-ticked run is still detectable); new **`doctor`** verb (detection-only)
+  surfaces stalled/orphaned runs as drafted re-arm proposals; **`doctor-install`**
+  opt-in OS-scheduler installer (`schtasks`/cron) + notify. Session-death
+  recovery rides the doctor.
+- **Kill semantics:** new **`kill`** verb — journaled intent → backend-seam
+  cancellation (new `build_cancel_cmd`: `scancel`/`qdel`/PBS) → verified against
+  the scheduler → honest "N requested, M confirmed gone"; a full kill settles
+  through `reconcile`/`settle` (one-definition rule). Kill telemetry line added
+  to the monitor summary.
+- **Guaranteed harvest:** every terminal path — complete/failed/timeout/
+  abandoned/kill/abnormal-exit — ends in a best-effort, loud code-harvest
+  (`harvest_on_terminal`, durable `<run_id>.harvest.jsonl`); the poll loop is
+  wrapped in `try/finally`; reconcile harvests on verdict *transitions* only.
+- **Cluster-side watcher (`watcher-install`):** install-time probe ladder
+  (crontab → scrontab → self-resubmitting job → loud none); a stdlib-only
+  cluster script writes a heartbeat and alarms on a stale `last_read`, folded
+  into the existing reporter SSH call at zero extra round-trip.
+- **Telemetry contract:** every emitted field declares cumulative vs per-tick
+  delta (`FIELD_KIND` + `scripts/lint_telemetry_labels.py`, wired into
+  pre-commit + CI). **Campaign loud-fail default:** the per-task resubmit
+  backstop now fires by default (cap 2, manifest-overridable); manifest gains
+  `anomaly_policy` + `greenlit`/`greenlit_at`; `campaign-advance` emits a typed
+  `anomaly_brief`.
+
+### Added — §2 decision journal
+
+- **`append-decision` / `read-decisions`** over append-only per-scope
+  `decisions.jsonl` — one record per `y`/nudge exchange (evidence digest,
+  proposal, response, resolved decision): the durable "why the run took its
+  shape" record, generalizing the failure-only `verdict_history`.
+
+### Added — never-stall + surface
+
+- **Detach-by-contract:** `detach: true` default on the scheduler-bound block
+  verbs — the parent returns a handle immediately and a fully-detached child (no
+  `claude -p`, no LLM) owns the poll; briefs arrive via the journal + tail-loop /
+  doctor / cluster-watcher. Survives session death.
+- **MCP surface:** `hpc-agent mcp-serve` is the preferred block-invocation
+  surface (typed tools, no shell affordance, cancel/raw-submit structurally
+  unreachable). A **warm in-process runner** (default) reuses the loaded registry
+  instead of a per-call subprocess cold start; a **curated catalog** derives the
+  block toolset from the `next_block` field (no hardcoded list). `install-commands`
+  registers it.
+
+### Changed
+
+- **Skill/slash prose inverted to the `y`/nudge norm.** The four workflow skills
+  shrink to single-sentence block starts + a propose→`y`/nudge relay loop; the
+  "no `[Y/n]` / deterministic resolution" doctrine survives only *inside* blocks.
+  `docs/internals/skill-policy.md` rewritten. The `claude -p` worker is **stranded**
+  from routing (left on disk; physical deletion + the #137 OAuth machinery are a
+  later pass, gated on a proving run).
+
+
 
 ### Added — persist opaque per-trial params for provenance; warm-start stays a documented strategy pattern (#369)
 
