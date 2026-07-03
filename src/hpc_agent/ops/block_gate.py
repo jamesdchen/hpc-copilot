@@ -3,20 +3,30 @@
 Before a block that ACTS on the cluster runs (``submit-s2`` stage & canary,
 ``submit-s3`` main-array launch, ``submit-s4`` harvest, ``aggregate-run`` reduce),
 its precondition gate verifies that the human actually greenlit *this* verb:
+somewhere in the run-scoped journal there is a decision that
 
-* the latest journaled decision for the run (``read_decisions``, run scope) has
-  ``response == "y"`` (a greenlight, not a nudge), AND
-* that decision's ``resolved["next_block"]`` names THIS verb — the machine-computed
+* has ``response == "y"`` (a greenlight, not a nudge), AND
+* whose ``resolved["next_block"]`` names THIS verb — the machine-computed
   ``next_block`` the predecessor block emitted, which the LLM surfaced and the
   human's ``y`` greenlit.
+
+The gate scans the journal newest-to-oldest and passes on the FIRST such match.
+It does **not** trust ``records[-1]`` in isolation: the run-scoped JSONL is
+SHARED across every run touchpoint (submit S1–S4, anomaly briefs, harvest — see
+``state.decision_journal`` module docstring), so any unrelated touchpoint
+journaled *after* a legitimate block greenlight (a nudge, or a ``y`` naming a
+different verb) would otherwise flip ``records[-1]`` and wedge a sequence the
+human DID authorize. Scanning for the latest greenlight-naming-*this*-verb keeps
+the guard fail-safe (it never invents a greenlight) without the wedge.
 
 A mis-sequenced call fails loudly with :class:`errors.SpecInvalid`:
 
 * no journaled record at all → "no journaled greenlight for <verb> — surface the
   <predecessor> brief and record the decision via append-decision";
-* the latest exchange was a nudge (``response != "y"``) → the human has not
-  greenlit yet;
-* the greenlight named a *different* verb → both are named.
+* no greenlight names this verb and the latest exchange was a nudge
+  (``response != "y"``) → the human has not greenlit yet;
+* no greenlight names this verb and the latest greenlight named a *different*
+  verb → both are named.
 
 "A guard the LLM itself satisfies is not a guard" (engineering-principles.md):
 prose never hardcodes the block sequence — the affordance is removed, and the
@@ -78,16 +88,38 @@ def assert_greenlit_target(
     verb: str,
     predecessor: str,
 ) -> None:
-    """Refuse *verb* unless the latest run-scoped decision greenlit exactly it.
+    """Refuse *verb* unless some run-scoped decision greenlit exactly it.
 
     *predecessor* is the human label of the brief that must have been surfaced
     and greenlit first (e.g. ``"S1"`` for ``submit-s2``) — it is named in the
     "no journaled greenlight" message so the failure is self-remediating.
 
-    Raises :class:`errors.SpecInvalid` when the journal has no record, the latest
-    record is a nudge (not a ``y``), or its greenlight names a different verb.
+    Scans the run-scoped journal newest-to-oldest and passes on the first record
+    that is a greenlight (``response == "y"``) naming *verb*. A later unrelated
+    touchpoint (nudge, or a ``y`` for a different verb) therefore cannot wedge a
+    verb the human already greenlit — ``records[-1]`` is not this block's
+    greenlight in a shared journal.
+
+    Raises :class:`errors.SpecInvalid` when no greenlight names *verb*: the
+    journal has no record at all, the latest exchange is a nudge (not a ``y``),
+    or the latest greenlight names a different verb.
+
+    NOTE (consumption is NOT enforced here): a single greenlight re-authorizes
+    *verb* on every re-invocation — this gate has no consumption/monotonicity
+    (it never compares the greenlight timestamp against the block's last
+    execution). Replay is backstopped downstream by ``run_id`` dedup, which
+    refuses a second cluster action for an already-acted run.
+    # TODO(wave4): greenlight consumption/monotonicity — track the block's
+    # last-execution vs the greenlight timestamp so a consumed `y` cannot
+    # re-fire. Interacts with the block-drive resume flow; out of scope here.
     """
     records = read_decisions(experiment_dir, "run", run_id)
+    for record in reversed(records):
+        if str(record.get("response") or "") != _GREENLIGHT:
+            continue
+        if _journaled_target(record.get("resolved")) == verb:
+            return
+    # No greenlight names *verb* anywhere in the journal — diagnose from the tail.
     if not records:
         raise errors.SpecInvalid(
             f"no journaled greenlight for {verb} — surface the {predecessor} brief "
@@ -102,10 +134,9 @@ def assert_greenlit_target(
             "and record the human's `y` via append-decision before acting."
         )
     target = _journaled_target(latest.get("resolved"))
-    if target != verb:
-        raise errors.SpecInvalid(
-            f"{verb}: the latest greenlight for run {run_id!r} names {target!r}, "
-            f"not {verb!r} — a mis-sequenced call. Run the block the human "
-            f"greenlit, or re-surface the {predecessor} brief and record a "
-            f"greenlight naming {verb}."
-        )
+    raise errors.SpecInvalid(
+        f"{verb}: the latest greenlight for run {run_id!r} names {target!r}, "
+        f"not {verb!r} — a mis-sequenced call. Run the block the human "
+        f"greenlit, or re-surface the {predecessor} brief and record a "
+        f"greenlight naming {verb}."
+    )

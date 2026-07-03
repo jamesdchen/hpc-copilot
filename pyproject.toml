@@ -116,6 +116,7 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers -n auto -m 'not slow'"
 markers = [
     "slow: real-process / real-time tests (subprocess + signals, multi-hour sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
+    "integration: real-seam tests — construct specs the way orchestrators do and validate them against the target verb's live pydantic model, and drive verbs through real in-process CLI dispatch (SSH chokepoints patched). Hermetic and fast, so they run in the default tier; select alone with `pytest -m integration`. Guards the faked-subprocess bug class (a spec that unit tests fake but a real invocation rejects).",
 ]
 # Per-test wall-clock cap for the default tier: a wedged in-process path fails
 # the one test instead of hanging the runner until the job-level timeout. The

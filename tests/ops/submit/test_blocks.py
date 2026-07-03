@@ -81,14 +81,19 @@ def _sv_spec() -> SubmitAndVerifySpec:
 
 
 def _sv_result(
-    *, verified: bool, job_ids: list[str], deduped: bool = False, failure_kind: Any = None
+    *,
+    verified: bool,
+    job_ids: list[str],
+    deduped: bool = False,
+    failure_kind: Any = None,
+    canary_run_id: Any = f"{_RUN_ID}_canary",
 ) -> SubmitAndVerifyResult:
     return SubmitAndVerifyResult(
         run_id=_RUN_ID,
         job_ids=job_ids,
         total_tasks=10,
         deduped=deduped,
-        canary_run_id=f"{_RUN_ID}_canary",
+        canary_run_id=canary_run_id,
         canary_job_ids=["12344"],
         verified=verified,
         failure_kind=failure_kind,
@@ -286,8 +291,32 @@ def test_s2_surfaces_canary_failure(tmp_path: Path) -> None:
     assert result.stage_reached == "canary_failed"
     assert result.needs_decision is True
     assert result.brief["failure_kind"] == "import_error"
+    # A canary that LANDED and failed verification names the failure_kind.
+    assert "failed verification" in result.reason
     # The estimate is still attached (the human sizes the fix against the footprint).
     assert result.brief["est_core_hours"] == 40.0
+
+
+def test_s2_distinguishes_canary_never_landed_from_verification_failure(tmp_path: Path) -> None:
+    """A canary that never entered the queue (verified=False, canary_run_id=None,
+    failure_kind=None) must NOT be rendered as a "failed verification (None)" — it
+    gets a distinct "never entered the queue" reason (still a canary_failed
+    anomaly terminator → human decides)."""
+    spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
+    _greenlight(tmp_path, "submit-s2")
+
+    with mock.patch.object(
+        blocks,
+        "submit_and_verify",
+        return_value=_sv_result(verified=False, job_ids=[], failure_kind=None, canary_run_id=None),
+    ):
+        result = blocks.submit_s2(tmp_path, spec=spec)
+
+    assert result.stage_reached == "canary_failed"
+    assert result.needs_decision is True
+    assert "never entered the queue" in result.reason
+    # Distinct from the genuine-verification-failure wording.
+    assert "failed verification" not in result.reason
 
 
 # ── S3: launches main + arms monitor ─────────────────────────────────────────

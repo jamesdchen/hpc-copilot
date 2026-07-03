@@ -51,6 +51,8 @@ __all__ = [
     "SCOPE_KINDS",
     "append_decision",
     "read_decisions",
+    "latest_decision",
+    "is_latest_committed_greenlight",
     "decisions_path",
 ]
 
@@ -214,3 +216,35 @@ def read_decisions(experiment_dir: Path, scope_kind: str, scope_id: str) -> list
         if isinstance(obj, dict):
             records.append(obj)
     return records
+
+
+def latest_decision(experiment_dir: Path, scope_kind: str, scope_id: str) -> dict[str, Any] | None:
+    """Return the most recent decision record for a scope, or ``None`` if empty.
+
+    "Most recent" = the last record in append (chronological) order — the
+    journal is append-only so the latest line is the current human touchpoint.
+    ``None`` when the scope has no recorded decisions yet.
+
+    Raises :class:`errors.SpecInvalid` on a bad scope.
+    """
+    records = read_decisions(experiment_dir, scope_kind, scope_id)
+    return records[-1] if records else None
+
+
+def is_latest_committed_greenlight(experiment_dir: Path, scope_kind: str, scope_id: str) -> bool:
+    """True iff a scope's most recent decision is a committed ``y`` greenlight.
+
+    This is the decision-journal half of the §5 "committed-but-unadvanced"
+    predicate — the other half being a still-set ``pending_decision`` marker
+    (``state.journal.is_awaiting_decision``). It is the single canonical
+    encoding of the rule the ``block-drive`` Stop guard
+    (``_kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced``)
+    and the out-of-session ``doctor`` both key their advance detection on: the
+    LATEST record has ``response == "y"``. A trailing nudge (or no decision
+    yet) is not a greenlight, so the two surfaces agree on when a parked driver
+    holds an approved-but-unconsumed decision that must be advanced.
+
+    Raises :class:`errors.SpecInvalid` on a bad scope.
+    """
+    latest = latest_decision(experiment_dir, scope_kind, scope_id)
+    return latest is not None and latest.get("response") == "y"

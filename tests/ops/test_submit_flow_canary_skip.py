@@ -166,3 +166,34 @@ def test_cache_version_keying():
         )
         is False
     )
+
+
+def test_sequential_records_preserve_both_entries():
+    """Read-modify-write is locked (no lost update): two sequential records with
+    DIFFERENT keys must BOTH persist (regression for the unlocked-RMW lost-update
+    that clobbered one entry when two submits validated different cmd_shas)."""
+    key_a = canary_cache.canary_cache_key(cmd_sha="A", version="1")
+    key_b = canary_cache.canary_cache_key(cmd_sha="B", version="1")
+    canary_cache.record_canary_validated(key_a)
+    canary_cache.record_canary_validated(key_b)
+    # The second write read the first's entry under the lock, so neither is lost.
+    assert canary_cache.is_canary_validated_fresh(key_a) is True
+    assert canary_cache.is_canary_validated_fresh(key_b) is True
+
+
+def test_record_acquires_lock_around_write(monkeypatch):
+    """The record write holds the advisory flock across read+write (the state-layer
+    lock idiom). Assert the lock context is entered exactly once per record."""
+    calls: list[str] = []
+    from hpc_agent.infra import io as _io
+
+    orig = _io.advisory_flock
+
+    def _spy(lock_path, **kw):
+        calls.append(str(lock_path))
+        return orig(lock_path, **kw)
+
+    monkeypatch.setattr(_io, "advisory_flock", _spy)
+    canary_cache.record_canary_validated(canary_cache.canary_cache_key(cmd_sha="z", version="1"))
+    assert len(calls) == 1
+    assert calls[0].endswith(".lock")

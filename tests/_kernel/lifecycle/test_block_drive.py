@@ -250,27 +250,61 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def test_run_tick_chains_deterministic_spans_in_code(faked: dict[str, Any]) -> None:
-    """A clean span with a successor chains on IN CODE — no park, no LLM (§2)."""
+    """A clean span with an UNGATED successor chains on IN CODE — no park, no LLM (§2)."""
+    faked["results"] = {
+        "status-snapshot": {
+            "block": "snapshot",
+            "stage_reached": "snapshot_clean",
+            "needs_decision": False,
+            "run_id": "r1",
+            "next_block": {"verb": "status-watch", "spec_hint": {"monitor": {"run_id": "r1"}}},
+        },
+        "status-watch": {
+            "block": "watch",
+            "stage_reached": "watch_anomaly",
+            "needs_decision": True,
+            "brief": {"anomaly": "failed"},
+            "next_block": None,
+        },
+    }
+    result, code = run_tick(Path("."), run_id="r1", workflow="status")
+    assert code == 0
+    # snapshot chained into watch (ungated), which then parked on its own decision.
+    assert result.action == "awaiting_decision"
+    assert [r["verb"] for r in faked["ran"]] == ["status-snapshot", "status-watch"]
+    # The chained status-watch ran under its spec_hint VERBATIM (no run_id injection).
+    assert faked["ran"][1]["spec"] == {"monitor": {"run_id": "r1"}}
+    assert result.current_verb == "status-watch"
+
+
+def test_run_tick_parks_before_gated_successor(faked: dict[str, Any]) -> None:
+    """A clean span whose successor is greenlight-GATED PARKS for the human `y`.
+
+    ``aggregate-check`` reaches ``ready`` with ``needs_decision=False`` and a
+    successor of ``aggregate-run`` — but ``aggregate-run`` calls the greenlight
+    gate, which an in-code chain never satisfies. So the driver parks BEFORE it
+    (needs_decision + gate agree) rather than chaining into a gate failure.
+    """
     faked["results"] = {
         "aggregate-check": {
             "block": "check",
             "stage_reached": "ready",
             "needs_decision": False,
-            "next_block": {"verb": "aggregate-run", "spec_hint": {"run_id": "r1"}},
-        },
-        "aggregate-run": {
-            "block": "run",
-            "stage_reached": "harvested",
-            "needs_decision": False,
-            "next_block": None,
+            "run_id": "r1",
+            "brief": {"terminal": True},
+            "next_block": {"verb": "aggregate-run", "spec_hint": {"aggregate": {"run_id": "r1"}}},
         },
     }
     result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
     assert code == 0
-    assert result.action == "terminal"
-    # Both spans ran in one tick.
-    assert [r["verb"] for r in faked["ran"]] == ["aggregate-check", "aggregate-run"]
-    assert faked["parked"] == []
+    assert result.action == "awaiting_decision"
+    assert result.current_verb == "aggregate-check"
+    assert result.next_verb == "aggregate-run"
+    # Only the entry block ran; aggregate-run did NOT (it awaits the greenlight).
+    assert [r["verb"] for r in faked["ran"]] == ["aggregate-check"]
+    assert len(faked["parked"]) == 1
+    marker = faked["parked"][0]
+    assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
 
 
 def test_run_tick_parks_at_decision(faked: dict[str, Any]) -> None:
@@ -329,10 +363,18 @@ def test_run_tick_resume_advance_clears_and_runs_successor(faked: dict[str, Any]
 
 
 def test_run_tick_detached_exits_with_handle(faked: dict[str, Any]) -> None:
-    """A detached, scheduler-bound child → exit with the handle, no chaining (§2)."""
+    """A detached, scheduler-bound child → exit with the handle, no chaining (§2).
+
+    Reached via a resume advance into ``submit-s2`` (the real detach path is a
+    gated block the human greenlit), which returns a ``started`` handle.
+    """
+    faked["pending"] = _pending(
+        current_verb="submit-s1", next_verb="submit-s2", input_spec={"walltime_sec": 100}
+    )
+    faked["committed"] = {"walltime_sec": 100}  # unchanged → advance into submit-s2
     faked["results"] = {
-        "submit-s1": {
-            "block": "s1",
+        "submit-s2": {
+            "block": "s2",
             "stage_reached": "detached",
             "needs_decision": False,
             "started": True,

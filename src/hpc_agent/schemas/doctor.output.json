@@ -41,9 +41,97 @@
       },
       "title": "Parked",
       "type": "array"
+    },
+    "awaiting_advance_count": {
+      "default": 0,
+      "description": "Number of parked runs whose human 'y' is committed but the driver died before advancing (§5 Phase-5) — stalled drivers, surfaced with a re-arm proposal.",
+      "title": "Awaiting Advance Count",
+      "type": "integer"
+    },
+    "awaiting_advance": {
+      "description": "One entry per committed-but-unadvanced run — a driver that must be re-armed to consume an already-approved decision. Distinct from 'parked' (still awaiting the human): doctor drafts the re-arm, never enacts it.",
+      "items": {
+        "$ref": "#/$defs/AdvanceRunProposal"
+      },
+      "title": "Awaiting Advance",
+      "type": "array"
     }
   },
   "$defs": {
+    "AdvanceRunProposal": {
+      "additionalProperties": false,
+      "description": "One parked run whose human ``y`` is committed but the driver never advanced.\n\nThe §5 Phase-5 out-of-session case: the run carries a ``pending_decision``\nmarker AND its latest committed decision is a ``y`` greenlight, but the\ndriver that must consume it is dead (session ended, no OS scheduler). This\nis a STALLED driver — distinct from :class:`StalledRunProposal` (a missed\n*tick* deadline) and from :class:`ParkedRunNote` (still genuinely awaiting\nthe human) — so ``doctor`` surfaces it with a DRAFTED re-arm/advance\nproposal. Detection only: ``doctor`` never runs ``block-drive`` itself.",
+      "properties": {
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "description": "Journal status of the parked-but-decided run (always 'in_flight').",
+          "title": "Status",
+          "type": "string"
+        },
+        "block": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The block whose decision was approved but not consumed, or null.",
+          "title": "Block"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The workflow the approved block belongs to, or null.",
+          "title": "Workflow"
+        },
+        "awaiting_since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the run began awaiting the (now-committed) decision (ISO-8601 UTC), or null.",
+          "title": "Awaiting Since"
+        },
+        "proposal": {
+          "description": "Human-facing DRAFTED re-arm proposal, e.g. 'approved spec committed for <run_id> block <block> but the driver has not advanced — re-arm ...'. doctor NEVER enacts it.",
+          "title": "Proposal",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "Detection evidence (the committed decision's ts/response, awaiting_since, now).",
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "proposal",
+        "evidence"
+      ],
+      "title": "doctor awaiting-advance proposal",
+      "type": "object"
+    },
     "ParkedRunNote": {
       "additionalProperties": false,
       "description": "One live run legitimately awaiting a human decision (§5 \"parked ≠ stalled\").\n\nA parked run carries a ``pending_decision`` marker — a ``block-drive`` span\nreached a block's y/nudge boundary and is waiting on the human. It is NOT a\nstalled driver: the read is \"awaiting your decision since T\", never \"driver\nstalled — re-arm?\". A parked run never appears in ``DoctorResult.stalled``.",

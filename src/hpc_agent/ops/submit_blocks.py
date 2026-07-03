@@ -435,11 +435,27 @@ def submit_s2(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
             brief=brief,
         )
     if not sv.verified:
+        # Two distinct "not verified" conditions collapse into verified=False in
+        # submit-and-verify (ops/submit_and_verify.py): (a) a canary LANDED and
+        # failed its verification (failure_kind set), vs (b) NO canary ever
+        # entered the queue — canary_run_id is None, failure_kind is None (the
+        # canary_submit.canary_run_id-None branch). Rendering (b) as a
+        # "verification failure (None)" is misleading — the canary never launched.
+        # Reason-only distinction (no new stage_reached literal, so no wire/schema
+        # regen): both stay canary_failed terminators (still an anomaly → human
+        # decides, needs_decision/next_block unchanged), only the reason differs.
+        if sv.canary_run_id is None:
+            reason = (
+                "canary never entered the queue (no canary_run_id) — submission "
+                "did not launch; propose a fix before main."
+            )
+        else:
+            reason = f"canary failed verification ({sv.failure_kind}); propose a fix before main."
         return SubmitBlockResult(
             block="s2",
             stage_reached="canary_failed",
             needs_decision=True,
-            reason=f"canary failed verification ({sv.failure_kind}); propose a fix before main.",
+            reason=reason,
             run_id=sv.run_id,
             brief=brief,
         )

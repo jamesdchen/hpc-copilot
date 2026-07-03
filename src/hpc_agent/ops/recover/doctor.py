@@ -23,6 +23,7 @@ from typing import Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.doctor import (
+    AdvanceRunProposal,
     DoctorResult,
     DoctorSpec,
     ParkedRunNote,
@@ -30,6 +31,10 @@ from hpc_agent._wire.queries.doctor import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
+from hpc_agent.state.decision_journal import (
+    is_latest_committed_greenlight,
+    latest_decision,
+)
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 
 
@@ -90,6 +95,42 @@ def _draft_parked_note(parked: dict[str, Any]) -> ParkedRunNote:
     )
 
 
+def _draft_advance_proposal(
+    parked: dict[str, Any], *, decision: dict[str, Any] | None, now: str
+) -> AdvanceRunProposal:
+    """Turn a parked-and-decided run into a DRAFTED re-arm proposal (never enacted).
+
+    Reached only for a run whose ``pending_decision`` marker is still set AND
+    whose latest committed decision is a ``y`` — the §5 Phase-5 case where the
+    human already decided but the driver died before consuming it.
+    """
+    run_id = parked["run_id"]
+    block = parked.get("block")
+    workflow = parked.get("workflow")
+    awaiting_since = parked.get("awaiting_since")
+    wf = workflow or "<workflow>"
+    blk = block or "<block>"
+    proposal = (
+        f"approved spec committed for {run_id} block {blk} but the driver has not "
+        f"advanced — re-arm: `hpc-agent block-drive --run-id {run_id} --workflow {wf}`. "
+        "Re-running is safe — tick idempotency loses nothing."
+    )
+    return AdvanceRunProposal(
+        run_id=run_id,
+        status=parked.get("status", "in_flight"),
+        block=block,
+        workflow=workflow,
+        awaiting_since=awaiting_since,
+        proposal=proposal,
+        evidence={
+            "awaiting_since": awaiting_since,
+            "committed_decision_ts": decision.get("ts") if decision else None,
+            "committed_response": decision.get("response") if decision else None,
+            "now": now,
+        },
+    )
+
+
 @primitive(
     name="doctor",
     verb="query",
@@ -120,9 +161,12 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     testing); it defaults to the current UTC time. Each live run whose stamped
     ``next_tick_due`` is before that instant is a stalled driver — returned with
     a drafted recovery proposal the human decides on. Runs *parked on a human
-    decision* (a ``pending_decision`` marker, §5 "parked ≠ stalled") are surfaced
-    separately in ``parked`` as an "awaiting your decision since T" read and
-    never appear in ``stalled``. No side effects.
+    decision* (a ``pending_decision`` marker, §5 "parked ≠ stalled") are split by
+    the decision journal: while still genuinely awaiting the human they are
+    surfaced in ``parked`` as an "awaiting your decision since T" read; once the
+    human's ``y`` is committed but the driver died before advancing (§5 Phase-5)
+    they are surfaced in ``awaiting_advance`` as a drafted re-arm proposal — a
+    stalled driver. Neither ever appears in ``stalled``. No side effects.
 
     Raises :class:`errors.SpecInvalid` if *spec.now* is a non-ISO-8601 string.
     """
@@ -136,9 +180,25 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
 
     # Parked ≠ stalled (§5): runs awaiting a human decision are surfaced as a
     # distinct read, never a re-arm proposal. find_stalled_runs already excludes
-    # them, so a parked run can never appear in both lists.
+    # them, so a parked run can never appear in the stalled list.
+    #
+    # But a parked run splits into two sub-states (§5 Phase-5): a run is only
+    # genuinely *awaiting the human* while its latest committed decision is NOT a
+    # `y` greenlight. Once the human commits `y` (marker still set, driver dead —
+    # no OS scheduler consumed it), it is a STALLED driver that must be re-armed.
+    # is_latest_committed_greenlight is the same rule the in-session Stop guard
+    # (decision_rendezvous_stop_guard.find_committed_unadvanced) keys on, so the
+    # hook and the doctor agree on "committed-but-unadvanced".
     parked_hits = find_parked_runs(now, experiment_dir=experiment_dir)
-    parked_notes = [_draft_parked_note(hit) for hit in parked_hits]
+    parked_notes: list[ParkedRunNote] = []
+    advance_proposals: list[AdvanceRunProposal] = []
+    for hit in parked_hits:
+        run_id = hit["run_id"]
+        if is_latest_committed_greenlight(experiment_dir, "run", run_id):
+            decision = latest_decision(experiment_dir, "run", run_id)
+            advance_proposals.append(_draft_advance_proposal(hit, decision=decision, now=now))
+        else:
+            parked_notes.append(_draft_parked_note(hit))
 
     result = DoctorResult(
         now=now,
@@ -146,6 +206,8 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         stalled=proposals,
         parked_count=len(parked_notes),
         parked=parked_notes,
+        awaiting_advance_count=len(advance_proposals),
+        awaiting_advance=advance_proposals,
     )
     dumped: dict[str, Any] = result.model_dump(mode="json")
 

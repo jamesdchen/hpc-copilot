@@ -13,6 +13,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.queries.doctor import DoctorSpec
 from hpc_agent.ops.recover.doctor import doctor
+from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.journal import mark_pending_decision, stamp_tick, upsert_run
 from hpc_agent.state.run_record import RunRecord
 
@@ -171,3 +172,125 @@ def test_doctor_no_parked_when_none_awaiting(tmp_path: Path) -> None:
     out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
     assert out["parked_count"] == 0
     assert out["parked"] == []
+
+
+# ─── awaiting_advance: committed-but-unadvanced (§5 Phase-5) ─────────────────
+
+
+def _commit_y(exp: Path, run_id: str) -> None:
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="s2",
+        response="y",
+        resolved={"approved": True},
+    )
+
+
+def _commit_nudge(exp: Path, run_id: str) -> None:
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="s2",
+        response="cap the cost at 10",
+    )
+
+
+def test_doctor_surfaces_committed_y_as_awaiting_advance(tmp_path: Path) -> None:
+    """A parked run whose latest committed decision is a `y` is a stalled driver
+    (human decided, driver died before advancing) — surfaced in awaiting_advance
+    with a re-arm proposal, NOT in parked and NOT in stalled."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("decided"))
+    stamp_tick(
+        "decided",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "decided")
+    _commit_y(tmp_path, "decided")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    # Not stalled (has a marker), not merely parked (has a committed y).
+    assert out["stalled_count"] == 0
+    assert out["parked_count"] == 0
+    assert out["parked"] == []
+    # Surfaced as awaiting_advance with a re-arm proposal.
+    assert out["awaiting_advance_count"] == 1
+    prop = out["awaiting_advance"][0]
+    assert prop["run_id"] == "decided"
+    assert prop["block"] == "s2"
+    assert prop["workflow"] == "submit"
+    assert "re-arm" in prop["proposal"].lower()
+    assert "block-drive" in prop["proposal"].lower()
+    assert "decided" in prop["proposal"]
+    assert prop["evidence"]["committed_response"] == "y"
+
+
+def test_doctor_parked_with_only_nudge_stays_awaiting_human(tmp_path: Path) -> None:
+    """A parked run whose latest decision is a nudge (not a `y`) is still
+    genuinely awaiting the human → parked note, never awaiting_advance."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("nudged"))
+    stamp_tick(
+        "nudged",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "nudged")
+    _commit_nudge(tmp_path, "nudged")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["awaiting_advance_count"] == 0
+    assert out["awaiting_advance"] == []
+    assert out["parked_count"] == 1
+    assert out["parked"][0]["run_id"] == "nudged"
+    assert out["stalled_count"] == 0
+
+
+def test_doctor_y_then_nudge_latest_wins_stays_parked(tmp_path: Path) -> None:
+    """A `y` followed by a later nudge → latest is the nudge → still awaiting the
+    human (matches the Stop guard, which keys on the LATEST decision)."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("reopened"))
+    stamp_tick(
+        "reopened",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "reopened")
+    _commit_y(tmp_path, "reopened")
+    _commit_nudge(tmp_path, "reopened")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["awaiting_advance_count"] == 0
+    assert out["parked_count"] == 1
+    assert out["parked"][0]["run_id"] == "reopened"
+
+
+def test_doctor_parked_without_any_decision_stays_awaiting_human(tmp_path: Path) -> None:
+    """Nothing committed yet → parked note, never awaiting_advance (the existing
+    parked path is unchanged for a run with no decision journal)."""
+    now = "2026-07-03T01:00:00+00:00"
+    upsert_run(tmp_path, _record("waiting"))
+    stamp_tick(
+        "waiting",
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _park(tmp_path, "waiting")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=now))
+
+    assert out["awaiting_advance_count"] == 0
+    assert out["parked_count"] == 1
+    assert out["parked"][0]["run_id"] == "waiting"

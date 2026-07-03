@@ -322,7 +322,18 @@ def drive_once(
 
     print(json.dumps({"delegate": delegate, "plan": plan}, indent=2, sort_keys=True))
 
-    if dry_run or plan["action"] == "skip":
+    if dry_run:
+        return 0
+    # ``agent`` / ``skip`` plans don't carry a run_id, but the delegate block
+    # they came from does — recover it so those branches can re-stamp too.
+    run_id = delegate.get("run_id") if isinstance(delegate, dict) else None
+    if plan["action"] == "skip":
+        # A skip still refreshes the dead-man's-switch deadline when there IS a
+        # run to stamp, so a live driver repeatedly idling on skip steps is not
+        # mistaken for a stalled one (find_stalled_runs reads next_tick_due). A
+        # skip with no run_id has nothing to stamp — guard for it.
+        if run_id:
+            _stamp_driver_tick(experiment_dir, run_id)
         return 0
     if plan["action"] == "cli":
         exit_code = _run_cli_step(plan["verb"], plan["run_id"], experiment_dir)
@@ -332,7 +343,14 @@ def drive_once(
         _stamp_driver_tick(experiment_dir, plan["run_id"])
         return exit_code
     if plan["action"] == "agent":
-        return _run_agent_step(plan["spawn_request"], experiment_dir, resolver)
+        exit_code = _run_agent_step(plan["spawn_request"], experiment_dir, resolver)
+        # Same watchdog re-stamp as the cli branch: an agent tick is a live
+        # driver advancing, so refresh next_tick_due when there is a run to
+        # stamp (else a driver looping on agent steps drifts past its deadline
+        # and find_stalled_runs false-alarms it).
+        if run_id:
+            _stamp_driver_tick(experiment_dir, run_id)
+        return exit_code
     return 0
 
 

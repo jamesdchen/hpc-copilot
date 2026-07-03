@@ -72,6 +72,16 @@ _log = logging.getLogger(__name__)
 # field the ownership map attributes.
 _META_KEYS: frozenset[str] = frozenset({"next_block"})
 
+# The FRESH entry blocks whose spec the driver CAN materialize from a bare
+# ``(run_id, workflow)`` — both take a top-level ``run_id`` (§3). The other two
+# workflow entry blocks are NOT bare-startable: ``submit-s1`` needs the
+# ``goal``/``task_generator``/``walk`` inputs and ``campaign-greenlight`` needs a
+# ``campaign_id``, none of which live on ``BlockDriveSpec``. A fresh start of
+# those is driven by the interview skill / campaign reconcile driver, not a bare
+# ``block-drive`` tick — the driver returns a clear ``skip`` rather than running a
+# doomed span (see :func:`_fresh_entry_spec` / :func:`run_tick`).
+_FRESH_ENTRY_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot", "aggregate-check"})
+
 
 # ── pure planning (no I/O) ─────────────────────────────────────────────────────
 
@@ -343,6 +353,21 @@ def _next_spec_hint(result: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _fresh_entry_spec(verb: str | None, run_id: str | None) -> dict[str, Any] | None:
+    """Build the FIRST span's spec for a FRESH chain start, or ``None`` if unbuildable.
+
+    ``status-snapshot`` / ``aggregate-check`` accept a top-level ``run_id`` (§3), so
+    the driver materializes ``{"run_id": run_id}`` (or ``{}`` — a fleet digest — when
+    no run_id is supplied to ``status-snapshot``). ``submit-s1`` and
+    ``campaign-greenlight`` need inputs a bare tick can't supply, so the driver
+    returns ``None`` and :func:`run_tick` reports a clear ``skip`` naming the missing
+    inputs rather than running a span the block would reject with ``SpecInvalid``.
+    """
+    if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
+        return {"run_id": run_id} if run_id else {}
+    return None
+
+
 # ── the tick ───────────────────────────────────────────────────────────────────
 
 
@@ -421,8 +446,43 @@ def run_tick(
         clear_pending_decision(run_id, experiment_dir=experiment_dir)
 
     verb: str | None = plan["verb"]
-    carry: dict[str, Any] = dict(plan.get("carry_fields", {}))
     wf = plan.get("workflow") or workflow
+
+    # Materialize the FIRST span's spec (§3, correct spec-materialization — no
+    # blind top-level ``run_id`` injection).
+    #
+    # * RESUME (advance / rerun / advance_carrying): the approved ``resolved`` spec
+    #   the LLM committed IS the correctly-shaped acting spec for the routed block
+    #   (the gated block's nested-object spec, or the current block's for a rerun).
+    #   The downstream edits an ``advance_carrying`` folds are already inside
+    #   ``resolved``; the ``next_block`` routing token is stripped as metadata.
+    # * FRESH: the entry block's minimal spec, or ``None`` when the block is not
+    #   bare-startable (submit-s1 / campaign-greenlight) → a clear skip.
+    if resume_action:
+        first_spec: dict[str, Any] = {
+            k: v for k, v in (committed_resolved or {}).items() if k not in _META_KEYS
+        }
+    else:
+        built = _fresh_entry_spec(verb, run_id)
+        if built is None:
+            return (
+                BlockDriveResult(
+                    action="skip",
+                    run_id=run_id,
+                    workflow=wf,
+                    next_verb=verb,
+                    reason=(
+                        f"cannot fresh-start {verb} from a bare block-drive tick — it "
+                        "needs inputs beyond (run_id, workflow) "
+                        "(submit-s1: goal/task_generator/walk; campaign-greenlight: "
+                        "campaign_id). Drive its fresh start via the interview skill / "
+                        "campaign reconcile driver."
+                    ),
+                ),
+                0,
+            )
+        first_spec = built
+
     # The action label of the FIRST span (how the tick entered); subsequent
     # deterministic spans are ``chained``.
     first_label = {
@@ -437,7 +497,7 @@ def run_tick(
         run_id=run_id or "",
         workflow=wf,
         first_verb=verb,
-        first_carry=carry,
+        first_spec=first_spec,
         first_label=first_label,
     )
 
@@ -448,24 +508,28 @@ def _chain(
     run_id: str,
     workflow: str | None,
     first_verb: str | None,
-    first_carry: dict[str, Any],
+    first_spec: dict[str, Any],
     first_label: str,
 ) -> tuple[BlockDriveResult, int]:
     """Run block spans, chaining deterministic successors until a stop (§2).
 
-    Loops: run ``verb``, stamp the watchdog, then branch on the Result —
-    ``needs_decision`` parks (writes the pending marker, exits), a detached handle
-    exits, a code-determined successor chains on in-code, and a terminal exits.
+    Loops: run ``verb`` under ``spec``, stamp the watchdog, then branch on the
+    Result — ``needs_decision`` parks (writes the pending marker, exits), a
+    detached handle exits, a code-determined UNGATED successor chains on in-code
+    (its spec is the predecessor's ``spec_hint`` passed VERBATIM), a
+    greenlight-GATED successor PARKS for the human ``y`` the gate requires (an
+    in-code chain never journals it), and a terminal exits. The FIRST span's spec
+    is materialized by the caller (:func:`run_tick`); chained spans take the
+    predecessor's ``spec_hint`` — never a blind top-level ``run_id`` injection (§3).
     """
     from hpc_agent._kernel.lifecycle.drive import _stamp_driver_tick
 
     verb = first_verb
-    carry = first_carry
+    spec: dict[str, Any] = dict(first_spec)
     last_action = first_label
     last_result: dict[str, Any] = {}
 
     while verb is not None:
-        spec: dict[str, Any] = {"run_id": run_id, **carry} if run_id else dict(carry)
         result, code = _run_block_verb(verb, spec, experiment_dir)
         if run_id:
             _stamp_driver_tick(experiment_dir, run_id)
@@ -542,10 +606,45 @@ def _chain(
                 0,
             )
 
-        # Deterministic continuation: chain the successor IN CODE (no LLM). The
-        # block's spec_hint carries the minimal next-spec skeleton.
+        # A greenlight-GATED successor (block_chain.is_gated is the SoT): an
+        # in-code chain never journals the human ``y`` the gate requires, so PARK
+        # here exactly as a decision does — surface the predecessor's brief, store
+        # a resume cursor whose ``next_verb`` is the gated block, and exit. A later
+        # tick advances into it once the human's greenlight is journaled and its
+        # gate finds it (design: needs_decision + gate agree, zero gate re-scoping).
+        if block_chain.is_gated(successor):
+            _park(
+                experiment_dir,
+                run_id=run_id,
+                workflow=workflow,
+                verb=verb,
+                stage=stage,
+                successor=successor,
+                spec=spec,
+                result=result,
+            )
+            return (
+                BlockDriveResult(
+                    action="awaiting_decision",
+                    run_id=run_id or None,
+                    workflow=workflow,
+                    current_verb=verb,
+                    next_verb=successor,
+                    stage_reached=stage,
+                    brief=result.get("brief") if isinstance(result.get("brief"), dict) else None,
+                    reason=(
+                        result.get("reason")
+                        or f"{verb} complete; greenlight required before {successor} — parked."
+                    ),
+                ),
+                0,
+            )
+
+        # Deterministic continuation into an UNGATED successor: chain it IN CODE
+        # (no LLM). The predecessor's spec_hint is the successor's VALID minimal
+        # spec — passed VERBATIM (no top-level run_id injection, §3).
         last_action = "chained"
-        carry = _next_spec_hint(result)
+        spec = _next_spec_hint(result)
         verb = successor
 
     # Loop only exits via a return above unless the first verb was None.

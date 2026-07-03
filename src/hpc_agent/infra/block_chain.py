@@ -34,10 +34,12 @@ __all__ = [
     "SUCCESSORS",
     "WORKFLOW_OF",
     "ORDER",
+    "GATED_BLOCKS",
     "successor_verb",
     "workflow_of",
     "block_index",
     "next_block_hint",
+    "is_gated",
 ]
 
 
@@ -59,6 +61,21 @@ ORDER: dict[str, list[str]] = {
 WORKFLOW_OF: dict[str, str] = {
     verb: workflow for workflow, verbs in ORDER.items() for verb in verbs
 }
+
+
+# ── the greenlight-gated blocks ───────────────────────────────────────────────
+
+# The block verbs whose op body calls ``ops/block_gate.assert_greenlit_target``
+# before it acts on the cluster — the SINGLE SOURCE OF TRUTH for "the driver must
+# PARK for a human greenlight before entering this block". Derived by grepping the
+# callers of ``assert_greenlit_target``: ``ops/submit_blocks.py`` guards
+# ``submit-s2`` / ``submit-s3`` / ``submit-s4`` and ``ops/aggregate_blocks.py``
+# guards ``aggregate-run``. A block-drive IN-CODE chain never journals the ``y``
+# these gates require, so the driver stops at the rendezvous before any member and
+# lets the human greenlight it (``block_drive._chain``). ``status-watch`` and the
+# ``campaign-*`` blocks are UNGATED and chain in code. The ``test_block_chain``
+# suite pins this set against the live gate callers so the two cannot drift.
+GATED_BLOCKS: frozenset[str] = frozenset({"submit-s2", "submit-s3", "submit-s4", "aggregate-run"})
 
 
 # ── the successor table ───────────────────────────────────────────────────────
@@ -186,3 +203,14 @@ def next_block_hint(
     if verb is None:
         return None
     return {"verb": verb, "why": why, "spec_hint": dict(spec_hint)}
+
+
+def is_gated(verb: str) -> bool:
+    """True when *verb*'s op body calls the greenlight gate (:data:`GATED_BLOCKS`).
+
+    The SoT for the driver's park-before-gated rule: a ``block-drive`` in-code
+    chain never journals the human ``y`` that ``assert_greenlit_target`` requires,
+    so the driver must PARK for a greenlight before chaining into a gated block
+    (``block_drive._chain``). Chains freely through every ungated block.
+    """
+    return verb in GATED_BLOCKS

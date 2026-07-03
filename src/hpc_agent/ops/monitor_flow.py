@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -359,16 +360,67 @@ def monitor_flow(
             state.ticks += 1
             elapsed = _now() - started
 
-            # Poll.
-            record = record_status(
-                experiment_dir,
-                run_id,
-                ssh_target=record.ssh_target,
-                remote_path=record.remote_path,
-                job_ids=list(record.job_ids),
-                job_name=record.job_name,
-                file_glob=file_glob,
-            )
+            # Poll. A single transient poll fault (a reporter rc!=0 →
+            # RemoteCommandFailed, or a TimeoutError — an OSError subclass —
+            # after the backoff window) must NOT abort a healthy multi-hour poll
+            # and kill the detached child; only the outer try/finally would catch
+            # it and re-raise. Mirror the sibling canary loop
+            # (ops/verify_canary.py): swallow the transient fault, note it on a
+            # tick, and continue to the next poll. The loop stays bounded by the
+            # wall-clock budget below, so a poller that keeps failing past the
+            # budget still terminates to TIMEOUT with the guaranteed harvest.
+            try:
+                record = record_status(
+                    experiment_dir,
+                    run_id,
+                    ssh_target=record.ssh_target,
+                    remote_path=record.remote_path,
+                    job_ids=list(record.job_ids),
+                    job_name=record.job_name,
+                    file_glob=file_glob,
+                )
+            except (errors.RemoteCommandFailed, OSError) as exc:
+                logging.getLogger(__name__).warning(
+                    "monitor_flow: transient poll failure for run %s (tick %d): %s — "
+                    "continuing to the next poll",
+                    run_id,
+                    state.ticks,
+                    exc,
+                )
+                # Re-derive the budget so repeated transient failures still
+                # terminate (rather than spin forever skipping the check below).
+                over_budget = (_now() - started) >= wall_clock_budget_seconds
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=dict(record.last_status or {}),
+                    diff_from_prev={
+                        "newly_complete": [],
+                        "newly_failed": [],
+                        "newly_combined_waves": [],
+                    },
+                    actions=[{"kind": "poll_error", "error": str(exc)}],
+                    lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
+                    next_tick_seconds=None if over_budget else effective_interval,
+                )
+                if over_budget:
+                    _ingest_runtime_at_terminal(experiment_dir, record=record)
+                    terminal_cause = "cap-overrun"
+                    return MonitorFlowResult(
+                        run_id=run_id,
+                        lifecycle_state=LifecycleState.TIMEOUT,
+                        last_status=dict(record.last_status or {}),
+                        combined_waves=state.last_combined_waves,
+                        failed_waves=state.last_failed_waves,
+                        ticks=state.ticks,
+                        elapsed_seconds=_now() - started,
+                        escalation_reason=None,
+                    )
+                # Live poller, transient blip: re-stamp the watchdog so a genuinely
+                # dead poller is still doctor-visible, then back off and retry.
+                _stamp_watchdog(experiment_dir, run_id, effective_interval)
+                _sleep(effective_interval)
+                continue
             last_status = dict(record.last_status or {})
 
             # Compute diff against the prior tick (for the tick log).
@@ -593,6 +645,13 @@ def monitor_flow(
                         lifecycle_state="in_flight",
                         next_tick_seconds=effective_interval,
                     )
+                    # §5 watchdog: re-stamp the next-poll deadline (as the
+                    # auto-resume branch above does) so a dead poller stays
+                    # doctor-visible. A recover-resubmit grew the run, so the
+                    # next poll can take longer — without this re-stamp the stale
+                    # (pre-resubmit) next_tick_due can false-positive a stall on a
+                    # live poller.
+                    _stamp_watchdog(experiment_dir, run_id, effective_interval)
                     refreshed = load_run(experiment_dir, run_id)
                     if refreshed is not None:
                         record = refreshed

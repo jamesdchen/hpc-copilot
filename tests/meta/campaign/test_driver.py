@@ -235,6 +235,81 @@ def test_drive_once_agent_step_uses_injected_resolver(monkeypatch):
     assert used == [{"workflow": "submit", "fields": {}}]
 
 
+# ─── watchdog re-stamp on skip / agent ticks (FIX 3, §5) ─────────────────────
+
+
+def test_drive_once_skip_with_run_id_restamps(monkeypatch):
+    """A skip tick still refreshes the dead-man's-switch deadline when the
+    delegate names a run — a live driver idling on skip steps must not drift
+    past next_tick_due and be false-alarmed by find_stalled_runs."""
+    monkeypatch.setattr(
+        drive_mod,
+        "load_context",
+        # cli step with a run_id but no mapped verb → plan_action skips,
+        # yet the delegate still carries the run to stamp.
+        lambda _exp: {"delegate": {"kind": "cli", "step": "no_such_step", "run_id": "r5"}},
+    )
+    stamped: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        drive_mod, "_stamp_driver_tick", lambda exp, rid: stamped.append((exp, rid))
+    )
+
+    code = drive_once(Path("/tmp/exp"), step_table=_CAMPAIGN, resolver=_unused_resolver)
+
+    assert code == 0
+    assert stamped == [(Path("/tmp/exp"), "r5")]
+
+
+def test_drive_once_skip_without_run_id_does_not_stamp(monkeypatch):
+    """A skip with no run to stamp (no delegate run_id) leaves the watchdog
+    untouched — there is nothing to refresh."""
+    monkeypatch.setattr(
+        drive_mod,
+        "load_context",
+        lambda _exp: {"delegate": {"kind": "cli", "step": "no_such_step"}},
+    )
+    stamped: list[str] = []
+    monkeypatch.setattr(drive_mod, "_stamp_driver_tick", lambda _exp, rid: stamped.append(rid))
+
+    code = drive_once(Path("/tmp/exp"), step_table=_CAMPAIGN, resolver=_unused_resolver)
+
+    assert code == 0
+    assert stamped == []
+
+
+def test_drive_once_agent_step_restamps_when_run_id(monkeypatch):
+    """An agent tick refreshes the deadline too (when the delegate names a run),
+    so a driver looping on agent steps stays live to the watchdog."""
+    monkeypatch.setattr(
+        drive_mod,
+        "load_context",
+        lambda _exp: {
+            "delegate": {
+                "kind": "agent",
+                "step": "submit",
+                "spawn_request": {"workflow": "submit", "fields": {}},
+                "run_id": "r9",
+            }
+        },
+    )
+    stamped: list[str] = []
+    monkeypatch.setattr(drive_mod, "_stamp_driver_tick", lambda _exp, rid: stamped.append(rid))
+
+    class _R:
+        def model_dump(self, *, mode):
+            return {"ok": True}
+
+    code = drive_once(
+        Path("/tmp/exp"),
+        step_table=_CAMPAIGN,
+        resolver=lambda _sr, _exp: (_R(), 0),
+        allow_agent_steps=True,
+    )
+
+    assert code == 0
+    assert stamped == ["r9"]
+
+
 def test_drive_wrapper_parses_argv_and_delegates(monkeypatch):
     """The argparse wrapper only translates argv into drive_once's kwargs."""
     captured: dict = {}

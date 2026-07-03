@@ -71,13 +71,30 @@ def test_gate_matching_greenlight_passes(tmp_path: Path) -> None:
     assert_greenlit_target(tmp_path, run_id=_RUN_ID, verb="submit-s2", predecessor="S1")
 
 
-def test_gate_uses_LATEST_decision(tmp_path: Path) -> None:
-    """A stale matching greenlight followed by a nudge does NOT pass — only the
-    latest exchange governs."""
+def test_gate_greenlight_survives_later_unrelated_touchpoints(tmp_path: Path) -> None:
+    """The wedge fix: a greenlight for the verb is NOT retracted by an unrelated
+    later touchpoint in the SHARED run journal — the gate scans for the latest
+    greenlight naming *this* verb, so a trailing nudge and a `y` for a different
+    verb both fall through to the still-standing s2 greenlight.
+
+    (Consumption is NOT enforced here — a later same-verb nudge does not
+    retract; replay is backstopped by run-dedup. See gate TODO(wave4).)"""
     _greenlight(tmp_path, "submit-s2")
-    _greenlight(tmp_path, "submit-s2", response="actually hold on")
-    with pytest.raises(errors.SpecInvalid):
+    _greenlight(tmp_path, "submit-s2", response="actually hold on")  # nudge, not a retraction
+    _greenlight(tmp_path, "submit-s3")  # unrelated greenlight for a DIFFERENT verb
+    assert_greenlit_target(tmp_path, run_id=_RUN_ID, verb="submit-s2", predecessor="S1")
+
+
+def test_gate_no_greenlight_for_verb_among_other_records_refuses(tmp_path: Path) -> None:
+    """Regression: records exist but NONE greenlights this verb → still raises.
+    Here the only greenlight names a different verb, preceded by a nudge — the
+    scan finds no `y` for submit-s2 and fails closed."""
+    _greenlight(tmp_path, "submit-s2", response="no — hold on")  # nudge, not a `y`
+    _greenlight(tmp_path, "submit-s3")  # greenlight for a DIFFERENT verb
+    with pytest.raises(errors.SpecInvalid) as ei:
         assert_greenlit_target(tmp_path, run_id=_RUN_ID, verb="submit-s2", predecessor="S1")
+    msg = str(ei.value)
+    assert "submit-s3" in msg and "submit-s2" in msg
 
 
 def test_gate_accepts_whole_hint_dict(tmp_path: Path) -> None:

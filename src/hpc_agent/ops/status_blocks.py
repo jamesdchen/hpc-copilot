@@ -275,15 +275,21 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         brief=brief,
         # Runtime-gated: the table's successor for a clean snapshot is status-watch,
         # but only when a live run exists to watch (an all-terminal / empty fleet
-        # emits None). The ``if has_live`` guard applies that runtime condition.
+        # emits None). The ``if has_live and spec.run_id`` guard applies that
+        # runtime condition AND the single-run requirement: status-watch embeds a
+        # MonitorFlowSpec keyed on ONE run_id, so a fleet digest (run_id=None) has
+        # no single run to watch and emits None (the driver can't materialize a
+        # watch spec for "the fleet"). The spec_hint is the successor's VALID
+        # minimal StatusWatchSpec — ``monitor={run_id}`` — which the driver passes
+        # verbatim when it chains this ungated hop in code (block_drive._chain).
         next_block=(
             _next_block(
                 "status-snapshot",
                 "snapshot_clean",
                 "live run(s) in flight; watch to a terminal state.",
-                run_id=spec.run_id,
+                monitor={"run_id": spec.run_id},
             )
-            if has_live
+            if has_live and spec.run_id is not None
             else None
         ),
     )

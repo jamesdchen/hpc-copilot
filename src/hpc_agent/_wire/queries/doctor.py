@@ -99,6 +99,46 @@ class ParkedRunNote(BaseModel):
     )
 
 
+class AdvanceRunProposal(BaseModel):
+    """One parked run whose human ``y`` is committed but the driver never advanced.
+
+    The §5 Phase-5 out-of-session case: the run carries a ``pending_decision``
+    marker AND its latest committed decision is a ``y`` greenlight, but the
+    driver that must consume it is dead (session ended, no OS scheduler). This
+    is a STALLED driver — distinct from :class:`StalledRunProposal` (a missed
+    *tick* deadline) and from :class:`ParkedRunNote` (still genuinely awaiting
+    the human) — so ``doctor`` surfaces it with a DRAFTED re-arm/advance
+    proposal. Detection only: ``doctor`` never runs ``block-drive`` itself.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="doctor awaiting-advance proposal")
+
+    run_id: RunIdStrict
+    status: str = Field(
+        description="Journal status of the parked-but-decided run (always 'in_flight')."
+    )
+    block: str | None = Field(
+        default=None, description="The block whose decision was approved but not consumed, or null."
+    )
+    workflow: str | None = Field(
+        default=None, description="The workflow the approved block belongs to, or null."
+    )
+    awaiting_since: str | None = Field(
+        default=None,
+        description="When the run began awaiting the (now-committed) decision (ISO-8601 UTC), or null.",
+    )
+    proposal: str = Field(
+        description=(
+            "Human-facing DRAFTED re-arm proposal, e.g. 'approved spec committed for "
+            "<run_id> block <block> but the driver has not advanced — re-arm ...'. "
+            "doctor NEVER enacts it."
+        )
+    )
+    evidence: dict[str, Any] = Field(
+        description="Detection evidence (the committed decision's ts/response, awaiting_since, now).",
+    )
+
+
 class DoctorResult(BaseModel):
     """Shape of the ``data`` field on a ``doctor`` envelope."""
 
@@ -118,5 +158,22 @@ class DoctorResult(BaseModel):
         description=(
             "One entry per run awaiting a human decision — distinct from stalled; "
             "doctor surfaces the wait, never a re-arm proposal."
+        ),
+    )
+    awaiting_advance_count: int = Field(
+        default=0,
+        description=(
+            "Number of parked runs whose human 'y' is committed but the driver "
+            "died before advancing (§5 Phase-5) — stalled drivers, surfaced with a "
+            "re-arm proposal."
+        ),
+    )
+    awaiting_advance: list[AdvanceRunProposal] = Field(
+        default_factory=list,
+        description=(
+            "One entry per committed-but-unadvanced run — a driver that must be "
+            "re-armed to consume an already-approved decision. Distinct from "
+            "'parked' (still awaiting the human): doctor drafts the re-arm, never "
+            "enacts it."
         ),
     )
