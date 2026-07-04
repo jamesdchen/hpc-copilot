@@ -44,6 +44,7 @@ from typing import Any
 __all__ = [
     "DetachedLaunch",
     "DriveModeError",
+    "DetachedLeaseHeld",
     "detached_drive_supported",
     "build_status_pipeline_spec",
     "launch_status_pipeline_detached",
@@ -73,6 +74,19 @@ SUPPORTED_DETACHED_BLOCK_VERBS = frozenset({"submit-s2", "submit-s3", "submit-sp
 
 class DriveModeError(ValueError):
     """The detached drive mode was requested for an unsupported shape."""
+
+
+class DetachedLeaseHeld(DriveModeError):
+    """A LIVE detached worker already owns this ``(run_id, block)`` lease.
+
+    Raised by :func:`_spawn_detached` when a second detached launch is attempted
+    for a ``(run_id, block)`` whose prior lease still names a running pid — the
+    proving-run-#2 failure where two ``submit-s2`` workers raced one run,
+    self-inflicting SSH contention and a stuck ``in_flight`` journal (design
+    ``proving-run-2-hardening.md`` §3 Move 3 "idempotent-single", §2 rows 8/10).
+    A stale lease (dead pid) is silently reclaimed, so a crash never permanently
+    blocks relaunch; only a genuinely live sibling is refused.
+    """
 
 
 @dataclass(frozen=True)
@@ -211,7 +225,9 @@ def launch_status_pipeline_detached(
         "--experiment-dir",
         experiment_dir,
     ]
-    return _spawn_detached(run_id=run_id, argv=argv, log_path=log_path, cwd=experiment_dir)
+    return _spawn_detached(
+        run_id=run_id, block="status", argv=argv, log_path=log_path, cwd=experiment_dir
+    )
 
 
 def _agent_launch_prefix(hpc_agent_bin: str | None) -> list[str]:
@@ -235,7 +251,93 @@ def _agent_launch_prefix(hpc_agent_bin: str | None) -> list[str]:
     return [sys.executable, "-m", "hpc_agent"]
 
 
-def _spawn_detached(*, run_id: str, argv: list[str], log_path: Path, cwd: str) -> DetachedLaunch:
+def _pid_alive(pid: int) -> bool:
+    """Whether *pid* names a running process on this host.
+
+    The lease liveness check (a dead pid is a reclaimable stale lease; a live one
+    refuses the second launch). Kept a module-level function so tests can
+    monkeypatch it and stay deterministic — they must NOT depend on real pids or
+    wall-clock. POSIX: ``os.kill(pid, 0)`` — no signal delivered, just an
+    existence/permission probe (``PermissionError`` means the process exists but
+    is another user's, i.e. alive). win32: ``OpenProcess`` +
+    ``GetExitCodeProcess`` — a handle that opens and reports ``STILL_ACTIVE``
+    (259) is a running process; a pid that no longer exists fails to open.
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes  # noqa: PLC0415 — win32-only, imported lazily
+
+        _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        _STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]  # win32-only
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == _STILL_ACTIVE
+            # Couldn't read the exit code but the handle opened — treat as alive
+            # rather than reclaim a lease we can't prove is dead.
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        # Any other errno: be conservative and treat the pid as alive so a lease
+        # is never wrongly reclaimed out from under a running worker.
+        return True
+    return True
+
+
+def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:
+    """Refuse a second LIVE detached worker for the same ``(run_id, block)``.
+
+    Filesystem lease keyed by ``(run_id, block)`` (mirrors the ``.submit_lock``
+    advisory-lock convention in ``ops/submit_flow.py``). Returns the lease-file
+    path the caller stamps with the launched pid *after* a successful ``Popen``.
+
+    The check-and-claim runs under an :func:`hpc_agent.infra.io.advisory_flock`
+    so two racing launches can't both pass the liveness check — the exact
+    proving-run-#2 race (two ``submit-s2`` against one run). Reads the prior
+    lease if present: a LIVE recorded pid → :class:`DetachedLeaseHeld` (refuse);
+    a DEAD one (or an unreadable/absent lease) → reclaimable, so the launch
+    proceeds. A crashed worker leaves a dead pid, so the lease self-heals and
+    never permanently blocks relaunch.
+
+    NOTE: this only holds the flock long enough to *decide*; the caller stamps
+    the lease under the same key immediately after spawning. Two launches for
+    the same key that interleave both see "no live lease" only if neither has
+    stamped yet — which the surrounding flock in :func:`_spawn_detached`
+    prevents by keeping decide+spawn+stamp inside one critical section.
+    """
+    lease_path = detached_dir / f"{block}-{run_id}.lease.json"
+    if lease_path.exists():
+        try:
+            prior = json.loads(lease_path.read_text(encoding="utf-8"))
+            prior_pid = int(prior.get("pid", -1))
+        except (OSError, ValueError, TypeError):
+            prior_pid = -1
+        if prior_pid > 0 and _pid_alive(prior_pid):
+            raise DetachedLeaseHeld(
+                f"a live detached worker (pid {prior_pid}) already owns the "
+                f"({run_id!r}, {block!r}) lease at {lease_path}; refusing a second "
+                "racing launch. Poll the journal for this run instead of spawning "
+                "again. If the worker has died, its dead pid makes the lease stale "
+                "and the next launch will reclaim it automatically."
+            )
+    return lease_path
+
+
+def _spawn_detached(
+    *, run_id: str, block: str, argv: list[str], log_path: Path, cwd: str
+) -> DetachedLaunch:
     """``Popen`` *argv* fully detached, capturing stdout/stderr to *log_path*.
 
     The one place the platform-detach + log-capture is done, shared by the
@@ -245,22 +347,52 @@ def _spawn_detached(*, run_id: str, argv: list[str], log_path: Path, cwd: str) -
     a poll can never block on a tty), stdout/stderr captured to a log so the
     child's envelope + diagnostics survive without the orchestrator reading them
     live. The orchestrator learns the outcome from the JOURNAL, not this pipe.
+
+    *block* keys the idempotent-single lease with *run_id*: the whole
+    decide→spawn→stamp is done under one advisory flock so a second detached
+    launch for the same ``(run_id, block)`` while the first is alive is refused
+    (:class:`DetachedLeaseHeld`), never two racing (design
+    ``proving-run-2-hardening.md`` §3 Move 3). A stale lease (dead pid) is
+    reclaimed, so a crash never blocks relaunch.
     """
-    log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
-    try:
-        proc = subprocess.Popen(
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            env={**os.environ},
-            **_detach_popen_kwargs(),
+    from hpc_agent.infra import io  # noqa: PLC0415 — avoid an import cycle at module load
+
+    detached_dir = log_path.parent
+    lock_path = detached_dir / f"{block}-{run_id}.lease.lock"
+    with io.advisory_flock(lock_path):
+        lease_path = _guard_single_lease(detached_dir, block, run_id)
+
+        log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                cwd=cwd,
+                env={**os.environ},
+                **_detach_popen_kwargs(),
+            )
+        finally:
+            # The child inherits its own dup'd fd; this process closes its copy
+            # so it isn't holding the log open for the runner's whole lifetime.
+            log_handle.close()
+
+        # Stamp the lease with the just-launched pid while still under the flock,
+        # so a concurrent launch for the same key sees a live lease the moment it
+        # acquires the lock.
+        lease_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "block": block,
+                    "pid": proc.pid,
+                    "log_path": str(log_path.resolve()),
+                    "argv": argv,
+                }
+            ),
+            encoding="utf-8",
         )
-    finally:
-        # The child inherits its own dup'd fd; this process closes its copy so
-        # it isn't holding the log open for the runner's whole lifetime.
-        log_handle.close()
 
     return DetachedLaunch(
         run_id=run_id,
@@ -346,4 +478,6 @@ def launch_submit_block_detached(
         "--experiment-dir",
         experiment_dir,
     ]
-    return _spawn_detached(run_id=run_id, argv=argv, log_path=log_path, cwd=experiment_dir)
+    return _spawn_detached(
+        run_id=run_id, block=verb, argv=argv, log_path=log_path, cwd=experiment_dir
+    )

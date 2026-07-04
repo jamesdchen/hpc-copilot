@@ -361,6 +361,11 @@ def build_submit_spec(
         # latter is exec'd as a shell command and exits 127 (the ridge_imp
         # incident). Catches a hand-rolled spec / stale divergent-build sidecar.
         _check_bare_module_executor(extra_env["EXECUTOR"])
+        # Sibling guard (Move 1 / proving-run #2): a per-task one-liner placed in
+        # EXECUTOR breaks the cpu_array.sh transport — the inverse of
+        # write-run-sidecar's guard, which refuses a *dispatcher*-shaped value in
+        # the *sidecar*. The per-task command belongs in the sidecar's executor.
+        _check_executor_is_dispatcher(str(extra_env["EXECUTOR"]))
 
     # S5 / incident 6: REPO_DIR is derived from the SAME value the rsync deploy
     # lands at (``remote_path``) via the single deploy-target derivation, so the
@@ -783,6 +788,60 @@ def _check_bare_module_executor(executor: str) -> None:
         "The interview's python_module path generates this automatically; if "
         "you're seeing this you're hand-rolling the spec or carrying a stale "
         "sidecar from a divergent build. Re-run the interview (`/submit-hpc`)."
+    )
+
+
+def _check_executor_is_dispatcher(executor: str) -> None:
+    """Refuse an agent-supplied ``job_env["EXECUTOR"]`` that is a per-task one-liner.
+
+    This is the exact INVERSE of ``write-run-sidecar``'s guard
+    (:func:`hpc_agent.ops.submit_flow._is_runnable_executor`), which refuses a
+    *dispatcher*-shaped value in the *sidecar*: here we refuse a *per-task*-shaped
+    value in *EXECUTOR*. ``EXECUTOR`` MUST be the comma-free, space-safe dispatcher
+    (:data:`_DEFAULT_EXECUTOR_CMD`, ``python3 .hpc/_hpc_dispatch.py``), because
+    ``cpu_array.sh`` ships it via ``qsub -v …,EXECUTOR=…`` (comma-delimited) and
+    then runs ``time $EXECUTOR`` **unquoted**. A per-task one-liner like
+    ``python3 -c "import argparse, sys; ..."`` breaks that transport twice — the
+    comma truncates the ``-v`` value, and word-splitting hands ``-c`` only the
+    first bare token (``import``) → ``SyntaxError`` (the actual proving-run-#2
+    canary failure). The real per-task command belongs in the sidecar's
+    ``executor`` field (``write-run-sidecar``), which the dispatcher reads from
+    JSON on the cluster and runs correctly.
+
+    Refuses on exactly the two shapes that break the transport, so a direct
+    per-task command that survives it (``python3 analyze.py --seed $SEED`` — no
+    comma, no quoting-dependent argument) and every legitimate dispatcher variant
+    (``python .hpc/_hpc_dispatch.py``, a ``python3 -m <module>`` custom dispatcher)
+    pass through untouched:
+
+    * a comma anywhere (truncates the ``qsub -v`` value), or
+    * an inline ``python -c`` one-liner (its quoted code argument cannot survive
+      the unquoted ``$EXECUTOR`` word-split; it belongs in the sidecar).
+    """
+    if "," in executor:
+        reason = "it contains a comma, which truncates the `qsub -v ...,EXECUTOR=...` value"
+    else:
+        try:
+            parts = shlex.split(executor)
+        except ValueError:
+            return  # unparseable shell — leave it to the cluster to surface
+        if "-c" not in parts:
+            return
+        reason = (
+            "it is a `python -c` inline one-liner, whose quoted code argument "
+            "cannot survive the unquoted `time $EXECUTOR` word-split"
+        )
+    raise errors.SpecInvalid(
+        f"job_env['EXECUTOR'] {executor!r} is not the dispatcher command: {reason}. "
+        "EXECUTOR is shipped comma-delimited via `qsub -v ...,EXECUTOR=...` and run "
+        "as `time $EXECUTOR` UNQUOTED, so it MUST be the comma-free, space-safe "
+        f"dispatcher (default {_DEFAULT_EXECUTOR_CMD!r}) — the proving-run-#2 canary "
+        "died `SyntaxError` when a per-task one-liner was placed here (the comma "
+        "truncated the -v value and `-c import` word-split). The REAL per-task "
+        "command belongs in the sidecar's `executor` field (write it with "
+        "`write-run-sidecar`); the cluster-side dispatcher reads it from JSON and "
+        "runs it correctly. Drop the EXECUTOR override — build-submit-spec defaults "
+        "it to the dispatcher."
     )
 
 

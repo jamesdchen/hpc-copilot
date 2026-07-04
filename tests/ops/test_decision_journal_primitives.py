@@ -110,6 +110,65 @@ def test_read_empty_scope(tmp_path: Path) -> None:
     assert result.records == []
 
 
+# ─── next_block auto-default from the parked pending decision (proving run #2) ──
+
+
+def _seed_pending(tmp_path: Path, run_id: str, *, next_verb: str) -> None:
+    """Create a run record parked on a decision whose successor is *next_verb*."""
+    from hpc_agent.state.journal import mark_pending_decision, upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["100"],
+            total_tasks=4,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status="in_flight",
+        ),
+    )
+    mark_pending_decision(
+        run_id,
+        block="submit-s1",
+        workflow="submit",
+        brief={"proposal": "greenlight the resolved plan?"},
+        resume_cursor={"workflow": "submit", "run_id": run_id, "next_verb": next_verb},
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=tmp_path,
+    )
+
+
+def test_greenlight_defaults_next_block_from_pending_decision(tmp_path: Path) -> None:
+    _seed_pending(tmp_path, "run-1", next_verb="submit-s2")
+    out = _append(tmp_path, response="y", resolved={"cluster": "hoffman2"})
+    assert out.record.resolved["next_block"] == "submit-s2"
+    assert out.record.resolved["cluster"] == "hoffman2"  # existing fields preserved
+
+
+def test_explicit_next_block_is_not_overridden(tmp_path: Path) -> None:
+    _seed_pending(tmp_path, "run-1", next_verb="submit-s2")
+    out = _append(tmp_path, response="y", resolved={"next_block": "submit-s3"})
+    assert out.record.resolved["next_block"] == "submit-s3"
+
+
+def test_nudge_response_is_not_defaulted(tmp_path: Path) -> None:
+    _seed_pending(tmp_path, "run-1", next_verb="submit-s2")
+    out = _append(tmp_path, response="no — halve the grid", resolved={"cluster": "hoffman2"})
+    assert "next_block" not in out.record.resolved
+
+
+def test_no_pending_decision_leaves_resolved_untouched(tmp_path: Path) -> None:
+    out = _append(tmp_path, response="y", resolved={"cluster": "hoffman2"})
+    assert "next_block" not in out.record.resolved
+
+
 def test_append_rejects_bad_scope(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid):
         append_decision(

@@ -50,3 +50,30 @@ def test_describe_rejects_path_traversal() -> None:
     rc, out, _ = run_cli("describe", "../etc/passwd")
     assert rc == 1
     assert parse_envelope(out)["ok"] is False
+
+
+def test_describe_schema_emits_resolved_input_schema_content() -> None:
+    # Move 2 (proving-run-2-hardening §3): `--schema` returns the RESOLVED
+    # input-schema JSON *content*, not the bare filename — so an agent never
+    # `find /`s a schema file. Wire an existing verb with a known input schema.
+    rc, out, _ = run_cli("describe", "append-decision", "--schema")
+    assert rc == 0
+    env = parse_envelope(out)
+    assert env["ok"] is True
+    assert env["data"]["kind"] == "input_schema"
+    assert env["data"]["name"] == "append-decision"
+    schema = env["data"]["schema"]
+    # A real JSON Schema object, not a filename string.
+    assert isinstance(schema, dict)
+    assert schema.get("type") == "object"
+    assert "properties" in schema
+    # append-decision's contract requires these fields.
+    assert set(schema.get("required", [])) >= {"scope_kind", "scope_id", "block", "response"}
+
+
+def test_describe_schema_rejects_an_unknown_name() -> None:
+    rc, out, _ = run_cli("describe", "no-such-thing", "--schema")
+    assert rc == 1
+    env = parse_envelope(out)
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"

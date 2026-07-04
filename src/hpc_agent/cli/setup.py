@@ -240,7 +240,82 @@ def setup(
 
 
 def _describe_handler(args: argparse.Namespace) -> int:
+    # Move 2 (proving-run-2-hardening §3): `--schema` routes an agent to the
+    # RESOLVED input-schema content instead of the bare filename `describe`
+    # otherwise returns — so a caller blocked from `cat`/`python -c` never has
+    # to `find /` a schema file. Additive: no change to the `describe()`
+    # primitive signature or its registry row (the flag lives on the argparse
+    # subparser, not in the CliShape.args baked into operations.json).
+    if getattr(args, "schema", False):
+        return _emit_describe_schema(args.name)
     return _emit_describe(args.name)
+
+
+def _valid_ref_name(name: str) -> bool:
+    """True when *name* is a lowercase procedure/skill/primitive identifier."""
+    return bool(
+        name and name[0].isalpha() and all(c.islower() or c.isdigit() or c == "-" for c in name)
+    )
+
+
+def _emit_describe_schema(name: str) -> int:
+    """Emit a verb's RESOLVED input-schema JSON content (Move 2).
+
+    Reuses the same package-data resolution as the MCP surface
+    (:func:`schema_for` + ``_load_input_schema``) so a CLI caller gets the
+    schema *content*, not its filename. The filesystem path is not an API;
+    the package owns its schemas via ``importlib.resources``.
+    """
+    if not _valid_ref_name(name):
+        return _err(
+            error_code="spec_invalid",
+            message=(
+                f"name {name!r} must be lowercase letters, digits, and hyphens — a primitive name"
+            ),
+            category="user",
+            retry_safe=False,
+        )
+
+    from hpc_agent._kernel.extension.mcp_server import _load_input_schema
+    from hpc_agent._kernel.registry.operations import schema_for
+    from hpc_agent._kernel.registry.primitive import get_meta
+    from hpc_agent.cli._dispatch import cli_to_invocation_string
+
+    try:
+        meta = get_meta(name)
+    except (KeyError, RuntimeError):
+        return _err(
+            error_code="spec_invalid",
+            message=f"no primitive named {name!r}",
+            category="user",
+            retry_safe=False,
+        )
+
+    backed = {
+        "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
+        "cli": cli_to_invocation_string(meta.name, meta.cli),
+    }
+    fname = schema_for(name, "input", backed)
+    if not fname:
+        return _err(
+            error_code="spec_invalid",
+            message=f"primitive {name!r} declares no input schema",
+            category="user",
+            retry_safe=False,
+        )
+    # schema_for returns the packaged filename (e.g. "append_decision.input.json");
+    # _load_input_schema wants the basename it appends ".input.json" to.
+    basename = fname[: -len(".input.json")]
+    schema = _load_input_schema(basename)
+    if schema is None:
+        return _err(
+            error_code="spec_invalid",
+            message=f"input schema for {name!r} could not be loaded",
+            category="user",
+            retry_safe=False,
+        )
+    _ok({"kind": "input_schema", "name": name, "schema": schema})
+    return EXIT_OK
 
 
 def _emit_describe(name: str) -> int:

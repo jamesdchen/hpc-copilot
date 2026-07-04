@@ -20,7 +20,7 @@ The slash `/submit-hpc` is the human-interview wrapper; an external autonomous a
   ```bash
   hpc-agent submit-s1 --spec <path> --experiment-dir <dir>
   ```
-  Write the spec JSON with the `Write` tool and pass `--spec <path>` (never inline a shell-hostile JSON string). Parse the block envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those).
+  Write the spec JSON with the `Write` tool and pass `--spec <path>` (never inline a shell-hostile JSON string). Parse the block envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` (or the MCP tool's `inputSchema`) — never `find`/`cat`/`inspect` a schema file.
 
 ## The driver loop
 

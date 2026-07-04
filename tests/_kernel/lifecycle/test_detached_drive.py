@@ -415,6 +415,115 @@ def test_launch_submit_block_requires_run_id(_journal):
         )
 
 
+# ─── idempotent-single lease (proving-run-#2 Move 3) ────────────────────────
+
+
+def _lease_path(journal_home: Path, block: str, run_id: str) -> Path:
+    return journal_home / "_detached" / f"{block}-{run_id}.lease.json"
+
+
+def test_second_live_launch_for_same_run_block_is_refused(_journal, tmp_path, monkeypatch):
+    """Two detached workers for the SAME (run_id, block) must never race — the
+    proving-run-#2 failure (two submit-s2 against one run). While the first
+    lease's pid is ALIVE, the second launch is refused."""
+    from hpc_agent._kernel.lifecycle import detached
+
+    monkeypatch.setattr(detached.subprocess, "Popen", lambda argv, **kw: _FakePopen(argv, **kw))
+    # Deterministic liveness: the just-launched pid is treated as alive.
+    monkeypatch.setattr(detached, "_pid_alive", lambda pid: True)
+
+    first = detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-race1", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    assert first.pid == 4242
+    lease = _lease_path(tmp_path / "journal", "submit-s2", "ml-race1")
+    assert json.loads(lease.read_text(encoding="utf-8"))["pid"] == 4242
+
+    with pytest.raises(detached.DetachedLeaseHeld, match="already owns"):
+        detached.launch_submit_block_detached(
+            verb="submit-s2",
+            experiment_dir=str(_journal),
+            spec=_block_spec("ml-race1", detach=False),
+            hpc_agent_bin="hpc-agent-stub",
+        )
+
+
+def test_launch_reclaims_stale_lease_when_prior_pid_dead(_journal, tmp_path, monkeypatch):
+    """A crashed worker leaves a dead pid; the lease is stale and reclaimable, so
+    a relaunch succeeds (a crash must never permanently block relaunch)."""
+    from hpc_agent._kernel.lifecycle import detached
+
+    monkeypatch.setattr(detached.subprocess, "Popen", lambda argv, **kw: _FakePopen(argv, **kw))
+    monkeypatch.setattr(detached, "_pid_alive", lambda pid: True)
+
+    detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-stale1", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    lease = _lease_path(tmp_path / "journal", "submit-s2", "ml-stale1")
+    assert json.loads(lease.read_text(encoding="utf-8"))["pid"] == 4242
+
+    # The prior worker "dies": its pid is now dead → stale, reclaimable lease.
+    monkeypatch.setattr(detached, "_pid_alive", lambda pid: False)
+    relaunch = detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-stale1", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    assert relaunch.run_id == "ml-stale1"
+    assert relaunch.pid == 4242  # relaunch succeeded, lease reclaimed
+
+
+def test_lease_is_keyed_per_run_and_block_not_global(_journal, monkeypatch):
+    """The lease keys on (run_id, block): a live submit-s2 for run A must not
+    block a submit-s2 for run B, nor a submit-s3 for run A."""
+    from hpc_agent._kernel.lifecycle import detached
+
+    monkeypatch.setattr(detached.subprocess, "Popen", lambda argv, **kw: _FakePopen(argv, **kw))
+    monkeypatch.setattr(detached, "_pid_alive", lambda pid: True)
+
+    detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-A", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    # Different run, same block → allowed.
+    other_run = detached.launch_submit_block_detached(
+        verb="submit-s2",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-B", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    assert other_run.run_id == "ml-B"
+    # Same run, different block → allowed.
+    other_block = detached.launch_submit_block_detached(
+        verb="submit-s3",
+        experiment_dir=str(_journal),
+        spec=_block_spec("ml-A", detach=False),
+        hpc_agent_bin="hpc-agent-stub",
+    )
+    assert other_block.run_id == "ml-A"
+
+
+def test_pid_alive_reports_current_process_and_rejects_nonpositive():
+    """The real liveness probe: this very process is alive; a non-positive pid is
+    never alive (guards a corrupt/absent lease pid)."""
+    import os
+
+    from hpc_agent._kernel.lifecycle import detached
+
+    assert detached._pid_alive(os.getpid()) is True
+    assert detached._pid_alive(0) is False
+    assert detached._pid_alive(-1) is False
+
+
 def test_cli_default_still_spawns_worker(_journal, monkeypatch, capsys):
     """No flag, no env → the default `claude -p` worker path, unchanged."""
     import types

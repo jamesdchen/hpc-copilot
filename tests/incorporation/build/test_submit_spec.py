@@ -409,11 +409,17 @@ def test_rejects_bare_script_executor_with_trailing_args_for_register_run_file(
     assert "HPC_KW_" in msg
 
 
-def test_accepts_one_liner_executor_for_register_run_file(
+def test_rejects_one_liner_executor_in_favor_of_sidecar(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The ``python3 -c "..."`` form is the correct invocation — the guard
-    must NOT fire even when the targeted file is @register_run-decorated."""
+    """Move 1 / proving-run #2: a per-task ``python3 -c "..."`` one-liner placed
+    in EXECUTOR is now REFUSED — it belongs in the sidecar's ``executor``, not in
+    the job-script EXECUTOR. ``cpu_array.sh`` ships EXECUTOR comma-delimited via
+    ``qsub -v ...,EXECUTOR=...`` and runs ``time $EXECUTOR`` UNQUOTED, so the
+    one-liner's commas truncate the -v value and the word-split hands ``-c`` only
+    ``import`` → SyntaxError (the actual proving-run-#2 canary death). This is the
+    inverse of write-run-sidecar's guard (which refuses a *dispatcher*-shaped
+    value in the *sidecar*)."""
     monkeypatch.chdir(tmp_path)
     exec_dir = tmp_path / "executors"
     exec_dir.mkdir()
@@ -431,10 +437,13 @@ def test_accepts_one_liner_executor_for_register_run_file(
         '_n = next(v for v in _m.values() if getattr(v, \\"_hpc_run\\", False)); '
         '_m.compute(_n)"'
     )
-    spec = build_submit_spec(
-        spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": one_liner})
-    )
-    assert spec["job_env"]["EXECUTOR"] == one_liner
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": one_liner})
+        )
+    msg = str(excinfo.value)
+    assert "dispatcher" in msg
+    assert "sidecar" in msg  # routes the one-liner to its correct home
 
 
 # --- BUG 4: campaign manifest strategy.params → HPC_KW_* --------------------
@@ -676,6 +685,89 @@ def test_accepts_run_module_executor_form(tmp_path, monkeypatch: pytest.MonkeyPa
     cmd = "python3 -m hpc_agent.executor_cli run-module my_pkg.train:main"
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), extra_env={"EXECUTOR": cmd}))
     assert spec["job_env"]["EXECUTOR"] == cmd
+
+
+# --- Move 1: EXECUTOR must be the dispatcher, never a per-task one-liner ------
+
+
+def test_rejects_comma_executor_that_truncates_qsub_v_value(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A comma anywhere in EXECUTOR truncates the ``qsub -v ...,EXECUTOR=...``
+    value cluster-side. Refuse at build so the mangled value never reaches qsub."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": 'python3 -c "import argparse, sys; print(1)"'},
+            )
+        )
+    msg = str(excinfo.value)
+    assert "dispatcher" in msg
+    assert "sidecar" in msg
+
+
+def test_rejects_python_c_one_liner_executor_without_comma(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even without a comma, a ``python -c`` inline one-liner cannot survive the
+    unquoted ``time $EXECUTOR`` word-split — its quoted code argument shatters.
+    Refuse it; the per-task command belongs in the sidecar."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(
+            spec=BuildSubmitSpecInput(
+                **_required(),
+                extra_env={"EXECUTOR": 'python3 -c "print(42)"'},
+            )
+        )
+    assert "sidecar" in str(excinfo.value)
+
+
+def test_default_dispatcher_executor_passes_the_guard() -> None:
+    """The framework-default dispatcher command is the ONE valid EXECUTOR shape —
+    the guard must let it (and its explicit extra_env restatement) through."""
+    # Default path: no extra_env override at all.
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))
+    assert spec["job_env"]["EXECUTOR"] == "python3 .hpc/_hpc_dispatch.py"
+    # Explicit restatement of the default dispatcher via extra_env also passes.
+    spec2 = build_submit_spec(
+        spec=BuildSubmitSpecInput(
+            **_required(), extra_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        )
+    )
+    assert spec2["job_env"]["EXECUTOR"] == "python3 .hpc/_hpc_dispatch.py"
+
+
+def test_custom_module_dispatcher_executor_is_not_over_refused() -> None:
+    """A comma-free, space-safe ``python3 -m <module>`` custom dispatcher is a
+    legitimate dispatcher variant (the extra_env override affordance) — the guard
+    must NOT over-refuse it."""
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(
+            **_required(), extra_env={"EXECUTOR": "python3 -m my.custom_dispatch"}
+        )
+    )
+    assert spec["job_env"]["EXECUTOR"] == "python3 -m my.custom_dispatch"
+
+
+def test_check_executor_is_dispatcher_unit() -> None:
+    """Direct coverage of the EXECUTOR-ownership predicate."""
+    from hpc_agent.incorporation.build.submit_spec import _check_executor_is_dispatcher
+
+    # Valid dispatcher shapes → no raise.
+    _check_executor_is_dispatcher("python3 .hpc/_hpc_dispatch.py")
+    _check_executor_is_dispatcher("python .hpc/_hpc_dispatch.py")
+    _check_executor_is_dispatcher("python3 -m my.custom_dispatch")
+    # A direct per-task command that survives the transport (no comma, no -c) is
+    # not this guard's concern — the var-ref / casing guards own it.
+    _check_executor_is_dispatcher("python3 analyze.py --seed $SEED")
+    # Broken shapes → refuse.
+    with pytest.raises(errors.SpecInvalid, match="comma"):
+        _check_executor_is_dispatcher('python3 -c "import argparse, sys"')
+    with pytest.raises(errors.SpecInvalid):
+        _check_executor_is_dispatcher('python3 -c "print(1)"')
 
 
 def test_check_per_task_executor_rejects_bare_module_function() -> None:

@@ -242,8 +242,9 @@ class TestDetachedWorkerBindsToRunningInterpreter:
         )
         captured: dict[str, Any] = {}
 
-        def _capture(*, run_id: str, argv: list[str], log_path: Any, cwd: str):  # noqa: ANN401
+        def _capture(*, run_id: str, block: str, argv: list[str], log_path: Any, cwd: str):  # noqa: ANN401
             captured["argv"] = argv
+            captured["block"] = block
             return _FakeLaunch()
 
         with mock.patch.object(detached, "_spawn_detached", _capture):
