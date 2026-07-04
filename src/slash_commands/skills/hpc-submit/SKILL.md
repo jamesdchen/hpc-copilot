@@ -28,6 +28,7 @@ The slash `/submit-hpc` is the human-interview wrapper; an external autonomous a
 
 1. **Invoke `block-drive`.** The first call starts the chain at `submit-s1`; each later call consumes the approved spec from the journal's `resolved` and advances — or re-runs the block a nudge changed. The route is a **function of the spec** (design §4: identity + field→stage ownership), computed in code — never a verb you pick.
 2. **Render the brief the driver returns as a proposal.** Relay the `reason` + `brief` (the code-digested evidence — resolved fields with pre-filled recommendations at S1, "canary green, est. N core-hours" at S2, the terminal status digest at S3, the code-extracted results table at S4). Never re-compute or re-interpret the brief's numbers — relay what code drafted.
+   **At the S1 brief, fire `submit-speculate` BEFORE presenting it** (default, not opt-in — design §3's budget-1 speculative canary): the canary's queue+run time then overlaps the human's review, and a plain `y` finds S2 already done. This is doctrine-safe by construction — the canary is cheap, sandboxed, and idempotent; a spec-changing nudge moves the `cmd_sha` so the stale canary drains ignored (nudges never cancel it; no kill path); the TTL cache enforces the one-per-brief budget. Skip only when the S1 brief carries unresolved REQUIRED ambiguities (no recommended spec to speculate under).
 3. **The human answers `y` or nudges.** A single `y` approves the proposed input spec; anything else is a natural-language nudge ("no, halve the grid and re-canary"), which you fold into the block's **inputs** (never a hand-edited derived *output* — that is the fabricated-field bug class) and re-present. Loop until `y`.
 4. **On `y`, commit the approved input spec to the journal's `resolved`, then invoke `block-drive` again to advance.** The commit *is* the approval (design §3, §5). Write the decision record and append it:
    ```bash
@@ -39,15 +40,23 @@ Anomaly terminators (`stage_reached` = `canary_failed` / `watching_anomaly`) are
 
 ## Never-stall contract (blocks never block the chat)
 
-Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait) and `submit-s3` (main-array watch) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification and rides the in-session tail-loop (see below). In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.
+Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait) and `submit-s3` (main-array watch) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification. In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.
+
+**Await the worker — never poll on a timer.** Immediately after a block detaches, launch the waiter through the harness's backgrounding (Claude Code `run_in_background: true`):
+
+```bash
+hpc-agent wait-detached --spec <path with {"run_id": "<run_id>", "block": "<verb>"}>
+```
+
+It blocks locally on the worker's lease pid (no SSH) and exits the moment the worker does — the harness then wakes you exactly once, with the brief ready to read from the journal. Do NOT schedule timed `/loop` wakeups to "check on" a detached worker (guessed cadences add dead air after the brief is ready and burn context re-reads); do NOT infer progress from the log or elapsed time while waiting (the reconcile rule below). A `timeout` outcome is not an anomaly — long queue waits are normal; re-arm another wait.
 
 While a run is live, spawn a background tail of the local supervisor's output so the human sees liveness without asking (design §5 session tail-loop); if the session dies, output is recovered from the cluster by the guaranteed harvest on re-arm.
 
 **Reconcile is the only source of run state** (`proving-run-2-hardening.md` Move 4). The tail is liveness *display*, never state: NEVER infer "still running" from an open log, a live pid, elapsed time, or an empty output file — proving run #2's driver reported a canary as "running, no result yet" from exactly those signals while the journal already recorded it failed. Run state comes ONLY from what the blocks read from the journal/reconcile (`status-snapshot`, the returned brief, `read-decisions`): report the state those return, and when the tail looks stale, invoke `status-snapshot` instead of narrating a guess.
 
-## Speculative canary (opt-in)
+## Speculative canary (DEFAULT at the S1 relay)
 
-To overlap the S1 review with the canary, invoke `submit-speculate` during the S1 `y`/nudge round — it runs S2's canary early under the recommended defaults, so a plain `y` finds S2 already done. Nudges **never** cancel a speculative canary (design §3): a spec-changing nudge moves the `cmd_sha`, the stale canary drains and is ignored, and the next canary is fresh; an unchanged spec keeps the result. Budget is one speculative canary per pending brief, enforced by the canary TTL cache — no kill path.
+Fire `submit-speculate` when presenting the S1 brief (step 2 above — the default, skipped only when required ambiguities leave no recommended spec): it runs S2's canary early under the recommended defaults, so a plain `y` finds S2 already done and the canary's queue+run time hides inside the human's review. Nudges **never** cancel a speculative canary (design §3): a spec-changing nudge moves the `cmd_sha`, the stale canary drains and is ignored, and the next canary is fresh; an unchanged spec keeps the result. Budget is one speculative canary per pending brief, enforced by the canary TTL cache — no kill path.
 
 ## Inputs
 

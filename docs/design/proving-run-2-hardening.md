@@ -134,5 +134,35 @@ Every item here is a *"seam validated by design review, not execution."* The
 proving run is the forcing function; expect more of this class until the flow has
 run end-to-end on a real cluster several times.
 
+## 6. Conduct closure — every conduct rule gets a mechanized counterpart
+
+Proving run #3 (2026-07-04) sharpened the thesis: the Class-2 failures are not
+individual bugs but one structural tension — **the doctrine's constraint
+surface was prose, while the agent's capability surface is everything.** Prose
+drifts with every model/harness update; mechanisms don't. Extending
+engineering-principles' "a guard the LLM itself satisfies is not a guard" from
+code to conduct: every conduct rule below carries (or gets) a machine
+counterpart. This is a finite closure, not whack-a-mole — the agent needs
+exactly four things (information, something to await, specs built for it,
+bounded actions), and each has an owner.
+
+| # | Conduct rule | Mechanism | Status |
+|---|---|---|---|
+| 1 | Never hand off to a spawned LLM worker | §6 deletion — the path does not exist | shipped |
+| 2 | Never advance past an ungreennlit gate | `block_gate.assert_greenlit_target` | shipped (pre-existing) |
+| 3 | Never end the turn on an unconsumed greenlight | decision-rendezvous Stop hook | shipped (pre-existing) |
+| 4 | Never place the per-task one-liner in `EXECUTOR` | `_check_executor_is_dispatcher` | shipped |
+| 5 | Never hand-restate the greenlit successor | `next_block` default: parked `resume_cursor`, falling back to the static chain table (`infra/block_chain.ORDER`) — mode-independent (v2; v1's pending-decision-only derivation missed the MCP-direct mode and the papercut re-fired in run #3) | shipped |
+| 6 | Never supply a defaultable spec field | block-owned defaults — sidecar synthesis defaults `result_dir_template` to `results/{run_id}/task_{task_id}` (``{task_id}`` is a reserved dispatcher render key: collision-free for any axis) instead of dying `SpecInvalid` for the agent to paper over | shipped |
+| 7 | Never run mutating scheduler commands (ssh transport included) | `scheduler_write_fence` PreToolUse hook: blocks `qsub`/`sbatch`/`qdel`/`scancel`/`qmod`/`qalter` in command position — including inside `ssh`/nested shells — while read-only probes (`qstat`/`squeue`/`qacct`, plain `ssh`) pass ("consequences are gated, curiosity isn't" — decided 2026-07-04). Shipped by `install-commands` into `hooks.PreToolUse` | shipped |
+| 8 | Never poll a detached worker on a timer / infer progress from elapsed time | `wait-detached` (blocking lease-pid wait, launched via harness backgrounding → the harness wakes the agent exactly once, at completion) + the reconcile-is-truth skill rule. Deliberately CLI-only (a blocking call would wedge the synchronous in-process MCP dispatch) | shipped |
+| 9 | Never fabricate or divert a `resolved` field the brief didn't recommend | **provenance gate** (designed, next): blocks persist their brief durably at the decision boundary (code-side, both driving modes — the v1 lesson says never key this on block-drive-only state); `append-decision` then refuses a greenlight whose `resolved` diverges from the persisted brief's recommendations without either a prior nudge exchange or an explicit `provenance.overrides` naming the field | designed |
+| 10 | Never relay numbers/state that don't match the journal | **mechanized reviewer** (designed, next): deterministic claim-extraction over the agent's outgoing relay, diffed against the brief/journal/reducer envelope; refuses the turn on mismatch. Code auditing the LLM against the durable record — vs. Claude Science's LLM-audits-LLM reviewer — is the moat stated as a feature | designed |
+
+Rules 9–10 are the remaining trust seams; both are *post-hoc deterministic
+checks over durable records*, which is the pattern every future conduct rule
+should follow. When a new conduct rule cannot be given a mechanism, that is a
+design smell in the rule.
+
 See [human-amplification-blocks.md](human-amplification-blocks.md) §1/§5/§6 and
 [block-drive.md](block-drive.md).

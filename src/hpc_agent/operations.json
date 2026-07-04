@@ -835,6 +835,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent wait-detached --spec <path>",
+    "idempotent": true,
+    "input_schema": "wait_detached.input.json",
+    "name": "wait-detached",
+    "output_schema": "wait_detached.output.json",
+    "python": "hpc_agent.ops.monitor.wait_detached.wait_detached",
+    "side_effects": [],
+    "summary": "Block until the detached worker for a run exits (lease-pid wait; local, no SSH). Launch via the harness's backgrounding so the harness notifies you exactly once, when the brief is ready — never timed /loop polling.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent walk-submit-ambiguities --spec <path>",
     "idempotent": true,
     "input_schema": "walk_submit_ambiguities.input.json",

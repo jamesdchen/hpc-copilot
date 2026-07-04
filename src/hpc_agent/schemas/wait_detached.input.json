@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/wait_detached.input.json",
+  "title": "wait-detached input spec",
+  "description": "Which detached worker to wait on, and for how long.",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "block": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Block"
+    },
+    "timeout_sec": {
+      "default": 7200.0,
+      "exclusiveMinimum": 0,
+      "maximum": 86400.0,
+      "title": "Timeout Sec",
+      "type": "number"
+    },
+    "poll_interval_sec": {
+      "default": 2.0,
+      "exclusiveMinimum": 0,
+      "maximum": 60.0,
+      "title": "Poll Interval Sec",
+      "type": "number"
+    }
+  }
+}

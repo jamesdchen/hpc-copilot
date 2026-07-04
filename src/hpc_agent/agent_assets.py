@@ -169,6 +169,36 @@ _RENDEZVOUS_STOP_ENTRY: dict[str, Any] = {
     ],
 }
 
+
+# The scheduler write-fence (conduct rule 7, proving-run-3 finding (d)):
+# mutating scheduler verbs (qsub/sbatch/qdel/scancel/qmod/qalter) are blocked
+# from the agent's Bash — including inside an ssh transport — while read-only
+# probes (qstat/squeue/qacct, plain ssh) stay allowed ("consequences are gated,
+# curiosity isn't" — James, 2026-07-04). PreToolUse + exit-2 blocks the call;
+# the bash ``case`` pre-filter keeps every non-matching Bash call at builtin
+# cost, and the Python side does command-position analysis so innocent
+# mentions (``grep qsub log``) pass.
+def _build_write_fence_command() -> str:
+    return (
+        'input=$(cat); case "$input" in '
+        "*qsub*|*sbatch*|*qdel*|*scancel*|*qmod*|*qalter*) "
+        f"printf '%s' \"$input\" | {_hook_python()} "
+        "-m hpc_agent._kernel.hooks.scheduler_write_fence;; esac"
+    )
+
+
+_WRITE_FENCE_COMMAND = _build_write_fence_command()
+_WRITE_FENCE_NEEDLE = "hpc_agent._kernel.hooks.scheduler_write_fence"
+_WRITE_FENCE_ENTRY: dict[str, Any] = {
+    "matcher": "Bash",
+    "hooks": [
+        {
+            "type": "command",
+            "command": _WRITE_FENCE_COMMAND,
+        }
+    ],
+}
+
 # The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
 # shell-free invocation surface for blocks (design §3, "The tool surface subsumes
 # the shell"). Registered venv-pinned via the current interpreter so it does not
@@ -737,6 +767,17 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Wire the scheduler write-fence (conduct rule 7): PreToolUse on Bash,
+    # blocking mutating scheduler verbs (ssh transport included) while leaving
+    # read-only probes untouched. Same additive + idempotent merge.
+    settings_write_fence_hook = _merge_hook_entry(
+        target,
+        event="PreToolUse",
+        entry=_WRITE_FENCE_ENTRY,
+        needle=_WRITE_FENCE_NEEDLE,
+        dry_run=dry_run,
+    )
+
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
@@ -758,6 +799,7 @@ def install_agent_assets(
         "settings_stop_hook": settings_stop_hook,
         "settings_rendezvous_hook": settings_rendezvous_hook,
         "settings_rendezvous_stop_hook": settings_rendezvous_stop_hook,
+        "settings_write_fence_hook": settings_write_fence_hook,
         "settings_permissions": settings_permissions,
         "mcp_server": mcp_server,
         "wrote": not dry_run,

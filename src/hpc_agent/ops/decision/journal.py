@@ -115,12 +115,23 @@ def _default_next_block(experiment_dir: Path, spec: AppendDecisionInput) -> dict
     round-trip (two ``s1`` greenlight records 32s apart, the first missing
     ``next_block``).
 
-    The successor is already durable: when a block parks, ``block_drive._park``
-    stores ``resume_cursor["next_verb"]`` in the run's ``pending_decision``. So on
-    a run-scoped greenlight (``response=="y"``) whose ``resolved`` omits
-    ``next_block``, default it from there. Never overrides an explicit value — a
-    nudge that redirects the successor, or an agent that set it, stays
-    authoritative. Non-run scopes and non-``y`` responses are returned untouched.
+    Two derivations, in order (v2 — proving-run-3 re-fire):
+
+    1. **Parked pending decision** — when ``block_drive`` drove the chain, its
+       ``_park`` stored ``resume_cursor["next_verb"]`` in the run's
+       ``pending_decision``. (Requires a RunRecord + the block-drive mode.)
+    2. **Static chain table** — the skills' preferred mode invokes the block's
+       MCP tool directly: no driver, no park, and at S1→S2 no RunRecord even
+       exists, so v1's derivation never fired and the papercut re-appeared in
+       run #3. Fall back to ``infra/block_chain.ORDER`` — the record's own
+       ``block`` field names the block that terminated; its chain successor is
+       the machine-computed next verb. Mode-independent. Short forms
+       (``"s1"``, the run-#2/#3 journaling convention) match by suffix; an
+       ambiguous or chain-final block derives nothing.
+
+    Never overrides an explicit value — a nudge that redirects the successor,
+    or an agent that set it, stays authoritative. Non-run scopes and non-``y``
+    responses are returned untouched.
     """
     resolved = spec.resolved
     if spec.scope_kind != "run" or str(spec.response or "") != "y":
@@ -134,9 +145,37 @@ def _default_next_block(experiment_dir: Path, spec: AppendDecisionInput) -> dict
     pending = read_pending_decision(spec.scope_id, experiment_dir=experiment_dir)
     cursor = pending.get("resume_cursor") if isinstance(pending, dict) else None
     successor = cursor.get("next_verb") if isinstance(cursor, dict) else None
-    if not isinstance(successor, str) or not successor:
-        return resolved
-    return {**resolved, "next_block": successor}
+    if isinstance(successor, str) and successor:
+        return {**resolved, "next_block": successor}
+    successor = _chain_successor(spec.block)
+    if successor:
+        return {**resolved, "next_block": successor}
+    return resolved
+
+
+def _chain_successor(block: str) -> str | None:
+    """The chain-table successor of *block*, or None when underivable.
+
+    Matches the journaled block name against ``infra/block_chain.ORDER``
+    verbatim first, then by ``-<short>`` suffix (records journal ``"s1"`` for
+    ``submit-s1``). Multiple suffix matches (never true today — pinned by the
+    derivation test) or a chain-final block return None: the default must never
+    guess.
+    """
+    from hpc_agent.infra.block_chain import ORDER
+
+    name = (block or "").strip().lower()
+    if not name:
+        return None
+    matches: list[tuple[list[str], int]] = []
+    for chain in ORDER.values():
+        for idx, verb in enumerate(chain):
+            if verb == name or verb.endswith(f"-{name}"):
+                matches.append((chain, idx))
+    if len(matches) != 1:
+        return None
+    chain, idx = matches[0]
+    return chain[idx + 1] if idx + 1 < len(chain) else None
 
 
 @primitive(

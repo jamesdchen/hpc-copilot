@@ -112,6 +112,13 @@ slash_commands = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# NOTE (test wall-clock, 2026-07-04): pytest's tmp lives in %TEMP%, which
+# Windows Defender scans file-by-file (the repo dir is exclusion-listed;
+# %TEMP% is not) — observed as 2-3x full-suite variance (4:14 → 11:29 for
+# identical tests). A --basetemp under THIS repo is not viable: the path
+# contains a space ("CC Allowed"), and several hook tests embed tmp_path
+# unquoted in command strings. To reclaim the variance, point --basetemp at
+# a space-free, Defender-excluded dir (e.g. C:\hpc-pytest-tmp) via the CLI.
 addopts = "-ra --strict-markers -n auto -m 'not slow'"
 markers = [
     "slow: real-process / real-time tests (subprocess + signals, multi-hour sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",

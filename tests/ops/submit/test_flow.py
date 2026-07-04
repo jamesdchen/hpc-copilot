@@ -811,14 +811,24 @@ class TestSidecarGuarantee:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
         assert read_run_sidecar(tmp_path, "rNoData")["data_sha"] is None
 
-    def test_raises_when_missing_and_no_result_dir_template(
+    def test_missing_result_dir_template_synthesizes_the_block_owned_default(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
+        """Proving-run-3 finding (a) / conduct rule 6: a missing template used
+        to die SpecInvalid here, and the driving agent papered over it by
+        hand-injecting a value — a silent LLM default. The block owns the
+        default now: ``{task_id}`` is a reserved dispatcher render key, so
+        ``results/{run_id}/task_{task_id}`` is collision-free for any axis."""
+        from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
 
         spec = _spec("rNo", result_dir_template=None)
-        with pytest.raises(errors.SpecInvalid, match="result_dir_template"):
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rNo")
+        assert sc["result_dir_template"] == "results/{run_id}/task_{task_id}"
 
     def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, _journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module

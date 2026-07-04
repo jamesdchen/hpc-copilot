@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/wait_detached.output.json",
+  "title": "wait-detached output data",
+  "description": "How the wait ended, plus the pointers the wake-up needs next.\n\n``outcome``:\n\n* ``worker_exited`` — the lease pid died: the block finished (or crashed);\n  the journal/log carry the verdict. Read the run's journal state next.\n* ``no_live_worker`` — no live lease for ``(run_id, block)`` at call time:\n  either the worker already exited (brief likely ready) or none was ever\n  launched. Also the immediate return when the lease file is absent.\n* ``timeout`` — the budget elapsed with the worker still alive. NOT an\n  anomaly by itself (long queue waits are normal); re-arm another wait or\n  consult ``status-snapshot``.",
+  "type": "object",
+  "required": [
+    "outcome",
+    "run_id",
+    "block",
+    "pid",
+    "log_path",
+    "waited_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "enum": [
+        "worker_exited",
+        "no_live_worker",
+        "timeout"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "block": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Block"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Pid"
+    },
+    "log_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Log Path"
+    },
+    "waited_sec": {
+      "minimum": 0,
+      "title": "Waited Sec",
+      "type": "number"
+    }
+  }
+}

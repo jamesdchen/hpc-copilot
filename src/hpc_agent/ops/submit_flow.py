@@ -726,14 +726,15 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
             ),
         )
 
-    if not spec.result_dir_template:
-        raise errors.SpecInvalid(
-            f"per-run sidecar for run_id {spec.run_id!r} is missing and the "
-            "spec carries no result_dir_template, so submit-flow cannot "
-            "synthesize the artifact the cluster dispatcher requires. Either "
-            "run write_run_sidecar first (Step 6d / wrap-entry-point) or pass "
-            "result_dir_template in the spec."
-        )
+    # Block-owned default (proving-run-3 finding (a) / conduct rule 6): a
+    # missing result_dir_template previously died SpecInvalid here, and the
+    # driving agent papered over it by hand-injecting a value — a silent LLM
+    # default at exactly the seam code must own. ``{task_id}`` is a reserved
+    # render key the dispatcher always supplies (``_format_result_dir``), so
+    # this default is collision-free for ANY task axis. An explicit template
+    # (spec, or the wrap-entry-point contract) always wins — this only fills
+    # true absence.
+    result_dir_template = spec.result_dir_template or "results/{run_id}/task_{task_id}"
 
     from hpc_agent import __version__ as _pkg_version
     from hpc_agent.infra.time import utcnow_iso
@@ -842,7 +843,7 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         hpc_agent_version=_pkg_version or "",
         submitted_at=utcnow_iso(),
         executor=executor,
-        result_dir_template=spec.result_dir_template,
+        result_dir_template=result_dir_template,
         task_count=int(spec.total_tasks),
         wave_map=cap_wave_map,
         tasks_py_sha=tasks_py_sha,

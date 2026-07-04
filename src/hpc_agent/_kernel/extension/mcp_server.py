@@ -75,6 +75,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -648,7 +649,14 @@ class McpServer:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     json.dump(spec, fh)
             argv = _build_invocation(name, shape, arguments, spec_path)
+            started = time.perf_counter()
             exit_code, stdout, stderr = self._runner(argv)
+            # Per-call telemetry (2026-07-04): "why is MCP slow" must be a
+            # measurement, not a mystery. One stderr line per tools/call —
+            # stderr rides the harness's MCP log, never the JSON-RPC channel.
+            sys.stderr.write(
+                f"[mcp] {name} {int((time.perf_counter() - started) * 1000)}ms exit={exit_code}\n"
+            )
         finally:
             if spec_path is not None:
                 with contextlib.suppress(OSError):

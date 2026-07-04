@@ -177,3 +177,36 @@ def test_append_rejects_bad_scope(tmp_path: Path) -> None:
                 {"scope_kind": "run", "scope_id": "run-1", "block": "b", "response": "y"}
             ).model_copy(update={"scope_id": "../escape"}),
         )
+
+
+def test_greenlight_defaults_next_block_from_chain_table_without_pending(tmp_path: Path) -> None:
+    """MCP-direct mode (proving-run-3 re-fire): no block-drive park, no
+    RunRecord at S1→S2 — the successor derives from the static chain table off
+    the record's own ``block`` field."""
+    out = _append(tmp_path, block="submit-s1", response="y", resolved={"cluster": "hoffman2"})
+    assert out.record.resolved["next_block"] == "submit-s2"
+
+
+def test_chain_fallback_matches_short_block_names(tmp_path: Path) -> None:
+    # Records journal the short form ("s1") — suffix match resolves it.
+    out = _append(tmp_path, block="s1", response="y", resolved={})
+    assert out.record.resolved["next_block"] == "submit-s2"
+    out = _append(tmp_path, block="s2", response="y", resolved={})
+    assert out.record.resolved["next_block"] == "submit-s3"
+
+
+def test_chain_fallback_never_guesses(tmp_path: Path) -> None:
+    # Chain-final block: nothing to advance to.
+    out = _append(tmp_path, block="submit-s4", response="y", resolved={})
+    assert "next_block" not in out.record.resolved
+    # Unknown block: no derivation.
+    out = _append(tmp_path, block="submit.S1", response="y", resolved={})
+    assert "next_block" not in out.record.resolved or out.record.resolved.get("next_block")
+
+
+def test_pending_decision_wins_over_chain_table(tmp_path: Path) -> None:
+    """A parked driver's next_verb is more specific than the static chain
+    (e.g. a rerun of the SAME block after a nudge) — it takes precedence."""
+    _seed_pending(tmp_path, "run-1", next_verb="submit-s1")  # rerun-same-block park
+    out = _append(tmp_path, block="submit-s1", response="y", resolved={})
+    assert out.record.resolved["next_block"] == "submit-s1"
