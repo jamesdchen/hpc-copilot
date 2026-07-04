@@ -44,6 +44,40 @@ if TYPE_CHECKING:
 __all__ = ["launch_main_array", "submit_and_verify"]
 
 
+def _mark_canary_terminal(experiment_dir: Path, canary_run_id: str | None, *, status: str) -> None:
+    """Close the canary's RunRecord once its verdict is known (§5 watchdog).
+
+    A canary is a 1-task run with its own ``<main>-canary`` RunRecord, created
+    ``in_flight`` at submission. ``verify-canary`` is a side-effect-free query:
+    it polls the canary to terminal ON THE CLUSTER but never closes the LOCAL
+    record. Left alone, a verified canary lingers ``in_flight`` and the §5
+    watchdog / ``doctor`` false-flags it as a stalled driver (and would draft a
+    spurious re-arm). Transition it here, where the canary's lifecycle is owned
+    (``submit_and_verify`` submitted it). Best-effort: a bookkeeping stamp must
+    never fail the submit gate — a deduped/cache-hit canary has no fresh record
+    (``FileNotFoundError`` is benign), and any other stamp error is warned, not
+    raised (the next reconcile re-derives ground truth regardless).
+    """
+    if not canary_run_id:
+        return
+    try:
+        from hpc_agent.state.journal import mark_run
+
+        mark_run(experiment_dir, canary_run_id, status=status)
+    except FileNotFoundError:
+        pass  # deduped / cache-hit canary — no fresh record to close
+    except Exception:  # noqa: BLE001 — a terminal stamp must never fail the gate
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "failed to mark canary %r terminal (status=%s); doctor may "
+            "transiently flag it as stalled until the next reconcile",
+            canary_run_id,
+            status,
+            exc_info=True,
+        )
+
+
 def _launch_main_array(experiment_dir: Path, base: SubmitFlowSpec) -> SubmitFlowResult:
     """Phase-2 of the two-phase gate: launch the main array after a verified canary.
 
@@ -277,7 +311,9 @@ def submit_and_verify(
 
     if not verify_result.ok:
         # Canary failed → refuse to launch the main array (#160). job_ids is
-        # empty: the main never went out.
+        # empty: the main never went out. Close the canary record as failed so
+        # it doesn't linger in_flight and false-flag as a stalled driver (§5).
+        _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="failed")
         return SubmitAndVerifyResult(
             run_id=canary_submit.run_id,
             job_ids=[],
@@ -289,6 +325,12 @@ def submit_and_verify(
             failure_kind=verify_result.failure_kind,
             verify_result=verify_result,
         )
+
+    # Canary verified → its 1-task job is terminal on the cluster. Close the
+    # canary's RunRecord so the §5 watchdog / doctor stop scanning it as a live
+    # in_flight run (both the stop_after_canary S2 return and the Phase-2 launch
+    # below are reached only past this point, so one call covers both).
+    _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="complete")
 
     # Canary verified. The block boundary (submit-s2): STOP before the main
     # array so the human can review "canary green, est N core-hours" and
