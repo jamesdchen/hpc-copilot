@@ -166,6 +166,11 @@ def preflight_executor_exists(
     )
 
 
+# stderr marker the first (login-shell) submit uses to piggyback binary
+# resolution onto its own round-trip — see RemoteHPCBackend._execute_command.
+_BIN_MARKER = "__HPC_SUBMIT_BIN__"
+
+
 class RemoteHPCBackend:
     """SSH shim for scheduler backends.
 
@@ -180,6 +185,12 @@ class RemoteHPCBackend:
     ssh_run: Callable[[str], subprocess.CompletedProcess[str]]
     remote_repo: str
     log_dir: str
+
+    # Per-instance cache: submit binary name -> absolute path on the remote
+    # host, harvested from the first login-shell submit's stderr marker.
+    # Instance-scoped (not module) so two backends pointed at different
+    # clusters can never cross-pollinate paths.
+    _resolved_bins: dict[str, str]
 
     def _execute_command(
         self,
@@ -214,11 +225,59 @@ class RemoteHPCBackend:
         ``~/.bashrc``; that is empirically false on Hoffman2, and a cluster
         that genuinely needed it must express it through the preamble
         (``conda_source`` / ``modules``), never a globally-hanging ``-i``.
+
+        Login-shell amortisation (proving-run-2 Phase-0 measurement,
+        2026-07-04): sourcing that profile chain costs ~1.2 s *server-side*
+        per call on Hoffman2 — twice the SSH handshake — with wild variance
+        under login-node load (a 22.8 s outlier was observed). So the login
+        shell is paid ONCE per (backend instance, binary): the first submit
+        piggybacks ``command -v <bin>`` onto its own ``bash -lc`` round-trip
+        (a ``__HPC_SUBMIT_BIN__=<path>`` marker on stderr — stderr, never
+        stdout, which the job-id regex parses), and every later submit runs
+        the cached absolute path with NO login shell. A cached path that
+        stops resolving (exit 127 / stale after a cluster upgrade) is
+        dropped and that call falls back to the login-shell form — the
+        fallback self-heals by re-harvesting the marker.
         """
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
-        inner = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+        bin_name = cmd[0]
+        cached = getattr(self, "_resolved_bins", {}).get(bin_name)
+        if cached:
+            abs_cmd_str = " ".join([shlex.quote(cached), *(shlex.quote(arg) for arg in cmd[1:])])
+            direct = f"cd {shlex.quote(self.remote_repo)} && {abs_cmd_str}"
+            proc = self.ssh_run(direct)
+            if proc.returncode != 127:
+                return proc
+            # Stale path (cluster upgrade moved the scheduler tree): drop the
+            # cache entry and fall through to the login-shell form below,
+            # which re-resolves via the marker.
+            self._resolved_bins.pop(bin_name, None)
+        inner = (
+            f'echo "{_BIN_MARKER}=$(command -v {shlex.quote(bin_name)})" 1>&2; '
+            f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
+        )
         remote_cmd = f"bash -lc {shlex.quote(inner)}"
-        return self.ssh_run(remote_cmd)
+        proc = self.ssh_run(remote_cmd)
+        self._harvest_bin_marker(bin_name, proc)
+        return proc
+
+    def _harvest_bin_marker(self, bin_name: str, proc: subprocess.CompletedProcess[str]) -> None:
+        """Cache the absolute binary path the login-shell call resolved.
+
+        Reads the ``__HPC_SUBMIT_BIN__=<path>`` marker off *proc*'s stderr.
+        Absent/empty marker (e.g. an injected test runner that doesn't emit
+        it, or ``command -v`` finding nothing) caches nothing — the next call
+        just pays the login shell again, never a wrong path.
+        """
+        stderr = getattr(proc, "stderr", None) or ""
+        for line in stderr.splitlines():
+            if line.startswith(f"{_BIN_MARKER}="):
+                path = line.split("=", 1)[1].strip()
+                if path.startswith("/"):
+                    if not hasattr(self, "_resolved_bins"):
+                        self._resolved_bins = {}
+                    self._resolved_bins[bin_name] = path
+                return
 
     def _setup_log_dir(self) -> None:
         """Create the log directory on the remote host via SSH."""

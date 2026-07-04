@@ -399,3 +399,103 @@ class TestErrors:
                 job_env={},
                 cwd=tmp_path,
             )
+
+
+# ---------------------------------------------------------------------------
+# login-shell amortisation (proving-run-2 Phase-0: bash -lc costs ~1.2s
+# server-side per call on Hoffman2 — resolve once, then submit by abs path)
+# ---------------------------------------------------------------------------
+class TestLoginShellAmortisation:
+    def _backend(self, responder):
+        recorder = _SSHRecorder(responder)
+        backend = RemoteSGEBackend(
+            script="/remote/path/job.sh",
+            ssh_run=recorder,
+            remote_repo="/remote/path",
+        )
+        return backend, recorder
+
+    @staticmethod
+    def _qsub_responder(cmd):
+        if "qsub" not in cmd:
+            return _cp()
+        stderr = (
+            "__HPC_SUBMIT_BIN__=/u/systems/UGE8.6.4/bin/lx-amd64/qsub\n"
+            if "__HPC_SUBMIT_BIN__" in cmd
+            else ""
+        )
+        return _cp(stdout="Your job 111 (probe) has been submitted\n", stderr=stderr)
+
+    def test_first_submit_uses_login_shell_and_harvests_marker(self, tmp_path):
+        backend, recorder = self._backend(self._qsub_responder)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+
+        (qsub_call,) = [c for c in recorder.calls if "qsub" in c]
+        wrap = shlex.split(qsub_call)
+        assert wrap[:2] == ["bash", "-lc"]
+        # Resolution rides the SAME round-trip, on stderr (stdout carries the
+        # job id the JOB_ID_REGEX parses — never polluted).
+        assert "__HPC_SUBMIT_BIN__" in wrap[2]
+        assert backend._resolved_bins == {"qsub": "/u/systems/UGE8.6.4/bin/lx-amd64/qsub"}
+
+    def test_second_submit_skips_login_shell_via_cached_abs_path(self, tmp_path):
+        backend, recorder = self._backend(self._qsub_responder)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+
+        qsub_calls = [c for c in recorder.calls if "qsub" in c]
+        assert len(qsub_calls) == 2
+        second = qsub_calls[1]
+        assert "bash -lc" not in second  # no login shell on the warm path
+        assert second.startswith("cd /remote/path && ")
+        assert "/u/systems/UGE8.6.4/bin/lx-amd64/qsub" in second
+
+    def test_stale_abs_path_falls_back_and_reheals(self, tmp_path):
+        """A cached path that 127s (cluster upgrade) is dropped; the SAME call
+        retries via the login shell and re-harvests a fresh marker."""
+        state = {"moved": False}
+
+        def responder(cmd):
+            if "qsub" not in cmd:
+                return _cp()
+            if "UGE8.6.4" in cmd and state["moved"]:
+                return _cp(stderr="bash: no such file\n", returncode=127)
+            stderr = (
+                "__HPC_SUBMIT_BIN__=/u/systems/UGE9.0.0/bin/lx-amd64/qsub\n"
+                if state["moved"] and "__HPC_SUBMIT_BIN__" in cmd
+                else (
+                    "__HPC_SUBMIT_BIN__=/u/systems/UGE8.6.4/bin/lx-amd64/qsub\n"
+                    if "__HPC_SUBMIT_BIN__" in cmd
+                    else ""
+                )
+            )
+            return _cp(stdout="Your job 222 (probe) has been submitted\n", stderr=stderr)
+
+        backend, recorder = self._backend(responder)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+        state["moved"] = True  # scheduler tree moved out from under the cache
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+
+        qsub_calls = [c for c in recorder.calls if "qsub" in c]
+        # 1st: login shell. 2nd: stale abs path (127). 3rd: login-shell retry
+        # of the SAME submit, which re-harvests the new location.
+        assert len(qsub_calls) == 3
+        assert "bash -lc" in qsub_calls[0]
+        assert "UGE8.6.4" in qsub_calls[1] and "bash -lc" not in qsub_calls[1]
+        assert "bash -lc" in qsub_calls[2]
+        assert backend._resolved_bins == {"qsub": "/u/systems/UGE9.0.0/bin/lx-amd64/qsub"}
+
+    def test_absent_marker_caches_nothing(self, tmp_path):
+        def responder(cmd):
+            if "qsub" not in cmd:
+                return _cp()
+            return _cp(stdout="Your job 333 (probe) has been submitted\n", stderr="")
+
+        backend, recorder = self._backend(responder)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+        backend.submit_plan(_single_batch_plan(1, 5), "probe", job_env={}, cwd=tmp_path)
+
+        qsub_calls = [c for c in recorder.calls if "qsub" in c]
+        # No marker → no cache → both submits stay on the (correct) login shell.
+        assert all("bash -lc" in c for c in qsub_calls)
+        assert getattr(backend, "_resolved_bins", {}) == {}
