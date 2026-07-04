@@ -194,20 +194,30 @@ class RemoteHPCBackend:
         backend's ``_build_command``, so we need to land in the right
         directory before invoking qsub/sbatch.
 
-        The cd+submit is wrapped in ``bash -lic`` so the remote shell sources
-        the cluster's login+interactive profile sequence (``/etc/profile``,
-        ``/etc/profile.d/*.sh``, ``~/.bash_profile``, ``~/.bashrc``). Many
-        clusters (Hoffman2/UGE, CARC, etc.) install ``qsub`` / ``sbatch`` /
-        the modules system onto ``PATH`` only via that init — the bare ssh
-        command channel is non-login non-interactive and would fail with
-        ``bash: qsub: command not found``. ``-l`` covers profile; ``-i``
-        covers ``~/.bashrc``; both are needed in practice (Hoffman2 sources
-        the UGE PATH from a profile.d entry that some bash builds only run
-        in interactive mode).
+        The cd+submit is wrapped in ``bash -lc`` (LOGIN, non-interactive) so
+        the remote shell sources the cluster's login profile sequence
+        (``/etc/profile`` → ``/etc/profile.d/*.sh`` → ``~/.bash_profile``).
+        Many clusters (Hoffman2/UGE, CARC, etc.) install ``qsub`` / ``sbatch``
+        onto ``PATH`` only via that init — the bare ssh command channel is
+        non-login and would fail ``bash: qsub: command not found``.
+
+        Do NOT add ``-i`` here. An interactive bash on an ssh *exec* channel
+        (no PTY — ``ssh_run`` allocates none) blocks: interactive init expects
+        a terminal / job control and hangs until the ``_execute_command``
+        120 s timeout fires, which the flow then misreports as
+        ``dispatcher_failed`` (proving-run #2, 2026-07: ``bash -lic`` hung the
+        Hoffman2 canary submit before qsub was ever reached, so nothing hit
+        the scheduler; ``bash -lc`` resolves ``qsub`` at
+        ``/u/systems/UGE8.6.4/bin/lx-amd64/qsub`` and returns cleanly). The
+        earlier ``-i`` (commit cafb160b) rested on the assumption that some
+        clusters expose the scheduler PATH only via an interactivity-guarded
+        ``~/.bashrc``; that is empirically false on Hoffman2, and a cluster
+        that genuinely needed it must express it through the preamble
+        (``conda_source`` / ``modules``), never a globally-hanging ``-i``.
         """
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
         inner = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
-        remote_cmd = f"bash -lic {shlex.quote(inner)}"
+        remote_cmd = f"bash -lc {shlex.quote(inner)}"
         return self.ssh_run(remote_cmd)
 
     def _setup_log_dir(self) -> None:

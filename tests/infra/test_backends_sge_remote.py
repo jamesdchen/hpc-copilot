@@ -367,12 +367,15 @@ class TestErrors:
 
         qsub_calls = [c for c in recorder.calls if "qsub" in c]
         assert len(qsub_calls) == 1
-        # The submit command is wrapped in `bash -lic '<inner>'` so the cluster's
-        # profile sequence sources qsub onto PATH (Hoffman2 regression: bare ssh
-        # is non-login non-interactive). Decode the wrap before asserting on
+        # The submit command is wrapped in `bash -lc '<inner>'` (LOGIN, NOT
+        # interactive) so the cluster's profile sequence sources qsub onto PATH
+        # (Hoffman2 regression: bare ssh is non-login). It must NOT be `-lic`:
+        # an interactive bash on a no-PTY ssh exec channel hangs until the
+        # 120 s timeout (proving-run #2). Decode the wrap before asserting on
         # the inner's quoted path.
         wrap_parts = shlex.split(qsub_calls[0])
-        assert wrap_parts[:2] == ["bash", "-lic"]
+        assert wrap_parts[:2] == ["bash", "-lc"]
+        assert "i" not in wrap_parts[1], "interactive bash (-i) hangs no-PTY ssh"
         inner = wrap_parts[2]
         assert "cd '/remote/path with space'" in inner
         assert "'/remote/path with space/job.sh'" in inner
