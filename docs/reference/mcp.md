@@ -8,8 +8,10 @@ Gemini, or your own harness) as native tools, resources, and prompts.
 It is an **additive projection of the CLI, not a rewrite.** Discovery is read
 straight from the `@primitive` registry — the same registry `cli/parser.py`
 walks to build argparse — so the MCP tool list can never drift from the CLI.
-Invocation shells out to `python -m hpc_agent <verb>`, so every contract the
-CLI already carries is inherited verbatim: the `{ok, error_code, category,
+Invocation drives the same `cli.dispatch.main` code path the `hpc-agent`
+binary runs — in-process by default (warm registry, ~40 ms/call vs ~1.2 s
+for the injectable subprocess fallback; measured 2026-07-04) — so every
+contract the CLI already carries is inherited verbatim: the `{ok, error_code, category,
 retry_safe, remediation}` envelope, the 0/1/2/3 exit codes, JSON-Schema spec
 validation, and the journal/idempotency guarantees. The CLI stays the single
 source of truth.
@@ -23,7 +25,8 @@ source of truth.
                          hpc-agent mcp-serve
                   ┌──────────────────┴──────────────────┐
    projection ◄── │ @primitive registry  →  tools/...    │
-                  │ tools/call  →  python -m hpc_agent … │ ──► CLI envelope
+                  │ tools/call  →  cli.dispatch.main(…)  │ ──► CLI envelope
+                  │   (in-process; subprocess fallback)  │
                   └──────────────────────────────────────┘     (verbatim)
 ```
 
@@ -153,9 +156,9 @@ returns the command's markdown body as a user message.
 
 `serverInfo.version` and the `initialize` `instructions` both carry the
 hpc-agent package version, so a client can detect a daemon/package mismatch.
-Because `mcp-serve` invokes `sys.executable -m hpc_agent`, the server and the
-binary it drives are always the same install — there is no in-process/subprocess
-version drift.
+Because the default runner dispatches in-process (and the subprocess fallback
+invokes `sys.executable -m hpc_agent`), the server and the code it drives are
+always the same install — there is no version drift between them.
 
 ## What it is not
 

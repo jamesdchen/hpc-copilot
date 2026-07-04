@@ -545,6 +545,7 @@ class HPCBackend(abc.ABC):
         cwd: Path | None = None,
         per_wave_extra_flags: list[str] | None = None,
         gate_job_ids: list[str] | None = None,
+        setup_log_dir: bool = True,
     ) -> list[tuple[int, str, str]]:
         """Submit a :class:`SubmissionPlan` as wave-sequenced array jobs (#339).
 
@@ -582,11 +583,23 @@ class HPCBackend(abc.ABC):
         RuntimeError
             If a submission exits non-zero (message carries the command and
             stderr) or the scheduler stdout has no parseable job id.
+
+        *setup_log_dir* (default ``True``) creates the remote log dir once for
+        the whole plan; each per-batch ``submit_one`` below always skips its own
+        (idempotent) ``mkdir``. A caller that already ensured the log dir this
+        submission (submit-flow, when a canary array just created it — same
+        backend instance, same ``log_dir``) passes ``False`` to drop the
+        redundant SSH round-trip, which on Windows (no ``ControlMaster``) pays a
+        full handshake.
         """
         cwd = cwd or Path.cwd()
         # Ensure the log dir once for the whole plan; each per-batch
-        # ``submit_one`` below skips its own (idempotent) ``mkdir``.
-        self._setup_log_dir()
+        # ``submit_one`` below skips its own (idempotent) ``mkdir``. A caller
+        # that already created this backend's log dir (a prior canary array in
+        # the SAME submission) passes ``setup_log_dir=False`` — the mkdir is
+        # idempotent, so re-running it only costs a redundant round-trip.
+        if setup_log_dir:
+            self._setup_log_dir()
 
         # The per-batch offset ships to the job as ``TASK_OFFSET`` (read by the
         # cluster templates). The scheduler env builders transport it as a

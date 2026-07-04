@@ -1016,6 +1016,7 @@ def _make_single_array_submission(
     cwd: Path,
     resources: object = None,
     extra_flags: list[str] | None = None,
+    setup_log_dir: bool = True,
 ) -> list[str]:
     """Submit a ``<=cap`` sweep and return the job IDs (#339 increment 3).
 
@@ -1032,6 +1033,12 @@ def _make_single_array_submission(
     backend into scheduler resource flags; ``None``/empty emits none, so
     the template directives apply unchanged. *extra_flags* (e.g. an afterok
     scheduler-dependency, #250) are appended after the resource flags.
+
+    *setup_log_dir* (default ``True``) threads through to the backend submitter
+    so the remote log-dir ``mkdir`` fires once per submission. submit-flow's
+    main array passes ``False`` when a canary array just created the same
+    backend's log dir this call, dropping one SSH round-trip (the mkdir is
+    idempotent; on Windows every round-trip is a full handshake).
 
     The single multi-rank MPI job (#293; ``array=False``, ``task_range=None``)
     is NOT a scheduler array, so it cannot be expressed as a ``JobBatch`` /
@@ -1052,7 +1059,13 @@ def _make_single_array_submission(
     try:
         if single_mpi_job:
             job_id = backend.submit_one(
-                None, job_name, job_env, extra_flags=flags, cwd=cwd, array=False
+                None,
+                job_name,
+                job_env,
+                extra_flags=flags,
+                cwd=cwd,
+                array=False,
+                setup_log_dir=setup_log_dir,
             )
             return [job_id]
         # Normal array case: a one-batch, one-wave plan. submit_plan emits the
@@ -1077,7 +1090,12 @@ def _make_single_array_submission(
             strategy="single array (<=cap)",
         )
         submissions = backend.submit_plan(
-            plan, job_name, job_env, cwd=cwd, per_wave_extra_flags=flags
+            plan,
+            job_name,
+            job_env,
+            cwd=cwd,
+            per_wave_extra_flags=flags,
+            setup_log_dir=setup_log_dir,
         )
     except RuntimeError as exc:
         # Map the backend submitter's RuntimeError (non-zero exit / unparseable
@@ -1297,6 +1315,7 @@ def _submit_main_array(
     gate_job_ids: list[str],
     backend_name: str,
     cluster: str | None,
+    setup_log_dir: bool = True,
 ) -> list[str]:
     """Submit the main array, single-wave (≤cap) or N-wave (>cap). Returns ids.
 
@@ -1318,6 +1337,11 @@ def _submit_main_array(
 
     Returns one job id per wave for the multi-wave path (a list the journal /
     pre-stamp already tolerate), or the single array's id for the ≤cap path.
+
+    *setup_log_dir* (default ``True``) is threaded to the backend submitter so
+    the remote log-dir ``mkdir`` fires once. The caller passes ``False`` when a
+    canary array already created this backend's log dir this call — the mkdir is
+    idempotent, so re-running it only spends a redundant SSH round-trip.
     """
     if not _is_multiwave_sweep(backend_name=backend_name, total_tasks=total_tasks, cluster=cluster):
         # ≤cap single wave: the canary gate is the afterok flag built from the
@@ -1337,6 +1361,7 @@ def _submit_main_array(
             cwd=cwd,
             resources=resources,
             extra_flags=afterok_flags,
+            setup_log_dir=setup_log_dir,
         )
 
     # Over-cap: split into concurrency-bounded waves. Resource flags apply to
@@ -1353,6 +1378,7 @@ def _submit_main_array(
             cwd=cwd,
             per_wave_extra_flags=backend.resource_flags(resources),
             gate_job_ids=gate_job_ids,
+            setup_log_dir=setup_log_dir,
         )
     except RuntimeError as exc:
         # Carry submit_plan's partial accounting (the wave ids that DID land
@@ -1701,6 +1727,17 @@ def _submit_one_spec(
             gate_job_ids=gate_job_ids,
             backend_name=spec.backend,
             cluster=spec.cluster,
+            # Skip the main array's remote log-dir mkdir when a canary already
+            # created it THIS call: canary + main share ``backend_obj`` (built
+            # once above) and therefore the same ``log_dir``, so the canary's
+            # own ``_setup_log_dir`` already ran the idempotent ``mkdir -p``.
+            # ``canary_done`` is True whether the canary fired now or a prior
+            # call's canary (whose mkdir persists on the cluster) is being
+            # reused — both mean the dir exists — so re-issuing the mkdir here
+            # only costs a redundant SSH round-trip (a full handshake on
+            # Windows, where ControlMaster is unavailable). When no canary ran,
+            # ``canary_done`` is False and the main array does the mkdir itself.
+            setup_log_dir=not canary_done,
         )
     except errors.RemoteCommandFailed as exc:
         # #339 inc 4 crash-safety: a multi-wave main array that failed mid-plan

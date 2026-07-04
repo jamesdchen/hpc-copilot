@@ -11,12 +11,17 @@ anticipated ("MCP wrappers can be written on top of the CLI"). Two halves:
   ``cli/parser.py`` walks it to build argparse. There is no second
   hand-maintained tool list, so the MCP surface cannot drift from the CLI —
   the CLI registry stays the single source of truth.
-* **Invocation is delegated.** ``tools/call`` writes the spec to a temp file
-  and runs ``python -m hpc_agent <verb> ...`` as a subprocess, then maps the
-  JSON envelope back. Every contract the CLI carries — exit-code →
-  category, schema validation, journal/idempotency, the
-  ``{ok, error_code, category, retry_safe, remediation}`` failure shape —
-  is inherited verbatim, with zero re-implementation.
+* **Invocation drives the CLI dispatch path — in-process by default.**
+  ``tools/call`` writes the spec to a temp file and drives the SAME
+  ``cli.dispatch.main`` code path the ``hpc-agent`` binary runs, then maps
+  the JSON envelope back. The default runner is
+  :func:`_in_process_cli_runner` (warm registry, ~40 ms/call vs ~1.2 s for a
+  subprocess — measured 2026-07-04); :func:`_subprocess_cli_runner` stays
+  injectable as the isolation fallback and the parity oracle. Every contract
+  the CLI carries — exit-code → category, schema validation,
+  journal/idempotency, the ``{ok, error_code, category, retry_safe,
+  remediation}`` failure shape — is inherited verbatim, with zero
+  re-implementation.
 
 Safety posture (the reason this ships)
 =======================================

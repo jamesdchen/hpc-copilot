@@ -43,6 +43,8 @@ Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary 
 
 While a run is live, spawn a background tail of the local supervisor's output so the human sees liveness without asking (design §5 session tail-loop); if the session dies, output is recovered from the cluster by the guaranteed harvest on re-arm.
 
+**Reconcile is the only source of run state** (`proving-run-2-hardening.md` Move 4). The tail is liveness *display*, never state: NEVER infer "still running" from an open log, a live pid, elapsed time, or an empty output file — proving run #2's driver reported a canary as "running, no result yet" from exactly those signals while the journal already recorded it failed. Run state comes ONLY from what the blocks read from the journal/reconcile (`status-snapshot`, the returned brief, `read-decisions`): report the state those return, and when the tail looks stale, invoke `status-snapshot` instead of narrating a guess.
+
 ## Speculative canary (opt-in)
 
 To overlap the S1 review with the canary, invoke `submit-speculate` during the S1 `y`/nudge round — it runs S2's canary early under the recommended defaults, so a plain `y` finds S2 already done. Nudges **never** cancel a speculative canary (design §3): a spec-changing nudge moves the `cmd_sha`, the stale canary drains and is ignored, and the next canary is fresh; an unchanged spec keeps the result. Budget is one speculative canary per pending brief, enforced by the canary TTL cache — no kill path.
