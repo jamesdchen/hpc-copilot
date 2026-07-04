@@ -44,7 +44,7 @@ def _iso(ts):
 def _atomic_write(path, text):
     """Write *text* to *path* via a temp file + rename (no torn reads)."""
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(text)
     os.replace(tmp, path)
 
