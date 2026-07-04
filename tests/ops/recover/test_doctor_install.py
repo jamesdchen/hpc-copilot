@@ -285,3 +285,46 @@ def test_notify_summary_counts_extras() -> None:
     text = notify_mod.summarize_proposals(proposals)
     assert "run a" in text
     assert "(+2 more" in text
+
+
+# --------------------------------------------------------------------------- #
+# watchdog_installed — the read-only probe the submit-s3 brief consumes
+# --------------------------------------------------------------------------- #
+def test_watchdog_installed_windows_reflects_task_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeSchtasks()
+    monkeypatch.setattr(di, "_platform", lambda: "windows")
+    monkeypatch.setattr(di, "_run", fake)
+
+    assert di.watchdog_installed(tmp_path) is False
+    fake.exists = True
+    assert di.watchdog_installed(tmp_path) is True
+    # Pure probe: only /Query calls, never /Create or /Delete.
+    assert all(a[:2] == ["schtasks", "/Query"] for a in fake.calls)
+
+
+def test_watchdog_installed_posix_reflects_cron_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeCrontab()
+    monkeypatch.setattr(di, "_platform", lambda: "posix")
+    monkeypatch.setattr(di, "_run", fake)
+
+    assert di.watchdog_installed(tmp_path) is False
+    fake.content = f"*/30 * * * * cmd # {di._task_name(tmp_path)}\n"
+    assert di.watchdog_installed(tmp_path) is True
+
+
+def test_watchdog_installed_probe_failure_reads_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-safe direction: a broken probe recommends a (redundant, idempotent)
+    install rather than hiding a missing watchdog behind the error."""
+
+    def _boom(argv, *, input_text=None, timeout):  # noqa: ANN001, ANN202
+        raise OSError("no scheduler binary")
+
+    monkeypatch.setattr(di, "_platform", lambda: "windows")
+    monkeypatch.setattr(di, "_run", _boom)
+    assert di.watchdog_installed(tmp_path) is False

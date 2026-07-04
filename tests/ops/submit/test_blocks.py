@@ -381,6 +381,67 @@ def test_s3_launches_main_and_arms_monitor(tmp_path: Path) -> None:
     assert result.needs_decision is False  # clean terminal → proceed to S4
     assert result.brief["monitor_arm"] == {"arm": "none", "cadence_sec": 0}
     assert result.brief["main_job_ids"] == ["999"]
+    # §5 watchdog status rides the brief arming the long wait (opt-in install —
+    # the brief carries the recommendation; nothing is auto-installed).
+    assert "installed" in result.brief["watchdog"]
+
+
+def test_s3_brief_recommends_watchdog_install_when_missing(tmp_path: Path) -> None:
+    _greenlight(tmp_path, "submit-s3")
+    with (
+        mock.patch.object(
+            blocks,
+            "launch_main_array",
+            return_value=_sv_result(verified=True, job_ids=["999"]),
+        ),
+        mock.patch.object(
+            blocks,
+            "monitor_flow",
+            return_value=_monitor_result(lifecycle_state="complete"),
+        ),
+        mock.patch.object(
+            blocks,
+            "decide_monitor_arm",
+            return_value={"arm": "none", "cadence_sec": 0},
+        ),
+        mock.patch(
+            "hpc_agent.ops.recover.doctor_install.watchdog_installed",
+            return_value=False,
+        ),
+    ):
+        result = blocks.submit_s3(tmp_path, spec=_s3_spec())
+
+    watchdog = result.brief["watchdog"]
+    assert watchdog["installed"] is False
+    assert "doctor-install" in watchdog["recommendation"]
+
+
+def test_s3_brief_watchdog_installed_carries_no_recommendation(tmp_path: Path) -> None:
+    _greenlight(tmp_path, "submit-s3")
+    with (
+        mock.patch.object(
+            blocks,
+            "launch_main_array",
+            return_value=_sv_result(verified=True, job_ids=["999"]),
+        ),
+        mock.patch.object(
+            blocks,
+            "monitor_flow",
+            return_value=_monitor_result(lifecycle_state="complete"),
+        ),
+        mock.patch.object(
+            blocks,
+            "decide_monitor_arm",
+            return_value={"arm": "none", "cadence_sec": 0},
+        ),
+        mock.patch(
+            "hpc_agent.ops.recover.doctor_install.watchdog_installed",
+            return_value=True,
+        ),
+    ):
+        result = blocks.submit_s3(tmp_path, spec=_s3_spec())
+
+    assert result.brief["watchdog"] == {"installed": True}
 
 
 def test_s3_anomaly_is_a_terminator(tmp_path: Path) -> None:

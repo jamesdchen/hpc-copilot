@@ -60,6 +60,31 @@ if TYPE_CHECKING:
 __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 
 
+def _watchdog_brief(experiment_dir: Path) -> dict[str, Any]:
+    """The §5 watchdog install-status field for a brief arming a long wait.
+
+    ``doctor-install`` is decided opt-in ("never auto-installed" — design §5,
+    2026-07-03): the design-consistent close for the crash-durability gap is a
+    *decision brief*, not a silent default. So the block that arms an
+    unattended wait reports whether the OS-scheduler dead-man's switch exists
+    on this machine, and — when it doesn't — carries the recommendation for
+    the human's ``y``/nudge. Proving run #2 ran with no watchdog armed; a dead
+    session would have stranded the run undetected.
+    """
+    from hpc_agent.ops.recover.doctor_install import watchdog_installed
+
+    installed = watchdog_installed(experiment_dir)
+    field: dict[str, Any] = {"installed": installed}
+    if not installed:
+        field["recommendation"] = (
+            "§5 watchdog not installed on this machine — if this session dies, "
+            "the run strands undetected until a human runs doctor. Recommend "
+            "`hpc-agent doctor-install` (one idempotent OS-scheduler entry; "
+            "`uninstall:true` reverses it)."
+        )
+    return field
+
+
 def _detached_block_result(block: str, verb: str, launch: Any) -> SubmitBlockResult:
     """Build the immediate-return handle for a detached block (design §3).
 
@@ -559,7 +584,12 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
             experiment_dir=str(experiment_dir),
             spec=_detached_spec_dict(spec),
         )
-        return _detached_block_result("s3", "submit-s3", launch)
+        result = _detached_block_result("s3", "submit-s3", launch)
+        # The detach hands the long unattended wait to a background worker —
+        # exactly the moment the human should learn whether the §5 dead-man's
+        # switch would catch that worker's death (see _watchdog_brief).
+        result.brief["watchdog"] = _watchdog_brief(experiment_dir)
+        return result
 
     # 1. Phase-2: launch the main array (canary already verified/greenlit in S2).
     main = launch_main_array(
@@ -600,6 +630,7 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
         "ticks": mon.ticks,
         "elapsed_seconds": mon.elapsed_seconds,
         "monitor_arm": arm,
+        "watchdog": _watchdog_brief(experiment_dir),
     }
 
     if mon.lifecycle_state == "complete":

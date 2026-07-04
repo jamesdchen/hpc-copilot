@@ -86,6 +86,27 @@ def _run(
     )
 
 
+def watchdog_installed(experiment_dir: Path) -> bool:
+    """Pure probe: is the §5 doctor watchdog scheduled for *experiment_dir*?
+
+    Read-only — queries the OS scheduler (schtasks / crontab) for this
+    experiment's task marker and never installs anything. Consumed by the
+    ``submit-s3`` brief so the human learns, at the moment a long unattended
+    wait is being armed, whether a dead session would strand the run
+    undetected — with ``doctor-install`` as the recommended (opt-in,
+    "never auto-installed" — design §5, decided 2026-07-03) remedy.
+
+    A probe failure (no ``schtasks``/``crontab``, timeout) reads as ``False``:
+    the fail-safe direction is to recommend an install that turns out to be
+    redundant (idempotent: re-install returns ``already_installed``), never to
+    hide a missing watchdog behind a probe error.
+    """
+    task_name = _task_name(experiment_dir)
+    if _platform() == "windows":
+        return _win_task_exists(task_name)
+    return any(task_name in ln for ln in _cron_read_lines())
+
+
 # --------------------------------------------------------------------------- #
 # Windows — schtasks
 # --------------------------------------------------------------------------- #
