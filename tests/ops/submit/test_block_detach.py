@@ -218,3 +218,55 @@ def test_speculate_noop_when_fresh_does_not_detach(tmp_path: Path, monkeypatch) 
     m_launch.assert_not_called()
     assert result.speculated is False
     assert result.started is False
+
+
+class TestDetachedWorkerBindsToRunningInterpreter:
+    """The detached worker must run the SAME install as the parent that spawned
+    it — ``sys.executable -m hpc_agent``, never a bare ``hpc-agent`` PATH lookup.
+
+    A bare PATH ``hpc-agent`` is an independent console-script that can resolve
+    to a DIFFERENT install (stale wheel, unactivated conda env, editable-dev
+    multi-venv). In that case the detached worker silently runs the wrong code,
+    or — when the block verbs are absent there — dies immediately with
+    ``unknown command 'submit-s2'``. Surfaced by the first Hoffman2 proving run.
+    """
+
+    def test_submit_block_argv_uses_sys_executable_dash_m(self, tmp_path: Path) -> None:
+        import sys
+
+        from hpc_agent._kernel.lifecycle import detached
+
+        submit = _submit_flow_spec().model_copy(update={"canary": True})
+        spec = SubmitAndVerifySpec(
+            submit=submit.model_copy(update={}), poll_interval_sec=1, wait_budget_sec=5
+        )
+        captured: dict[str, Any] = {}
+
+        def _capture(*, run_id: str, argv: list[str], log_path: Any, cwd: str):  # noqa: ANN401
+            captured["argv"] = argv
+            return _FakeLaunch()
+
+        with mock.patch.object(detached, "_spawn_detached", _capture):
+            detached.launch_submit_block_detached(
+                verb="submit-s2",
+                experiment_dir=str(tmp_path),
+                spec={"submit": spec.model_dump(mode="json"), "detach": False},
+            )
+
+        argv = captured["argv"]
+        assert argv[:3] == [sys.executable, "-m", "hpc_agent"]
+        assert argv[3] == "submit-s2"
+        assert "hpc-agent" not in argv[:1]  # never a bare PATH console-script
+
+    def test_explicit_bin_still_overrides(self) -> None:
+        from hpc_agent._kernel.lifecycle.detached import _agent_launch_prefix
+
+        assert _agent_launch_prefix("my-stub-bin") == ["my-stub-bin"]
+
+    def test_default_prefix_is_running_interpreter(self) -> None:
+        import sys
+
+        from hpc_agent._kernel.lifecycle.detached import _agent_launch_prefix
+
+        assert _agent_launch_prefix(None) == [sys.executable, "-m", "hpc_agent"]
+        assert _agent_launch_prefix("") == [sys.executable, "-m", "hpc_agent"]

@@ -185,8 +185,10 @@ def launch_status_pipeline_detached(
     experiment tree (the same target ``cli/spawn._maybe_persist_inline_prompt``
     uses).
 
-    *hpc_agent_bin* overrides the launched binary (default: ``hpc-agent`` on
-    PATH); a test passes a stub. Raises :class:`DriveModeError` via
+    *hpc_agent_bin* overrides the launched binary (default: the running
+    interpreter via :func:`_agent_launch_prefix`, ``sys.executable -m
+    hpc_agent`` — the child runs the SAME install as the parent, never a bare
+    PATH lookup); a test passes a stub. Raises :class:`DriveModeError` via
     :func:`build_status_pipeline_spec` when ``run_id`` is missing.
     """
     from hpc_agent.state.run_record import _current_homedir
@@ -202,7 +204,7 @@ def launch_status_pipeline_detached(
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
     argv = [
-        hpc_agent_bin or "hpc-agent",
+        *_agent_launch_prefix(hpc_agent_bin),
         "status-pipeline",
         "--spec",
         str(spec_path),
@@ -210,6 +212,27 @@ def launch_status_pipeline_detached(
         experiment_dir,
     ]
     return _spawn_detached(run_id=run_id, argv=argv, log_path=log_path, cwd=experiment_dir)
+
+
+def _agent_launch_prefix(hpc_agent_bin: str | None) -> list[str]:
+    """The argv prefix that invokes hpc-agent for a DETACHED worker.
+
+    Defaults to ``[sys.executable, "-m", "hpc_agent"]`` — the *running*
+    interpreter — NOT a bare ``hpc-agent`` PATH lookup. The detached child must
+    run the SAME install as the parent that spawned it (the design contract:
+    "the child is the same deterministic composite the synchronous path runs").
+    A bare PATH ``hpc-agent`` is an independent console-script artifact that can
+    resolve to a DIFFERENT install than the one driving the run — a stale wheel,
+    an unactivated conda env, or (in editable/multi-venv dev) a different tree
+    entirely — in which case the worker silently runs the wrong code or, when the
+    block verbs are absent there, dies immediately with ``unknown command``.
+    Binding to ``sys.executable`` makes the worker's code identity match the
+    driver's by construction. An explicit *hpc_agent_bin* (a test stub, or a
+    caller that truly wants a specific binary) still overrides.
+    """
+    if hpc_agent_bin:
+        return [hpc_agent_bin]
+    return [sys.executable, "-m", "hpc_agent"]
 
 
 def _spawn_detached(*, run_id: str, argv: list[str], log_path: Path, cwd: str) -> DetachedLaunch:
@@ -316,7 +339,7 @@ def launch_submit_block_detached(
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
     argv = [
-        hpc_agent_bin or "hpc-agent",
+        *_agent_launch_prefix(hpc_agent_bin),
         verb,
         "--spec",
         str(spec_path),
