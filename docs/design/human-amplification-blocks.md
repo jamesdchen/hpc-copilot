@@ -310,23 +310,44 @@ one-off ssh at the edges (fine when blocks are complete enough).
       it is a *dependency-untangling* job, not a file-removal one, and is NOT
       cleanly feasible in a single pass yet. The worker is confirmed fully
       stranded (every SKILL routes through `block-drive`; no SKILL emits
-      `hpc-agent run`), so stranding carries no correctness risk. Clean-delete
-      blockers: (1) `_kernel/lifecycle/drive.py` co-mingles the worker resolver
-      (`default_judgement_resolver → run_workflow`) with the block watchdog
-      stamp (`_stamp_driver_tick`, which `block_drive` imports); (2)
-      `_wire/spawn_contract.py` (`WorkerReport` / `WORKFLOW_PROCEDURES` /
-      `SpawnRequest`) is still imported by the campaign driver, the `describe`
-      verb, `load-context`, and `llm_resolver`; (3) `cli/spawn.py::cmd_run`
-      hosts the KEEP `--detached` status entry alongside the worker spawn; (4)
-      `load-context` can still emit `agent`-kind delegates the legacy
-      `hpc-campaign-driver --allow-agent-steps` feeds to the worker. **Deletion
-      sequence:** (a) cut the campaign agent-step path to `block-drive` so
-      `default_judgement_resolver`/`run_workflow` lose their last caller; (b)
-      stop `load-context` emitting agent-kind delegates + drop the
-      `render_spawn_prompt` prefill; (c) migrate `describe`/`llm_resolver` off
-      `spawn_contract`; (d) then delete `invoke.py`, `run.py`, the `run` verb,
-      `spawn_prompt.py`, `worker_prompts/`, `spawn_contract.py`, the worker
-      schemas, `hpc-worker.md`, and the §5 worker tests in one commit.
+      `hpc-agent run`), so stranding carries no correctness risk.
+      **CORRECTION (2026-07-04, deeper trace):** an earlier version of this
+      bullet (and the scoping agent) listed `_wire/spawn_contract.py` for
+      deletion — that is WRONG. `spawn_contract` is NOT worker machinery; it is
+      shared decision/escalation infrastructure. Its symbols `WorkerReport`,
+      `WorkerDecision`, `SpawnRequest`, `DECISION_POINTS`, `DecidedBy` (the
+      `Worker` prefix is legacy naming, not scope) are imported by keep-code:
+      `_kernel/decision/kernel.py`, `_kernel/contract/strict_schema.py`,
+      `_kernel/lifecycle/structured.py`, `ops/recover/resolve.py`,
+      `_wire/fixtures/escalation.py`, `_wire/queries/load_context.py`. So
+      `spawn_contract.py` **STAYS**; only the spawn *transport* deletes. A
+      later cosmetic pass may rename `Worker*` → decision-neutral names.
+      **Corrected keep/delete boundary:**
+      - DELETE (pure spawn transport): `_kernel/lifecycle/invoke.py` (`claude -p`),
+        `_kernel/lifecycle/run.py` (`run_workflow`),
+        `_kernel/extension/spawn_prompt.py` (render),
+        `_kernel/extension/worker_prompts/*.md`, the `hpc-agent run` verb in
+        `cli/spawn.py`, the worker JSON schemas, `agents/hpc-worker.md`.
+      - DELETE (legacy campaign resolver seam — superseded by the block-drive
+        reconcile in `meta/campaign/blocks.py` → `atoms/advance.py`, which does
+        NOT use `drive()`/resolver): `meta/campaign/driver.py` +
+        `hpc-campaign-driver` console script (pyproject),
+        `meta/campaign/deterministic_resolver.py`,
+        `_kernel/lifecycle/llm_resolver.py`, and the agent-step half of
+        `_kernel/lifecycle/drive.py` (`JudgementResolver`,
+        `default_judgement_resolver`, `_run_agent_step`, `allow_agent_steps`,
+        the `agent`-kind branch, the `drive()` loop).
+      - KEEP in `drive.py`: `_stamp_driver_tick` (imported by `block_drive`),
+        `_DEFAULT_DRIVER_TICK_CADENCE_SECONDS` (imported by
+        `ops/submit/runner.py`). `plan_action`/`_run_cli_step`/`load_context`
+        there are legacy-only (block_drive has its own copies) — deletable.
+      - EDIT (not delete): `cli/setup.py` `describe` off `WORKFLOW_PROCEDURES`;
+        `load-context` (`_wire/queries/load_context.py` + the campaign atom) to
+        stop emitting `agent`-kind delegates / `SpawnRequest`.
+      - This is ~one atomic contract change (partial states don't typecheck) +
+        a fan-out of test/file deletions; verify the FULL suite + regen
+        (`operations.json`, `_verb_module_map.py` — the `run` verb is removed)
+        before pushing. Real refactor, not landable in a rushed pre-clear window.
 
 ## 9. Wave 4 — the code-driven chain
 
