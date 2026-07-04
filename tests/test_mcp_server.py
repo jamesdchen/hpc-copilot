@@ -322,3 +322,45 @@ def test_serve_loop_reports_parse_error() -> None:
 def test_invalid_catalog_rejected() -> None:
     with pytest.raises(ValueError, match="catalog"):
         M.McpServer(registry=get_registry(), catalog="weird")
+
+
+# ─── conduct rule 11: blocking invocations are refused at the MCP seam ───────
+
+
+def _call(server, name: str, arguments: dict) -> dict:
+    resp = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 7100,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+    )
+    assert resp is not None
+    return resp
+
+
+def test_mcp_refuses_submit_s2_without_detach() -> None:
+    """A blocking canary watch over the synchronous server = head-of-line wedge
+    (proving-run-3: 26-min and 20-min stalls). Refused with the detached path
+    named."""
+    server = _server(allow_mutations=True)
+    resp = _call(server, "submit-s2", {"spec": {"detach": False}})
+    assert "error" in resp
+    assert "detach" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_submit_s2_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "submit-s2", {"spec": {"detach": True}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
+
+
+def test_mcp_refuses_blocking_status_watch() -> None:
+    server = _server(allow_mutations=True)
+    resp = _call(server, "status-watch", {"spec": {"wait_terminal": True}})
+    assert "error" in resp
+    assert "wait-detached" in resp["error"]["message"]

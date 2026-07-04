@@ -234,6 +234,43 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     return int(code), out.getvalue(), err.getvalue()
 
 
+# Conduct rule 11 (proving-run-3 finding (h)): the in-process dispatch is
+# SYNCHRONOUS and single-threaded, so one blocking tools/call (a canary/array
+# watch, a wait-to-terminal poll) wedges the whole server and every later call
+# queues behind it — observed twice in run #3 (26-min and 20-min head-of-line
+# stalls; an abandoned agent turn does NOT kill the server-side call). The
+# blocking invocations are refused HERE, at the seam, with the detached path
+# named — never left to skill prose.
+_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3"})
+
+
+def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
+    """Raise ``_Invalid`` for tool calls that would block the server.
+
+    ``submit-s2``/``submit-s3`` must carry ``spec.detach == true`` (the
+    detached worker + ``wait-detached`` is the sanctioned wait);
+    ``status-watch`` must not request a blocking wait-to-terminal poll.
+    """
+    spec = arguments.get("spec")
+    spec_dict = spec if isinstance(spec, dict) else {}
+    if name in _DETACH_REQUIRED_VERBS and not spec_dict.get("detach"):
+        raise _Invalid(
+            f"{name} without detach=true is a BLOCKING scheduler watch — over "
+            "this synchronous server it wedges every later tool call "
+            "(head-of-line; an abandoned turn does not stop it). Set "
+            '{"detach": true} in the spec; the block returns a pid handle '
+            "immediately. Then run `hpc-agent wait-detached` via backgrounded "
+            "Bash to be woken when the brief is ready."
+        )
+    if name == "status-watch" and spec_dict.get("wait_terminal"):
+        raise _Invalid(
+            "status-watch with wait_terminal=true is a BLOCKING poll — it "
+            "wedges this synchronous server. Invoke it without wait_terminal "
+            "(detached-by-contract) and await the worker with `hpc-agent "
+            "wait-detached` via backgrounded Bash."
+        )
+
+
 class _Invalid(Exception):
     """Maps to JSON-RPC ``-32602`` (invalid params) — a client contract error."""
 
@@ -626,6 +663,7 @@ class McpServer:
                 raise _Invalid(f"{_RUN_PRIMITIVE_TOOL} 'arguments' must be an object")
             return self.call_tool(inner, inner_args)
 
+        _refuse_blocking_over_mcp(name, arguments)
         meta = self._invocable().get(name)
         if meta is None:
             # Either the primitive does not exist or the safety policy forbids
