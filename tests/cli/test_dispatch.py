@@ -62,7 +62,8 @@ def _capsys_envelope(captured) -> dict[str, Any]:
     """Return the parsed JSON envelope on stdout (must be exactly one line)."""
     lines = [ln for ln in captured.out.splitlines() if ln.strip()]
     assert len(lines) == 1, f"expected one envelope, got: {captured.out!r}"
-    return json.loads(lines[0])
+    envelope: dict[str, Any] = json.loads(lines[0])
+    return envelope
 
 
 # ─── args-based dispatch ───────────────────────────────────────────────────
@@ -154,6 +155,64 @@ def test_spec_arg_rejects_missing_spec_with_user_error(
     env = _capsys_envelope(capsys.readouterr())
     assert env["ok"] is False
     assert env["category"] == "user"
+
+
+def test_spec_arg_accepts_explicit_empty_object_for_all_optional_model(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """A supplied ``--spec`` containing a literal ``{}`` is a VALID spec for an
+    all-optional model — it must not misfire the "--spec is required" guard.
+
+    The doctor-install repro (2026-07-04): ``hpc-agent doctor-install --spec
+    <file with {}>`` was rejected with "--spec is required" because the loaded
+    empty dict is falsy — the guard keys on the path now, not the dict.
+    """
+
+    class _AllOptional(BaseModel):
+        notify: bool = True
+        interval_minutes: int = 15
+
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text("{}", encoding="utf-8")
+
+    @primitive(
+        name="syn-all-optional",
+        verb="query",
+        cli=CliShape(help="All-optional spec.", spec_arg=True, spec_model=_AllOptional),
+    )
+    def syn_all_optional(*, spec: _AllOptional) -> dict[str, Any]:
+        return {"notify": spec.notify, "interval_minutes": spec.interval_minutes}
+
+    ns = argparse.Namespace(spec=spec_file)
+    assert dispatch_primitive("syn-all-optional", ns) == 0
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["data"] == {"notify": True, "interval_minutes": 15}
+
+
+def test_spec_arg_explicit_empty_object_still_rejects_required_fields(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """An explicit ``{}`` against a model WITH required fields fails with the
+    real field error (model validation), not the misleading "--spec is
+    required"."""
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text("{}", encoding="utf-8")
+
+    @primitive(
+        name="syn-empty-required",
+        verb="query",
+        cli=CliShape(help="Required fields.", spec_arg=True, spec_model=_Spec),
+    )
+    def syn_empty_required(*, spec: _Spec) -> dict[str, Any]:
+        return {"name": spec.name}
+
+    ns = argparse.Namespace(spec=spec_file)
+    rc = dispatch_primitive("syn-empty-required", ns)
+    assert rc == 1
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["ok"] is False
+    assert "--spec is required" not in env["message"]
+    assert "name" in env["message"]  # the real missing-field diagnosis
 
 
 def test_spec_arg_rejects_invalid_model(capsys: pytest.CaptureFixture[str], tmp_path) -> None:

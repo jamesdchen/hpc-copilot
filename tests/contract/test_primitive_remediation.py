@@ -269,10 +269,26 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
 # Verbs whose schema input shape doesn't accept an empty ``{}`` and
 # instead emits a different error mode (e.g. the framework needs the
 # file to exist on disk before validation, or the verb's wrapper does
-# its own pre-spec gate). These take an empty-but-valid sentinel rather
+# its own pre-spec gate). These take a different known-bad probe rather
 # than ``{}``. Kept tiny — when a verb needs more elaborate seeding the
 # test is xfail-ed under ``XFAIL_NEEDS_FIXTURE`` below instead.
-EMPTY_SPEC_OVERRIDES: dict[str, dict] = {}
+#
+# A bogus key every ``extra="forbid"`` wire model rejects — the known-bad
+# probe for verbs whose models are ALL-OPTIONAL, where ``{}`` is a valid
+# spec. (Until the 2026-07 dispatch fix, the ``--spec`` falsy-guard
+# rejected a supplied literal ``{}`` before the model ever saw it,
+# masking which verbs legitimately accept an empty spec — these entries
+# surfaced when that guard was fixed to key on the path, not the loaded
+# dict's falsiness.)
+_BOGUS_KEY_SPEC: dict = {"contract-probe-bogus-key": 1}
+
+EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
+    "apply-safe-defaults": _BOGUS_KEY_SPEC,
+    "block-drive": _BOGUS_KEY_SPEC,
+    "doctor": _BOGUS_KEY_SPEC,
+    "status-snapshot": _BOGUS_KEY_SPEC,
+    "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
+}
 
 
 # Verbs whose contract conformance can't be probed without a richer

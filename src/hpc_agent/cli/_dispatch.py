@@ -274,10 +274,20 @@ def _load_and_model_validate_spec(name: str, shape: CliShape, ns: argparse.Names
     schema_name = shape.schema_ref.input if shape.schema_ref else None
     raw = _load_spec(spec_path, schema_name=None)
     if not raw:
+        # ``_load_spec`` returns ``{}`` BOTH for "no --spec supplied" and for a
+        # supplied file containing a literal ``{}`` — key the required-check on
+        # the path, not the dict's falsiness. An explicitly supplied empty
+        # object is a valid spec for an all-optional model (e.g.
+        # ``doctor-install``) and falls through to schema/model validation,
+        # which still rejects it with the real field error when the model has
+        # required fields.
         if shape.spec_required:
-            raise errors.SpecInvalid(f"--spec is required for `{name}`")
-        # Optional-spec primitive with no --spec: let arg_pre synthesize.
-        return None
+            if spec_path is None:
+                raise errors.SpecInvalid(f"--spec is required for `{name}`")
+        else:
+            # Optional-spec primitive with no/empty --spec: let arg_pre
+            # synthesize (e.g. ``aggregate-flow``'s ``--run-id`` shortcut).
+            return None
     if not isinstance(raw, dict):
         raise errors.SpecInvalid(
             f"--spec for `{name}` must be a JSON object; got {type(raw).__name__}"
