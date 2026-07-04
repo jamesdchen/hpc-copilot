@@ -517,6 +517,65 @@ def test_s4_partial_harvest_when_waves_escalate(tmp_path: Path) -> None:
     assert result.brief["escalation_reason"].startswith("combiner_failed")
 
 
+# ── brief persistence (conduct rule 9, provenance gate) ──────────────────────
+
+
+def test_s2_persists_brief_for_provenance_gate(tmp_path: Path) -> None:
+    """At its decision point S2 durably persists its brief so append-decision's
+    provenance gate can diff a later S2→S3 greenlight against it."""
+    from hpc_agent.state.decision_briefs import latest_brief_for_block
+
+    spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
+    _greenlight(tmp_path, "submit-s2")
+
+    with mock.patch.object(
+        blocks, "submit_and_verify", return_value=_sv_result(verified=True, job_ids=[])
+    ):
+        result = blocks.submit_s2(tmp_path, spec=spec)
+
+    persisted = latest_brief_for_block(tmp_path, _RUN_ID, "s2")
+    assert persisted is not None
+    assert persisted["block"] == "s2"
+    assert persisted["brief"]["est_core_hours"] == result.brief["est_core_hours"]
+
+
+def test_s4_persists_brief_for_provenance_gate(tmp_path: Path) -> None:
+    from hpc_agent.state.decision_briefs import latest_brief_for_block
+
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    _greenlight(tmp_path, "submit-s4")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        blocks.submit_s4(tmp_path, spec=spec)
+
+    persisted = latest_brief_for_block(tmp_path, _RUN_ID, "s4")
+    assert persisted is not None
+    assert "results_table" in persisted["brief"]
+
+
+def test_s1_ambiguity_branch_does_not_persist_without_run_id(tmp_path: Path) -> None:
+    """S1's pre-resolve ambiguity branch has no run_id yet — nothing to scope a
+    brief file to, so it legitimately persists nothing (the gate then fails open
+    for that greenlight)."""
+    from hpc_agent.state.decision_briefs import read_briefs
+
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": None,
+            "configured_clusters": ["carc", "hoffman2"],
+            "goal": "sweep ridge",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    result = blocks.submit_s1(tmp_path, spec=SubmitS1Spec(walk=walk, run_preflight=False))
+
+    assert result.run_id is None
+    assert read_briefs(tmp_path, _RUN_ID) == []
+
+
 # ── registry metadata ────────────────────────────────────────────────────────
 
 

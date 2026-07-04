@@ -60,6 +60,34 @@ if TYPE_CHECKING:
 __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 
 
+def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlockResult:
+    """Durably persist a decision-point brief so the provenance gate can diff it.
+
+    Conduct rule 9 (docs/design/proving-run-2-hardening.md §6): ``append-decision``
+    refuses a greenlight whose ``resolved`` diverts a field the brief never
+    recommended — but only if the brief the block emitted is on disk. CODE
+    persists it here, at the moment a block returns a decision-point Result, in
+    BOTH driving modes (block-drive AND direct MCP invocation) — the v1
+    ``next_block`` lesson forbids keying this on block-drive-only state.
+
+    Persists only when the block ends at a human boundary (``needs_decision``) AND
+    a ``run_id`` exists to scope the file (S1's pre-resolve ambiguity branch has no
+    run_id yet — its greenlight then legitimately fails open). Detached / clean-
+    terminal returns (``needs_decision=False``) carry nothing to greenlight, so
+    nothing is persisted. Pass-through: returns *result* unchanged.
+    """
+    if result.needs_decision and result.run_id and result.brief:
+        from hpc_agent.state.decision_briefs import append_brief
+
+        append_brief(
+            experiment_dir,
+            run_id=result.run_id,
+            block=result.block,
+            brief=result.brief,
+        )
+    return result
+
+
 def _watchdog_brief(experiment_dir: Path) -> dict[str, Any]:
     """The §5 watchdog install-status field for a brief arming a long wait.
 
@@ -280,7 +308,14 @@ def submit_s1(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     supplied — the ``resolve-submit-inputs`` terminator (``resolved`` /
     ``prior_run_found`` / ``needs_scaffold_interview``). ``needs_decision`` is
     True in every case: S1 always ends at a human greenlight (§3).
+
+    The emitted brief is persisted (``_persist_brief``) so the provenance gate
+    (conduct rule 9) can later diff an S1→S2 greenlight's ``resolved`` against it.
     """
+    return _persist_brief(experiment_dir, _submit_s1_impl(experiment_dir, spec=spec))
+
+
+def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockResult:
     brief: dict[str, Any] = {}
 
     # 1. Preflight (optional) — fold pass/fail into the brief.
@@ -405,7 +440,14 @@ def submit_s2(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
     Precondition gate (design §2): the latest journaled decision for this run must
     be a greenlight naming ``submit-s2`` — the human greenlit S1's resolved brief.
     A missing/mismatched greenlight fails loudly (``assert_greenlit_target``).
+
+    The emitted brief is persisted (``_persist_brief``) for the provenance gate
+    (conduct rule 9): an S2→S3 greenlight's ``resolved`` is diffed against it.
     """
+    return _persist_brief(experiment_dir, _submit_s2_impl(experiment_dir, spec=spec))
+
+
+def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockResult:
     assert_greenlit_target(
         experiment_dir,
         run_id=spec.submit.submit.run_id,
@@ -557,7 +599,15 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
     the canary S2 verified must be recorded validated-fresh
     (``_assert_canary_verified``, the TTL-cache artifact). ``launch_main_array``
     adds the tree-drift guard. All three fail loudly before any main-array submit.
+
+    The emitted brief is persisted (``_persist_brief``) at each human-boundary
+    return for the provenance gate (conduct rule 9). The unattended / detached /
+    clean-terminal returns carry no greenlight, so nothing is persisted there.
     """
+    return _persist_brief(experiment_dir, _submit_s3_impl(experiment_dir, spec=spec))
+
+
+def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
     assert_greenlit_target(
         experiment_dir,
         run_id=spec.submit.submit.run_id,
@@ -730,7 +780,14 @@ def submit_s4(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
     be a greenlight naming ``submit-s4`` — the human greenlit S3's terminal brief.
     The terminal-or-explicitly-partial invariant is NOT re-checked here: the
     composed ``aggregate-flow`` gate owns it (compose, don't duplicate).
+
+    The emitted results brief is persisted (``_persist_brief``) for the
+    provenance gate (conduct rule 9).
     """
+    return _persist_brief(experiment_dir, _submit_s4_impl(experiment_dir, spec=spec))
+
+
+def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
     assert_greenlit_target(
         experiment_dir,
         run_id=spec.aggregate.run_id,
