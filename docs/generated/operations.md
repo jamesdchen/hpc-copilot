@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**122 operations total**: 98 primitive atoms + 24 workflow atoms.
+**123 operations total**: 99 primitive atoms + 24 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (51)
+## `query` (52)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -70,6 +70,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |
 | [`verify-aggregation-complete`](../primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` | `_(none)_` | — | — |
 | [`verify-submitted`](../primitives/verify-submitted.md) | ✓ | ssh | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
+| [`wait-detached`](../primitives/wait-detached.md) | ✓ | _none_ | `hpc-agent wait-detached --spec <path>` | `_(none)_` | — | — |
 | [`walk-submit-ambiguities`](../primitives/walk-submit-ambiguities.md) | ✓ | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` | `_(none)_` | — | — |
 
 ## `validate` (16)
