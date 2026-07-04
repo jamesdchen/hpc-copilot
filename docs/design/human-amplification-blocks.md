@@ -283,9 +283,16 @@ one-off ssh at the edges (fine when blocks are complete enough).
 - [x] Block interleaving rules — **decided:** speculative canary allowed
       pre-greenlight, budget = 1 per pending brief, nudges never cancel (§3).
 - [x] `doctor` verb — **built** (`hpc-agent doctor`, detection-only).
-      OS-scheduler installation — **decided:** opt-in install verb
-      (`doctor --install` → Task Scheduler / cron), never auto-installed;
-      implementation pending.
+      OS-scheduler installation — **built** as a separate opt-in verb
+      `hpc-agent doctor-install` (`ops/recover/doctor_install.py`), never
+      auto-installed: Windows `schtasks /SC MINUTE` vs POSIX `crontab` on a
+      platform branch, idempotent marker keyed on `repo_hash`, `uninstall`,
+      loud-fail; writes a durable `doctor.spec.json` and schedules
+      `hpc-agent doctor --spec …`. Verified on the 2026-07-03 proving run
+      (verb wired, 11 tests green). Residual (optional): a Windows probe
+      ladder + loud `installed:false`/`probes` map to fully mirror
+      `watcher-install`'s Rung-4 degradation, and lifting `arm.py`'s adaptive
+      cadence in place of the fixed `interval_minutes`.
 - [x] Decision-journal schema — **built:** `append-decision` /
       `read-decisions` over per-scope `decisions.jsonl`; the schema prose
       lives in `docs/primitives/append-decision.md` (one record per
@@ -299,6 +306,27 @@ one-off ssh at the edges (fine when blocks are complete enough).
       default routing; physical deletion happens in one dedicated pass once
       the blocks are proven on a real run. The skill-prose rewrite to
       single-sentence block starts rides that pass.
+      **Update (2026-07-03, blocks now proven on Hoffman2):** scoped the deletion;
+      it is a *dependency-untangling* job, not a file-removal one, and is NOT
+      cleanly feasible in a single pass yet. The worker is confirmed fully
+      stranded (every SKILL routes through `block-drive`; no SKILL emits
+      `hpc-agent run`), so stranding carries no correctness risk. Clean-delete
+      blockers: (1) `_kernel/lifecycle/drive.py` co-mingles the worker resolver
+      (`default_judgement_resolver → run_workflow`) with the block watchdog
+      stamp (`_stamp_driver_tick`, which `block_drive` imports); (2)
+      `_wire/spawn_contract.py` (`WorkerReport` / `WORKFLOW_PROCEDURES` /
+      `SpawnRequest`) is still imported by the campaign driver, the `describe`
+      verb, `load-context`, and `llm_resolver`; (3) `cli/spawn.py::cmd_run`
+      hosts the KEEP `--detached` status entry alongside the worker spawn; (4)
+      `load-context` can still emit `agent`-kind delegates the legacy
+      `hpc-campaign-driver --allow-agent-steps` feeds to the worker. **Deletion
+      sequence:** (a) cut the campaign agent-step path to `block-drive` so
+      `default_judgement_resolver`/`run_workflow` lose their last caller; (b)
+      stop `load-context` emitting agent-kind delegates + drop the
+      `render_spawn_prompt` prefill; (c) migrate `describe`/`llm_resolver` off
+      `spawn_contract`; (d) then delete `invoke.py`, `run.py`, the `run` verb,
+      `spawn_prompt.py`, `worker_prompts/`, `spawn_contract.py`, the worker
+      schemas, `hpc-worker.md`, and the §5 worker tests in one commit.
 
 ## 9. Wave 4 — the code-driven chain
 
