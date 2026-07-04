@@ -113,6 +113,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
         "hpc_agent.ops.aggregate.invariants",
     ),
     "verify-canary": ("verify-canary", "hpc_agent.ops.verify_canary"),
+    "verify-relay": ("verify-relay", "hpc_agent.ops.decision.verify_relay"),
     "verify-submitted": ("verify-submitted", "hpc_agent.ops.verify_submitted"),
     "wait-detached": ("wait-detached", "hpc_agent.ops.monitor.wait_detached"),
     "walk-submit-ambiguities": ("walk-submit-ambiguities", "hpc_agent.ops.walk_submit_ambiguities"),

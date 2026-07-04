@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_relay.input.json",
+  "title": "verify-relay input spec",
+  "description": "What relay to audit, and against which run's durable records.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "relay_text"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "relay_text": {
+      "title": "Relay Text",
+      "type": "string"
+    },
+    "block": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Block"
+    }
+  }
+}

@@ -821,6 +821,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "verify-relay",
+    "output_schema": null,
+    "python": "hpc_agent.ops.decision.verify_relay.verify_relay",
+    "side_effects": [],
+    "summary": "Audit an agent's draft relay text against a run's durable records (decision journal, sidecar, RunRecord, briefs). Deterministic claim-extraction — numbers, run/job ids, state words — diffed against the record. Returns a verdict; never blocks (conduct rule 10).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>",
     "idempotent": true,
     "input_schema": null,

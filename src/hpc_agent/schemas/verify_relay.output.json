@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_relay.output.json",
+  "title": "verify-relay output data",
+  "description": "The audit verdict over the relay text.\n\n``clean`` is False iff any mismatch was found. ``claims_checked`` counts\nonly the FACTUAL claims that were evaluated (conversational numbers —\nlist markers, ``~``-prefixed durations — are filtered out before the\ncount). ``sources_consulted`` honestly lists only the durable records\nthat were actually found and read (nothing to contradict → an empty or\nshort list, not a fabricated one).",
+  "type": "object",
+  "required": [
+    "clean",
+    "claims_checked",
+    "mismatches",
+    "sources_consulted"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "clean": {
+      "title": "Clean",
+      "type": "boolean"
+    },
+    "claims_checked": {
+      "minimum": 0,
+      "title": "Claims Checked",
+      "type": "integer"
+    },
+    "mismatches": {
+      "items": {
+        "$ref": "#/$defs/RelayMismatch"
+      },
+      "title": "Mismatches",
+      "type": "array"
+    },
+    "sources_consulted": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Sources Consulted",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "RelayMismatch": {
+      "additionalProperties": false,
+      "description": "One claim in the relay that the durable records do not support.\n\n``kind``:\n\n* ``number`` — a numeric claim that contradicts every source number\n  (there ARE source numbers, but none match, even under truncation\n  tolerance). ``nearest_source_value`` carries the closest source number.\n* ``state`` — a lifecycle/verification word that contradicts the run's\n  recorded state (e.g. relay says \"running\" while the journal says\n  \"failed\"). ``nearest_source_value`` carries the recorded state.\n* ``run_id`` — a run-id/job-id-shaped token that matches no authoritative\n  identifier for the run. ``nearest_source_value`` carries the run in scope.\n* ``unverifiable`` — a factual claim with NO source to check against at\n  all (no records carry any comparable value). Flagged, never silently\n  passed: the bar is useful-conservative — prefer flagging to missing.",
+      "properties": {
+        "claim": {
+          "title": "Claim",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "number",
+            "state",
+            "run_id",
+            "unverifiable"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "nearest_source_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearest Source Value"
+        }
+      },
+      "required": [
+        "claim",
+        "kind",
+        "detail"
+      ],
+      "title": "verify-relay mismatch",
+      "type": "object"
+    }
+  }
+}
