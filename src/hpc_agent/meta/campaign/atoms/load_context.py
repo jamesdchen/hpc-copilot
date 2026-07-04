@@ -190,20 +190,16 @@ def _build_delegate(
 ) -> dict[str, Any]:
     """Describe the next workflow step as a delegable unit of work.
 
-    The ``delegate`` block is the single contract two consumers share:
-
-    - an in-session orchestrator reads it and either runs the step
-      itself (``kind == "cli"``) or spawns a fresh-context subagent
-      with ``prompt`` (``kind == "agent"``);
-    - the headless campaign driver reads the same block and either
-      runs the ``hpc-agent`` verb directly (``cli``) or shells
-      ``claude -p`` (``agent``).
-
-    ``kind`` is the cost/determinism split: ``cli`` steps are
-    deterministic and need no LLM; ``agent`` steps need judgement.
+    ``kind`` is the cost/determinism split: ``cli`` steps are deterministic
+    and need no LLM; ``agent`` steps need human judgement at a decision
+    boundary. An ``agent`` step's ``prompt`` routes the reader to the
+    block-drive chain for that workflow (design §6) — the code-driven
+    sequencer whose blocks terminate at human decision points. The former
+    ``claude -p`` bare-worker spawn transport (``spawn_request`` +
+    ``render_spawn_prompt``) was deleted in the §6 worker removal;
+    ``spawn_request`` is retained as an always-``None`` key for wire-shape
+    compatibility.
     """
-    from hpc_agent._kernel.extension.spawn_prompt import render_spawn_prompt
-
     exp = str(experiment_dir)
     if hint == "onboard":
         return {
@@ -240,19 +236,20 @@ def _build_delegate(
             "campaign_id": None,
             "experiment_dir": exp,
             "reason": "no runs in flight; the next step is a new submission",
-            "spawn_request": {
-                "workflow": "submit",
-                "experiment_dir": exp,
-                "fields": {},
-            },
-            "prompt": render_spawn_prompt(workflow="submit", experiment_dir=exp, fields={}),
+            "spawn_request": None,
+            "prompt": (
+                f"Start the submit workflow for {exp} via the block-drive "
+                "chain (first block submit-s1): invoke the `submit-s1` typed "
+                "MCP tool, or `hpc-agent block-drive --workflow submit "
+                f"--experiment-dir {exp}`. The blocks are the whole execution; "
+                "relay each decision brief to the human for a y/nudge and "
+                "commit the approved spec via append-decision. Do NOT hand off "
+                "to a worker — the `run --workflow` spawn transport no longer "
+                "exists."
+            ),
         }
     if hint == "decide":
         campaign_id = _decide_campaign_id(campaigns, latest_run)
-        decide_fields: dict[str, Any] = {
-            "campaign_id": campaign_id,
-            "step": "decide",
-        }
         return {
             "kind": "agent",
             "step": "decide",
@@ -264,17 +261,19 @@ def _build_delegate(
                 "iteration(s) (a free slot in async-refill mode, or an idle "
                 "campaign in synchronous mode)"
             ),
-            # step stays "decide" even for an async refill: the deterministic
-            # resolver dispatches its decide chain on fields.step == "decide",
-            # then campaign-advance returns decision="refill" and the resolver's
-            # refill arm submits refill_count iterations (#362, plan §1.4).
-            "spawn_request": {
-                "workflow": "campaign",
-                "experiment_dir": exp,
-                "fields": decide_fields,
-            },
-            "prompt": render_spawn_prompt(
-                workflow="campaign", experiment_dir=exp, fields=decide_fields
+            # step stays "decide" even for an async refill: the campaign block
+            # flow (blocks.py → atoms/advance.py) dispatches the decide chain,
+            # then campaign-advance returns decision="refill" and the refill
+            # arm submits refill_count iterations (#362, plan §1.4).
+            "spawn_request": None,
+            "prompt": (
+                f"Advance campaign {campaign_id!r} in {exp} via the campaign "
+                "block flow: invoke `campaign-watch` / `block-drive --workflow "
+                "campaign` (the code-driven chain; campaign-advance decides "
+                "iterate/refill/stop deterministically against the greenlit "
+                "spec). Relay any anomaly or completion brief to the human. Do "
+                "NOT hand off to a worker — the `run --workflow` spawn "
+                "transport no longer exists."
             ),
         }
     # monitor / aggregate — pick the in-flight run that governs the step.

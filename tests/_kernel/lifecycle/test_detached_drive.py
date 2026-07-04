@@ -15,7 +15,6 @@ for the outcome. These tests pin:
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
@@ -258,92 +257,6 @@ def test_launch_detached_writes_spec_and_detaches(_journal, monkeypatch):
     assert written == {"monitor": {"run_id": "ml-launch1"}}
 
 
-# ─── CLI run wiring ────────────────────────────────────────────────────────
-
-
-def _run_args(tmp_path, *, workflow="status", fields="{}", detached=False, inline=False):
-    return argparse.Namespace(
-        workflow=workflow,
-        experiment_dir=tmp_path,
-        fields_json=fields,
-        detached=detached,
-        inline=inline,
-    )
-
-
-def _envelope(capsys):
-    out = capsys.readouterr().out.strip().splitlines()
-    return json.loads(out[-1])
-
-
-def test_cli_detached_flag_launches_runner_and_emits_run_id(_journal, monkeypatch, capsys):
-    from hpc_agent._kernel.lifecycle import detached
-    from hpc_agent.cli import spawn
-
-    monkeypatch.delenv("HPC_AGENT_DRIVE", raising=False)
-    monkeypatch.setattr(detached.subprocess, "Popen", lambda argv, **kw: _FakePopen(argv, **kw))
-
-    # The spawn path must NOT run — detached spawns no LLM.
-    monkeypatch.setattr(
-        "hpc_agent._kernel.lifecycle.run.run_workflow",
-        lambda **_: (_ for _ in ()).throw(AssertionError("no worker on detached path")),
-    )
-
-    rc = spawn.cmd_run(
-        _run_args(
-            _journal, fields=json.dumps({"run_id": "ml-cli1", "blocking": True}), detached=True
-        )
-    )
-    env = _envelope(capsys)
-    assert rc == 0
-    assert env["ok"] is True
-    assert env["data"]["mode"] == "detached"
-    assert env["data"]["run_id"] == "ml-cli1"
-    assert "poll" in env["data"]["instructions"].lower()
-
-
-def test_cli_detached_env_selects_mode(_journal, monkeypatch, capsys):
-    from hpc_agent._kernel.lifecycle import detached
-    from hpc_agent.cli import spawn
-
-    monkeypatch.setenv("HPC_AGENT_DRIVE", "detached")
-    monkeypatch.setattr(detached.subprocess, "Popen", lambda argv, **kw: _FakePopen(argv, **kw))
-
-    rc = spawn.cmd_run(
-        _run_args(_journal, fields=json.dumps({"run_id": "ml-cli2", "blocking": True}))
-    )
-    env = _envelope(capsys)
-    assert rc == 0
-    assert env["data"]["mode"] == "detached"
-    assert env["data"]["run_id"] == "ml-cli2"
-
-
-def test_cli_detached_refused_for_unsupported_workflow(_journal, monkeypatch, capsys):
-    from hpc_agent.cli import spawn
-
-    monkeypatch.delenv("HPC_AGENT_DRIVE", raising=False)
-    rc = spawn.cmd_run(
-        _run_args(_journal, workflow="submit", fields=json.dumps({"blocking": True}), detached=True)
-    )
-    env = _envelope(capsys)
-    assert rc == 1
-    assert env["ok"] is False
-    assert env["error_code"] == "spec_invalid"
-    assert "status" in env["message"]
-
-
-def test_cli_detached_refused_for_snapshot_status(_journal, monkeypatch, capsys):
-    from hpc_agent.cli import spawn
-
-    monkeypatch.delenv("HPC_AGENT_DRIVE", raising=False)
-    rc = spawn.cmd_run(
-        _run_args(_journal, fields=json.dumps({"run_id": "x", "blocking": False}), detached=True)
-    )
-    env = _envelope(capsys)
-    assert rc == 1
-    assert env["error_code"] == "spec_invalid"
-
-
 # ─── submit-block detached launch (design §3 detach-by-contract) ────────────
 
 
@@ -522,20 +435,3 @@ def test_pid_alive_reports_current_process_and_rejects_nonpositive():
     assert detached._pid_alive(os.getpid()) is True
     assert detached._pid_alive(0) is False
     assert detached._pid_alive(-1) is False
-
-
-def test_cli_default_still_spawns_worker(_journal, monkeypatch, capsys):
-    """No flag, no env → the default `claude -p` worker path, unchanged."""
-    import types
-
-    from hpc_agent.cli import spawn
-
-    monkeypatch.delenv("HPC_AGENT_DRIVE", raising=False)
-    report = types.SimpleNamespace(model_dump=lambda: {"result": "ok"})
-    monkeypatch.setattr(
-        "hpc_agent._kernel.lifecycle.run.run_workflow", lambda **_: (report, 0, None)
-    )
-    rc = spawn.cmd_run(_run_args(_journal, fields=json.dumps({"run_id": "x", "blocking": True})))
-    env = _envelope(capsys)
-    assert rc == 0
-    assert env["data"]["mode"] == "spawn"

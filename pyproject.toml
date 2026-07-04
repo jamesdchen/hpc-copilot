@@ -83,7 +83,6 @@ Issues = "https://github.com/jamesdchen/hpc-agent/issues"
 
 [project.scripts]
 hpc-agent = "hpc_agent.cli.dispatch:main"
-hpc-campaign-driver = "hpc_agent.meta.campaign.driver:main"
 hpc-block-drive = "hpc_agent._kernel.lifecycle.block_drive:main"
 
 [tool.setuptools.packages.find]

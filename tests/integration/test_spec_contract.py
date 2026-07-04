@@ -37,7 +37,6 @@ from hpc_agent._kernel.lifecycle import detached, drive
 from hpc_agent._kernel.registry.primitive import get_registry
 from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.infra import block_chain
-from hpc_agent.meta.campaign import driver as campaign_driver
 
 from .conftest import assert_valid_spec, spec_model_for
 
@@ -71,18 +70,17 @@ def test_run_cli_step_builds_a_bare_run_id_dict() -> None:
     )
 
 
-def test_campaign_driver_cli_step_specs_validate() -> None:
-    """The campaign driver's per-step ``{"run_id": ...}`` validates for both verbs.
+def test_drive_cli_step_specs_validate() -> None:
+    """The tick-loop's per-step ``{"run_id": ...}`` validates for both flow verbs.
 
-    ``meta/campaign/driver._CAMPAIGN_STEP_VERB`` maps ``monitor -> monitor-flow``
-    and ``aggregate -> aggregate-flow``; ``drive._run_cli_step`` hands each the
-    bare ``{"run_id": run_id}`` spec pinned above. Both models require only
-    ``run_id`` today — LOCK it so a future required field on either model is
-    caught here instead of at a live campaign tick.
+    ``drive._run_cli_step`` hands the mapped verb the bare ``{"run_id": run_id}``
+    spec pinned above. A step table maps ``monitor -> monitor-flow`` and
+    ``aggregate -> aggregate-flow`` (the shape the deleted campaign driver used;
+    an external loop supplies its own). Both models require only ``run_id``
+    today — LOCK it so a future required field on either model is caught here
+    instead of at a live tick.
     """
-    step_table = campaign_driver._CAMPAIGN_STEP_VERB
-    assert dict(step_table) == {"monitor": "monitor-flow", "aggregate": "aggregate-flow"}
-    for verb in step_table.values():
+    for verb in ("monitor-flow", "aggregate-flow"):
         assert spec_model_for(verb) is not None, f"{verb} lost its spec_model"
         assert_valid_spec(verb, {"run_id": _RUN_ID})
 

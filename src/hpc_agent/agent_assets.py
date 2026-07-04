@@ -8,8 +8,8 @@ Code's user-global config directory.
 The core asset trees ship as package data inside the ``slash_commands``
 package — ``slash_commands/commands/*.md``,
 ``slash_commands/skills/<name>/SKILL.md``, and
-``slash_commands/agents/<name>.md`` (named subagent definitions, e.g.
-the haiku-pinned ``hpc-worker`` that inline mode dispatches to).
+``slash_commands/agents/<name>.md`` (named subagent definitions; core
+ships none since the §6 worker removal — the tree remains for plugins).
 Optional plugins may ship their own ``commands/`` + ``skills/`` +
 ``agents/`` trees via the ``slash_command_assets`` hook on the
 ``hpc_agent.plugins`` seam; those are installed *after* the core
@@ -589,9 +589,9 @@ def _install_tree(
 
     # Named subagent definitions — a flat ``agents/*.md`` tree (same shape
     # as ``commands/``). Claude Code discovers these under
-    # ``~/.claude/agents/``; the haiku-pinned ``hpc-worker`` is what inline
-    # mode dispatches to so the model pin rides with the definition (the
-    # harness enforces it), not the caller's cooperation.
+    # ``~/.claude/agents/``. Core ships none since the §6 worker removal
+    # (the haiku-pinned ``hpc-worker`` went with the spawn transport); the
+    # walk remains so plugins can ship their own agent definitions.
     agents_src = root / "agents"
     if agents_src.is_dir():
         agents_dst = target / "agents"
@@ -631,7 +631,7 @@ def install_agent_assets(
             "claude_dir": "<resolved path>",
             "commands_installed": ["aggregate-hpc", ...],
             "skills_installed": ["hpc-submit", ...],
-            "agents_installed": ["hpc-worker", ...],
+            "agents_installed": [],
             "cleared_collisions": ["/.../.claude/agents", ...],
             "settings_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},
             "settings_stop_hook": {"settings_path": "...", "action": "added", "wrote": <bool>},

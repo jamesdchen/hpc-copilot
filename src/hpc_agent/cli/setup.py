@@ -384,21 +384,16 @@ def describe(*, name: str) -> dict[str, Any]:
 
     Resolution order:
 
-    1. Worker-prompt procedure (``hpc_agent/_kernel/extension/worker_prompts/<name>.md``,
-       with plugin overlay) — returns ``kind: "procedure"``.
-    2. Inline skill (``slash_commands/skills/<name>/SKILL.md``) —
+    1. Inline skill (``slash_commands/skills/<name>/SKILL.md``) —
        returns ``kind: "skill"``.
-    3. Primitive in the operations catalog — returns ``kind:
+    2. Primitive in the operations catalog — returns ``kind:
        "primitive"`` with its contract.
+
+    (Worker-prompt procedures — ``kind: "procedure"`` — were the bare-worker
+    spawn transport's surface; deleted with it in the §6 worker removal. The
+    block-drive skills are the workflow entry points now.)
     """
     from importlib.resources import files
-
-    from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
-
-    if name in WORKFLOW_PROCEDURES:
-        from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
-
-        return {"kind": "procedure", "name": name, "content": _procedure_body(name)}
 
     skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
     if skill_md.is_file():

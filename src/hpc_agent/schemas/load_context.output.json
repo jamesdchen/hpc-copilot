@@ -126,7 +126,7 @@
     },
     "_Delegate": {
       "additionalProperties": false,
-      "description": "The next workflow step described as a delegable unit of work.\n\nFor an ``agent``-kind step ``spawn_request`` carries the shared\n:class:`SpawnRequest` contract — the campaign driver feeds it to\n``run_workflow``, which renders the canonical worker prompt and\ninvokes a fresh-context worker. ``None`` for ``cli``-kind steps.\nThe ``prompt`` field carries that canonical prompt pre-rendered.",
+      "description": "The next workflow step described as a delegable unit of work.\n\n``spawn_request`` is always ``None`` since the §6 worker removal — the\nfield is retained (typed by the shared :class:`SpawnRequest` contract)\nfor wire-shape compatibility. An ``agent``-kind step's ``prompt`` now\nroutes the reader to the block-drive chain for that workflow instead of\ncarrying a rendered worker prompt.",
       "properties": {
         "kind": {
           "enum": [

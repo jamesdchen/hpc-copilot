@@ -198,18 +198,15 @@ def test_delegate_submit_is_agent_kind(journal_home, experiment):
     assert delegate["prompt"]
 
 
-def test_delegate_agent_step_carries_a_spawn_request(journal_home, experiment):
-    # An agent step is delegated through a pinned hpc_spawn request, not
-    # a hand-written prompt — the orchestrator passes spawn_request to
-    # Task and the spawn_guard hook renders it.
+def test_delegate_agent_step_routes_to_block_drive(journal_home, experiment):
+    # An agent step is a human decision boundary: no spawn_request (the
+    # bare-worker transport was deleted in the §6 worker removal) — the
+    # prompt routes the reader to the block-drive chain instead.
     _onboard(experiment)
     delegate = load_context(experiment_dir=experiment)["delegate"]
-    spawn = delegate["spawn_request"]
-    assert spawn["workflow"] == "submit"
-    assert spawn["experiment_dir"] == delegate["experiment_dir"]
-    assert isinstance(spawn["fields"], dict)
-    # prompt is the rendered canonical text, the same SoT as the hook.
-    assert "submit PROCEDURE" in delegate["prompt"]
+    assert delegate["spawn_request"] is None
+    assert "submit-s1" in delegate["prompt"]
+    assert "block-drive" in delegate["prompt"]
 
 
 def test_delegate_monitor_is_cli_kind(journal_home, experiment):
@@ -241,9 +238,9 @@ def test_decide_hint_when_campaign_idle(journal_home, experiment):
     assert delegate["step"] == "decide"
     assert delegate["campaign_id"] == "optuna-1"
     assert delegate["run_id"] is None
-    # A decide step delegates the hpc-campaign workflow, pinned.
-    assert delegate["spawn_request"]["workflow"] == "campaign"
-    assert "hpc-campaign" in delegate["prompt"]
+    # A decide step routes to the campaign block flow; no worker spawn.
+    assert delegate["spawn_request"] is None
+    assert "block-drive" in delegate["prompt"]
 
 
 def test_submit_hint_when_idle_and_no_campaign(journal_home, experiment):
@@ -282,7 +279,8 @@ def test_async_refill_decides_while_runs_in_flight(journal_home, experiment):
     assert delegate["kind"] == "agent"
     assert delegate["step"] == "decide"
     assert delegate["campaign_id"] == "optuna-1"
-    assert delegate["spawn_request"]["workflow"] == "campaign"
+    assert delegate["spawn_request"] is None
+    assert "campaign" in delegate["prompt"]
 
 
 def test_async_off_still_monitors_in_flight(journal_home, experiment):

@@ -51,11 +51,11 @@ class _CampaignRow(BaseModel):
 class _Delegate(BaseModel):
     """The next workflow step described as a delegable unit of work.
 
-    For an ``agent``-kind step ``spawn_request`` carries the shared
-    :class:`SpawnRequest` contract — the campaign driver feeds it to
-    ``run_workflow``, which renders the canonical worker prompt and
-    invokes a fresh-context worker. ``None`` for ``cli``-kind steps.
-    The ``prompt`` field carries that canonical prompt pre-rendered.
+    ``spawn_request`` is always ``None`` since the §6 worker removal — the
+    field is retained (typed by the shared :class:`SpawnRequest` contract)
+    for wire-shape compatibility. An ``agent``-kind step's ``prompt`` now
+    routes the reader to the block-drive chain for that workflow instead of
+    carrying a rendered worker prompt.
     """
 
     model_config = ConfigDict(extra="forbid")
