@@ -260,7 +260,7 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "read-decisions",
     "status-snapshot",
     "status-watch",
-        "wait-detached",
+    "wait-detached",
     "submit-s1",
     "submit-s2",
     "submit-s3",
