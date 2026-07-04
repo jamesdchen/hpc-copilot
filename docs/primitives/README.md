@@ -135,6 +135,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [trace](trace.md) | yes | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |
 | [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |
+| [wait-detached](wait-detached.md) | yes | _none_ | `hpc-agent wait-detached --spec <path>` |
 | [walk-submit-ambiguities](walk-submit-ambiguities.md) | yes | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` |
 
 ### `validate` primitives

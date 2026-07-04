@@ -58,6 +58,7 @@ def _run_hook(payload: dict) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
 
 
@@ -81,5 +82,6 @@ def test_hook_never_wedges_on_malformed_payload() -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     assert proc.returncode == 0

@@ -211,7 +211,12 @@ def test_preserves_existing_settings_and_hooks(tmp_path: Path) -> None:
     # test_agent_assets_settings_permissions.py for the permissions contract).
     assert settings["permissions"]["deny"] == ["Bash(rm -rf:*)"]
     assert settings["customKey"] == {"nested": [1, 2, 3]}
-    assert settings["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": []}]
+    # The pre-existing PreToolUse entry survives; the scheduler write-fence
+    # (conduct rule 7) is appended after it.
+    ptu_pre = settings["hooks"]["PreToolUse"]
+    assert ptu_pre[0] == {"matcher": "Bash", "hooks": []}
+    assert len(ptu_pre) == 2
+    assert "scheduler_write_fence" in ptu_pre[1]["hooks"][0]["command"]
 
     # The pre-existing PostToolUse entry survives, and ours is appended after it.
     ptu = _post_tool_use(settings)
@@ -232,7 +237,10 @@ def test_creates_event_arrays_when_hooks_exist_without_them(tmp_path: Path) -> N
     install_agent_assets(claude_dir=tmp_path)
     settings = _settings(tmp_path)
 
-    assert settings["hooks"]["PreToolUse"] == []
+    # The empty PreToolUse array gains exactly the write-fence entry.
+    ptu = settings["hooks"]["PreToolUse"]
+    assert len(ptu) == 1
+    assert "scheduler_write_fence" in ptu[0]["hooks"][0]["command"]
     assert len(_autofetch_entries(settings)) == 1
     assert len(_stop_entries(settings)) == 1
 
