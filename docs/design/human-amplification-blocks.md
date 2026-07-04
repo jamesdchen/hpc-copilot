@@ -314,3 +314,20 @@ since wave 3 (MCP-vs-CLI, curated surface, watchers, surface consolidation).
 **Full spec:** [`block-drive.md`](block-drive.md). Gated on the proving run; a
 refactor, not a tweak. Nothing from waves 1–3 is deleted by it (the §6 worker
 deletion remains its own separate pass).
+
+## 10. Spec review — separating syntax from logic
+
+The propose loop (§2) surfaces a proposal for `y`/nudge, but leaves open *what the
+human actually reviews*. The next design layer applies §1's division of labor to
+the review surface itself: **the human reviews only logic; code owns all syntax.**
+The LLM never authors a spec (it emits a flat *intent bag*; code builds and
+validates); validators return typed outcomes so the L2/L3 line is a result-shape,
+not a policy table; every human decision is a **code-enumerated `{choice}`** (the
+LLM relays, never frames); and — the load-bearing correction — the human is asked
+by a **consequence gate** (blast radius, not spec-cleanliness), not on every
+transition, because a verification layer that over-fires gets turned off and
+protects nothing.
+
+**Full spec:** [`spec-review-separation.md`](spec-review-separation.md). Also gated
+on the proving run — its sharpest open seams (render altitude, gate calibration,
+per-family intent-schema authority) need a real researcher, not more design.
