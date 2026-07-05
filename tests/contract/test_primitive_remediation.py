@@ -114,6 +114,9 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "submit-s3",
         "submit-s4",
         "submit-speculate",
+        # revise-resolved (proving-run-5 wave 5.1): the nudge-as-delta verb —
+        # re-resolves a run under a {field: value} patch. Spec-taking composite.
+        "revise-resolved",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -257,6 +260,9 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "submit-s2",
     "submit-s3",
     "submit-s4",
+    # revise-resolved (wave 5.1): new spec composite; like the other composites
+    # it does not yet thread failure_features into its spec_invalid envelope (WS3).
+    "revise-resolved",
 }
 
 

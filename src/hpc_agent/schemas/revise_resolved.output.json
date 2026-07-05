@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/revise_resolved.output.json",
+  "title": "revise-resolved output data",
+  "description": "The amended decision brief — mirrors the S1 ``SubmitBlockResult`` brief.\n\n``stage_reached`` is the resolver outcome the amended brief stops at\n(``resolved`` / ``prior_run_found`` / ``needs_scaffold_interview``);\n``needs_decision`` is True in every case (the human re-``y``s the amended\nbrief through the EXISTING append-decision path, so the human-authorship +\nbrief-provenance gates still run on the re-commit — this verb produces the\nbrief, it does NOT bypass the gates). ``brief`` carries the re-derived\n``resolved`` values + the fresh ``resolve`` output (``submit_spec`` with\n``job_env`` re-derived from the patched cluster, ``run_id``, ``cmd_sha``,\n``sidecar_path``). ``applied_patch`` records exactly what the delta changed\n(the audit trail shows *what the human changed*, design §4 point 2).",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "The resolver stage the amended brief stopped at.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "Always True — the human re-y's the amended brief through append-decision.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the re-resolution outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The re-computed run_id (the patch may move it via cmd_sha).",
+      "title": "Run Id"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "The amended S1-shaped brief: re-derived resolved values + the fresh resolve output (submit_spec, sidecar_path). The LLM relays it and takes the human's re-y; it never authored the derived fields.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "applied_patch": {
+      "additionalProperties": true,
+      "description": "The delta actually applied {field: value} — the audit of what changed.",
+      "title": "Applied Patch",
+      "type": "object"
+    }
+  }
+}

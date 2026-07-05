@@ -75,6 +75,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'reconcile': ('reconcile-journal', 'hpc_agent.ops.monitor.reconcile'),
     'resolve-resources': ('resolve-resources', 'hpc_agent.ops.resolve_resources'),
     'resolve-submit-inputs': ('resolve-submit-inputs', 'hpc_agent.ops.resolve_submit_inputs'),
+    'revise-resolved': ('revise-resolved', 'hpc_agent.ops.revise_resolved'),
     'scaffold-spec': ('scaffold-spec', 'hpc_agent.ops.scaffold_spec'),
     'scaffold-strategy': ('scaffold-strategy', 'hpc_agent.incorporation.scaffold_strategy'),
     'smoke-test-executor': ('smoke-test-executor', 'hpc_agent.ops.smoke_test_executor'),

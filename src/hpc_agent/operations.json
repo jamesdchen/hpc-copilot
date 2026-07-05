@@ -1445,6 +1445,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "revise_resolved.input.json",
+    "name": "revise-resolved",
+    "output_schema": "revise_resolved.output.json",
+    "python": "hpc_agent.ops.revise_resolved.revise_resolved",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "summary": "Apply a resolver-owned FIELD DELTA {field: value} to a run's latest greenlit resolved and RE-RESOLVE, re-deriving job_env/executor/run_id/cmd_sha/sidecar from the delta (proving-run-5 wave 5.1). The patch may name only INPUT fields (cluster, goal, task_generator, walltime_sec, entry_point, …); a derived field (job_env, executor, ssh_target, …) is REFUSED. Returns the amended brief for the human's re-y — it does NOT bypass the append-decision gates.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "status_pipeline.input.json",

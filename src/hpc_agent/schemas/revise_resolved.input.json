@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/revise_resolved.input.json",
+  "title": "revise-resolved input spec",
+  "description": "Inputs to ``revise-resolved``: a scope + a resolver-owned field delta.\n\n``scope_kind`` / ``scope_id`` name the run whose LATEST committed greenlit\n``resolved`` is being amended (``scope_id`` is the run_id for a run-scoped\ndecision). ``patch`` is the field-level delta the human's nudge expressed\n— e.g. ``{\"cluster\": \"hoffman2\"}`` for \"use hoffman2 instead\".\n\nThe ``patch`` may name ONLY resolver-owned / caller-authored INPUT fields\n(``cluster``, ``goal``, ``task_generator``, ``walltime_sec``, ``gpu_type``,\n``partition``, ``mpi_pe``, ``entry_point``, ``homogeneous_axes`` …). A key\nnaming a CODE-DERIVED field (``job_env``, ``run_id``, ``cmd_sha``,\n``executor``, ``ssh_target``, ``backend``, ``remote_path``, ``total_tasks``,\nthe sidecar) is REFUSED with ``SpecInvalid`` — those are re-derived from the\ninput delta and must never be hand-set (the whole point: hand-authoring a\nderived value is structurally impossible because the only thing the LLM can\nexpress is a delta on an input field).",
+  "type": "object",
+  "required": [
+    "scope_kind",
+    "scope_id",
+    "patch"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope_kind": {
+      "description": "Decision scope: 'run' (a run's decision journal) or 'campaign'.",
+      "title": "Scope Kind",
+      "type": "string"
+    },
+    "scope_id": {
+      "description": "The scope id — the run_id for a run-scoped decision. Its LATEST committed (response=='y') decision's resolved is the base the patch amends.",
+      "minLength": 1,
+      "title": "Scope Id",
+      "type": "string"
+    },
+    "patch": {
+      "additionalProperties": true,
+      "description": "The field-level delta {field: value} the nudge expressed. Keys must be resolver-owned / caller-authored INPUT fields; a key naming a code-derived field is refused (SpecInvalid) — the verb re-derives job_env/executor/run_id/etc. from the input delta.",
+      "title": "Patch",
+      "type": "object"
+    }
+  }
+}
