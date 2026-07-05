@@ -92,7 +92,7 @@ def schema_for(name: str, side: str, backed_by: dict) -> str | None:
     """
     schemas_dir = _PACKAGE_ROOT / "schemas"
     override = backed_by.get(f"{side}_schema_override")
-    if override and (schemas_dir / override).is_file():
+    if isinstance(override, str) and (schemas_dir / override).is_file():
         return override
     candidates = [
         f"{name.replace('-', '_')}.{side}.json",
