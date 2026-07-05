@@ -303,3 +303,159 @@ def test_gate_does_not_fire_on_nudge_response(tmp_path: Path) -> None:
     _persist_brief(tmp_path, "run-1", "s1", {"resolved": {"cluster": "hoffman2"}})
     out = _append(tmp_path, block="s1", response="no", resolved={"result_dir_template": "x"})
     assert out.record.response == "no"
+
+
+# ─── human-authorship gate (conduct rule 9 extension, proving run #4) ──────────
+
+# Run #4's exact shape: the agent read the executor, invented the sweep,
+# presented it as a recommendation, and the human's bare "y" laundered it
+# into ``resolved`` as "caller-supplied".
+_RUN4_PROPOSAL = "task_generator: items_x_seeds, 20 seeds (0-19), samples=1_000_000"
+_RUN4_TASK_GENERATOR = {"kind": "items_x_seeds", "seeds": 20, "samples": 1_000_000}
+
+
+def test_authorship_gate_refuses_bare_y_committing_proposed_task_generator(
+    tmp_path: Path,
+) -> None:
+    """The proving-run-#4 fire path: bare 'y' + a task_generator that appears
+    only in the agent's proposal is REFUSED, and nothing is journaled."""
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            proposal=_RUN4_PROPOSAL,
+            resolved={"task_generator": _RUN4_TASK_GENERATOR},
+        )
+    msg = str(ei.value)
+    assert "human-authorship gate" in msg
+    assert "task_generator is human-authored" in msg
+    assert "agent's proposal" in msg
+    assert "20" in msg and "1000000" in msg  # the underivable tokens are named
+    # The refused exchange never reaches the journal.
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "run", "scope_id": "run-1"}),
+    )
+    assert result.count == 0
+
+
+def test_authorship_gate_passes_when_response_states_the_sweep(tmp_path: Path) -> None:
+    """Pass path (1): the human's own reply states the value tokens — including
+    a magnitude suffix (1M) and a derived range endpoint (0-49 from 50)."""
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="50 seeds at 1M samples",
+        proposal=_RUN4_PROPOSAL,
+        resolved={
+            "task_generator": {
+                "kind": "items_x_seeds",
+                "seeds": 50,
+                "seed_range": "0-49",
+                "samples": 1_000_000,
+            }
+        },
+    )
+    assert out.record.resolved["task_generator"]["seeds"] == 50
+
+
+def test_authorship_gate_passes_when_prior_nudge_stated_the_sweep(tmp_path: Path) -> None:
+    """Pass paths (2)+(3): a prior human response in scope (here a nudge)
+    stated the value, so a later bare 'y' commits it."""
+    _append(tmp_path, block="s1", response="use 20 seeds at 1M samples each")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        proposal=_RUN4_PROPOSAL,
+        resolved={"task_generator": _RUN4_TASK_GENERATOR},
+    )
+    assert out.record.resolved["task_generator"]["seeds"] == 20
+
+
+def test_authorship_gate_ignores_non_required_caller_fields(tmp_path: Path) -> None:
+    """Pass path (4): fields outside REQUIRED_CALLER_FIELDS are unaffected —
+    a bare 'y' commits auto-resolvable fields exactly as before."""
+    out = _append(tmp_path, block="s1", response="y", resolved={"cluster": "hoffman2"})
+    assert out.record.resolved["cluster"] == "hoffman2"
+
+
+def test_authorship_gate_skips_field_already_human_committed(tmp_path: Path) -> None:
+    """Pass path (5): once the field was committed (through the gate) in a
+    prior record, subsequent decisions restating it are unaffected."""
+    _append(
+        tmp_path,
+        block="s1",
+        response="20 seeds at 1M samples",
+        resolved={"task_generator": _RUN4_TASK_GENERATOR},
+    )
+    out = _append(
+        tmp_path,
+        block="s2",
+        response="y",
+        resolved={"task_generator": _RUN4_TASK_GENERATOR},
+    )
+    assert out.record.resolved["task_generator"] == _RUN4_TASK_GENERATOR
+
+
+def test_authorship_gate_refuses_bare_y_committing_goal(tmp_path: Path) -> None:
+    """goal is free text: the decision that first commits it needs a non-bare
+    reply (or human-text overlap) — a bare 'y' against a proposed goal is
+    refused."""
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            proposal="goal: estimate pi via monte carlo",
+            resolved={"goal": "estimate pi via monte carlo"},
+        )
+    assert "goal is human-authored" in str(ei.value)
+
+
+def test_authorship_gate_passes_goal_on_non_bare_response(tmp_path: Path) -> None:
+    """A substantive human reply on the committing decision passes goal."""
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="yes — estimate pi to 4 decimal places",
+        resolved={"goal": "estimate pi via monte carlo"},
+    )
+    assert out.record.resolved["goal"] == "estimate pi via monte carlo"
+
+
+def test_authorship_gate_passes_goal_stated_in_prior_response(tmp_path: Path) -> None:
+    """A prior human response that overlaps the goal text lets a bare 'y'
+    commit it later."""
+    _append(tmp_path, block="s1", response="the goal is to estimate pi via monte carlo")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={"goal": "estimate pi via monte carlo"},
+    )
+    assert out.record.resolved["goal"] == "estimate pi via monte carlo"
+
+
+def test_authorship_gate_fails_open_on_old_schema_journal(tmp_path: Path) -> None:
+    """Fail-open: prior records exist but none carries a ``response`` key
+    (old-schema journal) — there is no human text to derive from, so the
+    gate does not fire."""
+    import json
+
+    from hpc_agent.state.decision_journal import decisions_path
+
+    path = decisions_path(tmp_path, "run", "run-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"scope_kind": "run", "scope_id": "run-1", "block": "s1"}) + "\n",
+        encoding="utf-8",
+    )
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={"task_generator": _RUN4_TASK_GENERATOR},
+    )
+    assert out.record.resolved["task_generator"] == _RUN4_TASK_GENERATOR

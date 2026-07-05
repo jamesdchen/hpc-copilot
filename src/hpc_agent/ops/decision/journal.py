@@ -11,10 +11,22 @@ into the envelope's ``data`` block.
 audit log, so a replayed append records a second line rather than
 deduping — there is no natural idempotency key (``ts`` is auto-stamped and
 differs per call). ``read-decisions`` is a pure query.
+
+Two trust-seam gates run before an append is persisted: the rule-9
+brief-provenance gate (:func:`_assert_brief_provenance`) and the
+human-authorship gate (:func:`_assert_human_authorship`, proving run #4).
+Both are FRICTION at the seam, not proof — the driving agent authors the
+spec (``response`` included), so a determined agent could fabricate a human
+quote; what they mechanically kill is the observed rationalization class
+(hand-injected fields, bare-``y`` laundering). The true lock — a harness
+hook capturing the human utterance out-of-band — is staged follow-up work,
+the same posture as rule 10's verb-only MVP.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +97,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     experiment_dir = Path(experiment_dir)
     resolved = _default_next_block(experiment_dir, spec)
     _assert_brief_provenance(experiment_dir, spec, resolved)
+    _assert_human_authorship(experiment_dir, spec, resolved)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -270,6 +283,269 @@ def _assert_brief_provenance(
             "provenance.overrides. Do not hand-inject a spec field the brief did "
             "not surface (proving-run-2-hardening §6)."
         )
+
+
+# ── human-authorship gate (conduct rule 9 extension, proving run #4) ──────────
+
+# REQUIRED_CALLER fields whose value is free-text intent (no structured tokens
+# to extract) — checked with the softer non-bare-response / word-overlap rule.
+# Everything else in REQUIRED_CALLER_FIELDS (today: task_generator) is checked
+# by deterministic token derivation.
+_FREE_TEXT_CALLER_FIELDS = frozenset({"goal"})
+
+# Responses that are a bare acknowledgement — they carry no authored content,
+# so they cannot commit a required-caller value that appears only in the
+# agent's proposal. Compared after lowercasing and squashing non-letters.
+_BARE_ACK_RESPONSES = frozenset(
+    {
+        "y",
+        "yes",
+        "yep",
+        "yeah",
+        "ok",
+        "okay",
+        "sure",
+        "fine",
+        "go",
+        "go ahead",
+        "proceed",
+        "continue",
+        "confirm",
+        "confirmed",
+        "approve",
+        "approved",
+        "lgtm",
+        "do it",
+        "sounds good",
+        "looks good",
+    }
+)
+
+
+def _is_bare_ack(response: str) -> bool:
+    """True when *response* is a bare acknowledgement (``y`` / ``ok`` / ...)."""
+    norm = re.sub(r"[^a-z]+", " ", (response or "").lower()).strip()
+    return norm in _BARE_ACK_RESPONSES
+
+
+# Number tokens in human text / field values, adapted from verify-relay's
+# claim-extraction idiom: ints, floats, comma- or underscore-grouped values,
+# plus an attached k/M/B magnitude suffix ("1M samples" states 1_000_000).
+_HA_NUM_RE = re.compile(r"(\d[\d,_]*(?:\.\d+)?)([kKmMbB])?(?![A-Za-z0-9_])")
+_HA_MULTIPLIERS = {"k": 1_000.0, "m": 1_000_000.0, "b": 1_000_000_000.0}
+
+# Word tokens (>= 4 chars) for the free-text overlap check.
+_HA_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{3,}")
+
+
+def _ha_word_tokens(text: str) -> set[str]:
+    return {m.group(0).lower() for m in _HA_WORD_RE.finditer(text or "")}
+
+
+def _human_number_pool(texts: list[str]) -> tuple[set[str], set[float]]:
+    """Every number a human utterance stated, as normalized strings + floats.
+
+    Grouping commas/underscores are normalized away; an attached magnitude
+    suffix contributes the expanded value too (``1M`` → ``1`` and
+    ``1000000``), so "50 seeds at 1M samples" supports ``samples=1_000_000``.
+    """
+    strings: set[str] = set()
+    floats: set[float] = set()
+    for text in texts:
+        for m in _HA_NUM_RE.finditer(text or ""):
+            norm = m.group(1).replace(",", "").replace("_", "")
+            strings.add(norm)
+            try:
+                val = float(norm)
+            except ValueError:
+                continue
+            floats.add(val)
+            suffix = m.group(2)
+            if suffix:
+                expanded = val * _HA_MULTIPLIERS[suffix.lower()]
+                floats.add(expanded)
+                strings.add(str(int(expanded)) if expanded == int(expanded) else str(expanded))
+    return strings, floats
+
+
+def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
+    """Gather every number token a required-caller field VALUE asserts.
+
+    Scalars contribute their value; strings contribute their embedded number
+    tokens (grouping commas/underscores normalized, so ``samples=1_000_000``
+    asserts ``1000000``); dicts contribute their values (keys are schema
+    vocabulary, not claims). Bools are skipped.
+    """
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        val = float(obj)
+        norm = str(int(val)) if val == int(val) else str(val)
+        out.setdefault(norm, val)
+        return
+    if isinstance(obj, str):
+        for m in _HA_NUM_RE.finditer(obj):
+            norm = m.group(1).replace(",", "").replace("_", "")
+            try:
+                out.setdefault(norm, float(norm))
+            except ValueError:
+                continue
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect_value_numbers(v, out)
+        return
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_value_numbers(v, out)
+
+
+def _human_derivable(val: float, norm: str, strings: set[str], floats: set[float]) -> bool:
+    """True when a value number is derivable from the human number pool.
+
+    Derivable means: stated verbatim (normalized-string or float equality),
+    zero (a 0-based range start is derived, never asserted), or an integral
+    off-by-one of a stated count (``seeds (0-19)`` derives from "20 seeds":
+    19 == 20 - 1 — the range-endpoint form of a stated count).
+    """
+    if norm in strings or val in floats:
+        return True
+    if val == 0:
+        return True
+    return val == int(val) and ((val + 1) in floats or (val - 1) in floats)
+
+
+def _assert_human_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Human-authorship gate: refuse committing a REQUIRED_CALLER field whose
+    value has no human-attributed utterance on record.
+
+    Proving run #4: the driving agent FABRICATED a ``task_generator`` ("20
+    seeds × 1M samples") by reading the executor, presented it as a
+    recommendation, and the human's bare ``y`` laundered it into ``resolved``
+    as "caller-supplied". The field partition's no-fabricate lock
+    (:mod:`hpc_agent.ops.submit.field_partition`) held — no safe_default can
+    exist for a required-caller field — but nothing distinguished
+    human-authored from agent-authored caller values at the commit point.
+    This gate closes that seam at ``append-decision``, beside the rule-9
+    brief-provenance gate.
+
+    **Trigger** — the record's ``resolved`` introduces a
+    :data:`~hpc_agent.ops.submit.field_partition.REQUIRED_CALLER_FIELDS`
+    member (imported, never redefined; today ``goal`` / ``task_generator``)
+    for the FIRST time in this scope's journal. A field already present in a
+    prior record's ``resolved`` was gated when it was committed — subsequent
+    decisions are unaffected.
+
+    **Check** — the value must be derivable from HUMAN text: this record's
+    ``response`` plus every prior record's ``response`` in the scope's
+    journal (a prior nudge that stated the sweep authorizes a later bare
+    ``y``).
+
+    * Structured fields (``task_generator``): every number token the value
+      asserts must be human-derivable (:func:`_human_derivable` — verbatim,
+      magnitude-suffixed like ``1M``, zero, or a range endpoint of a stated
+      count). A value with no numbers falls back to the free-text rule.
+    * Free-text fields (``goal``): the committing ``response`` must be
+      non-bare (:func:`_is_bare_ack`), OR the value's word tokens must
+      overlap some human response text.
+
+    **Fail-open** only where the journal genuinely lacks response text: prior
+    records exist and NONE carries a ``response`` key (old-schema journals).
+    An empty/absent value is not a commit and is never gated.
+
+    **Honesty — friction, not proof.** The driving agent authors this spec,
+    ``response`` included, so a determined agent could fabricate a human
+    quote — "a guard the LLM itself satisfies is not a guard"
+    (engineering-principles). What this gate kills is the OBSERVED failure:
+    bare-``y`` laundering, which is rationalization ("the human approved it")
+    rather than fraud (typing words the human never said). Same staged
+    posture as rule 10's verb-only MVP: the true lock — a harness hook
+    capturing the human utterance out-of-band and comparing it here — is the
+    named follow-up. This gate refuses value-commitment without a
+    human-attributed utterance on record; it does not prove human authorship.
+
+    Raises :class:`errors.SpecInvalid` naming the field(s), the underivable
+    token(s), and the remedy (ask the human for the sweep, or the human
+    restates it in their reply).
+    """
+    if not isinstance(resolved, dict) or not resolved:
+        return
+
+    # Import (never redefine) the required-caller partition — one source of
+    # truth with the no-fabricate Ambiguity lock (field_partition docstring).
+    # Reached through the top-level ``field_ownership`` facade via the package
+    # alias form: the direct ``hpc_agent.ops.submit.field_partition`` spelling
+    # trips the subject-import lint from inside the ``decision`` subject (see
+    # scripts/lint_subject_imports.py and the harvest_guard precedent).
+    from hpc_agent.ops import field_ownership as _field_ownership
+
+    candidates = [
+        f
+        for f in sorted(_field_ownership.REQUIRED_CALLER_FIELDS)
+        if f in resolved and resolved[f] not in (None, "", {}, [])
+    ]
+    if not candidates:
+        return
+
+    prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
+    if prior and not any("response" in rec for rec in prior):
+        # Fail-open: an old-schema journal with no response text at all —
+        # there is no human record to derive from OR to contradict.
+        return
+
+    first_commits = [
+        f
+        for f in candidates
+        if not any(isinstance(rec.get("resolved"), dict) and f in rec["resolved"] for rec in prior)
+    ]
+    if not first_commits:
+        return
+
+    human_texts = [str(spec.response or "")]
+    human_texts.extend(str(rec.get("response") or "") for rec in prior)
+    human_num_strings, human_num_floats = _human_number_pool(human_texts)
+    human_words: set[str] = set()
+    for text in human_texts:
+        human_words |= _ha_word_tokens(text)
+    bare = _is_bare_ack(str(spec.response or ""))
+
+    problems: list[str] = []
+    for field in first_commits:
+        value = resolved[field]
+        if field not in _FREE_TEXT_CALLER_FIELDS:
+            value_numbers: dict[str, float] = {}
+            _collect_value_numbers(value, value_numbers)
+            if value_numbers:
+                missing = sorted(
+                    norm
+                    for norm, val in value_numbers.items()
+                    if not _human_derivable(val, norm, human_num_strings, human_num_floats)
+                )
+                if missing:
+                    problems.append(
+                        f"{field} is human-authored: a bare {spec.response!r} cannot "
+                        "commit a value that appears only in the agent's proposal — "
+                        "ask the human for the sweep (or the human restates it in "
+                        f"their reply); value token(s) {missing} derive from no human "
+                        "response in this scope's journal"
+                    )
+                continue
+            # No number tokens — fall through to the free-text rule below.
+        if not bare:
+            continue  # a substantive human reply commits it
+        overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if _ha_word_tokens(overlap_text) & human_words:
+            continue  # the human's own words (this reply or a prior one) state it
+        problems.append(
+            f"{field} is human-authored: a bare {spec.response!r} cannot commit a "
+            "value that appears only in the agent's proposal — ask the human to "
+            f"state the {field} (or the human restates it in their reply)"
+        )
+
+    if problems:
+        raise errors.SpecInvalid("human-authorship gate (conduct rule 9): " + "; ".join(problems))
 
 
 def _chain_successor(block: str) -> str | None:

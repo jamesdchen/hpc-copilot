@@ -29,6 +29,7 @@ __all__ = [
     "SchemaIncompat",
     "Preempted",
     "AlreadyInFlight",
+    "SiblingRunLive",
     "SubmissionIncomplete",
     "SpawnWorkerDied",
     "StructuredOutputError",
@@ -378,6 +379,30 @@ class AlreadyInFlight(HpcError):
 
             remediation = remediation_for("already_in_flight", placeholders=placeholders)
         super().__init__(message, remediation=remediation)
+
+
+class SiblingRunLive(HpcError):
+    """A SIBLING prior run_id — another run in this experiment's journal with
+    the SAME code identity (cmd_sha / node_sha) — is still live (``in_flight``,
+    possibly with a live detached-worker lease), and the submit under a NEW
+    run_id did not name it in ``supersedes``.
+
+    The supersession conduct gate (proving run #4, findings e/g/h): a fresh
+    run_id must never be an escape hatch from the single-lease / provenance
+    rules — when a scope's history is inconvenient, hopping to a new run_id
+    would otherwise make every gate forget. Distinct from
+    :class:`AlreadyInFlight` (same run_id replayed): here the run_id is NEW
+    but the code identity matches a live prior attempt, so the submit must
+    either close the sibling first (``hpc-agent kill --run-id <old>`` /
+    reconcile to terminal) or carry an explicit ``supersedes: "<old>"`` field,
+    which journals the old→new link and triggers closure of the old attempt.
+    """
+
+    # Reuses the ``spec_invalid`` code (same posture as ``AlreadyInFlight``):
+    # adding a new error_code value is a breaking envelope change.
+    error_code = "spec_invalid"
+    retry_safe = False
+    category = "user"
 
 
 class SubmissionIncomplete(HpcError):

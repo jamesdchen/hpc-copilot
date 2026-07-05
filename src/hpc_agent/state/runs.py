@@ -40,6 +40,7 @@ __all__ = [
     "read_run_sidecar",
     "resolve_node_sha",
     "run_sidecar_path",
+    "sidecar_effective_identity",
     "update_run_sidecar_job_ids",
     "write_run_sidecar",
 ]
@@ -539,6 +540,22 @@ def resolve_node_sha(
         ) from exc
 
 
+def sidecar_effective_identity(sidecar: dict[str, Any]) -> str | None:
+    """A run sidecar's EFFECTIVE dedup identity, as ONE definition.
+
+    ``node_sha`` when the run declared parents (params + ancestry,
+    ``docs/design/dag-kernel.md``), else its bare ``cmd_sha`` (the 0-parent
+    degeneracy). This is the same rule :func:`find_run_by_cmd_sha` matches
+    with; the supersession sibling gate (``ops/supersession.py``)
+    routes through it too so the "same code identity" predicate cannot drift
+    between the two consumers (engineering-principles: one definition per
+    identity decision). Returns ``None`` when the sidecar carries neither —
+    identity unknown, never a match.
+    """
+    identity = sidecar.get("node_sha") or sidecar.get("cmd_sha")
+    return str(identity) if identity else None
+
+
 def find_run_by_cmd_sha(
     experiment_dir: Path,
     cmd_sha: str,
@@ -655,7 +672,7 @@ def find_run_by_cmd_sha(
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
-        if (data.get("node_sha") or data.get("cmd_sha")) != query_identity:
+        if sidecar_effective_identity(data) != query_identity:
             continue
         if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
             continue

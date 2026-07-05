@@ -9,6 +9,8 @@
 
 The one field the block cannot invent is `task_generator` (the sweep shape) — when no `tasks.py` exists it surfaces as a required S1 field. Ask the user for the scale-up shape (`items_x_seeds` / `cartesian_product` / `enumerated` / `numeric_linspace`) and fold their answer into the nudge; the framework never invents a sweep.
 
+**`goal` and `task_generator` are HUMAN-AUTHORED — ask, never propose.** When either surfaces as required, ASK the user and wait; do NOT recommend or pre-fill a sweep recipe (seed counts, sample sizes, axes) derived from reading the repo. A table row recommending a sweep the user never stated is a conduct violation, not a convenience.
+
 ## Invocation
 
 Invoke the `hpc-submit` skill via the Skill tool with the initial spec (only the fields the user supplied):

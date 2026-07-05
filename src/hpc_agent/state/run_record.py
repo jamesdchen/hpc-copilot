@@ -314,6 +314,30 @@ class RunRecord:
     kill_confirmed_at: str | None = None
     kill_requested_job_ids: list[str] = dataclasses.field(default_factory=list)
     kill_confirmed_job_ids: list[str] = dataclasses.field(default_factory=list)
+    # ── Supersession conduct (proving run #4, findings e/g/h) ─────────────────
+    # Minting a NEW run_id while a SIBLING prior run_id (same cmd_sha, same
+    # journal home) still has live state must be an explicit, closure-triggering
+    # act — a fresh run_id must never make the lease / provenance gates forget
+    # (`ops/supersession.py`). ``superseded_by`` + ``superseded_at`` are
+    # stamped on the OLD record as the durable evidence of WHY it was closed
+    # (the verdict is revisable; the evidence is durable — engineering-
+    # principles); ``supersedes`` is stamped on the NEW record so the old→new
+    # audit link is queryable in both directions without a scan. The status
+    # write itself goes through ``mark_run`` with the reason recorded in
+    # ``last_status.verdict_reason`` (the same centralized idiom reconcile's
+    # settle arms use), never an ad-hoc status flip. Harmless empty defaults:
+    # a pre-supersession record loads unchanged (``from_dict`` filters).
+    superseded_by: str = ""
+    superseded_at: str | None = None
+    supersedes: str = ""
+    # Non-empty when the superseded run's scheduler jobs could NOT be confirmed
+    # gone at supersession time (no backend cancel affordance, partial kill, or
+    # an unreachable cluster / open circuit breaker). Shape (caller-assembled,
+    # pure I/O layer): {"job_ids": [...], "reason": str, "recorded_at": iso8601}.
+    # Surfaced by status-snapshot (and the doctor's journal reads) rather than
+    # blocking the superseding submit; cleared when a later reconcile confirms
+    # the jobs terminal.
+    pending_closure: dict = dataclasses.field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

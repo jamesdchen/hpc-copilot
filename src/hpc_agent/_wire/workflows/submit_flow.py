@@ -289,6 +289,25 @@ class SubmitFlowSpec(BaseModel):
         ),
     )
     campaign_id: CampaignId | None = Field(default=None)
+    supersedes: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "Explicit supersession of a PRIOR sibling run_id (supersession "
+            "conduct, proving run #4). Submitting a NEW run_id while another "
+            "run in this experiment's journal with the SAME code identity "
+            "(cmd_sha/node_sha) still has live state is refused unless this "
+            "field names that sibling. When set, submit-flow journals the "
+            "old→new audit link (superseded_by on the old record, supersedes "
+            "on the new — queryable both directions), TRIGGERS closure of the "
+            "old attempt and its -canary pairing (kill + verify through the "
+            "backend seam where reachable; otherwise the old record is marked "
+            "abandoned with verdict_reason superseded_by=<new> and a "
+            "pending_closure marker the watchdog/doctor surfaces), and only "
+            "then proceeds. Null = ordinary submit; a live same-identity "
+            "sibling then refuses with the two sanctioned exits (kill/"
+            "reconcile it first, or declare supersedes)."
+        ),
+    )
     parents: list[RunIdStrict] | None = Field(
         default=None,
         min_length=1,
@@ -463,6 +482,21 @@ class SubmitFlowSpec(BaseModel):
     def _canary_only_requires_canary(self) -> SubmitFlowSpec:
         if self.canary_only and not self.canary:
             raise ValueError("canary_only=true requires canary=true (nothing to gate on otherwise)")
+        return self
+
+    @model_validator(mode="after")
+    def _supersedes_names_a_prior_sibling(self) -> SubmitFlowSpec:
+        # A run cannot supersede itself, and the #258 canary pairing of the
+        # SAME run is a co-submitted child, not a prior sibling — both would
+        # otherwise let a confused caller "close" the very state this submit
+        # is creating.
+        if self.supersedes is not None and (
+            self.supersedes == self.run_id or self.supersedes == f"{self.run_id}-canary"
+        ):
+            raise ValueError(
+                f"supersedes={self.supersedes!r} must name a PRIOR sibling run_id, "
+                f"not this submit's own run_id ({self.run_id!r}) or its -canary pairing."
+            )
         return self
 
     @model_validator(mode="after")

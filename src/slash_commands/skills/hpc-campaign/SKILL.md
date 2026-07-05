@@ -20,6 +20,10 @@ The slash `/campaign-hpc` is the human-interview wrapper (path picking, slug, sp
   ```bash
   hpc-agent campaign-greenlight --spec <path> --experiment-dir <dir>
   ```
+  `--spec` takes a **file path only** — inline JSON (`--spec '{...}'`) is refused at the seam. Literally: `Write` the spec JSON to `.hpc/specs/campaign-greenlight.json`, then run
+  ```bash
+  hpc-agent campaign-greenlight --spec .hpc/specs/campaign-greenlight.json --experiment-dir .
+  ```
   Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` (or the MCP tool's `inputSchema`) — never `find`/`cat`/`inspect` a schema file.
 
 ## The driver loop

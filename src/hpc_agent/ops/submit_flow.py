@@ -2224,6 +2224,24 @@ def _submit_flow_batch_locked(
         # otherwise be needed because mypy can't see the None elimination.
         return [r for r in results if r is not None]
 
+    # Supersession conduct (proving run #4, findings e/g/h): a NEW run_id
+    # submitted while a SIBLING prior run_id with the SAME code identity
+    # (cmd_sha/node_sha) still has live state must either be refused (the
+    # structured SiblingRunLive refusal names the sibling and the two exits)
+    # or carry an explicit `supersedes` field — in which case the gate
+    # journals the old→new link and closes the old attempt through the kill/
+    # reconcile machinery BEFORE any of this batch's cluster traffic. Runs
+    # here, in the pre-rsync prelude next to the other pre-submit guards
+    # (#191 / provenance drift), on journal-home reads only (no SSH unless a
+    # declared supersession actually closes something).
+    from hpc_agent.ops.supersession import (
+        apply_supersession_gate,
+        stamp_supersedes_on_new,
+    )
+
+    for i in fresh_indices:
+        apply_supersession_gate(experiment_dir, specs[i])
+
     # Guarantee the cluster-required per-run sidecar exists for every
     # fresh spec BEFORE rsync — submit-flow owns this artifact rather than
     # trusting a prior step to have written it. Missing + synthesizable →
@@ -2298,6 +2316,17 @@ def _submit_flow_batch_locked(
     for i in fresh_indices:
         try:
             results[i] = _submit_one_spec(experiment_dir=experiment_dir, spec=specs[i])
+            # Forward half of the supersession audit link: the backward
+            # (superseded_by) half was journaled by the gate BEFORE any
+            # cluster traffic; stamp `supersedes` on the just-landed new
+            # record so the new→old direction is readable without a scan.
+            superseded_run_id = specs[i].supersedes
+            if superseded_run_id:
+                stamp_supersedes_on_new(
+                    experiment_dir,
+                    new_run_id=specs[i].run_id,
+                    old_run_id=superseded_run_id,
+                )
         except Exception as exc:
             # Mutate the exception to carry the partial results. The
             # caller can branch on ``hasattr(exc, "partial_submit_results")``

@@ -30,8 +30,17 @@ from typing import Literal
 
 from hpc_agent.infra.block_chain import block_index
 
+# Re-exported so subject files (e.g. ``ops/decision/journal.py``'s
+# human-authorship gate) can reach the required-caller partition through this
+# TOP-LEVEL facade via the package alias form (``from hpc_agent.ops import
+# field_ownership``) — the direct ``hpc_agent.ops.submit.field_partition``
+# import trips the subject-import lint from inside another subject. One
+# source of truth: this binds, never copies, the partition's frozenset.
+from hpc_agent.ops.submit.field_partition import REQUIRED_CALLER_FIELDS
+
 __all__ = [
     "OWNERSHIP",
+    "REQUIRED_CALLER_FIELDS",
     "field_owner",
     "route",
 ]

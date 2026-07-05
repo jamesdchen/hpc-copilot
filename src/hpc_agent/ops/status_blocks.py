@@ -147,10 +147,21 @@ def _digest_run(record: Any) -> dict[str, Any]:
     the brief surfaces it as the parent's child rather than a mystery run.
     """
     parent_run_id = canary_parent_of(record.run_id)
+    superseded_by = getattr(record, "superseded_by", "") or None
     return {
         "run_id": record.run_id,
         "is_canary": parent_run_id is not None,
         "parent_run_id": parent_run_id,
+        # Supersession conduct: a record closed because a NEW run_id explicitly
+        # superseded it displays as superseded (its ``status`` stays the honest
+        # journal verdict, typically ``abandoned`` with verdict_reason
+        # superseded_by=<new>), and is excluded from the anomaly list — it was
+        # deliberately closed, not lost. ``pending_closure`` (non-empty when the
+        # old scheduler jobs could not be confirmed gone at supersession time)
+        # rides along so the brief surfaces the outstanding cleanup.
+        "superseded_by": superseded_by,
+        "is_superseded": superseded_by is not None,
+        "pending_closure": dict(getattr(record, "pending_closure", {}) or {}),
         "cluster": record.cluster,
         "ssh_target": record.ssh_target,
         "status": record.status,
@@ -240,7 +251,10 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     anomalies = [
         {**row, "recommendation": _recommendation_for(row["status"])}
         for row in running_where
-        if row["status"] in _ANOMALY_STATUSES
+        # A superseded record is a deliberate closure (superseded_by names the
+        # replacement), not an anomaly needing a recovery decision — it
+        # displays as superseded, never as failed/abandoned-needs-attention.
+        if row["status"] in _ANOMALY_STATUSES and not row["is_superseded"]
     ]
 
     # 4. Stalled-driver evidence (§5 dead-man's switch) — a live run whose

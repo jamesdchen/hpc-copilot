@@ -71,6 +71,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "RemoteCommandFailed",
         "SchedulerThrottled",
         "SchemaIncompat",
+        "SiblingRunLive",
         "SpawnWorkerDied",
         "SpecInvalid",
         "SshCircuitOpen",

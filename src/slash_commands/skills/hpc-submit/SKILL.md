@@ -20,7 +20,10 @@ The slash `/submit-hpc` is the human-interview wrapper; an external autonomous a
   ```bash
   hpc-agent submit-s1 --spec <path> --experiment-dir <dir>
   ```
-  Write the spec JSON with the `Write` tool and pass `--spec <path>` (never inline a shell-hostile JSON string). Parse the block envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` (or the MCP tool's `inputSchema`) — never `find`/`cat`/`inspect` a schema file.
+  Write the spec JSON with the `Write` tool and pass `--spec <path>` (never inline a shell-hostile JSON string). `--spec` takes a **file path only** — inline JSON (`--spec '{...}'`) is refused at the seam. Literally: `Write` the spec JSON to `.hpc/specs/submit-s1.json`, then run
+  ```bash
+  hpc-agent submit-s1 --spec .hpc/specs/submit-s1.json --experiment-dir .
+  ``` Parse the block envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` (or the MCP tool's `inputSchema`) — never `find`/`cat`/`inspect` a schema file.
 
 ## The driver loop
 
@@ -35,6 +38,10 @@ The slash `/submit-hpc` is the human-interview wrapper; an external autonomous a
    hpc-agent append-decision --spec <path> --experiment-dir <dir>
    ```
    `scope_kind: "run"`, `scope_id: <run_id>`, `block: <the block that terminated>`, `evidence_digest: <brief>`, `proposal: <what you surfaced>`, `response: "y"`, and the approved input spec under `resolved` — the block-gate (`ops/block_gate.py`, `assert_greenlit_target`) and the driver read exactly this (a spec, never the nudge string), so the record is load-bearing, not bookkeeping. **Do not end your turn after committing without firing the next tick** — the decision-rendezvous Stop-hook (design §5) blocks the stop until the driver advances.
+
+**`goal` and `task_generator` are HUMAN-AUTHORED — ask, never propose.** The run's goal and the sweep recipe (seed counts, sample sizes, axes) come only from the human: when the S1 brief surfaces either as a required field, ASK and wait for the answer. NEVER derive, recommend, or pre-fill a value for them from reading the repo — a table row recommending a sweep the human never stated is a conduct violation (proving run #4 fabricated "20 seeds" exactly this way), the same fabricated-field bug class as hand-editing a derived output.
+
+**A spec-changing nudge supersedes the prior attempt — close it out FIRST.** When a nudge changes cluster or resources after staging or submit (S2/S3), the earlier attempt does not vanish on its own: kill or reconcile it, or name it via the supersedes mechanism in the new spec, BEFORE re-submitting. Minting a fresh `run_id` cleans up nothing — proving run #4 orphaned three attempts this way, leaving staged trees and queued jobs live under abandoned run_ids.
 
 Anomaly terminators (`stage_reached` = `canary_failed` / `watching_anomaly`) are genuine human branches (resubmit-failed / reconcile / kill) with no single deterministic successor — the driver surfaces the anomaly brief and the human's nudge names the recovery action. **NEVER hand-compute a decision or interpret raw results:** code (the blocks the driver composes) digests the evidence into the brief; the human decides; you only translate at the rendezvous. This extends the #355 doctrine ("results are never computed by an LLM") from computing to *concluding*.
 

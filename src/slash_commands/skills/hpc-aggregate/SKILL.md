@@ -22,6 +22,10 @@ The slash `/aggregate-hpc` is the human-interview wrapper; an external autonomou
   ```bash
   hpc-agent aggregate-check --spec <path> --experiment-dir <dir>
   ```
+  `--spec` takes a **file path only** — inline JSON (`--spec '{...}'`) is refused at the seam. Literally: `Write` the spec JSON to `.hpc/specs/aggregate-check.json`, then run
+  ```bash
+  hpc-agent aggregate-check --spec .hpc/specs/aggregate-check.json --experiment-dir .
+  ```
   Parse the envelope from stdout. Read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` (or the MCP tool's `inputSchema`) — never `find`/`cat`/`inspect` a schema file.
 
 ## The driver loop

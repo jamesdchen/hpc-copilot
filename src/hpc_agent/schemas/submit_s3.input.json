@@ -423,6 +423,20 @@
           "default": null,
           "title": "Campaign Id"
         },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit supersession of a PRIOR sibling run_id (supersession conduct, proving run #4). Submitting a NEW run_id while another run in this experiment's journal with the SAME code identity (cmd_sha/node_sha) still has live state is refused unless this field names that sibling. When set, submit-flow journals the old→new audit link (superseded_by on the old record, supersedes on the new — queryable both directions), TRIGGERS closure of the old attempt and its -canary pairing (kill + verify through the backend seam where reachable; otherwise the old record is marked abandoned with verdict_reason superseded_by=<new> and a pending_closure marker the watchdog/doctor surfaces), and only then proceeds. Null = ordinary submit; a live same-identity sibling then refuses with the two sanctioned exits (kill/reconcile it first, or declare supersedes).",
+          "title": "Supersedes"
+        },
         "parents": {
           "anyOf": [
             {
