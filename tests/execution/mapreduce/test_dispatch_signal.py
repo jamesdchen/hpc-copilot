@@ -98,7 +98,10 @@ class TestIdempotencySkip:
         sentinel = tmp_path / "executor_ran.flag"
         hpc = _scaffold(
             tmp_path,
-            executor=f'touch "{sentinel}"',
+            # finding-16: the executor must also write a per-task result to
+            # $RESULT_DIR (else exit 4). `touch` proves it RAN; the metrics
+            # write makes the exit clean so this test still asserts code == 0.
+            executor=f'touch "{sentinel}"; echo {{}} > "$RESULT_DIR/metrics.json"',
             result_dir_template=str(result_root / "{task_id}"),
             kwargs_per_task=[{}],
         )
@@ -127,7 +130,9 @@ class TestIdempotencySkip:
         sentinel = tmp_path / "executor_ran.flag"
         hpc = _scaffold(
             tmp_path,
-            executor=f'touch "{sentinel}"',
+            # finding-16: write a per-task result to $RESULT_DIR (else exit 4);
+            # `touch` proves the executor ran, the metrics write keeps exit 0.
+            executor=f'touch "{sentinel}"; echo {{}} > "$RESULT_DIR/metrics.json"',
             result_dir_template=str(result_root / "{task_id}"),
             kwargs_per_task=[{}],
         )
@@ -406,7 +411,10 @@ class TestPreemptionSignalTrap:
         result_root = tmp_path / "results"
         hpc = _scaffold(
             tmp_path,
-            executor="echo ok",
+            # finding-16: the executor must write a per-task result to
+            # $RESULT_DIR or it is a task failure (exit 4). This test asserts a
+            # clean exit-0 fallback, so the executor produces a real result.
+            executor='echo ok > "$RESULT_DIR/metrics.json"',
             result_dir_template=str(result_root / "{task_id}"),
             kwargs_per_task=[{}],
         )
@@ -437,7 +445,7 @@ class TestPreemptionSignalTrap:
                 proc.wait()
                 pytest.fail("dispatcher hung on bad HPC_PREEMPT_GRACE_SEC")
 
-        # Executor printed "ok" → exit 0; no crash from int("abc").
+        # Executor wrote its result → exit 0; no crash from int("abc").
         assert proc.returncode == 0, stderr_log.read_bytes()
 
     def test_kill_escalation_when_executor_ignores_sigint_and_sigterm(self, tmp_path):

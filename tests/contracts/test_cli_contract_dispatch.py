@@ -122,7 +122,15 @@ class TestPipelineHappyPath:
         "genuine test-harness constraints tied to the cluster execution model",
     )
     def test_v1_layout_dispatches_cleanly(self, tmp_path: Path) -> None:
-        dispatch = _stub_layout(tmp_path, schema_version=1)
+        # finding-16: a valid executor must write its per-task result to
+        # $RESULT_DIR — an exit-0 that promotes nothing is now a task failure
+        # (exit 4). The stub's default `python -c 'pass'` writes nothing, so a
+        # "clean dispatch" fixture must produce a real result file.
+        dispatch = _stub_layout(
+            tmp_path,
+            schema_version=1,
+            executor='echo {} > "$RESULT_DIR/metrics.json"',
+        )
         proc = _run(
             dispatch_path=dispatch,
             cwd=tmp_path,
