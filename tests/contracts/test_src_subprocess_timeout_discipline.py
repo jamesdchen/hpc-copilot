@@ -57,6 +57,13 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # the select loop via `_communicate_select(timeout=...)`. These are the
     # seams `ssh_run` funnels through; callers inherit the discipline.
     "src/hpc_agent/infra/remote.py": {"_capture_windows", "_capture_via_select"},
+    # The cross-platform bounded-capture wrapper (2026-07-05 Hoffman2 orphan
+    # fix). The Popen is immediately bounded by `communicate(timeout=...)`, and
+    # on timeout the WHOLE process tree is killed (POSIX `os.killpg` / Windows
+    # `taskkill /T`) before a bounded drain — so no grandchild (a shelled
+    # `hpc-agent` → `ssh`) can hold the stdout pipe past the deadline. Sibling
+    # to remote.py's capture seams; the composite-preflight verbs funnel here.
+    "src/hpc_agent/infra/bounded_subprocess.py": {"run_capture_bounded"},
     # Deliberately detached workers (the `_spawn_detached` path): the child
     # is MEANT to outlive this process; its lifetime is bounded by the
     # single-lease + doctor-watchdog machinery, not by a parent-side wait.

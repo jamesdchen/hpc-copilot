@@ -45,6 +45,7 @@ from typing import Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 
 __all__ = [
     "SubCall",
@@ -180,13 +181,7 @@ def _run_subprocess(call: SubCall, *, timeout_sec: float) -> dict[str, Any]:
     """
     started = time.monotonic()
     try:
-        proc = subprocess.run(
-            call.argv,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout_sec,
-        )
+        proc = run_capture_bounded(call.argv, timeout_sec=timeout_sec)
     except subprocess.TimeoutExpired:
         return _synth_error_subresult(
             error_code="cluster_timeout",
