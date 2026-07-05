@@ -136,6 +136,19 @@ def _write_tasks_py(exp: Path, resolve_body: str = "{'seed': i}") -> None:
     )
 
 
+def _true_identity(exp: Path, run_name: str = "demo") -> dict[str, object]:
+    """The ground-truth identity for *exp*'s tasks.py, via compute-run-id —
+    what a truthful caller threads into write-run-sidecar (run #6 F1)."""
+    from hpc_agent.incorporation.build.compute_run_id import compute_run_id
+
+    truth = compute_run_id(exp, run_name=run_name)
+    return {
+        "run_id": truth["run_id"],
+        "cmd_sha": truth["cmd_sha"],
+        "task_count": truth["total"],
+    }
+
+
 class TestPerTaskExecutorGuard:
     """The dispatcher reads ``sidecar.executor`` and runs it per task verbatim,
     so a broken command fails silently cluster-side. Both shapes below are from
@@ -163,12 +176,15 @@ class TestPerTaskExecutorGuard:
 
     def test_correct_per_task_executor_accepted(self, tmp_path: Path) -> None:
         # No false positive on the canonical command: uppercase $SEED + $RESULT_DIR.
+        # With tasks.py present the identity cross-check runs too, so the spec
+        # must be TRUTHFUL (run #6 F1: placeholder identity is now refused).
         _write_tasks_py(tmp_path)
         spec = _spec(
             executor=(
                 "python executors/monte_carlo_pi.py --seed $SEED "
                 '--output-file "$RESULT_DIR/metrics.json"'
-            )
+            ),
+            **_true_identity(tmp_path),
         )
         out = write_run_sidecar(experiment_dir=tmp_path, spec=spec)
         assert Path(out["path"]).is_file()
@@ -242,3 +258,62 @@ def test_trial_params_omitted_when_absent(tmp_path: Path) -> None:
 
 # Import Path lazily for the runtime branches above (TYPE_CHECKING gate).
 from pathlib import Path  # noqa: E402
+
+
+class TestIdentityCrossCheck:
+    """Finding 21 at the CLI surface (run #6 F1 family): cmd_sha / task_count /
+    run_id must agree with the materialized task list when .hpc/tasks.py
+    exists. Refuse-on-provable-miss only: no tasks.py -> unchecked (the
+    happy-path tests above); -canary run_ids exempt (the mirror owns them)."""
+
+    def test_wrong_task_count_refused(self, tmp_path: Path) -> None:
+        _write_tasks_py(tmp_path)  # total() == 3
+        ident = _true_identity(tmp_path)
+        ident["task_count"] = 4
+        with pytest.raises(errors.SpecInvalid, match=r"tasks\.total"):
+            write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**ident))
+        assert not (tmp_path / ".hpc" / "runs").exists()
+
+    def test_wrong_cmd_sha_refused(self, tmp_path: Path) -> None:
+        _write_tasks_py(tmp_path)
+        ident = _true_identity(tmp_path)
+        ident["cmd_sha"] = "0" * 64
+        ident["run_id"] = "demo-" + "0" * 8  # consistent with the (wrong) sha
+        with pytest.raises(errors.SpecInvalid, match="dedup"):
+            write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**ident))
+
+    def test_conventional_run_id_with_wrong_suffix_refused(self, tmp_path: Path) -> None:
+        _write_tasks_py(tmp_path)
+        ident = _true_identity(tmp_path)
+        ident["run_id"] = "demo-" + "a" * 8  # claims the convention, wrong hex
+        with pytest.raises(errors.SpecInvalid, match="convention"):
+            write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**ident))
+
+    def test_truthful_identity_accepted(self, tmp_path: Path) -> None:
+        _write_tasks_py(tmp_path)
+        out = write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**_true_identity(tmp_path)))
+        assert Path(out["path"]).is_file()
+
+    def test_cmd_sha_prefix_form_accepted(self, tmp_path: Path) -> None:
+        # The wire model admits the 8-char prefix; a TRUE prefix passes.
+        _write_tasks_py(tmp_path)
+        ident = _true_identity(tmp_path)
+        ident["cmd_sha"] = str(ident["cmd_sha"])[:8]
+        out = write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**ident))
+        assert Path(out["path"]).is_file()
+
+    def test_nonconventional_run_id_makes_no_identity_claim(self, tmp_path: Path) -> None:
+        # No trailing 8-hex token -> only cmd_sha/task_count are checked.
+        _write_tasks_py(tmp_path)
+        ident = _true_identity(tmp_path)
+        ident["run_id"] = "freeform_name"
+        out = write_run_sidecar(experiment_dir=tmp_path, spec=_spec(**ident))
+        assert Path(out["path"]).is_file()
+
+    def test_canary_run_id_exempt(self, tmp_path: Path) -> None:
+        # The canary sidecar mirrors the MAIN run (task_count=1, main cmd_sha);
+        # its identity is not independently derivable from tasks.py.
+        _write_tasks_py(tmp_path)
+        spec = _spec(run_id="demo-deadbeef-canary", cmd_sha="0" * 64, task_count=1)
+        out = write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+        assert Path(out["path"]).is_file()

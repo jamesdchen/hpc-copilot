@@ -35,6 +35,83 @@ from hpc_agent.state.runs import resolve_node_sha
 from hpc_agent.state.runs import write_run_sidecar as _write_run_sidecar
 
 
+def _assert_identity_matches_tasks(experiment_dir: Path, spec: WriteRunSidecarInput) -> None:
+    """Cross-check the spec's identity fields against the materialized task list.
+
+    Finding 21 extended to the direct CLI surface (run #6 F1 family):
+    ``cmd_sha`` / ``task_count`` / ``run_id`` are CODE-DERIVED identity —
+    ``compute-run-id`` derives them from ``.hpc/tasks.py``, the one place the
+    task list is materialized — yet this primitive (the documented sidecar
+    write-first unblock path) accepted them verbatim. A hand-authored
+    undercount sizes the job array short and silently drops tasks; a wrong
+    ``cmd_sha`` corrupts the dedup/resume identity.
+
+    Refuse-on-provable-miss posture only:
+
+    * ``.hpc/tasks.py`` absent → no truth to check against; today's behavior
+      stands (hand-written setups without a task list are a documented case).
+    * malformed ``tasks.py`` → proves nothing here; the submit path owns
+      surfacing that (skip, never mask it as an identity mismatch).
+    * a ``-canary`` run_id (the one #258 suffix predicate,
+      ``reconcile.canary_parent_of``) is exempt: the canary sidecar is the
+      MAIN run's mirror (``task_count=1``, main's cmd_sha) written by
+      ``submit_flow._mirror_canary_sidecar`` via the state layer, and its
+      identity is the main's — not independently derivable from tasks.py.
+    * ``run_id`` is checked only when its trailing ``-<8-hex>`` token CLAIMS
+      the ``compute-run-id`` convention (``<run_name>-<cmd_sha[:8]>``); a
+      non-conventional name makes no identity claim (``cmd_sha`` itself is
+      still cross-checked, and that is the real dedup key).
+
+    Raises :class:`errors.SpecInvalid` naming the declared value(s), the
+    ground truth, and the fix (thread ``compute-run-id``'s outputs).
+    """
+    from hpc_agent.ops.monitor.reconcile import canary_parent_of
+
+    if canary_parent_of(spec.run_id) is not None:
+        return
+    if not (Path(experiment_dir) / ".hpc" / "tasks.py").is_file():
+        return
+    from hpc_agent.incorporation.build.compute_run_id import compute_run_id
+
+    run_name = spec.run_id.rsplit("-", 1)[0] or spec.run_id
+    try:
+        truth = compute_run_id(Path(experiment_dir), run_name=run_name)
+    except errors.SpecInvalid:
+        return  # malformed tasks.py proves nothing here; the submit path surfaces it
+
+    true_sha: str = truth["cmd_sha"]
+    true_total: int = truth["total"]
+    problems: list[str] = []
+    if spec.task_count != true_total:
+        problems.append(
+            f"task_count={spec.task_count} but .hpc/tasks.py produces {true_total} "
+            "tasks (tasks.total()) — an undercount sizes the job array short and "
+            "silently drops the higher task_ids (finding 21)"
+        )
+    if not true_sha.startswith(spec.cmd_sha):
+        problems.append(
+            f"cmd_sha={spec.cmd_sha!r} but the materialized task list hashes to "
+            f"{true_sha!r} (compute-run-id) — a wrong cmd_sha corrupts the "
+            "dedup/resume identity (find-prior-run keys on it)"
+        )
+    tail = spec.run_id.rsplit("-", 1)[-1]
+    if len(tail) == 8 and all(c in "0123456789abcdef" for c in tail) and tail != true_sha[:8]:
+        problems.append(
+            f"run_id={spec.run_id!r} claims the <run_name>-<cmd_sha[:8]> convention "
+            f"but the true prefix is {true_sha[:8]!r} (expected "
+            f"{run_name + '-' + true_sha[:8]!r})"
+        )
+    if problems:
+        raise errors.SpecInvalid(
+            "write-run-sidecar refused — declared run identity disagrees with the "
+            "materialized task list: " + "; ".join(problems) + ". These fields are "
+            "CODE-DERIVED (run #6 F1): do not hand-author them — run `hpc-agent "
+            "compute-run-id --run-name <name>` and thread its run_id/cmd_sha/total "
+            "into this spec verbatim (or let resolve-submit-inputs write the "
+            "sidecar for you)."
+        )
+
+
 @primitive(
     name="write-run-sidecar",
     verb="mutate",
@@ -75,7 +152,11 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         uppercased ``$SEED``). The fix is the REAL per-task command with
         ``$RESULT_DIR`` for output and ``$<NAME>`` (uppercase) for kwargs
         — e.g. ``python train.py --seed $SEED --output-file
-        "$RESULT_DIR/metrics.json"``.
+        "$RESULT_DIR/metrics.json"``. Also raised when ``.hpc/tasks.py``
+        exists and the declared ``cmd_sha`` / ``task_count`` / ``run_id``
+        disagree with the materialized task list
+        (:func:`_assert_identity_matches_tasks` — finding 21 at the CLI
+        surface; thread ``compute-run-id``'s outputs instead).
     """
     # The cluster dispatcher reads THIS executor and runs it per task verbatim,
     # so a broken command fails silently cluster-side. Refuse str.format
@@ -98,6 +179,12 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
             "`python train.py --seed $SEED`); the dispatcher path belongs "
             "in the submit-flow spec's job_env['EXECUTOR'], not here (#162)."
         )
+
+    # Identity cross-check LAST among the guards (after the executor checks, so
+    # a broken command surfaces its own precise remedy first): cmd_sha /
+    # task_count / run_id must agree with the materialized task list when
+    # .hpc/tasks.py exists (finding 21 at the CLI surface, run #6 F1 family).
+    _assert_identity_matches_tasks(Path(experiment_dir), spec)
 
     target = _write_run_sidecar(
         Path(experiment_dir),
