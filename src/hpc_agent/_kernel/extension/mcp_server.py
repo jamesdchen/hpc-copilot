@@ -105,13 +105,22 @@ _RUN_PRIMITIVE_TOOL = "run-primitive"
 # The ``curated`` catalog's fixed extras: the recovery verbs (``doctor`` detects
 # stalled/orphaned runs, ``kill`` the request→confirm kill, ``net-triage`` the
 # bounded connectivity differential — the 2026-07-05 incident's missing tool)
-# plus the ``submit-speculate`` opt-in touchpoint. These are stable
-# human-amplification surfaces that are NOT blocks (their Result models carry
-# no ``next_block``), so they are unioned in explicitly. Everything else in
-# ``curated`` is DERIVED (see :func:`_declares_next_block`) — a block is any
-# verb whose Result model declares a ``next_block`` field, so adding/removing
-# that field moves a verb in/out of the curated set with no edit here.
-_CURATED_EXTRA_VERBS = frozenset({"doctor", "kill", "net-triage", "submit-speculate"})
+# plus the ``submit-speculate`` opt-in touchpoint — AND the human-amplification
+# LOOP surfaces the block verbs are driven through: ``block-drive`` (the chain
+# driver the skills invoke — one stateless tick that parks or detaches, so it is
+# MCP-safe, never a multi-hour blocking call) and ``append-decision`` (the
+# greenlight commit). Without these two, an MCP-first agent reaches the block
+# verbs but not the DRIVER or the COMMIT, so it drops to raw CLI for the core
+# loop and hand-authors specs — reintroducing the finding-13/17 corruption class
+# (run #6). These are stable human-amplification surfaces that are NOT blocks
+# (their Result models carry no ``next_block``), so they are unioned in
+# explicitly. Everything else in ``curated`` is DERIVED (see
+# :func:`_declares_next_block`) — a block is any verb whose Result model declares
+# a ``next_block`` field, so adding/removing that field moves a verb in/out of
+# the curated set with no edit here.
+_CURATED_EXTRA_VERBS = frozenset(
+    {"doctor", "kill", "net-triage", "submit-speculate", "block-drive", "append-decision"}
+)
 
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.
@@ -802,9 +811,13 @@ class McpServer:
             )
         elif self._catalog == "curated":
             catalog_note = (
-                "Curated catalog: only the human-amplification block verbs (each "
-                "returns a next_block suggestion) plus the recovery/opt-in verbs "
-                "(doctor, kill, submit-speculate) are exposed as typed tools."
+                "Curated catalog: the human-amplification block verbs (each "
+                "returns a next_block suggestion), the loop driver `block-drive` "
+                "and the greenlight commit `append-decision`, plus the "
+                "recovery/opt-in verbs (doctor, kill, net-triage, submit-speculate) "
+                "are exposed as typed tools. Drive the submit/aggregate/campaign "
+                "loops via `block-drive` and commit each `y` via `append-decision` "
+                "— do not hand-author specs on the CLI."
             )
         else:
             catalog_note = "Each read-only primitive is exposed as its own typed tool."

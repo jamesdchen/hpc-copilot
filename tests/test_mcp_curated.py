@@ -36,12 +36,21 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     # so the assertion tracks whatever set N marked — never a hardcoded list.
     allowed = M.allowed_primitives(get_registry(), allow_mutations=True)
     derived = {n for n, meta in allowed.items() if M._declares_next_block(meta)}
-    expected = derived | {"doctor", "kill", "net-triage", "submit-speculate"}
+    expected = derived | {
+        "doctor",
+        "kill",
+        "net-triage",
+        "submit-speculate",
+        "block-drive",
+        "append-decision",
+    }
 
     assert names == expected
-    # Sanity anchors: block verbs are in; a non-block read verb is out.
+    # Sanity anchors: block verbs are in; the loop driver + commit are in; a
+    # non-block read verb is out.
     assert {"submit-s2", "submit-s3", "submit-s4"} <= names
     assert {"doctor", "kill", "net-triage", "submit-speculate"} <= names
+    assert {"block-drive", "append-decision"} <= names
     assert "clusters" not in names
 
 

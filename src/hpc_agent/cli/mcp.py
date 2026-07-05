@@ -80,9 +80,10 @@ def register(sub: argparse._SubParsersAction) -> None:
             "full (default): one typed tool per read-only primitive. tiered: "
             "expose only find/describe/run-primitive so per-tool schemas stay out "
             "of the model's context (mirrors the CLI's find->describe->invoke flow). "
-            "curated: only the human-amplification block verbs (those returning a "
-            "next_block) plus the recovery/opt-in verbs (doctor, kill, "
-            "submit-speculate) — the surface install-commands registers."
+            "curated: the human-amplification block verbs (those returning a "
+            "next_block), the loop driver block-drive + the greenlight commit "
+            "append-decision, plus the recovery/opt-in verbs (doctor, kill, "
+            "net-triage, submit-speculate) — the surface install-commands registers."
         ),
     )
     p.set_defaults(func=cmd_mcp_serve)
