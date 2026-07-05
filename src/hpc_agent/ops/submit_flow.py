@@ -960,27 +960,63 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     )
 
 
+# The dispatch-essential sidecar fields the canary must share with the main
+# run — the canary's contract is "dispatch the SAME command as the main run",
+# and these are exactly the fields that determine what dispatches and where
+# it lands (run #6 F1 follow-up): the per-task command, the result contract,
+# the parameter identity, the activation snapshot, and the cluster/staging
+# coordinates the control-plane reporter derives activation from (#176).
+_CANARY_MIRROR_ESSENTIALS: tuple[str, ...] = (
+    "executor",
+    "result_dir_template",
+    "cmd_sha",
+    "env",
+    "cluster",
+    "remote_path",
+)
+
+
 def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
-    """Ensure the canary's per-run sidecar exists by mirroring the main run's.
+    """Ensure the canary's per-run sidecar exists AND matches the main run's.
 
     The dispatcher hard-requires ``.hpc/runs/<run_id>.json``; the canary uses
     run_id ``<main>-canary``, which Step 6d never writes and
     :func:`_ensure_run_sidecar` only covers for the main spec — so the canary
     errored ``sidecar not found`` and the gate was a no-op (#160 / #162). Copy
     the main sidecar's per-task executor + result_dir_template to the canary
-    path (``task_count=1``) so the canary dispatches the SAME command. No-op
-    when the canary sidecar already exists or the main one is unreadable.
+    path (``task_count=1``) so the canary dispatches the SAME command.
+
+    Staleness (run #6 F1 follow-up): the original pure-existence no-op meant a
+    corrected/re-resolved MAIN sidecar never propagated — the re-canary re-ran
+    the OLD broken command. And because ``cmd_sha`` is PARAM identity only, an
+    executor fix does not change run_id, so even the sanctioned
+    ``revise-resolved`` rail landed on the same stale canary path. Now: when
+    the canary sidecar already exists, compare the dispatch-essential fields
+    (:data:`_CANARY_MIRROR_ESSENTIALS`) against the main sidecar — identical →
+    no-op (idempotent as before); divergent → RE-MIRROR from the main (the
+    canary must dispatch the SAME command as the main run, which is this
+    function's contract). Best-effort posture preserved: an unreadable main
+    sidecar is a silent no-op either way.
     """
     from hpc_agent.infra.time import utcnow_iso
     from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
 
-    target = run_sidecar_path(experiment_dir, canary_run_id)
-    if target.is_file() and target.stat().st_size > 0:
-        return
     try:
         main = read_run_sidecar(experiment_dir, main_run_id)
     except Exception:  # noqa: BLE001 — best-effort mirror; a missing main is handled below
         return
+    target = run_sidecar_path(experiment_dir, canary_run_id)
+    if target.is_file() and target.stat().st_size > 0:
+        try:
+            existing = read_run_sidecar(experiment_dir, canary_run_id)
+        except Exception:  # noqa: BLE001 — an unreadable canary sidecar is re-mirrored below
+            existing = None
+        if existing is not None and all(
+            existing.get(k) == main.get(k) for k in _CANARY_MIRROR_ESSENTIALS
+        ):
+            return  # in sync — the idempotent no-op
+        # Divergent (or corrupt) canary sidecar: fall through and re-mirror so
+        # the canary dispatches the main run's CURRENT command, not a stale one.
     executor = main.get("executor")
     result_dir_template = main.get("result_dir_template")
     if not executor or not result_dir_template:

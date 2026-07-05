@@ -71,6 +71,68 @@ def test_mirror_canary_sidecar_copies_executor_with_task_count_1(tmp_path) -> No
     assert csc["task_count"] == 1
 
 
+def test_mirror_canary_sidecar_remirrors_on_divergent_main(tmp_path) -> None:
+    """Run #6 F1 follow-up: a corrected/re-resolved MAIN sidecar must propagate.
+
+    The original pure-existence no-op preserved a stale canary sidecar, so the
+    re-canary re-ran the OLD broken executor (empirical: the hand-fixed
+    ``monte_carlo_pi`` run re-failed exit-127 until the canary sidecar was
+    hand-deleted). cmd_sha is PARAM identity, so an executor fix keeps the same
+    run_id — the mirror must compare content, not existence.
+    """
+    from hpc_agent.ops.submit_flow import _mirror_canary_sidecar
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    def _write_main(executor: str) -> None:
+        write_run_sidecar(
+            tmp_path,
+            run_id="r1",
+            cmd_sha="c",
+            hpc_agent_version="v",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor=executor,
+            result_dir_template="results/{task_id}",
+            task_count=8,
+            tasks_py_sha="",
+        )
+
+    _write_main("monte_carlo_pi_BROKEN")
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    assert read_run_sidecar(tmp_path, "r1-canary")["executor"] == "monte_carlo_pi_BROKEN"
+
+    # The main sidecar is corrected (e.g. revise-resolved re-derived it) …
+    _write_main("python executors/monte_carlo_pi.py --seed $SEED")
+    # … and the next mirror RE-MIRRORS instead of no-op'ing on existence.
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    csc = read_run_sidecar(tmp_path, "r1-canary")
+    assert csc["executor"] == "python executors/monte_carlo_pi.py --seed $SEED"
+    assert csc["task_count"] == 1
+
+
+def test_mirror_canary_sidecar_noop_when_in_sync(tmp_path) -> None:
+    """Identical dispatch-essentials → the mirror stays the idempotent no-op
+    (the canary sidecar file is not rewritten, byte-for-byte)."""
+    from hpc_agent.ops.submit_flow import _mirror_canary_sidecar
+    from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1",
+        cmd_sha="c",
+        hpc_agent_version="v",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py --seed $SEED",
+        result_dir_template="results/{task_id}",
+        task_count=8,
+        tasks_py_sha="",
+    )
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    before = run_sidecar_path(tmp_path, "r1-canary").read_text(encoding="utf-8")
+    _mirror_canary_sidecar(tmp_path, "r1", "r1-canary")
+    after = run_sidecar_path(tmp_path, "r1-canary").read_text(encoding="utf-8")
+    assert before == after
+
+
 def test_mirror_canary_sidecar_noop_when_main_missing(tmp_path) -> None:
     from hpc_agent.ops.submit_flow import _mirror_canary_sidecar
     from hpc_agent.state.runs import run_sidecar_path
