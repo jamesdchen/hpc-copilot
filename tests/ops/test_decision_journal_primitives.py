@@ -588,6 +588,73 @@ def test_authorship_gate_still_refuses_contiguous_run_with_unstated_endpoints(
         )
 
 
+def test_authorship_gate_refuses_fabricated_categorical_when_numbers_derive(
+    tmp_path: Path,
+) -> None:
+    """Finding 25: the numeric-only structured check let a fabricated
+    CATEGORICAL/string param ride through. The human states "20 seeds,
+    n_samples=1000000" — every NUMBER in the task_generator derives (seeds
+    [0..19] from "20 seeds", 1_000_000 from "n_samples=1000000") — but the
+    agent smuggles a fabricated ``dataset`` axis the human never named. The
+    numbers passing must NOT wave the non-numeric claim through."""
+    _log_utterance(tmp_path, "20 seeds, n_samples=1000000")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            resolved={
+                "task_generator": {
+                    "kind": "items_x_seeds",
+                    "params": {
+                        "items": [{"n_samples": 1_000_000, "dataset": "fabricated-set"}],
+                        "seeds": list(range(20)),
+                    },
+                }
+            },
+        )
+    msg = str(ei.value)
+    assert "human-authorship gate" in msg
+    assert "task_generator is human-authored" in msg
+    assert "fabricated" in msg  # the smuggled categorical token is named
+    assert "harness-captured" in msg  # names the evidence source consulted
+    # The refused exchange never reaches the journal.
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "run", "scope_id": "run-1"}),
+    )
+    assert result.count == 0
+
+
+def test_authorship_gate_passes_categorical_the_human_named(tmp_path: Path) -> None:
+    """The categorical check is a lock, not a wall: a param VALUE the human
+    DID name (here a cartesian axis over datasets the utterance lists) passes,
+    proving the string-leaf check gates fabrication, not legitimate claims.
+    The ``kind`` discriminator ("cartesian_product") is schema vocabulary and
+    is never itself treated as a claim even though the human never typed it."""
+    _log_utterance(tmp_path, "cartesian sweep over datasets cifar10 and mnist, 20 seeds")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={
+            "task_generator": {
+                "kind": "cartesian_product",
+                "params": {
+                    "axes": {
+                        "dataset": ["cifar10", "mnist"],
+                        "seed": list(range(20)),
+                    }
+                },
+            }
+        },
+    )
+    assert out.record.resolved["task_generator"]["params"]["axes"]["dataset"] == [
+        "cifar10",
+        "mnist",
+    ]
+
+
 def test_authorship_gate_utterance_mode_ignores_substantive_response_for_goal(
     tmp_path: Path,
 ) -> None:

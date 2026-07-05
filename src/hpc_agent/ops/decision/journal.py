@@ -294,7 +294,8 @@ def _assert_brief_provenance(
 # REQUIRED_CALLER fields whose value is free-text intent (no structured tokens
 # to extract) — checked with the softer non-bare-response / word-overlap rule.
 # Everything else in REQUIRED_CALLER_FIELDS (today: task_generator) is checked
-# by deterministic token derivation.
+# by deterministic token derivation — both the NUMBER tokens it asserts and,
+# since finding 25, its non-numeric CATEGORICAL string claims.
 _FREE_TEXT_CALLER_FIELDS = frozenset({"goal"})
 
 # Responses that are a bare acknowledgement — they carry no authored content,
@@ -438,6 +439,54 @@ def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
             _collect_value_numbers(v, out)
 
 
+# Discriminator keys whose VALUE is a schema-union arm name, not a caller
+# claim ("kind": "items_x_seeds" / "cartesian_product"). Its value is
+# framework vocabulary — the human never types it — so it is exempt from the
+# categorical authorship check (finding 25). Dict KEYS everywhere are schema
+# vocabulary too and are never collected; only VALUE string leaves are.
+_SCHEMA_ENUM_KEYS = frozenset({"kind"})
+
+
+def _collect_value_string_tokens(obj: Any, out: set[str]) -> None:
+    """Gather word tokens from every caller-CLAIM string VALUE leaf.
+
+    Proving run #5 finding 25: :func:`_collect_value_numbers` checks only the
+    NUMBER tokens a required-caller value asserts, so a fabricated
+    CATEGORICAL/string param (a ``dataset`` axis the human never named) rode
+    through whenever the numbers happened to derive. This gathers the
+    non-numeric claim tokens the number check ignores, so they face the same
+    human-derivability bar.
+
+    Two positions are schema vocabulary — never a claim — and are excluded:
+
+    * dict KEYS (``params`` / ``items`` / ``seeds``, a cartesian axis NAME) —
+      the schema's own field names. Only VALUE leaves are collected, so a
+      key never spuriously satisfies (or triggers) the check.
+    * the value of a discriminator key (``kind``: ``items_x_seeds``) — it
+      names a union arm, not a claim (:data:`_SCHEMA_ENUM_KEYS`).
+
+    Bools/numbers are skipped (:func:`_collect_value_numbers` owns them); a
+    pure-number string (``"0-49"``) contributes no word tokens and so is
+    silently a no-op here.
+    """
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        return
+    if isinstance(obj, str):
+        out |= _ha_word_tokens(obj)
+        return
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(key, str) and key in _SCHEMA_ENUM_KEYS:
+                continue  # the discriminator value is schema vocabulary, not a claim
+            _collect_value_string_tokens(value, out)
+        return
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _collect_value_string_tokens(item, out)
+
+
 def _human_derivable(val: float, norm: str, strings: set[str], floats: set[float]) -> bool:
     """True when a value number is derivable from the human number pool.
 
@@ -499,8 +548,12 @@ def _assert_human_authorship(
       magnitude-suffixed like ``1M``, zero, or a range endpoint of a stated
       count). A consecutive-int list asserts only its endpoints and length
       (:func:`_contiguous_int_run` — "20 seeds" derives ``seeds=[0..19]``;
-      proving run #5's finding was the gate demanding the enumeration).
-      A value with no numbers falls back to the free-text rule.
+      proving run #5's finding was the gate demanding the enumeration). Its
+      non-numeric CATEGORICAL string claims must ALSO overlap the human word
+      pool (:func:`_collect_value_string_tokens`, finding 25) — schema
+      vocabulary (dict keys, the ``kind`` discriminator value) exempt — so a
+      fabricated ``dataset`` axis cannot ride a passing number check. A value
+      with no number OR string claims falls back to the free-text rule.
     * Free-text fields (``goal``): the value's word tokens must overlap some
       human text; in journal-response mode only, a non-bare committing
       ``response`` (:func:`_is_bare_ack`) also commits it.
@@ -596,12 +649,20 @@ def _assert_human_authorship(
         if field not in _FREE_TEXT_CALLER_FIELDS:
             value_numbers: dict[str, float] = {}
             _collect_value_numbers(value, value_numbers)
-            if value_numbers:
+            # Finding 25: the number check alone let a fabricated CATEGORICAL
+            # param (a dataset name the human never uttered) pass whenever the
+            # numbers derived. Hold the value's non-numeric claim tokens to the
+            # same human-derivability bar — schema vocabulary (dict keys, the
+            # ``kind`` discriminator value) is excluded by the collector.
+            value_strings: set[str] = set()
+            _collect_value_string_tokens(value, value_strings)
+            if value_numbers or value_strings:
                 missing = sorted(
                     norm
                     for norm, val in value_numbers.items()
                     if not _human_derivable(val, norm, human_num_strings, human_num_floats)
                 )
+                missing += sorted(value_strings - human_words)
                 if missing:
                     problems.append(
                         f"{field} is human-authored: {spec.response!r} cannot "
@@ -610,7 +671,7 @@ def _assert_human_authorship(
                         f"token(s) {missing} derive from no {source_desc}"
                     )
                 continue
-            # No number tokens — fall through to the free-text rule below.
+            # No number OR string claims — fall through to the free-text rule below.
         if response_commits:
             continue  # journal-response mode: a substantive human reply commits it
         overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
