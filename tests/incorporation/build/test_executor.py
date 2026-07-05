@@ -36,13 +36,14 @@ from hpc_agent.state.discover import (
 
 def _load_template_module(path: Path):
     spec = importlib.util.spec_from_file_location(f"_loaded_{path.stem}", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
-FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "mock_experiment"
+FIXTURE_ROOT = Path(__file__).parent.parent.parent / "fixtures" / "mock_experiment"
 TEMPLATES_DIR = _PACKAGE_ROOT / "execution" / "mapreduce" / "templates" / "scaffolds"
 
 
@@ -180,6 +181,7 @@ def test_tasks_example_is_valid_python_and_exposes_total_resolve() -> None:
     source = path.read_text(encoding="utf-8")
     ast.parse(source)
     spec = importlib.util.spec_from_file_location("tasks_example_under_test", path)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert callable(mod.total)
