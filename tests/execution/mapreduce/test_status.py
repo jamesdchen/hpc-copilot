@@ -486,3 +486,143 @@ class TestMainImportGating:
         codes = [e["code"] for e in doc.get("errors", [])]
         assert "tasks_py_import_degraded" in codes
         assert "tasks_py_import_error" not in codes
+
+
+# ---------------------------------------------------------------------------
+# Vanished-workdir qacct fallback (proving run #3, finding f)
+# ---------------------------------------------------------------------------
+
+_QACCT_EXIT0 = (
+    "==============================================================\n"
+    "jobnumber    9001\n"
+    "taskid       1\n"
+    "exit_status  0\n"
+    "failed       0\n"
+    "ru_wallclock 12\n"
+    "slots        1\n"
+)
+
+_QACCT_FAILED = (
+    "==============================================================\n"
+    "jobnumber    9001\n"
+    "taskid       1\n"
+    "exit_status  1\n"
+    "failed       0\n"
+    "ru_wallclock 12\n"
+    "slots        1\n"
+)
+
+
+def _sge_responder(qacct_stdout: str | None):
+    """A ``subprocess.run`` stub speaking real SGE tool output.
+
+    qstat: rc 0 with empty stdout — the job has left the live queue.
+    qacct: the given accounting record, or rc 1 when ``None`` (SGE keeps no
+    record yet — ``qacct -j`` exits non-zero for an unknown job).
+    """
+    from types import SimpleNamespace
+
+    def _run(cmd, *_a, **_kw):
+        tool = cmd[0]
+        if tool == "qstat":
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        if tool == "qacct":
+            if qacct_stdout is None:
+                return SimpleNamespace(
+                    stdout="", stderr="error: job id 9001 not found", returncode=1
+                )
+            return SimpleNamespace(stdout=qacct_stdout, stderr="", returncode=0)
+        raise AssertionError(f"unexpected scheduler tool: {tool!r}")
+
+    return _run
+
+
+class TestVanishedWorkdirAccountingFallback:
+    """Proving run #3, finding f: the remote workdir vanished mid-run (scratch
+    purge / cleanup), the job left qstat, and the reporter classified every
+    task ``unknown`` forever — qacct's terminal record (exit_status 0 →
+    COMPLETED) fell into the unknown bucket because completion was only ever
+    read from result files. The reporter now classifies terminally from the
+    accounting record when (and only when) the result location is gone; a
+    still-missing record stays ``unknown`` and is bounded by the poll loop's
+    escalation arm instead of looping forever."""
+
+    def _report(self, result_dir, monkeypatch, qacct_stdout):
+        import subprocess
+
+        monkeypatch.setattr(subprocess, "run", _sge_responder(qacct_stdout))
+        return report_status(
+            result_dir=result_dir,
+            job_ids=["9001"],
+            total_tasks=1,
+            scheduler="sge",
+            sge_user="user",
+        )
+
+    def test_vanished_workdir_qacct_exit0_is_terminal_complete(self, tmp_path, monkeypatch):
+        """(a) Workdir gone + qacct exit 0 → complete on accounting evidence;
+        the run classifies terminal COMPLETE (harvest-eligible), not unknown."""
+        from hpc_agent._kernel.contract.vocabulary import LifecycleState
+        from hpc_agent.ops.monitor.classify import classify_polling
+
+        gone = tmp_path / "purged"  # never created — the vanished workdir
+        report = self._report(gone, monkeypatch, _QACCT_EXIT0)
+
+        assert report["summary"]["complete"] == 1
+        assert report["summary"]["unknown"] == 0
+        task = report["tasks"]["0"]
+        assert task["status"] == "complete"
+        assert task["evidence"] == "scheduler_accounting"
+        assert task["result_missing"] is True
+        assert classify_polling(report["summary"], 1) == (LifecycleState.COMPLETE, None)
+
+    def test_vanished_workdir_qacct_failed_is_terminal_failure(self, tmp_path, monkeypatch):
+        """(b) Workdir gone + qacct non-zero exit → terminal FAILED (this arm
+        predates the fix; pinned here against the vanished-workdir inputs)."""
+        from hpc_agent._kernel.contract.vocabulary import LifecycleState
+        from hpc_agent.ops.monitor.classify import classify_polling
+
+        gone = tmp_path / "purged"
+        report = self._report(gone, monkeypatch, _QACCT_FAILED)
+
+        assert report["summary"]["failed"] == 1
+        assert report["summary"]["unknown"] == 0
+        state, _reason = classify_polling(report["summary"], 1)
+        assert state == LifecycleState.FAILED
+
+    def test_no_qacct_record_stays_unknown_then_bounded_escalation(self, tmp_path, monkeypatch):
+        """(c) Workdir gone + qacct has no record → unknown, and the poll
+        classifier escalates to a terminal abandoned anomaly at the bound —
+        never an unbounded unknown loop."""
+        from hpc_agent._kernel.contract.vocabulary import LifecycleState
+        from hpc_agent.ops.monitor.classify import (
+            POLLING_REASON_UNKNOWN_EXHAUSTED,
+            UNKNOWN_TICKS_BEFORE_ESCALATION,
+            classify_polling,
+        )
+
+        gone = tmp_path / "purged"
+        report = self._report(gone, monkeypatch, None)
+
+        assert report["summary"]["unknown"] == 1
+        # Below the bound: keep polling (a single tick can be accounting lag).
+        for streak in range(UNKNOWN_TICKS_BEFORE_ESCALATION):
+            assert classify_polling(report["summary"], 1, unknown_streak=streak) == (None, None)
+        # At the bound: terminal anomaly, with machine-readable provenance.
+        state, reason = classify_polling(
+            report["summary"], 1, unknown_streak=UNKNOWN_TICKS_BEFORE_ESCALATION
+        )
+        assert state == LifecycleState.ABANDONED
+        assert reason is not None and reason.startswith(POLLING_REASON_UNKNOWN_EXHAUSTED)
+
+    def test_intact_result_dir_gates_the_accounting_fallback(self, tmp_path, monkeypatch):
+        """With the result dir INTACT, a COMPLETED task with no result file
+        stays ``unknown`` (ran to exit 0 but wrote nothing) — the scheduler's
+        exit code must not mask an on-disk anomaly."""
+        intact = tmp_path / "results"
+        intact.mkdir()
+        report = self._report(intact, monkeypatch, _QACCT_EXIT0)
+
+        assert report["summary"]["complete"] == 0
+        assert report["summary"]["unknown"] == 1
+        assert report["tasks"]["0"].get("evidence") != "scheduler_accounting"

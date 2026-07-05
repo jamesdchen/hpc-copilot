@@ -19,14 +19,17 @@ import pytest
 
 from hpc_agent._kernel.contract.vocabulary import JournalStatus, LifecycleState
 from hpc_agent.ops.monitor.classify import (
+    POLLING_REASON_UNKNOWN_EXHAUSTED,
     SETTLE_REASON_ABANDONED,
     SETTLE_REASON_COMPLETE,
     SETTLE_REASON_FAILED,
+    UNKNOWN_TICKS_BEFORE_ESCALATION,
     all_tasks_complete,
     classify_polling,
     classify_settled,
     run_failed,
     settle,
+    unresolved_unknown,
 )
 
 
@@ -189,3 +192,61 @@ def test_all_tasks_complete_missing_keys_count_as_zero():
 
 def test_run_failed_reporter_error_summary_is_false():
     assert run_failed({"error": "boom"}) is False
+
+
+# --------------------------------------------------------------------------
+# Bounded-unknown escalation (proving run #3, finding f): a vanished remote
+# workdir left the poll loop classifying "unknown" forever — no live work, no
+# results, no failure evidence, and no arm that ever terminated. The
+# classifier now escalates to a terminal ``abandoned`` anomaly once the
+# caller-tracked unresolved-unknown streak crosses the bound.
+# --------------------------------------------------------------------------
+
+
+def test_unresolved_unknown_predicate():
+    # The tick signature: no live work, not complete, at least one unknown.
+    assert unresolved_unknown(_summary(unknown=5), 5) is True
+    assert unresolved_unknown(_summary(complete=3, unknown=2), 5) is True
+    # Live work, positive evidence, or completion → not unresolved.
+    assert unresolved_unknown(_summary(unknown=4, running=1), 5) is False
+    assert unresolved_unknown(_summary(unknown=4, pending=1), 5) is False
+    assert unresolved_unknown(_summary(unknown=4, failed=1), 5) is False
+    assert unresolved_unknown(_summary(complete=5), 5) is False
+    # No unknowns at all → nothing unresolved.
+    assert unresolved_unknown(_summary(), 5) is False
+    # Zero-task runs and reporter-failure summaries carry no evidence.
+    assert unresolved_unknown(_summary(unknown=5), 0) is False
+    assert unresolved_unknown({"error": "boom"}, 5) is False
+
+
+def test_polling_unknown_below_bound_keeps_polling():
+    s = _summary(unknown=5)
+    for streak in range(UNKNOWN_TICKS_BEFORE_ESCALATION):
+        assert classify_polling(s, 5, unknown_streak=streak) == (None, None)
+
+
+def test_polling_unknown_streak_escalates_to_abandoned_anomaly():
+    state, reason = classify_polling(
+        _summary(unknown=5), 5, unknown_streak=UNKNOWN_TICKS_BEFORE_ESCALATION
+    )
+    assert state == LifecycleState.ABANDONED
+    assert reason is not None
+    assert reason.startswith(POLLING_REASON_UNKNOWN_EXHAUSTED)
+
+
+def test_polling_streak_alone_never_escalates_a_live_tick():
+    # A stale (high) streak must not fire unless the CURRENT tick is still
+    # unresolved-unknown — live work or a complete count wins.
+    assert classify_polling(_summary(unknown=2, running=1), 5, unknown_streak=99) == (None, None)
+    assert classify_polling(_summary(unknown=2, pending=3), 5, unknown_streak=99) == (None, None)
+    assert classify_polling(_summary(complete=5), 5, unknown_streak=99) == (
+        LifecycleState.COMPLETE,
+        None,
+    )
+
+
+def test_polling_failure_evidence_outranks_unknown_escalation():
+    # Positive failure evidence classifies FAILED even at a maxed-out streak.
+    state, reason = classify_polling(_summary(failed=1, unknown=4), 5, unknown_streak=99)
+    assert state == LifecycleState.FAILED
+    assert reason == "failed_tasks_no_auto_recover_in_mvp"

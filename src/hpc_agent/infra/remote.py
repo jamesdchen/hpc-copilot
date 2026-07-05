@@ -205,9 +205,14 @@ def _with_ssh_backoff(
     throttle-marked cp is carried through retries by :class:`_ThrottleRetry`
     and unwrapped on exhaustion so the cp is returned rather than raised.
 
-    *label* identifies the call site (e.g. ``"rsync push"``) and is retained
-    for caller-side diagnostics. Disable retries entirely by setting
+    *label* identifies the call site (e.g. ``"rsync push"``) and names it in
+    the per-retry stderr diagnostic. Disable retries entirely by setting
     ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
+
+    Each retry is announced on stderr (``<label>: attempt N failed (...);
+    retrying in Xs``) — the ladder used to spin silently, which turned a
+    stalled ssh-agent named pipe into an unexplained multi-minute hang with
+    no breadcrumb in the driver log (2026-07-04 pre-flight wedge).
     """
     if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
         return fn()
@@ -221,8 +226,19 @@ def _with_ssh_backoff(
             raise _ThrottleRetry(cp)
         return cp
 
+    def _log_retry(attempt: int, exc: BaseException, delay: float) -> None:
+        if isinstance(exc, _ThrottleRetry):
+            detail = (exc.cp.stderr or "").strip() or f"exit {exc.cp.returncode}"
+        else:
+            detail = str(exc)
+        print(
+            f"{label}: attempt {attempt} failed ({_truncate(detail, 200)}); retrying in {delay:g}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
     try:
-        return run_with_retry(_attempt, policy=_ssh_backoff_policy())
+        return run_with_retry(_attempt, policy=_ssh_backoff_policy(), on_retry=_log_retry)
     except _ThrottleRetry as exhausted:
         # Every retry consumed and still throttled: return the failing cp for
         # the caller to inspect (an exhausted TimeoutError, by contrast,
@@ -379,6 +395,58 @@ def _communicate_select(
     return out, err
 
 
+# Bound on the post-kill output drain in :func:`_capture_windows`. After the
+# timed-out child is killed we give its reader threads a few seconds to hit
+# EOF and hand over whatever output was buffered; if a grandchild still holds
+# the pipe handles we abandon the (daemon) reader threads rather than block.
+_POST_KILL_DRAIN_SEC: Final[float] = 5.0
+
+
+def _capture_windows(
+    argv: list[str],
+    *,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Blocking capture with a timeout that can *actually fire* (S2 wedge fix).
+
+    ``subprocess.run(..., timeout=...)`` is NOT a hard deadline on Windows: on
+    ``TimeoutExpired`` it kills the child and then calls an **unbounded**
+    ``communicate()`` to collect the reader threads' output. When a grandchild
+    inherited the stdout/stderr handles (ssh ControlMaster mux, agent relay),
+    EOF never arrives and that post-kill ``communicate()`` blocks forever —
+    the 2026-07-04 submit-flow pre-flight wedge (driver parked for hours in
+    ``subprocess.run`` despite ``timeout=60``). Faulthandler pinned the stall
+    to exactly this frame.
+
+    This helper reimplements run-with-timeout with every wait bounded: kill on
+    deadline, then drain for at most :data:`_POST_KILL_DRAIN_SEC` before
+    abandoning the reader threads (they are daemon threads; leaking them
+    cannot block interpreter exit).
+    """
+    proc = subprocess.Popen(  # noqa: S603 - argv built by ssh_argv, no shell
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        # Bounded second drain — the whole point. Collect what the reader
+        # threads already buffered, but never wait for an EOF a grandchild
+        # may withhold indefinitely.
+        try:
+            out, err = proc.communicate(timeout=_POST_KILL_DRAIN_SEC)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
+        raise subprocess.TimeoutExpired(argv, timeout or 0.0, output=out, stderr=err) from None
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 def _capture_via_select(
     argv: list[str],
     *,
@@ -387,21 +455,17 @@ def _capture_via_select(
     """Run *argv* capturing stdout/stderr, returning a ``CompletedProcess``.
 
     POSIX uses the close-pipes-on-exit :func:`_communicate_select` reader so a
-    backgrounded remote child can't wedge the read; Windows falls back to the
-    blocking ``subprocess.run`` (select(2) over pipes is POSIX-only). Both
-    surfaces raise :class:`subprocess.TimeoutExpired` on *timeout*, so the
-    caller's single translation to :class:`TimeoutError` covers either. This is
-    the one capture seam ``ssh_run`` funnels through (and the point tests patch
-    to fake remote output).
+    backgrounded remote child can't wedge the read; Windows falls back to
+    :func:`_capture_windows`, a blocking capture whose timeout is a hard
+    deadline (``subprocess.run``'s post-kill ``communicate()`` is unbounded
+    and wedged the submit pre-flight probe for hours — see that helper's
+    docstring). Both surfaces raise :class:`subprocess.TimeoutExpired` on
+    *timeout*, so the caller's single translation to :class:`TimeoutError`
+    covers either. This is the one capture seam ``ssh_run`` funnels through
+    (and the point tests patch to fake remote output).
     """
     if _WINDOWS:
-        return subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
+        return _capture_windows(argv, timeout=timeout)
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = _communicate_select(proc, argv=argv, timeout=timeout)
     assert proc.returncode is not None  # set by _communicate_select

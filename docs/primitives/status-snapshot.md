@@ -42,8 +42,10 @@ never manufacturing a decision point.
 
 A `StatusSnapshotSpec` JSON spec with:
 
-- `run_id` (optional) — the run to digest. Null → a **fleet digest** over every
-  in-flight run.
+- `run_id` (optional) — the run to digest, **plus its paired `-canary` /
+  parent sibling journal entry** (#258: every canary-gated submit writes two
+  entries; the snapshot digests both so an in-flight canary is never invisible).
+  Null → a **fleet digest** over every in-flight run.
 - `reconcile` (default `false`) — re-derive ground truth from the cluster
   (`reconcile-journal`) before digesting. This is the **only** path that touches
   SSH; it requires `run_id` and `scheduler`.
@@ -58,8 +60,11 @@ A `StatusSnapshotSpec` JSON spec with:
 A `StatusBlockResult` (`block="snapshot"`) with `stage_reached`, `needs_decision`,
 and a `brief`:
 
-- `running_where` — one row per digested run: `{run_id, cluster, ssh_target,
-  status, summary, last_tick_at, last_seen_by_human_at, changed_since_seen}`.
+- `running_where` — one row per digested run: `{run_id, is_canary,
+  parent_run_id, cluster, ssh_target, status, summary, last_tick_at,
+  last_seen_by_human_at, changed_since_seen}`. A `-canary` journal entry is
+  marked `is_canary=true` with `parent_run_id` naming the main run it was
+  submitted alongside.
 - `changed_since_seen` — the subset of `running_where` whose driver ticked since
   the human last looked (never looked → everything is new).
 - `stalled_runs` — the `find_stalled_runs` hits (a live run whose `next_tick_due`

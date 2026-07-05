@@ -414,12 +414,10 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
 
     source_text = " ".join(json.dumps(o, default=str) for o in source_objs).lower()
 
-    run_status_raw: str | None = None
-    if record is not None:
-        run_status_raw = record.status
-    elif sidecar is not None:
-        raw = sidecar.get("status")
-        run_status_raw = raw if isinstance(raw, str) and raw else None
+    # Status lives on the journal RunRecord only — the run sidecar never
+    # carries a "status" key (write_run_sidecar's field set), so there is
+    # no sidecar fallback here.
+    run_status_raw: str | None = record.status if record is not None else None
     run_status_family = _STATUS_TO_FAMILY.get(run_status_raw or "")
 
     # Authoritative id set + recorded job ids.

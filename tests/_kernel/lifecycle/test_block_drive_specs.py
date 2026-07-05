@@ -273,17 +273,30 @@ def test_is_gated_matches_live_gate_callers() -> None:
     """GATED_BLOCKS is exactly the set of block verbs whose op calls the gate."""
     from hpc_agent.ops import aggregate_blocks, submit_blocks
 
-    # (verb, op function) for every block that could call the greenlight gate.
-    candidates: list[tuple[str, Any]] = [
-        ("submit-s1", submit_blocks.submit_s1),
-        ("submit-s2", submit_blocks.submit_s2),
-        ("submit-s3", submit_blocks.submit_s3),
-        ("submit-s4", submit_blocks.submit_s4),
-        ("aggregate-check", aggregate_blocks.aggregate_check),
-        ("aggregate-run", aggregate_blocks.aggregate_run),
+    # (verb, module, op function) for every block that could call the greenlight
+    # gate. The submit blocks are ``_persist_brief`` wrappers around a
+    # ``_<name>_impl`` body (rule-9 provenance gate), so the live gate call sits
+    # in the impl — resolve it alongside the public op when it exists.
+    candidates: list[tuple[str, Any, Any]] = [
+        ("submit-s1", submit_blocks, submit_blocks.submit_s1),
+        ("submit-s2", submit_blocks, submit_blocks.submit_s2),
+        ("submit-s3", submit_blocks, submit_blocks.submit_s3),
+        ("submit-s4", submit_blocks, submit_blocks.submit_s4),
+        ("aggregate-check", aggregate_blocks, aggregate_blocks.aggregate_check),
+        ("aggregate-run", aggregate_blocks, aggregate_blocks.aggregate_run),
     ]
+
+    def _op_source(module: Any, fn: Any) -> str:
+        src = inspect.getsource(fn)
+        impl = getattr(module, f"_{fn.__name__}_impl", None)
+        if impl is not None:
+            src += inspect.getsource(impl)
+        return src
+
     derived = {
-        verb for verb, fn in candidates if "assert_greenlit_target(" in inspect.getsource(fn)
+        verb
+        for verb, module, fn in candidates
+        if "assert_greenlit_target(" in _op_source(module, fn)
     }
     assert derived == {"submit-s2", "submit-s3", "submit-s4", "aggregate-run"}
     assert set(block_chain.GATED_BLOCKS) == derived

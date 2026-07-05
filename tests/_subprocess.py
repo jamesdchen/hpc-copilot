@@ -57,6 +57,29 @@ def _forward_coverage_env(env: dict[str, str] | None) -> dict[str, str] | None:
     return {**env, **forwarded}
 
 
+def _forward_journal_home(env: dict[str, str] | None) -> dict[str, str]:
+    """Carry the parent's per-test journal home into the child as env.
+
+    The autouse ``_isolated_journal_home`` fixture (tests/conftest.py)
+    isolates the journal home by patching the ``run_record.HPC_HOMEDIR``
+    module attribute — an in-process knob a spawned CLI child cannot see.
+    Without translation the child falls back to the REAL ``~/.claude/hpc``
+    and leaks journal dirs into the developer's home (proving-run #3
+    findings item g). Translate attr → env at this seam: resolve
+    :func:`hpc_agent.state.run_record._current_homedir` in the parent and
+    hand it to the child as ``HPC_JOURNAL_DIR`` (the highest-precedence
+    knob, honoured identically by the child).
+
+    A caller-provided ``HPC_JOURNAL_DIR`` (explicit *env* or an inherited
+    ``monkeypatch.setenv``) wins — the injection only fills the gap.
+    """
+    from hpc_agent.state.run_record import _current_homedir
+
+    base = dict(os.environ) if env is None else dict(env)
+    base.setdefault("HPC_JOURNAL_DIR", str(_current_homedir()))
+    return base
+
+
 def run_cli(
     *args: str,
     env: dict[str, str] | None = None,
@@ -82,6 +105,6 @@ def run_cli(
         encoding="utf-8",
         check=False,
         timeout=timeout,
-        env=_forward_coverage_env(env),
+        env=_forward_journal_home(_forward_coverage_env(env)),
         **kwargs,
     )

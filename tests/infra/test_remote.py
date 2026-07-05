@@ -772,3 +772,94 @@ class TestCaptureSelectReader:
             remote._communicate_select(proc, argv=["sh", "-c", "sleep 30"], timeout=0.5)
         # The child was killed + reaped, not left running.
         assert proc.returncode is not None
+
+
+# ---------------------------------------------------------------------------
+# Windows blocking-capture fallback: the timeout must be a HARD deadline
+# ---------------------------------------------------------------------------
+#
+# The 2026-07-04 submit pre-flight wedge: ``subprocess.run(..., timeout=60)``
+# is not a hard deadline — on TimeoutExpired it kills the child then calls an
+# UNBOUNDED ``communicate()``, which blocks forever when a grandchild holds
+# the inherited stdout/stderr handles (ssh ControlMaster mux / agent relay).
+# ``_capture_windows`` replaces it with bounded waits only. The helper is
+# plain ``Popen`` code, so it is exercised on every platform even though only
+# Windows routes through it in production.
+
+
+class TestCaptureWindowsBoundedTimeout:
+    def test_returns_completedprocess_on_success(self):
+        cp = remote._capture_windows(
+            [sys.executable, "-c", "import sys; print('hi'); print('err', file=sys.stderr)"],
+            timeout=30,
+        )
+        assert cp.returncode == 0
+        assert cp.stdout.strip() == "hi"
+        assert "err" in cp.stderr
+
+    def test_timeout_fires_despite_grandchild_holding_pipes(self):
+        """The wedge reproduction: the child spawns a grandchild that inherits
+        its stdout/stderr handles, then sleeps. Killing the child does NOT
+        close the pipes (the grandchild still holds them), so an unbounded
+        post-kill drain — subprocess.run's behavior — blocks until the
+        grandchild exits (~30s here; hours in the field). The bounded drain
+        must surface TimeoutExpired in timeout + _POST_KILL_DRAIN_SEC + slack.
+        """
+        script = (
+            "import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "stdout=sys.stdout, stderr=sys.stderr); "
+            "time.sleep(30)"
+        )
+        start = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            remote._capture_windows([sys.executable, "-c", script], timeout=1.5)
+        elapsed = time.monotonic() - start
+        # Old behavior: ~30s (grandchild lifetime). Bound: 1.5s timeout +
+        # 5s post-kill drain + generous process-spawn slack.
+        assert elapsed < 20, f"post-kill drain not bounded: took {elapsed:.1f}s"
+
+    def test_timeout_kills_child_and_reports_within_bound(self):
+        start = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            remote._capture_windows(
+                [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1.0
+            )
+        # No grandchild → kill closes the pipes → drain returns immediately.
+        assert time.monotonic() - start < 15
+
+
+class TestBackoffRetryIsLoud:
+    """The ladder used to retry silently — a stalled connection looked like a
+    dead driver. Each retry must leave a stderr breadcrumb naming the label,
+    the attempt, and the failure."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_backoff(self, monkeypatch):
+        monkeypatch.delenv("HPC_SSH_NO_BACKOFF", raising=False)
+        monkeypatch.setattr("hpc_agent.infra.remote._BACKOFF_DELAYS_SEC", (0.0,) * 4)
+        monkeypatch.setattr("hpc_agent.infra.remote.time.sleep", lambda _: None)
+
+    def test_throttle_retry_prints_attempt_line(self, capsys):
+        throttle_cp = _cp(
+            stderr="kex_exchange_identification: Connection closed by remote host",
+            returncode=255,
+        )
+        ok_cp = _cp(stdout="hi\n", returncode=0)
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = [throttle_cp, ok_cp]
+            remote.ssh_run("ls", ssh_target="u@c")
+        err = capsys.readouterr().err
+        assert "ssh u@c: attempt 1 failed" in err
+        assert "kex_exchange_identification" in err
+        assert "retrying in" in err
+
+    def test_timeout_retry_prints_attempt_lines(self, capsys):
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(TimeoutError):
+                remote.ssh_run("ls", ssh_target="u@c")
+        err = capsys.readouterr().err
+        # 5 attempts total → 4 retry announcements (final failure raises).
+        for n in (1, 2, 3, 4):
+            assert f"ssh u@c: attempt {n} failed" in err

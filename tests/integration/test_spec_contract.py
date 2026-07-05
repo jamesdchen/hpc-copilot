@@ -251,8 +251,17 @@ def test_parking_ungated_hops_are_decision_terminators() -> None:
     """
     from hpc_agent.ops import status_blocks, submit_blocks
 
-    for fn in (submit_blocks.submit_s3, status_blocks.status_watch):
+    for module, fn in (
+        (submit_blocks, submit_blocks.submit_s3),
+        (status_blocks, status_blocks.status_watch),
+    ):
+        # The submit blocks are ``_persist_brief`` wrappers around a
+        # ``_<name>_impl`` body (rule-9 provenance gate); the terminator
+        # emission lives in the impl, so inspect it alongside the public op.
         src = inspect.getsource(fn)
+        impl = getattr(module, f"_{fn.__name__}_impl", None)
+        if impl is not None:
+            src += inspect.getsource(impl)
         assert 'stage_reached="watching_timeout"' in src or 'stage_reached="watch_timeout"' in src
         # The timeout terminator is a decision point (needs_decision=True).
         assert "needs_decision=True" in src

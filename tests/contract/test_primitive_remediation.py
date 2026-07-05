@@ -44,11 +44,11 @@ Marked with ``contract`` — run with ``pytest -m contract``.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from .conftest import invoke_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
@@ -146,18 +146,9 @@ _SPEC_VERBS: frozenset[str] = frozenset(
 )
 
 
-_CLI_TIMEOUT_SEC = 30
-
-
 def _verbs_with_cli() -> set[str]:
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", "--help"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=_CLI_TIMEOUT_SEC,
-    )
-    text = proc.stdout
+    rc, text, stderr = invoke_cli(["--help"])
+    assert rc == 0, f"hpc-agent --help failed (rc={rc}): {stderr!r}"
     start = text.find("{")
     end = text.find("}", start)
     if start == -1 or end == -1:
@@ -175,18 +166,15 @@ def _run_verb_with_bad_spec(verb: str, spec: dict, tmp_path: Path) -> dict:
     """
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps(spec), encoding="utf-8")
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", verb, "--spec", str(spec_file)],
-        capture_output=True,
-        text=True,
-        timeout=_CLI_TIMEOUT_SEC,
-    )
-    out = proc.stdout.strip().splitlines()
+    # In-process for the bulk (same dispatch path, same envelope contract);
+    # real subprocess for SUBPROCESS_SAMPLE_VERBS — see conftest.invoke_cli.
+    rc, stdout, stderr = invoke_cli([verb, "--spec", str(spec_file)])
+    out = stdout.strip().splitlines()
     if not out:
         pytest.xfail(
             f"{verb}: no stdout envelope emitted; argparse / pre-spec "
-            f"gate likely rejected the invocation. stderr={proc.stderr!r}, "
-            f"rc={proc.returncode}. Register in NEEDS_EXTRA_CLI_ARGS."
+            f"gate likely rejected the invocation. stderr={stderr!r}, "
+            f"rc={rc}. Register in NEEDS_EXTRA_CLI_ARGS."
         )
     parsed: dict = json.loads(out[-1])
     return parsed
@@ -401,13 +389,11 @@ def test_spec_verb_inventory_matches_cli() -> None:
     cli_verbs = _verbs_with_cli()
     accepting: set[str] = set()
     for verb in cli_verbs:
-        proc = subprocess.run(
-            [sys.executable, "-m", "hpc_agent", verb, "--help"],
-            capture_output=True,
-            text=True,
-            timeout=_CLI_TIMEOUT_SEC,
-        )
-        for line in proc.stdout.splitlines():
+        # In-process: this is a --help surface scan (argparse output), not an
+        # envelope-contract probe; the console entry path is covered by the
+        # SUBPROCESS_SAMPLE_VERBS probes.
+        _rc, help_text, _err = invoke_cli([verb, "--help"])
+        for line in help_text.splitlines():
             stripped = line.strip()
             if stripped.startswith("--spec ") or stripped == "--spec":
                 accepting.add(verb)

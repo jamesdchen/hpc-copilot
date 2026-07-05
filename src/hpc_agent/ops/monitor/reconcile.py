@@ -245,6 +245,26 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
     }
 
 
+# The canary-pairing suffix (#258): every canary-gated ``submit-flow`` writes
+# TWO journal entries, ``<run_id>`` and ``<run_id>-canary``. This module owns
+# the pairing definition; other call sites (``ops/status_blocks``) import the
+# helpers below rather than re-inlining the suffix (engineering-principles.md:
+# one definition per identity decision).
+_CANARY_SUFFIX = "-canary"
+
+
+def canary_parent_of(run_id: str) -> str | None:
+    """The parent run's id when *run_id* is a ``-canary`` sibling, else None.
+
+    The single is-this-a-canary predicate (#258 pairing): a non-None return
+    means *run_id* names the 1-task canary journal entry and the returned id
+    names the main run it was submitted alongside.
+    """
+    if run_id.endswith(_CANARY_SUFFIX):
+        return run_id[: -len(_CANARY_SUFFIX)]
+    return None
+
+
 def _sibling_run_ids(run_id: str) -> list[str]:
     """Paired journal entries that share this submit's ``cmd_sha`` (#258).
 
@@ -254,10 +274,10 @@ def _sibling_run_ids(run_id: str) -> list[str]:
     untouched canary entry. The pairing is the ``-canary`` suffix; given either
     half, return the other.
     """
-    suffix = "-canary"
-    if run_id.endswith(suffix):
-        return [run_id[: -len(suffix)]]
-    return [f"{run_id}{suffix}"]
+    parent = canary_parent_of(run_id)
+    if parent is not None:
+        return [parent]
+    return [f"{run_id}{_CANARY_SUFFIX}"]
 
 
 @primitive(

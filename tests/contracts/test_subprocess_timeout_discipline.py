@@ -47,9 +47,7 @@ _ALLOWLIST_FILES: set[str] = {
 # follow-up migration is to switch each to :func:`tests._subprocess.run_cli`
 # (or add an explicit timeout) and remove its entry here. DO NOT GROW.
 _GRANDFATHERED: set[str] = {
-    "tests/meta/campaign/atoms/test_cli_campaign.py",
     "tests/cli/_helpers.py",
-    "tests/cli/test_discover_search_dirs.py",
     "tests/integration/test_external_harness_compat.py",
     "tests/integration/test_hpc_preamble_integration.py",
     "tests/integration/test_status_integration.py",
@@ -78,7 +76,7 @@ def _calls_without_timeout(path: Path) -> list[int]:
         return []
     offenders: list[int] = []
     for node in ast.walk(tree):
-        if not _is_subprocess_run_call(node):
+        if not isinstance(node, ast.Call) or not _is_subprocess_run_call(node):
             continue
         kw_names = {kw.arg for kw in node.keywords}
         if "timeout" not in kw_names:

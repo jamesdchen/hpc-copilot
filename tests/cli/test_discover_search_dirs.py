@@ -9,9 +9,9 @@ can stay on a pure CLI call without importing the Python package.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from typing import TYPE_CHECKING
+
+from tests._subprocess import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,26 +31,15 @@ def _write_executor(path: Path) -> None:
 
 
 def _run_discover(experiment_dir: Path, *extra: str) -> dict:
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "hpc_agent",
-            "discover",
-            "--experiment-dir",
-            str(experiment_dir),
-            *extra,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = run_cli("discover", "--experiment-dir", str(experiment_dir), *extra)
     assert proc.returncode == 0, proc.stderr
     lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
     assert len(lines) == 1
     env = json.loads(lines[0])
     assert env["ok"] is True
-    return env["data"]
+    data = env["data"]
+    assert isinstance(data, dict)
+    return data
 
 
 def test_default_scans_executors_scripts_src(tmp_path: Path) -> None:

@@ -104,6 +104,54 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
     return tasks_py
 
 
+@pytest.fixture(autouse=True)
+def _isolated_journal_home(tmp_path: Path) -> Iterator[None]:
+    """Redirect the hpc journal home to ``tmp_path`` for EVERY test.
+
+    Everything under ``~/.claude/hpc/`` — the per-repo journal
+    (``<repo_hash>/``), the detached-worker spec/log/lease files
+    (``_detached/``), and the global caches (canary / discover /
+    preflight / describe / skill-return breadcrumb) — resolves through
+    :func:`hpc_agent.state.run_record._current_homedir`. Any test that
+    exercises those paths without redirecting the home writes into the
+    developer's REAL ``~/.claude/hpc/`` (proving-run #3 findings item g:
+    thousands of leaked ``<repo_hash>/`` dirs keyed to pytest tmp paths,
+    plus ``_detached/submit-s2-ml_run_abcd1234-*`` spec files).
+
+    Per-test opt-outs remain fully honoured because this fixture uses
+    the LOWEST-precedence knob and runs at setup time, before any
+    test-owned fixture:
+
+    * ``monkeypatch.setenv("HPC_JOURNAL_DIR", ...)`` (the documented
+      idiom) — env wins over the ``HPC_HOMEDIR`` attribute patched here.
+    * ``monkeypatch.setattr(run_record, "HPC_HOMEDIR", ...)`` (the
+      legacy idiom) — the test's setattr lands after this fixture's, so
+      its value wins for the test body and monkeypatch undo restores
+      this fixture's value, which teardown here then restores again.
+
+    Any ``HPC_JOURNAL_DIR`` inherited from the invoking shell is
+    removed for the test's duration (and restored after) — otherwise it
+    would out-rank the attribute and defeat the isolation.
+
+    Env and attr are saved/restored by hand rather than via
+    ``monkeypatch`` for the same finalizer-order-neutrality reason as
+    ``_hermetic_cluster_binaries`` below.
+    """
+    from hpc_agent.state import run_record
+
+    saved_env = os.environ.pop("HPC_JOURNAL_DIR", None)
+    saved_attr = run_record.HPC_HOMEDIR
+    run_record.HPC_HOMEDIR = tmp_path / "hpc_journal_home"
+    try:
+        yield
+    finally:
+        run_record.HPC_HOMEDIR = saved_attr
+        if saved_env is not None:
+            os.environ["HPC_JOURNAL_DIR"] = saved_env
+        else:
+            os.environ.pop("HPC_JOURNAL_DIR", None)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _register_primitives_once() -> None:
     """Populate the @primitive registry once per pytest session.

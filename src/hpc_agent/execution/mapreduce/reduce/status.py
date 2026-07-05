@@ -575,6 +575,16 @@ _ACTIVE_STATES = {"RUNNING", "REQUEUED", "CONFIGURING"}
 _PENDING_STATES = {"PENDING"}
 _FAILED_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"}
 
+# Scheduler-terminal SUCCESS states: the accounting record (SGE ``qacct``
+# ``exit_status 0``/``failed 0``, sacct ``COMPLETED``, PBS ``Exit_status`` 0 —
+# every query parser normalizes these to "COMPLETED") proves the task ran to
+# exit 0. Deliberately NOT in the ``_categorize`` map: with the result dir
+# intact, completion is defined by the result file on disk, and a COMPLETED
+# task with no result stays ``unknown`` (it ran but wrote nothing — including
+# the min-rows demotion path). Only the vanished-workdir fallback below
+# (:func:`_accounting_complete`) reads this set.
+_TERMINAL_SUCCESS_STATES = {"COMPLETED"}
+
 
 def _empty_summary() -> dict[str, int]:
     """Return the canonical zeroed summary dict (5 int keys, always present).
@@ -593,6 +603,32 @@ def _categorize(state: str) -> str:
     if state in _FAILED_STATES or state.startswith("CANCELLED"):
         return TaskStatus.FAILED
     return TaskStatus.UNKNOWN
+
+
+def _accounting_complete(state: str, *, result_dir_vanished: bool) -> bool:
+    """True when the scheduler's accounting record is the completion evidence.
+
+    Vanished-workdir fallback (proving run #3, finding f): when a run's
+    result location is GONE (mid-run cleanup, scratch purge) no task can ever
+    show a result file, so the reporter used to bucket every scheduler-terminal
+    task as ``unknown`` and the monitor polled that unknown forever. In that
+    one situation the scheduler's terminal accounting record (``qacct``
+    ``exit_status 0`` → "COMPLETED") is the only remaining completion evidence,
+    and it is positive evidence — the task reached the cluster, ran, and exited
+    zero.
+
+    Fires only when BOTH hold:
+
+    * ``result_dir_vanished`` — the task's expected result location no longer
+      exists. With the dir intact, a COMPLETED task with no result file stays
+      ``unknown`` (ran to exit 0 but wrote nothing, or was demoted by
+      ``min_rows``) so an on-disk anomaly is never masked by the exit code;
+      the poll loop's bounded-unknown escalation surfaces it instead.
+    * the scheduler reports a terminal-success state
+      (:data:`_TERMINAL_SUCCESS_STATES`). Terminal *failure* states already
+      classify via :func:`_categorize`; absent accounting stays ``unknown``.
+    """
+    return result_dir_vanished and str(state or "").strip().upper() in _TERMINAL_SUCCESS_STATES
 
 
 # Dispatcher exit codes that mean "the scheduler bumped this task" — its
@@ -688,6 +724,10 @@ def report_status(
     tasks: dict[str, dict] = {}
     summary = _empty_summary()
 
+    # Vanished-workdir signal: the shared result root itself is gone, so no
+    # task can ever produce a result file — see ``_accounting_complete``.
+    result_root_vanished = not Path(result_dir).is_dir()
+
     # 0-based HpcTaskId throughout: csv_results, job_info (query ingest edge),
     # and the keys we emit all speak the domain space.
     for tid in range(total_tasks):
@@ -698,7 +738,21 @@ def report_status(
             info = job_info[tid]
             state = info["state"]
             cat = _categorize(state)
-            tasks[str(tid)] = {"status": cat, **info}
+            if cat == TaskStatus.UNKNOWN and _accounting_complete(
+                state, result_dir_vanished=result_root_vanished
+            ):
+                # Result root vanished + scheduler-terminal exit 0: classify
+                # complete on the accounting evidence, with provenance so a
+                # consumer can tell this apart from a result-file completion.
+                cat = TaskStatus.COMPLETE
+                tasks[str(tid)] = {
+                    "status": cat,
+                    "evidence": "scheduler_accounting",
+                    "result_missing": True,
+                    **info,
+                }
+            else:
+                tasks[str(tid)] = {"status": cat, **info}
             summary[cat] += 1
         else:
             tasks[str(tid)] = {"status": "unknown"}
@@ -880,6 +934,18 @@ def report_status_from_tasks(
     tasks: dict[str, dict] = {}
     summary = _empty_summary()
 
+    def _result_dir_vanished(task_id: int) -> bool:
+        """Per-task vanished signal: the recorded ``result_dir`` no longer exists.
+
+        An empty/unset ``result_dir`` (degraded template) carries no vanish
+        evidence — the accounting fallback must not fire on it.
+        """
+        entry = task_entries.get(str(task_id))
+        rd = entry.get("result_dir") if isinstance(entry, dict) else None
+        if not isinstance(rd, str) or not rd:
+            return False
+        return not Path(rd).is_dir()
+
     # 0-based HpcTaskId throughout (task_entries are keyed str(0..n-1);
     # completed + job_info already speak the domain space).
     for tid in range(total):
@@ -893,7 +959,21 @@ def report_status_from_tasks(
             info = job_info[tid]
             state = info["state"]
             cat = _categorize(state)
-            tasks[str(tid)] = {"status": cat, "cmd_sha": cmd_sha, **info}
+            if cat == TaskStatus.UNKNOWN and _accounting_complete(
+                state, result_dir_vanished=_result_dir_vanished(tid)
+            ):
+                # Vanished result dir + scheduler-terminal exit 0: classify
+                # complete on the accounting evidence (see _accounting_complete).
+                cat = TaskStatus.COMPLETE
+                tasks[str(tid)] = {
+                    "status": cat,
+                    "cmd_sha": cmd_sha,
+                    "evidence": "scheduler_accounting",
+                    "result_missing": True,
+                    **info,
+                }
+            else:
+                tasks[str(tid)] = {"status": cat, "cmd_sha": cmd_sha, **info}
             summary[cat] += 1
         else:
             tasks[str(tid)] = {"status": "unknown", "cmd_sha": cmd_sha}

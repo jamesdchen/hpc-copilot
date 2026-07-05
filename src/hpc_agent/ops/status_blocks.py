@@ -47,7 +47,7 @@ from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
-from hpc_agent.ops.monitor.reconcile import reconcile
+from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.state.index import find_in_flight_runs, find_stalled_runs
 from hpc_agent.state.journal import load_run, mark_seen_by_human
@@ -139,9 +139,17 @@ def _changed_since_seen(record: Any) -> bool:
 
 
 def _digest_run(record: Any) -> dict[str, Any]:
-    """Code-digest one run into a "running where / changed since seen" row."""
+    """Code-digest one run into a "running where / changed since seen" row.
+
+    A ``-canary`` journal entry (the 1-task sibling every canary-gated submit
+    writes, #258) is marked ``is_canary`` and carries its ``parent_run_id`` so
+    the brief surfaces it as the parent's child rather than a mystery run.
+    """
+    parent_run_id = canary_parent_of(record.run_id)
     return {
         "run_id": record.run_id,
+        "is_canary": parent_run_id is not None,
+        "parent_run_id": parent_run_id,
         "cluster": record.cluster,
         "ssh_target": record.ssh_target,
         "status": record.status,
@@ -210,10 +218,17 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
             raise errors.SpecInvalid("reconcile=True requires a scheduler to query alive jobs.")
         reconcile(experiment_dir, spec.run_id, scheduler=spec.scheduler)
 
-    # 2. Gather the run(s) to digest — one run, or the whole in-flight fleet.
+    # 2. Gather the run(s) to digest — one run PLUS its paired ``-canary`` /
+    #    parent sibling (#258: every canary-gated submit writes a sibling
+    #    journal entry; a single-run snapshot that skipped it left an in-flight
+    #    canary invisible to the human — proving run #3, finding c), or the
+    #    whole in-flight fleet.
     if spec.run_id is not None:
-        rec = load_run(experiment_dir, spec.run_id)
-        records = [rec] if rec is not None else []
+        records = [
+            rec
+            for rid in (spec.run_id, *_sibling_run_ids(spec.run_id))
+            if (rec := load_run(experiment_dir, rid)) is not None
+        ]
     else:
         records = list(find_in_flight_runs(experiment_dir))
 

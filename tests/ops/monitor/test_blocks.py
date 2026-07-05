@@ -54,6 +54,19 @@ def _record(
     )
 
 
+def _journal_of(*recs: SimpleNamespace):
+    """A ``load_run(experiment_dir, run_id)`` stand-in keyed by run_id.
+
+    The single-run snapshot path loads the requested run AND its paired
+    ``-canary`` / parent sibling (#258), so a bare ``return_value=rec`` mock
+    would hand the parent record back for the sibling lookup too. This maps
+    each id to its own record and returns None for absent siblings, like the
+    real journal.
+    """
+    table = {r.run_id: r for r in recs}
+    return lambda _experiment_dir, run_id: table.get(run_id)
+
+
 def _monitor_result(*, lifecycle_state: str, last_status: dict[str, Any] | None = None):
     from hpc_agent.ops.monitor_flow import MonitorFlowResult
 
@@ -88,7 +101,7 @@ def test_snapshot_digests_running_where_and_stamps_watermark(tmp_path: Path) -> 
     seen_calls: list[tuple[str, str]] = []
 
     with (
-        mock.patch.object(blocks, "load_run", return_value=rec),
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
         mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
         mock.patch.object(
             blocks,
@@ -118,7 +131,7 @@ def test_snapshot_digests_running_where_and_stamps_watermark(tmp_path: Path) -> 
 def test_snapshot_no_watermark_move_when_mark_seen_false(tmp_path: Path) -> None:
     rec = _record(last_seen_by_human_at="2026-07-03T09:00:00+00:00")
     with (
-        mock.patch.object(blocks, "load_run", return_value=rec),
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
         mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
         mock.patch.object(blocks, "mark_seen_by_human") as m_seen,
     ):
@@ -140,7 +153,7 @@ def test_snapshot_surfaces_stalled_run_evidence(tmp_path: Path) -> None:
         }
     ]
     with (
-        mock.patch.object(blocks, "load_run", return_value=rec),
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
         mock.patch.object(blocks, "find_stalled_runs", return_value=stalled),
         mock.patch.object(blocks, "mark_seen_by_human"),
     ):
@@ -154,7 +167,7 @@ def test_snapshot_surfaces_stalled_run_evidence(tmp_path: Path) -> None:
 def test_snapshot_failed_run_is_an_anomaly_with_recommendation(tmp_path: Path) -> None:
     rec = _record(status="failed")
     with (
-        mock.patch.object(blocks, "load_run", return_value=rec),
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
         mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
         mock.patch.object(blocks, "mark_seen_by_human"),
     ):
@@ -190,7 +203,7 @@ def test_snapshot_reconcile_composes_the_ring(tmp_path: Path) -> None:
     rec = _record()
     with (
         mock.patch.object(blocks, "reconcile") as m_rec,
-        mock.patch.object(blocks, "load_run", return_value=rec),
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
         mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
         mock.patch.object(blocks, "mark_seen_by_human"),
     ):
@@ -200,6 +213,55 @@ def test_snapshot_reconcile_composes_the_ring(tmp_path: Path) -> None:
         )
     m_rec.assert_called_once()
     assert m_rec.call_args.kwargs["scheduler"] == "slurm"
+
+
+def test_snapshot_single_run_surfaces_canary_sibling(tmp_path: Path) -> None:
+    """Regression (proving run #3, finding c): a single-run snapshot must list
+    the paired ``<run_id>-canary`` journal entry (#258), marked as a canary
+    child of its parent — an in-flight canary used to be invisible."""
+    parent = _record(run_id=_RUN_ID, status="complete")
+    canary = _record(run_id=f"{_RUN_ID}-canary", status="in_flight")
+    seen_calls: list[str] = []
+
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(parent, canary)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(
+            blocks,
+            "mark_seen_by_human",
+            side_effect=lambda run_id, *, at, experiment_dir: seen_calls.append(run_id),
+        ),
+    ):
+        result = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+
+    rows = result.brief["running_where"]
+    assert [r["run_id"] for r in rows] == [_RUN_ID, f"{_RUN_ID}-canary"]
+    parent_row, canary_row = rows
+    assert parent_row["is_canary"] is False
+    assert parent_row["parent_run_id"] is None
+    assert canary_row["is_canary"] is True
+    assert canary_row["parent_run_id"] == _RUN_ID
+    # Both digested runs get their attention watermark re-stamped.
+    assert seen_calls == [_RUN_ID, f"{_RUN_ID}-canary"]
+
+
+def test_snapshot_canary_run_id_surfaces_its_parent(tmp_path: Path) -> None:
+    """The pairing is symmetric: snapshotting the canary id digests the parent too."""
+    parent = _record(run_id=_RUN_ID, status="in_flight")
+    canary = _record(run_id=f"{_RUN_ID}-canary", status="complete")
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(parent, canary)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        result = blocks.status_snapshot(
+            tmp_path, spec=StatusSnapshotSpec(run_id=f"{_RUN_ID}-canary")
+        )
+
+    assert {r["run_id"] for r in result.brief["running_where"]} == {
+        _RUN_ID,
+        f"{_RUN_ID}-canary",
+    }
 
 
 def test_snapshot_fleet_digest_over_in_flight_runs(tmp_path: Path) -> None:

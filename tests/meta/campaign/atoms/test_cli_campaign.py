@@ -8,29 +8,26 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 from typing import TYPE_CHECKING
 
 from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
+from tests._subprocess import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *args],
-        capture_output=True,
-        text=True,
-    )
+    proc = run_cli(*args)
     return proc.returncode, proc.stdout, proc.stderr
 
 
 def _parse_envelope(stdout: str) -> dict:
     lines = [line for line in stdout.strip().splitlines() if line.strip()]
     assert len(lines) == 1, f"expected exactly one stdout line; got {len(lines)}"
-    return json.loads(lines[0])
+    envelope = json.loads(lines[0])
+    assert isinstance(envelope, dict)
+    return envelope
 
 
 def _common_required_kwargs(run_id: str, task_count: int = 1) -> dict:

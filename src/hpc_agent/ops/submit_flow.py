@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -120,16 +121,70 @@ def _validate_ssh_target(ssh_target: str) -> str:
         raise errors.SpecInvalid(str(exc)) from exc
 
 
-def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
-    """Single ssh probe to verify cluster reachability. Caller may skip."""
+# Pre-flight probe bounds. The 2026-07-04 S2 wedge was this probe's ssh
+# subprocess blocking with no enforceable deadline (Windows subprocess.run's
+# post-kill communicate() is unbounded — see infra.remote._capture_windows),
+# parking the whole block-drive chain silently for hours. The probe now runs
+# under a hard per-attempt timeout and a small attempt budget, so its total
+# wall-clock is bounded even in the worst case: each ``ssh_run`` call is
+# itself capped at 5 backoff-ladder attempts × timeout + ~30s of sleeps, so
+# the probe cannot exceed ``max_attempts × (5 × timeout + 30s)`` (~6 min at
+# the defaults) before surfacing a structured failure.
+_PREFLIGHT_PROBE_TIMEOUT_SEC = 30.0
+_PREFLIGHT_PROBE_MAX_ATTEMPTS = 2
+
+
+def _preflight_probe(
+    ssh_target: str,
+    *,
+    skip: bool,
+    timeout_sec: float | None = None,
+    max_attempts: int | None = None,
+) -> None:
+    """Cheap ssh probe to verify cluster reachability. Caller may skip.
+
+    Bounded on every axis (see the constants above): each attempt passes an
+    explicit *timeout_sec* to :func:`ssh_run` (default
+    :data:`_PREFLIGHT_PROBE_TIMEOUT_SEC`), timeouts are retried at most
+    *max_attempts* times total (default :data:`_PREFLIGHT_PROBE_MAX_ATTEMPTS`)
+    with a loud per-attempt stderr line, and every failure path raises
+    :class:`errors.SshUnreachable` (``ssh_unreachable`` / ``network`` /
+    ``retry_safe``) so the block-drive chain gets an anomaly envelope instead
+    of a hang or a raw ``TimeoutError``.
+
+    A clean non-zero exit (auth refused, unknown host, connection refused)
+    fails immediately without consuming the retry budget: ``ssh_run`` already
+    retried any throttle-marked transient internally, so what comes back
+    non-zero is permanent and re-probing only burns wall-clock (and risks
+    tripping the cluster's connection rate-limiter).
+    """
     if skip:
         return
-    probe = ssh_run("true", ssh_target=ssh_target)
-    if probe.returncode != 0:
+    effective_timeout = _PREFLIGHT_PROBE_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+    attempts = _PREFLIGHT_PROBE_MAX_ATTEMPTS if max_attempts is None else max_attempts
+    last_failure = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            probe = ssh_run("true", ssh_target=ssh_target, timeout=effective_timeout)
+        except TimeoutError as exc:
+            last_failure = str(exc)
+            print(
+                f"pre-flight probe attempt {attempt}/{attempts} to {ssh_target} "
+                f"failed: {last_failure}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        if probe.returncode == 0:
+            return
         raise errors.SshUnreachable(
             f"pre-flight ssh probe to {ssh_target} failed (exit {probe.returncode}): "
             f"{(probe.stderr or '').strip()[:200]}"
         )
+    raise errors.SshUnreachable(
+        f"pre-flight ssh probe to {ssh_target} timed out on all {attempts} attempts "
+        f"({effective_timeout:g}s per attempt); last failure: {last_failure}"
+    )
 
 
 # #275: the cluster-side ``command -v uv`` probe is ONE implementation, in

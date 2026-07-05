@@ -45,6 +45,7 @@ from hpc_agent._kernel.contract.vocabulary import LifecycleState
 __all__ = [
     "all_tasks_complete",
     "run_failed",
+    "unresolved_unknown",
     "classify_polling",
     "classify_settled",
     "settle",
@@ -52,6 +53,8 @@ __all__ = [
     "SETTLE_REASON_COMPLETE",
     "SETTLE_REASON_FAILED",
     "SETTLE_REASON_ABANDONED",
+    "POLLING_REASON_UNKNOWN_EXHAUSTED",
+    "UNKNOWN_TICKS_BEFORE_ESCALATION",
 ]
 
 # Stable machine-readable reasons for a settle verdict — the provenance an
@@ -61,6 +64,46 @@ __all__ = [
 SETTLE_REASON_COMPLETE = "all_tasks_complete"
 SETTLE_REASON_FAILED = "positive_failure_evidence"
 SETTLE_REASON_ABANDONED = "no_on_disk_evidence"
+
+#: Machine-readable reason for the bounded-unknown escalation arm of
+#: :func:`classify_polling` (proving run #3, finding f): nothing alive on the
+#: scheduler, no results on disk, no failure evidence — and it STAYED that way
+#: for the escalation streak. An anomaly verdict, not a normal terminal.
+POLLING_REASON_UNKNOWN_EXHAUSTED = "unknown_status_exhausted"
+
+#: Consecutive "no live work, only unknowns" polls tolerated before
+#: :func:`classify_polling` escalates to a terminal ``abandoned`` anomaly
+#: instead of polling forever. Small: one such tick can be a transient
+#: accounting lag (qacct has no record yet seconds after the job leaves
+#: qstat); three consecutive ticks with zero live work and zero evidence is
+#: the vanished-workdir class, which no amount of further polling resolves.
+UNKNOWN_TICKS_BEFORE_ESCALATION = 3
+
+
+def unresolved_unknown(summary: dict[str, Any], total_tasks: int) -> bool:
+    """True when a poll tick shows NO live work and NO conclusive evidence.
+
+    The tick signature of the vanished-workdir class (proving run #3, finding
+    f): the scheduler holds nothing running or pending, nothing failed, the
+    run is not complete, and at least one task is ``unknown`` — i.e. the
+    reporter found neither a result file nor a scheduler record (or only a
+    record no classifier arm can use). One such tick is inconclusive
+    (accounting lag); a *streak* of them is what :func:`classify_polling`'s
+    bounded-unknown arm escalates on. The caller owns the streak count (state
+    lives in the poll loop; the decision lives here).
+
+    Zero-task runs and reporter-failure summaries (``{"error": ...}``) carry
+    no unknown count and return False.
+    """
+    if total_tasks <= 0:
+        return False
+    complete = int(summary.get("complete", 0) or 0)
+    running = int(summary.get("running", 0) or 0)
+    pending = int(summary.get("pending", 0) or 0)
+    failed = int(summary.get("failed", 0) or 0)
+    unknown = int(summary.get("unknown", 0) or 0)
+    return complete < total_tasks and running == 0 and pending == 0 and failed == 0 and unknown > 0
+
 
 # The non-``complete`` buckets of the canonical 5-key ``TaskStatus`` summary
 # (see ``execution/mapreduce/reduce/status._empty_summary``). A clean reporter
@@ -116,6 +159,7 @@ def classify_polling(
     total_tasks: int,
     *,
     partial_ok: bool = False,
+    unknown_streak: int = 0,
 ) -> tuple[str | None, str | None]:
     """Mid-flight verdict: ``(lifecycle_state, escalation_reason)``.
 
@@ -125,6 +169,16 @@ def classify_polling(
     With ``partial_ok=True``, the wave is classified ``complete`` as soon as no
     work is left and at least one task succeeded; only a zero-success wave is
     ``failed`` under partial-ok.
+
+    ``unknown_streak`` is the caller's count of consecutive polls for which
+    :func:`unresolved_unknown` held (the poll loop owns the state; the
+    decision lives here). Once the streak reaches
+    :data:`UNKNOWN_TICKS_BEFORE_ESCALATION` while the current tick is STILL
+    unresolved-unknown, the verdict is a terminal ``abandoned`` anomaly
+    (reason :data:`POLLING_REASON_UNKNOWN_EXHAUSTED`) — the vanished-workdir
+    class (proving run #3, finding f) that would otherwise poll "unknown"
+    forever. Failure evidence outranks this arm (a positive ``failed`` count
+    classifies FAILED above), and any live work resets the caller's streak.
 
     NOTE: completion here is *lenient* (``complete >= total_tasks``) and is
     checked BEFORE failure — unlike :func:`classify_settled`. The divergence is
@@ -144,6 +198,16 @@ def classify_polling(
         # No work left and at least one failure. MVP doesn't auto-resubmit;
         # surface the failure for the caller to handle.
         return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
+    if unknown_streak >= UNKNOWN_TICKS_BEFORE_ESCALATION and unresolved_unknown(
+        summary, total_tasks
+    ):
+        # Bounded-unknown anomaly escalation: nothing alive, nothing on disk,
+        # nothing failed — for the whole streak. Terminal ``abandoned`` with a
+        # reason that names the anomaly, never an infinite unknown loop.
+        return (
+            LifecycleState.ABANDONED,
+            f"{POLLING_REASON_UNKNOWN_EXHAUSTED}:streak={int(unknown_streak)}",
+        )
     return (None, None)
 
 

@@ -56,6 +56,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
@@ -216,6 +217,9 @@ class _LoopState:
     last_combined_waves: list[int] = field(default_factory=list)
     last_failed_waves: list[int] = field(default_factory=list)
     combiner_attempts: dict[int, int] = field(default_factory=dict)
+    #: Consecutive polls for which ``classify.unresolved_unknown`` held —
+    #: fed to the classifier's bounded-unknown escalation arm (finding f).
+    unknown_streak: int = 0
 
 
 # ``_tick_log_path`` and ``_append_tick`` live in
@@ -494,11 +498,25 @@ def monitor_flow(
                             # envelope will surface failed_waves.
                             state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
 
+            # Bounded-unknown watchdog (proving run #3, finding f): a run whose
+            # remote workdir vanished mid-run can poll "unknown" indefinitely —
+            # nothing alive on the scheduler, no results on disk, no failure
+            # evidence. Count consecutive such polls; the classifier's
+            # bounded-unknown arm escalates to a terminal ``abandoned`` anomaly
+            # once the streak reaches UNKNOWN_TICKS_BEFORE_ESCALATION, instead
+            # of spinning to the wall-clock budget. Any tick with live work or
+            # positive evidence resets the streak.
+            if unresolved_unknown(last_status, int(record.total_tasks)):
+                state.unknown_streak += 1
+            else:
+                state.unknown_streak = 0
+
             # Terminal check.
             terminal, esc_reason = _is_terminal(
                 last_status,
                 int(record.total_tasks),
                 partial_ok=_read_partial_ok(experiment_dir, run_id),
+                unknown_streak=state.unknown_streak,
             )
             if terminal == LifecycleState.COMPLETE:
                 mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
@@ -694,14 +712,14 @@ def monitor_flow(
                     escalation_reason=esc_reason,
                 )
 
-            # Any other terminal verdict (``abandoned`` — no on-disk evidence —
-            # or a future terminal lifecycle state). ``classify_polling`` does
-            # not emit these today, so this branch is behavior-neutral for the
-            # current classifier; it exists so that if the poll loop EVER
-            # observes a non-complete/failed terminal state it flows through the
-            # SAME mark-terminal + guaranteed-harvest path (design §5 gap (a):
+            # Any other terminal verdict. ``classify_polling`` emits exactly one
+            # today: the bounded-unknown escalation to ``abandoned`` (finding f —
+            # unknown_streak reached UNKNOWN_TICKS_BEFORE_ESCALATION with no live
+            # work and no evidence). It flows through the SAME mark-terminal +
+            # guaranteed-harvest path as complete/failed (design §5 gap (a):
             # abandoned must not skip the harvest) instead of silently falling
-            # through to the budget check and polling a dead run to timeout.
+            # through to the budget check and polling a dead run to timeout; the
+            # anomaly provenance rides out on ``escalation_reason``.
             if terminal is not None:
                 mark_terminal(experiment_dir, run_id, status=terminal)
                 _append_tick(

@@ -167,15 +167,60 @@ def _detach_popen_kwargs() -> dict[str, Any]:
     ``start_new_session=True`` makes the child a session+group leader so it does
     not receive the parent's SIGHUP/SIGINT. Windows: ``DETACHED_PROCESS |
     CREATE_NEW_PROCESS_GROUP`` so it has no console and ignores the parent's
-    Ctrl-C/console-close.
+    Ctrl-C/console-close, plus ``CREATE_BREAKAWAY_FROM_JOB`` so the worker
+    escapes an inherited kill-on-close Job Object.
+
+    The Job Object flag is the proving-run-#3 finding (detached-worker-as-MCP-
+    grandchild): agent harnesses (Claude Code among them) run their MCP servers
+    inside a Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``, so every
+    descendant — including our "detached" worker — is killed the moment the
+    session's job handle closes, regardless of ``DETACHED_PROCESS``. Measured
+    empirically (2026-07-04, Windows 11): a worker spawned with only
+    ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` inside a kill-on-close job
+    dies when the job handle closes; adding ``CREATE_BREAKAWAY_FROM_JOB``
+    keeps it alive when the job grants ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` (and
+    jobs with ``SILENT_BREAKAWAY_OK`` — this box's Claude Code session job,
+    flags 0x3000 — already exempt children automatically). When the job grants
+    neither, CreateProcess is documented to fail with ``ERROR_ACCESS_DENIED``
+    (observed on Win11: it instead succeeds and silently keeps the child in
+    the job), so :func:`_popen_detached` retries once WITHOUT the breakaway
+    flag — degrading to today's behavior, never refusing the launch.
     """
     if sys.platform == "win32":
         flags = 0
         # These attributes exist only on Windows; guard for the type checker.
         flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
         flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags |= getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         return {"creationflags": flags}
     return {"start_new_session": True}
+
+
+def _popen_detached(argv: list[str], **popen_kwargs: Any) -> subprocess.Popen[bytes]:
+    """``Popen`` with the platform detach flags, tolerating breakaway denial.
+
+    On Windows a job without ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` may refuse a
+    ``CREATE_BREAKAWAY_FROM_JOB`` spawn with ``ERROR_ACCESS_DENIED`` (winerror
+    5). That host put us in an inescapable job on purpose; the launch must
+    still succeed (the worker then shares the session's fate — exactly the
+    pre-fix contract), so retry once without the breakaway bit. Any other
+    failure propagates unchanged.
+    """
+    detach_kwargs = _detach_popen_kwargs()
+    try:
+        return subprocess.Popen(argv, **popen_kwargs, **detach_kwargs)
+    except OSError as exc:
+        breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+        flags = detach_kwargs.get("creationflags", 0)
+        if (
+            sys.platform == "win32"
+            and breakaway
+            and flags & breakaway
+            and getattr(exc, "winerror", None) == 5  # ERROR_ACCESS_DENIED
+        ):
+            detach_kwargs["creationflags"] = flags & ~breakaway
+            return subprocess.Popen(argv, **popen_kwargs, **detach_kwargs)
+        raise
 
 
 def launch_status_pipeline_detached(
@@ -364,14 +409,13 @@ def _spawn_detached(
 
         log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
         try:
-            proc = subprocess.Popen(
+            proc = _popen_detached(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 cwd=cwd,
                 env={**os.environ},
-                **_detach_popen_kwargs(),
             )
         finally:
             # The child inherits its own dup'd fd; this process closes its copy

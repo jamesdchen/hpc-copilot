@@ -80,6 +80,7 @@ def _is_terminal(
     total_tasks: int,
     *,
     partial_ok: bool = False,
+    unknown_streak: int = 0,
 ) -> tuple[str | None, str | None]:
     """Inspect counts and return (lifecycle_state, escalation_reason).
 
@@ -89,8 +90,18 @@ def _is_terminal(
     soon as no work is left and at least one task succeeded. Only a
     zero-success wave is classified ``failed`` under partial-ok.
 
+    ``unknown_streak`` is the poll loop's count of consecutive
+    unresolved-unknown ticks (see ``classify.unresolved_unknown``); at
+    ``UNKNOWN_TICKS_BEFORE_ESCALATION`` the classifier escalates to a
+    terminal ``abandoned`` anomaly instead of polling unknown forever
+    (the vanished-workdir class, proving run #3 finding f). Callers that
+    do not track a streak (the aggregate precondition) leave the default
+    ``0`` and never trigger the arm.
+
     Thin adapter over the shared mid-flight classifier so the monitor poll
     loop and the reconcile settle path read the same count-to-verdict rule
     from one place (:mod:`hpc_agent.ops.monitor.classify`).
     """
-    return classify_polling(last_status, total_tasks, partial_ok=partial_ok)
+    return classify_polling(
+        last_status, total_tasks, partial_ok=partial_ok, unknown_streak=unknown_streak
+    )

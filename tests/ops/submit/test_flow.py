@@ -1757,3 +1757,99 @@ class TestPostQsubSidecarPreStamp:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
 
         assert read_run_sidecar(tmp_path, "rProd")["job_ids"] == ["13610902"]
+
+
+class TestPreflightProbe:
+    """The 2026-07-04 S2 wedge: ``_preflight_probe``'s ssh subprocess blocked
+    with no enforceable deadline, parking the driver silently for hours.
+    These tests pin the three guards that replace the hang: a hard per-attempt
+    timeout threaded to ``ssh_run``, a bounded attempt budget with a loud
+    per-attempt stderr line, and a structured ``SshUnreachable`` envelope
+    (never a raw ``TimeoutError``, never a hang) on final failure.
+    """
+
+    @staticmethod
+    def _probe(**kwargs: Any):
+        from hpc_agent.ops.submit_flow import _preflight_probe
+
+        return _preflight_probe("u@cluster", skip=False, **kwargs)
+
+    def test_skip_makes_no_ssh_call(self) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import _preflight_probe
+
+        with mock.patch.object(sf_module, "ssh_run") as ssh:
+            _preflight_probe("u@cluster", skip=True)
+        assert ssh.call_count == 0
+
+    def test_default_timeout_threaded_to_ssh_run(self) -> None:
+        """The probe must pass an explicit per-attempt timeout — the wedge
+        was a probe subprocess with no enforceable deadline."""
+        from hpc_agent.ops import submit_flow as sf_module
+
+        ok = mock.Mock(returncode=0)
+        with mock.patch.object(sf_module, "ssh_run", return_value=ok) as ssh:
+            self._probe()
+        ssh.assert_called_once_with(
+            "true", ssh_target="u@cluster", timeout=sf_module._PREFLIGHT_PROBE_TIMEOUT_SEC
+        )
+
+    def test_explicit_timeout_overrides_default(self) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+
+        ok = mock.Mock(returncode=0)
+        with mock.patch.object(sf_module, "ssh_run", return_value=ok) as ssh:
+            self._probe(timeout_sec=7.5)
+        assert ssh.call_args.kwargs["timeout"] == 7.5
+
+    def test_timeout_budget_is_bounded_and_raises_envelope(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """(a) the timeout fires, (b) the retry budget is bounded, (c) the
+        failure surfaces as the structured ssh_unreachable envelope."""
+        from hpc_agent.ops import submit_flow as sf_module
+
+        hang = TimeoutError("ssh to u@cluster timed out after 30s: true")
+        with (
+            mock.patch.object(sf_module, "ssh_run", side_effect=hang) as ssh,
+            pytest.raises(errors.SshUnreachable) as exc_info,
+        ):
+            self._probe()
+        # Bounded budget: exactly max_attempts calls, then a raise — no spin.
+        assert ssh.call_count == sf_module._PREFLIGHT_PROBE_MAX_ATTEMPTS
+        # Structured envelope fields (what the CLI maps to error_code/category).
+        err = exc_info.value
+        assert err.error_code == "ssh_unreachable"
+        assert err.category == "network"
+        assert err.retry_safe is True
+        assert "timed out on all 2 attempts" in str(err)
+        assert "timed out after 30s" in str(err)  # last failure carried
+        # Loud per-attempt breadcrumbs on stderr — the wedge was silent.
+        stderr = capsys.readouterr().err
+        assert "pre-flight probe attempt 1/2 to u@cluster failed" in stderr
+        assert "pre-flight probe attempt 2/2 to u@cluster failed" in stderr
+
+    def test_timeout_then_success_recovers(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+
+        ok = mock.Mock(returncode=0)
+        with mock.patch.object(
+            sf_module, "ssh_run", side_effect=[TimeoutError("timed out"), ok]
+        ) as ssh:
+            self._probe()  # must not raise
+        assert ssh.call_count == 2
+        assert "attempt 1/2" in capsys.readouterr().err
+
+    def test_clean_nonzero_exit_fails_immediately_without_burning_budget(self) -> None:
+        """Auth refused / unknown host is permanent: ssh_run already retried
+        transients internally, so the probe must not re-probe (connection-storm
+        guard) — one call, immediate structured raise."""
+        from hpc_agent.ops import submit_flow as sf_module
+
+        bad = mock.Mock(returncode=255, stderr="Permission denied (publickey).")
+        with (
+            mock.patch.object(sf_module, "ssh_run", return_value=bad) as ssh,
+            pytest.raises(errors.SshUnreachable, match="exit 255"),
+        ):
+            self._probe()
+        assert ssh.call_count == 1
