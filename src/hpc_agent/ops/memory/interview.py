@@ -49,6 +49,53 @@ if TYPE_CHECKING:
 __all__ = ["record_interview"]
 
 
+def _assert_derived_executor_runnable(executor_cmd: str, *, kind: str) -> None:
+    """Assert a derived ``executor_cmd`` is a runnable per-task command.
+
+    Run #6 finding F1: the framework's entry_point→executor derivation is the
+    ONE sanctioned source of the sidecar's per-task ``executor``
+    (``resolve-submit-inputs`` re-applies ``_materialized.entry_point
+    .executor_cmd`` over anything else), so a derivation emitting a command
+    the submit gates would refuse — or the dispatcher would exit-127 on — is
+    a framework bug that must fail LOUDLY at derivation time, not on the
+    cluster.
+
+    The bar is the same pair the submit path enforces downstream:
+
+    * :func:`hpc_agent.incorporation.build.submit_spec.check_per_task_executor`
+      (format placeholders, bare ``module:function``, bare script names,
+      kwarg casing) — called without an ``experiment_dir`` (the kwarg set is
+      unknowable here, so that leg no-ops exactly as at sidecar-write time);
+    * ``submit_flow._is_runnable_executor`` (empty / dispatcher-shaped).
+
+    Raises :class:`errors.SpecInvalid` naming the derivation kind — the
+    remedy is a framework fix, never a hand-edited command.
+    """
+    # Lazy imports: incorporation is substrate for this check (the same
+    # predicate write-run-sidecar applies); submit_flow is reached via the
+    # package alias form (the direct subject spelling trips the
+    # subject-import lint from inside ``memory``).
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+    from hpc_agent.ops import submit_flow as _submit_flow
+
+    prefix = (
+        f"interview: the materialized {kind!r} entry point derived an unrunnable "
+        f"per-task executor_cmd {executor_cmd!r} — this is a FRAMEWORK bug in the "
+        "entry_point→executor derivation (the derivation is the single sanctioned "
+        "source of the sidecar's executor, so it must always emit a runnable "
+        "command). Do not hand-edit the command; fix the derivation "
+        "(incorporation/wrap_entry_point.py). "
+    )
+    try:
+        check_per_task_executor(executor_cmd)
+    except errors.SpecInvalid as exc:
+        raise errors.SpecInvalid(prefix + f"Downstream gate said: {exc}") from exc
+    if not _submit_flow._is_runnable_executor(executor_cmd):
+        raise errors.SpecInvalid(
+            prefix + "It is empty or dispatcher-shaped (_is_runnable_executor refused it)."
+        )
+
+
 def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
     """Resolve --campaign-dir to an absolute Path for record_interview."""
     return {"campaign_dir": Path(ns.campaign_dir).resolve()}
@@ -252,6 +299,16 @@ def record_interview(
                     run_name=ep["run_name"],
                 ),
             }
+        # Run #6 F1: the derivation is the SINGLE sanctioned source of the
+        # per-task executor (resolve-submit-inputs re-applies it over anything
+        # else), so a derivation that emits an unrunnable command is a
+        # FRAMEWORK bug — fail loudly here, at derivation time, not exit-127
+        # on the cluster after a full staging round-trip.
+        if entry_point_materialized is not None:
+            _assert_derived_executor_runnable(
+                str(entry_point_materialized.get("executor_cmd") or ""),
+                kind=str(entry_point_materialized.get("kind") or kind),
+            )
 
     if "task_generator" in intent:
         # Generator mode — pre-validate count, then materialize tasks.py.

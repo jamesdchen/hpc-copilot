@@ -3,7 +3,7 @@
 Replaces the prose tables in ``hpc-submit/SKILL.md`` and
 ``hpc-wrap-entry-point/SKILL.md`` with one code object so the partition
 can no longer drift between the two skills (or between a skill and the
-resolution code). Every submit-input field is in exactly one of two
+resolution code). Every submit-input field is in exactly one of three
 classes:
 
 * :data:`REQUIRED_CALLER_FIELDS` — genuine judgment the LLM relays
@@ -16,6 +16,14 @@ classes:
 * :data:`AUTO_RESOLVABLE_FIELDS` — fields a deterministic rule (a cluster
   default, a runtime prior, a recommendation primitive, a glob) can fill.
   Only these may carry an :class:`Ambiguity` ``safe_default``.
+* :data:`CODE_DERIVED_FIELDS` — outputs the framework RE-DERIVES from the
+  input delta (``executor`` from the interview's materialized entry,
+  ``job_env``/activation from the cluster, ``run_id``/``cmd_sha`` from the
+  task list, …). NO agent-facing surface may accept a hand-authored value
+  for one: ``revise-resolved`` refuses a patch naming one, and
+  ``append-decision`` refuses a ``resolved`` dict committing one (run #6
+  finding F1: a hand-authored sidecar ``executor`` of the bare token
+  ``monte_carlo_pi`` shelled verbatim and exited 127).
 
 The :class:`Ambiguity` guard (``__post_init__``) is the fireable lock:
 constructing an ``Ambiguity`` with a ``safe_default`` on a
@@ -38,6 +46,8 @@ from typing import Any
 
 __all__ = [
     "AUTO_RESOLVABLE_FIELDS",
+    "CODE_DERIVED_FIELDS",
+    "JOURNAL_UNAUTHORABLE_FIELDS",
     "REQUIRED_CALLER_FIELDS",
     "Ambiguity",
     "may_have_safe_default",
@@ -67,6 +77,61 @@ AUTO_RESOLVABLE_FIELDS: frozenset[str] = frozenset(
         "entry_point",
         "uncovered_param",
     }
+)
+
+
+# CODE-DERIVED fields — the third partition class (run #6 finding F1). Each is
+# an OUTPUT the framework recomputes from the input delta; an LLM must never
+# hand-author one at any agent-facing surface. Moved here from
+# ``ops/revise_resolved.py``'s private ``_DERIVED_FIELDS`` so the single source
+# of truth serves every guard (revise-resolved's patch refusal, append-
+# decision's resolved refusal) — the run-#6 incident was exactly a surface
+# (the sidecar / a hand-authored resolve spec) where ``executor`` was still
+# authorable: the agent wrote the bare extension-less token ``monte_carlo_pi``
+# and the dispatcher shelled it verbatim (exit 127, canary_failed).
+CODE_DERIVED_FIELDS: frozenset[str] = frozenset(
+    {
+        "job_env",  # derived from (cluster, run identity) at build-submit-spec
+        "run_id",  # derived by compute-run-id (<run_name>-<cmd_sha[:8]>)
+        "cmd_sha",  # derived by compute-run-id (hash of the task list)
+        "executor",  # the per-task command — from the interview's materialized entry
+        "ssh_target",  # derived from the cluster's user@host (clusters.yaml)
+        "backend",  # derived from the cluster's scheduler (clusters.yaml)
+        "remote_path",  # derived from the cluster's scratch
+        "total_tasks",  # derived from tasks.total() (compute-run-id)
+        "sidecar",  # the whole config snapshot is re-written, never hand-set
+        "submit_spec",  # the built submit-flow spec — a derived output
+        "script",  # the cluster-side template path (backend + is_gpu)
+        "repo_dir",  # derived from remote_path (deploy target)
+        "job_name",  # defaults to profile
+        "modules",  # activation — derived from (cluster, clusters.yaml)
+        "conda_source",  # activation — derived from (cluster, clusters.yaml)
+        "conda_env",  # activation — derived from (cluster, clusters.yaml)
+    }
+)
+
+# The subset of CODE_DERIVED_FIELDS that ``append-decision`` refuses in a
+# caller-supplied ``resolved`` dict. Scoped by AUDIT, not by the full set,
+# because three derived names are LEGITIMATELY present in a committed
+# ``resolved`` and refusing them would break green paths (engineering-
+# principles: the guard must be able to fire without breaking a legit path):
+#
+# * ``run_id`` — a genuine INPUT field of the status/aggregate workflows
+#   (``field_ownership.OWNERSHIP`` maps it to status-snapshot /
+#   aggregate-check), so a greenlight's resolved naming it is sanctioned.
+# * ``cmd_sha`` — the §4 identity fast-path token: ``block_drive`` reads
+#   ``committed_resolved.get("cmd_sha")`` to decide advance-vs-rerun, so the
+#   approved spec legitimately echoes it.
+# * ``total_tasks`` — a count echo is harmless here because it has its own
+#   ground-truth cross-check downstream (finding 21: resolve-submit-inputs
+#   refuses any declared count that disagrees with ``tasks.total()``).
+#
+# Everything else in the set is a value the framework alone derives and no
+# brief/spec flow ever asks the agent to restate — a ``resolved`` naming one
+# is the hand-authoring bug class (run #6 F1's ``executor``), refused with a
+# pointer at ``revise-resolved`` (patch the INPUT field instead).
+JOURNAL_UNAUTHORABLE_FIELDS: frozenset[str] = CODE_DERIVED_FIELDS - frozenset(
+    {"run_id", "cmd_sha", "total_tasks"}
 )
 
 

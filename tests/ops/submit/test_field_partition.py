@@ -106,3 +106,56 @@ def test_to_dict_shape_matches_skill_entry() -> None:
 def test_to_dict_includes_context_when_set() -> None:
     amb = Ambiguity(field="uncovered_param", safe_default={"samples": None}, context={"x": 1})
     assert amb.to_dict()["context"] == {"x": 1}
+
+
+# ---------------------------------------------------------------------------
+# CODE_DERIVED_FIELDS -- the third partition class (run #6 F1).
+# ---------------------------------------------------------------------------
+
+
+def test_code_derived_disjoint_from_other_classes() -> None:
+    from hpc_agent.ops.submit.field_partition import (
+        AUTO_RESOLVABLE_FIELDS,
+        CODE_DERIVED_FIELDS,
+        REQUIRED_CALLER_FIELDS,
+    )
+
+    assert not (CODE_DERIVED_FIELDS & REQUIRED_CALLER_FIELDS)
+    assert not (CODE_DERIVED_FIELDS & AUTO_RESOLVABLE_FIELDS)
+
+
+def test_executor_is_code_derived() -> None:
+    from hpc_agent.ops.submit.field_partition import CODE_DERIVED_FIELDS
+
+    assert "executor" in CODE_DERIVED_FIELDS
+    assert "job_env" in CODE_DERIVED_FIELDS
+
+
+def test_journal_unauthorable_is_code_derived_minus_sanctioned_echoes() -> None:
+    from hpc_agent.ops.submit.field_partition import (
+        CODE_DERIVED_FIELDS,
+        JOURNAL_UNAUTHORABLE_FIELDS,
+    )
+
+    expected = CODE_DERIVED_FIELDS - {"run_id", "cmd_sha", "total_tasks"}
+    assert expected == JOURNAL_UNAUTHORABLE_FIELDS
+    assert "executor" in JOURNAL_UNAUTHORABLE_FIELDS
+
+
+def test_revise_resolved_binds_the_partition() -> None:
+    """revise-resolved's derived set IS the partition's (bound, never copied) --
+    the two can no longer drift (run #6 F1 promoted the list to the SoT)."""
+    from hpc_agent.ops.revise_resolved import _DERIVED_FIELDS
+    from hpc_agent.ops.submit.field_partition import CODE_DERIVED_FIELDS
+
+    assert _DERIVED_FIELDS is CODE_DERIVED_FIELDS
+
+
+def test_field_ownership_facade_re_exports_the_partition() -> None:
+    from hpc_agent.ops import field_ownership
+    from hpc_agent.ops.submit import field_partition
+
+    assert field_ownership.CODE_DERIVED_FIELDS is field_partition.CODE_DERIVED_FIELDS
+    assert (
+        field_ownership.JOURNAL_UNAUTHORABLE_FIELDS is field_partition.JOURNAL_UNAUTHORABLE_FIELDS
+    )

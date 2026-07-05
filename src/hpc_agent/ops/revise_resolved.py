@@ -64,7 +64,11 @@ from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
 # The resolver-owned / caller-authored INPUT partition — the SINGLE source of
 # truth, imported (never redefined) so the allowlist can't drift from the walk's
 # own field vocabulary (walk_submit_ambiguities + field_partition).
-from hpc_agent.ops.submit.field_partition import AUTO_RESOLVABLE_FIELDS, REQUIRED_CALLER_FIELDS
+from hpc_agent.ops.submit.field_partition import (
+    AUTO_RESOLVABLE_FIELDS,
+    CODE_DERIVED_FIELDS,
+    REQUIRED_CALLER_FIELDS,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -87,27 +91,10 @@ _REVISABLE_INPUT_FIELDS: frozenset[str] = (
 # delta. Naming one in a ``patch`` is exactly the hand-authoring bug this verb
 # removes (findings 13/4/10/17), so it earns a TARGETED refusal message. This is
 # not the allow/deny mechanism (that is the allowlist above); it only makes the
-# error name the field's real owner.
-_DERIVED_FIELDS: frozenset[str] = frozenset(
-    {
-        "job_env",  # derived from (cluster, run identity) at build-submit-spec
-        "run_id",  # derived by compute-run-id (<run_name>-<cmd_sha[:8]>)
-        "cmd_sha",  # derived by compute-run-id (hash of the task list)
-        "executor",  # the per-task command — from the interview's materialized entry
-        "ssh_target",  # derived from the cluster's user@host (clusters.yaml)
-        "backend",  # derived from the cluster's scheduler (clusters.yaml)
-        "remote_path",  # derived from the cluster's scratch
-        "total_tasks",  # derived from tasks.total() (compute-run-id)
-        "sidecar",  # the whole config snapshot is re-written, never hand-set
-        "submit_spec",  # the built submit-flow spec — a derived output
-        "script",  # the cluster-side template path (backend + is_gpu)
-        "repo_dir",  # derived from remote_path (deploy target)
-        "job_name",  # defaults to profile
-        "modules",  # activation — derived from (cluster, clusters.yaml)
-        "conda_source",  # activation — derived from (cluster, clusters.yaml)
-        "conda_env",  # activation — derived from (cluster, clusters.yaml)
-    }
-)
+# error name the field's real owner. BOUND (never copied) from the field
+# partition — the single source of truth since run #6 F1 promoted the list to a
+# third partition class shared with append-decision's resolved refusal.
+_DERIVED_FIELDS: frozenset[str] = CODE_DERIVED_FIELDS
 
 
 def _assert_patch_targets_input_fields(patch: dict[str, Any]) -> None:

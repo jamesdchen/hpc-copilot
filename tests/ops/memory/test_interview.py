@@ -1275,3 +1275,36 @@ def test_entry_point_petsc_solver_rejects_malformed_hint(tmp_path: Path) -> None
             solver={"kind": "fenics"},
         )
     assert not (tmp_path / ".hpc" / "wrappers").exists()
+
+
+class TestDerivedExecutorRunnableAssert:
+    """Run #6 F1 item 2: the entry_point->executor derivation is the single
+    sanctioned source of the sidecar's executor, so a derivation emitting an
+    unrunnable command must fail LOUDLY at derivation time (a framework bug),
+    never exit-127 on the cluster."""
+
+    def test_fires_on_bare_script_name(self) -> None:
+        from hpc_agent.ops.memory.interview import _assert_derived_executor_runnable
+
+        with pytest.raises(errors.SpecInvalid, match="FRAMEWORK bug"):
+            _assert_derived_executor_runnable("train.py", kind="script")
+
+    def test_fires_on_dispatcher_shaped_command(self) -> None:
+        from hpc_agent.ops.memory.interview import _assert_derived_executor_runnable
+
+        with pytest.raises(errors.SpecInvalid, match="FRAMEWORK bug"):
+            _assert_derived_executor_runnable("python3 .hpc/_hpc_dispatch.py", kind="script")
+
+    def test_fires_on_bare_module_function(self) -> None:
+        from hpc_agent.ops.memory.interview import _assert_derived_executor_runnable
+
+        with pytest.raises(errors.SpecInvalid, match="FRAMEWORK bug"):
+            _assert_derived_executor_runnable("pkg.mod:fn", kind="python_module")
+
+    def test_passes_on_runnable_command(self) -> None:
+        from hpc_agent.ops.memory.interview import _assert_derived_executor_runnable
+
+        _assert_derived_executor_runnable(
+            'python executors/train.py --seed $SEED --out "$RESULT_DIR/metrics.json"',
+            kind="register_run",
+        )

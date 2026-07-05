@@ -730,3 +730,46 @@ def test_authorship_gate_fails_open_on_old_schema_journal(tmp_path: Path) -> Non
         resolved={"task_generator": _RUN4_TASK_GENERATOR},
     )
     assert out.record.resolved["task_generator"] == _RUN4_TASK_GENERATOR
+
+
+# ---------------------------------------------------------------------------
+# Code-derived field gate (run #6 F1): a resolved dict must never
+# hand-commit a field the framework derives.
+# ---------------------------------------------------------------------------
+
+
+def test_append_refuses_code_derived_resolved_field(tmp_path: Path) -> None:
+    """The F1 shape verbatim: a greenlight committing a hand-authored
+    executor is refused, pointing at the revise-resolved rail."""
+    with pytest.raises(errors.SpecInvalid, match="CODE-DERIVED") as exc_info:
+        _append(tmp_path, resolved={"cluster": "discovery", "executor": "monte_carlo_pi"})
+    assert "revise-resolved" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "field", ["job_env", "ssh_target", "backend", "modules", "conda_source", "conda_env"]
+)
+def test_append_refuses_each_journal_unauthorable_field(tmp_path: Path, field: str) -> None:
+    with pytest.raises(errors.SpecInvalid, match="CODE-DERIVED"):
+        _append(tmp_path, resolved={field: "hand-authored"})
+
+
+def test_append_allows_sanctioned_identity_echoes(tmp_path: Path) -> None:
+    """run_id / cmd_sha / total_tasks are legitimately present in a committed
+    resolved (status/aggregate input; the section-4 identity fast-path token;
+    the finding-21-cross-checked count echo) -- the gate must not fire."""
+    out = _append(
+        tmp_path,
+        resolved={
+            "cluster": "discovery",
+            "run_id": "run-1",
+            "cmd_sha": "deadbeef",
+            "total_tasks": 10,
+        },
+    )
+    assert out.count == 1
+
+
+def test_append_allows_plain_input_resolved(tmp_path: Path) -> None:
+    out = _append(tmp_path, resolved={"cluster": "hoffman2", "walltime_sec": 600})
+    assert out.count == 1
