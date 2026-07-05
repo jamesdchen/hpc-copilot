@@ -8,6 +8,9 @@ error_codes:
 - code: spec_invalid
   category: user
   retry_safe: false
+- code: cluster_unknown
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent build-submit-spec --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.incorporation.build.submit_spec.build_submit_spec
