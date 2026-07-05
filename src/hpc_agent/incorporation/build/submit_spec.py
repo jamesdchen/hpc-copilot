@@ -1182,6 +1182,51 @@ def _check_bare_script_executor(executor: str) -> None:
         )
 
 
+def _warn_task_interface_blind_executor(executor: str) -> None:
+    """WARN (never refuse) on an executor that consumes NONE of the task contract.
+
+    Run #6 finding F1 generalized finding 17 from an extension proxy to the
+    underlying PROPERTY: the per-task contract offers ``$RESULT_DIR`` /
+    ``$HPC_RESULT_DIR``, ``$TASK_ID`` / ``$HPC_TASK_ID``, and the swept
+    kwargs as ``$HPC_KW_*`` / bare ``$<NAME>`` refs — an executor that is a
+    single bare token with no arguments and no ``$`` reference consumes none
+    of them, so every task would run the IDENTICAL argument-less command.
+    The empirical case was the hand-authored extension-less token
+    ``monte_carlo_pi`` (exit 127 on the cluster, canary_failed).
+
+    Warn-loud, not refuse, by decision: a blanket refusal is UNWINNABLE —
+    this gate cannot know the cluster's ``$PATH``, and a bare ``mybinary``
+    may be a real installed wrapper that reads ``$HPC_TASK_ID`` /
+    ``$HPC_KW_*`` internally (the legitimate escape hatch the message
+    names). The canary stays the hard backstop: a genuinely broken one
+    hard-fails there on ONE task ("survival over strictness"). The REFUSAL
+    set is unchanged — extension-bearing bare script names
+    (:func:`_check_bare_script_executor`), bare ``module:function``,
+    dispatcher-shaped, format placeholders, wrong-case kwargs.
+    """
+    import warnings
+
+    token = (executor or "").strip()
+    if not token or len(token.split()) != 1:
+        return  # arguments present — the command engages the task interface
+    if "$" in token:
+        return  # references a contract/env var — not interface-blind
+    warnings.warn(
+        f"per-task executor {token!r} is TASK-INTERFACE-BLIND: a single bare "
+        "token with no arguments and no $RESULT_DIR/$HPC_RESULT_DIR, "
+        "$TASK_ID/$HPC_TASK_ID, or $HPC_KW_*/swept-kwarg reference — every "
+        "task would run the identical argument-less command. If it is not a "
+        "real installed command on the cluster's $PATH it will exit 127; if "
+        "it produces no per-task output the canary will hard-fail it on one "
+        "task before the array launches. This is legitimate ONLY for a PATH "
+        "wrapper that reads $HPC_TASK_ID / $HPC_KW_* internally; otherwise "
+        "use a real per-task command (e.g. `python executors/train.py "
+        '--out "$RESULT_DIR/metrics.json"`).',
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
 def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None) -> None:
     """Boundary guard for the REAL per-task EXECUTOR (the sidecar's ``executor``).
 
@@ -1196,6 +1241,12 @@ def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None
        proving-run-5 finding 17) — both exec as command-not-found (exit 127).
     3. a swept-kwarg ``$ref`` in the wrong case
        (:func:`_check_executor_kwarg_casing`).
+
+    Additionally WARNS — never refuses — on a task-interface-blind executor
+    (a single bare token consuming none of the per-task contract,
+    :func:`_warn_task_interface_blind_executor`, run #6 F1): the refusal is
+    unwinnable without knowing the cluster's ``$PATH``, so the canary stays
+    the hard backstop.
 
     Deliberately omits the job_env-aware unset-var check
     (:func:`_check_executor_var_references`): at sidecar-write time the assembled
@@ -1214,6 +1265,10 @@ def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None
     _check_bare_module_executor(executor)
     # A bare script name (``train.py``) is the sibling exit-127 shape (finding 17).
     _check_bare_script_executor(executor)
+    # Run #6 F1: the extension-LESS bare token (``monte_carlo_pi``) is
+    # refusal-unwinnable (it may be a real $PATH binary) — WARN loudly on the
+    # task-interface-blind property instead; the canary is the hard backstop.
+    _warn_task_interface_blind_executor(executor)
     if "$" in (executor or ""):
         _check_executor_kwarg_casing(executor, kwargs_keys=_resolve_kwargs_keys(experiment_dir))
 

@@ -1439,3 +1439,40 @@ def test_finding17_check_per_task_executor_accepts_runnable_forms(runnable: str)
     from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
 
     check_per_task_executor(runnable)  # must not raise
+
+
+class TestTaskInterfaceBlindWarn:
+    """Run #6 F1 item 3: finding 17 generalized from the extension proxy to the
+    PROPERTY -- a single bare token consuming none of the per-task contract
+    WARNS loudly (never refuses: the gate cannot know the cluster PATH, and
+    the canary stays the hard backstop)."""
+
+    def test_bare_extensionless_token_warns(self) -> None:
+        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+        with pytest.warns(RuntimeWarning, match="TASK-INTERFACE-BLIND"):
+            check_per_task_executor("monte_carlo_pi")
+
+    def test_command_with_args_does_not_warn(self) -> None:
+        import warnings
+
+        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            check_per_task_executor("python executors/monte_carlo_pi.py --seed $SEED")
+
+    def test_single_token_with_var_ref_does_not_warn(self) -> None:
+        import warnings
+
+        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            check_per_task_executor("$HOME/bin/task_wrapper")
+
+    def test_bare_script_name_still_refused_not_warned(self) -> None:
+        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+        with pytest.raises(errors.SpecInvalid, match="bare script name"):
+            check_per_task_executor("train.py")
