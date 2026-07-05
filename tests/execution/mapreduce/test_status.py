@@ -626,3 +626,47 @@ class TestVanishedWorkdirAccountingFallback:
         assert report["summary"]["complete"] == 0
         assert report["summary"]["unknown"] == 1
         assert report["tasks"]["0"].get("evidence") != "scheduler_accounting"
+
+
+class TestCheckResultsIgnoresFrameworkArtifacts:
+    """Proving-run-5 finding 16: the dispatcher ALWAYS writes ``_runtime.json``
+    (and stamps ``.hpc_cmd_sha`` / makes ``_checkpoints/``) into a per-task
+    result dir. A default ``file_glob='*'`` completion scan must NOT count those
+    framework sidecars as a produced result — otherwise a task that exited 0 but
+    wrote no real output still reads ``complete``, the ``failed`` count the
+    dispatcher's non-zero exit produced is masked, and the canary greens on a run
+    with nothing to aggregate (the FALSE GREEN)."""
+
+    def _seed_framework_sidecars(self, rdir):
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "_runtime.json").write_text('{"exit_code": 0, "task_id": 0}')
+        (rdir / ".hpc_cmd_sha").write_text("deadbeef" * 8)
+        (rdir / "_checkpoints").mkdir()
+
+    def test_from_tasks_framework_only_dir_is_not_complete(self, tmp_path):
+        rdir = tmp_path / "results" / "task_0"
+        self._seed_framework_sidecars(rdir)
+        tasks_data = {"total_tasks": 1, "tasks": {"0": {"result_dir": str(rdir)}}}
+        # Default glob '*' would otherwise match _runtime.json → complete.
+        assert check_results_from_tasks(tasks_data) == {}
+
+    def test_from_tasks_real_metrics_still_completes(self, tmp_path):
+        rdir = tmp_path / "results" / "task_0"
+        self._seed_framework_sidecars(rdir)
+        (rdir / "metrics.json").write_text('{"value": 3.14, "n_samples": 1}')
+        tasks_data = {"total_tasks": 1, "tasks": {"0": {"result_dir": str(rdir)}}}
+        results = check_results_from_tasks(tasks_data)
+        assert 0 in results
+        # The chosen result is the REAL artifact, not a framework sidecar.
+        assert results[0]["path"].endswith("metrics.json")
+
+    def test_check_results_flat_scan_ignores_runtime_json(self, tmp_path):
+        result_dir = tmp_path / "results"
+        result_dir.mkdir()
+        (result_dir / "_runtime.json").write_text('{"exit_code": 0}')
+        # Only the framework sidecar is present → no task counts complete.
+        assert check_results(result_dir, total_tasks=1) == {}
+        # A real result then completes task 0 (flat 0-based position).
+        (result_dir / "out.csv").write_text("v\n1\n")
+        results = check_results(result_dir, total_tasks=1)
+        assert 0 in results and results[0]["path"].endswith("out.csv")

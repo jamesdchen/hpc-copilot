@@ -18,9 +18,22 @@ def run(seed: int = 0, alpha: float = 1.0) -> dict:
 
 if __name__ == "__main__":
     import argparse
+    import os
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=1.0)
+    # The framework's result contract lives in ``compute()`` — the wrapper
+    # ``@register_run`` injects into this module. It calls ``run()`` and WRITES
+    # the returned dict to ``--output_file``, defaulting to
+    # ``$RESULT_DIR/metrics.json`` (the dispatcher sets ``RESULT_DIR`` per task).
+    # Route through it so a hand-run CLI produces the SAME result artifact the
+    # reducer and aggregate read. Calling ``run()`` here and only ``print()``-ing
+    # would exit 0 while writing nothing: the dispatcher then has no output to
+    # promote and the canary greens on a run that produced no metrics.
+    ap.add_argument(
+        "--output_file",
+        default=os.path.join(os.environ.get("RESULT_DIR", "."), "metrics.json"),
+    )
     args = ap.parse_args()
-    print(run(**vars(args)))
+    compute(args)  # noqa: F821 — injected into this module by @register_run

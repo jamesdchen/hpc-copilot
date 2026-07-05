@@ -401,6 +401,93 @@ def test_exit_no_runner_constant_in_lockstep_with_preamble() -> None:
     assert dispatch._EXIT_NO_RUNNER == 3
 
 
+def test_exit_no_output_constant_in_lockstep_with_preamble() -> None:
+    """#16 (proving run #5): the "exit 0 but produced no output" code is a
+    TERMINAL code the retry helper must NOT retry (``HPC_DISPATCH_EXIT_NO_OUTPUT``
+    in hpc_preamble.sh). Pin the value AND cross-check the shell asset so a
+    change on one side without the other is caught."""
+    from hpc_agent import _PACKAGE_ROOT
+
+    assert dispatch._EXIT_NO_OUTPUT == 4
+    preamble = (
+        _PACKAGE_ROOT
+        / "execution"
+        / "mapreduce"
+        / "templates"
+        / "runtime"
+        / "common"
+        / "hpc_preamble.sh"
+    ).read_text(encoding="utf-8")
+    assert "HPC_DISPATCH_EXIT_NO_OUTPUT=4" in preamble
+    # And the retry loop treats it as terminal (breaks, does not back off).
+    assert 'rc" -eq "$HPC_DISPATCH_EXIT_NO_OUTPUT' in preamble
+
+
+class TestDispatchEmptyOutputIsFailure:
+    """#16 (proving run #5, the FALSE GREEN): an executor that exits 0 but
+    writes NOTHING to $RESULT_DIR produced no result. Promoting the empty WIP as
+    a success let every task read ``complete``, the 1-task canary pass, and only
+    the harvest discover there was nothing to aggregate. The dispatcher must
+    convert exit-0-with-empty-WIP into a task FAILURE so the reporter counts it
+    failed and the canary catches it on one task."""
+
+    @_posix_shell_executor
+    def test_empty_output_exit0_becomes_failure(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="true",  # exits 0, writes nothing to $RESULT_DIR
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        # Non-zero, distinct, terminal exit — NOT a promoted success.
+        assert exc_info.value.code == dispatch._EXIT_NO_OUTPUT
+        result_dir = result_root / "0"
+        # WIP preserved with a failure-capture log (like a real failure), so the
+        # empty-output cause is diagnosable and NOT silently promoted.
+        log = result_dir / "_wip_0" / "_hpc_dispatch_error.log"
+        assert log.is_file()
+        assert f"exit_code={dispatch._EXIT_NO_OUTPUT}" in log.read_text()
+        # No success marker stamped — a re-run must not be idempotency-skipped.
+        assert not (result_dir / ".hpc_cmd_sha").exists()
+        # The recorded per-task exit code (what the canary reads) is non-zero.
+        runtime = json.loads((result_dir / "_runtime.json").read_text())
+        assert runtime["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    @_posix_shell_executor
+    def test_real_metrics_json_still_completes(self, tmp_path, monkeypatch):
+        """A task that writes metrics.json to $RESULT_DIR is promoted, exit 0
+        (the empty-output guard must not touch a real result)."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"value": 1, "n_samples": 1}\' > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        result_dir = result_root / "0"
+        assert (result_dir / "metrics.json").is_file()
+        assert not (result_dir / "_wip_0").exists()  # promoted, WIP cleaned up
+        assert (result_dir / ".hpc_cmd_sha").is_file()  # success stamps the marker
+
+
 class TestDispatchFailsLoudOnSelfRecursion:
     """#162: when the run sidecar's per-task ``executor`` would re-invoke the
     dispatcher itself (submit-flow synthesized it from the job-script command
@@ -633,6 +720,7 @@ def _scaffold_with_manifest(
 class TestFrozenManifest:
     """dispatcher reads kwargs from sidecar trial_params, not by re-importing tasks.py."""
 
+    @_posix_shell_executor
     def test_fast_path_skips_tasks_py(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -640,7 +728,9 @@ class TestFrozenManifest:
         even if tasks.py does not exist — tasks.py is never imported."""
         hpc = _scaffold_with_manifest(
             tmp_path,
-            executor="true",
+            # Writes a result so the run is a genuine success (an empty-output
+            # exit-0 is now a task failure — proving-run-5 finding 16).
+            executor='echo ok > "$RESULT_DIR/out.txt"',
             trial_params=[{"seed": 0}, {"seed": 1}],
         )
         # Deliberately do NOT write tasks.py — the fast path must not need it.
@@ -653,6 +743,7 @@ class TestFrozenManifest:
             dispatch.main()
         assert exc_info.value.code == 0
 
+    @_posix_shell_executor
     def test_fast_path_exports_kwargs_as_hpc_kw(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -668,7 +759,7 @@ class TestFrozenManifest:
         params = [{"lr": "0.01", "batch": "32"}, {"lr": "0.001", "batch": "64"}]
         hpc = _scaffold_with_manifest(
             tmp_path,
-            executor="true",
+            executor='echo ok > "$RESULT_DIR/out.txt"',
             trial_params=params,
         )
         monkeypatch.setenv("HPC_TASK_ID", "0")
@@ -680,6 +771,7 @@ class TestFrozenManifest:
             dispatch.main()
         assert exc_info.value.code == 0
 
+    @_posix_shell_executor
     def test_fallback_to_tasks_py_when_no_trial_params(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -689,7 +781,7 @@ class TestFrozenManifest:
         make_sidecar_json(
             tmp_path,
             run_id="old_run",
-            executor="true",
+            executor='echo ok > "$RESULT_DIR/out.txt"',
             result_dir_template=str(tmp_path / "results" / "{task_id}"),
             task_count=1,
             tasks_py_sha="abc123",

@@ -67,6 +67,39 @@ from hpc_agent.infra.time import utcnow_iso
 # Result checking
 # ---------------------------------------------------------------------------
 
+# Framework-internal artifacts the dispatcher writes into (or beside) a
+# per-task result dir — NEVER a produced result. The completion scan must skip
+# them: the dispatcher ALWAYS writes ``_runtime.json`` after the executor exits
+# (dispatch.py ~:1042), so counting it as a result file makes a task that
+# exited 0 but produced no real output still read ``complete`` — the
+# proving-run-5 finding-16 FALSE GREEN the canary must catch (its ``failed``
+# terminal never fires because a "complete" task wins over the scheduler's
+# FAILED state). ``_wip_*`` (in-progress / preserved-failed dirs) is matched by
+# prefix; the rest by exact name. Keep this in lock-step with the sidecar/
+# marker names the dispatcher (dispatch.py) and the retry preamble
+# (hpc_preamble.sh) write.
+_FRAMEWORK_ARTIFACT_NAMES = frozenset(
+    {
+        "_runtime.json",  # dispatcher per-task runtime telemetry (always written)
+        "_checkpoints",  # step-indexed checkpoint dir (#294)
+        ".hpc_cmd_sha",  # idempotency marker stamped on a successful promote
+        ".hpc_failed",  # terminal failure-marker dir (hpc_preamble.sh)
+        "_hpc_dispatch_error.log",  # failure capture (normally inside _wip_*)
+    }
+)
+
+
+def _is_framework_artifact(name: str) -> bool:
+    """True when *name* is a dispatcher-written sidecar, not a produced result.
+
+    ``name`` is a single path component (a file/dir basename). Matches the
+    ``_wip_*`` prefix (in-progress / preserved-failed dirs) and the exact
+    framework sidecar names in :data:`_FRAMEWORK_ARTIFACT_NAMES`. Files nested
+    *inside* a ``_wip_*`` dir are excluded separately by the path-level
+    ``_wip_`` check the scanners already apply.
+    """
+    return name.startswith("_wip_") or name in _FRAMEWORK_ARTIFACT_NAMES
+
 
 def check_results(
     result_dir: str | Path,
@@ -123,6 +156,10 @@ def check_results(
             for path_str in sorted(glob.glob(str(task_dir / file_glob))):
                 if "/_wip_" in path_str:
                     continue
+                if _is_framework_artifact(os.path.basename(path_str)):
+                    # A dispatcher sidecar (_runtime.json, _checkpoints, …) is
+                    # not a produced result — never count it as completion.
+                    continue
                 if validate and path_str.endswith(".csv"):
                     status = _accept_csv(path_str)
                     if status is None:
@@ -141,7 +178,11 @@ def check_results(
     # later file onto an earlier task's id. ``_wip_`` temp files are
     # dropped first so they don't consume a position slot.
     if not results:
-        candidates = [p for p in sorted(glob.glob(str(rdir / file_glob))) if "/_wip_" not in p]
+        candidates = [
+            p
+            for p in sorted(glob.glob(str(rdir / file_glob)))
+            if "/_wip_" not in p and not _is_framework_artifact(os.path.basename(p))
+        ]
         for tid, path_str in enumerate(candidates[:total_tasks], start=0):
             if validate and path_str.endswith(".csv"):
                 status = _accept_csv(path_str)
@@ -841,6 +882,12 @@ def check_results_from_tasks(
         for match in sorted(rdir.glob(file_glob)):
             match_str = str(match)
             if "_wip_" in match_str:
+                continue
+            if _is_framework_artifact(match.name):
+                # A dispatcher sidecar (_runtime.json — always written —,
+                # _checkpoints, .hpc_cmd_sha, …) is not a produced result;
+                # counting it would mark an output-less task ``complete`` and
+                # mask the failure from the reporter/canary (finding 16).
                 continue
             try:
                 if match.is_file() and match.stat().st_size <= 0:

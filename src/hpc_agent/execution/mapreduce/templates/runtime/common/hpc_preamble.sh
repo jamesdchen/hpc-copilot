@@ -311,6 +311,15 @@ fi
 # lock-step with ``_EXIT_NO_RUNNER`` in hpc_agent/execution/mapreduce/dispatch.py.
 HPC_DISPATCH_EXIT_NO_RUNNER=3
 
+# Dispatcher exit code signalling "executor exited 0 but produced no output"
+# (empty WIP result dir) — kept in lock-step with ``_EXIT_NO_OUTPUT`` in
+# hpc_agent/execution/mapreduce/dispatch.py. Like the no-runner code it is a
+# DETERMINISTIC scaffold error (an executor whose __main__ bypasses the
+# framework's result-writer): retrying cannot make it write output, so treat
+# it as TERMINAL and fail immediately instead of burning the remaining
+# attempts on a run that will never produce a result.
+HPC_DISPATCH_EXIT_NO_OUTPUT=4
+
 hpc_run_with_retry() {
     local max_attempts="${HPC_MAX_ATTEMPTS:-3}"
     local backoff_base="${HPC_RETRY_BACKOFF_SEC:-2}"
@@ -341,6 +350,10 @@ hpc_run_with_retry() {
         fi
         if [ "$rc" -eq "$HPC_DISPATCH_EXIT_NO_RUNNER" ]; then
             echo "[hpc-agent] terminal error (exit ${rc}: no per-task runner resolved); not retrying" >&2
+            break
+        fi
+        if [ "$rc" -eq "$HPC_DISPATCH_EXIT_NO_OUTPUT" ]; then
+            echo "[hpc-agent] terminal error (exit ${rc}: executor exited 0 but produced no output); not retrying" >&2
             break
         fi
         if [ "$attempt" -ge "$max_attempts" ]; then

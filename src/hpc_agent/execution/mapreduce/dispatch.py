@@ -65,6 +65,19 @@ _EXIT_PREEMPTED = 130
 # that retrying cannot fix) rather than a transient failure to back off.
 _EXIT_NO_RUNNER = 3
 
+# Exit code used when the executor exits 0 but writes NOTHING to its WIP
+# result dir — it produced no result to promote. Distinct from the generic
+# failure (1), schema (2), and no-runner (3) codes so the cluster-side retry
+# wrapper treats it as TERMINAL: an executor whose __main__ only prints,
+# bypassing the framework's result-writer, is a deterministic scaffold error
+# that retrying cannot fix. Promoting the empty dir as a success was the
+# proving-run-5 finding-16 FALSE GREEN — every task read "complete", the
+# 1-task canary passed, the full array ran, and only the harvest discovered
+# there was nothing to aggregate. Marking a no-output run FAILED lets the
+# reporter count it failed and the canary catch it on one task before paying
+# for N. Kept in lock-step with HPC_DISPATCH_EXIT_NO_OUTPUT in hpc_preamble.sh.
+_EXIT_NO_OUTPUT = 4
+
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
@@ -944,13 +957,6 @@ def main() -> None:
     ended_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     if returncode == 0:
-        # Promote: atomically move each output file to the final directory.
-        # metrics.json is the idempotency marker — if the process is
-        # killed mid-promotion, a half-promoted task with metrics.json
-        # already in place would be skipped on retry and the missing
-        # outputs would never be recovered. Move metrics.json last so a
-        # crash before that point leaves the task obviously incomplete.
-        #
         # Walk the WIP tree recursively so an executor that writes
         # nested subdirs (e.g. ``per_seed/seed_0/metric.csv``) promotes
         # correctly. A flat ``os.listdir`` + ``os.replace`` would have
@@ -965,26 +971,65 @@ def main() -> None:
         # Sort: metrics.json at the top level last (it's the
         # idempotency marker); everything else alphabetically.
         promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
-        for src, rel in promote_pairs:
-            dst = os.path.join(result_dir, rel)
-            parent = os.path.dirname(dst)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            os.replace(src, dst)
-        shutil.rmtree(wip_dir, ignore_errors=True)
-        # Stamp this submission's cmd_sha so a subsequent re-entry can
-        # detect "code or kwargs changed since this result was written"
-        # and bypass the metrics.json idempotency skip. Best-effort: a
-        # write failure here MUST NOT change the dispatcher's exit code
-        # (the task succeeded; the marker is only a hint for next time).
-        if current_cmd_sha:
-            try:
-                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha, encoding="utf-8")
-            except OSError as exc:
-                print(
-                    f"[dispatch] WARN: failed to stamp .hpc_cmd_sha in {result_dir}: {exc}",
-                    file=sys.stderr,
-                )
+        if not promote_pairs:
+            # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
+            # the executor produced NO files. Under WIP/atomic-promote
+            # semantics "produced a result" == "wrote at least one file to
+            # $RESULT_DIR"; there is nothing to promote here, so promoting it
+            # as a success is a FALSE GREEN (the canary passes on the 1-task
+            # probe, the whole array runs, and only the harvest finds nothing
+            # to reduce). The usual cause is an executor whose ``__main__``
+            # calls the function and only ``print()``s the result, bypassing
+            # the framework's result-writer (``compute(args)`` /
+            # ``write_metrics``). Convert to a task FAILURE — the same
+            # non-zero-exit + failure-capture + preserved-WIP path a real
+            # crash takes — so the reporter counts it failed and the canary
+            # catches it BEFORE the main array pays for N tasks. A distinct,
+            # terminal exit code (retrying a no-output executor is futile).
+            returncode = _EXIT_NO_OUTPUT
+            print(
+                f"[dispatch] FAILED (exit {returncode}): executor exited 0 but wrote NO "
+                f"files to $RESULT_DIR ({wip_dir}) — nothing to promote. An executor must "
+                "write its per-task result (e.g. metrics.json) to $RESULT_DIR; a __main__ "
+                "that only prints the result bypasses the framework's result-writer "
+                "(compute(args) / write_metrics). Treating as a task failure.",
+                file=sys.stderr,
+            )
+            _write_failure_capture(
+                wip_dir,
+                task_id=task_id,
+                returncode=returncode,
+                executor=executor,
+                stderr_tail=stderr_tail,
+            )
+        else:
+            # Promote: atomically move each output file to the final directory.
+            # metrics.json is the idempotency marker — if the process is
+            # killed mid-promotion, a half-promoted task with metrics.json
+            # already in place would be skipped on retry and the missing
+            # outputs would never be recovered. metrics.json was sorted last
+            # above so a crash before that point leaves the task obviously
+            # incomplete.
+            for src, rel in promote_pairs:
+                dst = os.path.join(result_dir, rel)
+                parent = os.path.dirname(dst)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                os.replace(src, dst)
+            shutil.rmtree(wip_dir, ignore_errors=True)
+            # Stamp this submission's cmd_sha so a subsequent re-entry can
+            # detect "code or kwargs changed since this result was written"
+            # and bypass the metrics.json idempotency skip. Best-effort: a
+            # write failure here MUST NOT change the dispatcher's exit code
+            # (the task succeeded; the marker is only a hint for next time).
+            if current_cmd_sha:
+                try:
+                    Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha, encoding="utf-8")
+                except OSError as exc:
+                    print(
+                        f"[dispatch] WARN: failed to stamp .hpc_cmd_sha in {result_dir}: {exc}",
+                        file=sys.stderr,
+                    )
     else:
         print(
             f"[dispatch] FAILED (exit {returncode}), partial output preserved in {wip_dir}",

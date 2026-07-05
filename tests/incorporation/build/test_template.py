@@ -68,6 +68,28 @@ def test_shape_scaffold_is_a_discoverable_register_run(
     assert [r.name for r in runs] == ["run"], (shape, runs)
 
 
+def test_script_main_routes_through_compute_result_writer(tmp_path: Path) -> None:
+    """#16 (proving run #5): the rendered ``train.py`` ``__main__`` must route
+    through the injected ``compute()`` result-writer, NOT call ``run()`` and only
+    ``print()``. An executor that only prints exits 0 while writing no
+    ``metrics.json`` — the dispatcher then has nothing to promote and the canary
+    greens on a run that produced nothing to aggregate."""
+    build_template(repo_dir=tmp_path, shape="script")
+    src = (tmp_path / "train.py").read_text(encoding="utf-8")
+
+    # Isolate the __main__ block so the assertions are about the entry point.
+    main_block = src.split('if __name__ == "__main__":', 1)[1]
+    assert "compute(args)" in main_block
+    assert "print(run(" not in main_block  # the bypassing anti-pattern is gone
+    # The result artifact defaults to $RESULT_DIR/metrics.json (the dispatcher
+    # sets RESULT_DIR per task) so a hand-run CLI writes the framework's result.
+    assert "output_file" in main_block
+    assert "metrics.json" in main_block
+    assert "RESULT_DIR" in main_block
+    # Still valid, importable Python.
+    ast.parse(src)
+
+
 def test_shape_script_is_default(tmp_path: Path) -> None:
     """No --shape flag means train.py — the script shape is the default."""
     data = build_template(repo_dir=tmp_path)
