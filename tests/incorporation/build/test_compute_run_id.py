@@ -35,7 +35,7 @@ def test_happy_path_returns_deterministic_run_id(tmp_path: Path) -> None:
 
     out = compute_run_id(tmp_path, run_name="myrun")
 
-    assert set(out.keys()) == {"run_id", "cmd_sha", "trial_tokens", "trial_params"}
+    assert set(out.keys()) == {"run_id", "cmd_sha", "total", "trial_tokens", "trial_params"}
     assert len(out["cmd_sha"]) == 64
     assert all(c in "0123456789abcdef" for c in out["cmd_sha"])
     assert out["run_id"] == f"myrun-{out['cmd_sha'][:8]}"
@@ -45,6 +45,11 @@ def test_happy_path_returns_deterministic_run_id(tmp_path: Path) -> None:
     # Resolved per-task params are always surfaced (the cmd_sha pre-image),
     # task-ordered, for provenance — recoverable independent of any campaign.
     assert out["trial_params"] == [{"seed": 0}, {"seed": 1}]
+    # ``total`` is the authoritative task count (tasks.total() == 2 here),
+    # equal to len(trial_params) by construction — the ground truth
+    # resolve-submit-inputs cross-checks agent-authored counts against (#21).
+    assert out["total"] == 2
+    assert out["total"] == len(out["trial_params"])
 
 
 _TOKEN_TASKS_PY = """\

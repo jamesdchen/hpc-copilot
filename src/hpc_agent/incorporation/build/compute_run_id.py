@@ -61,10 +61,13 @@ _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
     agent_facing=True,
 )
 def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
-    """Return ``{"run_id", "cmd_sha", "trial_tokens", "trial_params"}``.
+    """Return ``{"run_id", "cmd_sha", "total", "trial_tokens", "trial_params"}``.
 
     ``run_id`` is ``"<run_name>-<sha[:8]>"``; ``cmd_sha`` is the full 64-char
-    hash. ``trial_tokens`` is the task-ordered list of the opaque
+    hash. ``total`` is the authoritative task count (``tasks.total()``,
+    == ``len(trial_params)``) — the ground truth a caller cross-checks an
+    agent-authored ``total_tasks`` / ``task_count`` against (finding 21).
+    ``trial_tokens`` is the task-ordered list of the opaque
     ``trial_token`` each ``resolve(i)`` returned (``None`` when no task carries
     one). ``trial_params`` is the task-ordered list of the resolved per-task
     params each ``resolve(i)`` returned, minus
@@ -115,7 +118,8 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
         # the eager-materialization convention, so re-reading it here is cheap.
         # The reserved bookkeeping key (trial_token) is the reconciliation
         # token; everything else is a swept/resolved param.
-        materialized = [tasks.resolve(i) for i in range(int(tasks.total()))]
+        total = int(tasks.total())
+        materialized = [tasks.resolve(i) for i in range(total)]
         tokens = [m.get(_TRIAL_TOKEN_KEY) for m in materialized]
         # trial_params is the cmd_sha pre-image: each task's resolved kwargs
         # with the reserved keys stripped, exactly what compute_cmd_sha hashed.
@@ -133,6 +137,13 @@ def compute_run_id(experiment_dir: Path, *, run_name: str) -> dict[str, Any]:
     return {
         "run_id": f"{run_name}-{cmd_sha[:8]}",
         "cmd_sha": cmd_sha,
+        # The authoritative task count — ``tasks.total()`` materialized ONCE here,
+        # the one place the task list is realized at submit time (== len of
+        # ``trial_params`` by construction). Surfaced as a named field so a caller
+        # cross-checking an agent-authored ``total_tasks`` / ``task_count`` against
+        # the ground truth (resolve-submit-inputs, finding 21) names the count
+        # directly instead of re-deriving ``len(trial_params)``.
+        "total": total,
         "trial_tokens": trial_tokens,
         # Always surfaced (one dict per task): the run's params ARE its
         # provenance, recoverable independent of whether it's a campaign.

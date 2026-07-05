@@ -228,6 +228,30 @@ def resolve_submit_inputs(
     run_id = cr["run_id"]
     cmd_sha = cr["cmd_sha"]
 
+    # 2b. Cross-check the agent-authored task counts against the ground truth
+    #     compute-run-id just materialized (proving-run #5, finding 21). Both the
+    #     submit spec's job-array size (`submit.total_tasks`) and the sidecar's
+    #     `sidecar.task_count` are agent-authored and were otherwise NEVER checked
+    #     against the real task list. An UNDERCOUNT fails SILENT: it sizes the job
+    #     array `1-total_tasks`, the higher task_ids never dispatch, and the run
+    #     returns incomplete results discovered only at harvest (the finding-16
+    #     expensive class). compute-run-id is the ONE place the task list is
+    #     materialized (`total` == len(trial_params)), so its count is
+    #     authoritative — refuse a mismatch LOUDLY, naming both the declared
+    #     value(s) and the true count. Mirrors the `interview` primitive's
+    #     `tasks.total() != intent.task_count` cross-check (ops/memory/interview.py).
+    true_total = cr["total"]
+    if spec.submit.total_tasks != true_total or spec.sidecar.task_count != true_total:
+        raise errors.SpecInvalid(
+            "declared task count disagrees with the materialized task list: "
+            f"submit.total_tasks={spec.submit.total_tasks}, "
+            f"sidecar.task_count={spec.sidecar.task_count}, but .hpc/tasks.py "
+            f"produces {true_total} tasks (tasks.total()). An undercount would "
+            f"size the job array 1-{spec.submit.total_tasks} and silently drop "
+            "the higher task_ids (incomplete results found only at harvest); fix "
+            f"the declared count(s) to match the true {true_total}."
+        )
+
     # 3. find-prior-run: branch on the resume contract (submit.md Step 6c).
     #    A live prior (found, not orphan, status complete/in_flight) is the
     #    only resume-vs-fresh decision the user owns; a terminal-but-not-

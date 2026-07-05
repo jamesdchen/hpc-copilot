@@ -12,6 +12,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 
+import pytest
+
+from hpc_agent import errors
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
 from hpc_agent._wire.actions.build_tasks_py import BuildTasksPyInput
 from hpc_agent._wire.actions.write_run_sidecar import WriteRunSidecarInput
@@ -31,7 +34,7 @@ def _submit_input() -> BuildSubmitSpecInput:
         remote_path="/scratch/me/exp",
         run_id="ridge-abcd1234",
         cmd_sha="a" * 64,
-        total_tasks=4,
+        total_tasks=2,
         backend="sge",
     )
 
@@ -42,7 +45,7 @@ def _sidecar_input() -> WriteRunSidecarInput:
         cmd_sha="0" * 8,  # placeholder; overridden too
         executor="python -m src.ridge --alpha $alpha",
         result_dir_template="results/{run_id}/task_{task_id}",
-        task_count=4,
+        task_count=2,
     )
 
 
@@ -72,7 +75,22 @@ def _cr() -> dict[str, Any]:
         "cmd_sha": "a" * 64,
         "trial_tokens": None,
         "trial_params": [{"alpha": 0.1}, {"alpha": 1.0}],
+        # The authoritative task count compute-run-id materialized (== len of
+        # trial_params). resolve-submit-inputs cross-checks the agent-authored
+        # submit.total_tasks / sidecar.task_count against this.
+        "total": 2,
     }
+
+
+def _spec_with_counts(*, submit_total: int, sidecar_count: int) -> ResolveSubmitInputsSpec:
+    """A spec whose agent-authored task counts are overridable per-test, so a
+    mismatch against compute-run-id's true count (``_cr()`` total == 2) can be
+    exercised."""
+    return ResolveSubmitInputsSpec(
+        run_name="ridge",
+        submit=_submit_input().model_copy(update={"total_tasks": submit_total}),
+        sidecar=_sidecar_input().model_copy(update={"task_count": sidecar_count}),
+    )
 
 
 def _fp(
@@ -107,7 +125,7 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
 
     _touch_tasks_py(tmp_path)
-    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 4}
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
     with (
         mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
         mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)) as fp,
@@ -489,3 +507,82 @@ def test_absent_tasks_with_scaffold_spec_builds_then_resolves(tmp_path: Path) ->
     assert res.needs_decision is False
     assert res.submit_spec == built
     bt.assert_called_once()  # the deterministic scaffold fired
+
+
+def test_undercount_task_count_refused_naming_both_counts(tmp_path: Path) -> None:
+    """An UNDERCOUNT (declared < the materialized tasks.total()) must fail LOUD.
+
+    The finding-21 silent class: an undercount sizes the job array 1-total_tasks,
+    the higher task_ids never dispatch, and the run returns incomplete results
+    found only at harvest. compute-run-id materialized the true count (== 2 here);
+    a spec declaring 1 must be refused with SpecInvalid naming BOTH the declared
+    value and the true count — never build the spec / write the sidecar."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),  # true total == 2
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec") as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar") as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+        pytest.raises(errors.SpecInvalid) as excinfo,
+    ):
+        resolve_submit_inputs(tmp_path, spec=_spec_with_counts(submit_total=1, sidecar_count=1))
+
+    msg = str(excinfo.value)
+    assert "submit.total_tasks=1" in msg  # names the declared submit count
+    assert "sidecar.task_count=1" in msg  # names the declared sidecar count
+    assert "2 tasks" in msg  # names the true count compute-run-id materialized
+    # Refused BEFORE the job array was sized / the sidecar written.
+    bs.assert_not_called()
+    ws.assert_not_called()
+
+
+def test_overcount_task_count_refused_naming_both_counts(tmp_path: Path) -> None:
+    """An OVERCOUNT (declared > tasks.total()) is equally a spec-authoring error —
+    the array would index past the task list. Refused with the same loud
+    SpecInvalid; the spec is never built and the sidecar never written."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),  # true total == 2
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec") as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar") as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+        pytest.raises(errors.SpecInvalid) as excinfo,
+    ):
+        resolve_submit_inputs(tmp_path, spec=_spec_with_counts(submit_total=5, sidecar_count=5))
+
+    msg = str(excinfo.value)
+    assert "submit.total_tasks=5" in msg
+    assert "sidecar.task_count=5" in msg
+    assert "2 tasks" in msg  # the true count
+    bs.assert_not_called()
+    ws.assert_not_called()
+
+
+def test_one_count_disagreeing_refused(tmp_path: Path) -> None:
+    """The two agent-authored counts must ALSO agree with each other: a spec whose
+    submit.total_tasks matches the true count but sidecar.task_count does not (or
+    vice-versa) is still refused — the guard demands all three equal."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),  # true total == 2
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec") as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar") as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+        pytest.raises(errors.SpecInvalid) as excinfo,
+    ):
+        resolve_submit_inputs(tmp_path, spec=_spec_with_counts(submit_total=2, sidecar_count=1))
+
+    msg = str(excinfo.value)
+    assert "sidecar.task_count=1" in msg
+    assert "2 tasks" in msg
+    bs.assert_not_called()
+    ws.assert_not_called()
