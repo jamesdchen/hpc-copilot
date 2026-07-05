@@ -363,11 +363,28 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     #    input-resolution ring to its own terminator; else stop at the clean
     #    brief for the human to greenlight the resolved plan.
     if spec.resolve is None:
+        # PRE-RESOLVE boundary: the walk is clean but no run_id / submit-flow spec
+        # exists yet — resolve needs caller inputs the walk cannot supply
+        # (``remote_path`` + the build-submit-spec fields). ``next_block`` stays
+        # submit-s2 — the code-driven table target the resolve leg feeds (the
+        # ``("submit-s1","resolved") -> submit-s2`` invariant; do NOT special-case
+        # it to None, that breaks the block↔SUCCESSORS agreement contract). The
+        # REASON flags that run_id is UNMINTED so the caller supplies the resolve
+        # spec FIRST (run #7: the agent read the submit-s2 pointer as "advance
+        # now", jumped ahead of the resolve leg, and improvised a direct
+        # submit-s2; the fix is this honest reason + the hpc-submit skill's
+        # pre-resolve-boundary step, not a routing change).
         return SubmitBlockResult(
             block="s1",
             stage_reached="resolved",
             needs_decision=True,
-            reason="all submit inputs resolved (no ambiguities); greenlight to stage & canary.",
+            reason=(
+                "plan resolved (no ambiguities) — PRE-RESOLVE boundary: run_id is "
+                "UNMINTED. Supply the resolve inputs (remote_path + the "
+                "build-submit-spec fields) so S1's resolve leg mints run_id and "
+                "builds the sidecar; only then does submit-s2 (the next_block "
+                "target) have a resolved run to stage."
+            ),
             brief=brief,
             next_block=_next_block(
                 "submit-s1",

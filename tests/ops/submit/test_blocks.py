@@ -158,6 +158,39 @@ def test_s1_runs_preflight_and_folds_into_brief(tmp_path: Path) -> None:
     assert result.needs_decision is True
 
 
+def test_s1_clean_walk_without_resolve_reason_flags_pre_resolve_boundary(tmp_path: Path) -> None:
+    """Run #7 block-drive seam: a clean walk with no resolve spec is the
+    PRE-RESOLVE boundary — run_id is unminted (resolve needs caller inputs the
+    walk cannot supply, e.g. remote_path). ``next_block`` STAYS submit-s2 (the
+    code-driven ``("submit-s1","resolved")->submit-s2`` table target — special-
+    casing it to None breaks the block↔SUCCESSORS agreement contract), but the
+    brief's REASON must flag that run_id is unminted and direct the caller to
+    supply resolve FIRST — so the agent doesn't read the submit-s2 pointer as
+    "advance now" and jump ahead of the resolve leg (which sent the demo agent
+    off-driver into a hand-called submit-s2). The routing fix is the reason +
+    the hpc-submit skill's pre-resolve step, not a table change.
+    """
+    walk = WalkSubmitAmbiguitiesInput.model_validate(
+        {
+            "cluster": "hoffman2",
+            "goal": "g",
+            "tasks_py_present": True,
+            "entry_point_resolved": True,
+            "data_axis_resolved": True,
+            "homogeneous_axes_resolved": True,
+        }
+    )
+    result = blocks.submit_s1(tmp_path, spec=SubmitS1Spec(walk=walk, run_preflight=False))
+
+    assert result.stage_reached == "resolved"
+    assert result.needs_decision is True
+    assert result.run_id is None  # unminted at the pre-resolve boundary
+    # next_block stays the table target; the guidance lives in the reason.
+    assert result.next_block is not None and result.next_block["verb"] == "submit-s2"
+    assert "resolve" in result.reason.lower()  # directs supplying the resolve inputs
+    assert "run_id" in result.reason  # names WHY it is not yet submittable (unminted)
+
+
 # ── submit_and_verify split (backward-compat) ────────────────────────────────
 
 
