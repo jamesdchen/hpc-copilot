@@ -149,7 +149,7 @@ def _outcome_table(status: dict[str, Any]) -> list[dict[str, Any]]:
         spec_arg=True,
         spec_model=CampaignGreenlightSpec,
         experiment_dir_arg=True,
-        schema_ref=SchemaRef(input="campaign_greenlight"),
+        schema_ref=SchemaRef(input="campaign_greenlight", output="campaign_block"),
     ),
     agent_facing=True,
 )
@@ -281,7 +281,7 @@ def campaign_greenlight(
         spec_arg=True,
         spec_model=CampaignWatchSpec,
         experiment_dir_arg=True,
-        schema_ref=SchemaRef(input="campaign_watch"),
+        schema_ref=SchemaRef(input="campaign_watch", output="campaign_block"),
     ),
     agent_facing=True,
 )
@@ -392,7 +392,7 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
         spec_arg=True,
         spec_model=CampaignCompleteSpec,
         experiment_dir_arg=True,
-        schema_ref=SchemaRef(input="campaign_complete"),
+        schema_ref=SchemaRef(input="campaign_complete", output="campaign_block"),
     ),
     agent_facing=True,
 )

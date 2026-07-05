@@ -207,7 +207,7 @@ def _digest_run(record: Any) -> dict[str, Any]:
         # aggregate-check (conditionally-SSH, still declared True). The SSH path
         # is opt-in via spec.reconcile; the flag marks the capability honestly.
         requires_ssh=True,
-        schema_ref=SchemaRef(input="status_snapshot"),
+        schema_ref=SchemaRef(input="status_snapshot", output="status_block"),
     ),
     agent_facing=True,
 )
@@ -412,7 +412,7 @@ def _watch_anomaly_brief(mon: Any, summary: dict[str, int]) -> dict[str, Any]:
         spec_model=StatusWatchSpec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="status_watch"),
+        schema_ref=SchemaRef(input="status_watch", output="status_block"),
     ),
     agent_facing=True,
 )

@@ -105,15 +105,23 @@ def _output_schema_for(primitive_name: str) -> dict | None:
         f"{primitive_name.replace('-', '_')}.output.json",
         f"{primitive_name}.output.json",
     ]
-    # Add the CLI-derived candidate from the primitive registry so
-    # CLI-renamed primitives (e.g. ``check-preflight`` →
-    # ``preflight.output.json``) resolve too.
+    # An explicit ``CliShape.schema_ref.output`` override takes precedence
+    # (a shape-named shared file the convention can't reach, e.g. the
+    # ``submit-s1..s4`` blocks → ``submit_block.output.json``). Also add the
+    # CLI-derived candidate so CLI-renamed primitives (e.g. ``check-preflight``
+    # → ``preflight.output.json``) resolve too. Kept in lockstep with
+    # ``operations.schema_for`` so the runtime validator and the catalog never
+    # disagree about which file backs a given primitive.
     try:
         from hpc_agent._kernel.registry.operations import _cli_subcommand
         from hpc_agent._kernel.registry.primitive import get_registry
 
         meta = get_registry().get(primitive_name)
         if meta is not None and meta.cli:
+            schema_ref = meta.cli.schema_ref
+            if schema_ref is not None and schema_ref.output:
+                candidates.insert(0, f"{schema_ref.output}.output.json")
+
             from hpc_agent.cli._dispatch import cli_to_invocation_string
 
             cli_str = cli_to_invocation_string(meta.name, meta.cli)

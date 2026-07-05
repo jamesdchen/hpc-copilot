@@ -91,6 +91,48 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   from routing (left on disk; physical deletion + the #137 OAuth machinery are a
   later pass, gated on a proving run).
 
+### Removed — stranded `runtime-prior` wire model + schema
+
+- Deleted `_wire/queries/runtime_prior.py` (`RuntimePriorResult`) and
+  `schemas/runtime_prior.output.json`. `read-runtime-prior` is an
+  **optional plugin-only** verb (core never registers it; `resolve-resources`
+  probes it and treats an unregistered verb as a normal cold-start), so — like
+  the other plugin-only verb `plan-submit` — its output contract belongs in the
+  providing plugin, not core. The model was imported nowhere and the schema was
+  loaded by no verb, `$ref`, or `describe`/`validate_output` consumer: a pure
+  wire-surface removal, no behavior change. (`resolve-resources`'s probe is
+  untouched — it hand-parses the envelope and never validated against the schema.)
+
+### Fixed — block verbs' shared output schema is now reachable (`describe` + `validate_output`)
+
+- The eleven human-amplification block verbs share four output shapes named
+  for the shape, not the verb: `submit-s1..s4` → `submit_block.output.json`,
+  `aggregate-check`/`aggregate-run` → `aggregate_block.output.json`,
+  `status-snapshot`/`status-watch` → `status_block.output.json`,
+  `campaign-greenlight`/`campaign-watch`/`campaign-complete` →
+  `campaign_block.output.json`. The schema-resolution convention keys off the
+  verb name (`submit_s1.output.json`…), so it could never find these files —
+  every one of the eleven reported `output_schema: null` in the catalog, so
+  `describe` omitted the output contract and `validate_output` silently skipped
+  the block outputs (drift would have gone uncaught). Activated the dormant
+  `SchemaRef.output` field (docstring already reserved it for "future output
+  validation") and taught both resolvers — `operations.schema_for` (catalog /
+  `describe`) and `contract.schema._output_schema_for` (`validate_output`) — to
+  prefer it over the convention, so they stay in lockstep. Each block verb now
+  declares `SchemaRef(input=…, output=…)`; convention-named verbs are unchanged.
+  A contract test pins that both resolvers agree on the same existing file for
+  every block verb. No new schema files — the four already existed, just
+  unreachable. `_kernel/registry/operations.py`, `_kernel/contract/schema.py`,
+  `cli/_dispatch.py`, `ops/{submit,aggregate,status}_blocks.py`,
+  `meta/campaign/blocks.py`, `tests/contract/test_schema_roundtrip.py`.
+- **Symmetric orphan guard for output schemas.** Added
+  `test_no_orphan_output_schemas`, the mirror of the existing
+  `test_no_orphan_input_schemas`: every `*.output.json` must back a CLI verb
+  (catalog `output_schema`, now honoring the block override above) or sit on a
+  small documented cross-cutting allow-list (`inspect_cluster`, `worker`,
+  `worker.strict`). This is the guard that would have caught the stranded
+  `runtime_prior.output.json` mechanically instead of by hand-audit — a new
+  stranded output schema now fails CI instead of accreting silently.
 
 
 ### Added — persist opaque per-trial params for provenance; warm-start stays a documented strategy pattern (#369)
