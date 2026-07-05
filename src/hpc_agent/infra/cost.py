@@ -85,6 +85,21 @@ class CostEstimate:
     est_core_hours: float
     est_gpu_hours: float
 
+    @property
+    def footprint_unknown(self) -> bool:
+        """True when the estimate carries no real footprint.
+
+        A non-positive ``walltime_s`` or ``total_tasks`` means
+        :func:`estimate_core_hours` returned its *defensive* zero — nothing
+        was measured, so ``est_core_hours == 0.0`` reads as "unknown", NOT
+        "free" (proving run #6: a cold-start submit with an unresolved
+        walltime rendered "est. 0 core-hours" to the human). Derived, not
+        stored: arithmetic consumers keep the zero-return contract, while
+        render/gate consumers branch on this to say "unknown" and to refuse
+        passing an unprovable footprint under a configured cost ceiling.
+        """
+        return self.walltime_s <= 0 or self.total_tasks <= 0
+
 
 def core_hours_from_cpu_seconds(cpu_s: float) -> float:
     """Normalize summed per-task ``cpu_s`` into core-hours.

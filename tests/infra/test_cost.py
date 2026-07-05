@@ -122,3 +122,28 @@ class TestEnvCostBudget:
     def test_garbage_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(_COST_BUDGET_ENV, "lots")
         assert env_cost_budget() is None
+
+
+class TestFootprintUnknown:
+    """Run #6: the derived ``footprint_unknown`` property distinguishes the
+    kernel's DEFENSIVE zero (nothing measured) from a genuinely tiny estimate,
+    so render/gate consumers never present "unknown" as literal 0.0."""
+
+    def test_unresolved_walltime_is_unknown(self) -> None:
+        from hpc_agent.infra.cost import estimate_core_hours
+
+        est = estimate_core_hours(total_tasks=10, walltime_s=0)
+        assert est.footprint_unknown
+        assert est.est_core_hours == 0.0  # arithmetic contract unchanged
+
+    def test_zero_tasks_is_unknown(self) -> None:
+        from hpc_agent.infra.cost import estimate_core_hours
+
+        assert estimate_core_hours(total_tasks=0, walltime_s=3600).footprint_unknown
+
+    def test_real_footprint_is_known(self) -> None:
+        from hpc_agent.infra.cost import estimate_core_hours
+
+        est = estimate_core_hours(total_tasks=10, walltime_s=3600, cores_per_task=2)
+        assert not est.footprint_unknown
+        assert est.est_core_hours == 20.0

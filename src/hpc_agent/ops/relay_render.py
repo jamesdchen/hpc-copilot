@@ -183,9 +183,14 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
     # S2 — stage & canary.
     if stage == "canary_verified":
         est = brief.get("est_core_hours")
-        est_phrase = (
-            f"{est:g} core-hours" if isinstance(est, (int, float)) and est else "unknown core-hours"
-        )
+        # Unknown-footprint honesty (run #6): the S2/retarget briefs stamp
+        # footprint_unknown=True when the kernel returned its defensive 0.0
+        # (walltime unresolved) — that must never render as "est. 0 core-hours".
+        # The falsy-est fallback covers briefs from older workers without the flag.
+        if brief.get("footprint_unknown") or not (isinstance(est, (int, float)) and est):
+            est_phrase = "unknown core-hours (walltime unresolved)"
+        else:
+            est_phrase = f"{est:g} core-hours"
         # The canary is a ONE-task probe by construction (finding-15 anti-bleed):
         # render "canary 1 task" LITERALLY. NEVER interpolate the main array's
         # total_tasks (brief["cost_estimate"]["total_tasks"]) — that count bleeding

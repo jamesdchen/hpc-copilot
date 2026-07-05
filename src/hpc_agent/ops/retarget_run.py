@@ -79,6 +79,8 @@ from hpc_agent.ops.supersession import supersede_run
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent.infra.cost import CostEstimate
+
 __all__ = ["retarget_run"]
 
 
@@ -137,12 +139,14 @@ def _old_scheduler(experiment_dir: Path, *, old_run_id: str, cluster: str) -> st
     return str((load_clusters_config().get(cluster) or {}).get("scheduler") or "")
 
 
-def _est_core_hours(submit: SubmitFlowSpec) -> float:
-    """The pre-dispatch core-hours footprint for the retargeted spec (S2 parity).
+def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
+    """The pre-dispatch cost estimate for the retargeted spec (S2 parity).
 
     Mirrors ``submit_blocks._estimate_for_submit``: total_tasks × walltime × cores,
     via the single ``estimate_core_hours`` kernel. Defensive — a missing walltime
-    reads as a zero footprint, never raises.
+    yields the kernel's zero-cost estimate (never raises); the returned
+    estimate's ``footprint_unknown`` is what the brief/reason render as
+    "unknown core-hours" instead of a false "0" (run #6).
     """
     from hpc_agent.infra.cost import estimate_core_hours
 
@@ -153,7 +157,7 @@ def _est_core_hours(submit: SubmitFlowSpec) -> float:
         total_tasks=submit.total_tasks,
         walltime_s=walltime_s or 0,
         cores_per_task=cores,
-    ).est_core_hours
+    )
 
 
 @primitive(
@@ -308,7 +312,7 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
         experiment_dir, spec=SubmitAndVerifySpec(submit=submit), stop_after_canary=True
     )
 
-    est_core_hours = _est_core_hours(submit)
+    est = _cost_estimate(submit)
     brief: dict[str, Any] = {
         # run_id + cluster ride the brief so a relay renders from the brief's OWN
         # data (design §5.3): the canonical line is "canary <state> on <cluster>".
@@ -320,7 +324,11 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
         "canary_job_ids": sv.canary_job_ids,
         "verified": sv.verified,
         "failure_kind": sv.failure_kind,
-        "est_core_hours": est_core_hours,
+        "est_core_hours": est.est_core_hours,
+        # Unknown-footprint honesty (run #6): the kernel's defensive 0.0 must
+        # never render as a literal "0 core-hours" — the relay renderer reads
+        # off the brief dict, so the signal rides here too.
+        "footprint_unknown": est.footprint_unknown,
         "supersession": supersession,
         "resolve": {
             "run_id": rr.run_id,
@@ -333,10 +341,16 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
     if sv.verify_result is not None:
         brief["verify_result"] = sv.verify_result.model_dump(mode="json")
 
+    # An unknown footprint says so, loudly — never "est. 0 core-hours" (run #6).
+    est_phrase = (
+        "unknown core-hours (walltime unresolved — no history)"
+        if est.footprint_unknown
+        else f"{est.est_core_hours:g} core-hours"
+    )
     if sv.verified:
         reason = (
-            f"retargeted to {new_cluster!r}: canary green (est. {est_core_hours:g} "
-            f"core-hours); superseded {old_run_id!r}. Greenlight to submit & watch on "
+            f"retargeted to {new_cluster!r}: canary green (est. {est_phrase}); "
+            f"superseded {old_run_id!r}. Greenlight to submit & watch on "
             f"{new_cluster}."
         )
         stage = "retargeted_canary_verified"

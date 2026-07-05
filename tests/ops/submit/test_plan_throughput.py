@@ -248,3 +248,50 @@ class TestEvaluateCostGateUnit:
         gate = evaluate_cost_gate(c, self._est(150.0), budget=200.0)
         assert gate is not None
         assert gate["decision"] == "budget_override"
+
+
+class TestCostGateUnknownFootprint:
+    """Run #6: an UNKNOWN footprint (walltime unresolved -> the kernel's
+    defensive 0.0) must never read as "under threshold" when the operator
+    configured a ceiling -- and is never budget-overridable."""
+
+    def _unknown_est(self):
+        from hpc_agent.infra.cost import estimate_core_hours
+
+        est = estimate_core_hours(total_tasks=10, walltime_s=0)
+        assert est.footprint_unknown
+        return est
+
+    def test_unknown_unattended_refused_when_threshold_set(self) -> None:
+        from hpc_agent.infra.constraints import ClusterConstraints
+        from hpc_agent.ops.submit.plan_throughput import evaluate_cost_gate
+
+        c = ClusterConstraints(max_estimated_core_hours=100.0)
+        with pytest.raises(errors.SpecInvalid, match="cannot be estimated"):
+            evaluate_cost_gate(c, self._unknown_est())
+
+    def test_unknown_not_budget_overridable(self) -> None:
+        from hpc_agent.infra.constraints import ClusterConstraints
+        from hpc_agent.ops.submit.plan_throughput import evaluate_cost_gate
+
+        c = ClusterConstraints(max_estimated_core_hours=100.0)
+        with pytest.raises(errors.SpecInvalid, match="cannot be estimated"):
+            evaluate_cost_gate(c, self._unknown_est(), budget=1e9)
+
+    def test_unknown_interactive_requires_confirmation(self) -> None:
+        from hpc_agent.infra.constraints import ClusterConstraints
+        from hpc_agent.ops.submit.plan_throughput import evaluate_cost_gate
+
+        c = ClusterConstraints(max_estimated_core_hours=100.0)
+        gate = evaluate_cost_gate(c, self._unknown_est(), interactive=True)
+        assert gate is not None
+        assert gate["decision"] == "requires_confirmation"
+        assert gate["footprint_unknown"] is True
+
+    def test_unknown_with_no_threshold_stays_disabled(self) -> None:
+        # Default-off preserved: no configured ceiling -> no gate, unknown or not.
+        from hpc_agent.infra.constraints import ClusterConstraints
+        from hpc_agent.ops.submit.plan_throughput import evaluate_cost_gate
+
+        c = ClusterConstraints(max_estimated_core_hours=None)
+        assert evaluate_cost_gate(c, self._unknown_est()) is None

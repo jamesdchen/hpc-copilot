@@ -249,9 +249,11 @@ def _estimate_for_submit(base: SubmitFlowSpec) -> CostEstimate:
 
     ``total_tasks × walltime × cores`` — all three already live on the submit
     spec (``total_tasks`` + ``resources.{walltime_sec,cpus}``). Delegates to the
-    single ``estimate_core_hours`` kernel (cost.py is untouched). A missing
-    walltime yields a zero-cost estimate (the kernel is defensive), which reads
-    as "unknown footprint" in the brief rather than raising.
+    single ``estimate_core_hours`` kernel. A missing walltime yields the
+    kernel's defensive zero-cost estimate rather than raising; the returned
+    estimate's ``footprint_unknown`` property is what the brief/reason
+    renderers branch on to say "unknown core-hours" instead of a false "0"
+    (run #6: the human read a cold-start's defensive 0.0 as literal).
     """
     resources = base.resources
     walltime_s = resources.walltime_sec if (resources and resources.walltime_sec) else 0
@@ -497,6 +499,11 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
         "deduped": sv.deduped,
         "est_core_hours": est.est_core_hours,
         "est_gpu_hours": est.est_gpu_hours,
+        # Unknown-footprint honesty (run #6): the defensive 0.0 above must
+        # never render as a literal "0 core-hours". Stamped into the brief so
+        # the relay renderer (which reads est_core_hours off the brief dict,
+        # not the CostEstimate) has the signal to say "unknown".
+        "footprint_unknown": est.footprint_unknown,
         "cost_estimate": {
             "total_tasks": est.total_tasks,
             "walltime_s": est.walltime_s,
@@ -504,6 +511,7 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
             "gpus_per_task": est.gpus_per_task,
             "est_core_hours": est.est_core_hours,
             "est_gpu_hours": est.est_gpu_hours,
+            "footprint_unknown": est.footprint_unknown,
         },
     }
     if sv.verify_result is not None:
@@ -543,13 +551,19 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
             run_id=sv.run_id,
             brief=brief,
         )
+    # An unknown footprint says so, loudly — never "est. 0 core-hours" (run #6:
+    # the human read the defensive 0.0 as literal and the driving agent had to
+    # caption it by hand).
+    est_phrase = (
+        "unknown core-hours (walltime unresolved — no history)"
+        if est.footprint_unknown
+        else f"{est.est_core_hours:g} core-hours"
+    )
     return SubmitBlockResult(
         block="s2",
         stage_reached="canary_verified",
         needs_decision=True,
-        reason=(
-            f"canary green, est. {est.est_core_hours:g} core-hours; greenlight to submit & watch."
-        ),
+        reason=f"canary green, est. {est_phrase}; greenlight to submit & watch.",
         run_id=sv.run_id,
         brief=brief,
         next_block=_next_block(

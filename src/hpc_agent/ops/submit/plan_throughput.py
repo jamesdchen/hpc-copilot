@@ -52,6 +52,14 @@ def evaluate_cost_gate(
       the higher cap and the gate returns a ``budget_override`` decision
       block (allowed) instead of refusing.
 
+    **Unknown footprint under a configured ceiling never passes** (run #6):
+    when the operator set a threshold but the estimate's footprint is
+    unknown (``CostEstimate.footprint_unknown`` — walltime unresolved), the
+    defensive ``est_core_hours == 0.0`` must NOT read as "under threshold".
+    Interactive → a ``requires_confirmation`` decision block; unattended →
+    :class:`errors.SpecInvalid`. The ``HPC_AGENT_COST_BUDGET`` override does
+    NOT apply here — an unknown estimate cannot be proven under a budget.
+
     The returned decision block (when not ``None``) is informational and
     surfaced under the plan's ``cost_gate`` key; it never silently changes
     the wave plan.
@@ -59,13 +67,50 @@ def evaluate_cost_gate(
     Raises
     ------
     errors.SpecInvalid
-        Unattended estimate over threshold and not under an operator budget.
+        Unattended estimate over threshold and not under an operator budget;
+        or an unattended estimate whose footprint is unknown while a
+        threshold is configured (never budget-overridable).
     """
     threshold = constraints.max_estimated_core_hours
     if threshold is None:
         return None  # gate disabled — default off, no behavior change.
 
     est = estimate.est_core_hours
+    if estimate.footprint_unknown:
+        # The operator configured a core-hours ceiling, but the footprint is
+        # unprovable (walltime and/or task count unresolved → the kernel's
+        # defensive 0.0). Treating "unknown" as "free" would silently pass
+        # an arbitrarily large spend under the ceiling (run #6). No budget
+        # override: an unknown estimate cannot be proven under any cap.
+        detail = (
+            f"({estimate.total_tasks} tasks × {estimate.walltime_s}s walltime) "
+            f"while this cluster sets max_estimated_core_hours="
+            f"{float(threshold):g}. Set resources.walltime_sec (or pass "
+            "--est-task-duration-s) so the footprint can be estimated"
+        )
+        if interactive:
+            return {
+                "decision": "requires_confirmation",
+                "message": (
+                    f"The submission's footprint cannot be estimated {detail}, "
+                    "or confirm to proceed with an unbounded footprint."
+                ),
+                "footprint_unknown": True,
+                "est_core_hours": est,
+                "est_gpu_hours": estimate.est_gpu_hours,
+                "threshold_core_hours": float(threshold),
+                "total_tasks": estimate.total_tasks,
+                "walltime_s": estimate.walltime_s,
+                "cores_per_task": estimate.cores_per_task,
+                "gpus_per_task": estimate.gpus_per_task,
+            }
+        raise errors.SpecInvalid(
+            f"the submission's footprint cannot be estimated {detail}. An "
+            "unknown footprint is never treated as free under a configured "
+            "cost ceiling, and HPC_AGENT_COST_BUDGET cannot override it (an "
+            "unknown estimate cannot be proven under a budget). Running "
+            "interactively, re-run with confirmation instead."
+        )
     if est <= float(threshold):
         return None  # under the operator's ceiling — nothing to gate.
 
@@ -243,7 +288,9 @@ def plan_throughput(
         ``max_walltime`` (only checkable when ``est_task_duration_s`` is
         supplied); or — when the cluster sets ``max_estimated_core_hours``
         and this is an unattended over-threshold submission not under
-        ``HPC_AGENT_COST_BUDGET`` — the #345 cost gate.
+        ``HPC_AGENT_COST_BUDGET`` — the #345 cost gate. An unattended
+        submission whose footprint is UNKNOWN (walltime unresolved) is also
+        refused when the threshold is set, and is never budget-overridable.
     """
     from hpc_agent import load_clusters_config
 
