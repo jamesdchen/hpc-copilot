@@ -1306,7 +1306,7 @@
     "idempotent": true,
     "input_schema": "aggregate_check.input.json",
     "name": "aggregate-check",
-    "output_schema": null,
+    "output_schema": "aggregate_block.output.json",
     "python": "hpc_agent.ops.aggregate_blocks.aggregate_check",
     "side_effects": [
       "ssh"
@@ -1336,7 +1336,7 @@
     "idempotent": true,
     "input_schema": "aggregate_run.input.json",
     "name": "aggregate-run",
-    "output_schema": null,
+    "output_schema": "aggregate_block.output.json",
     "python": "hpc_agent.ops.aggregate_blocks.aggregate_run",
     "side_effects": [
       "ssh",
@@ -1366,7 +1366,7 @@
     "idempotent": true,
     "input_schema": "campaign_complete.input.json",
     "name": "campaign-complete",
-    "output_schema": null,
+    "output_schema": "campaign_block.output.json",
     "python": "hpc_agent.meta.campaign.blocks.campaign_complete",
     "side_effects": [],
     "summary": "Campaign block (end): the completion brief — spend vs budget, iterations, stop reason, and a code-extracted per-iteration outcome table — plus an EMPTY proposed_interpretations slot the LLM fills at the y/nudge boundary (code extracts outcomes; the human concludes). Terminates → y/nudge.",
@@ -1378,7 +1378,7 @@
     "idempotent": true,
     "input_schema": "campaign_greenlight.input.json",
     "name": "campaign-greenlight",
-    "output_schema": null,
+    "output_schema": "campaign_block.output.json",
     "python": "hpc_agent.meta.campaign.blocks.campaign_greenlight",
     "side_effects": [
       "writes-campaign-state"
@@ -1408,7 +1408,7 @@
     "idempotent": true,
     "input_schema": "campaign_watch.input.json",
     "name": "campaign-watch",
-    "output_schema": null,
+    "output_schema": "campaign_block.output.json",
     "python": "hpc_agent.meta.campaign.blocks.campaign_watch",
     "side_effects": [],
     "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
@@ -1494,7 +1494,7 @@
     "idempotent": true,
     "input_schema": "status_snapshot.input.json",
     "name": "status-snapshot",
-    "output_schema": null,
+    "output_schema": "status_block.output.json",
     "python": "hpc_agent.ops.status_blocks.status_snapshot",
     "side_effects": [
       "ssh"
@@ -1508,7 +1508,7 @@
     "idempotent": true,
     "input_schema": "status_watch.input.json",
     "name": "status-watch",
-    "output_schema": null,
+    "output_schema": "status_block.output.json",
     "python": "hpc_agent.ops.status_blocks.status_watch",
     "side_effects": [
       "ssh",
@@ -1586,7 +1586,7 @@
     "idempotent": true,
     "input_schema": "submit_s1.input.json",
     "name": "submit-s1",
-    "output_schema": null,
+    "output_schema": "submit_block.output.json",
     "python": "hpc_agent.ops.submit_blocks.submit_s1",
     "side_effects": [
       "ssh"
@@ -1600,7 +1600,7 @@
     "idempotent": true,
     "input_schema": "submit_s2.input.json",
     "name": "submit-s2",
-    "output_schema": null,
+    "output_schema": "submit_block.output.json",
     "python": "hpc_agent.ops.submit_blocks.submit_s2",
     "side_effects": [
       "scheduler-submit",
@@ -1615,7 +1615,7 @@
     "idempotent": true,
     "input_schema": "submit_s3.input.json",
     "name": "submit-s3",
-    "output_schema": null,
+    "output_schema": "submit_block.output.json",
     "python": "hpc_agent.ops.submit_blocks.submit_s3",
     "side_effects": [
       "scheduler-submit",
@@ -1630,7 +1630,7 @@
     "idempotent": true,
     "input_schema": "submit_s4.input.json",
     "name": "submit-s4",
-    "output_schema": null,
+    "output_schema": "submit_block.output.json",
     "python": "hpc_agent.ops.submit_blocks.submit_s4",
     "side_effects": [
       "ssh"
