@@ -20,6 +20,7 @@ from hpc_agent import errors
 DOCUMENTED_ERROR_CODES = frozenset(
     {
         "ssh_unreachable",
+        "ssh_circuit_open",
         "model_endpoint_error",
         "scheduler_throttled",
         "spec_invalid",
@@ -43,6 +44,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
 # no dedicated subclass — it's the catch-all for unclassified failures).
 EXPECTED_SUBCLASSES = {
     "ssh_unreachable": errors.SshUnreachable,
+    "ssh_circuit_open": errors.SshCircuitOpen,
     "model_endpoint_error": errors.ModelEndpointError,
     "scheduler_throttled": errors.SchedulerThrottled,
     "spec_invalid": errors.SpecInvalid,
@@ -90,7 +92,9 @@ def test_envelope_schema_enum_matches_subclass_inventory() -> None:
     def _resolve(node: dict) -> dict:
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            return defs[ref.removeprefix("#/$defs/")]
+            resolved = defs[ref.removeprefix("#/$defs/")]
+            assert isinstance(resolved, dict)
+            return resolved
         return node
 
     error_variant = next(

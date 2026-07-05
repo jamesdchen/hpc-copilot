@@ -73,6 +73,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "SchemaIncompat",
         "SpawnWorkerDied",
         "SpecInvalid",
+        "SshCircuitOpen",
         "SshUnreachable",
         "StructuredOutputError",
         "SubmissionIncomplete",

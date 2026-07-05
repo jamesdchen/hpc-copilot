@@ -136,6 +136,7 @@ GpuType = Annotated[str, Field(min_length=1)]
 # alias so every consumer's enum stays byte-equivalent.
 ErrorCode = Literal[
     "ssh_unreachable",
+    "ssh_circuit_open",
     "model_endpoint_error",
     "scheduler_throttled",
     "spec_invalid",

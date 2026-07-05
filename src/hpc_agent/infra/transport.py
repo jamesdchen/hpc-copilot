@@ -32,6 +32,7 @@ from hpc_agent.infra.remote import (
     _with_ssh_backoff,
     ssh_run,
 )
+from hpc_agent.infra.ssh_circuit import guarded_call
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv, ssh_env
 from hpc_agent.infra.ssh_throttle import throttle_connection
 from hpc_agent.infra.ssh_validation import validate_remote_path
@@ -510,13 +511,19 @@ def rsync_push(
     validate_remote_path(remote_path.rstrip("/"))
 
     if not _have_rsync():
-        return _tar_ssh_push(
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            local_path=local_path,
-            exclude=exclude,
-            delete=delete,
-            timeout=effective_timeout,
+        # The tar|ssh fallback returns before the _with_ssh_backoff wrap
+        # below, so it must consult the per-host circuit breaker itself —
+        # on native Windows (no rsync) this IS the live push path.
+        return guarded_call(
+            ssh_target,
+            lambda: _tar_ssh_push(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                local_path=local_path,
+                exclude=exclude,
+                delete=delete,
+                timeout=effective_timeout,
+            ),
         )
 
     exclude_flags: list[str] = []
@@ -565,7 +572,7 @@ def rsync_push(
         # mode (Windows OpenSSH version probe can't catch it; 2026-06-04).
         return run_with_named_pipe_retry(_attempt)
 
-    return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}")
+    return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}", ssh_target=ssh_target)
 
 
 # Remote path (relative to ``remote_path``) of the content-hash cache the
@@ -784,7 +791,7 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
                 f"rsync deploy to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s"
             ) from exc
 
-    result = _with_ssh_backoff(_run, label=f"rsync deploy {ssh_target}")
+    result = _with_ssh_backoff(_run, label=f"rsync deploy {ssh_target}", ssh_target=ssh_target)
     if result.returncode != 0:
         raise RuntimeError(
             f"rsync deploy to {ssh_target} failed (exit {result.returncode}): "
@@ -1152,12 +1159,18 @@ def rsync_pull(
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
     if not _have_rsync():
-        return _scp_pull(
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            remote_subdir=remote_subdir,
-            local_dir=local_dir,
-            timeout=effective_timeout,
+        # Early return bypasses the _with_ssh_backoff wrap below, so route
+        # the scp fallback through the circuit breaker directly (the live
+        # pull path on native Windows, where rsync is absent).
+        return guarded_call(
+            ssh_target,
+            lambda: _scp_pull(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                remote_subdir=remote_subdir,
+                local_dir=local_dir,
+                timeout=effective_timeout,
+            ),
         )
 
     filter_flags: list[str] = []
@@ -1185,4 +1198,4 @@ def rsync_pull(
                 f"{_truncate(f'{src} -> {dst}')}"
             ) from exc
 
-    return _with_ssh_backoff(_run, label=f"rsync pull {ssh_target}")
+    return _with_ssh_backoff(_run, label=f"rsync pull {ssh_target}", ssh_target=ssh_target)

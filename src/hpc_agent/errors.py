@@ -13,6 +13,7 @@ from __future__ import annotations
 __all__ = [
     "HpcError",
     "SshUnreachable",
+    "SshCircuitOpen",
     "SchedulerThrottled",
     "SpecInvalid",
     "ExecutorNotFound",
@@ -63,6 +64,36 @@ class SshUnreachable(HpcError):
     remediation = (
         "Verify SSH_AUTH_SOCK is forwarded and ssh-agent has a key for the host. "
         "Run `hpc-agent preflight` to diagnose."
+    )
+
+
+class SshCircuitOpen(HpcError):
+    """Per-host SSH circuit breaker is open — attempts to this host fail fast.
+
+    Raised by :mod:`hpc_agent.infra.ssh_circuit` at the ssh seam after
+    :data:`~hpc_agent.infra.ssh_circuit.CIRCUIT_THRESHOLD` consecutive
+    connection-level failures to one host (connect/banner timeouts,
+    connection refused/reset — NOT auth failures or remote-command exits).
+    Ban-hammer protection: a fleet of workers/retries collectively hammering
+    a host with half-open connections is what gets the source IP banned by
+    the cluster's intrusion filter (2026-07-04 incident), so once the
+    breaker is open every further attempt is refused locally until the
+    cooldown ends and a single half-open probe succeeds.
+
+    ``retry_safe=False`` on purpose: an immediate retry against an open
+    circuit is exactly the behavior the breaker exists to stop. The message
+    carries the cooldown deadline and the per-host override.
+    """
+
+    error_code = "ssh_circuit_open"
+    retry_safe = False
+    category = "network"
+    remediation = (
+        "Wait for the cooldown deadline named in the message (a single probe "
+        "then re-checks the host), or verify the host is reachable out-of-band "
+        "and set HPC_SSH_CIRCUIT_OVERRIDE=<host> to explicitly bypass the "
+        "breaker for that host only. Inspect the recorded failures under "
+        "<journal home>/_ssh_circuit/<host>.json."
     )
 
 

@@ -61,6 +61,7 @@
         "error_code": {
           "enum": [
             "ssh_unreachable",
+            "ssh_circuit_open",
             "model_endpoint_error",
             "scheduler_throttled",
             "spec_invalid",

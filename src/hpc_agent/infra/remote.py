@@ -38,6 +38,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any, Final
 
+from hpc_agent.infra import ssh_circuit
 from hpc_agent.infra.retry import RetryPolicy, run_with_retry
 from hpc_agent.infra.ssh_options import run_with_named_pipe_retry, ssh_argv
 from hpc_agent.infra.ssh_throttle import throttle_connection
@@ -186,6 +187,7 @@ def _with_ssh_backoff(
     fn: Callable[[], subprocess.CompletedProcess[str]],
     *,
     label: str,
+    ssh_target: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Call *fn* with exponential-backoff retry on transient ssh failures.
 
@@ -209,19 +211,40 @@ def _with_ssh_backoff(
     the per-retry stderr diagnostic. Disable retries entirely by setting
     ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
 
+    When *ssh_target* is given, every attempt — including each ladder retry,
+    and the ``HPC_SSH_NO_BACKOFF`` single shot — runs under the persistent
+    per-host circuit breaker (:mod:`hpc_agent.infra.ssh_circuit`): the
+    breaker is consulted BEFORE the attempt and the outcome is recorded
+    after. Consequence for the ladder: three consecutive connection-level
+    failures open the circuit mid-schedule, and the next rung raises
+    :class:`hpc_agent.errors.SshCircuitOpen` (not retryable) instead of
+    opening yet another connection — the fleet-level ban-hammer guard the
+    2026-07-04 all-night probe storm showed was missing. Non-connection
+    failures (auth refused, remote command non-zero) neither count nor trip.
+
     Each retry is announced on stderr (``<label>: attempt N failed (...);
     retrying in Xs``) — the ladder used to spin silently, which turned a
     stalled ssh-agent named pipe into an unexplained multi-minute hang with
     no breadcrumb in the driver log (2026-07-04 pre-flight wedge).
     """
+    if ssh_target is None:
+        guarded = fn
+    else:
+
+        def guarded() -> subprocess.CompletedProcess[str]:
+            assert ssh_target is not None  # narrowed by the enclosing branch
+            return ssh_circuit.guarded_call(ssh_target, fn)
+
     if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
-        return fn()
+        return guarded()
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # TimeoutError raised by fn propagates to run_with_retry as a
         # retryable exception; a throttle-marked cp is re-raised as the
         # _ThrottleRetry signal so the same runner retries it.
-        cp = fn()
+        # SshCircuitOpen raised by the breaker gate is NOT in retry_on and
+        # propagates immediately — an open circuit ends the ladder.
+        cp = guarded()
         if _is_throttle_failure(cp):
             raise _ThrottleRetry(cp)
         return cp
@@ -557,4 +580,4 @@ def ssh_run(
         # is None when capture_output=False).
         return run_with_named_pipe_retry(_attempt)
 
-    return _with_ssh_backoff(_run, label=f"ssh {ssh_target}")
+    return _with_ssh_backoff(_run, label=f"ssh {ssh_target}", ssh_target=ssh_target)

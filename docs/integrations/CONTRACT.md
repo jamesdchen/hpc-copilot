@@ -42,7 +42,7 @@ operation succeeded but a sub-system was degraded
 ```json
 {
   "ok": false,
-  "error_code": "<one of 17>",
+  "error_code": "<one of 18>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -102,6 +102,7 @@ Source of truth: `src/hpc_agent/errors.py`. Full list also in
 | `error_code` | `category` | `retry_safe` | Recommended action |
 |---|---|---|---|
 | `ssh_unreachable` | network | true | **Halt-and-prompt.** Don't loop; the agent socket is missing or the host is unreachable. Re-run `preflight` after operator fix. |
+| `ssh_circuit_open` | network | false | **Do NOT retry.** The per-host SSH circuit breaker tripped after consecutive connection-level failures (ban-risk protection). The message names the cooldown deadline; after it, one probe re-checks the host automatically. Operator override: `HPC_SSH_CIRCUIT_OVERRIDE=<host>`. |
 | `model_endpoint_error` | network | true | **Halt-and-prompt.** The configured `HPC_AGENT_MODEL` endpoint (the raw model-call adapter) is unreachable, returned a non-2xx, or returned an unusable body. Verify `HPC_AGENT_MODEL_BASE_URL` / key / model id; a 5xx or connection error is a transient outage — retry. |
 | `scheduler_throttled` | cluster | true | Backoff (1s → 2s → 4s, max 4 retries). Schedulers cap at ~1/sec. |
 | `cluster_timeout` | cluster | true | Backoff (4s → 8s → 16s, max 3 retries). Likely NFS stall. |

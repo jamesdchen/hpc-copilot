@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
+from hpc_agent.errors import SshCircuitOpen
 from hpc_agent.infra import remote, transport
 from hpc_agent.infra.ssh_options import _ssh_binary
 
@@ -651,7 +652,25 @@ class TestSshBackoff:
         assert result.returncode == 255
         assert mock_run.call_count == 1
 
-    def test_ssh_run_retries_then_gives_up_after_schedule(self):
+    def test_ssh_run_ladder_stops_at_circuit_trip(self):
+        """Connection-marked failures trip the per-host breaker mid-ladder.
+
+        Three consecutive connection-level failures open the circuit
+        (ssh_circuit.CIRCUIT_THRESHOLD), so the 4th ladder rung fails fast
+        with SshCircuitOpen instead of opening a 4th connection — the
+        ban-hammer guard the 2026-07-04 probe storm showed was missing.
+        """
+        throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.return_value = throttle_cp
+            with pytest.raises(SshCircuitOpen):
+                remote.ssh_run("ls", ssh_target="u@c")
+        assert mock_run.call_count == 3
+
+    def test_ssh_run_retries_then_gives_up_after_schedule_with_override(self, monkeypatch):
+        """With the per-host override set, the historical exhaustion contract
+        holds: every scheduled retry runs and the failing cp is RETURNED."""
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
         throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
         with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.return_value = throttle_cp
@@ -675,7 +694,16 @@ class TestSshBackoff:
         assert result.returncode == 0
         assert mock_run.call_count == 2
 
-    def test_timeout_error_retries_then_raises(self):
+    def test_timeout_error_trips_circuit_mid_ladder(self):
+        """Wrapper timeouts count as connection failures: rung 4 fails fast."""
+        with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(SshCircuitOpen):
+                remote.ssh_run("ls", ssh_target="u@c")
+        assert mock_run.call_count == 3  # breaker opens at the 3rd failure
+
+    def test_timeout_error_retries_then_raises_with_override(self, monkeypatch):
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
         with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
@@ -854,7 +882,11 @@ class TestBackoffRetryIsLoud:
         assert "kex_exchange_identification" in err
         assert "retrying in" in err
 
-    def test_timeout_retry_prints_attempt_lines(self, capsys):
+    def test_timeout_retry_prints_attempt_lines(self, capsys, monkeypatch):
+        # Override the circuit breaker so all 4 scheduled retries actually run
+        # (three consecutive timeouts would otherwise trip it mid-ladder —
+        # that path is covered in TestSshBackoff / tests/infra/test_ssh_circuit.py).
+        monkeypatch.setenv("HPC_SSH_CIRCUIT_OVERRIDE", "c")
         with patch("hpc_agent.infra.remote._capture_via_select") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
