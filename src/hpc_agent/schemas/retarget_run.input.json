@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/retarget_run.input.json",
+  "title": "retarget-run input spec",
+  "description": "Inputs to ``retarget-run``: the failed attempt + the cluster-retarget delta.\n\n``old_run_id`` is the attempt being retargeted — its on-disk sidecar\n(``.hpc/runs/<old_run_id>.json``, the v2 config snapshot) supplies the\nrun-owned resolve inputs, and it is the run wave-2 supersession closes.\n``patch`` is the field delta the nudge expressed — it MUST name a NEW\n``cluster`` (a same-cluster delta is a plain revision → ``revise-resolved``,\nnot a retarget). ``new_run_name`` is optional: when absent it is derived in\nCODE as ``<old_run_name>-<cluster>`` so the LLM never authors a run name.\n\nLike ``revise-resolved``, the ``patch`` may name ONLY resolver-owned /\ncaller-authored INPUT fields; a key naming a CODE-DERIVED field (``job_env``,\n``run_id``, ``cmd_sha``, ``executor``, ``ssh_target``, ``backend``,\n``remote_path``, the sidecar) is REFUSED with ``SpecInvalid`` — the verb\nre-derives those from the new cluster.",
+  "type": "object",
+  "required": [
+    "old_run_id",
+    "patch"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "old_run_id": {
+      "description": "The failed attempt's run_id — its sidecar supplies the run-owned resolve inputs, and wave-2 supersession closes it (and its -canary pairing). This is the run being retargeted OFF its cluster.",
+      "minLength": 1,
+      "title": "Old Run Id",
+      "type": "string"
+    },
+    "patch": {
+      "additionalProperties": true,
+      "description": "The field-level delta {field: value} the retarget nudge expressed. MUST name a NEW `cluster` different from the failed attempt's (a same-cluster delta is a plain revision — use revise-resolved). Keys must be resolver-owned INPUT fields; a code-derived field (job_env, executor, ssh_target, backend, …) is refused (SpecInvalid) — the verb re-derives them for the target cluster.",
+      "title": "Patch",
+      "type": "object"
+    },
+    "new_run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional explicit run name for the retargeted attempt. When null the verb DERIVES it as <old_run_name>-<cluster> so the LLM never authors a run name. Must differ from the old run_name so the new run_id does not collide with (and re-attach to) the superseded attempt (#207).",
+      "title": "New Run Name"
+    }
+  }
+}

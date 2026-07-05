@@ -221,6 +221,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-watch](campaign-watch.md) | yes | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` |
 | [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
+| [retarget-run](retarget-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<new_run_id>.json`; scheduler-submit: `<new-cluster>`; ssh: `<new-cluster>` | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` |
 | [revise-resolved](revise-resolved.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` |
 | [status-pipeline](status-pipeline.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [status-snapshot](status-snapshot.md) | yes | ssh: `<cluster>` | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` |

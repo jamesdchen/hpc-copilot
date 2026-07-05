@@ -28,7 +28,7 @@ Terminology:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 __all__ = [
@@ -36,6 +36,7 @@ __all__ = [
     "WORKFLOW_OF",
     "ORDER",
     "GATED_BLOCKS",
+    "ANOMALY_TERMINATORS",
     "DEADLINE_SECONDS",
     "WATCH_VERBS",
     "WATCH_BUDGET_SLACK_SEC",
@@ -44,6 +45,7 @@ __all__ = [
     "block_index",
     "next_block_hint",
     "is_gated",
+    "recovery_arm_verb",
     "verb_deadline_seconds",
 ]
 
@@ -298,3 +300,59 @@ def is_gated(verb: str) -> bool:
     (``block_drive._chain``). Chains freely through every ungated block.
     """
     return verb in GATED_BLOCKS
+
+
+# ── the anomaly recovery arms ──────────────────────────────────────────────────
+
+# The block terminators where recovery is a genuine HUMAN branch — ``SUCCESSORS``
+# maps each to ``None`` (a bare ``y`` has no deterministic successor: the human's
+# nudge names the recovery). Kept as a NAMED set (not re-scraped from SUCCESSORS)
+# so ``recovery_arm_verb`` is explicit about WHERE a delta-selected arm applies,
+# and so a future terminator that gains an arm is a one-line, auditable edit.
+ANOMALY_TERMINATORS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("submit-s2", "canary_failed"),
+        ("submit-s3", "watching_anomaly"),
+    }
+)
+
+# Recovery-arm verb keyed by the DELTA's target field (design §4.1: "the route is
+# a function of the spec — the delta's target field selects the arm, computed in
+# code, never a verb the model picks"). A ``cluster`` delta selects ``retarget-run``
+# (proving-run-5 wave 5.2) — the one composite that supersedes the failed attempt,
+# re-resolves under a NEW run_name + the new cluster, and re-canaries. Other
+# recovery deltas (resume / kill / fix-and-retry) stay human branches (``None``)
+# until their arm lands. Kept SEPARATE from ``SUCCESSORS`` on purpose: an arm is
+# NOT a deterministic successor of the STAGE (a bare ``y`` at an anomaly has no
+# successor) — it is selected only when the human's nudge names the recovery, so
+# folding it into SUCCESSORS would wrongly auto-chain every anomaly to retarget.
+_RECOVERY_ARM_BY_FIELD: dict[str, str] = {"cluster": "retarget-run"}
+
+
+def recovery_arm_verb(
+    current_verb: str, stage_reached: str, delta_fields: Iterable[str]
+) -> str | None:
+    """The recovery-arm verb for a nudge DELTA at an anomaly terminator, else None.
+
+    Design §4.1: at an anomaly terminator (:data:`ANOMALY_TERMINATORS` —
+    ``canary_failed`` / ``watching_anomaly``) a nudge that names an anomaly
+    recovery routes to the recovery arm; the route is a FUNCTION OF THE SPEC — the
+    delta's target field selects the arm, computed HERE in code, never a verb the
+    model picks. A delta touching ``cluster`` selects ``retarget-run`` (supersede →
+    re-resolve under a new run_name → re-canary). Returns ``None`` when the pair is
+    not an anomaly terminator, or when the delta names no field that maps to an arm
+    (a genuine human branch — resubmit / kill / fix).
+
+    This is the SoT the ``hpc-submit`` skill consults at the rendezvous (mirroring
+    how a spec-changing nudge routes through ``revise-resolved``): the LLM names the
+    delta; code maps the delta to the arm. It is deliberately kept off the driver's
+    deterministic ``SUCCESSORS`` auto-chain — a bare ``y`` at an anomaly has no
+    successor, so the arm fires only when the human's nudge selects it.
+    """
+    if (current_verb, stage_reached) not in ANOMALY_TERMINATORS:
+        return None
+    for field in delta_fields:
+        arm = _RECOVERY_ARM_BY_FIELD.get(field)
+        if arm is not None:
+            return arm
+    return None

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/retarget_run.output.json",
+  "title": "retarget-run output data",
+  "description": "The retarget outcome — an S2-shaped brief + the supersession audit.\n\n``stage_reached`` is the re-canary outcome the human decides on:\n``retargeted_canary_verified`` (green on the new cluster — greenlight S3),\n``retargeted_canary_failed`` (failed AGAIN — the human picks the next\nrecovery), or ``resolve_blocked`` (the fresh resolve surfaced its own\ndecision, e.g. a live sibling of the NEW run_id from a prior retarget).\n``needs_decision`` is always True: the human re-``y``s the brief through the\nEXISTING ``append-decision`` path — this verb produces the brief, it does NOT\nbypass the gates. ``superseded_run_id`` / ``applied_patch`` are the audit of\nwhat the retarget closed and changed.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "superseded_run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "The re-canary outcome the amended brief stops at.",
+      "enum": [
+        "retargeted_canary_verified",
+        "retargeted_canary_failed",
+        "resolve_blocked"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "Always True — the human re-y's the retarget brief through append-decision.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the retarget outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "superseded_run_id": {
+      "description": "The failed attempt closed by wave-2 supersession (old→new link stamped).",
+      "title": "Superseded Run Id",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The retargeted run's run_id (<new_run_name>-<cmd_sha[:8]>); None if unresolved.",
+      "title": "Run Id"
+    },
+    "verified": {
+      "default": false,
+      "description": "True iff the re-canary verified green on the NEW cluster (#160 gate).",
+      "title": "Verified",
+      "type": "boolean"
+    },
+    "failure_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The canary failure kind when the re-canary failed on the new cluster; else None.",
+      "title": "Failure Kind"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "The S2-shaped brief: the retargeted resolved values + the re-canary result (run_id, cluster, verified, est core-hours) + the supersession summary. The LLM relays it and takes the human's re-y.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "applied_patch": {
+      "additionalProperties": true,
+      "description": "The delta actually applied {field: value} — the audit of what the retarget changed.",
+      "title": "Applied Patch",
+      "type": "object"
+    }
+  }
+}

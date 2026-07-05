@@ -15,11 +15,13 @@ from unittest import mock
 import hpc_agent.ops.submit_blocks as submit_blocks
 from hpc_agent.infra import block_chain
 from hpc_agent.infra.block_chain import (
+    ANOMALY_TERMINATORS,
     ORDER,
     SUCCESSORS,
     WORKFLOW_OF,
     block_index,
     next_block_hint,
+    recovery_arm_verb,
     successor_verb,
     workflow_of,
 )
@@ -248,3 +250,53 @@ def test_module_helper_delegates_to_block_chain() -> None:
     assert submit_blocks._next_block("submit-s1", "prior_run_found", "why") is None
     # Sanity: the module imports the shared builder, not a private copy.
     assert submit_blocks.next_block_hint is block_chain.next_block_hint
+
+
+# ── the anomaly recovery arm (wave 5.2) ───────────────────────────────────────
+
+
+def test_anomaly_terminators_have_no_deterministic_successor() -> None:
+    """Every anomaly terminator maps to None in SUCCESSORS — a bare `y` at an
+    anomaly has no deterministic successor; the recovery is a delta-selected arm,
+    not an auto-chain (so folding an arm into SUCCESSORS would be wrong)."""
+    for pair in ANOMALY_TERMINATORS:
+        assert pair in SUCCESSORS, pair
+        assert SUCCESSORS[pair] is None, pair
+
+
+def test_cluster_delta_at_anomaly_selects_retarget_run() -> None:
+    """A nudge DELTA touching `cluster` at an anomaly terminator routes to
+    retarget-run — the route is a function of the spec, computed in code (§4.1)."""
+    assert recovery_arm_verb("submit-s2", "canary_failed", ["cluster"]) == "retarget-run"
+    assert recovery_arm_verb("submit-s3", "watching_anomaly", ["cluster"]) == "retarget-run"
+    # The target-cluster field selects the arm even amid other edited fields.
+    assert (
+        recovery_arm_verb("submit-s2", "canary_failed", ["walltime_sec", "cluster"])
+        == "retarget-run"
+    )
+
+
+def test_non_cluster_delta_at_anomaly_is_a_human_branch() -> None:
+    """A delta that names no arm-mapped field stays a human branch (None) — the
+    human's nudge picks resubmit / kill / fix, not a coded arm."""
+    assert recovery_arm_verb("submit-s2", "canary_failed", ["walltime_sec"]) is None
+    assert recovery_arm_verb("submit-s3", "watching_anomaly", []) is None
+
+
+def test_recovery_arm_only_fires_at_anomaly_terminators() -> None:
+    """A cluster delta at a NON-anomaly terminator has no recovery arm — clean
+    successors and the pre-mint branches are not anomaly recovery points."""
+    assert recovery_arm_verb("submit-s2", "canary_verified", ["cluster"]) is None
+    assert recovery_arm_verb("submit-s1", "resolved", ["cluster"]) is None
+    assert recovery_arm_verb("submit-s1", "prior_run_found", ["cluster"]) is None
+
+
+def test_recovery_arm_target_is_a_known_verb() -> None:
+    """A recovery arm must resolve to a real, registered verb (no dangling arm)."""
+    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+    register_primitives()
+    registry = get_registry()
+    arm = recovery_arm_verb("submit-s2", "canary_failed", ["cluster"])
+    assert arm is not None
+    assert arm in registry, arm

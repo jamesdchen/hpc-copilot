@@ -117,6 +117,9 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # revise-resolved (proving-run-5 wave 5.1): the nudge-as-delta verb —
         # re-resolves a run under a {field: value} patch. Spec-taking composite.
         "revise-resolved",
+        # retarget-run (proving-run-5 wave 5.2): the cluster-retarget recovery arm —
+        # supersede + re-resolve(new run_name) + re-canary. Spec-taking composite.
+        "retarget-run",
         "aggregate-flow",
         "apply-safe-defaults",
         "build-submit-spec",
@@ -263,6 +266,9 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     # revise-resolved (wave 5.1): new spec composite; like the other composites
     # it does not yet thread failure_features into its spec_invalid envelope (WS3).
     "revise-resolved",
+    # retarget-run (wave 5.2): new spec composite; like the other composites it
+    # does not yet thread failure_features into its spec_invalid envelope (WS3).
+    "retarget-run",
 }
 
 
