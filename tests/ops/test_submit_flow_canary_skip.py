@@ -98,7 +98,7 @@ def test_always_canary_env_wins_over_cached_cmd_sha(monkeypatch):
     from hpc_agent import __version__ as ver
 
     canary_cache.record_canary_validated(
-        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "", cluster="c")
     )
     monkeypatch.setenv("HPC_AGENT_ALWAYS_CANARY", "1")
     assert sf._should_run_canary(_spec(total_tasks=100)) is True
@@ -116,7 +116,7 @@ def test_always_canary_off_value_changes_nothing(monkeypatch):
 def test_cached_cmd_sha_skips_canary(monkeypatch):
     from hpc_agent import __version__ as ver
 
-    key = canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+    key = canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "", cluster="c")
     canary_cache.record_canary_validated(key)
     # total_tasks large (no #263 skip), but cmd_sha is fresh → #249 skip.
     assert sf._should_run_canary(_spec(total_tasks=100)) is False
@@ -130,7 +130,7 @@ def test_no_canary_skip_env_disables_249(monkeypatch):
     from hpc_agent import __version__ as ver
 
     canary_cache.record_canary_validated(
-        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "", cluster="c")
     )
     monkeypatch.setenv("HPC_NO_CANARY_SKIP", "1")
     assert sf._should_run_canary(_spec(total_tasks=100)) is True
@@ -140,7 +140,7 @@ def test_force_canary_overrides_cached_cmd_sha():
     from hpc_agent import __version__ as ver
 
     canary_cache.record_canary_validated(
-        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "")
+        canary_cache.canary_cache_key(cmd_sha="sha-abc", version=ver or "", cluster="c")
     )
     assert sf._should_run_canary(_spec(total_tasks=100, force_canary=True)) is True
 
@@ -149,7 +149,7 @@ def test_force_canary_overrides_cached_cmd_sha():
 
 
 def test_cache_ttl_expiry():
-    key = canary_cache.canary_cache_key(cmd_sha="x", version="1")
+    key = canary_cache.canary_cache_key(cmd_sha="x", version="1", cluster="c")
     canary_cache.record_canary_validated(key)
     now = datetime.now(timezone.utc)
     assert canary_cache.is_canary_validated_fresh(key, now=now + timedelta(hours=1)) is True
@@ -158,13 +158,38 @@ def test_cache_ttl_expiry():
 
 
 def test_cache_version_keying():
-    canary_cache.record_canary_validated(canary_cache.canary_cache_key(cmd_sha="x", version="1"))
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="x", version="1", cluster="c")
+    )
     # A different framework version is a different key → miss.
     assert (
         canary_cache.is_canary_validated_fresh(
-            canary_cache.canary_cache_key(cmd_sha="x", version="2")
+            canary_cache.canary_cache_key(cmd_sha="x", version="2", cluster="c")
         )
         is False
+    )
+
+
+def test_cache_cluster_keying():
+    """Proving run #5: cluster joined the key — a canary validated on cluster A
+    must NOT let a submit on cluster B skip its own canary (modules / activation
+    / scheduler dialect are cluster-local, so the proof does not transfer)."""
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="x", version="1", cluster="discovery")
+    )
+    # Same cmd_sha + version, DIFFERENT cluster → miss (run the canary).
+    assert (
+        canary_cache.is_canary_validated_fresh(
+            canary_cache.canary_cache_key(cmd_sha="x", version="1", cluster="hoffman2")
+        )
+        is False
+    )
+    # The recording cluster still validates.
+    assert (
+        canary_cache.is_canary_validated_fresh(
+            canary_cache.canary_cache_key(cmd_sha="x", version="1", cluster="discovery")
+        )
+        is True
     )
 
 
@@ -172,8 +197,8 @@ def test_sequential_records_preserve_both_entries():
     """Read-modify-write is locked (no lost update): two sequential records with
     DIFFERENT keys must BOTH persist (regression for the unlocked-RMW lost-update
     that clobbered one entry when two submits validated different cmd_shas)."""
-    key_a = canary_cache.canary_cache_key(cmd_sha="A", version="1")
-    key_b = canary_cache.canary_cache_key(cmd_sha="B", version="1")
+    key_a = canary_cache.canary_cache_key(cmd_sha="A", version="1", cluster="c")
+    key_b = canary_cache.canary_cache_key(cmd_sha="B", version="1", cluster="c")
     canary_cache.record_canary_validated(key_a)
     canary_cache.record_canary_validated(key_b)
     # The second write read the first's entry under the lock, so neither is lost.
@@ -194,6 +219,8 @@ def test_record_acquires_lock_around_write(monkeypatch):
         return orig(lock_path, **kw)
 
     monkeypatch.setattr(_io, "advisory_flock", _spy)
-    canary_cache.record_canary_validated(canary_cache.canary_cache_key(cmd_sha="z", version="1"))
+    canary_cache.record_canary_validated(
+        canary_cache.canary_cache_key(cmd_sha="z", version="1", cluster="c")
+    )
     assert len(calls) == 1
     assert calls[0].endswith(".lock")

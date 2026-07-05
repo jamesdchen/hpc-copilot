@@ -47,7 +47,7 @@ I/O contracts:
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -106,6 +106,47 @@ def _materialized_executor_cmd(experiment_dir: Path) -> str | None:
         return None
     cmd = entry.get("executor_cmd")
     return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """A LIVE canary-only prior attempt for *run_id*, or None — read in CODE.
+
+    ``find-prior-run`` keys on the main sidecar's ``cmd_sha`` and reads a
+    ``status`` the sidecar never carries (status lives on the journal RunRecord
+    only), so it is blind to an attempt that died *pre-main-submit*: the main
+    array never launched, but its ``<run_id>-canary`` sub-record + the S2
+    worker's detached lease are still live. Re-resolving over that live attempt
+    (e.g. to retarget a different cluster) would sail past the resume-vs-fresh
+    fork and only meet it at the S2 backstop — too late for the human to pick.
+
+    This surfaces the live canary attempt so the SAME ``prior_run_found`` fork
+    fires at S1. Liveness mirrors the supersession doctrine verbatim (the #276
+    corpse rule): a *non-terminal* ``<run_id>-canary`` record OR a live detached
+    lease for the id counts as live; a TERMINAL canary (failed / complete) with
+    no live lease is a corpse and does NOT block re-resolve. Returns the canary
+    record's ``run_id`` / ``status`` / ``cluster`` for the decision brief.
+    """
+    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+    from hpc_agent.ops.supersession import _live_lease
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.run_record import TERMINAL_STATUSES
+
+    # The paired ``<run_id>-canary`` entry via the one #258 suffix definition —
+    # never a second hardcoded ``-canary`` (the `_sibling_run_ids` docstring owns
+    # the pairing convention; supersession's `_supersede_missing_main` uses it too).
+    (canary_id,) = _sibling_run_ids(run_id)
+    canary = load_run(experiment_dir, canary_id)
+    lease = _live_lease(run_id) or _live_lease(canary_id)
+    canary_live = (
+        canary is not None and canary.status not in TERMINAL_STATUSES
+    ) or lease is not None
+    if not canary_live:
+        return None
+    return {
+        "prior_run_id": canary_id,
+        "status": canary.status if canary is not None else "in_flight",
+        "cluster": canary.cluster if canary is not None else None,
+    }
 
 
 @primitive(
@@ -205,6 +246,34 @@ def resolve_submit_inputs(
             cmd_sha=cmd_sha,
             prior_run_id=fp["prior_run_id"],
             prior_status=fp["status"],
+            prior_cluster=fp["cluster"],
+        )
+
+    # 3b. Canary-only liveness (proving-run #5): find-prior-run above reads a
+    #     status off the SIDECAR (which never carries one) and so is blind to an
+    #     attempt that died pre-main-submit — the main array never launched, but
+    #     the <run_id>-canary journal record + the S2 worker's detached lease are
+    #     still live. Surface that as the SAME resume-vs-fresh fork so a retarget
+    #     meets the human at S1, not the S2 backstop. A TERMINAL canary is a
+    #     corpse and does NOT block (the #276 spirit; see _live_canary_attempt).
+    canary = _live_canary_attempt(experiment_dir, run_id)
+    if canary is not None:
+        return ResolveSubmitInputsResult(
+            stage_reached="prior_run_found",
+            needs_decision=True,
+            reason=(
+                f"a live canary-only prior attempt ({canary['prior_run_id']}, "
+                f"status={canary['status']}, cluster={canary['cluster']}) is in "
+                "flight for this run_id — its main array never launched, so it is "
+                "invisible to cmd_sha resume-detection. Only the user can choose "
+                "resume-vs-fresh (and whether to retarget); do NOT re-submit until "
+                "they decide."
+            ),
+            run_id=run_id,
+            cmd_sha=cmd_sha,
+            prior_run_id=canary["prior_run_id"],
+            prior_status=canary["status"],
+            prior_cluster=canary["cluster"],
         )
 
     # 4. build-submit-spec: assemble + validate the submit-flow spec. Inject the

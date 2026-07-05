@@ -167,6 +167,7 @@ def _warn_layer1_drift(
 # DECISION so it is unit-testable without I/O and carries a provenance reason.
 _DEDUP = "dedup"  # the existing record stands; do not submit
 _PROCEED = "proceed"  # fall through to a fresh / in-place submit
+_REFUSE = "refuse"  # a live run on a DIFFERENT cluster — refuse loudly, never dedup
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,7 @@ def _resolve_layer1(
     invalidate_on_code_change: bool,
     current_executor: str | None,
     current_tasks_py_sha: str | None,
+    current_cluster: str | None = None,
 ) -> _Layer1Decision:
     """Decide what an existing journal record means for this submit.
 
@@ -200,9 +202,21 @@ def _resolve_layer1(
 
     * ``failed`` / ``abandoned`` (resubmittable-terminal, #276) -> ``_PROCEED``:
       a terminal-failure corpse is not a live run and must not block a retry.
-    * ``in_flight`` (and any other non-terminal, non-complete) -> ``_DEDUP``:
+      Terminal-failure proceeds cross-cluster too: redo-in-place is the legit
+      recovery, and cluster placement is irrelevant to a dead run.
+    * ``in_flight`` (and any other non-terminal, non-complete) on the SAME
+      cluster (or when either recorded/current cluster is empty) -> ``_DEDUP``:
       a live run blocks a duplicate submit.
+    * ``in_flight`` where BOTH the recorded and the current cluster are
+      non-empty AND differ -> ``_REFUSE`` (proving run #5): run_id keys on
+      parameters only (#207), so a cluster retarget under the same run_id would
+      otherwise silently re-attach this submit to the OLD cluster's in-flight
+      canary. One run_id cannot be live on two clusters — refuse loudly. An
+      empty recorded/current cluster proves nothing, so it is never a refusal
+      (the "cannot prove it changed" precedent, mirroring code-drift).
     * ``complete`` with no code/executor drift -> ``_DEDUP`` (idempotency).
+      Complete dedups cross-cluster too: the results already exist, so where
+      they were produced is irrelevant to a replay.
     * ``complete`` with drift + ``invalidate_on_code_change`` -> ``_PROCEED``:
       the finished run's code changed, so it is NOT a valid replay; redo in
       place (same run_id, #207).
@@ -212,6 +226,13 @@ def _resolve_layer1(
     if is_resubmittable_terminal(existing):
         return _Layer1Decision(_PROCEED, "terminal_failure_resubmittable")
     if existing.status != JournalStatus.COMPLETE:
+        # A live run on a DIFFERENT cluster is not a duplicate — it is a retarget
+        # under a parameter-only run_id (#207). Dedup would re-attach this submit
+        # to the OLD cluster's in-flight canary (proving run #5). Refuse, but only
+        # when BOTH clusters are known: an empty recorded/current value cannot
+        # prove a change (mirrors _layer1_code_drift's "cannot prove it changed").
+        if existing.cluster and current_cluster and existing.cluster != current_cluster:
+            return _Layer1Decision(_REFUSE, "in_flight_cluster_mismatch")
         return _Layer1Decision(_DEDUP, "in_flight_blocks_duplicate")
     drift, recorded_executor, recorded_tasks_py_sha = _layer1_code_drift(
         existing,
@@ -374,14 +395,18 @@ def submit_and_record(
     resolved_tasks_py_sha = _resolve_current_tasks_py_sha(experiment_dir, tasks_py_sha)
 
     # LAYER 1 — run_id / journal dedup. The decision tree (terminal-failure
-    # falls through; in_flight blocks; COMPLETE dedups, redoes-in-place under
-    # the lever on drift, or warns-and-dedups, #276 / #351 sub-bug #5) lives in
-    # the pure ``_resolve_layer1`` so it is unit-testable without I/O. The
-    # COMPLETE-redo drift compares the PRIOR run's recorded executor/tasks_py_sha
-    # — read from its journal RunRecord, since the same-run_id sidecar is already
-    # overwritten with the NEW code by now (see ``_layer1_code_drift``) — against
-    # the about-to-submit code; an in-place redo keeps the run_id (#207). The
-    # side-effects (warn / return / fall-through) stay here.
+    # falls through; in_flight blocks — or REFUSES on a cross-cluster retarget,
+    # proving run #5; COMPLETE dedups, redoes-in-place under the lever on drift,
+    # or warns-and-dedups, #276 / #351 sub-bug #5) lives in the pure
+    # ``_resolve_layer1`` so it is unit-testable without I/O. The COMPLETE-redo
+    # drift compares the PRIOR run's recorded executor/tasks_py_sha — read from
+    # its journal RunRecord, since the same-run_id sidecar is already overwritten
+    # with the NEW code by now (see ``_layer1_code_drift``) — against the
+    # about-to-submit code; an in-place redo keeps the run_id (#207). The cluster
+    # mismatch matters ONLY on the in_flight branch: a run_id keys on parameters
+    # alone (#207), so a retarget to a new cluster under the same run_id would
+    # otherwise silently re-attach to the OLD cluster's live canary. The
+    # side-effects (warn / raise / return / fall-through) stay here.
     existing = load_run(experiment_dir, run_id)
     if existing is not None:
         decision = _resolve_layer1(
@@ -389,7 +414,20 @@ def submit_and_record(
             invalidate_on_code_change=invalidate_on_code_change,
             current_executor=resolved_executor,
             current_tasks_py_sha=resolved_tasks_py_sha,
+            current_cluster=cluster,
         )
+        if decision.action == _REFUSE:
+            raise errors.SpecInvalid(
+                f"run {run_id!r} is already live on cluster "
+                f"{existing.cluster!r} (status={existing.status}), but this "
+                f"submit targets {cluster!r} — one run_id cannot be live on two "
+                "clusters at once. The run_id keys on swept parameters only "
+                "(#207), so a cluster retarget under the same run_id would "
+                "silently re-attach this submit to the other cluster's live "
+                "run. Wait for or kill the live attempt, or make the retarget a "
+                "NEW attempt: re-resolve with a distinct run_name and name the "
+                "old attempt via supersedes."
+            )
         if decision.action == _DEDUP:
             if decision.warn_drift:
                 _warn_layer1_drift(

@@ -44,8 +44,8 @@ if TYPE_CHECKING:
 __all__ = ["submit_speculate"]
 
 
-def _canary_key(base_job_env: dict[str, str] | None) -> str | None:
-    """Return the ``(cmd_sha, framework-version)`` cache key for this spec, or None.
+def _canary_key(base_job_env: dict[str, str] | None, *, cluster: str) -> str | None:
+    """Return the ``(cmd_sha, framework-version, cluster)`` cache key, or None.
 
     None when the cache is disabled or the spec carries no ``HPC_CMD_SHA`` — both
     mean "cannot dedup on the cache", so speculation proceeds (the canary is
@@ -59,7 +59,9 @@ def _canary_key(base_job_env: dict[str, str] | None) -> str | None:
     cmd_sha = (base_job_env or {}).get("HPC_CMD_SHA") or ""
     if not cmd_sha:
         return None
-    return canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=_pkg_version or "")
+    return canary_cache.canary_cache_key(
+        cmd_sha=cmd_sha, version=_pkg_version or "", cluster=cluster
+    )
 
 
 @primitive(
@@ -108,7 +110,7 @@ def submit_speculate(experiment_dir: Path, *, spec: SubmitSpeculateSpec) -> Subm
     array and never cancels anything.
     """
     base = spec.submit.submit
-    key = _canary_key(base.job_env)
+    key = _canary_key(base.job_env, cluster=base.cluster)
     if key is not None:
         from hpc_agent.state import canary_cache
 

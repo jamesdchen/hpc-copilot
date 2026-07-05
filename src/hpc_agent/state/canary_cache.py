@@ -85,13 +85,18 @@ def _lock_path(target: Path) -> Path:
     return target.with_suffix(target.suffix + ".lock")
 
 
-def canary_cache_key(*, cmd_sha: str, version: str) -> str:
-    """Stable key for a ``(cmd_sha, framework-version)`` pair.
+def canary_cache_key(*, cmd_sha: str, version: str, cluster: str) -> str:
+    """Stable key for a ``(cmd_sha, framework-version, cluster)`` triple.
 
     A version bump yields a different key (auto-invalidation on ``pip install
     -U``). ``cmd_sha`` is already a hash, so no further hashing is needed.
+    ``cluster`` joined the key in proving run #5: a canary proves the spec runs
+    on THAT cluster (modules, activation, scheduler dialect are cluster-local),
+    so a discovery-validated entry must never let a hoffman2 submit skip its
+    canary. Pre-existing two-part entries simply never match again — the TTL
+    cache treats them as stale, which is the correct degradation.
     """
-    return f"{cmd_sha}|{version}"
+    return f"{cmd_sha}|{version}|{cluster}"
 
 
 def _read_cache() -> dict[str, Any]:

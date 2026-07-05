@@ -193,10 +193,12 @@ def _assert_canary_verified(experiment_dir: Path, base: SubmitFlowSpec) -> None:
     cmd_sha = (base.job_env or {}).get("HPC_CMD_SHA") or ""
     if not cmd_sha:
         return
-    key = canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=_pkg_version or "")
+    key = canary_cache.canary_cache_key(
+        cmd_sha=cmd_sha, version=_pkg_version or "", cluster=base.cluster
+    )
     if not canary_cache.is_canary_validated_fresh(key):
         raise errors.SpecInvalid(
-            "submit-s3: no validated-fresh canary for this (cmd_sha, version) — "
+            "submit-s3: no validated-fresh canary for this (cmd_sha, version, cluster) — "
             "re-run submit-s2 so the canary verifies the current tree before the "
             f"main array launches (run_id={base.run_id!r})."
         )

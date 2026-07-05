@@ -52,8 +52,8 @@ def _sidecar_ret() -> dict[str, Any]:
 
 def _build_tasks_input() -> BuildTasksPyInput:
     return BuildTasksPyInput(
-        axes=[{"name": "exp_alpha", "values": [0.1, 1.0]}],
-        flags_by_executor={"src.ridge": [{"name": "alpha", "type": "float"}]},
+        axes=[{"name": "exp_alpha", "values": [0.1, 1.0]}],  # type: ignore[list-item]
+        flags_by_executor={"src.ridge": [{"name": "alpha", "type": "float"}]},  # type: ignore[list-item]
     )
 
 
@@ -318,6 +318,128 @@ def test_orphan_prior_is_not_live_proceeds_fresh(tmp_path: Path) -> None:
 
     assert res.stage_reached == "resolved"
     assert res.needs_decision is False
+
+
+def _canary_record(
+    tmp_path: Path,
+    run_id: str,
+    *,
+    status: str,
+    cluster: str = "discovery",
+    job_ids: list[str] | None = None,
+) -> None:
+    """Upsert a ``<run_id>`` journal RunRecord in tmp_path's journal home.
+
+    Mirrors tests/ops/submit/test_supersession.py's ``_record`` idiom — the
+    canary sub-record is an ordinary RunRecord whose run_id ends in ``-canary``.
+    """
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=run_id,
+            profile="p",
+            cluster=cluster,
+            ssh_target="u@h",
+            remote_path="/scratch/x",
+            job_name="j",
+            job_ids=job_ids if job_ids is not None else ["501"],
+            total_tasks=1,
+            submitted_at="2026-07-05T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status=status,
+        ),
+    )
+
+
+def test_live_canary_only_attempt_escalates_with_cluster(tmp_path: Path, monkeypatch: Any) -> None:
+    """An attempt that died pre-main-submit leaves only a LIVE <run_id>-canary
+    sub-record (main array never launched) — invisible to cmd_sha resume-detection.
+    resolve-submit-inputs must still surface prior_run_found, carrying the canary's
+    cluster + status so the human meets the retarget fork at S1, not the S2 backstop."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    _touch_tasks_py(tmp_path)
+    # compute-run-id yields run_id "ridge-abcd1234"; its live canary sibling.
+    _canary_record(tmp_path, "ridge-abcd1234-canary", status="in_flight", cluster="discovery")
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        # cmd_sha resume-detection finds nothing (the main record never existed).
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec") as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar") as ws,
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "prior_run_found"
+    assert res.needs_decision is True
+    assert res.prior_run_id == "ridge-abcd1234-canary"
+    assert res.prior_status == "in_flight"
+    assert res.prior_cluster == "discovery"  # the retarget-fork brief field
+    assert res.submit_spec is None
+    assert res.sidecar_path is None
+    bs.assert_not_called()  # stopped before building the spec
+    ws.assert_not_called()  # and before writing the sidecar
+
+
+def test_terminal_canary_only_attempt_proceeds_fresh(tmp_path: Path, monkeypatch: Any) -> None:
+    """A TERMINAL canary-only sub-record (failed/complete) with no live lease is a
+    corpse (#276 spirit) — it must NOT block re-resolve. Clean resolve unchanged."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    _touch_tasks_py(tmp_path)
+    _canary_record(tmp_path, "ridge-abcd1234-canary", status="failed", cluster="discovery")
+    built = {"profile": "ridge"}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built) as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "resolved"
+    assert res.needs_decision is False
+    assert res.submit_spec == built
+    bs.assert_called_once()
+    ws.assert_called_once()
+
+
+def test_live_detached_lease_only_escalates(tmp_path: Path, monkeypatch: Any) -> None:
+    """Even with NO canary journal record, a live detached S2 worker lease for the
+    run_id is a live attempt → prior_run_found (belt-and-suspenders liveness)."""
+    import os
+
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+    from hpc_agent.state.run_record import _current_homedir
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    _touch_tasks_py(tmp_path)
+    detached = _current_homedir() / "_detached"
+    detached.mkdir(parents=True, exist_ok=True)
+    # Our own pid is definitionally alive → a live lease on run-id "ridge-abcd1234".
+    (detached / "submit-s2-ridge-abcd1234.lease.json").write_text(
+        f'{{"run_id": "ridge-abcd1234", "block": "submit-s2", "pid": {os.getpid()}}}',
+        encoding="utf-8",
+    )
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec") as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar") as ws,
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert res.stage_reached == "prior_run_found"
+    assert res.prior_run_id == "ridge-abcd1234-canary"
+    assert res.prior_status == "in_flight"  # no record → live-by-lease default
+    assert res.prior_cluster is None  # no record → cluster unknown
+    bs.assert_not_called()
+    ws.assert_not_called()
 
 
 def test_absent_tasks_no_scaffold_spec_escalates(tmp_path: Path) -> None:

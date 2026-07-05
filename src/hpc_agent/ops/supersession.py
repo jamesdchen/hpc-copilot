@@ -317,6 +317,107 @@ def _invoke_kill(experiment_dir: Path, *, run_id: str, scheduler: str) -> dict[s
     return _kill(experiment_dir=experiment_dir, spec=KillSpec(run_id=run_id, scheduler=scheduler))
 
 
+def _supersede_missing_main(
+    experiment_dir: Path,
+    *,
+    spec: Any,
+    supersedes: str,
+    siblings: list[RunRecord],
+) -> dict[str, Any]:
+    """Resolve a ``supersedes`` whose named run has NO main journal record.
+
+    An attempt that dies at the canary stage leaves only a ``<id>-canary``
+    sub-record — the main journal entry never lands. The old blanket refusal
+    ("no journal record exists … nothing to supersede") was *unsatisfiable* for
+    the honest caller here: the ONLY way to proceed was to DROP the ``supersedes``
+    honesty marker, which trains agents to route around the gate (proving run
+    #5). Split known-but-clean from unknown instead:
+
+    * **Unknown** — no ``<id>-canary`` sub-record AND no live detached lease for
+      the id or its canary: keep the typo-protecting refusal (a real bad
+      run_id, same message as before).
+    * **Clean** — a *terminal* canary sub-record and no live lease: no-op PASS.
+      Stamp the backward ``superseded_by`` link on the canary record (the only
+      record that exists to stamp) and return a ``noop_already_clean`` summary;
+      the forward link on the new record is stamped post-submit as usual.
+    * **Live** — a *non-terminal* canary sub-record OR a live lease: a REAL
+      supersession target. Route the existing kill/settle machinery at the
+      canary id via :func:`supersede_run` (it does not structurally require a
+      main record — it stamps + closes whichever paired ids exist), never
+      "nothing to supersede".
+    """
+    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of
+
+    # The paired ``<id>-canary`` entry via the one #258 suffix definition.
+    (canary_id,) = _sibling_run_ids(supersedes)
+    canary = load_run(experiment_dir, canary_id)
+    lease = _live_lease(supersedes) or _live_lease(canary_id)
+
+    if canary is None and lease is None:
+        raise errors.SpecInvalid(
+            f"supersedes names run {supersedes!r} but no journal record exists for it "
+            f"in this experiment's journal home — nothing to supersede. Check the "
+            "run_id (hpc-agent status-snapshot lists known runs), or drop the field."
+        )
+
+    canary_live = (
+        canary is not None and canary.status not in TERMINAL_STATUSES
+    ) or lease is not None
+
+    if canary_live:
+        # A live canary attempt IS a real target. Any OTHER uncovered live
+        # sibling still refuses (the canary itself is covered by `supersedes`).
+        uncovered = [
+            s
+            for s in siblings
+            if s.run_id != canary_id and canary_parent_of(s.run_id) != supersedes
+        ]
+        if uncovered:
+            _refuse(experiment_dir, new_run_id=spec.run_id, siblings=uncovered)
+        summary = supersede_run(
+            experiment_dir,
+            old_run_id=canary_id,
+            new_run_id=spec.run_id,
+            scheduler=spec.backend,
+        )
+        summary["superseded_run_id"] = supersedes
+        summary["action"] = "superseded_live_canary"
+        summary["note"] = (
+            f"{supersedes!r} has no main journal record; its canary attempt "
+            f"{canary_id!r} was still live and was closed as the supersession target."
+        )
+        return summary
+
+    # Clean: a terminal canary attempt, nothing live to close. Stamp the
+    # backward link on the canary record (the honest audit trail) and pass —
+    # the caller must NOT have to drop `supersedes` to proceed.
+    now = utcnow_iso()
+    closed: list[str] = []
+    if canary is not None:
+
+        def _stamp(r: RunRecord) -> None:
+            r.superseded_by = spec.run_id
+            r.superseded_at = now
+
+        update_run_record(experiment_dir, canary_id, _stamp)
+        closed.append(canary_id)
+
+    return {
+        "superseded_run_id": supersedes,
+        "closed": closed,
+        "pending_closure": [],
+        "superseded_at": now,
+        "action": "noop_already_clean",
+        "note": (
+            f"{supersedes!r} has no main journal record; its only attempt "
+            f"{canary_id!r} is terminal"
+            + (f" ({canary.status})" if canary is not None else "")
+            + " with no live lease — supersession link stamped where a record "
+            "exists, nothing to close."
+        ),
+    }
+
+
 def apply_supersession_gate(experiment_dir: Path, spec: Any) -> dict[str, Any] | None:
     """Pre-submit supersession gate for one fresh submit-flow spec.
 
@@ -327,10 +428,17 @@ def apply_supersession_gate(experiment_dir: Path, spec: Any) -> dict[str, Any] |
 
     * No live same-identity sibling and no ``supersedes`` → ``None`` (no-op).
     * Live sibling(s), no ``supersedes`` → :class:`errors.SiblingRunLive`.
-    * ``supersedes`` named → validates it (must exist; a live sibling NOT
-      covered by it still refuses), then :func:`supersede_run` and returns its
-      closure summary. The forward link on the NEW record is stamped after the
-      submit lands (:func:`stamp_supersedes_on_new`).
+    * ``supersedes`` named, main record present → validates it (a live sibling
+      NOT covered by it still refuses), then :func:`supersede_run` and returns
+      its closure summary.
+    * ``supersedes`` named, NO main record → :func:`_supersede_missing_main`
+      splits known-but-clean from unknown: a genuinely unknown id still refuses
+      (typo protection), a terminal ``-canary``-only attempt is a no-op PASS
+      (link stamped, ``action=noop_already_clean``), and a LIVE ``-canary``-only
+      attempt is closed as a real target — never "nothing to supersede".
+
+    The forward link on the NEW record is stamped after the submit lands
+    (:func:`stamp_supersedes_on_new`).
     """
     experiment_dir = Path(experiment_dir)
     supersedes = getattr(spec, "supersedes", None)
@@ -344,10 +452,8 @@ def apply_supersession_gate(experiment_dir: Path, spec: Any) -> dict[str, Any] |
 
     old = load_run(experiment_dir, supersedes)
     if old is None:
-        raise errors.SpecInvalid(
-            f"supersedes names run {supersedes!r} but no journal record exists for it "
-            f"in this experiment's journal home — nothing to supersede. Check the "
-            "run_id (hpc-agent status-snapshot lists known runs), or drop the field."
+        return _supersede_missing_main(
+            experiment_dir, spec=spec, supersedes=supersedes, siblings=siblings
         )
     from hpc_agent.ops.monitor.reconcile import canary_parent_of
 

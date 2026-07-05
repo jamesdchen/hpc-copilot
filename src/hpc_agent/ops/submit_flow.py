@@ -261,7 +261,9 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
 
     cmd_sha = (spec.job_env or {}).get("HPC_CMD_SHA") or ""
     if cmd_sha and not canary_cache.cache_disabled():
-        key = canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=_pkg_version or "")
+        key = canary_cache.canary_cache_key(
+            cmd_sha=cmd_sha, version=_pkg_version or "", cluster=spec.cluster
+        )
         if canary_cache.is_canary_validated_fresh(key):
             return False
     return True

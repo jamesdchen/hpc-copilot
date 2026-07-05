@@ -280,6 +280,66 @@ def test_supersedes_unknown_run_id_is_spec_invalid(tmp_path: Path) -> None:
         apply_supersession_gate(tmp_path, _spec("new-run", supersedes="never-existed"))
 
 
+def test_supersedes_canary_only_terminal_is_noop_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proving run #5: an attempt that died at the canary stage has only a
+    ``<id>-canary`` sub-record. Superseding it (clean, terminal, no live lease)
+    is a no-op PASS — the caller must NOT be forced to drop `supersedes`. The
+    backward link is stamped on the canary record, nothing is killed."""
+    _record(tmp_path, "old-run-canary", sha=None, status="failed", job_ids=["102"])
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(supersession, "_invoke_kill", _fake_kill_factory(calls))
+
+    summary = apply_supersession_gate(tmp_path, _spec("new-run", supersedes="old-run"))
+
+    assert calls == []  # terminal — nothing to close
+    assert summary is not None
+    assert summary["action"] == "noop_already_clean"
+    assert summary["superseded_run_id"] == "old-run"
+    assert summary["closed"] == ["old-run-canary"]
+    assert summary["pending_closure"] == []
+    assert "no main journal record" in summary["note"]
+
+    # No main record was invented; the backward link lives on the canary record.
+    assert load_run(tmp_path, "old-run") is None
+    canary = load_run(tmp_path, "old-run-canary")
+    assert canary is not None
+    assert canary.status == "failed"  # verdict untouched
+    assert canary.superseded_by == "new-run"
+    assert canary.superseded_at
+
+
+def test_supersedes_canary_only_unknown_id_still_refuses(tmp_path: Path) -> None:
+    """No main record, no ``-canary`` sub-record, no live lease → a genuinely
+    unknown run_id. Keep today's typo-protecting refusal + message."""
+    with pytest.raises(errors.SpecInvalid, match="no journal record"):
+        apply_supersession_gate(tmp_path, _spec("new-run", supersedes="never-existed"))
+
+
+def test_supersedes_canary_only_live_closes_canary_not_nothing_to_supersede(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A LIVE ``<id>-canary`` attempt with no main record is a REAL target: it
+    is closed via the kill/settle machinery, NOT rejected with "nothing to
+    supersede" (which trained the agent to drop the honesty marker)."""
+    _record(tmp_path, "old-run-canary", sha=None, status="in_flight", job_ids=["102"])
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(supersession, "_invoke_kill", _fake_kill_factory(calls))
+
+    summary = apply_supersession_gate(tmp_path, _spec("new-run", supersedes="old-run"))
+
+    assert summary is not None
+    assert summary["action"] == "superseded_live_canary"
+    assert "nothing to supersede" not in summary["note"]
+    # The live canary was routed through the kill machinery.
+    assert [c["run_id"] for c in calls] == ["old-run-canary"]
+    canary = load_run(tmp_path, "old-run-canary")
+    assert canary is not None
+    assert canary.status == "abandoned"
+    assert canary.superseded_by == "new-run"
+
+
 def test_supersedes_terminal_run_links_without_kill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

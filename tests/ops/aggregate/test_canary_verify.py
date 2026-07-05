@@ -833,7 +833,8 @@ def test_remote_checkpoint_snippet_logic(
     def _run() -> dict:
         monkeypatch.setattr(sys, "argv", ["-c", str(d)])
         exec(code, {})  # noqa: S102 — exercising the remote snippet's own logic
-        return json.loads(capsys.readouterr().out.strip())
+        parsed: dict = json.loads(capsys.readouterr().out.strip())
+        return parsed
 
     # No checkpoint yet → missing.
     assert _run()["status"] == "missing"
@@ -996,13 +997,18 @@ def _seed_canary_with_sidecar_cmd_sha(
     )
 
 
-def _is_cmd_sha_cached(cmd_sha: str) -> bool:
-    """Whether ``cmd_sha`` was recorded canary-validated (the cache poisoning)."""
+def _is_cmd_sha_cached(cmd_sha: str, *, cluster: str = "hoffman2") -> bool:
+    """Whether ``cmd_sha`` was recorded canary-validated (the cache poisoning).
+
+    ``cluster`` defaults to the seeded canary's cluster (``hoffman2``) — the key
+    joined cluster in proving run #5, and ``record_canary_validated`` keys on the
+    run's own cluster, so the poisoning check must read the SAME triple.
+    """
     from hpc_agent import __version__ as pkg_version
     from hpc_agent.state import canary_cache
 
     return canary_cache.is_canary_validated_fresh(
-        canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=pkg_version or "")
+        canary_cache.canary_cache_key(cmd_sha=cmd_sha, version=pkg_version or "", cluster=cluster)
     )
 
 

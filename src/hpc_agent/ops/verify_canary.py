@@ -1018,7 +1018,9 @@ def verify_canary(
         from hpc_agent.state import canary_cache
 
         canary_cache.record_canary_validated(
-            canary_cache.canary_cache_key(cmd_sha=_cmd_sha, version=_pkg_version or "")
+            canary_cache.canary_cache_key(
+                cmd_sha=_cmd_sha, version=_pkg_version or "", cluster=record.cluster
+            )
         )
 
     # #351-3: only claim "exit 0" when the exit code was ACTUALLY read as 0 from

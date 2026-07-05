@@ -170,3 +170,14 @@ class ResolveSubmitInputsResult(BaseModel):
             "in_flight) on stage_reached='prior_run_found'; else null."
         ),
     )
+    prior_cluster: str | None = Field(
+        default=None,
+        description=(
+            "Resume context — the cluster the live prior attempt is running on, "
+            "on stage_reached='prior_run_found'; else null. For a canary-only "
+            "prior (an attempt that died pre-main-submit, leaving only its live "
+            "<run_id>-canary sub-record + detached lease) this names the cluster "
+            "the canary is in-flight against — so the human meets a retarget fork "
+            "at S1 knowing the prior attempt's cluster, not just its id."
+        ),
+    )
