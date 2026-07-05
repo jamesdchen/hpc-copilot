@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**125 operations total**: 101 primitive atoms + 24 workflow atoms.
+**126 operations total**: 101 primitive atoms + 25 workflow atoms.
 
 ## How to read this page
 
@@ -150,7 +150,7 @@ Creates new files (e.g. starter executor templates).
 | [`scaffold-strategy`](../primitives/scaffold-strategy.md) | ✓ | writes-file | `hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]` | `_(none)_` | — | — |
 | [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `_(none)_` | — | — |
 
-## `workflow` (24)
+## `workflow` (25)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -166,6 +166,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`campaign-watch`](../primitives/campaign-watch.md) | ✓ | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`monitor-flow`](../primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `_(none)_` | — | — |
 | [`resolve-submit-inputs`](../primitives/resolve-submit-inputs.md) | ✓ | writes-sidecar | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`revise-resolved`](../primitives/revise-resolved.md) | ✓ | writes-sidecar | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-pipeline`](../primitives/status-pipeline.md) | ✓ | ssh; writes-tick-log | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-snapshot`](../primitives/status-snapshot.md) | ✓ | ssh | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-watch`](../primitives/status-watch.md) | ✓ | ssh; writes-tick-log | `hpc-agent status-watch --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
