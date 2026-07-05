@@ -28,6 +28,7 @@
             "nonzero_exit",
             "missing_output",
             "reporter_unreachable",
+            "canary_failed",
             "completed_unknown",
             "timeout",
             "abandoned",

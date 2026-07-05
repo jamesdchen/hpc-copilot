@@ -23,6 +23,12 @@ CanaryFailureKind = Literal[
     # Every status poll failed — broken cluster-side reporter (the job may have
     # run but its result can't be read, so the canary can't be trusted).
     "reporter_unreachable",
+    # Finding 12: consecutive DETERMINISTIC broken-env polls (rc 126/127)
+    # escalated the canary early, and the env-independent ``.hpc_failed`` marker
+    # scan (plain sh, survives the broken env) found the dispatcher's terminal
+    # failure marker(s) — positive proof the task ran and failed even though the
+    # python status reporter was unreachable.
+    "canary_failed",
     # The job left the scheduler queue without recording a completion and no
     # stderr marker explains why — resolved fast instead of riding the full
     # wait budget (#193).

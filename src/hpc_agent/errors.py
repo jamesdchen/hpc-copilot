@@ -216,6 +216,24 @@ class RemoteCommandFailed(HpcError):
     category = "cluster"
     remediation = "Check the cluster-side stderr captured in the exception message."
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        remediation: str | None = None,
+        returncode: int | None = None,
+    ) -> None:
+        # Carry the remote command's exit code as a first-class attribute so a
+        # caller can split a DETERMINISTIC broken-env failure (rc 126 "not
+        # executable" / 127 "command not found" — the run's python/conda env is
+        # absent and no amount of waiting heals it) from a transient transport
+        # failure WITHOUT string-parsing the message (see
+        # ``ops.verify_canary._classify_poll_failure``). ``None`` when the raiser
+        # had no exit code to attach (a parse failure before the child ran, or a
+        # legacy call site that predates this kwarg).
+        super().__init__(message, remediation=remediation)
+        self.returncode = returncode
+
 
 class ConfigInvalid(HpcError):
     """clusters.yaml is malformed."""

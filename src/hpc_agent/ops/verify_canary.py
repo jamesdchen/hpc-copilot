@@ -87,6 +87,121 @@ def _failure_features(stderr_tail: str, log_path: str | None) -> dict[str, Any]:
 _DEFAULT_POLL_INTERVAL_SEC = 30
 _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
 
+#: Consecutive DETERMINISTIC broken-env poll failures (rc 126/127) that escalate
+#: the canary to a loud verdict instead of riding the full 30-min budget. A
+#: broken run env (bare ``python`` the conda env never provided) fails EVERY poll
+#: the same way and will never heal by waiting, so ~K polls (≈90s on the ramp)
+#: is enough to conclude — finding 12. A single TRANSIENT failure resets the
+#: counter (that class belongs to the connection breaker and stays on the budget).
+_DETERMINISTIC_ENV_POLLS_TO_FAIL = 3
+
+#: Floor (seconds) between watchdog liveness stamps in the canary poll loop. The
+#: loop fast-starts at ~3s and ramps, so stamping every poll would churn the
+#: sidecar lock every 3s; flooring the stamp keeps the sidecar fresh (no frozen
+#: submit-time timestamp — finding 12) without hammering the lock.
+_WATCHDOG_STAMP_FLOOR_SEC = 10.0
+
+
+def _classify_poll_failure(exc: BaseException) -> str:
+    """Classify a poll-loop exception as ``"deterministic_env"`` or ``"transient"``.
+
+    A :class:`errors.RemoteCommandFailed` whose remote ``returncode`` is 126
+    ("not executable") or 127 ("command not found") is the broken-env signature:
+    the SSH connection SUCCEEDED and the remote command deterministically failed
+    because the run's ``python`` / conda env is absent or wrong. Waiting will
+    never heal it, so the canary loop escalates fast on a run of these
+    (:data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL`). EVERYTHING else — an
+    :class:`OSError`/``TimeoutError`` transport blip, an
+    :class:`~hpc_agent.errors.SshUnreachable`, or a ``RemoteCommandFailed`` with
+    any other returncode — is ``"transient"`` and rides the wait budget (that
+    class belongs to the connection breaker). The returncode is read off the
+    exception attribute, never string-parsed from the message.
+    """
+    if isinstance(exc, errors.RemoteCommandFailed) and exc.returncode in (126, 127):
+        return "deterministic_env"
+    return "transient"
+
+
+def _reporter_unreachable_envelope(
+    canary_run_id: str,
+    last_poll_error: Exception | None,
+    *,
+    annotation: str | None = None,
+) -> dict[str, Any]:
+    """Build the shared ``reporter_unreachable`` failure envelope.
+
+    Two poll-loop arms reach the same verdict — the connection succeeded (or kept
+    timing out) but the cluster-side reporter never returned a readable status,
+    so the canary CANNOT be trusted as passed:
+
+    * the wait budget elapsed with EVERY poll failing (the budget-timeout arm), and
+    * :data:`_DETERMINISTIC_ENV_POLLS_TO_FAIL` consecutive DETERMINISTIC
+      broken-env polls escalated early AND the env-independent marker scan
+      (:func:`hpc_agent.infra.cluster_status.ssh_marker_scan`) found NO
+      ``.hpc_failed`` marker to positively confirm failure — unverifiable, so
+      still a loud fail, never a pass (the never-pass-unverified posture).
+
+    The diagnosis is identical for both (wrong/absent conda env; fix before
+    submitting); *annotation* appends the arm-specific evidence (rc + consecutive
+    count for the escalation arm). Factoring it here lets both call sites share
+    the one envelope.
+    """
+    details = (
+        f"canary {canary_run_id!r}: every status poll failed — the "
+        f"cluster-side reporter never returned (last error: {last_poll_error}). "
+        "The scheduler may have run the job, but the framework cannot read its "
+        "result, so the canary CANNOT be trusted as passed. Common cause: "
+        "hpc-agent not importable in the cluster's python (wrong/absent conda "
+        "env) or a module-load failure in the job preamble. Fix the cluster env "
+        "before submitting the main array."
+    )
+    if annotation:
+        details = f"{details} {annotation}"
+    return {
+        "ok": False,
+        "failure_kind": "reporter_unreachable",
+        "details": details,
+        "stderr_tail": "",
+        "metrics_fingerprint": None,
+        "failure_features": _failure_features("", None),
+    }
+
+
+def _canary_failed_envelope(
+    canary_run_id: str,
+    *,
+    markers: list[str],
+    returncode: int | None,
+    consecutive: int,
+) -> dict[str, Any]:
+    """Build the ``canary_failed`` envelope from env-independent marker evidence.
+
+    Reached only on the deterministic broken-env escalation path when the
+    plain-``sh`` :func:`hpc_agent.infra.cluster_status.ssh_marker_scan` found the
+    dispatcher's ``.hpc_failed/<run_id>.<task>.failed`` terminal marker(s) —
+    POSITIVE proof the task ran and failed, surviving the broken env that blinded
+    the python status reporter. The marker basenames ride out as evidence in
+    ``details`` (the envelope shape is fixed by ``schemas/verify_canary.output``).
+    """
+    names = ", ".join(markers) if markers else "(none)"
+    return {
+        "ok": False,
+        "failure_kind": "canary_failed",
+        "details": (
+            f"canary {canary_run_id!r} FAILED: the cluster-side dispatcher wrote "
+            f"terminal failure marker(s) [{names}] under .hpc_failed/ — positive "
+            f"proof the task ran and failed, read with a plain shell scan that "
+            f"survives the broken run env ({consecutive} consecutive status polls "
+            f"died rc={returncode}, the command-not-found/not-executable "
+            "signature). Fix the cluster env (hpc-agent importable in the run's "
+            "conda env) and inspect the per-task cluster log for the underlying "
+            "error before submitting the main array."
+        ),
+        "stderr_tail": "",
+        "metrics_fingerprint": None,
+        "failure_features": _failure_features("", None),
+    }
+
 
 def _env_float(name: str, default: float) -> float:
     """Read a float env var, falling back to *default* on unset/invalid/negative.
@@ -523,7 +638,12 @@ def verify_canary(
       ``"nonzero_exit"`` (the canary task-0 ``_runtime.json`` recorded a
       non-zero ``exit_code`` even though it wrote a result file — #351-3) /
       ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
-      failed — broken cluster-side reporter) / ``"completed_unknown"`` (the
+      failed — broken cluster-side reporter; also the fast-escalation verdict
+      when K consecutive deterministic broken-env polls (rc 126/127) found NO
+      ``.hpc_failed`` marker to confirm failure — finding 12) /
+      ``"canary_failed"`` (the same K-poll broken-env escalation, but the
+      env-independent ``.hpc_failed`` marker scan positively proved the task ran
+      and failed — finding 12) / ``"completed_unknown"`` (the
       job left the scheduler queue without recording a completion and no
       stderr marker explains why — resolved fast instead of timing out) /
       ``"timeout"`` / ``"abandoned"`` / (checkpoint mode) ``"checkpoint_missing"``
@@ -565,7 +685,12 @@ def verify_canary(
     from hpc_agent.infra.cluster_status import ssh_status_report
     from hpc_agent.infra.clusters import remote_activation_for_sidecar
     from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
-    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.journal import (
+        clear_poll_health,
+        load_run,
+        stamp_poll_health,
+        stamp_watchdog_tick,
+    )
     from hpc_agent.state.runs import read_run_sidecar
 
     record = load_run(experiment_dir, canary_run_id)
@@ -645,7 +770,54 @@ def verify_canary(
     # which stays the steady-state ceiling. See ``_CANARY_FAST_POLL_SEC``.
     _poll_ceiling = float(poll_interval_sec)
     effective_poll = _initial_poll_interval(poll_interval_sec)
-    while time.monotonic() < deadline:
+    # Finding 12 poll-loop honesty: split poll failures by class, escalate a
+    # deterministic broken env fast, and stamp liveness every poll so the sidecar
+    # never freezes at its submit stamp. Consecutive DETERMINISTIC (rc 126/127)
+    # failures escalate; a transient failure resets the counter and rides the
+    # budget (that class belongs to the connection breaker). The watchdog stamp is
+    # floored (≥ _WATCHDOG_STAMP_FLOOR_SEC) so the fast-start ramp doesn't churn
+    # the sidecar lock every 3s; poll-failure EVIDENCE (error class + count) is
+    # stamped under last_status.poll_health so status-snapshot shows "last N polls
+    # rc=127" instead of a frozen timestamp.
+    consecutive_env_polls = 0
+    poll_health_dirty = False
+    last_watchdog_stamp = float("-inf")
+    # No `while...else`: the budget-timeout / reporter-unreachable arm moved to the
+    # loop head (`if now >= deadline`) so the deterministic-env escalation can also
+    # return from inside the loop. A terminal ``break`` still falls through to the
+    # post-loop stderr fetch, exactly as before.
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            # Budget elapsed. Distinguish a broken reporter (EVERY poll raised, we
+            # never got a single status read) from a genuine slow/stuck run (polls
+            # succeeded but the run never went terminal). A broken reporter must
+            # fail the canary LOUDLY with the real cause — otherwise it masquerades
+            # as a timeout, the agent retries, and the main array submits against a
+            # cluster whose results can't even be read. This is exactly the failure
+            # mode where 8 tasks die on a module/env error but the canary "passes"
+            # because verification couldn't run.
+            if not got_report and last_poll_error is not None:
+                return _reporter_unreachable_envelope(canary_run_id, last_poll_error)
+            return {
+                "ok": False,
+                "failure_kind": "timeout",
+                "details": (
+                    f"canary {canary_run_id!r} did not terminate within "
+                    f"{wait_budget_sec}s (last summary: {last_summary})"
+                ),
+                "stderr_tail": "",
+                "metrics_fingerprint": None,
+                "failure_features": _failure_features("", None),
+            }
+        # §5 watchdog liveness — floored so the 3s fast-start ramp can't churn the
+        # sidecar lock every poll. ONE shared tick definition (state.journal), the
+        # same one the monitor poll loop routes through.
+        if now - last_watchdog_stamp >= _WATCHDOG_STAMP_FLOOR_SEC:
+            stamp_watchdog_tick(
+                canary_run_id, next_tick_seconds=effective_poll, experiment_dir=experiment_dir
+            )
+            last_watchdog_stamp = now
         try:
             report = ssh_status_report(
                 ssh_target=record.ssh_target,
@@ -659,10 +831,70 @@ def verify_canary(
             )
         except (errors.RemoteCommandFailed, OSError) as exc:
             last_poll_error = exc
+            failure_class = _classify_poll_failure(exc)
+            rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None
+            if failure_class == "deterministic_env":
+                consecutive_env_polls += 1
+            else:
+                consecutive_env_polls = 0
+            # Stamp the failure evidence (error class + consecutive count) under a
+            # DISTINCT key the lifecycle classifiers never read, so the sidecar
+            # reads "polling, last N polls rc=127" instead of a frozen timestamp.
+            stamp_poll_health(
+                canary_run_id,
+                error_class=failure_class,
+                consecutive=(consecutive_env_polls if failure_class == "deterministic_env" else 1),
+                returncode=rc,
+                experiment_dir=experiment_dir,
+            )
+            poll_health_dirty = True
+            if (
+                failure_class == "deterministic_env"
+                and consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
+            ):
+                # A broken run env fails every poll the same way and will NEVER
+                # heal by waiting — escalate now instead of riding the full budget.
+                # Read the env-independent .hpc_failed markers with plain sh (it
+                # works when python is gone): present → positive canary_failed;
+                # absent → still a loud reporter_unreachable (the scan proves
+                # FAILURE only; a marker-less blind run is never called passed).
+                from hpc_agent.infra.cluster_status import ssh_marker_scan
+
+                try:
+                    scan = ssh_marker_scan(
+                        ssh_target=record.ssh_target,
+                        remote_path=record.remote_path,
+                        run_id=canary_run_id,
+                    )
+                except (errors.RemoteCommandFailed, OSError):
+                    scan = {"failed_markers": [], "count": 0}
+                if int(scan.get("count") or 0) > 0:
+                    return _canary_failed_envelope(
+                        canary_run_id,
+                        markers=list(scan.get("failed_markers") or []),
+                        returncode=rc,
+                        consecutive=consecutive_env_polls,
+                    )
+                return _reporter_unreachable_envelope(
+                    canary_run_id,
+                    last_poll_error,
+                    annotation=(
+                        f"Escalated after {consecutive_env_polls} consecutive "
+                        f"deterministic broken-env polls (rc={rc}); no .hpc_failed "
+                        "marker was found for this run, so failure could not be "
+                        "positively confirmed either — the canary is unverifiable, "
+                        "not passed."
+                    ),
+                )
             time.sleep(effective_poll)
             effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
             continue
         got_report = True
+        if poll_health_dirty:
+            # A poll succeeded after prior failures — drop the stale evidence so
+            # the sidecar no longer reads "polling, rc=127".
+            clear_poll_health(canary_run_id, experiment_dir=experiment_dir)
+            poll_health_dirty = False
         last_summary = dict(report.get("summary") or {})
         complete = int(last_summary.get("complete") or 0)
         failed = int(last_summary.get("failed") or 0)
@@ -696,43 +928,6 @@ def verify_canary(
             first_vanished_at = None
         time.sleep(effective_poll)
         effective_poll = _next_poll_interval(effective_poll, _poll_ceiling)
-    else:
-        # Distinguish a broken reporter (EVERY poll raised, we never got a
-        # single status read) from a genuine slow/stuck run (polls
-        # succeeded but the run never went terminal). A broken reporter
-        # must fail the canary LOUDLY with the real cause — otherwise it
-        # masquerades as a timeout, the agent retries, and the main array
-        # submits against a cluster whose results can't even be read. This
-        # is exactly the failure mode where 8 tasks die on a module/env
-        # error but the canary "passes" because verification couldn't run.
-        if not got_report and last_poll_error is not None:
-            return {
-                "ok": False,
-                "failure_kind": "reporter_unreachable",
-                "details": (
-                    f"canary {canary_run_id!r}: every status poll failed — the "
-                    f"cluster-side reporter never returned (last error: {last_poll_error}). "
-                    "The scheduler may have run the job, but the framework cannot read its "
-                    "result, so the canary CANNOT be trusted as passed. Common cause: "
-                    "hpc-agent not importable in the cluster's python (wrong/absent conda "
-                    "env) or a module-load failure in the job preamble. Fix the cluster env "
-                    "before submitting the main array."
-                ),
-                "stderr_tail": "",
-                "metrics_fingerprint": None,
-                "failure_features": _failure_features("", None),
-            }
-        return {
-            "ok": False,
-            "failure_kind": "timeout",
-            "details": (
-                f"canary {canary_run_id!r} did not terminate within "
-                f"{wait_budget_sec}s (last summary: {last_summary})"
-            ),
-            "stderr_tail": "",
-            "metrics_fingerprint": None,
-            "failure_features": _failure_features("", None),
-        }
 
     # Fetch the canary's stderr tail (1 task, task_id=0).
     # Resolve scheduler from clusters.yaml — substring-matching on the

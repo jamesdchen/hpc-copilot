@@ -16,6 +16,7 @@ parse failure.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,7 @@ from hpc_agent.infra.ssh_validation import parse_remote_json
 if TYPE_CHECKING:
     from hpc_agent.infra.backends import HPCBackend
 
-__all__ = ["ssh_status_report", "ssh_batch_scheduler_states"]
+__all__ = ["ssh_status_report", "ssh_batch_scheduler_states", "ssh_marker_scan"]
 
 # Pin the reporter to the *activated env's* interpreter. A CARC ``module load
 # python/X`` (or an Lmod auto-reload) hijacks a bare ``python`` on PATH even
@@ -157,11 +158,48 @@ def ssh_status_report(
             detail = f"{structured} [stderr: {stderr}]"
         else:
             detail = structured or stderr or "(no output)"
-        raise RemoteCommandFailed(f"status reporter failed (rc={proc.returncode}): {detail}")
+        raise RemoteCommandFailed(
+            f"status reporter failed (rc={proc.returncode}): {detail}",
+            returncode=proc.returncode,
+        )
     report = parse_remote_json(json_stdout, source_label="status reporter")
     if watcher_run_dir is not None:
         report["watcher_alarm"] = watcher_alarm
     return report
+
+
+def ssh_marker_scan(*, ssh_target: str, remote_path: str, run_id: str) -> dict:
+    """Scan for the dispatcher's terminal ``.hpc_failed`` markers with plain ``sh``.
+
+    The cluster-side dispatch preamble writes
+    ``$RESULT_DIR/.hpc_failed/<run_id>.<task>.failed`` after it gives up on a
+    task (``hpc_preamble.sh`` ~:319; ``$RESULT_DIR`` defaults to the job cwd =
+    ``remote_path``) precisely so terminal FAILURE state survives a broken run
+    env — the exact case where :func:`ssh_status_report`'s python-based reporter
+    dies ``rc 127`` because the run's conda env never provided
+    ``python``/``hpc_agent``. This reads those markers with a bare ``ls | grep``:
+    NO remote python, NO activation prefix — it MUST work when the env is broken,
+    which is the whole point.
+
+    Returns ``{"failed_markers": [names], "count": N}`` where *names* are the
+    marker basenames (``<run_id>.<task>.failed``). An empty result
+    (``count == 0``) proves only the ABSENCE of a failure marker for this run —
+    NEVER success: a marker-less blind run is unverifiable, so the caller keeps
+    the never-pass-unverified posture (present → ``canary_failed``; absent →
+    ``reporter_unreachable``).
+    """
+    marker_dir = f"{remote_path.rstrip('/')}/.hpc_failed"
+    # run_id is filesystem-validated to ``^[A-Za-z0-9._\\-]+$``; escape it for the
+    # ERE so its ``.`` separators stay literal, and anchor the whole basename.
+    pattern = "^" + re.escape(run_id) + r"\..*\.failed$"
+    # Plain sh: list the marker dir (a missing dir → empty via ``2>/dev/null``),
+    # keep only THIS run's terminal markers, and never fail the pipeline (grep
+    # exits 1 on no match → ``|| true`` so ssh_run sees rc 0 and reads empty
+    # stdout). No python, no conda activation — survives the broken env.
+    cmd = f"ls -1 {shlex.quote(marker_dir)}/ 2>/dev/null | grep -E {shlex.quote(pattern)} || true"
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
+    names = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    return {"failed_markers": names, "count": len(names)}
 
 
 def ssh_batch_scheduler_states(

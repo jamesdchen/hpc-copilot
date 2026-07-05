@@ -546,18 +546,68 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
 
 
 def remote_activation_for_sidecar(sidecar: dict[str, Any]) -> str:
-    """Activation prefix for a run, derived from its sidecar's ``cluster``
-    + resolved ``env``. Best-effort: ``""`` when the cluster can't be
-    resolved (so the caller falls back to bare ``python``, unchanged)."""
+    """Activation prefix for a run's control-plane ssh command — the ONE
+    definition of "how to activate on this cluster", consulted by every
+    reporter / reconcile / combine call.
+
+    The control-plane commands (status reporter, combiner, reconcile probe)
+    run directly on the login node and never source ``hpc_preamble.sh``, so
+    they need the conda / module activation built inline
+    (:func:`remote_activation_prefix`). Per-field precedence — so an empty
+    sidecar env can never blind the reporter, *even for an already-damaged run
+    whose hand-carried sidecar dropped fields* (proving-run-5 finding 13):
+
+      1. **Explicit sidecar activation wins** — a ``modules`` /
+         ``conda_source`` / ``conda_env`` the sidecar pins is honored
+         (back-compat; also survives an ad-hoc cluster absent from
+         clusters.yaml, or a config that drifted after submit).
+      2. **Else derive from the cluster** — activation is a cluster-local fact
+         (#281): each field the sidecar omits is back-filled from
+         ``clusters.yaml[cluster]``. A hand-authored sidecar that dropped
+         ``env.conda_env`` (or the whole ``env`` block) but kept ``cluster``
+         still activates — activation must never depend on a field a sidecar
+         can drop, which is precisely what fell to a bare ``python`` (``exit
+         127``) in finding 13.
+      3. **Else** ``""`` (bare ``python``, unchanged) for a sidecar that
+         carries neither a usable activation nor a resolvable cluster.
+
+    Best-effort throughout: a bad / missing clusters.yaml degrades to ``""``
+    rather than breaking status / aggregate.
+    """
+    env = sidecar.get("env") or {}
+    # Sidecar-pinned fields. ``modules`` is written as a list OR a space-joined
+    # string across callers (see ``write_run_sidecar``) — normalise to the list
+    # ``remote_activation_prefix`` iterates.
+    raw_modules = env.get("modules")
+    if isinstance(raw_modules, str):
+        pinned_modules = raw_modules.split()
+    elif isinstance(raw_modules, list):
+        pinned_modules = [str(m) for m in raw_modules]
+    else:
+        pinned_modules = []
+    pinned_conda_source = env.get("conda_source")
+    pinned_conda_env = env.get("conda_env")
+
+    # The cluster config is BOTH the tier-2 derive source and the back-fill for
+    # a sidecar that pins only *some* fields (a sidecar carrying just conda_env
+    # still gets the cluster's conda_source — the pre-existing behaviour).
+    cfg: dict[str, Any] = {}
     cluster_key = sidecar.get("cluster")
-    if not cluster_key:
-        return ""
-    try:
-        cfg = load_clusters_config().get(cluster_key, {})
-    except Exception:  # noqa: BLE001 — a bad/missing config must not break status/aggregate
-        return ""
-    conda_env = (sidecar.get("env") or {}).get("conda_env")
-    return remote_activation_prefix(cfg, conda_env=conda_env)
+    if cluster_key:
+        try:
+            cfg = load_clusters_config().get(cluster_key, {}) or {}
+        except Exception:  # noqa: BLE001 — a bad/missing config must not break status/aggregate
+            cfg = {}
+
+    # Per-field precedence: the sidecar pin wins; the cluster back-fills what
+    # the sidecar omitted; neither present → the field stays empty and
+    # ``remote_activation_prefix`` returns "" (tier 3, bare python).
+    merged = {
+        "modules": pinned_modules or (cfg.get("modules") or []),
+        "conda_source": pinned_conda_source or cfg.get("conda_source"),
+        "conda_envs": cfg.get("conda_envs") or [],
+    }
+    return remote_activation_prefix(merged, conda_env=pinned_conda_env)
 
 
 def validate_clusters_config(clusters: dict[str, Any]) -> None:

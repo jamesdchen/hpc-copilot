@@ -46,7 +46,11 @@ __all__ = [
     "read_pending_decision",
     "is_awaiting_decision",
     "is_resubmittable_terminal",
+    "is_kill_confirmed",
     "stamp_tick",
+    "stamp_watchdog_tick",
+    "stamp_poll_health",
+    "clear_poll_health",
     "mark_seen_by_human",
     "record_kill_request",
     "record_kill_confirmed",
@@ -190,6 +194,130 @@ def stamp_tick(
         record.next_tick_due = next_tick_due
 
     update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+
+
+#: Grace (seconds) added to the chosen inter-tick cadence when deriving the
+#: watchdog ``next_tick_due`` deadline. A poll merely mid-round-trip at the
+#: boundary must not read as a dead driver; a driver that actually dies leaves
+#: the last stamp behind and the deadline lapses → the §5 doctor /
+#: ``find_stalled_runs`` flags it. THE one definition — both the monitor poll
+#: loop and the canary poll loop stamp through :func:`stamp_watchdog_tick`.
+_WATCHDOG_DEADLINE_GRACE = 3.0
+
+
+def stamp_watchdog_tick(
+    run_id: str,
+    *,
+    next_tick_seconds: float,
+    experiment_dir: Path | None = None,
+) -> None:
+    """THE one definition of a driver watchdog liveness stamp (§5 dead-man's switch).
+
+    Computes ``now`` + the next-tick deadline (*next_tick_seconds* +
+    :data:`_WATCHDOG_DEADLINE_GRACE`) and records both via :func:`stamp_tick`, so
+    the §5 watchdog (in-session timer / out-of-session ``doctor``) covers a dead
+    poller via a lapsed ``next_tick_due``. BOTH poll loops route through here —
+    ``ops.monitor_flow._stamp_watchdog`` (a thin re-point) and the
+    ``ops.verify_canary`` canary loop — so the two can never disagree on what a
+    tick means (the #351-#4 "two loops, two definitions" class; a frozen canary
+    sidecar false-flagged a stalled driver in proving run #5, finding 12).
+
+    Best-effort and loud: a stamp failure must NEVER break a poll loop (the run
+    keeps being monitored), but a missing stamp blinds the watchdog, so warn.
+    """
+    try:
+        from datetime import timedelta
+
+        from hpc_agent.infra.time import utcnow
+
+        _now = utcnow()
+        deadline = _now + timedelta(seconds=next_tick_seconds + _WATCHDOG_DEADLINE_GRACE)
+        stamp_tick(
+            run_id,
+            last_tick_at=_now.isoformat(timespec="seconds"),
+            next_tick_due=deadline.isoformat(timespec="seconds"),
+            experiment_dir=experiment_dir,
+        )
+    except Exception:  # noqa: BLE001 — a watchdog stamp must never fail the poll loop
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "watchdog tick stamp failed for run %s — the doctor / find_stalled_runs "
+            "cannot see this poller until the next successful stamp",
+            run_id,
+            exc_info=True,
+        )
+
+
+def stamp_poll_health(
+    run_id: str,
+    *,
+    error_class: str,
+    consecutive: int,
+    returncode: int | None = None,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Record poll-failure EVIDENCE under ``last_status.poll_health`` (§5, finding 12).
+
+    So ``status-snapshot`` / the doctor render "polling, last N polls rc=127"
+    instead of a submit-time timestamp frozen for the whole wait budget while a
+    canary poll loop grinds on a deterministic broken-env failure. Written under
+    a DISTINCT nested key that the lifecycle classifiers NEVER read
+    (:func:`hpc_agent.ops.monitor.classify.settle` /
+    :func:`~hpc_agent.ops.monitor.classify.classify_polling` read only the
+    ``complete``/``running``/``pending``/``failed``/``unknown`` counts), so this
+    evidence can never perturb a complete/failed/abandoned verdict.
+
+    Best-effort and loud, exactly like :func:`stamp_watchdog_tick`.
+    """
+    try:
+        from hpc_agent.infra.time import utcnow_iso
+
+        def _mutate(record: RunRecord) -> None:
+            ls = dict(record.last_status or {})
+            ls["poll_health"] = {
+                "error_class": error_class,
+                "consecutive": int(consecutive),
+                "returncode": returncode,
+                "at": utcnow_iso(),
+            }
+            record.last_status = ls
+
+        update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+    except Exception:  # noqa: BLE001 — evidence stamping must never fail the poll loop
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "poll-health stamp failed for run %s", run_id, exc_info=True
+        )
+
+
+def clear_poll_health(
+    run_id: str,
+    *,
+    experiment_dir: Path | None = None,
+) -> None:
+    """Drop a stale ``last_status.poll_health`` block once a poll succeeds again.
+
+    A recovered poll must not leave "polling, last 3 polls rc=127" lingering on
+    the record. Best-effort no-op when the key is absent. Mirrors
+    :func:`stamp_poll_health`'s never-raise posture.
+    """
+    try:
+
+        def _mutate(record: RunRecord) -> None:
+            if record.last_status and "poll_health" in record.last_status:
+                ls = dict(record.last_status)
+                ls.pop("poll_health", None)
+                record.last_status = ls
+
+        update_run_record(_resolve_experiment_dir(experiment_dir), run_id, _mutate)
+    except Exception:  # noqa: BLE001 — evidence clearing must never fail the poll loop
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "poll-health clear failed for run %s", run_id, exc_info=True
+        )
 
 
 def mark_seen_by_human(
@@ -485,6 +613,29 @@ def is_resubmittable_terminal(record: RunRecord) -> bool:
     if is_held(record):
         return False
     return record.status in _RESUBMITTABLE_TERMINAL_STATUSES
+
+
+def is_kill_confirmed(record: RunRecord) -> bool:
+    """True when *record* names a deliberate kill the scheduler CONFIRMED gone.
+
+    A kill is confirmed when ``kill_confirmed_at`` is stamped AND every requested
+    scheduler job id is accounted for as gone — ``kill_confirmed_job_ids`` covers
+    ``job_ids`` (:func:`hpc_agent.ops.monitor.kill.kill` journals the verified-gone
+    subset there). Such a run is terminal from the KILL evidence ALONE: the status
+    reporter's per-task counts are irrelevant to a deliberate kill. Reconcile keys
+    its reporter-independent terminal short-circuit off this (proving run #5,
+    finding 14) so a broken cluster env — which crashes the per-task reporter —
+    can no longer strand a kill-confirmed run at ``in_flight``.
+
+    Returns False when no kill was confirmed, the run has no job_ids, or the
+    confirmation is only PARTIAL (some requested id is not yet confirmed gone) —
+    a partial kill leaves the run live, so it must not settle terminal here.
+    """
+    if not record.kill_confirmed_at:
+        return False
+    if not record.job_ids:
+        return False
+    return set(record.job_ids) <= set(record.kill_confirmed_job_ids)
 
 
 def _refresh_index_entry(

@@ -77,3 +77,69 @@ def test_for_sidecar_bad_config_falls_back_to_empty(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(clusters_mod, "load_clusters_config", _boom)
     # A broken config must not break status/aggregate — degrade to bare python.
     assert remote_activation_for_sidecar({"cluster": "myc"}) == ""
+
+
+def test_for_sidecar_derives_from_cluster_when_env_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finding 13 (proving run #5): a hand-carried sidecar that dropped its
+    ``env`` activation block but KEPT ``cluster`` must still activate — the
+    prefix derives from clusters.yaml, never falls to a bare ``python`` that
+    the cluster's Lmod default hijacks (``exit 127`` on every canary/status
+    poll). Activation is a cluster-local fact; it cannot depend on a field the
+    sidecar can drop.
+    """
+    monkeypatch.setattr(
+        clusters_mod,
+        "load_clusters_config",
+        lambda: {"myc": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-pi"]}},
+    )
+    # No env at all — the damaged-sidecar shape.
+    assert (
+        remote_activation_for_sidecar({"cluster": "myc"})
+        == "source /c/conda.sh && conda activate hpc-pi && "
+    )
+    # Present-but-empty env — same derivation.
+    assert (
+        remote_activation_for_sidecar({"cluster": "myc", "env": {}})
+        == "source /c/conda.sh && conda activate hpc-pi && "
+    )
+
+
+def test_for_sidecar_explicit_pin_wins_over_absent_cluster_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tier 1: an activation the sidecar pins EXPLICITLY is honored even when
+    the cluster is ad-hoc (absent from clusters.yaml) or its config drifted —
+    the reporter must not fall to bare ``python`` when the sidecar itself
+    carries enough to activate."""
+    monkeypatch.setattr(clusters_mod, "load_clusters_config", dict)  # cluster unknown
+    p = remote_activation_for_sidecar(
+        {"cluster": "adhoc", "env": {"conda_source": "/pinned/conda.sh", "conda_env": "e"}}
+    )
+    assert p == "source /pinned/conda.sh && conda activate e && "
+
+
+def test_for_sidecar_pin_overrides_cluster_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sidecar-pinned field wins per-field over the cluster's; omitted fields
+    still back-fill from the cluster (so a pinned conda_source coexists with a
+    cluster-derived module load)."""
+    monkeypatch.setattr(
+        clusters_mod,
+        "load_clusters_config",
+        lambda: {
+            "myc": {
+                "modules": ["python/3.10"],
+                "conda_source": "/cluster/conda.sh",
+                "conda_envs": ["cluster-env"],
+            }
+        },
+    )
+    p = remote_activation_for_sidecar(
+        {"cluster": "myc", "env": {"conda_source": "/pinned/conda.sh"}}
+    )
+    # conda_source pinned by the sidecar wins; modules + conda_envs[0] back-fill
+    # from the cluster.
+    assert p == (
+        "module load python/3.10 && source /pinned/conda.sh && conda activate cluster-env && "
+    )

@@ -1289,3 +1289,219 @@ def test_poll_loop_ramps_instead_of_flat_waiting(
     assert out["ok"] is True
     # Three sleeps between four polls, ramping from the 3s floor — NOT flat 30s.
     assert sleeps == [3.0, 6.0, 12.0]
+
+
+# ── Finding 12: poll-failure-class escalation + env-independent marker scan ───
+#
+# A canary on a cluster with a broken conda env dies rc 127 on a bare ``python``;
+# EVERY subsequent status poll dies the same way. That is DETERMINISTIC (it will
+# never heal by waiting), not a transient SSH blip, so the loop escalates after
+# ``_DETERMINISTIC_ENV_POLLS_TO_FAIL`` consecutive rc-126/127 polls instead of
+# riding the full 30-min budget. The escalation reads the env-independent
+# ``.hpc_failed`` markers with plain sh: present → positive ``canary_failed``;
+# absent → still a loud ``reporter_unreachable`` (the scan proves FAILURE only —
+# a marker-less blind run is never called passed). A TRANSIENT class resets the
+# counter and rides the budget (it belongs to the connection breaker).
+
+
+def _rc127() -> errors.RemoteCommandFailed:
+    """The broken-env poll failure: reporter died rc 127 (command not found)."""
+    return errors.RemoteCommandFailed(
+        "status reporter failed (rc=127): /usr/bin/python: command not found",
+        returncode=127,
+    )
+
+
+def test_deterministic_env_rc127_escalates_early_with_marker(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 consecutive rc-127 polls → escalate BEFORE the budget; the plain-sh
+    marker scan finds a ``.hpc_failed`` marker → positive ``canary_failed`` with
+    the marker name + rc as evidence, and the scan is invoked exactly once."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)  # far under the 1800s deadline → escalation, not timeout
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    scan_calls: list[dict] = []
+
+    def _fake_scan(**kw):
+        scan_calls.append(kw)
+        return {"failed_markers": ["r1-canary.0.failed"], "count": 1}
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_marker_scan", side_effect=_fake_scan),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "canary_failed"
+    assert "r1-canary.0.failed" in out["details"]
+    assert "rc=127" in out["details"]
+    # Escalated on the 3rd deterministic poll — the marker scan ran exactly once.
+    assert len(scan_calls) == 1
+    assert scan_calls[0]["run_id"] == "r1-canary"
+
+
+def test_deterministic_env_rc127_escalates_early_without_marker(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same 3-rc-127 escalation, but NO ``.hpc_failed`` marker exists → the scan
+    can only prove failure, never success, so the verdict is a loud
+    ``reporter_unreachable`` (never a pass) annotated with the escalation
+    evidence — the never-pass-unverified posture."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_marker_scan",
+            return_value={"failed_markers": [], "count": 0},
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "reporter_unreachable"
+    assert "Escalated after 3 consecutive" in out["details"]
+    assert "no .hpc_failed marker" in out["details"]
+
+
+def test_marker_scan_ssh_failure_does_not_yield_pass(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even if the marker scan itself can't run (SSH transport down), the never-
+    pass arm holds: the verdict is ``reporter_unreachable`` (ok=False), never a
+    silent pass of an unverified run."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_marker_scan",
+            side_effect=errors.RemoteCommandFailed("marker scan ssh failed"),
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    assert out["ok"] is False
+    assert out["failure_kind"] == "reporter_unreachable"
+
+
+def test_transient_polls_ride_budget_not_early_failed(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TRANSIENT poll failure (SSH timeout — OSError) must NOT early-fail: it
+    resets the deterministic counter and rides the wait budget (that class
+    belongs to the connection breaker). Proven by the marker scan never being
+    invoked and the verdict carrying no 'Escalated after' annotation."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)  # budget=4 → several transient polls then timeout
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=TimeoutError("ssh to host timed out"),
+        ),
+        mock.patch("hpc_agent.infra.cluster_status.ssh_marker_scan") as m_scan,
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=4)
+
+    assert out["ok"] is False
+    # Rode to the budget with every poll failing → reporter_unreachable, but NOT
+    # the deterministic early-fail arm.
+    assert out["failure_kind"] == "reporter_unreachable"
+    assert "Escalated after" not in out["details"]
+    m_scan.assert_not_called()
+
+
+def test_poll_health_evidence_stamped_under_distinct_key(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a failed poll the loop stamps poll-failure evidence (error class +
+    consecutive count + rc) under ``last_status.poll_health`` so status-snapshot
+    renders 'polling, last N polls rc=127' instead of a frozen timestamp. The
+    evidence lives under a DISTINCT key — it MUST NOT inject any of the
+    complete/running/pending/failed/unknown counts ``classify.settle`` reads."""
+    import itertools
+
+    from hpc_agent.ops.verify_canary import verify_canary
+    from hpc_agent.state.journal import load_run
+
+    _seed_canary(tmp_path)
+    _clk = itertools.count(0.0, 1.0)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(_clk))
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_rc127()),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_marker_scan",
+            return_value={"failed_markers": [], "count": 0},
+        ),
+    ):
+        verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+
+    rec = load_run(tmp_path, "r1-canary")
+    assert rec is not None
+    ph = rec.last_status.get("poll_health")
+    assert ph is not None
+    assert ph["error_class"] == "deterministic_env"
+    assert ph["consecutive"] == 3
+    assert ph["returncode"] == 127
+    # Settle-safe: the evidence never wrote a count key settle()/classify_polling read.
+    for count_key in ("complete", "running", "pending", "failed", "unknown"):
+        assert count_key not in rec.last_status
+
+
+def test_canary_loop_stamps_watchdog_liveness_each_poll(tmp_path: Path, journal_home: Path) -> None:
+    """Finding 12: the canary poll loop stamps §5 watchdog liveness (through the
+    ONE shared ``stamp_watchdog_tick`` definition) so the sidecar isn't frozen at
+    its submit stamp while polling — status-snapshot sees a live poller, not a
+    stall the doctor false-flags."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    stamps: list[tuple] = []
+
+    def _spy(*a, **k):
+        stamps.append((a, k))
+
+    with (
+        mock.patch("hpc_agent.state.journal.stamp_watchdog_tick", side_effect=_spy),
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+
+    assert out["ok"] is True
+    assert stamps, "canary loop must stamp watchdog liveness while polling"
+    # Stamped for the canary run, carrying the next-poll cadence.
+    assert stamps[0][0][0] == "r1-canary"
+    assert "next_tick_seconds" in stamps[0][1]

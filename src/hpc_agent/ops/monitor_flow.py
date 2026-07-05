@@ -158,48 +158,21 @@ def _floor_poll_interval(requested: float) -> float:
     return max(float(requested), floor)
 
 
-#: Multiplier on the chosen inter-poll cadence used to derive the watchdog
-#: deadline (``next_tick_due``). The next poll is due in ``effective_interval``
-#: seconds; the deadline is set a little past that so a poll that is merely
-#: mid-round-trip at the boundary is not mistaken for a dead driver. A driver
-#: (or a detached child) that actually dies leaves the last stamp behind and the
-#: deadline lapses → the §5 doctor / ``find_stalled_runs`` flags it.
-_WATCHDOG_DEADLINE_GRACE: float = 3.0
-
-
 def _stamp_watchdog(experiment_dir: Path, run_id: str, next_tick_seconds: float) -> None:
-    """Stamp ``last_tick_at`` + ``next_tick_due`` on the journal record (§5).
+    """Stamp the §5 driver dead-man's-switch fields for this monitor poll.
 
-    Every in-flight poll stamps the driver dead-man's-switch fields so the §5
-    watchdog (in-session timer / out-of-session ``doctor``) covers a dead poller
-    — including a detached S3 / status child — via a lapsed ``next_tick_due``.
-    Best-effort and loud: a stamp failure must never break the poll loop (the
-    run keeps being monitored), but a missing stamp blinds the watchdog, so warn.
-    Mirrors ``ops/submit/runner.py``'s initial stamp and ``drive._stamp_driver_tick``.
+    A thin re-point onto the ONE shared definition
+    (:func:`hpc_agent.state.journal.stamp_watchdog_tick`) so the monitor poll
+    loop and the canary poll loop (``ops.verify_canary``) cannot disagree on what
+    a tick means — the finding-12 "two loops, two definitions" fix. The shared
+    helper owns the now/deadline computation and the best-effort-and-loud posture
+    (a stamp failure never breaks the poll loop but is warned); this wrapper only
+    preserves the historical ``(experiment_dir, run_id, next_tick_seconds)``
+    call shape the many call sites below use.
     """
-    try:
-        from datetime import timedelta
+    from hpc_agent.state.journal import stamp_watchdog_tick
 
-        from hpc_agent.infra.time import utcnow
-        from hpc_agent.state.journal import stamp_tick
-
-        _now = utcnow()
-        deadline = _now + timedelta(seconds=next_tick_seconds + _WATCHDOG_DEADLINE_GRACE)
-        stamp_tick(
-            run_id,
-            last_tick_at=_now.isoformat(timespec="seconds"),
-            next_tick_due=deadline.isoformat(timespec="seconds"),
-            experiment_dir=experiment_dir,
-        )
-    except Exception:  # noqa: BLE001 — a watchdog stamp must never fail the poll loop
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "watchdog tick stamp failed for run %s — the doctor / find_stalled_runs "
-            "cannot see this poller until the next successful stamp",
-            run_id,
-            exc_info=True,
-        )
+    stamp_watchdog_tick(run_id, next_tick_seconds=next_tick_seconds, experiment_dir=experiment_dir)
 
 
 # ``_status_fingerprint`` lives in

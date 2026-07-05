@@ -19,7 +19,12 @@ from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.classify import settle
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.status import _ssh_status_report
-from hpc_agent.state.journal import load_run, mark_run, update_run_status
+from hpc_agent.state.journal import (
+    is_kill_confirmed,
+    load_run,
+    mark_run,
+    update_run_status,
+)
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
@@ -576,6 +581,57 @@ def _reconcile_one(
 
     if warnings:
         summary["warnings"] = warnings
+
+    # Kill-confirmed terminal short-circuit (proving run #5, finding 14).
+    #
+    # A deliberate kill the scheduler CONFIRMED gone (``is_kill_confirmed``:
+    # ``kill_confirmed_at`` stamped AND every requested job id covered by
+    # ``kill_confirmed_job_ids``) is terminal from the KILL evidence alone — the
+    # status reporter's per-task counts are irrelevant to a deliberate kill. Key
+    # this off the fresh alive probe too (``not alive``): when the alive-check
+    # itself couldn't run it falls back to the live job_ids, so ``not alive`` is
+    # False and we conservatively route through ``unable_to_verify`` below rather
+    # than settle on a probe that didn't run.
+    #
+    # Without this pre-branch, a broken cluster env crashes the per-task reporter
+    # (``reporter_failed=True``) — the reporter-dependent settle branch further
+    # down is guarded on ``not reporter_failed`` and is skipped — so a
+    # KILL-CONFIRMED run wrongly stayed ``in_flight`` (surfaced
+    # ``unable_to_verify``), blocked the next submit, and forced the driver to
+    # hand-choreograph reconcile→supersede.
+    #
+    # The verdict is ``abandoned``: exactly what ``classify.settle`` already
+    # yields for a killed run when the reporter DOES work (killed mid-flight = not
+    # complete, no positive ``failed`` count = abandoned). This preserves ONE
+    # verdict for a killed run across both reporter-healthy and reporter-broken
+    # paths rather than inventing a new state, and routes through the SAME
+    # ``mark_run`` + transition-gated ``harvest_on_terminal`` the settle arm uses.
+    # Placed BEFORE the ``unable_to_verify`` marking so the run settles TERMINAL
+    # (not unverifiable — otherwise the envelope's ``verify_state`` override would
+    # mask the terminal state); keyed STRICTLY on kill-confirmation so a non-kill
+    # reporter failure still routes through ``unable_to_verify``.
+    if is_kill_confirmed(record) and not alive:
+        recorded = {**summary, "verdict_reason": "killed_confirmed_reporter_independent"}
+        update_run_status(
+            experiment_dir,
+            run_id,
+            last_status=recorded,
+            combined_waves=combined,
+            failed_waves=[w for w in record.failed_waves if w not in set(combined)],
+        )
+        updated = mark_run(experiment_dir, run_id, status=str(LifecycleState.ABANDONED))
+        # Guaranteed harvest (§5), gated on a verdict TRANSITION — identical to the
+        # settle arm below: reconcile is invoked directly (kill / driver), so its
+        # terminal transitions never pass through the poll loop's finally. An
+        # idempotent re-reconcile of an already-``abandoned`` kill does NOT re-fire.
+        if str(LifecycleState.ABANDONED) != pre_reconcile_status:
+            harvest_on_terminal(
+                experiment_dir,
+                run_id,
+                terminal_cause=str(LifecycleState.ABANDONED),
+                record=updated,
+            )
+        return updated, alive_check_failed
 
     # #258 + 0.10.12: when either the alive-check or the status reporter
     # couldn't run, the run's true state is unknown. Mark the snapshot so
