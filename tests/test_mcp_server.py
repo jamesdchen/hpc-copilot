@@ -67,7 +67,15 @@ def test_initialize_reports_version_and_capabilities() -> None:
     server = _server()
     result = _result(server, "initialize", {"protocolVersion": "2025-06-18"})
     assert result["protocolVersion"] == "2025-06-18"  # echoes the client's version
-    assert result["serverInfo"] == {"name": "hpc-agent", "version": hpc_agent.__version__}
+    # serverInfo.version is the FINGERPRINTED version (``<version>[+<sha>]``)
+    # because the instructions tell clients to compare it for skew and the
+    # bare number cannot express skew between installs of the same release.
+    # Backward-parseable: the prefix up to ``+`` is the plain version.
+    from hpc_agent._build_info import full_version
+
+    assert result["serverInfo"]["name"] == "hpc-agent"
+    assert result["serverInfo"]["version"] == full_version()
+    assert result["serverInfo"]["version"].split("+", 1)[0] == hpc_agent.__version__
     assert set(result["capabilities"]) == {"tools", "resources", "prompts"}
     # Version is surfaced in instructions so a client can detect skew.
     assert hpc_agent.__version__ in result["instructions"]
@@ -364,3 +372,34 @@ def test_mcp_refuses_blocking_status_watch() -> None:
     resp = _call(server, "status-watch", {"spec": {"wait_terminal": True}})
     assert "error" in resp
     assert "wait-detached" in resp["error"]["message"]
+
+
+# ─── isolated runner deadline (src subprocess-timeout discipline) ────────────
+
+
+def test_subprocess_cli_runner_deadline_fires(monkeypatch) -> None:
+    """The isolated runner's server-level cap kills a hanging child (exit 124).
+
+    Fire path for the bound that closed the last ``_GRANDFATHERED`` entry in
+    ``tests/contracts/test_src_subprocess_timeout_discipline.py``: a synthetic
+    hanging child under an injected sub-second cap is killed (via the
+    ``infra.remote._capture_via_select`` wedge-safe seam) rather than awaited,
+    and the call maps to exit 124 with the deadline named on stderr.
+    """
+    import sys
+    import time
+
+    monkeypatch.setattr(M, "_SUBPROCESS_RUNNER_TIMEOUT_SEC", 0.5)
+    monkeypatch.setattr(
+        M,
+        "_isolated_runner_argv",
+        lambda argv: [sys.executable, "-c", "import time; time.sleep(60)"],
+    )
+    start = time.monotonic()
+    code, out, err = M._subprocess_cli_runner(["find"])
+    elapsed = time.monotonic() - start
+    assert code == 124
+    assert out == ""
+    assert "deadline" in err
+    assert "find" in err
+    assert elapsed < 30, "child was awaited, not killed"

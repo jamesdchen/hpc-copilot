@@ -66,13 +66,19 @@ def load_context(experiment_dir: Path) -> dict[str, Any]:
     Raises :class:`RuntimeError` when the CLI fails or the envelope is
     not ``ok`` — the loop cannot plan a step without context.
     """
-    proc = subprocess.run(
-        ["hpc-agent", "load-context", "--experiment-dir", str(experiment_dir)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["hpc-agent", "load-context", "--experiment-dir", str(experiment_dir)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            # load-context is a fast, purely local read (journal + config);
+            # 120s covers interpreter cold-start + registry walk with margin.
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"load-context timed out after 120s: {exc}") from exc
     if proc.returncode != 0:
         raise RuntimeError(f"load-context failed (exit {proc.returncode}): {proc.stderr.strip()}")
     envelope = json.loads(proc.stdout)
@@ -197,23 +203,49 @@ def _stamp_driver_tick(experiment_dir: Path, run_id: str) -> None:
         )
 
 
+def _cli_step_argv(verb: str, spec_path: str, experiment_dir: Path) -> list[str]:
+    """The argv one CLI step runs (a seam so tests can substitute a child)."""
+    return ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)]
+
+
+# Exit code for a step whose child exceeded its deadline and was killed — the
+# coreutils ``timeout(1)`` convention (mirrors ``block_drive._TIMEOUT_EXIT_CODE``).
+_TIMEOUT_EXIT_CODE = 124
+
+
 def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
     """Run a deterministic ``hpc-agent`` workflow verb for *run_id*.
 
     Both ``monitor-flow`` and ``aggregate-flow`` only *require* ``run_id``
     in their input spec, so a minimal ``{"run_id": ...}`` spec is valid.
+
+    The wait is BOUNDED by the per-verb deadline from the block registry
+    (:func:`block_chain.verb_deadline_seconds`; the flow verbs fall in its
+    watch class, so the deadline is the 24 h default budget + slack). stdio is
+    inherited (no pipes), so on expiry ``subprocess.run`` kills the child and
+    returns immediately — no post-kill drain wedge to guard; the step reports
+    :data:`_TIMEOUT_EXIT_CODE`.
     """
+    from hpc_agent.infra import block_chain
+
     with tempfile.NamedTemporaryFile(
         "w", suffix=".json", prefix=f"{verb}-spec-", delete=False
     ) as handle:
         json.dump({"run_id": run_id}, handle)
         spec_path = handle.name
+    deadline = block_chain.verb_deadline_seconds(verb, {"run_id": run_id})
     try:
         proc = subprocess.run(
-            ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)],
+            _cli_step_argv(verb, spec_path, experiment_dir),
             check=False,
+            timeout=deadline,
         )
         return proc.returncode
+    except subprocess.TimeoutExpired:
+        logging.getLogger(__name__).warning(
+            "cli step %s exceeded its %.0fs driver deadline — child killed", verb, deadline
+        )
+        return _TIMEOUT_EXIT_CODE
     finally:
         with contextlib.suppress(OSError):
             os.unlink(spec_path)

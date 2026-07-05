@@ -49,6 +49,7 @@ from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
 from hpc_agent.ops.monitor_flow import monitor_flow
+from hpc_agent.ops.recover.notify import acknowledge_alerts, read_unacknowledged_alerts
 from hpc_agent.state.index import find_in_flight_runs, find_stalled_runs
 from hpc_agent.state.journal import load_run, mark_seen_by_human
 from hpc_agent.state.run_record import TERMINAL_STATUSES
@@ -247,10 +248,22 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     #    re-arm proposal the human greenlights (the watchdog never restarts, §5).
     stalled = find_stalled_runs(now_iso, experiment_dir)
 
-    # 5. Re-stamp the attention watermark now that the delta is computed.
+    # 4b. Unacknowledged watchdog alerts (proving run #3: doctor DETECTED the
+    #     stalled canary driver and wrote doctor.alerts.log, but nothing
+    #     DELIVERED it — detection without delivery is silence). Fail-open read;
+    #     each alert is surfaced by exactly one snapshot, then acknowledged via
+    #     the alert watermark below. The log itself is an audit trail and is
+    #     never truncated.
+    alerts = read_unacknowledged_alerts(experiment_dir)
+
+    # 5. Re-stamp the attention watermark now that the delta is computed, and
+    #    acknowledge the alerts this brief is about to surface (same mark_seen
+    #    gate: a peek-only snapshot moves neither watermark).
     if spec.mark_seen:
         for r in records:
             mark_seen_by_human(r.run_id, at=now_iso, experiment_dir=experiment_dir)
+        if alerts:
+            acknowledge_alerts(experiment_dir, up_to_ts=max(a["ts"] for a in alerts))
 
     brief: dict[str, Any] = {
         "now": now_iso,
@@ -258,6 +271,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "changed_since_seen": changed,
         "stalled_runs": stalled,
         "anomalies": anomalies,
+        "alerts": alerts,
     }
 
     needs_decision = bool(stalled or anomalies)

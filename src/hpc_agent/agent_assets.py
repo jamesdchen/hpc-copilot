@@ -199,6 +199,31 @@ _WRITE_FENCE_ENTRY: dict[str, Any] = {
     ],
 }
 
+
+# The watchdog alert-count ``SessionStart`` hook (proving run #3: the scheduled
+# doctor wrote the stalled-driver alert to doctor.alerts.log and nothing
+# delivered it — detection without delivery is silence). Fires once per session
+# start (no matcher, no pre-filter — the interpreter start is paid rarely) and
+# prints "N unacknowledged hpc-agent watchdog alert(s) ..." to stdout, which
+# the harness injects as session context. Notify only: it never re-arms and
+# never acknowledges (the status-snapshot watermark owns acknowledgment); the
+# alert read is fail-open and non-creating, so a session started in an
+# unrelated repo is a clean silent no-op.
+def _build_alert_count_command() -> str:
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.alert_count"
+
+
+_ALERT_COUNT_COMMAND = _build_alert_count_command()
+_ALERT_COUNT_NEEDLE = "hpc_agent._kernel.hooks.alert_count"
+_ALERT_COUNT_ENTRY: dict[str, Any] = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": _ALERT_COUNT_COMMAND,
+        }
+    ],
+}
+
 # The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
 # shell-free invocation surface for blocks (design §3, "The tool surface subsumes
 # the shell"). Registered venv-pinned via the current interpreter so it does not
@@ -669,6 +694,8 @@ def install_agent_assets(
                                          "wrote": <bool>},
             "settings_rendezvous_stop_hook": {"settings_path": "...", "action": "added",
                                               "wrote": <bool>},
+            "settings_alert_count_hook": {"settings_path": "...", "action": "added",
+                                          "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
@@ -778,6 +805,17 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Wire the watchdog alert-count SessionStart hook (proving run #3: alert
+    # delivery, not just detection) — prints the unacknowledged alert count into
+    # session context. Same additive + idempotent merge.
+    settings_alert_count_hook = _merge_hook_entry(
+        target,
+        event="SessionStart",
+        entry=_ALERT_COUNT_ENTRY,
+        needle=_ALERT_COUNT_NEEDLE,
+        dry_run=dry_run,
+    )
+
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
@@ -800,6 +838,7 @@ def install_agent_assets(
         "settings_rendezvous_hook": settings_rendezvous_hook,
         "settings_rendezvous_stop_hook": settings_rendezvous_stop_hook,
         "settings_write_fence_hook": settings_write_fence_hook,
+        "settings_alert_count_hook": settings_alert_count_hook,
         "settings_permissions": settings_permissions,
         "mcp_server": mcp_server,
         "wrote": not dry_run,

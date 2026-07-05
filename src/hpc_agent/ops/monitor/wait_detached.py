@@ -9,7 +9,8 @@ and up to a full poll interval of dead air after the brief is ready.
 This verb is the bridge: a BLOCKING local wait on the worker's lease pid
 (``_kernel/lifecycle/detached.py`` writes ``_detached/<block>-<run_id>.lease.json``
 with the launched pid; ``_pid_alive`` probes it). The agent launches
-``hpc-agent wait-detached --spec {run_id...}`` through the harness's native
+``hpc-agent wait-detached --spec <file with {"run_id": ...}>`` (a file path —
+never inline JSON on the command line) through the harness's native
 backgrounding (Claude Code ``run_in_background``) and the harness wakes it
 exactly once, when this process exits — event-driven, no polling, no SSH
 (purely local pid probes).

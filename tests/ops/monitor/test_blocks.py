@@ -278,6 +278,91 @@ def test_snapshot_fleet_digest_over_in_flight_runs(tmp_path: Path) -> None:
     assert m_seen.call_count == 2
 
 
+# ── watchdog alert delivery (proving run #3: detection without delivery is
+# silence) ────────────────────────────────────────────────────────────────────
+
+
+_ALERT_TS = "2026-07-04T23:25:05+00:00"
+_ALERT_MSG = "hpc-agent doctor: driver stalled since 23:01, run pi-estimation-canary — re-arm?"
+
+
+def _write_alert_line(experiment_dir: Path, line: str) -> Path:
+    """Append a raw line to the repo's doctor.alerts.log (hermetic journal home)."""
+    from hpc_agent.state.run_record import journal_dir
+
+    log = journal_dir(experiment_dir) / "doctor.alerts.log"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    return log
+
+
+def _snapshot(tmp_path: Path, **spec_kwargs: Any):
+    """Run status-snapshot over one healthy mocked run; alerts read for real."""
+    rec = _record()
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        return blocks.status_snapshot(
+            tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID, **spec_kwargs)
+        )
+
+
+def test_snapshot_surfaces_alert_once_then_acknowledges(tmp_path: Path) -> None:
+    """Regression (proving run #3): the watchdog's doctor.alerts.log entry must
+    reach the human through the status surface — surfaced by exactly one
+    snapshot, then acknowledged via the alert watermark. The log itself is an
+    audit trail and survives acknowledgment untouched."""
+    log = _write_alert_line(tmp_path, f"{_ALERT_TS} {_ALERT_MSG}")
+
+    first = _snapshot(tmp_path)
+    assert first.brief["alerts"] == [{"ts": _ALERT_TS, "message": _ALERT_MSG}]
+
+    second = _snapshot(tmp_path)
+    assert second.brief["alerts"] == []
+
+    # Acknowledgment is a watermark, never a truncation.
+    assert _ALERT_MSG in log.read_text(encoding="utf-8")
+
+
+def test_snapshot_newer_alert_after_ack_is_surfaced(tmp_path: Path) -> None:
+    _write_alert_line(tmp_path, f"{_ALERT_TS} {_ALERT_MSG}")
+    _snapshot(tmp_path)  # surfaces + acknowledges the first alert
+
+    newer_ts = "2026-07-05T01:00:00+00:00"
+    _write_alert_line(tmp_path, f"{newer_ts} second stall")
+    result = _snapshot(tmp_path)
+    assert result.brief["alerts"] == [{"ts": newer_ts, "message": "second stall"}]
+
+
+def test_snapshot_peek_only_does_not_acknowledge_alerts(tmp_path: Path) -> None:
+    """mark_seen=False is a peek: neither the run watermark nor the alert
+    watermark moves, so the alert stays new for the next snapshot."""
+    _write_alert_line(tmp_path, f"{_ALERT_TS} {_ALERT_MSG}")
+
+    first = _snapshot(tmp_path, mark_seen=False)
+    second = _snapshot(tmp_path, mark_seen=False)
+    assert first.brief["alerts"] == second.brief["alerts"]
+    assert second.brief["alerts"] == [{"ts": _ALERT_TS, "message": _ALERT_MSG}]
+
+
+def test_snapshot_alerts_fail_open_on_corrupt_log(tmp_path: Path) -> None:
+    """A corrupt log (no parseable timestamps) yields no alerts, never an error."""
+    _write_alert_line(tmp_path, "not-a-timestamp some garbage")
+    _write_alert_line(tmp_path, "\x00\x01\x02binary junk")
+    _write_alert_line(tmp_path, "")
+
+    result = _snapshot(tmp_path)
+    assert result.brief["alerts"] == []
+    assert result.stage_reached == "snapshot_clean"
+
+
+def test_snapshot_no_alert_log_yields_empty_alerts(tmp_path: Path) -> None:
+    result = _snapshot(tmp_path)
+    assert result.brief["alerts"] == []
+
+
 # ── status-watch ─────────────────────────────────────────────────────────────
 
 

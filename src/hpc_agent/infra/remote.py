@@ -187,7 +187,7 @@ def _with_ssh_backoff(
     fn: Callable[[], subprocess.CompletedProcess[str]],
     *,
     label: str,
-    ssh_target: str | None = None,
+    ssh_target: str,
 ) -> subprocess.CompletedProcess[str]:
     """Call *fn* with exponential-backoff retry on transient ssh failures.
 
@@ -211,8 +211,10 @@ def _with_ssh_backoff(
     the per-retry stderr diagnostic. Disable retries entirely by setting
     ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
 
-    When *ssh_target* is given, every attempt — including each ladder retry,
-    and the ``HPC_SSH_NO_BACKOFF`` single shot — runs under the persistent
+    *ssh_target* is required (keyword-only, no default) so the breaker
+    cannot be silently bypassed by a future call site that forgets it:
+    every attempt — including each ladder retry, and the
+    ``HPC_SSH_NO_BACKOFF`` single shot — runs under the persistent
     per-host circuit breaker (:mod:`hpc_agent.infra.ssh_circuit`): the
     breaker is consulted BEFORE the attempt and the outcome is recorded
     after. Consequence for the ladder: three consecutive connection-level
@@ -227,13 +229,9 @@ def _with_ssh_backoff(
     stalled ssh-agent named pipe into an unexplained multi-minute hang with
     no breadcrumb in the driver log (2026-07-04 pre-flight wedge).
     """
-    if ssh_target is None:
-        guarded = fn
-    else:
 
-        def guarded() -> subprocess.CompletedProcess[str]:
-            assert ssh_target is not None  # narrowed by the enclosing branch
-            return ssh_circuit.guarded_call(ssh_target, fn)
+    def guarded() -> subprocess.CompletedProcess[str]:
+        return ssh_circuit.guarded_call(ssh_target, fn)
 
     if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
         return guarded()

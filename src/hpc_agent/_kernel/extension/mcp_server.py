@@ -79,7 +79,6 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-import hpc_agent
 from hpc_agent._kernel.extension.workflow_entries import WORKFLOW_ENTRIES_BY_PROMPT
 from hpc_agent.cli._dispatch import CliShape, _leaf_verb
 
@@ -141,6 +140,20 @@ _PROMPT_NAMES = tuple(WORKFLOW_ENTRIES_BY_PROMPT)
 CliRunner = Callable[["list[str]"], "tuple[int, str, str]"]
 
 
+# Server-level cap on one isolated-runner tool call. Generous: the blocking
+# watch/wait invocations are refused at the seam (conduct rule 11 —
+# :func:`_refuse_blocking_over_mcp` requires detach for submit-s2/s3 and rejects
+# blocking status-watch polls), so a legitimate call is minutes, not hours; 1 h
+# still covers a slow stage/harvest with wide margin while guaranteeing the
+# wedge class (an unbounded piped wait) cannot recur through this runner.
+_SUBPROCESS_RUNNER_TIMEOUT_SEC: float = 3600.0
+
+
+def _isolated_runner_argv(argv: list[str]) -> list[str]:
+    """The argv the isolated runner executes (a seam so tests can substitute)."""
+    return [sys.executable, "-m", "hpc_agent", *argv]
+
+
 def _subprocess_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     """Run ``python -m hpc_agent <argv...>`` in a SUBPROCESS and capture its envelope.
 
@@ -155,15 +168,29 @@ def _subprocess_cli_runner(argv: list[str]) -> tuple[int, str, str]:
     interpreter cold-start + registry walk). The two are parity-checked
     (``tests/test_mcp_server.py``): the same tool call through either yields an
     identical envelope + exit code.
+
+    The wait is BOUNDED by :data:`_SUBPROCESS_RUNNER_TIMEOUT_SEC`, and the
+    piped capture routes through ``infra.remote._capture_via_select`` — the
+    S2-wedge-fix seam whose deadline can actually fire on Windows (kill on
+    expiry, bounded post-kill drain). On expiry the child is killed and the
+    call maps to exit 124 (the ``timeout(1)`` convention) with the deadline
+    named on stderr.
     """
-    proc = subprocess.run(
-        [sys.executable, "-m", "hpc_agent", *argv],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    from hpc_agent.infra.remote import _capture_via_select
+
+    try:
+        proc = _capture_via_select(
+            _isolated_runner_argv(argv), timeout=_SUBPROCESS_RUNNER_TIMEOUT_SEC
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            124,
+            "",
+            (
+                f"hpc-agent {' '.join(argv)} exceeded the isolated runner's "
+                f"{_SUBPROCESS_RUNNER_TIMEOUT_SEC:.0f}s deadline — child killed"
+            ),
+        )
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -785,6 +812,14 @@ class McpServer:
             if self._allow_mutations
             else "Read-only (query/validate) verbs only; mutating verbs are gated off."
         )
+        # Fingerprinted version (``0.10.65+g<sha>``): the version *number*
+        # alone cannot express skew between installs of the same release, and
+        # the instructions explicitly tell clients to compare versions — so
+        # serverInfo carries the commit identity too. Lazy import; resolved
+        # once per server (initialize), fail-open to the bare number.
+        from hpc_agent._build_info import full_version
+
+        server_version = full_version()
         return {
             "protocolVersion": requested if isinstance(requested, str) else _PROTOCOL_VERSION,
             "capabilities": {
@@ -792,9 +827,9 @@ class McpServer:
                 "resources": {"listChanged": False},
                 "prompts": {"listChanged": False},
             },
-            "serverInfo": {"name": "hpc-agent", "version": hpc_agent.__version__},
+            "serverInfo": {"name": "hpc-agent", "version": server_version},
             "instructions": (
-                f"hpc-agent {hpc_agent.__version__} MCP server. Tools mirror the "
+                f"hpc-agent {server_version} MCP server. Tools mirror the "
                 "`hpc-agent` CLI registry (`hpc-agent capabilities`); each tool "
                 "result carries the full CLI envelope in structuredContent "
                 "(error_code, category, retry_safe, exit_code). "

@@ -979,8 +979,39 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
     )
 
 
-def _ensure_job_script_executor(run_id: str, job_env: dict[str, str]) -> None:
-    """Refuse a submission whose job-script ``EXECUTOR`` is empty/missing (#191).
+def _interview_run_name(experiment_dir: Path) -> str | None:
+    """The interview's registered run_name, when one is resolvable — fail-open.
+
+    Read from ``interview.json``'s ``_materialized.entry_point.run_name`` (the
+    interview persists it for the ``register_run`` and ``shell_command``
+    wrapper kinds — see ``ops.memory.interview``). Defensive by design,
+    mirroring ``_run_constant_spec_kwargs``: a missing / unreadable /
+    non-object ``interview.json``, or one without a materialized entry point
+    (hand-onboarded repos legitimately have none), yields ``None`` — the
+    caller's shape check stands on its own.
+    """
+    import json
+
+    try:
+        doc = json.loads((experiment_dir / "interview.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    materialized = doc.get("_materialized")
+    if not isinstance(materialized, dict):
+        return None
+    entry = materialized.get("entry_point")
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("run_name")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _ensure_job_script_executor(
+    run_id: str, job_env: dict[str, str], *, experiment_dir: Path | None = None
+) -> None:
+    """Refuse a job-script ``EXECUTOR`` that is empty or cannot be a command (#191).
 
     ``job_env["EXECUTOR"]`` is the *job-script* command — it runs the dispatcher
     (``python3 .hpc/_hpc_dispatch.py``), which then reads the sidecar for the
@@ -989,12 +1020,24 @@ def _ensure_job_script_executor(run_id: str, job_env: dict[str, str]) -> None:
     milliseconds, the canary "succeeds", and the main array fires the same
     broken qsub — every task exits cleanly having done nothing (the #162 class).
 
-    This validates *non-emptiness only*, deliberately NOT runnability: unlike
-    the sidecar's per-task ``executor`` (guarded by :func:`_is_runnable_executor`,
-    which rejects the dispatcher command), the job-script ``EXECUTOR`` is
-    *supposed* to be that dispatcher command. The cluster-side templates also
-    fence ``$EXECUTOR`` with ``: "${EXECUTOR:?...}"`` as defense-in-depth; this
-    intake guard fails faster and clearer than a vanished canary's stderr.
+    Proving run #3 (2026-07-05) extended the refusal to SHAPE: an
+    agent-hand-authored spec carried the executor NAME (``"run"`` — the
+    interview's run_name) instead of a command, the empty-only guard passed it,
+    and the truth surfaced only after a full cluster round-trip to exit 127
+    (``time run`` → command not found). A working job-script command is never a
+    single bare identifier: the real default is interpreter + script path, and
+    even a self-contained invocation carries a path separator (``./run.sh``).
+    So refuse a single token with no whitespace AND no path separator, and —
+    when ``interview.json`` makes the registered run_name resolvable — refuse
+    the run_name itself by name.
+
+    Beyond emptiness + the bare-name shape this deliberately does NOT validate
+    runnability: unlike the sidecar's per-task ``executor`` (guarded by
+    :func:`_is_runnable_executor`, which rejects the dispatcher command), the
+    job-script ``EXECUTOR`` is *supposed* to be that dispatcher command. The
+    cluster-side templates also fence ``$EXECUTOR`` with ``: "${EXECUTOR:?...}"``
+    as defense-in-depth; this intake guard fails faster and clearer than a
+    vanished canary's stderr.
     """
     executor = (job_env or {}).get("EXECUTOR") or ""
     if not executor.strip():
@@ -1006,6 +1049,84 @@ def _ensure_job_script_executor(run_id: str, job_env: dict[str, str]) -> None:
             "'succeed' and the main array would fire the same broken qsub. Pass "
             "EXECUTOR through build-submit-spec (which defaults it) or set "
             "job_env['EXECUTOR'] explicitly in the fields-file."
+        )
+    token = executor.strip()
+    bare_name = len(token.split()) == 1 and "/" not in token and "\\" not in token
+    run_name = _interview_run_name(experiment_dir) if experiment_dir is not None else None
+    if bare_name or (run_name is not None and token == run_name):
+        what = (
+            f"the run NAME (it equals the interview's registered run_name {run_name!r})"
+            if run_name is not None and token == run_name
+            else "a bare name — a single token with no whitespace and no path separator"
+        )
+        raise errors.SpecInvalid(
+            f"job_env['EXECUTOR'] for run_id {run_id!r} is {token!r}, which is {what}, "
+            "not a command the job script can run: the cluster job would execute "
+            f"`time {token}`, exit 127 (command not found), and the failure would "
+            "only surface after a full cluster round-trip. The job-script EXECUTOR "
+            "is the dispatcher command. Route EXECUTOR through build-submit-spec "
+            "(which defaults it to 'python3 .hpc/_hpc_dispatch.py') instead of "
+            "hand-authoring it in the fields-file."
+        )
+
+
+def _truncate_for_error(value: str, limit: int = 120) -> str:
+    """Truncate a (possibly 400+-char) command for an error envelope."""
+    v = value.strip()
+    return v if len(v) <= limit else v[: limit - 3] + "..."
+
+
+def _ensure_sidecar_matches_interview(experiment_dir: Path, run_id: str) -> None:
+    """Refuse a sidecar ``executor`` that diverges from the interview's command.
+
+    Proving run #3 (2026-07-05), layer (b) of the same incident
+    :func:`_ensure_job_script_executor` guards layer (a) of: the run sidecar
+    carried the executor NAME ``"run"`` while the truth — the real 477-char
+    per-task command — sat on disk the whole time in
+    ``interview.json._materialized.entry_point.executor_cmd``. The dispatcher
+    ran ``/bin/sh -c run`` → exit 127, discovered only by a cluster
+    round-trip. When the interview materialized an ``executor_cmd``, it is the
+    source of truth (``resolve-submit-inputs`` stamps it in code precisely so
+    the LLM never divines an executor); a sidecar that differs is provenance
+    drift, refused HERE — in the pre-rsync prelude, before anything is staged
+    or qsub'd.
+
+    Fail-open by design: no ``interview.json``, no ``_materialized`` block, or
+    no ``executor_cmd`` means the repo was hand-onboarded (bare
+    ``@register_run`` / hand-written sidecar) and legitimately has no
+    materialized truth to compare against — the check silently skips. A
+    missing / unreadable / empty-executor sidecar also skips: those are
+    :func:`_ensure_run_sidecar`'s refusals (#148 / #171), not drift.
+    """
+    import json
+
+    # Lazy import of the ONE reader of the materialized executor truth (shared
+    # with resolve-submit-inputs, which stamps it) — deferred to avoid a
+    # module-level ops→ops import at submit_flow import time.
+    from hpc_agent.ops.resolve_submit_inputs import _materialized_executor_cmd
+    from hpc_agent.state.runs import run_sidecar_path
+
+    expected = _materialized_executor_cmd(experiment_dir)
+    if expected is None:
+        return  # hand-onboarded repo: no materialized truth to diverge from
+    target = run_sidecar_path(experiment_dir, run_id)
+    try:
+        actual = json.loads(target.read_text(encoding="utf-8")).get("executor")
+    except (OSError, ValueError, AttributeError):
+        return  # missing/unreadable sidecar: _ensure_run_sidecar owns that refusal
+    if not isinstance(actual, str) or not actual.strip():
+        return  # empty/pending sidecar: _ensure_run_sidecar owns that refusal too
+    if actual.strip() != expected.strip():
+        raise errors.SpecInvalid(
+            f"run sidecar executor for run_id {run_id!r} diverges from the "
+            "interview's materialized per-task command. sidecar executor: "
+            f"{_truncate_for_error(actual)!r}; "
+            "interview.json _materialized.entry_point.executor_cmd: "
+            f"{_truncate_for_error(expected)!r}. The sidecar executor must be the "
+            "materialized executor_cmd — shipping the divergent sidecar would only "
+            "fail on the cluster (the proving-run-3 exit-127 class). Re-run "
+            "resolve-submit-inputs (which stamps the executor in code) or fix the "
+            "sidecar with `hpc-agent write-run-sidecar --spec <file>`."
         )
 
 
@@ -1622,9 +1743,11 @@ def _submit_one_spec(
         campaign_id=spec.campaign_id,
         cluster=spec.cluster,
     )
-    # Refuse an empty/missing job-script EXECUTOR before anything is qsub'd —
-    # the augmented dict is what actually ships to the scheduler (#191).
-    _ensure_job_script_executor(spec.run_id, job_env_full)
+    # Refuse an empty/missing OR bare-name job-script EXECUTOR before anything
+    # is qsub'd — the augmented dict is what actually ships to the scheduler
+    # (#191 + the proving-run-3 shape extension). experiment_dir lets the guard
+    # resolve the interview's run_name and name it in the refusal.
+    _ensure_job_script_executor(spec.run_id, job_env_full, experiment_dir=experiment_dir)
     backend_obj = build_remote_backend(
         backend_name=spec.backend,
         script=spec.script,
@@ -2108,6 +2231,13 @@ def _submit_flow_batch_locked(
     # (see _ensure_run_sidecar). #148 / #150.
     for i in fresh_indices:
         _ensure_run_sidecar(experiment_dir, specs[i])
+        # Proving run #3 layer (b): the sidecar on disk (pre-written by Step 6d
+        # or just synthesized above) must agree with the interview's
+        # materialized executor_cmd when one exists — refuse provenance drift
+        # HERE, before the rsync below stages anything and long before qsub.
+        # Checked after _ensure_run_sidecar so the canary mirror (which copies
+        # the main sidecar verbatim) can never propagate a divergent executor.
+        _ensure_sidecar_matches_interview(experiment_dir, specs[i].run_id)
         # The canary dispatches the SAME per-task command as the main run,
         # so its sidecar (``<run_id>-canary.json``) must ALSO exist on disk
         # before the shared rsync below — otherwise it never ships to the

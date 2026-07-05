@@ -94,8 +94,11 @@ def _ruff_canonicalise(path: Path) -> None:
         ["ruff", "format", "--quiet", str(path)],
     ):
         try:
-            subprocess.run(argv, capture_output=True, check=False)  # noqa: S603
-        except (FileNotFoundError, OSError):
+            # timeout: ruff over a single exported file finishes in well under
+            # a second; 60s is a generous ceiling so a wedged ruff cannot hang
+            # the export (best-effort step — a timeout skips, same as no ruff).
+            subprocess.run(argv, capture_output=True, check=False, timeout=60)  # noqa: S603
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             return
 
 

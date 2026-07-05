@@ -126,7 +126,11 @@ def test_phase2_canary_false_launches_main(tmp_path, _journal_home) -> None:
 
     spec = _spec(canary=False)
     with (
-        mock.patch.object(sf, "_augment_job_env", return_value={"EXECUTOR": "x"}),
+        # A real dispatcher command — the #191 shape guard now refuses a bare
+        # single-token EXECUTOR like "x" (proving-run-3 extension).
+        mock.patch.object(
+            sf, "_augment_job_env", return_value={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"}
+        ),
         mock.patch.object(sf, "build_remote_backend", return_value=mock.MagicMock()),
         mock.patch.object(sf, "_make_single_array_submission", return_value=["200"]) as mk,
         mock.patch.object(sf, "submit_and_record"),

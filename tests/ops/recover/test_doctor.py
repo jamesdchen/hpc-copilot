@@ -294,3 +294,179 @@ def test_doctor_parked_without_any_decision_stays_awaiting_human(tmp_path: Path)
     assert out["awaiting_advance_count"] == 0
     assert out["parked_count"] == 1
     assert out["parked"][0]["run_id"] == "waiting"
+
+
+# ─── version_skew: content-keyed code identity ──────────────────────────────
+
+
+def test_doctor_version_skew_fires_on_mismatched_shas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Synthetic skew: CLI embeds one sha, the source repo is at another →
+    doctor emits the warning naming BOTH shas and the fix (reinstall)."""
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: "aaaa1111")
+    monkeypatch.setattr(
+        doctor_mod, "_resolve_source_repo", lambda _dir: (str(tmp_path), "bbbb2222")
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+
+    skew = out["version_skew"]
+    assert skew is not None
+    assert skew["cli_sha"] == "aaaa1111"
+    assert skew["repo_sha"] == "bbbb2222"
+    assert skew["repo_root"] == str(tmp_path)
+    from hpc_agent import __version__
+
+    assert skew["cli_version"].split("+", 1)[0] == __version__
+    # The warning line names both shas and the fix.
+    assert "aaaa1111" in skew["warning"]
+    assert "bbbb2222" in skew["warning"]
+    assert "reinstall" in skew["warning"].lower()
+
+
+def test_doctor_version_skew_silent_when_shas_agree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: "aaaa1111")
+    monkeypatch.setattr(
+        doctor_mod, "_resolve_source_repo", lambda _dir: (str(tmp_path), "aaaa1111")
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["version_skew"] is None
+
+
+def test_doctor_version_skew_tolerates_short_sha_prefixes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git may widen a short sha on collision — prefix agreement is agreement."""
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: "aaaa1111")
+    monkeypatch.setattr(
+        doctor_mod, "_resolve_source_repo", lambda _dir: (str(tmp_path), "aaaa1111ffff")
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["version_skew"] is None
+
+
+def test_doctor_version_skew_fails_open_without_cli_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No embedded/resolvable CLI sha (old wheel, no git) → silently skipped."""
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: None)
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["version_skew"] is None
+
+
+def test_doctor_version_skew_fails_open_without_git_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No git binary at all → _resolve_source_repo yields None → field is null."""
+    import hpc_agent._build_info as bi
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: "aaaa1111")
+
+    def _missing(*a: object, **k: object) -> None:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(bi.subprocess, "run", _missing)
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["version_skew"] is None
+
+
+def test_doctor_version_skew_skipped_for_non_hpc_agent_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """experiment_dir in SOME git repo that isn't hpc-agent's source → skip."""
+    import hpc_agent.ops.recover.doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "runtime_sha", lambda: "aaaa1111")
+    # git resolves a toplevel, but that root lacks src/hpc_agent/__init__.py —
+    # a repo that merely USES hpc-agent must never trigger the comparison.
+    monkeypatch.setattr(doctor_mod, "git_output", lambda *a, **k: str(tmp_path))
+    assert doctor_mod._resolve_source_repo(tmp_path) is None
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["version_skew"] is None
+
+
+# ─── alert delivery + needs-attention shape (proving run #3) ────────────────
+
+
+def _write_alert(exp: Path, ts: str, message: str) -> Path:
+    from hpc_agent.state.run_record import journal_dir
+
+    log = journal_dir(exp) / "doctor.alerts.log"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(f"{ts} {message}\n")
+    return log
+
+
+def _stall(exp: Path, run_id: str) -> None:
+    upsert_run(exp, _record(run_id))
+    stamp_tick(
+        run_id,
+        last_tick_at="2026-07-03T00:00:00+00:00",
+        next_tick_due="2026-07-03T00:00:00+00:00",
+        experiment_dir=exp,
+    )
+
+
+def test_doctor_envelope_carries_unacknowledged_alerts(tmp_path: Path) -> None:
+    """Regression (proving run #3): the alerts the watchdog wrote to
+    doctor.alerts.log ride the doctor envelope itself — read-only, never
+    acknowledged by doctor (the status snapshot's watermark owns that)."""
+    ts = "2026-07-04T23:25:05+00:00"
+    msg = "hpc-agent doctor: driver stalled since 23:01, run pi-estimation-canary — re-arm?"
+    _write_alert(tmp_path, ts, msg)
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-05T01:00:00+00:00"))
+    assert out["alerts"] == [{"ts": ts, "message": msg}]
+    # A second doctor run still carries them — doctor never moves the watermark.
+    again = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-05T01:00:00+00:00"))
+    assert again["alerts"] == [{"ts": ts, "message": msg}]
+    # The one-line digest names the pending alert(s) even with nothing stalled NOW.
+    assert "1 unacknowledged alert(s)" in again["attention_summary"]
+    assert again["needs_attention"] is False
+
+
+def test_doctor_stalled_driver_is_unmistakable_at_top_level(tmp_path: Path) -> None:
+    """A stalled driver flips needs_attention and leads the attention_summary —
+    never buried under the per-run lists."""
+    _stall(tmp_path, "stalled")
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["needs_attention"] is True
+    assert out["attention_summary"].startswith("NEEDS ATTENTION")
+    assert "1 stalled driver(s)" in out["attention_summary"]
+
+
+def test_doctor_all_clear_summary_when_healthy(tmp_path: Path) -> None:
+    upsert_run(tmp_path, _record("healthy"))
+    stamp_tick(
+        "healthy",
+        last_tick_at="2026-07-03T00:59:00+00:00",
+        next_tick_due="2026-07-03T02:00:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["needs_attention"] is False
+    assert "all clear" in out["attention_summary"]
+    assert out["alerts"] == []
+
+
+def test_doctor_alerts_fail_open_on_corrupt_log(tmp_path: Path) -> None:
+    """A garbage alerts log yields no alerts and never an error."""
+    _write_alert(tmp_path, "not-a-timestamp", "junk")
+    log = _write_alert(tmp_path, "\x00\x01", "more junk")
+    log.write_bytes(log.read_bytes() + b"\xff\xfe raw bytes no newline")
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-03T01:00:00+00:00"))
+    assert out["alerts"] == []
+    assert out["needs_attention"] is False

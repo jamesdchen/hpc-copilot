@@ -363,6 +363,33 @@ class TestLadderIntegration:
             remote.ssh_run("true", ssh_target=TARGET)
         assert _state()["consecutive_failures"] == 0
 
+    def test_ssh_target_is_required_so_breaker_cannot_be_bypassed(self):
+        """Contract pin: _with_ssh_backoff has no ssh_target default.
+
+        The breaker only guards attempts when it knows the host; an optional
+        ``ssh_target=None`` default would let a future call site silently
+        bypass the circuit. Pin both the signature (no default) and the
+        runtime consequence (omitting it is a TypeError, i.e. the guard
+        actually fires).
+        """
+        import inspect
+
+        from hpc_agent.infra import remote
+
+        param = inspect.signature(remote._with_ssh_backoff).parameters["ssh_target"]
+        assert param.default is inspect.Parameter.empty, (
+            "ssh_target grew a default again — that silently bypasses the "
+            "SSH circuit breaker for any caller that omits it (see 2026-07-04 "
+            "probe storm). Keep it required."
+        )
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+        with pytest.raises(TypeError, match="ssh_target"):
+            remote._with_ssh_backoff(  # type: ignore[call-arg]
+                lambda: subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                label="pin",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Robustness

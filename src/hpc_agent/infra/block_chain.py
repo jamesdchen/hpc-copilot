@@ -28,6 +28,7 @@ Terminology:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 __all__ = [
@@ -35,11 +36,15 @@ __all__ = [
     "WORKFLOW_OF",
     "ORDER",
     "GATED_BLOCKS",
+    "DEADLINE_SECONDS",
+    "WATCH_VERBS",
+    "WATCH_BUDGET_SLACK_SEC",
     "successor_verb",
     "workflow_of",
     "block_index",
     "next_block_hint",
     "is_gated",
+    "verb_deadline_seconds",
 ]
 
 
@@ -76,6 +81,85 @@ WORKFLOW_OF: dict[str, str] = {
 # ``campaign-*`` blocks are UNGATED and chain in code. The ``test_block_chain``
 # suite pins this set against the live gate callers so the two cannot drift.
 GATED_BLOCKS: frozenset[str] = frozenset({"submit-s2", "submit-s3", "submit-s4", "aggregate-run"})
+
+
+# ── per-verb driver deadlines ─────────────────────────────────────────────────
+
+# How long the DRIVER lets one ``hpc-agent <verb>`` block subprocess run before
+# killing it (the proving-run-#3 wedge class: an unbounded parent-side wait —
+# see ``tests/contracts/test_src_subprocess_timeout_discipline.py``). These are
+# generous last-resort ceilings, not schedules: a healthy block finishes long
+# before its deadline, and the watch-class blocks derive theirs from the spec's
+# own ``wall_clock_budget_seconds`` so the driver never undercuts a legitimate
+# poll-to-terminal budget.
+
+# Quick, journal/SSH-probe-scale blocks (resolve / snapshot / check /
+# greenlight / complete): minutes suffice.
+_QUICK_VERB_DEADLINE_SEC: float = 600.0
+# Cluster-mutating blocks that stage, canary, or harvest (rsync + scheduler
+# round-trips + payload downloads): an hour is generous.
+_HEAVY_VERB_DEADLINE_SEC: float = 3600.0
+# Watch-class fallback when the spec carries no budget — matches the
+# ``MonitorFlowSpec.wall_clock_budget_seconds`` default (86400).
+_WATCH_DEFAULT_BUDGET_SEC: float = 86400.0
+# Slack added on top of a watch block's own wall-clock budget so the block's
+# internal timeout terminator fires FIRST (it exits cleanly with
+# ``watching_timeout``/``watch_timeout``); the driver deadline is only the
+# backstop for a block that wedged past its own budget.
+WATCH_BUDGET_SLACK_SEC: float = 900.0
+
+# The watch/wait-class blocks: their runtime is the run's own poll-to-terminal
+# budget, so their deadline is spec-derived (budget + slack), never a constant.
+WATCH_VERBS: frozenset[str] = frozenset({"submit-s3", "status-watch", "campaign-watch"})
+
+# The non-watch block verbs → their fixed driver deadline (seconds).
+DEADLINE_SECONDS: dict[str, float] = {
+    "submit-s1": _QUICK_VERB_DEADLINE_SEC,
+    "submit-s2": _HEAVY_VERB_DEADLINE_SEC,
+    "submit-s4": _HEAVY_VERB_DEADLINE_SEC,
+    "status-snapshot": _QUICK_VERB_DEADLINE_SEC,
+    "aggregate-check": _QUICK_VERB_DEADLINE_SEC,
+    "aggregate-run": _HEAVY_VERB_DEADLINE_SEC,
+    "campaign-greenlight": _QUICK_VERB_DEADLINE_SEC,
+    "campaign-complete": _QUICK_VERB_DEADLINE_SEC,
+}
+
+
+def _spec_wall_clock_budget(spec: Mapping[str, Any] | None) -> float | None:
+    """Extract ``wall_clock_budget_seconds`` from a block input *spec*, if any.
+
+    The watch-class specs nest it under their embedded monitor spec
+    (``submit-s3`` / ``status-watch`` → ``spec["monitor"]``); a bare
+    ``monitor-flow`` spec carries it at top level. Returns ``None`` when absent
+    or non-numeric — the caller falls back to the default ceiling.
+    """
+    if not isinstance(spec, Mapping):
+        return None
+    for candidate in (spec.get("monitor"), spec):
+        if isinstance(candidate, Mapping):
+            value = candidate.get("wall_clock_budget_seconds")
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                return float(value)
+    return None
+
+
+def verb_deadline_seconds(verb: str, spec: Mapping[str, Any] | None = None) -> float:
+    """The driver-side kill deadline (seconds) for one *verb* subprocess.
+
+    Watch-class verbs (:data:`WATCH_VERBS`) — and, conservatively, any verb this
+    table does not know (e.g. the tick-loop's ``monitor-flow``/``aggregate-flow``
+    steps) — get their *spec*'s own ``wall_clock_budget_seconds`` plus
+    :data:`WATCH_BUDGET_SLACK_SEC`, falling back to the 24 h default budget when
+    the spec carries none. Everything else reads its class deadline from
+    :data:`DEADLINE_SECONDS`. Always returns a finite positive bound — this is
+    the guarantee that no block-verb subprocess is ever awaited unboundedly.
+    """
+    if verb in WATCH_VERBS or verb not in DEADLINE_SECONDS:
+        budget = _spec_wall_clock_budget(spec)
+        if budget is None:
+            budget = _WATCH_DEFAULT_BUDGET_SEC
+        return budget + WATCH_BUDGET_SLACK_SEC
+    return DEADLINE_SECONDS[verb]
 
 
 # ── the successor table ───────────────────────────────────────────────────────

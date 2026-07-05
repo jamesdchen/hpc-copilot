@@ -12,12 +12,46 @@ from __future__ import annotations
 import argparse
 import difflib
 import re
+import sys
 from typing import NoReturn
 
-import hpc_agent
 from hpc_agent.cli._dispatch import CliShape, _leaf_verb, dispatch_primitive
 
 _INVALID_CHOICE_RE = re.compile(r"invalid choice: '([^']*)'")
+
+
+class _FingerprintVersionAction(argparse.Action):
+    """``--version`` that resolves the build fingerprint only when asked.
+
+    :func:`hpc_agent._build_info.full_version` may shell out to ``git``
+    in a source checkout; a stock ``action="version"`` string would pay
+    that at *parser-build* time — i.e. on every CLI invocation, --version
+    or not. Resolving inside ``__call__`` keeps the git call off the hot
+    path entirely. Output stays ``hpc-agent <version>[+<fingerprint>]``
+    on stdout, backward-parseable (prefix up to ``+`` is the plain
+    version every existing consumer reads).
+    """
+
+    def __init__(self, option_strings: list[str], dest: str, **kwargs: object) -> None:
+        super().__init__(
+            option_strings,
+            dest=argparse.SUPPRESS,
+            default=argparse.SUPPRESS,
+            nargs=0,
+            help="show program's version number (with build fingerprint) and exit",
+        )
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> NoReturn:
+        from hpc_agent._build_info import full_version
+
+        parser._print_message(f"{parser.prog} {full_version()}\n", sys.stdout)
+        parser.exit()
 
 
 class _HpcArgumentParser(argparse.ArgumentParser):
@@ -193,11 +227,7 @@ def build_single_verb_parser(primitive_name: str) -> argparse.ArgumentParser | N
         return None
 
     parser = _HpcArgumentParser(prog="hpc-agent")
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {hpc_agent.__version__}",
-    )
+    parser.add_argument("--version", action=_FingerprintVersionAction)
     sub = parser.add_subparsers(dest="cmd", required=True)
     verb = _leaf_verb(primitive_name, shape)
     verb_parser = sub.add_parser(verb, help=shape.help)
@@ -221,11 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
             "log records. See docs/reference/cli-spec.md for full schemas."
         ),
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {hpc_agent.__version__}",
-    )
+    parser.add_argument("--version", action=_FingerprintVersionAction)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     _register_from_registry(sub)

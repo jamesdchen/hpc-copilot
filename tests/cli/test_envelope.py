@@ -50,9 +50,20 @@ def test_help_lists_every_subcommand() -> None:
 
 
 def test_version_flag() -> None:
+    """Format pin: ``hpc-agent <maj>.<min>.<patch>[+<fingerprint>]``.
+
+    Backward-parseable by contract — the prefix up to ``+`` is the plain
+    version every existing consumer reads; the optional PEP 440 local
+    segment carries the content-keyed build fingerprint (``g<sha>`` from a
+    wheel, ``dev.g<sha>`` from a source checkout).
+    """
+    import re
+
     rc, out, _ = _run_cli("--version")
     assert rc == 0
-    assert "hpc-agent" in out
+    assert re.match(r"^hpc-agent \d+\.\d+\.\d+(?:\+[0-9A-Za-z][0-9A-Za-z.]*)?\s*$", out), (
+        f"unparseable --version output: {out!r}"
+    )
 
 
 def test_capabilities_envelope_shape() -> None:

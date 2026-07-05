@@ -12,7 +12,8 @@ This is the deterministic verb an OS-scheduled task (Task Scheduler / cron) runs
 out-of-session; the watch-the-watcher recursion bottoms out at the OS scheduler.
 
 Pure local filesystem read — the per-run journal records under
-``~/.claude/hpc/<repo>/``. No SSH, no scheduler.
+``~/.claude/hpc/<repo>/``. No SSH, no scheduler. The only subprocess is the
+version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
 """
 
 from __future__ import annotations
@@ -21,13 +22,16 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
+from hpc_agent._build_info import full_version, git_output, runtime_sha
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.doctor import (
     AdvanceRunProposal,
+    AlertRecord,
     DoctorResult,
     DoctorSpec,
     ParkedRunNote,
     StalledRunProposal,
+    VersionSkew,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
@@ -131,6 +135,102 @@ def _draft_advance_proposal(
     )
 
 
+def _shas_agree(a: str, b: str) -> bool:
+    """Prefix-tolerant short-sha equality (git may widen a short sha on collision)."""
+    return a.startswith(b) or b.startswith(a)
+
+
+def _resolve_source_repo(experiment_dir: Path) -> tuple[str, str] | None:
+    """``(repo_root, short_sha)`` when *experiment_dir* sits inside an hpc-agent
+    source repo, else ``None``.
+
+    Cheap and fail-open: one bounded ``git rev-parse --show-toplevel`` (2 s
+    timeout) plus a marker-file check that the repo IS hpc-agent's source
+    (``src/hpc_agent/__init__.py`` at the root) — an experiment repo that
+    merely *uses* hpc-agent never matches. No git, not a repo, timeout →
+    ``None``, silently.
+    """
+    if not experiment_dir.is_dir():
+        return None
+    top = git_output(["rev-parse", "--show-toplevel"], cwd=experiment_dir)
+    if not top:
+        return None
+    root = Path(top)
+    if not (root / "src" / "hpc_agent" / "__init__.py").is_file():
+        return None
+    sha = git_output(["rev-parse", "--short=8", "HEAD"], cwd=root)
+    if not sha:
+        return None
+    return str(root), sha
+
+
+def _detect_version_skew(experiment_dir: Path) -> VersionSkew | None:
+    """Compare the running CLI's build sha against the source repo's HEAD.
+
+    Returns a :class:`VersionSkew` warning when both shas resolve and differ
+    (the incident class: an installed wheel and the repo tip both claiming the
+    same version number while diverging by days of commits). Every unresolvable
+    input — no embedded sha, no git binary, experiment_dir not in the hpc-agent
+    source repo — returns ``None``: the check is advisory and must never make
+    ``doctor`` slower than one bounded git call or louder than one field.
+    """
+    cli_sha = runtime_sha()
+    if not cli_sha:
+        return None
+    resolved = _resolve_source_repo(experiment_dir)
+    if resolved is None:
+        return None
+    repo_root, repo_sha = resolved
+    if _shas_agree(cli_sha, repo_sha):
+        return None
+    cli_version = full_version()
+    return VersionSkew(
+        cli_version=cli_version,
+        cli_sha=cli_sha,
+        repo_sha=repo_sha,
+        repo_root=repo_root,
+        warning=(
+            f"version_skew: running hpc-agent CLI is {cli_version} (code {cli_sha}) "
+            f"but the hpc-agent repo at {repo_root} is at {repo_sha} — the installed "
+            "tool and the source tree have diverged; reinstall the CLI from the repo "
+            "(e.g. `uv tool install --reinstall .`) or rerun the release install flow."
+        ),
+    )
+
+
+def _attention_summary(
+    *,
+    stalled: int,
+    awaiting_advance: int,
+    parked: int,
+    alerts: int,
+) -> tuple[bool, str]:
+    """The unmistakable top-of-envelope digest: ``(needs_attention, one-liner)``.
+
+    Attention = a stalled driver or a committed-but-unadvanced run (both mean a
+    dead driver the human must re-arm). Parked runs and unacknowledged alert-log
+    entries are appended to the line for delivery but do not flip the flag on
+    their own — parked is a valid wait, and an alert's underlying condition is
+    re-detected live by this very scan (proving run #3: the alert LOG is the
+    audit trail; the live scan is the truth).
+    """
+    parts: list[str] = []
+    if stalled:
+        parts.append(f"{stalled} stalled driver(s)")
+    if awaiting_advance:
+        parts.append(f"{awaiting_advance} approved-but-unadvanced run(s)")
+    needs_attention = bool(parts)
+    if needs_attention:
+        line = f"NEEDS ATTENTION: {' and '.join(parts)} — drafted re-arm proposal(s) below."
+    elif parked:
+        line = f"no stalled drivers; {parked} run(s) parked awaiting your decision."
+    else:
+        line = "all clear: no stalled drivers."
+    if alerts:
+        line += f" {alerts} unacknowledged alert(s) in doctor.alerts.log."
+    return needs_attention, line
+
+
 @primitive(
     name="doctor",
     verb="query",
@@ -168,6 +268,18 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     they are surfaced in ``awaiting_advance`` as a drafted re-arm proposal — a
     stalled driver. Neither ever appears in ``stalled``. No side effects.
 
+    The envelope leads with delivery: ``needs_attention`` (True iff any stalled
+    or approved-but-unadvanced driver was found) and ``attention_summary`` (a
+    one-line human digest) make the verdict unmistakable without reading the
+    per-run lists, and ``alerts`` carries the unacknowledged entries from the
+    ``doctor.alerts.log`` audit trail (fail-open; doctor never acknowledges or
+    truncates — the status snapshot's watermark owns acknowledgment).
+
+    Additionally surfaces ``version_skew`` when the running CLI's embedded
+    build sha differs from the HEAD of the hpc-agent *source repo* that
+    *experiment_dir* belongs to (stale install — reinstall). Fail-open: no
+    git, no embedded sha, or not that repo → the field is simply null.
+
     Raises :class:`errors.SpecInvalid` if *spec.now* is a non-ISO-8601 string.
     """
     experiment_dir = Path(experiment_dir)
@@ -200,14 +312,32 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         else:
             parked_notes.append(_draft_parked_note(hit))
 
+    # Delivery, not just detection (proving run #3): carry the unacknowledged
+    # alert-log entries in the envelope too, and lead with an unmistakable
+    # needs-attention line. Read-only — doctor never moves the acknowledgment
+    # watermark (that is the status snapshot's job) and never truncates the log.
+    from hpc_agent.ops.recover.notify import read_unacknowledged_alerts
+
+    alerts = [AlertRecord(**a) for a in read_unacknowledged_alerts(experiment_dir)]
+    needs_attention, attention_summary = _attention_summary(
+        stalled=len(proposals),
+        awaiting_advance=len(advance_proposals),
+        parked=len(parked_notes),
+        alerts=len(alerts),
+    )
+
     result = DoctorResult(
         now=now,
+        needs_attention=needs_attention,
+        attention_summary=attention_summary,
+        alerts=alerts,
         stalled_count=len(proposals),
         stalled=proposals,
         parked_count=len(parked_notes),
         parked=parked_notes,
         awaiting_advance_count=len(advance_proposals),
         awaiting_advance=advance_proposals,
+        version_skew=_detect_version_skew(experiment_dir),
     )
     dumped: dict[str, Any] = result.model_dump(mode="json")
 

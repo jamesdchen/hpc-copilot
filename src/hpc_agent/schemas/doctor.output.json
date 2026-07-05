@@ -15,6 +15,26 @@
       "title": "Now",
       "type": "string"
     },
+    "needs_attention": {
+      "default": false,
+      "description": "Top-level 'is anything wrong?' flag: True when any stalled driver or committed-but-unadvanced run was found. The unmistakable summary bit — a caller that reads nothing else must still see this.",
+      "title": "Needs Attention",
+      "type": "boolean"
+    },
+    "attention_summary": {
+      "default": "",
+      "description": "Human-facing one-line digest of the scan (what needs attention and why, or 'all clear'). Rendered verbatim at the top of any status surface — never buried under the per-run lists.",
+      "title": "Attention Summary",
+      "type": "string"
+    },
+    "alerts": {
+      "description": "Unacknowledged entries from the doctor.alerts.log audit trail (fail-open: a missing/corrupt log yields an empty list). doctor only reads — acknowledgment is the status snapshot's watermark.",
+      "items": {
+        "$ref": "#/$defs/AlertRecord"
+      },
+      "title": "Alerts",
+      "type": "array"
+    },
     "stalled_count": {
       "description": "Number of live runs past their tick deadline.",
       "title": "Stalled Count",
@@ -55,6 +75,18 @@
       },
       "title": "Awaiting Advance",
       "type": "array"
+    },
+    "version_skew": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VersionSkew"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Set when the running CLI's build sha differs from the HEAD of the hpc-agent source repo that experiment_dir belongs to — the installed tool is stale; reinstall. Null when the shas agree or either side is unresolvable (no git, no embedded sha, not that repo — fail-open)."
     }
   },
   "$defs": {
@@ -130,6 +162,28 @@
         "evidence"
       ],
       "title": "doctor awaiting-advance proposal",
+      "type": "object"
+    },
+    "AlertRecord": {
+      "additionalProperties": false,
+      "description": "One line from the ``doctor.alerts.log`` audit trail (ts + message).\n\nThe loud fallback log the watchdog's notifier always writes\n(:mod:`hpc_agent.ops.recover.notify`). Surfaced while unacknowledged — an\nalert is \"new\" until a status snapshot has shown it to the human once\n(proving run #3: detection without delivery is silence).",
+      "properties": {
+        "ts": {
+          "description": "When the alert was appended (ISO-8601 UTC).",
+          "title": "Ts",
+          "type": "string"
+        },
+        "message": {
+          "description": "The human-facing alert text as written to the log.",
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "message"
+      ],
+      "title": "doctor alert-log record",
       "type": "object"
     },
     "ParkedRunNote": {
@@ -284,6 +338,46 @@
         "evidence"
       ],
       "title": "doctor stalled-run proposal",
+      "type": "object"
+    },
+    "VersionSkew": {
+      "additionalProperties": false,
+      "description": "Content-keyed version-skew warning: running CLI vs the source repo.\n\nThe version *number* cannot express skew between installs — the incident\nbehind this check had an installed wheel and the repo tip both reporting\nthe same version while diverging by days of commits. ``doctor`` compares\nthe running CLI's embedded build sha against the HEAD of the hpc-agent\nsource repo the experiment_dir belongs to (when both resolve cheaply;\notherwise the check silently skips — fail-open everywhere).",
+      "properties": {
+        "cli_version": {
+          "description": "Fingerprinted version of the running CLI, e.g. '0.10.65+g9154c3af'.",
+          "title": "Cli Version",
+          "type": "string"
+        },
+        "cli_sha": {
+          "description": "Short git sha embedded in (or resolved for) the running CLI.",
+          "title": "Cli Sha",
+          "type": "string"
+        },
+        "repo_sha": {
+          "description": "Short git HEAD sha of the hpc-agent source repo containing experiment_dir.",
+          "title": "Repo Sha",
+          "type": "string"
+        },
+        "repo_root": {
+          "description": "Root of the hpc-agent source repo that was compared.",
+          "title": "Repo Root",
+          "type": "string"
+        },
+        "warning": {
+          "description": "Human-facing warning line naming both shas and the fix (reinstall the CLI from the repo). Advisory only — doctor never acts on it.",
+          "title": "Warning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cli_version",
+        "cli_sha",
+        "repo_sha",
+        "repo_root",
+        "warning"
+      ],
+      "title": "doctor version-skew warning",
       "type": "object"
     }
   }

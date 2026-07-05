@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -213,6 +214,92 @@ def test_spec_arg_explicit_empty_object_still_rejects_required_fields(
     assert env["ok"] is False
     assert "--spec is required" not in env["message"]
     assert "name" in env["message"]  # the real missing-field diagnosis
+
+
+def _register_syn_inline() -> None:
+    @primitive(
+        name="syn-inline",
+        verb="query",
+        cli=CliShape(help="Spec via file path.", spec_arg=True, spec_model=_Spec),
+    )
+    def syn_inline(*, spec: _Spec) -> dict[str, Any]:
+        return {"name": spec.name}
+
+
+@pytest.mark.parametrize(
+    "inline",
+    [
+        '{"run_id": "pi-estimation"}',
+        '  ["a", "b"]',
+    ],
+)
+def test_spec_arg_inline_json_gets_friendly_spec_invalid(
+    capsys: pytest.CaptureFixture[str], inline: str
+) -> None:
+    """Inline JSON passed to ``--spec`` yields the ``spec_invalid`` envelope,
+    never a raw ``internal`` OSError.
+
+    The proving-run-3 papercut (2026-07-04): on Windows,
+    ``Path('{"run_id": ...}').read_text()`` raises OSError(22) — not
+    FileNotFoundError — because ``"`` and ``:`` are invalid path characters,
+    and the unclassified OSError escaped ``_load_spec`` as an ``internal``
+    envelope for ``wait-detached`` while ``submit-s1`` happened to hit the
+    friendly branch. One loader now classifies brace/bracket-leading args
+    before touching the filesystem, on every platform.
+    """
+    _register_syn_inline()
+    ns = argparse.Namespace(spec=Path(inline))
+    rc = dispatch_primitive("syn-inline", ns)
+    assert rc == 1  # EXIT_USER_ERROR, never EXIT_INTERNAL
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"
+    assert env["category"] == "user"
+    assert "FILE PATH" in env["message"]
+    assert "run_id" in env["message"] or '"a"' in env["message"]  # echoes the arg
+    assert "Write the JSON to a file" in env["message"]
+
+
+def test_spec_arg_inline_json_message_truncates_long_payloads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _register_syn_inline()
+    inline = json.dumps({"run_id": "x" * 500})
+    ns = argparse.Namespace(spec=Path(inline))
+    assert dispatch_primitive("syn-inline", ns) == 1
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["error_code"] == "spec_invalid"
+    assert "x" * 80 in env["message"]
+    assert "x" * 200 not in env["message"]  # echoed preview is capped ~100 chars
+
+
+def test_spec_arg_nonexistent_path_still_reports_file_not_found(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """An ordinary missing path keeps the pinned ``file not found`` diagnosis."""
+    _register_syn_inline()
+    missing = tmp_path / "no-such-spec.json"
+    ns = argparse.Namespace(spec=missing)
+    rc = dispatch_primitive("syn-inline", ns)
+    assert rc == 1
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["error_code"] == "spec_invalid"
+    assert "file not found" in env["message"]
+    assert "no-such-spec.json" in env["message"]
+
+
+def test_spec_arg_unreadable_path_is_user_error_not_internal(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """Any other OSError from the spec path (here: a directory) maps to
+    ``spec_invalid``, never an ``internal`` envelope."""
+    _register_syn_inline()
+    ns = argparse.Namespace(spec=tmp_path)  # a directory, not a file
+    rc = dispatch_primitive("syn-inline", ns)
+    assert rc == 1
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["error_code"] == "spec_invalid"
+    assert env["category"] == "user"
 
 
 def test_spec_arg_rejects_invalid_model(capsys: pytest.CaptureFixture[str], tmp_path) -> None:

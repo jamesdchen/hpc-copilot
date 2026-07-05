@@ -283,3 +283,26 @@ def test_dry_run_does_not_write_settings(tmp_path: Path) -> None:
     assert result["settings_stop_hook"]["action"] == "dry-run-would-add"
     assert result["settings_stop_hook"]["wrote"] is False
     assert not (tmp_path / "settings.json").exists()
+
+
+# ─── SessionStart alert-count hook (proving run #3: alert delivery) ─────────
+
+
+def test_session_start_alert_count_hook_is_wired(tmp_path: Path) -> None:
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_alert_count_hook"]["action"] == "added"
+    assert result["settings_alert_count_hook"]["wrote"] is True
+
+    settings = _settings(tmp_path)
+    entries = _entries_with_module(
+        settings["hooks"].get("SessionStart", []),
+        "hpc_agent._kernel.hooks.alert_count",
+    )
+    assert len(entries) == 1
+    assert "matcher" not in entries[0]  # SessionStart has no tool to match
+
+    # Idempotent on re-run.
+    second = install_agent_assets(claude_dir=tmp_path)
+    assert second["settings_alert_count_hook"]["action"] == "already-present"
+    settings = _settings(tmp_path)
+    assert len(settings["hooks"]["SessionStart"]) == 1

@@ -212,3 +212,103 @@ def test_scope_run_id_mention_passes(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path)
     out = _run(tmp_path, "Run run-1 is in flight.")
     assert [m for m in out.mismatches if m.kind == "run_id"] == []
+
+
+# ── proving run #3 false-positive class 1: verb names are not run-ids ──────────
+
+
+def test_block_verb_names_not_flagged_as_run_ids(tmp_path: Path) -> None:
+    """Proving run #3 FP: 'Next: submit-s3 ...' flagged submit-s3/s4 as run-ids."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Next: submit-s3 to harvest results, then submit-s4.")
+    assert out.clean is True
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    # The digits inside the verb names must not leak into number auditing.
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+
+
+def test_verb_shaped_token_outside_registry_still_flagged(tmp_path: Path) -> None:
+    """Counter: the exclusion is the registry vocabulary, not the shape."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Next: submit-s9 to harvest results.")
+    rid = [m for m in out.mismatches if m.kind == "run_id"]
+    assert len(rid) == 1
+    assert rid[0].claim == "submit-s9"
+
+
+# ── proving run #3 false-positive class 2: decimals / verified counts ──────────
+
+
+def test_decimal_fraction_and_verified_count_not_flagged_as_job_ids(tmp_path: Path) -> None:
+    """Proving run #3 FP: '141338909090909' (fractional digits) and '1000000'
+    (samples count present in the records) flagged as job-id-shaped tokens."""
+    _seed_journal(tmp_path, pi_estimate=3.141338909090909, samples=1000000)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+
+    out = _run(
+        tmp_path,
+        "Run run-1 complete: pi_estimate 3.141338909090909 from 1000000 samples (job 13610902).",
+    )
+    assert out.clean is True
+    assert out.mismatches == []
+
+
+def test_wrong_job_id_and_misrounded_decimal_still_flagged(tmp_path: Path) -> None:
+    """Counter: an unknown job id and a rounding that changes a digit still fire."""
+    _seed_journal(tmp_path, pi_estimate=3.141338909090909, samples=1000000)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+
+    out = _run(tmp_path, "Job 99999999 produced pi_estimate 3.151338909090909.")
+    assert out.clean is False
+    rid = [m for m in out.mismatches if m.kind == "run_id"]
+    assert len(rid) == 1
+    assert rid[0].claim == "99999999"
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == "3.151338909090909"
+
+
+# ── proving run #3 false-positive class 3: quantified state words are counts ───
+
+
+def test_zero_failed_count_phrasing_not_flagged_as_state(tmp_path: Path) -> None:
+    """Proving run #3 FP: '0 failed' / 'no failed waves' tripped the state
+    matcher as claiming state 'failed' against recorded 'complete'."""
+    _seed_journal(tmp_path, failed=0, complete_waves=4)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "Campaign complete: 0 failed, no failed waves.")
+    assert out.clean is True
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_zero_word_count_contradicting_recorded_failures_flagged(tmp_path: Path) -> None:
+    """Counter: 'no failed' over a record that counted failures still fires,
+    as the number claim it actually is."""
+    _seed_journal(tmp_path, failed=2)
+    _seed_record(tmp_path, status="failed")
+
+    out = _run(tmp_path, "All good: no failed waves.")
+    assert out.clean is False
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == "no failed"
+
+
+def test_bare_state_word_after_count_phrase_still_flagged(tmp_path: Path) -> None:
+    """Counter: the count phrasing does not whitelist a later bare state claim."""
+    _seed_journal(tmp_path, failed=0)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "0 failed earlier, but then the harvest failed.")
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "failed"
+    assert state[0].nearest_source_value == "complete"

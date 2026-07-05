@@ -726,6 +726,139 @@ class TestSidecarGuarantee:
         with p1, p2, p3, pytest.raises(errors.SpecInvalid, match="write-run-sidecar"):
             submit_flow_batch(tmp_path, spec=_batch([spec]))
 
+    def test_refuses_sidecar_that_diverges_from_interview_executor_cmd(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """Proving run #3 layer (b): the sidecar carried the executor NAME
+        'run' while the real per-task command sat in interview.json's
+        ``_materialized.entry_point.executor_cmd`` the whole time — the
+        dispatcher ran ``/bin/sh -c run`` → exit 127, discovered only by a
+        cluster round-trip. When the interview materialized an executor_cmd it
+        is the source of truth; a divergent sidecar is refused in the
+        pre-rsync prelude, before anything is staged or qsub'd."""
+        import json
+
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import write_run_sidecar
+
+        real_cmd = "python3 -m hpc_agent.executor_cli run --file .hpc/wrappers/run.py " + (
+            "--flag value " * 40  # a long materialized command, like the live 477-char one
+        )
+        (tmp_path / "interview.json").write_text(
+            json.dumps(
+                {
+                    "goal": "g",
+                    "_materialized": {
+                        "entry_point": {
+                            "kind": "register_run",
+                            "run_name": "run",
+                            "executor_cmd": real_cmd,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        write_run_sidecar(
+            tmp_path,
+            run_id="rDrift",
+            cmd_sha="x" * 64,
+            hpc_agent_version="0.10.0",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="run",  # the incident's hand-authored NAME, not the command
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+        )
+        spec = _spec("rDrift")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with (
+            p1,
+            p2 as push_deploy,
+            p3,
+            pytest.raises(errors.SpecInvalid, match="resolve-submit-inputs"),
+        ):
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        # Refused at the desk: the divergence never reached rsync (staging).
+        assert push_deploy.call_count == 0
+
+    def test_accepts_sidecar_matching_interview_executor_cmd(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """A sidecar whose executor IS the materialized executor_cmd submits
+        normally — the provenance check is a drift guard, not a new hoop."""
+        import json
+
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import write_run_sidecar
+
+        real_cmd = "python3 -m hpc_agent.executor_cli run --file .hpc/wrappers/run.py"
+        (tmp_path / "interview.json").write_text(
+            json.dumps(
+                {
+                    "goal": "g",
+                    "_materialized": {
+                        "entry_point": {"kind": "register_run", "executor_cmd": real_cmd}
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        write_run_sidecar(
+            tmp_path,
+            run_id="rMatch",
+            cmd_sha="x" * 64,
+            hpc_agent_version="0.10.0",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor=real_cmd,
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+        )
+        spec = _spec("rMatch")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            results = submit_flow_batch(tmp_path, spec=_batch([spec]))
+        assert results[0].job_ids == ["job_rMatch"]
+
+    def test_sidecar_interview_check_skips_hand_onboarded_repos(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """Fail-open: no interview.json (and, second case, an interview without
+        a ``_materialized`` block) means the repo was hand-onboarded and has no
+        materialized truth to compare against — the check silently skips and
+        the pre-written sidecar submits as before."""
+        import json
+
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import write_run_sidecar
+
+        for run_id, interview in [
+            ("rNoInterview", None),
+            ("rNoMaterialized", {"goal": "g"}),  # legacy doc: no _materialized
+        ]:
+            if interview is not None:
+                (tmp_path / "interview.json").write_text(json.dumps(interview), encoding="utf-8")
+            write_run_sidecar(
+                tmp_path,
+                run_id=run_id,
+                cmd_sha="x" * 64,
+                hpc_agent_version="0.10.0",
+                submitted_at="2026-01-01T00:00:00+00:00",
+                executor="python train.py --seed $SEED",  # hand-written, legitimate
+                result_dir_template="results/{run_id}/task_{task_id}",
+                task_count=4,
+                tasks_py_sha="y" * 64,
+            )
+            spec = _spec(run_id)
+            p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+            with p1, p2, p3:
+                results = submit_flow_batch(tmp_path, spec=_batch([spec]))
+            assert results[0].job_ids == [f"job_{run_id}"]
+
     def test_records_resources_on_synthesized_sidecar(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
@@ -865,14 +998,21 @@ class TestSidecarGuarantee:
 # ---------------------------------------------------------------------------
 
 
-def _write_interview(campaign_dir: Path, *, task_generator: dict, entry_point: dict) -> None:
+def _write_interview(campaign_dir: Path, *, task_generator: dict, entry_point: dict) -> str:
     """Materialize a real generator-mode interview.json via record_interview.
 
     Goes through the production writer (``ops.memory.interview.record_interview``)
     rather than hand-writing JSON, so the test pins the ACTUAL on-disk shape the
     reader keys on — if the persisted location of ``fixed_params`` ever moves,
     this breaks loudly instead of passing against a stale stub.
+
+    Returns the materialized ``executor_cmd`` (read back from the written doc):
+    since the proving-run-3 provenance gate, a submit over an interview'd repo
+    must ship a sidecar whose executor matches it, so callers thread it into
+    the spec's ``job_env["EXECUTOR"]``.
     """
+    import json
+
     from hpc_agent._wire.actions.interview import InterviewSpec
     from hpc_agent.ops.memory.interview import record_interview
 
@@ -884,6 +1024,8 @@ def _write_interview(campaign_dir: Path, *, task_generator: dict, entry_point: d
         "entry_point": entry_point,
     }
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=campaign_dir)
+    doc = json.loads((campaign_dir / "interview.json").read_text(encoding="utf-8"))
+    return str(doc["_materialized"]["entry_point"]["executor_cmd"])
 
 
 class TestSpecKwargsStamping:
@@ -894,7 +1036,7 @@ class TestSpecKwargsStamping:
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar
 
-        _write_interview(
+        executor_cmd = _write_interview(
             tmp_path,
             task_generator={
                 "kind": "cartesian_product",
@@ -908,7 +1050,7 @@ class TestSpecKwargsStamping:
                 "fixed_params": {"tp_size": 2},
             },
         )
-        spec = _spec("rGen", total_tasks=3)
+        spec = _spec("rGen", total_tasks=3, job_env={"EXECUTOR": executor_cmd})
         p1, p2, p3 = _mock_prelude_and_submit(sf_module)
         with p1, p2, p3:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
@@ -942,7 +1084,7 @@ class TestSpecKwargsStamping:
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar
 
-        _write_interview(
+        executor_cmd = _write_interview(
             tmp_path,
             task_generator={
                 "kind": "cartesian_product",
@@ -956,7 +1098,7 @@ class TestSpecKwargsStamping:
                 "fixed_params": {"samples": 10000},
             },
         )
-        spec = _spec("rSwept", total_tasks=3)
+        spec = _spec("rSwept", total_tasks=3, job_env={"EXECUTOR": executor_cmd})
         p1, p2, p3 = _mock_prelude_and_submit(sf_module)
         with p1, p2, p3:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
@@ -981,7 +1123,7 @@ class TestSpecKwargsStamping:
         from hpc_agent.state.run_record import RunRecord
         from hpc_agent.state.runs import read_run_sidecar
 
-        _write_interview(
+        executor_cmd = _write_interview(
             tmp_path,
             task_generator={
                 "kind": "cartesian_product",
@@ -995,7 +1137,7 @@ class TestSpecKwargsStamping:
                 "fixed_params": {"tp_size": 2},
             },
         )
-        spec = _spec("rE2E", total_tasks=3)
+        spec = _spec("rE2E", total_tasks=3, job_env={"EXECUTOR": executor_cmd})
         p1, p2, p3 = _mock_prelude_and_submit(sf_module)
         with p1, p2, p3:
             submit_flow_batch(tmp_path, spec=_batch([spec]))
@@ -1117,7 +1259,7 @@ def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -
     from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
     from hpc_agent.state.runs import read_run_sidecar
 
-    _write_interview(
+    executor_cmd = _write_interview(
         tmp_path,
         task_generator={
             "kind": "cartesian_product",
@@ -1131,7 +1273,7 @@ def test_canary_sidecar_mirrors_spec_kwargs(tmp_path: Any, _journal_home: Any) -
             "fixed_params": {"tp_size": 2},
         },
     )
-    spec = _spec("rCmk", canary=True, total_tasks=3)
+    spec = _spec("rCmk", canary=True, total_tasks=3, job_env={"EXECUTOR": executor_cmd})
 
     with (
         mock.patch.object(sf_module, "_preflight_probe"),

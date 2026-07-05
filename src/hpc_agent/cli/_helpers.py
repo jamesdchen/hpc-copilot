@@ -242,10 +242,33 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     """
     if spec_path is None:
         return {}
+    raw_arg = str(spec_path)
+    if raw_arg.lstrip()[:1] in ("{", "["):
+        # Inline JSON passed where a file path belongs. Classify it BEFORE
+        # touching the filesystem: on Windows, ``read_text`` on a string
+        # containing ``"`` / ``:`` raises OSError(22) (invalid argument), not
+        # FileNotFoundError — and an unclassified OSError escapes the adapter
+        # as an ``internal`` envelope (proving-run-3 papercut: ``wait-detached
+        # --spec '{"run_id": ...}'``). NOTE: argparse's ``type=Path`` has
+        # already normalized separators, so we cannot reliably recover the
+        # original JSON here — diagnose, don't parse.
+        preview = raw_arg[:100] + ("…" if len(raw_arg) > 100 else "")
+        raise errors.SpecInvalid(
+            f"--spec takes a FILE PATH, not inline JSON (got: {preview}). "
+            "Write the JSON to a file and pass its path, e.g. "
+            "--spec spec.json"
+        )
     try:
         loaded = json.loads(spec_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
+    except OSError as exc:
+        # Not-a-readable-file for any other reason (invalid characters in the
+        # path on Windows, a directory, permissions). Same user-error class as
+        # file-not-found — never an ``internal`` envelope.
+        raise errors.SpecInvalid(
+            f"--spec path is not a readable file: {spec_path} ({exc})"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise errors.SpecInvalid(f"--spec is not valid JSON ({spec_path}): {exc}") from exc
     if not isinstance(loaded, dict):

@@ -273,6 +273,17 @@ def plan_block_action(
 # ── I/O: running a block verb + inspecting its Result ──────────────────────────
 
 
+def _block_verb_argv(verb: str, spec_path: str, experiment_dir: Path) -> list[str]:
+    """The argv one block span runs (a seam so tests can substitute a child)."""
+    return ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)]
+
+
+# Exit code the driver reports for a span whose child exceeded its deadline and
+# was killed — the coreutils ``timeout(1)`` convention, distinguishable from any
+# CLI envelope exit code so ``_chain`` can name the deadline in its reason.
+_TIMEOUT_EXIT_CODE = 124
+
+
 def _run_block_verb(
     verb: str, spec: dict[str, Any], experiment_dir: Path
 ) -> tuple[dict[str, Any], int]:
@@ -283,20 +294,32 @@ def _run_block_verb(
     needs_decision, next_block, …}`` ``data`` block of the JSON envelope. Returns
     an empty dict on a non-zero exit or an unparseable envelope (the caller treats
     that as a failed span).
+
+    The wait is BOUNDED by the per-verb deadline from the block registry
+    (:func:`block_chain.verb_deadline_seconds` — watch-class blocks get their
+    spec's own wall-clock budget + slack; everything else a class ceiling). The
+    capture routes through ``infra.remote._capture_via_select``, the S2-wedge-fix
+    seam whose deadline can actually fire on Windows (kill on expiry, then a
+    bounded post-kill drain — see ``_capture_windows``). On expiry the child is
+    killed and the span reports ``({}, _TIMEOUT_EXIT_CODE)``.
     """
+    from hpc_agent.infra.remote import _capture_via_select
+
+    deadline = block_chain.verb_deadline_seconds(verb, spec)
     with tempfile.NamedTemporaryFile(
         "w", suffix=".json", prefix=f"{verb}-spec-", delete=False, encoding="utf-8"
     ) as handle:
         json.dump(spec, handle)
         spec_path = handle.name
     try:
-        proc = subprocess.run(
-            ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
+        proc = _capture_via_select(
+            _block_verb_argv(verb, spec_path, experiment_dir), timeout=deadline
         )
+    except subprocess.TimeoutExpired:
+        _log.warning(
+            "block verb %s exceeded its %.0fs driver deadline — child killed", verb, deadline
+        )
+        return {}, _TIMEOUT_EXIT_CODE
     finally:
         with contextlib.suppress(OSError):
             os.unlink(spec_path)
@@ -534,13 +557,21 @@ def _chain(
         if run_id:
             _stamp_driver_tick(experiment_dir, run_id)
         if not result:
+            if code == _TIMEOUT_EXIT_CODE:
+                deadline = block_chain.verb_deadline_seconds(verb, spec)
+                reason = (
+                    f"block {verb} exceeded its {deadline:.0f}s driver deadline "
+                    f"and was killed (exit {code})"
+                )
+            else:
+                reason = f"block {verb} failed or returned no result (exit {code})"
             return (
                 BlockDriveResult(
                     action="skip",
                     run_id=run_id or None,
                     workflow=workflow,
                     current_verb=verb,
-                    reason=f"block {verb} failed or returned no result (exit {code})",
+                    reason=reason,
                 ),
                 code or 1,
             )

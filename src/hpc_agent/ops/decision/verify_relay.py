@@ -29,11 +29,16 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   matched against the authoritative id set (scope run_id + sidecar/record
   run_id, job_ids, parent_run_ids) by exact match or shared prefix (a short-sha
   reference passes). A run-id-like token matching nothing → ``run_id``
-  mismatch. Standalone digit runs (>= 5 digits) are treated as job-id claims
-  ONLY when the run has recorded job_ids to compare against (else they fall
-  through to number checking). The character spans of every id token are then
-  excluded from number extraction, so the digits inside a run-id never
-  masquerade as a numeric claim.
+  mismatch — EXCEPT the registry's verb vocabulary ("Next: submit-s3" names a
+  verb, not a run; proving run #3 false positive), derived live from the
+  ``@primitive`` registry. Standalone digit runs (>= 5 digits) are treated as
+  job-id claims ONLY when the run has recorded job_ids to compare against
+  (else they fall through to number checking) — and never when the digits are
+  the fractional part of a decimal (``3.141338...``) or when they verify as a
+  numeric claim against the source numbers (``1000000`` samples); both fall
+  through to the number pass (proving run #3 false positives). The character
+  spans of every id token are then excluded from number extraction, so the
+  digits inside a run-id never masquerade as a numeric claim.
 
 * **Numbers.** ``\\d[\\d,]*(?:\\.\\d+)?%?`` — ints, floats, percentages,
   comma-grouped values (commas normalized away, ``%`` stripped). A claim passes
@@ -59,7 +64,16 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   (``verified`` / ``canary green``) passes only when its literal token is
   evidenced in some source (e.g. ``evidence_digest={"canary": "green"}``), else
   it is flagged. A state claim with no recorded state to check against at all →
-  ``unverifiable``.
+  ``unverifiable``. A state word preceded by a count quantifier (``0 failed``,
+  ``no failed waves``) is a COUNT claim, not a state claim (proving run #3
+  false positive): a numeric quantifier's digits are audited by the number
+  pass, and a zero-word quantifier (``no``/``none``/``zero``) is audited
+  against the family's KEYED counts (numeric values / list lengths under keys
+  naming the family, e.g. ``failed`` / ``failed_waves`` — the generic number
+  pool always carries a 0 somewhere, so it cannot falsify a zero claim). Any
+  nonzero keyed count falsifies the zero claim; with no keyed counts at all it
+  falls back to the recorded state (``no failed waves`` while the run itself
+  is failed → flagged; no state either → ``unverifiable``).
 
 ``sources_consulted`` names only the durable records actually found and read
 (decision journal, run sidecar, RunRecord, per-run briefs), so a run with no
@@ -215,6 +229,33 @@ def _id_matches(token: str, auth_ids: set[str]) -> bool:
     return False
 
 
+def _registry_verb_names() -> frozenset[str]:
+    """The registry's verb vocabulary (``submit-s3``, ``verify-relay``, ...).
+
+    Block-verb names are hyphen+digit shaped, so they satisfy
+    :func:`_is_run_id_like` and a faithful "Next: submit-s3" relay would flag
+    them as unmatched run-ids (proving run #3 false positive). Derived from
+    the live ``@primitive`` registry — the canonical verb list — rather than
+    a hardcoded copy that would drift as verbs land.
+    :func:`register_primitives` is idempotent (a no-op after the first call
+    in a process), so this stays cheap and deterministic.
+    """
+    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+    register_primitives()
+    return frozenset(get_registry())
+
+
+def _is_fraction_digits(text: str, start: int) -> bool:
+    """True when the digit run at *start* is the fractional part of a decimal.
+
+    ``3.141338909090909`` splits on the ``.`` under a bare ``\\d{5,}`` scan,
+    and the fractional digits are NOT a job-id claim (proving run #3 false
+    positive) — the whole decimal is audited by the number pass instead.
+    """
+    return start >= 2 and text[start - 1] == "." and text[start - 2].isdigit()
+
+
 # ── state extraction ───────────────────────────────────────────────────────────
 
 # Relay state phrase → canonical family. Multi-word phrases first in the regex.
@@ -257,6 +298,54 @@ _STATUS_TO_FAMILY: dict[str, str] = {
 _LIFECYCLE_FAMILIES = frozenset(
     {"running", "complete", "failed", "pending", "timeout", "abandoned"}
 )
+
+# A count quantifier immediately preceding a state word: a number ("0 failed",
+# "3 failed waves") or a zero-word ("no failed waves", "none failed"). The
+# lookbehind keeps the quantifier a whole token (and lets "3.0 failed" match
+# the full decimal, not its fractional tail).
+_COUNT_QUANT_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(\d[\d,]*(?:\.\d+)?|no|none|zero)\s+$",
+    re.IGNORECASE,
+)
+
+
+def _count_quantifier(text: str, start: int) -> str | None:
+    """The count quantifier directly before the state word at *start*, if any.
+
+    ``"0 failed"`` / ``"no failed waves"`` phrase a COUNT, not a lifecycle
+    state (proving run #3 false positive: "0 failed" tripped the state
+    matcher as claiming state ``failed``). Returns the quantifier token
+    lowercased, or None when the state word stands alone.
+    """
+    m = _COUNT_QUANT_RE.search(text, 0, start)
+    return m.group(1).lower() if m else None
+
+
+def _collect_keyed_counts(obj: Any, family: str, out: list[float]) -> None:
+    """Gather every count keyed to *family* from a durable-record object.
+
+    A dict value under a key naming the family (``failed``, ``failed_waves``,
+    ``n_failed``) contributes: its numeric value directly, or its length when
+    it is a list (an empty ``failed_waves`` IS a count of 0). The generic
+    number pool is useless for verifying a zero-count claim — a RunRecord
+    always carries zero-valued counters somewhere — so the zero-word check
+    compares against these keyed counts only.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and family in k.lower():
+                if isinstance(v, bool):
+                    pass
+                elif isinstance(v, (int, float)):
+                    out.append(float(v))
+                elif isinstance(v, (list, tuple)):
+                    out.append(float(len(v)))
+            _collect_keyed_counts(v, family, out)
+        return
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_keyed_counts(v, family, out)
+
 
 # Longest phrases first so ``in flight`` wins over a bare ``flight`` fragment,
 # and ``canary green`` over ``green`` alone (which we deliberately don't match).
@@ -443,9 +532,16 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
     consumed_spans: list[tuple[int, int]] = []
 
     # ── (1) run-id / job-id tokens (first; their spans block number reads) ─────
+    verb_names = _registry_verb_names()
     for m in _IDENT_RE.finditer(relay):
         token = m.group(0)
         if not _is_run_id_like(token, run_id):
+            continue
+        if token.lower() in verb_names:
+            # Registry verb vocabulary ("Next: submit-s3"), not a run-id
+            # claim. Consume the span so the digit inside the verb name is
+            # not read as a numeric claim, but audit nothing.
+            consumed_spans.append((m.start(), m.end()))
             continue
         consumed_spans.append((m.start(), m.end()))
         claims_checked += 1
@@ -467,7 +563,18 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         for m in _JOB_ID_RE.finditer(relay):
             if _overlaps(m.start(), m.end(), consumed_spans):
                 continue
+            if _is_fraction_digits(relay, m.start()):
+                # Fractional digits of a decimal ("pi_estimate 3.1413..."),
+                # not a job-id claim. Leave the span unconsumed so the number
+                # pass audits the WHOLE decimal against the source numbers.
+                continue
             token = m.group(0)
+            if token not in job_ids and _match_number(token, source_num_strings, source_num_floats):
+                # A digit run that verifies against a recorded number is a
+                # numeric claim ("1000000" samples), not a suspicious job id
+                # (proving run #3 false positive). Leave the span unconsumed
+                # so the number pass counts it as the number it just matched.
+                continue
             consumed_spans.append((m.start(), m.end()))
             claims_checked += 1
             if token not in job_ids:
@@ -520,12 +627,83 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
     seen_state: set[str] = set()
     for m in _STATE_RE.finditer(relay):
         phrase = re.sub(r"\s+", " ", m.group(0).lower())
-        if phrase in seen_state:
-            continue
-        seen_state.add(phrase)
         family = _STATE_WORD_TO_FAMILY.get(phrase)
         if family is None:
             continue
+        quant = _count_quantifier(relay, m.start()) if family in _LIFECYCLE_FAMILIES else None
+        if quant is not None:
+            # "0 failed" / "no failed waves" is a COUNT claim, not a state
+            # claim (proving run #3 false positive). A numeric quantifier's
+            # digits are audited by the number pass above; a zero-word
+            # quantifier ("no"/"none"/"zero") asserts a count of 0, audited
+            # here against the family's KEYED counts — the generic number
+            # pool always carries a 0 somewhere (RunRecord zero-valued
+            # counters), so it cannot falsify a zero claim. NOT added to
+            # seen_state — a later unquantified use of the same word is
+            # still a state claim.
+            if quant[0].isdigit():
+                continue
+            claims_checked += 1
+            claim = f"{quant} {m.group(0)}"
+            keyed_counts: list[float] = []
+            for obj in source_objs:
+                _collect_keyed_counts(obj, family, keyed_counts)
+            nonzero = [c for c in keyed_counts if c != 0]
+            if nonzero:
+                # Conservative: ANY nonzero recorded count for the family
+                # falsifies a zero-count claim, even when another source
+                # also recorded a 0 (contradictory sources → prefer flagging).
+                nearest_count = min(nonzero)
+                mismatches.append(
+                    RelayMismatch(
+                        claim=claim,
+                        kind="number",
+                        detail=(
+                            f"count claim {claim!r} asserts a zero count but the "
+                            f"records carry a nonzero {family!r} count"
+                        ),
+                        nearest_source_value=(
+                            str(int(nearest_count))
+                            if nearest_count == int(nearest_count)
+                            else str(nearest_count)
+                        ),
+                    )
+                )
+                continue
+            if keyed_counts:
+                # Counts exist and every one is zero — the claim is verified.
+                continue
+            # No keyed counts at all — fall back to the recorded state: a
+            # zero-count claim for the run's OWN recorded state contradicts
+            # it ("no failed waves" while the run itself is failed).
+            if run_status_family == family:
+                mismatches.append(
+                    RelayMismatch(
+                        claim=claim,
+                        kind="state",
+                        detail=(
+                            f"count claim {claim!r} asserts zero but the run's "
+                            f"recorded state is {run_status_raw!r}"
+                        ),
+                        nearest_source_value=run_status_raw,
+                    )
+                )
+            elif run_status_family is None:
+                mismatches.append(
+                    RelayMismatch(
+                        claim=claim,
+                        kind="unverifiable",
+                        detail=(
+                            f"count claim {claim!r} has no comparable count or "
+                            "state in any durable record for the run"
+                        ),
+                        nearest_source_value=None,
+                    )
+                )
+            continue
+        if phrase in seen_state:
+            continue
+        seen_state.add(phrase)
         claims_checked += 1
         verdict = _classify_state(family, run_status_raw, run_status_family, source_text)
         if verdict is None:

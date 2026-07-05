@@ -131,12 +131,82 @@ def test_ensure_job_script_executor_refuses_empty(bad_executor) -> None:
 
 def test_ensure_job_script_executor_accepts_the_dispatcher_command() -> None:
     """The job-script EXECUTOR is *supposed* to be the dispatcher command — the
-    guard checks non-emptiness only, NOT runnability (unlike the sidecar's
-    per-task executor, which must NOT be the dispatcher)."""
+    guard checks emptiness + the bare-name shape, NOT runnability (unlike the
+    sidecar's per-task executor, which must NOT be the dispatcher)."""
     from hpc_agent.ops.submit_flow import _ensure_job_script_executor
 
     # Must not raise — this is the canonical, correct value.
     _ensure_job_script_executor("rX", {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"})
+
+
+# ─── #191 shape extension (proving run #3): a bare NAME is not a command ────
+
+
+@pytest.mark.parametrize("bad_executor", ["run", "train", "x", "  run  "])
+def test_ensure_job_script_executor_refuses_bare_name(bad_executor: str) -> None:
+    """Proving run #3 layer (a): an agent-hand-authored spec carried the
+    executor NAME 'run' (the interview run_name) instead of a command; the
+    empty-only guard passed it and the job script ran `time run` → exit 127,
+    discovered only by a cluster round-trip. A single token with no whitespace
+    and no path separator cannot be the job-script command — refuse at the
+    desk, pointing at build-submit-spec (which defaults the dispatcher)."""
+    from hpc_agent import errors
+    from hpc_agent.ops.submit_flow import _ensure_job_script_executor
+
+    with pytest.raises(errors.SpecInvalid, match="build-submit-spec"):
+        _ensure_job_script_executor("rX", {"EXECUTOR": bad_executor})
+
+
+@pytest.mark.parametrize(
+    "good_executor",
+    [
+        # The canonical default the build layer stamps.
+        "python3 .hpc/_hpc_dispatch.py",
+        # A command with flags (whitespace ⇒ not a bare name).
+        "python3 .hpc/_hpc_dispatch.py --verbose",
+        # A single token that carries a path separator is a runnable path.
+        "./run.sh",
+        ".hpc/dispatch_wrapper.sh",
+    ],
+)
+def test_ensure_job_script_executor_accepts_real_commands(good_executor: str) -> None:
+    """Real commands — the dispatcher default, flagged variants, and pathed
+    single tokens — all pass the shape check."""
+    from hpc_agent.ops.submit_flow import _ensure_job_script_executor
+
+    _ensure_job_script_executor("rX", {"EXECUTOR": good_executor})
+
+
+def test_ensure_job_script_executor_names_the_interview_run_name(tmp_path) -> None:
+    """When interview.json resolves a registered run_name and the EXECUTOR
+    equals it, the refusal names the run_name specifically — the exact garbage
+    the proving-run-3 spec shipped."""
+    import json
+
+    from hpc_agent import errors
+    from hpc_agent.ops.submit_flow import _ensure_job_script_executor
+
+    (tmp_path / "interview.json").write_text(
+        json.dumps(
+            {
+                "goal": "g",
+                "_materialized": {"entry_point": {"kind": "register_run", "run_name": "run"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(errors.SpecInvalid, match="run_name"):
+        _ensure_job_script_executor("rX", {"EXECUTOR": "run"}, experiment_dir=tmp_path)
+
+
+def test_ensure_job_script_executor_shape_check_needs_no_interview(tmp_path) -> None:
+    """The bare-name refusal fires WITHOUT an interview.json (fail-closed on
+    shape alone); the run_name arm is only the more specific message."""
+    from hpc_agent import errors
+    from hpc_agent.ops.submit_flow import _ensure_job_script_executor
+
+    with pytest.raises(errors.SpecInvalid, match="bare name"):
+        _ensure_job_script_executor("rX", {"EXECUTOR": "train"}, experiment_dir=tmp_path)
 
 
 # ─── #191 B: every array template fences $EXECUTOR with :? ──────────────────

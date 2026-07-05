@@ -31,10 +31,101 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.run_record import journal_dir
 
 _NOTIFY_TIMEOUT_SEC = 10
+
+_ALERTS_LOG_NAME = "doctor.alerts.log"
+# Acknowledgment watermark for the alert log (proving run #3: the watchdog
+# detected the stall and wrote the alert, but nothing DELIVERED it — detection
+# without delivery is silence). The log itself is an append-only audit trail
+# and is never truncated; "acknowledged" means a status surface has shown the
+# alert to the human once, recorded as the ISO timestamp of the newest alert
+# surfaced. An alert is unacknowledged while its leading timestamp is newer
+# than the watermark.
+_ALERTS_WATERMARK_NAME = "doctor.alerts.seen"
+
+
+def _alerts_paths(experiment_dir: Path) -> tuple[Path, Path]:
+    """``(log_path, watermark_path)`` for *experiment_dir* — WITHOUT creating.
+
+    Deliberately not :func:`journal_dir` (which mkdirs the namespace + writes
+    ``repo.json``): the readers below run from status snapshots and from a
+    SessionStart hook that fires in ANY repo, and a read must never scaffold a
+    journal namespace for an arbitrary cwd (proving-run #3 finding g — leaked
+    ``<repo_hash>/`` dirs). The writer (:func:`_append_alert_log`) keeps using
+    the creating ``journal_dir``.
+    """
+    from hpc_agent.state.run_record import _current_homedir, repo_hash
+
+    base = _current_homedir() / repo_hash(experiment_dir)
+    return base / _ALERTS_LOG_NAME, base / _ALERTS_WATERMARK_NAME
+
+
+def read_unacknowledged_alerts(experiment_dir: Path) -> list[dict[str, str]]:
+    """Alerts in ``doctor.alerts.log`` newer than the acknowledgment watermark.
+
+    Returns ``[{"ts": <iso>, "message": <text>}, ...]`` in log (chronological)
+    order. Fail-open everywhere: a missing log, an unreadable log or watermark,
+    or a line that does not start with a parseable ISO timestamp yields no
+    alerts / skips the line — a broken alert channel must never break a status
+    read. Never mutates anything (the log is an audit trail; acknowledgment is
+    the separate :func:`acknowledge_alerts` watermark write).
+    """
+    try:
+        log_path, watermark_path = _alerts_paths(experiment_dir)
+        if not log_path.is_file():
+            return []
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, ValueError):
+        return []
+
+    watermark = None
+    try:
+        if watermark_path.is_file():
+            watermark = parse_iso_utc_or_none(
+                watermark_path.read_text(encoding="utf-8", errors="replace").strip()
+            )
+    except OSError:
+        watermark = None  # corrupt/unreadable watermark → treat all as new
+
+    alerts: list[dict[str, str]] = []
+    for line in lines:
+        ts_str, sep, message = line.partition(" ")
+        if not sep or not message.strip():
+            continue
+        ts = parse_iso_utc_or_none(ts_str)
+        if ts is None:
+            continue  # corrupt line — skip, never raise
+        if watermark is not None and ts <= watermark:
+            continue  # already surfaced once
+        alerts.append({"ts": ts_str, "message": message.strip()})
+    return alerts
+
+
+def acknowledge_alerts(experiment_dir: Path, *, up_to_ts: str) -> None:
+    """Advance the acknowledgment watermark to *up_to_ts* (ISO-8601 UTC).
+
+    Monotonic: a watermark already at or past *up_to_ts* is left alone, so a
+    stale snapshot can never resurrect acknowledged alerts. The log itself is
+    never touched (audit trail). Fail-open: an unparsable *up_to_ts* or an
+    unwritable watermark is a silent no-op — the alert simply stays "new".
+    """
+    new_dt = parse_iso_utc_or_none(up_to_ts)
+    if new_dt is None:
+        return
+    try:
+        _, watermark_path = _alerts_paths(experiment_dir)
+        if watermark_path.is_file():
+            current = parse_iso_utc_or_none(
+                watermark_path.read_text(encoding="utf-8", errors="replace").strip()
+            )
+            if current is not None and current >= new_dt:
+                return
+        watermark_path.write_text(up_to_ts + "\n", encoding="utf-8")
+    except (OSError, ValueError):
+        return
 
 
 def summarize_proposals(proposals: list[dict[str, Any]]) -> str:

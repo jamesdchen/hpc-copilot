@@ -45,7 +45,7 @@ every consumer schema updates in lock-step.
 - Every subcommand accepts `--experiment-dir` (defaults to CWD) unless the operation is global (e.g. `clusters list`, `capabilities`).
 - Subcommands with non-trivial inputs accept `--spec path/to/spec.json`.
 - Idempotent subcommands set `"idempotent": true` on the success envelope.
-- `hpc-agent --version` prints the package version and exits 0.
+- `hpc-agent --version` prints `hpc-agent <version>[+<fingerprint>]` and exits 0. The optional PEP 440 local segment is the content-keyed build identity (`g<sha>[.dirty]` embedded at wheel-build time; `dev[.g<sha>]` from a source checkout) — the prefix up to `+` is the plain package version, so existing parsers keep working. Format pinned by `tests/cli/test_envelope.py::test_version_flag`.
 
 ## Universal envelope
 

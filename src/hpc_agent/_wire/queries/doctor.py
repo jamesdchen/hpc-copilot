@@ -139,12 +139,80 @@ class AdvanceRunProposal(BaseModel):
     )
 
 
+class VersionSkew(BaseModel):
+    """Content-keyed version-skew warning: running CLI vs the source repo.
+
+    The version *number* cannot express skew between installs — the incident
+    behind this check had an installed wheel and the repo tip both reporting
+    the same version while diverging by days of commits. ``doctor`` compares
+    the running CLI's embedded build sha against the HEAD of the hpc-agent
+    source repo the experiment_dir belongs to (when both resolve cheaply;
+    otherwise the check silently skips — fail-open everywhere).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="doctor version-skew warning")
+
+    cli_version: str = Field(
+        description="Fingerprinted version of the running CLI, e.g. '0.10.65+g9154c3af'."
+    )
+    cli_sha: str = Field(description="Short git sha embedded in (or resolved for) the running CLI.")
+    repo_sha: str = Field(
+        description="Short git HEAD sha of the hpc-agent source repo containing experiment_dir."
+    )
+    repo_root: str = Field(description="Root of the hpc-agent source repo that was compared.")
+    warning: str = Field(
+        description=(
+            "Human-facing warning line naming both shas and the fix (reinstall the "
+            "CLI from the repo). Advisory only — doctor never acts on it."
+        )
+    )
+
+
+class AlertRecord(BaseModel):
+    """One line from the ``doctor.alerts.log`` audit trail (ts + message).
+
+    The loud fallback log the watchdog's notifier always writes
+    (:mod:`hpc_agent.ops.recover.notify`). Surfaced while unacknowledged — an
+    alert is "new" until a status snapshot has shown it to the human once
+    (proving run #3: detection without delivery is silence).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="doctor alert-log record")
+
+    ts: str = Field(description="When the alert was appended (ISO-8601 UTC).")
+    message: str = Field(description="The human-facing alert text as written to the log.")
+
+
 class DoctorResult(BaseModel):
     """Shape of the ``data`` field on a ``doctor`` envelope."""
 
     model_config = ConfigDict(extra="forbid", title="doctor output data")
 
     now: str = Field(description="The instant the scan was evaluated against (ISO-8601 UTC).")
+    needs_attention: bool = Field(
+        default=False,
+        description=(
+            "Top-level 'is anything wrong?' flag: True when any stalled driver "
+            "or committed-but-unadvanced run was found. The unmistakable summary "
+            "bit — a caller that reads nothing else must still see this."
+        ),
+    )
+    attention_summary: str = Field(
+        default="",
+        description=(
+            "Human-facing one-line digest of the scan (what needs attention and "
+            "why, or 'all clear'). Rendered verbatim at the top of any status "
+            "surface — never buried under the per-run lists."
+        ),
+    )
+    alerts: list[AlertRecord] = Field(
+        default_factory=list,
+        description=(
+            "Unacknowledged entries from the doctor.alerts.log audit trail "
+            "(fail-open: a missing/corrupt log yields an empty list). doctor "
+            "only reads — acknowledgment is the status snapshot's watermark."
+        ),
+    )
     stalled_count: int = Field(description="Number of live runs past their tick deadline.")
     stalled: list[StalledRunProposal] = Field(
         default_factory=list,
@@ -175,5 +243,14 @@ class DoctorResult(BaseModel):
             "re-armed to consume an already-approved decision. Distinct from "
             "'parked' (still awaiting the human): doctor drafts the re-arm, never "
             "enacts it."
+        ),
+    )
+    version_skew: VersionSkew | None = Field(
+        default=None,
+        description=(
+            "Set when the running CLI's build sha differs from the HEAD of the "
+            "hpc-agent source repo that experiment_dir belongs to — the installed "
+            "tool is stale; reinstall. Null when the shas agree or either side is "
+            "unresolvable (no git, no embedded sha, not that repo — fail-open)."
         ),
     )
