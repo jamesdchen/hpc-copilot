@@ -110,12 +110,21 @@ class CliArg:
 
 @dataclasses.dataclass(frozen=True)
 class SchemaRef:
-    """Schema reference for spec-loading and (future) output validation.
+    """Schema reference for spec-loading and output validation.
 
     ``input`` is the basename under ``hpc_agent/schemas/`` (no
     extension) — e.g. ``"submit_flow"`` resolves to
     ``schemas/submit_flow.input.json``. The dispatcher passes this to
     :func:`_validate_against_schema` after :func:`_load_spec`.
+
+    ``output`` is the same-shaped basename for the ``data`` block's
+    schema. Set it only when the naming convention can't reach the file —
+    i.e. a shape SHARED across sibling verbs whose ``<basename>.output.json``
+    is named for the shape, not the verb (e.g. ``submit-s1..s4`` all →
+    ``"submit_block"``). ``operations.schema_for`` (catalog / ``describe``)
+    and ``contract.schema._output_schema_for`` (``validate_output``) both
+    prefer it over the convention, so they never disagree. When ``None``,
+    resolution falls back to ``<verb>.output.json``.
     """
 
     input: str | None = None

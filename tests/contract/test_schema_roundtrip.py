@@ -414,3 +414,68 @@ def test_no_orphan_input_schemas() -> None:
         f"allow-list): {unexpected}. Either add the CLI verb or document "
         f"the composed-only status in this test."
     )
+
+
+# Verbs that share ONE output schema named for the shape, not the verb —
+# the naming convention (``<verb>.output.json``) can't reach it, so each
+# declares ``SchemaRef(output=...)``. Pins the wiring: if a block drops the
+# declaration, the schema file is renamed, or a verb is removed, this fails
+# loudly instead of silently regressing to ``output_schema=None`` (an
+# unvalidated, un-``describe``-able block output — the state these four
+# schemas were stranded in before the seam was wired).
+_SHARED_BLOCK_OUTPUT_SCHEMAS: dict[str, str] = {
+    "submit-s1": "submit_block.output.json",
+    "submit-s2": "submit_block.output.json",
+    "submit-s3": "submit_block.output.json",
+    "submit-s4": "submit_block.output.json",
+    "aggregate-check": "aggregate_block.output.json",
+    "aggregate-run": "aggregate_block.output.json",
+    "status-snapshot": "status_block.output.json",
+    "status-watch": "status_block.output.json",
+    "campaign-greenlight": "campaign_block.output.json",
+    "campaign-watch": "campaign_block.output.json",
+    "campaign-complete": "campaign_block.output.json",
+}
+
+
+def test_shared_block_output_schemas_resolve_in_both_resolvers() -> None:
+    """Every block verb's shared output schema is reachable — and the two
+    resolvers agree.
+
+    The catalog's :func:`schema_for` (feeds ``describe`` / ``capabilities``)
+    and :func:`_output_schema_for` (feeds ``validate_output``) resolve
+    schemas by two parallel code paths that the code comments promise stay
+    in lockstep. This pins that promise for the ``SchemaRef(output=...)``
+    override: for each block verb both paths must point at the same,
+    existing, shape-named file.
+    """
+    import hpc_agent
+    from hpc_agent._kernel.contract.schema import _output_schema_for
+    from hpc_agent._kernel.registry.operations import operations_catalog
+
+    hpc_agent.register_primitives()
+    catalog = {row["name"]: row for row in operations_catalog()}
+
+    for verb, expected_file in _SHARED_BLOCK_OUTPUT_SCHEMAS.items():
+        assert verb in catalog, f"{verb}: block verb no longer registered"
+        # Catalog side (describe / capabilities).
+        assert catalog[verb]["output_schema"] == expected_file, (
+            f"{verb}: catalog output_schema is {catalog[verb]['output_schema']!r}, "
+            f"expected {expected_file!r}. Did the SchemaRef(output=...) "
+            f"declaration drop, or the shared schema get renamed?"
+        )
+        # The file the convention can't reach must actually exist.
+        assert (SCHEMAS_DIR / expected_file).is_file(), (
+            f"{verb}: declared output schema {expected_file!r} does not exist under {SCHEMAS_DIR}"
+        )
+        # validate_output side — must resolve the SAME file, or block-verb
+        # outputs silently stop being validated.
+        resolved = _output_schema_for(verb)
+        assert resolved is not None, (
+            f"{verb}: validate_output found no output schema — block output drift would go uncaught"
+        )
+        assert resolved.get("$id", "").endswith(expected_file), (
+            f"{verb}: validate_output resolved a different schema "
+            f"($id={resolved.get('$id')!r}) than the catalog ({expected_file!r}); "
+            f"the two resolvers disagree"
+        )

@@ -310,7 +310,7 @@ def _results_table(aggregated_metrics: dict[str, Any]) -> list[dict[str, Any]]:
         spec_model=SubmitS1Spec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="submit_s1"),
+        schema_ref=SchemaRef(input="submit_s1", output="submit_block"),
     ),
     agent_facing=True,
 )
@@ -439,7 +439,7 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
         spec_model=SubmitS2Spec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="submit_s2"),
+        schema_ref=SchemaRef(input="submit_s2", output="submit_block"),
     ),
     agent_facing=True,
 )
@@ -611,7 +611,7 @@ _S3_ANOMALY_STATES: frozenset[str] = frozenset({"failed", "abandoned"})
         spec_model=SubmitS3Spec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="submit_s3"),
+        schema_ref=SchemaRef(input="submit_s3", output="submit_block"),
     ),
     agent_facing=True,
 )
@@ -792,7 +792,7 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         spec_model=SubmitS4Spec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="submit_s4"),
+        schema_ref=SchemaRef(input="submit_s4", output="submit_block"),
     ),
     agent_facing=True,
 )

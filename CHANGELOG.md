@@ -103,6 +103,29 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   wire-surface removal, no behavior change. (`resolve-resources`'s probe is
   untouched — it hand-parses the envelope and never validated against the schema.)
 
+### Fixed — block verbs' shared output schema is now reachable (`describe` + `validate_output`)
+
+- The eleven human-amplification block verbs share four output shapes named
+  for the shape, not the verb: `submit-s1..s4` → `submit_block.output.json`,
+  `aggregate-check`/`aggregate-run` → `aggregate_block.output.json`,
+  `status-snapshot`/`status-watch` → `status_block.output.json`,
+  `campaign-greenlight`/`campaign-watch`/`campaign-complete` →
+  `campaign_block.output.json`. The schema-resolution convention keys off the
+  verb name (`submit_s1.output.json`…), so it could never find these files —
+  every one of the eleven reported `output_schema: null` in the catalog, so
+  `describe` omitted the output contract and `validate_output` silently skipped
+  the block outputs (drift would have gone uncaught). Activated the dormant
+  `SchemaRef.output` field (docstring already reserved it for "future output
+  validation") and taught both resolvers — `operations.schema_for` (catalog /
+  `describe`) and `contract.schema._output_schema_for` (`validate_output`) — to
+  prefer it over the convention, so they stay in lockstep. Each block verb now
+  declares `SchemaRef(input=…, output=…)`; convention-named verbs are unchanged.
+  A contract test pins that both resolvers agree on the same existing file for
+  every block verb. No new schema files — the four already existed, just
+  unreachable. `_kernel/registry/operations.py`, `_kernel/contract/schema.py`,
+  `cli/_dispatch.py`, `ops/{submit,aggregate,status}_blocks.py`,
+  `meta/campaign/blocks.py`, `tests/contract/test_schema_roundtrip.py`.
+
 
 ### Added — persist opaque per-trial params for provenance; warm-start stays a documented strategy pattern (#369)
 

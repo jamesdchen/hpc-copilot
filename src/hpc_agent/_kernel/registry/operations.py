@@ -82,7 +82,18 @@ def _cli_subcommand(backed_by: dict) -> str | None:
 
 
 def schema_for(name: str, side: str, backed_by: dict) -> str | None:
-    """Return the schema filename for a primitive, if one exists."""
+    """Return the schema filename for a primitive, if one exists.
+
+    Resolution order: an explicit ``{side}_schema_override`` in *backed_by*
+    (from ``CliShape.schema_ref.output`` — a shape-named file the naming
+    convention can't reach, e.g. the shared ``submit_block.output.json``)
+    wins when it exists on disk; otherwise fall back to the convention
+    (``<name>.<side>.json`` / CLI-subcommand form).
+    """
+    schemas_dir = _PACKAGE_ROOT / "schemas"
+    override = backed_by.get(f"{side}_schema_override")
+    if override and (schemas_dir / override).is_file():
+        return override
     candidates = [
         f"{name.replace('-', '_')}.{side}.json",
         f"{name}.{side}.json",
@@ -90,7 +101,6 @@ def schema_for(name: str, side: str, backed_by: dict) -> str | None:
     cli_name = _cli_subcommand(backed_by)
     if cli_name:
         candidates.append(f"{cli_name.replace('-', '_')}.{side}.json")
-    schemas_dir = _PACKAGE_ROOT / "schemas"
     for fname in candidates:
         if (schemas_dir / fname).is_file():
             return fname
@@ -153,9 +163,17 @@ def _from_registry() -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for meta in get_registry().values():
+        schema_ref = meta.cli.schema_ref if meta.cli else None
         backed = {
             "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
             "cli": cli_to_invocation_string(meta.name, meta.cli),
+            # Explicit CliShape.schema_ref.output (a shape-named shared file
+            # the convention can't reach) takes precedence in schema_for.
+            "output_schema_override": (
+                f"{schema_ref.output}.output.json"
+                if schema_ref is not None and schema_ref.output
+                else None
+            ),
         }
         out.append(
             {

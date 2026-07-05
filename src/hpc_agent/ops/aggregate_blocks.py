@@ -262,7 +262,7 @@ def _harvest_ledger_tail(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
         spec_model=AggregateCheckSpec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="aggregate_check"),
+        schema_ref=SchemaRef(input="aggregate_check", output="aggregate_block"),
     ),
     agent_facing=True,
 )
@@ -409,7 +409,7 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
         spec_model=AggregateRunSpec,
         experiment_dir_arg=True,
         requires_ssh=True,
-        schema_ref=SchemaRef(input="aggregate_run"),
+        schema_ref=SchemaRef(input="aggregate_run", output="aggregate_block"),
     ),
     agent_facing=True,
 )
