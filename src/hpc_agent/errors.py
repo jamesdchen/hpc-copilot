@@ -14,6 +14,7 @@ __all__ = [
     "HpcError",
     "SshUnreachable",
     "SshCircuitOpen",
+    "SshSlotWaitTimeout",
     "SchedulerThrottled",
     "SpecInvalid",
     "ExecutorNotFound",
@@ -95,6 +96,35 @@ class SshCircuitOpen(HpcError):
         "and set HPC_SSH_CIRCUIT_OVERRIDE=<host> to explicitly bypass the "
         "breaker for that host only. Inspect the recorded failures under "
         "<journal home>/_ssh_circuit/<host>.json."
+    )
+
+
+class SshSlotWaitTimeout(HpcError):
+    """Gave up waiting for a per-host SSH connection slot — burst prevention.
+
+    Raised by :mod:`hpc_agent.infra.ssh_slots` when all of a host's
+    connection slots (default 2, fleet-wide across processes) stayed held
+    for the whole bounded wait window (~120s). This is *local* contention —
+    our own fleet is saturating its self-imposed per-host cap — not
+    evidence the host is down, so it does NOT count toward the circuit
+    breaker. The bound exists so a queue of waiters can never become a new
+    wedge class (2026-07-05 proving-run-#4 burst incident).
+
+    Reuses the ``ssh_unreachable`` error_code: adding a new code is a
+    breaking envelope change (same posture as :class:`SiblingRunLive`).
+    ``retry_safe=True``: retrying later, after in-flight calls drain, is
+    the natural recovery.
+    """
+
+    error_code = "ssh_unreachable"
+    retry_safe = True
+    category = "network"
+    remediation = (
+        "Too many concurrent SSH calls to one host from this machine's "
+        "hpc-agent fleet. Let in-flight calls finish and retry; check for "
+        "leaked slot files under <journal home>/_ssh_throttle/ if it "
+        "persists, or raise the cap with HPC_SSH_MAX_CONNECTIONS=<n> "
+        "(0 disables the limiter)."
     )
 
 

@@ -2,7 +2,7 @@
 
 * ``curated`` advertises exactly the DERIVED block verbs (a block = a verb whose
   Result model declares a ``next_block`` field) unioned with the fixed recovery /
-  opt-in extras (doctor / kill / submit-speculate), intersected with the
+  opt-in extras (doctor / kill / net-triage / submit-speculate), intersected with the
   mutation policy.
 * the server DEFAULTS to the warm in-process runner (reuses the process's
   registry, no per-call cold start) whose envelope + exit code are parity-checked
@@ -36,12 +36,12 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     # so the assertion tracks whatever set N marked — never a hardcoded list.
     allowed = M.allowed_primitives(get_registry(), allow_mutations=True)
     derived = {n for n, meta in allowed.items() if M._declares_next_block(meta)}
-    expected = derived | {"doctor", "kill", "submit-speculate"}
+    expected = derived | {"doctor", "kill", "net-triage", "submit-speculate"}
 
     assert names == expected
     # Sanity anchors: block verbs are in; a non-block read verb is out.
     assert {"submit-s2", "submit-s3", "submit-s4"} <= names
-    assert {"doctor", "kill", "submit-speculate"} <= names
+    assert {"doctor", "kill", "net-triage", "submit-speculate"} <= names
     assert "clusters" not in names
 
 

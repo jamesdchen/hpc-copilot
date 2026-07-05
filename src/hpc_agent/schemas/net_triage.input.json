@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/net_triage.input.json",
+  "title": "net-triage input spec",
+  "description": "Input spec for the ``net-triage`` verb.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "host": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional extra host to triage (bare hostname or user@host — the user part is stripped), IN ADDITION to every host in the cluster config. Use it for a host not (yet) in clusters.yaml.",
+      "title": "Host"
+    },
+    "control_timeout_sec": {
+      "default": 5.0,
+      "description": "Budget for the one control-plane HTTPS reachability check.",
+      "maximum": 30.0,
+      "minimum": 1.0,
+      "title": "Control Timeout Sec",
+      "type": "number"
+    },
+    "dns_timeout_sec": {
+      "default": 5.0,
+      "description": "Per-host budget for DNS resolution of the cluster hostname.",
+      "maximum": 30.0,
+      "minimum": 1.0,
+      "title": "Dns Timeout Sec",
+      "type": "number"
+    },
+    "tcp_timeout_sec": {
+      "default": 8.0,
+      "description": "Per-host budget for the single direct TCP connect to host:22.",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "title": "Tcp Timeout Sec",
+      "type": "number"
+    }
+  }
+}

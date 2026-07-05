@@ -103,6 +103,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # from the destructive parametrized probes in ``_verb_targets`` below.
         "doctor-install",
         "kill",
+        "net-triage",
         "read-decisions",
         "status-snapshot",
         "status-watch",
@@ -246,6 +247,7 @@ XFAIL_NO_FAILURE_FEATURES: set[str] = {
     "campaign-watch",
     "doctor",
     "kill",
+    "net-triage",
     "read-decisions",
     "status-snapshot",
     "status-watch",
@@ -278,6 +280,9 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     "apply-safe-defaults": _BOGUS_KEY_SPEC,
     "block-drive": _BOGUS_KEY_SPEC,
     "doctor": _BOGUS_KEY_SPEC,
+    # net-triage's spec is all-optional ({} is valid and would EXECUTE real
+    # network probes) — probe with the bogus key so the wire model rejects it.
+    "net-triage": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }

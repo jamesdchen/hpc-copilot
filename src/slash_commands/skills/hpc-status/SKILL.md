@@ -41,6 +41,8 @@ The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous 
 
 A `status-snapshot` with nothing live is terminal (`needs_decision: false`) — nothing to watch; surface and stop. A failed/abandoned anomaly or a stalled driver carries `needs_decision: true`: recovery (classify-then-resubmit, or reconcile-then-confirm before resubmit) is a human branch — the driver surfaces the recommendation and the nudge names the action. A `status-watch` that reaches a clean `complete` hands off to harvest (`submit-s4` — the guaranteed harvest already ran inside `monitor-flow`'s terminal path); a `timeout` (budget elapsed, cluster jobs may run on) keeps watching. **NEVER hand-compute a decision or interpret raw results:** code digests the status into the brief and the recommendation DATA; the human decides; you only translate at the rendezvous.
 
+On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`, or a brief's `open_ssh_circuits` line), run `hpc-agent net-triage` — the bounded, breaker-aware connectivity differential — before concluding a network cause; never diagnose with improvised ssh probes.
+
 ## Never-stall + session tail-loop
 
 `status-watch` is **detached by contract** (design §3): it returns a handle immediately after spawning a durable detached watcher rather than blocking on the poll; the terminal/anomaly brief arrives as a notification. In the CLI fallback, run it through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; the doctor scan re-arms an orphaned run from the journal losslessly.

@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/net_triage.output.json",
+  "title": "net-triage output data",
+  "description": "Shape of the ``data`` field on a ``net-triage`` envelope.",
+  "type": "object",
+  "required": [
+    "now",
+    "control",
+    "all_reachable",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "now": {
+      "description": "When the triage ran (ISO-8601 UTC).",
+      "title": "Now",
+      "type": "string"
+    },
+    "control": {
+      "$ref": "#/$defs/ControlPlaneCheck",
+      "description": "The one control-plane HTTPS check (shared by every host verdict)."
+    },
+    "hosts": {
+      "description": "Per-host differential: every configured cluster host + any caller host.",
+      "items": {
+        "$ref": "#/$defs/HostTriage"
+      },
+      "title": "Hosts",
+      "type": "array"
+    },
+    "all_reachable": {
+      "description": "True when every triaged host's verdict is 'reachable'.",
+      "title": "All Reachable",
+      "type": "boolean"
+    },
+    "summary": {
+      "description": "One-line human digest: each host's verdict, or 'no hosts to triage'.",
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "BreakerState": {
+      "additionalProperties": false,
+      "description": "One host's SSH circuit-breaker state, read from its durable state file.\n\nRead-only: triage NEVER writes breaker state, never claims the half-open\nprobe slot, and never counts toward the failure ledger. ``missing`` means\nno state file exists (a healthy host that never failed) and is treated as\nclosed everywhere — fail-open, same posture as the breaker itself.",
+      "properties": {
+        "state": {
+          "description": "Breaker state: 'open' fails SSH fast (ban-risk protection), 'closed' is healthy, 'missing' means no state file (never failed).",
+          "enum": [
+            "closed",
+            "open",
+            "missing"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "consecutive_failures": {
+          "default": 0,
+          "description": "Consecutive connection-level failures recorded for this host.",
+          "title": "Consecutive Failures",
+          "type": "integer"
+        },
+        "cooldown_until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the cooldown ends and the automatic half-open probe becomes eligible (ISO-8601 UTC). Null unless the breaker is open. A past deadline means the breaker is waiting for one probe to succeed.",
+          "title": "Cooldown Until"
+        },
+        "last_failure_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the last connection-level failure was recorded (ISO-8601 UTC), or null.",
+          "title": "Last Failure At"
+        },
+        "last_failure_detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The matched failure marker + stderr snippet of the last failure, or null.",
+          "title": "Last Failure Detail"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "net-triage breaker state",
+      "type": "object"
+    },
+    "ControlPlaneCheck": {
+      "additionalProperties": false,
+      "description": "The one bounded HTTPS probe that separates 'my network is down' from\n'the cluster is unreachable' — run once per invocation, not per host.",
+      "properties": {
+        "https_ok": {
+          "description": "True when the control endpoint answered over HTTPS (any HTTP status).",
+          "title": "Https Ok",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "The stable public endpoint probed.",
+          "title": "Url",
+          "type": "string"
+        },
+        "detail": {
+          "description": "'HTTP <status>' on success; the exception class + message on failure.",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "https_ok",
+        "url",
+        "detail"
+      ],
+      "title": "net-triage control-plane check",
+      "type": "object"
+    },
+    "HostTriage": {
+      "additionalProperties": false,
+      "description": "The full connectivity differential for one host, with a verdict.",
+      "properties": {
+        "host": {
+          "description": "The host triaged (breaker key: bare hostname, no user@).",
+          "title": "Host",
+          "type": "string"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The clusters.yaml entry this host came from, or null for a caller host.",
+          "title": "Cluster"
+        },
+        "breaker": {
+          "$ref": "#/$defs/BreakerState",
+          "description": "Circuit-breaker state read from the state file."
+        },
+        "dns_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the hostname resolved (bounded). Null when not attempted.",
+          "title": "Dns Ok"
+        },
+        "dns_detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolution detail or error.",
+          "title": "Dns Detail"
+        },
+        "tcp_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether ONE bounded TCP connect to host:22 succeeded. Null when the probe was SKIPPED — always skipped while the breaker is open (the half-open probe slot belongs to the breaker, never to triage) and when DNS already failed.",
+          "title": "Tcp Ok"
+        },
+        "tcp_detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Connect detail, error, or the reason the probe was skipped.",
+          "title": "Tcp Detail"
+        },
+        "verdict": {
+          "description": "The differential's answer: 'reachable' (host:22 accepts TCP); 'breaker_open_cooling' (SSH is failing fast by design — wait or override); 'host_unreachable_network_ok' (control passes, host doesn't — cluster-side outage or source-IP filter); 'local_network_down' (the control probe failed — fix THIS machine's network/VPN first); 'dns_failure' (hostname didn't resolve).",
+          "enum": [
+            "reachable",
+            "breaker_open_cooling",
+            "host_unreachable_network_ok",
+            "local_network_down",
+            "dns_failure"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "remediation": {
+          "description": "What to do about the verdict — deterministic text, one per verdict arm.",
+          "title": "Remediation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "breaker",
+        "verdict",
+        "remediation"
+      ],
+      "title": "net-triage per-host result",
+      "type": "object"
+    }
+  }
+}

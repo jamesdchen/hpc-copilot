@@ -45,6 +45,8 @@ The slash `/submit-hpc` is the human-interview wrapper; an external autonomous a
 
 Anomaly terminators (`stage_reached` = `canary_failed` / `watching_anomaly`) are genuine human branches (resubmit-failed / reconcile / kill) with no single deterministic successor — the driver surfaces the anomaly brief and the human's nudge names the recovery action. **NEVER hand-compute a decision or interpret raw results:** code (the blocks the driver composes) digests the evidence into the brief; the human decides; you only translate at the rendezvous. This extends the #355 doctrine ("results are never computed by an LLM") from computing to *concluding*.
 
+On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`), run `hpc-agent net-triage` — the bounded, breaker-aware connectivity differential — before concluding a network cause; never diagnose with improvised ssh probes.
+
 ## Never-stall contract (blocks never block the chat)
 
 Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait) and `submit-s3` (main-array watch) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification. In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.

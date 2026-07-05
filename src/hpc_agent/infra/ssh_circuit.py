@@ -381,25 +381,39 @@ def guarded_call(
     fn: Callable[[], subprocess.CompletedProcess[str]],
     *,
     clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], object] = time.sleep,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one ssh-family attempt under the breaker.
+    """Run one ssh-family attempt under the breaker AND the burst limiter.
 
     Consults :func:`check_circuit` BEFORE the attempt (so a retry ladder's
     next rung against an open circuit fails fast instead of proceeding),
-    then records the outcome: a raised :class:`TimeoutError` or a
-    connection-marked ``CompletedProcess`` counts as a connection failure;
-    anything that reached the host resets the counter.
+    then holds one cross-process per-host connection slot
+    (:mod:`hpc_agent.infra.ssh_slots`) for the whole attempt — every
+    ssh/scp/rsync/tar path funnels through this seam, so detached-worker
+    startup probes and the driving agent's own probes share one fleet-wide
+    cap per host instead of bursting together (2026-07-05 incident).
+    Ordering matters: the breaker gate runs first, so an open circuit
+    fails fast without queueing for a slot (waiters also re-check the
+    breaker each poll). Finally it records the outcome: a raised
+    :class:`TimeoutError` or a connection-marked ``CompletedProcess``
+    counts as a connection failure; anything that reached the host resets
+    the counter. A slot-wait give-up
+    (:class:`hpc_agent.errors.SshSlotWaitTimeout`) is local contention,
+    not host evidence — it never counts toward the breaker.
     """
+    from hpc_agent.infra import ssh_slots
+
     check_circuit(ssh_target, clock=clock)
-    try:
-        cp = fn()
-    except TimeoutError as exc:
-        record_connection_failure(ssh_target, detail=str(exc), clock=clock)
-        raise
-    marker = classify_connection_failure(cp)
-    if marker is not None:
-        stderr_snip = (cp.stderr or "").strip()[:200]
-        record_connection_failure(ssh_target, detail=f"{marker}: {stderr_snip}", clock=clock)
-    else:
-        record_connection_success(ssh_target)
+    with ssh_slots.connection_slot(ssh_target, clock=clock, sleep=sleep):
+        try:
+            cp = fn()
+        except TimeoutError as exc:
+            record_connection_failure(ssh_target, detail=str(exc), clock=clock)
+            raise
+        marker = classify_connection_failure(cp)
+        if marker is not None:
+            stderr_snip = (cp.stderr or "").strip()[:200]
+            record_connection_failure(ssh_target, detail=f"{marker}: {stderr_snip}", clock=clock)
+        else:
+            record_connection_success(ssh_target)
     return cp

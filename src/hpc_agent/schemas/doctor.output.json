@@ -76,6 +76,14 @@
       "title": "Awaiting Advance",
       "type": "array"
     },
+    "open_ssh_circuits": {
+      "description": "One line per host whose SSH circuit breaker is currently OPEN ('ssh circuit for <host>: OPEN until <ts> (<n> failures) ...'). An open breaker means SSH to that host fails fast BY DESIGN (ban-risk protection) — run net-triage for the full connectivity differential; never diagnose with improvised ssh probes. Empty when every breaker is closed (fail-open on unreadable state).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Open Ssh Circuits",
+      "type": "array"
+    },
     "version_skew": {
       "anyOf": [
         {

@@ -41,6 +41,8 @@ The slash `/campaign-hpc` is the human-interview wrapper (path picking, slug, sp
 
 A campaign is greenlit **once**, then runs asynchronously: `watching_healthy` (`continue` / `wait_in_flight` / `refill`) is **no boundary** — ticks self-chain in code; surface the health digest and let the human walk away. Only `watching_anomaly` and `watching_complete` are rendezvous points. **NEVER hand-compute a decision or interpret raw results:** code digests the campaign's durable state into each brief; the human decides.
 
+On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`), run `hpc-agent net-triage` — the bounded, breaker-aware connectivity differential — before concluding a network cause; never diagnose with improvised ssh probes.
+
 ## Never-stall
 
 Campaign execution is asynchronous by design — after the greenlight there is **no** per-iteration wait. `campaign-watch` is a cheap read; poll it on a schedule (`/loop <interval> /campaign-hpc`, or a cron-scheduled tick) rather than blocking. Anomaly and completion briefs arrive as notifications from the async driver.

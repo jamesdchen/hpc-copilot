@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**124 operations total**: 100 primitive atoms + 24 workflow atoms.
+**125 operations total**: 101 primitive atoms + 24 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (53)
+## `query` (54)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -56,6 +56,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`load-context`](../primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`logs`](../primitives/logs.md) | ✓ | ssh | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` | `_(none)_` | — | — |
 | [`monitor-summary`](../primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
+| [`net-triage`](../primitives/net-triage.md) | ✓ | _none_ | `hpc-agent net-triage [--spec <path>]` | `_(none)_` | — | — |
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

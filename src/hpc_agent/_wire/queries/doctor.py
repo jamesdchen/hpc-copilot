@@ -245,6 +245,17 @@ class DoctorResult(BaseModel):
             "enacts it."
         ),
     )
+    open_ssh_circuits: list[str] = Field(
+        default_factory=list,
+        description=(
+            "One line per host whose SSH circuit breaker is currently OPEN "
+            "('ssh circuit for <host>: OPEN until <ts> (<n> failures) ...'). "
+            "An open breaker means SSH to that host fails fast BY DESIGN "
+            "(ban-risk protection) — run net-triage for the full connectivity "
+            "differential; never diagnose with improvised ssh probes. Empty "
+            "when every breaker is closed (fail-open on unreadable state)."
+        ),
+    )
     version_skew: VersionSkew | None = Field(
         default=None,
         description=(

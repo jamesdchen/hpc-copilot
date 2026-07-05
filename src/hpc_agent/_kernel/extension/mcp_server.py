@@ -103,14 +103,15 @@ _MUTATING_VERBS = frozenset({"mutate", "submit", "scaffold", "workflow"})
 _RUN_PRIMITIVE_TOOL = "run-primitive"
 
 # The ``curated`` catalog's fixed extras: the recovery verbs (``doctor`` detects
-# stalled/orphaned runs, ``kill`` the request→confirm kill) plus the ``submit-
-# speculate`` opt-in touchpoint. These are stable human-amplification surfaces
-# that are NOT blocks (their Result models carry no ``next_block``), so they are
-# unioned in explicitly. Everything else in ``curated`` is DERIVED (see
-# :func:`_declares_next_block`) — a block is any verb whose Result model declares
-# a ``next_block`` field, so adding/removing that field moves a verb in/out of
-# the curated set with no edit here.
-_CURATED_EXTRA_VERBS = frozenset({"doctor", "kill", "submit-speculate"})
+# stalled/orphaned runs, ``kill`` the request→confirm kill, ``net-triage`` the
+# bounded connectivity differential — the 2026-07-05 incident's missing tool)
+# plus the ``submit-speculate`` opt-in touchpoint. These are stable
+# human-amplification surfaces that are NOT blocks (their Result models carry
+# no ``next_block``), so they are unioned in explicitly. Everything else in
+# ``curated`` is DERIVED (see :func:`_declares_next_block`) — a block is any
+# verb whose Result model declares a ``next_block`` field, so adding/removing
+# that field moves a verb in/out of the curated set with no edit here.
+_CURATED_EXTRA_VERBS = frozenset({"doctor", "kill", "net-triage", "submit-speculate"})
 
 # Read-only context resources, each backed by a CLI verb. The URI scheme is
 # informational; the value is the argv driven through the same runner as tools.

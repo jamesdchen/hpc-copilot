@@ -204,28 +204,39 @@ def _attention_summary(
     awaiting_advance: int,
     parked: int,
     alerts: int,
+    open_circuits: list[str] | None = None,
 ) -> tuple[bool, str]:
     """The unmistakable top-of-envelope digest: ``(needs_attention, one-liner)``.
 
-    Attention = a stalled driver or a committed-but-unadvanced run (both mean a
-    dead driver the human must re-arm). Parked runs and unacknowledged alert-log
-    entries are appended to the line for delivery but do not flip the flag on
-    their own — parked is a valid wait, and an alert's underlying condition is
-    re-detected live by this very scan (proving run #3: the alert LOG is the
-    audit trail; the live scan is the truth).
+    Attention = a stalled driver, a committed-but-unadvanced run (both mean a
+    dead driver the human must re-arm), or an OPEN ssh circuit (discovery to
+    that host is dark by design — the 2026-07-05 incident: an agent holding
+    this very output improvised ssh probes and mis-diagnosed a VPN outage
+    because the breaker state was recorded but not surfaced). Parked runs and
+    unacknowledged alert-log entries are appended to the line for delivery but
+    do not flip the flag on their own — parked is a valid wait, and an alert's
+    underlying condition is re-detected live by this very scan (proving run
+    #3: the alert LOG is the audit trail; the live scan is the truth).
     """
+    open_circuits = open_circuits or []
     parts: list[str] = []
     if stalled:
         parts.append(f"{stalled} stalled driver(s)")
     if awaiting_advance:
         parts.append(f"{awaiting_advance} approved-but-unadvanced run(s)")
+    if open_circuits:
+        parts.append(f"{len(open_circuits)} open ssh circuit(s)")
     needs_attention = bool(parts)
     if needs_attention:
-        line = f"NEEDS ATTENTION: {' and '.join(parts)} — drafted re-arm proposal(s) below."
+        line = f"NEEDS ATTENTION: {' and '.join(parts)}."
+        if stalled or awaiting_advance:
+            line += " Drafted re-arm proposal(s) below."
     elif parked:
         line = f"no stalled drivers; {parked} run(s) parked awaiting your decision."
     else:
         line = "all clear: no stalled drivers."
+    for circuit_line in open_circuits:
+        line += f" {circuit_line}"
     if alerts:
         line += f" {alerts} unacknowledged alert(s) in doctor.alerts.log."
     return needs_attention, line
@@ -275,6 +286,12 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     ``doctor.alerts.log`` audit trail (fail-open; doctor never acknowledges or
     truncates — the status snapshot's watermark owns acknowledgment).
 
+    ``open_ssh_circuits`` carries one line per host whose SSH circuit breaker
+    is OPEN (read from the local ``_ssh_circuit`` state files — still no SSH):
+    an open breaker means discovery to that host is dark by design, flips
+    ``needs_attention``, and joins the summary line so no agent concludes a
+    network cause without seeing it (run ``net-triage`` for the differential).
+
     Additionally surfaces ``version_skew`` when the running CLI's embedded
     build sha differs from the HEAD of the hpc-agent *source repo* that
     *experiment_dir* belongs to (stale install — reinstall). Fail-open: no
@@ -316,14 +333,22 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # alert-log entries in the envelope too, and lead with an unmistakable
     # needs-attention line. Read-only — doctor never moves the acknowledgment
     # watermark (that is the status snapshot's job) and never truncates the log.
+    from hpc_agent.ops.recover.net_triage import open_circuit_lines
     from hpc_agent.ops.recover.notify import read_unacknowledged_alerts
 
     alerts = [AlertRecord(**a) for a in read_unacknowledged_alerts(experiment_dir)]
+
+    # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
+    # visible on the surface the agent already reads — read-only, fail-open,
+    # still no SSH (the breaker state is a local file).
+    circuit_lines = open_circuit_lines()
+
     needs_attention, attention_summary = _attention_summary(
         stalled=len(proposals),
         awaiting_advance=len(advance_proposals),
         parked=len(parked_notes),
         alerts=len(alerts),
+        open_circuits=circuit_lines,
     )
 
     result = DoctorResult(
@@ -331,6 +356,7 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         needs_attention=needs_attention,
         attention_summary=attention_summary,
         alerts=alerts,
+        open_ssh_circuits=circuit_lines,
         stalled_count=len(proposals),
         stalled=proposals,
         parked_count=len(parked_notes),

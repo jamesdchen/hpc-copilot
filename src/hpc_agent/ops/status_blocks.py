@@ -270,6 +270,16 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     #     never truncated.
     alerts = read_unacknowledged_alerts(experiment_dir)
 
+    # 4c. Open ssh circuits (2026-07-05 incident: hoffman2's breaker was OPEN
+    #     with a recorded cooldown deadline, but no surface the agent read said
+    #     so — it improvised raw ssh probes and mis-diagnosed a VPN outage).
+    #     One line per breaker-dark host, read from the local _ssh_circuit
+    #     state files (no SSH, fail-open). Surfacing only — the differential
+    #     and remediation live in the net-triage verb.
+    from hpc_agent.ops.recover.net_triage import open_circuit_lines
+
+    open_ssh_circuits = open_circuit_lines()
+
     # 5. Re-stamp the attention watermark now that the delta is computed, and
     #    acknowledge the alerts this brief is about to surface (same mark_seen
     #    gate: a peek-only snapshot moves neither watermark).
@@ -286,6 +296,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "stalled_runs": stalled,
         "anomalies": anomalies,
         "alerts": alerts,
+        "open_ssh_circuits": open_ssh_circuits,
     }
 
     needs_decision = bool(stalled or anomalies)
