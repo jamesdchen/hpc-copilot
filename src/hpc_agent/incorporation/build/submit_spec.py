@@ -108,11 +108,95 @@ def _campaign_strategy_kw_env(experiment_dir: Path | None, campaign_id: str) -> 
     return {f"HPC_KW_{str(key).upper()}": str(value) for key, value in params.items()}
 
 
+def _cross_check_cluster_identity(
+    *,
+    cluster: str,
+    all_clusters: dict[str, Any],
+    cluster_cfg: dict[str, Any],
+    ssh_target: str,
+    backend: str,
+) -> None:
+    """Cross-check hand-authorable identity fields against clusters.yaml.
+
+    Three proving-run-5 refusals, all firing at submit-time (loud) instead of
+    on the cluster (exit-127 / wrong-cluster poll). Each closes a field that is
+    caller-authorable but never validated against derivable truth:
+
+    * **finding 20** — an unknown ``cluster`` (a typo) silently degrades every
+      cluster-derived field (nfs staging / env activation / array cap) to ``{}``
+      and fails only at verify-canary. When clusters.yaml is POPULATED and does
+      not carry ``cluster``, refuse with :class:`errors.ClusterUnknown` naming
+      the known clusters (mirrors ``plan_throughput``). An EMPTY config
+      (``{}`` — an ad-hoc cluster, a fresh install, or an isolated test) has
+      nothing to typo against, so it stays a pass-through (unchanged behaviour).
+    * **finding 18** — an ``ssh_target`` disagreeing with the cluster's derived
+      ``user@host`` runs the job on one host while every cluster-derived
+      decision (activation, array cap, scheduler family, run identity) keys on
+      ``cluster`` — finding-9's true split-brain root. Refuse the mismatch when
+      the entry yields a derivable ssh_target (both ``host`` and ``user`` set).
+    * **finding 19** — a ``backend`` (which drives the deploy templates + submit
+      grammar) disagreeing with ``clusters.yaml[cluster].scheduler`` (what
+      verify / monitor DERIVE) submits under the wrong grammar. Refuse unless
+      the entry pins a ``scheduler_profile`` — the sanctioned override, where
+      ``build_remote_backend`` enforces ``backend == profile.family`` instead
+      (``infra/backends/remote_factory.py``).
+    """
+    # finding 20 — an unknown cluster, but only when there IS a populated config
+    # to have typo'd against; an empty {} is the ad-hoc / fresh / test case.
+    if all_clusters and not cluster_cfg:
+        raise errors.ClusterUnknown(
+            f"cluster {cluster!r} is not defined in clusters.yaml; known clusters: "
+            f"{sorted(all_clusters)}. A typo'd cluster silently degrades every "
+            "cluster-derived field (nfs staging, env activation, array cap) to "
+            "empty and fails only later at verify-canary. Fix the cluster name, "
+            "or run `hpc-agent clusters list` to see what is configured."
+        )
+    if not cluster_cfg:
+        return  # empty / ad-hoc config: nothing derivable to cross-check against.
+
+    # finding 18 — ssh_target must equal the cluster's derived user@host. Use
+    # ClusterConfig.ssh_target as the single owner of that derivation; a thin
+    # entry that can't validate (or lacks host/user) yields None → skip.
+    from hpc_agent.infra.clusters import ClusterConfig
+
+    try:
+        derived_ssh = ClusterConfig.model_validate(cluster_cfg).ssh_target
+    except Exception:  # noqa: BLE001 — a malformed entry is another guard's concern
+        derived_ssh = None
+    if derived_ssh and ssh_target.strip() != derived_ssh:
+        raise errors.SpecInvalid(
+            f"ssh_target {ssh_target!r} disagrees with cluster {cluster!r}'s "
+            f"derived target {derived_ssh!r} (user@host from clusters.yaml). The "
+            "job would run on the ssh_target host while every cluster-derived "
+            "decision (env activation, array cap, scheduler family, run identity) "
+            f"keys on cluster={cluster!r} — the finding-9 split-brain, where a "
+            "retarget set cluster and ssh_target to different clusters and the "
+            "run executed on one while status polled the other. Set ssh_target to "
+            f"{derived_ssh!r}, or correct the cluster."
+        )
+
+    # finding 19 — backend must match the cluster's scheduler family. A pinned
+    # scheduler_profile is the sanctioned override (remote_factory then enforces
+    # backend == profile.family), so skip the check when one is present.
+    if not cluster_cfg.get("scheduler_profile"):
+        scheduler = str(cluster_cfg.get("scheduler") or "").strip().lower()
+        if scheduler and backend.strip().lower() != scheduler:
+            raise errors.SpecInvalid(
+                f"backend {backend!r} disagrees with cluster {cluster!r}'s "
+                f"scheduler {scheduler!r} (clusters.yaml). backend drives the "
+                "deploy templates + submit grammar, while verify/monitor DERIVE "
+                "the scheduler from clusters.yaml[cluster] — a mismatch deploys "
+                "one family's scripts and submits with another's flags. Set "
+                f"backend to {scheduler!r}, or pin a scheduler_profile on the "
+                "cluster entry to override the family."
+            )
+
+
 @primitive(
     name="build-submit-spec",
     verb="scaffold",
     side_effects=[],
-    error_codes=[errors.SpecInvalid],
+    error_codes=[errors.SpecInvalid, errors.ClusterUnknown],
     idempotent=True,
     cli=CliShape(
         help=(
@@ -211,7 +295,13 @@ def build_submit_spec(
     :class:`errors.SpecInvalid`
         Any required field is empty / malformed (ssh_target shape,
         unknown backend, total_tasks < 1) OR the assembled spec fails
-        schema validation.
+        schema validation OR (proving-run-5 findings 18/19) ``ssh_target``
+        disagrees with the cluster's derived ``user@host`` or ``backend``
+        disagrees with the cluster's ``scheduler``.
+    :class:`errors.ClusterUnknown`
+        (proving-run-5 finding 20) ``cluster`` is absent from a populated
+        clusters.yaml — a typo that would otherwise degrade every
+        cluster-derived field to empty and fail only at verify-canary.
     """
     profile = spec.profile
     cluster = spec.cluster
@@ -237,7 +327,19 @@ def build_submit_spec(
     # all-empty + per-pair guards now live inside ``Activation.__post_init__``.
     from hpc_agent.infra.clusters import load_clusters_config, resolve_activation
 
-    _cluster_cfg = load_clusters_config().get(cluster) or {}
+    _all_clusters = load_clusters_config()
+    _cluster_cfg = _all_clusters.get(cluster) or {}
+    # proving-run-5 findings 18/19/20: cross-check the hand-authorable identity
+    # fields (cluster / ssh_target / backend) against clusters.yaml at
+    # submit-time, so a typo or a split-brain retarget refuses LOUDLY here
+    # instead of failing late on the cluster (exit-127 / wrong-cluster poll).
+    _cross_check_cluster_identity(
+        cluster=cluster,
+        all_clusters=_all_clusters,
+        cluster_cfg=_cluster_cfg,
+        ssh_target=ssh_target,
+        backend=backend,
+    )
     # Minor fix: a spec built directly (not via the worker) may omit all three
     # env-activation fields even though clusters.yaml carries them for this
     # cluster. The worker happens to thread modules/conda_source/conda_env from
@@ -1055,16 +1157,44 @@ def _check_executor_kwarg_casing(executor: str, *, kwargs_keys: set[str] | None)
             )
 
 
+def _check_bare_script_executor(executor: str) -> None:
+    """Refuse a bare script-file token (``train.py``) as a per-task executor.
+
+    Proving-run-5 finding 17: the dispatcher reads ``sidecar.executor`` and runs
+    it verbatim, so a lone ``train.py`` (no interpreter prefix, no path
+    separator) becomes ``cd "$REPO_DIR" && train.py`` and exits 127 (command not
+    found). The shape check is the single owner in
+    :func:`hpc_agent.ops.submit_flow._is_bare_script_name` (the same predicate
+    the submit-flow sidecar gate uses); applying it here keeps ``write-run-
+    sidecar`` from ever writing a doomed sidecar in the first place.
+    """
+    from hpc_agent.ops.submit_flow import _is_bare_script_name
+
+    if _is_bare_script_name(executor):
+        token = executor.strip()
+        raise errors.SpecInvalid(
+            f"per-task executor {executor!r} is a bare script name with no "
+            "interpreter and no path separator, so the cluster dispatcher runs it "
+            'verbatim (`cd "$REPO_DIR" && '
+            f"{token}`) and exits 127 (command not found). Prefix the interpreter "
+            f"— e.g. `python {token}` (or `bash {token}` / `Rscript {token}`) — "
+            f"or use an executable path like `./{token}`."
+        )
+
+
 def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None) -> None:
     """Boundary guard for the REAL per-task EXECUTOR (the sidecar's ``executor``).
 
     The cluster dispatcher reads ``sidecar.executor`` and runs it per task, so a
-    structurally broken command here fails silently cluster-side. Catches the two
+    structurally broken command here fails silently cluster-side. Catches the
     shapes the ``#162`` dispatcher-self-recursion guard does NOT cover:
 
     1. str.format ``{placeholder}`` tokens — the dispatcher formats only
        result_dir_template (:func:`_check_executor_format_placeholders`).
-    2. a swept-kwarg ``$ref`` in the wrong case
+    2. a bare ``module:function`` (:func:`_check_bare_module_executor`) or a bare
+       script name like ``train.py`` (:func:`_check_bare_script_executor`,
+       proving-run-5 finding 17) — both exec as command-not-found (exit 127).
+    3. a swept-kwarg ``$ref`` in the wrong case
        (:func:`_check_executor_kwarg_casing`).
 
     Deliberately omits the job_env-aware unset-var check
@@ -1082,6 +1212,8 @@ def check_per_task_executor(executor: str, *, experiment_dir: Path | None = None
     # resolve-submit-inputs writes it deterministically; this is defense-in-depth
     # at the field the dispatcher actually consumes.
     _check_bare_module_executor(executor)
+    # A bare script name (``train.py``) is the sibling exit-127 shape (finding 17).
+    _check_bare_script_executor(executor)
     if "$" in (executor or ""):
         _check_executor_kwarg_casing(executor, kwargs_keys=_resolve_kwargs_keys(experiment_dir))
 

@@ -1199,3 +1199,243 @@ class TestMpiSingleUnitGuard:
             | {"backend": "slurm", "total_tasks": 1, "mpi": {"ranks": 8, "launcher": "srun"}}
         )
         assert spec.mpi is not None and spec.total_tasks == 1
+
+
+# --- proving-run-5 findings 18/19/20: cluster-identity cross-checks ----------
+#
+# Hand-authorable identity fields (cluster / ssh_target / backend) must agree
+# with clusters.yaml at submit-time, so a typo or a split-brain retarget refuses
+# LOUDLY here instead of failing late on the cluster.
+
+
+def _write_clusters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    cfg = tmp_path / "clusters.yaml"
+    cfg.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+
+
+_TWO_CLUSTER_YAML = (
+    "hoffman2:\n"
+    "  scheduler: sge\n"
+    "  host: hoffman2.idre.ucla.edu\n"
+    "  user: alice\n"
+    "  conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh\n"
+    "  conda_envs: [ml-py311]\n"
+    "discovery:\n"
+    "  scheduler: slurm\n"
+    "  host: discovery.usc.edu\n"
+    "  user: alice\n"
+)
+
+
+def _consistent() -> dict:
+    """A fixture whose cluster / ssh_target / backend all agree with hoffman2."""
+    return _required() | {
+        "cluster": "hoffman2",
+        "ssh_target": "alice@hoffman2.idre.ucla.edu",
+        "backend": "sge",
+    }
+
+
+def test_finding20_unknown_cluster_refused_against_populated_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd cluster (absent from a POPULATED clusters.yaml) is refused with
+    ClusterUnknown naming the known clusters — instead of silently degrading
+    every cluster-derived field to {} and failing only at verify-canary."""
+    _write_clusters(tmp_path, monkeypatch, _TWO_CLUSTER_YAML)
+    intent = _consistent() | {"cluster": "hofman2"}  # typo
+    with pytest.raises(errors.ClusterUnknown) as excinfo:
+        build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    msg = str(excinfo.value)
+    assert "hofman2" in msg
+    assert "discovery" in msg and "hoffman2" in msg  # known clusters listed
+
+
+def test_finding20_empty_config_is_passthrough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EMPTY clusters.yaml ({}) has nothing to typo against (ad-hoc cluster /
+    fresh install / isolated test), so an unknown cluster is NOT refused — the
+    autouse-conftest default path stays byte-for-byte unchanged."""
+    # The autouse conftest already points HPC_CLUSTERS_CONFIG at an empty {}.
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))  # cluster="hoffman2"
+    assert spec["cluster"] == "hoffman2"
+
+
+def test_finding18_ssh_target_mismatch_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """finding-9's true root: cluster=hoffman2 but ssh_target points at discovery
+    → the job runs on discovery while all cluster-derived logic keys on hoffman2.
+    Refuse the split-brain, naming the derived target."""
+    _write_clusters(tmp_path, monkeypatch, _TWO_CLUSTER_YAML)
+    intent = _consistent() | {"ssh_target": "alice@discovery.usc.edu"}
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    msg = str(excinfo.value)
+    assert "alice@discovery.usc.edu" in msg
+    assert "alice@hoffman2.idre.ucla.edu" in msg  # the derived target it should be
+
+
+def test_finding18_matching_ssh_target_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The consistent spec (ssh_target == derived user@host) passes untouched."""
+    _write_clusters(tmp_path, monkeypatch, _TWO_CLUSTER_YAML)
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_consistent()))
+    assert spec["ssh_target"] == "alice@hoffman2.idre.ucla.edu"
+
+
+def test_finding18_skips_when_entry_has_no_derivable_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cluster entry without a `user` yields no derivable ssh_target, so the
+    check cannot fire (can't cross-check against nothing) — back-compat with the
+    thin dev-box configs that only pin host."""
+    _write_clusters(
+        tmp_path,
+        monkeypatch,
+        "hoffman2:\n  scheduler: sge\n  host: hoffman2.idre.ucla.edu\n"
+        "  conda_source: /c/conda.sh\n  conda_envs: [ml-py311]\n",
+    )
+    # ssh_target is whatever the caller supplied; no user in the entry → skip.
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_consistent()))
+    assert spec["ssh_target"] == "alice@hoffman2.idre.ucla.edu"
+
+
+def test_finding19_backend_scheduler_mismatch_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """backend=slurm against a cluster whose scheduler is sge submits under the
+    wrong grammar — refuse, naming the cluster's scheduler."""
+    _write_clusters(tmp_path, monkeypatch, _TWO_CLUSTER_YAML)
+    intent = _consistent() | {"backend": "slurm"}
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    msg = str(excinfo.value)
+    assert "slurm" in msg and "sge" in msg
+
+
+def test_finding19_matching_backend_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_clusters(tmp_path, monkeypatch, _TWO_CLUSTER_YAML)
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_consistent()))
+    assert spec["backend"] == "sge"
+
+
+def test_finding19_scheduler_profile_pin_is_the_sanctioned_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pinned scheduler_profile is the sanctioned override: the family check
+    moves to build_remote_backend (backend == profile.family), so the top-level
+    `scheduler` string may legitimately differ from `backend` here."""
+    _write_clusters(
+        tmp_path,
+        monkeypatch,
+        "campus:\n"
+        "  scheduler: my_custom_grammar\n"  # unknown family, but pinned below
+        "  host: campus.edu\n"
+        "  user: alice\n"
+        "  conda_source: /c/conda.sh\n"
+        "  conda_envs: [ml]\n"
+        "  scheduler_profile:\n"
+        "    family: slurm\n"
+        "    submit: sbatch\n",
+    )
+    intent = _required() | {
+        "cluster": "campus",
+        "ssh_target": "alice@campus.edu",
+        "backend": "slurm",  # != scheduler 'my_custom_grammar', but a profile is pinned
+    }
+    # No raise: the pinned profile is present, so finding-19 defers to
+    # build_remote_backend's backend==profile.family check.
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**intent))
+    assert spec["backend"] == "slurm"
+
+
+# --- proving-run-5 finding 24: Activation conda_env needs conda on PATH -------
+
+
+class TestActivationCondaEvidence:
+    """The Activation invariant must not accept a *non-conda* module list as
+    proof conda is available (finding 24) — a bare `gcc/11` does not put conda
+    on PATH, so `conda activate` still dies `conda: command not found`."""
+
+    def test_non_conda_module_with_conda_env_refused(self) -> None:
+        from hpc_agent.infra.clusters import Activation
+
+        with pytest.raises(errors.SpecInvalid) as excinfo:
+            Activation(modules="gcc/11", conda_source="", conda_env="myenv")
+        msg = str(excinfo.value)
+        assert "conda: command not found" in msg
+        assert "gcc/11" in msg  # names the non-conda modules
+
+    def test_conda_naming_module_with_conda_env_allowed(self) -> None:
+        """The legitimate module-provides-conda pattern (module load anaconda3;
+        conda activate env) is preserved — an anaconda module IS evidence."""
+        from hpc_agent.infra.clusters import Activation
+
+        act = Activation(modules="anaconda3/2024.06", conda_source="", conda_env="myenv")
+        assert act.conda_env == "myenv"
+
+    @pytest.mark.parametrize("mod", ["miniconda3", "miniforge3/24.9", "micromamba", "mamba/1.5"])
+    def test_various_conda_distributions_recognized(self, mod: str) -> None:
+        from hpc_agent.infra.clusters import Activation
+
+        assert Activation(modules=mod, conda_source="", conda_env="e").conda_env == "e"
+
+    def test_conda_source_alone_still_sufficient(self) -> None:
+        from hpc_agent.infra.clusters import Activation
+
+        act = Activation(modules="", conda_source="/c/conda.sh", conda_env="e")
+        assert act.conda_source == "/c/conda.sh"
+
+    def test_modules_provide_conda_predicate_unit(self) -> None:
+        from hpc_agent.infra.clusters import _modules_provide_conda
+
+        assert _modules_provide_conda("anaconda3/2024.06") is True
+        assert _modules_provide_conda("cuda/12.3 miniconda3") is True
+        assert _modules_provide_conda("micromamba") is True
+        assert _modules_provide_conda("gcc/11") is False
+        assert _modules_provide_conda("cuda/12.3 python/3.11") is False
+        assert _modules_provide_conda("") is False
+
+
+# --- proving-run-5 finding 17: bare script name is not a per-task executor ----
+
+
+def test_finding17_check_per_task_executor_refuses_bare_script() -> None:
+    """A bare `train.py` (no interpreter, no path) run verbatim by the cluster
+    dispatcher exits 127. The sanctioned remedy verb's guard refuses it so
+    write-run-sidecar can't write a doomed sidecar, pointing at the interpreter
+    prefix."""
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    with pytest.raises(errors.SpecInvalid) as excinfo:
+        check_per_task_executor("train.py")
+    msg = str(excinfo.value)
+    assert "bare script name" in msg
+    assert "python train.py" in msg  # the interpreter-prefix remedy
+
+
+@pytest.mark.parametrize("bare", ["run.sh", "analyze.R", "sim.jl", "  train.py  "])
+def test_finding17_check_per_task_executor_refuses_all_script_extensions(bare: str) -> None:
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    with pytest.raises(errors.SpecInvalid, match="bare script name"):
+        check_per_task_executor(bare)
+
+
+@pytest.mark.parametrize(
+    "runnable",
+    [
+        "python train.py --seed $SEED",  # interpreter prefix
+        "./run.sh",  # executable path
+        "scripts/train.py",  # pathed
+        "python3 -m hpc_agent.executor_cli run-module my_pkg.train:main",
+    ],
+)
+def test_finding17_check_per_task_executor_accepts_runnable_forms(runnable: str) -> None:
+    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+    check_per_task_executor(runnable)  # must not raise

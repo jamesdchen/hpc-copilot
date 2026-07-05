@@ -422,6 +422,33 @@ def write_back_scheduler_profile(cluster_name: str, profile_dict: dict[str, Any]
         return False
 
 
+# Substrings whose presence in a ``module load`` argument is honest evidence
+# that the module puts the ``conda`` command on PATH (finding 24). ``conda``
+# covers anaconda / miniconda; ``mamba`` covers mamba / micromamba / mambaforge;
+# ``miniforge`` covers the conda-forge installer (whose name carries neither
+# ``conda`` nor ``mamba``). Deliberately NOT the bare token ``forge`` — that
+# would false-match the unrelated ``forge`` / Linaro-Forge debugger module. A
+# module named ``gcc/11`` or ``cuda/12`` matches nothing here, so it is NOT
+# accepted as proof conda is available — the exact hole the pre-tightening
+# ``or self.modules`` check let through.
+_CONDA_MODULE_TOKENS: tuple[str, ...] = ("conda", "mamba", "miniforge")
+
+
+def _modules_provide_conda(modules: str) -> bool:
+    """Whether the space-joined ``$MODULES`` string loads a conda distribution.
+
+    A deliberately narrow, honest heuristic: a module whose name contains
+    ``conda`` (anaconda/miniconda/miniforge) or ``mamba`` (mamba/micromamba)
+    puts the ``conda`` command on PATH; an arbitrary module (``gcc/11``,
+    ``cuda/12.3``) does not. It can still be fooled — a site could expose conda
+    under a bespoke module name, or ship a ``conda-docs`` module that provides
+    no binary — so it is proof-shaped, not proof; the honest claim is only that
+    a *non-conda* module list is not evidence conda is available.
+    """
+    low = (modules or "").lower()
+    return any(tok in low for tok in _CONDA_MODULE_TOKENS)
+
+
 @dataclass(frozen=True)
 class Activation:
     """A coherent cluster env-activation unit (#281).
@@ -434,9 +461,19 @@ class Activation:
     crashes every task at ``conda activate $CONDA_ENV`` → ``conda: command not
     found`` (the 2026-06-05 Hoffman2 canary, job 13556972). Resolving the
     three as ONE value object with the coherence invariant enforced at
-    construction makes that state *unrepresentable* — you cannot build an
-    ``Activation`` the preamble would crash on — instead of validating against
-    it case-by-case at each call site that assembles the fields.
+    construction rejects the incoherent states at the boundary instead of
+    re-validating them case-by-case at each call site that assembles the fields.
+
+    The invariant is honest about its own reach (finding 24): the earlier
+    docstring claimed ``conda: command not found`` was made *unrepresentable*,
+    but the check accepted ``conda_env`` set alongside a *non-conda* module list
+    (``gcc/11``) with no ``conda_source`` — a module that does not put conda on
+    PATH, so the preamble still crashed. The conda_env branch now requires
+    positive evidence conda is reachable: an explicit ``conda_source`` OR a
+    conda-naming module (:func:`_modules_provide_conda`). A bespoke
+    module-provides-conda name it cannot recognise is the residual it does not
+    claim to cover — hence "rejects the incoherent states it can see", not
+    "makes the crash unrepresentable".
 
     Construct via :func:`resolve_activation`, which back-fills ``conda_source``
     from ``clusters.yaml`` when a ``conda_env`` is selected but the source was
@@ -460,17 +497,31 @@ class Activation:
                 "or `modules`) and re-run `hpc-agent setup --cluster <name>` to "
                 "regenerate the resolved spec."
             )
-        if self.conda_env and not (self.conda_source or self.modules):
+        # A conda_env needs conda actually on PATH. A conda_source proves it; a
+        # module list proves it ONLY when a module names a conda distribution
+        # (finding 24) — a non-conda module (`gcc/11`) does not, and the preamble
+        # would still die `conda: command not found`.
+        if self.conda_env and not self.conda_source and not _modules_provide_conda(self.modules):
+            has_modules = bool(self.modules.strip())
+            module_note = (
+                f" The modules {self.modules!r} name no conda distribution "
+                "(anaconda/miniconda/miniforge/mamba), so they are not evidence "
+                "conda is on PATH."
+                if has_modules
+                else " Both conda_source and modules are empty."
+            )
             raise errors.SpecInvalid(
-                f"conda_env={self.conda_env!r} requires either conda_source or a "
-                "modules entry that puts conda on PATH; both are empty. The "
-                "cluster-side preamble would skip `source $CONDA_SOURCE` (because "
-                "$CONDA_SOURCE is empty) and then fail at `conda activate "
-                "$CONDA_ENV` with `conda: command not found`, crashing every task "
-                "in the array. Either populate `conda_source` in clusters.yaml "
-                "(commonly `/u/local/apps/anaconda3/<ver>/etc/profile.d/conda.sh`) "
-                "and re-run `hpc-agent setup --cluster <name>`, or drop `conda_env` "
-                "if env activation is handled by a module."
+                f"conda_env={self.conda_env!r} requires conda on PATH: either a "
+                f"conda_source, or a module that loads a conda distribution."
+                f"{module_note} The cluster-side preamble would skip `source "
+                "$CONDA_SOURCE` (because $CONDA_SOURCE is empty) and then fail at "
+                "`conda activate $CONDA_ENV` with `conda: command not found`, "
+                "crashing every task in the array. Either populate `conda_source` "
+                "in clusters.yaml (commonly "
+                "`/u/local/apps/anaconda3/<ver>/etc/profile.d/conda.sh`) and re-run "
+                "`hpc-agent setup --cluster <name>`, load a conda-providing module "
+                "(e.g. `anaconda3/2024.06`), or drop `conda_env` if activation is "
+                "handled by a non-conda module."
             )
 
     def as_job_env(self) -> dict[str, str]:

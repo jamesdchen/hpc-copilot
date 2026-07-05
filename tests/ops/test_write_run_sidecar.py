@@ -114,6 +114,20 @@ def test_dispatcher_plain_dispatch_py_refused(tmp_path: Path) -> None:
         write_run_sidecar(experiment_dir=tmp_path, spec=spec)
 
 
+def test_bare_script_name_executor_refused(tmp_path: Path) -> None:
+    """proving-run-5 finding 17: a bare `train.py` (no interpreter, no path) is
+    refused BEFORE write, with the interpreter-prefix remedy — the sidecar the
+    finding hit shipped `train.py` and every task died exit-127."""
+    spec = _spec(executor="train.py")
+    with pytest.raises(errors.SpecInvalid) as exc_info:
+        write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+    msg = str(exc_info.value)
+    assert "bare script name" in msg
+    assert "python train.py" in msg  # the precise remedy, not the generic dispatcher refusal
+    # Nothing written when the guard fires.
+    assert not (tmp_path / ".hpc" / "runs" / f"{spec.run_id}.json").exists()
+
+
 def _write_tasks_py(exp: Path, resolve_body: str = "{'seed': i}") -> None:
     (exp / ".hpc").mkdir(parents=True, exist_ok=True)
     (exp / ".hpc" / "tasks.py").write_text(

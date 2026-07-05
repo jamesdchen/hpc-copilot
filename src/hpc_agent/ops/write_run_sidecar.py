@@ -77,24 +77,27 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         — e.g. ``python train.py --seed $SEED --output-file
         "$RESULT_DIR/metrics.json"``.
     """
-    if not _is_runnable_executor(spec.executor):
-        raise errors.SpecInvalid(
-            f"write-run-sidecar refused: executor {spec.executor!r} is the "
-            "job-script dispatcher, not a per-task command. The sidecar's "
-            "executor field must be the REAL per-task command (e.g. "
-            "`python train.py --seed $SEED`); the dispatcher path belongs "
-            "in the submit-flow spec's job_env['EXECUTOR'], not here (#162)."
-        )
-
     # The cluster dispatcher reads THIS executor and runs it per task verbatim,
     # so a broken command fails silently cluster-side. Refuse str.format
-    # {placeholder} leakage and wrong-case swept-kwarg $refs at intake (empirical
+    # {placeholder} leakage, a bare module:function / script name (proving-run-5
+    # finding 17), and wrong-case swept-kwarg $refs at intake (empirical
     # 2026-06-06 demo: a canary's correct `--seed $SEED` regressed to a broken
     # `--seed $seed` + `--output-file results/{run_id}/seed_{seed}/metrics.json`
-    # on resubmit). Lazy import keeps module load free of incorporation/build.
+    # on resubmit). Run FIRST so a bare `train.py` surfaces its own precise
+    # "prefix the interpreter" message rather than the generic dispatcher refusal
+    # below. Lazy import keeps module load free of incorporation/build.
     from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
 
     check_per_task_executor(spec.executor, experiment_dir=Path(experiment_dir))
+
+    if not _is_runnable_executor(spec.executor):
+        raise errors.SpecInvalid(
+            f"write-run-sidecar refused: executor {spec.executor!r} is the "
+            "job-script dispatcher (or empty), not a per-task command. The "
+            "sidecar's executor field must be the REAL per-task command (e.g. "
+            "`python train.py --seed $SEED`); the dispatcher path belongs "
+            "in the submit-flow spec's job_env['EXECUTOR'], not here (#162)."
+        )
 
     target = _write_run_sidecar(
         Path(experiment_dir),

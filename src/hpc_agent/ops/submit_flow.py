@@ -591,6 +591,34 @@ def _push_and_deploy(
     deploy_runtime(ssh_target=ssh_target, remote_path=remote_path, scheduler=scheduler)
 
 
+# Script-file extensions that, as a *bare* single token, need an interpreter
+# (or an executable path) to run. A per-task ``executor`` of just ``train.py``
+# reaches the cluster as ``cd "$REPO_DIR" && train.py`` and exits 127 — the
+# shell has no interpreter to hand it to (proving-run-5 finding 17).
+_BARE_SCRIPT_EXTENSIONS: tuple[str, ...] = (".py", ".sh", ".r", ".jl")
+
+
+def _is_bare_script_name(executor: str | None) -> bool:
+    """True when *executor* is a lone script filename with no interpreter/path.
+
+    The unrunnable shape proving-run-5 finding 17 named: a single token (no
+    whitespace ⇒ no ``python`` / ``Rscript`` interpreter prefix) that ends in a
+    script extension (``.py`` / ``.sh`` / ``.R`` / ``.jl``) and carries no path
+    separator (``/`` or ``\\`` ⇒ not a ``./run.sh``-style runnable path). Run
+    verbatim by the cluster dispatcher it becomes ``command not found`` (exit
+    127). ``python train.py`` (interpreter prefix), ``./train.py`` and
+    ``scripts/train.py`` (path) are all runnable and return False.
+    """
+    if not executor:
+        return False
+    token = executor.strip()
+    if len(token.split()) != 1:
+        return False
+    if "/" in token or "\\" in token:
+        return False
+    return token.lower().endswith(_BARE_SCRIPT_EXTENSIONS)
+
+
 def _is_runnable_executor(executor: str | None) -> bool:
     """True when *executor* is a real per-task command, not the dispatcher/empty.
 
@@ -601,10 +629,18 @@ def _is_runnable_executor(executor: str | None) -> bool:
     per-task command. So a sidecar whose ``executor`` is empty or itself the
     dispatcher is "pending with no executor": shipping it makes the dispatcher
     run itself and the array self-recurses (#162).
+
+    Proving-run-5 finding 17 closes the residual this guard's own name promised
+    but never verified ("verify a guard can fire"): a bare script token
+    (``train.py`` — no interpreter, no path) passed the empty + not-dispatcher
+    check and died exit-127 on the cluster. A bare script name is now
+    non-runnable too (:func:`_is_bare_script_name`).
     """
     if not executor:
         return False
-    return ("_hpc_dispatch.py" not in executor) and ("dispatch.py" not in executor)
+    if ("_hpc_dispatch.py" in executor) or ("dispatch.py" in executor):
+        return False
+    return not _is_bare_script_name(executor)
 
 
 def _write_first_error(run_id: str, *, detail: str) -> errors.SpecInvalid:
@@ -776,10 +812,12 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         raise _write_first_error(
             spec.run_id,
             detail=(
-                f"exists but carries no real per-task executor (found "
-                f"{existing_executor!r} — empty, the dispatcher command, or "
-                "unreadable), so the cluster dispatcher would have nothing to run "
-                "or would run itself (#162)."
+                f"exists but carries no runnable per-task executor (found "
+                f"{existing_executor!r} — empty, the dispatcher command, "
+                "unreadable, or a bare script name with no interpreter and no "
+                "path separator like `train.py` instead of `python train.py`), "
+                "so the cluster dispatcher would have nothing to run, would run "
+                "itself (#162), or would exit 127 (command not found)."
             ),
         )
 

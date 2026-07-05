@@ -94,8 +94,11 @@ def test_build_remote_backend_treats_empty_pass_env_keys_as_forward_all() -> Non
         job_env_keys=job_env_keys,
     )
     # [] / () must normalize to the SAME key set as None — every job_env key.
-    assert tuple(forward_empty.pass_env_keys) == job_env_keys
-    assert tuple(forward_all.pass_env_keys) == tuple(forward_empty.pass_env_keys)
+    # ``pass_env_keys`` is declared on the SGE subclass, not the HPCBackend base.
+    assert tuple(forward_empty.pass_env_keys) == job_env_keys  # type: ignore[attr-defined]
+    assert tuple(forward_all.pass_env_keys) == tuple(  # type: ignore[attr-defined]
+        forward_empty.pass_env_keys  # type: ignore[attr-defined]
+    )
 
 
 def test_build_remote_backend_nonempty_pass_env_keys_restricts() -> None:
@@ -110,7 +113,7 @@ def test_build_remote_backend_nonempty_pass_env_keys_restricts() -> None:
         pass_env_keys=("EXECUTOR",),
         job_env_keys=("EXECUTOR", "CONDA_ENV", "REPO_DIR"),
     )
-    assert tuple(backend.pass_env_keys) == ("EXECUTOR",)
+    assert tuple(backend.pass_env_keys) == ("EXECUTOR",)  # type: ignore[attr-defined]
 
 
 # ─── #191 A: submit-flow refuses an empty job-script EXECUTOR ──────────────
@@ -240,3 +243,85 @@ def test_executor_guard_follows_the_task_id_guard() -> None:
     task_id_at = body.index("SGE_TASK_ID:?")
     executor_at = body.index("EXECUTOR:?")
     assert task_id_at < executor_at < task_id_at + 400
+
+
+# ─── proving-run-5 finding 17: a bare script name is not a runnable executor ──
+
+
+@pytest.mark.parametrize("bare", ["train.py", "run.sh", "analyze.R", "sim.jl", "  train.py  "])
+def test_is_runnable_executor_refuses_bare_script_name(bare: str) -> None:
+    """The SIDECAR per-task executor predicate must reject a bare script token
+    (no interpreter, no path separator): run verbatim by the dispatcher it exits
+    127. Before finding 17 this returned True (non-empty AND not-dispatcher), so
+    a hand-onboarded `train.py` sidecar sailed to the cluster and died."""
+    from hpc_agent.ops.submit_flow import _is_runnable_executor
+
+    assert _is_runnable_executor(bare) is False
+
+
+@pytest.mark.parametrize(
+    "runnable",
+    [
+        "python train.py --seed $SEED",  # interpreter prefix
+        "python3 analyze.py",  # interpreter prefix, no args
+        "./run.sh",  # executable path
+        "scripts/train.py",  # pathed (relative)
+        "/abs/train.py",  # pathed (absolute)
+        "mybinary",  # a bare NON-script token is not this check's concern
+    ],
+)
+def test_is_runnable_executor_accepts_real_commands(runnable: str) -> None:
+    from hpc_agent.ops.submit_flow import _is_runnable_executor
+
+    assert _is_runnable_executor(runnable) is True
+
+
+def test_is_bare_script_name_predicate_unit() -> None:
+    from hpc_agent.ops.submit_flow import _is_bare_script_name
+
+    assert _is_bare_script_name("train.py") is True
+    assert _is_bare_script_name("run.sh") is True
+    assert _is_bare_script_name("analyze.R") is True  # case-insensitive extension
+    assert _is_bare_script_name("sim.jl") is True
+    # Not bare-script: interpreter prefix, path separators, non-script tokens.
+    assert _is_bare_script_name("python train.py") is False
+    assert _is_bare_script_name("./train.py") is False
+    assert _is_bare_script_name("a/b/train.py") is False
+    assert _is_bare_script_name("mybinary") is False
+    assert _is_bare_script_name("") is False
+    assert _is_bare_script_name(None) is False
+
+
+def test_ensure_run_sidecar_refuses_prewritten_bare_script_executor(tmp_path) -> None:
+    """The submit-time reach: a per-run sidecar pre-written (Step 6d) with a bare
+    `train.py` executor is refused in _ensure_run_sidecar BEFORE any rsync/qsub —
+    the exit-127 the finding-17 audit hit only after a full cluster round-trip."""
+    import json
+
+    from hpc_agent import errors
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+    from hpc_agent.ops.submit_flow import _ensure_run_sidecar
+
+    runs = tmp_path / ".hpc" / "runs"
+    runs.mkdir(parents=True)
+    (runs / "r1.json").write_text(
+        json.dumps(
+            {"executor": "train.py", "result_dir_template": "results/{run_id}/task_{task_id}"}
+        ),
+        encoding="utf-8",
+    )
+    spec = SubmitFlowSpec(
+        profile="p",
+        cluster="c",
+        ssh_target="u@h",
+        remote_path="/r",
+        job_name="j",
+        run_id="r1",
+        total_tasks=4,
+        backend="sge",
+        script="run.sh",
+        job_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py"},
+        result_dir_template="results/{run_id}/task_{task_id}",
+    )
+    with pytest.raises(errors.SpecInvalid, match="bare script name"):
+        _ensure_run_sidecar(tmp_path, spec)
