@@ -16,6 +16,7 @@ The slash `/campaign-hpc` is the human-interview wrapper (path picking, slug, sp
 
 - **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
 - **MCP-first (preferred):** the typed `campaign-greenlight` / `campaign-watch` / `campaign-complete` tools from `hpc-agent mcp-serve`.
+- **Read-only QUERY verbs go DIRECT through MCP — never a spec-file round-trip.** `status-snapshot`, `read-decisions`, `verify-relay`, `doctor`, `net-triage` are pure reads: call the typed MCP tool with inline args and read the result — do NOT `Write` a `.hpc/specs/*.json` file and shell `--spec` just to read state back (three tool calls where one MCP call suffices). Never relay a number you remember; relay what the query returned.
 - **CLI fallback:** one call per block, spec written to a file with the `Write` tool:
   ```bash
   hpc-agent campaign-greenlight --spec <path> --experiment-dir <dir>
