@@ -438,6 +438,108 @@ def test_authorship_gate_passes_goal_stated_in_prior_response(tmp_path: Path) ->
     assert out.record.resolved["goal"] == "estimate pi via monte carlo"
 
 
+def _log_utterance(tmp_path: Path, text: str) -> None:
+    """Simulate the harness-side UserPromptSubmit capture for *tmp_path*."""
+    from hpc_agent.state.run_record import journal_dir
+    from hpc_agent.state.utterances import append_utterance
+
+    journal_dir(tmp_path)  # the namespace a real state write would have created
+    assert append_utterance(tmp_path, text) is not None
+
+
+def test_authorship_gate_refuses_fabricated_response_when_utterance_log_lacks_tokens(
+    tmp_path: Path,
+) -> None:
+    """The laundering the lock exists for: with the capture hook installed,
+    an agent-authored ``response`` quoting the sweep no longer counts — the
+    tokens must derive from a HARNESS-logged utterance, and here the human
+    never typed them."""
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            # In journal-response mode this fabricated quote would PASS
+            # (it states 20 and 1M) — the utterance log must outrank it.
+            response="use 20 seeds at 1M samples",
+            proposal=_RUN4_PROPOSAL,
+            resolved={"task_generator": _RUN4_TASK_GENERATOR},
+        )
+    msg = str(ei.value)
+    assert "human-authorship gate" in msg
+    assert "task_generator is human-authored" in msg
+    assert "harness-captured" in msg  # names the evidence source consulted
+    assert "20" in msg and "1000000" in msg
+
+
+def test_authorship_gate_passes_when_utterance_log_states_the_sweep(tmp_path: Path) -> None:
+    """The intended flow under the hook: the human typed the sweep in a
+    prompt (captured out-of-band), so a later bare 'y' commits it."""
+    _log_utterance(tmp_path, "use 20 seeds at 1M samples each")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        proposal=_RUN4_PROPOSAL,
+        resolved={"task_generator": _RUN4_TASK_GENERATOR},
+    )
+    assert out.record.resolved["task_generator"]["seeds"] == 20
+
+
+def test_authorship_gate_utterance_mode_ignores_substantive_response_for_goal(
+    tmp_path: Path,
+) -> None:
+    """In journal-response mode a non-bare reply commits a free-text goal;
+    with a log present the response is agent-relayed and carries no
+    authorship weight — the goal's words must overlap a logged utterance."""
+    _log_utterance(tmp_path, "please submit the job")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            response="yes — estimate pi to 4 decimal places",
+            resolved={"goal": "estimate pi via monte carlo"},
+        )
+    assert "goal is human-authored" in str(ei.value)
+
+
+def test_authorship_gate_passes_goal_overlapping_logged_utterance(tmp_path: Path) -> None:
+    _log_utterance(tmp_path, "I want to estimate pi via monte carlo on hoffman2")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={"goal": "estimate pi via monte carlo"},
+    )
+    assert out.record.resolved["goal"] == "estimate pi via monte carlo"
+
+
+def test_authorship_gate_old_schema_fail_open_does_not_apply_with_utterance_log(
+    tmp_path: Path,
+) -> None:
+    """The old-schema escape hatch exists only because the journal lacks any
+    human text; with a harness-captured log the stronger source exists, so a
+    responseless prior journal no longer waves the commit through."""
+    import json as _json
+
+    from hpc_agent.state.decision_journal import decisions_path
+
+    path = decisions_path(tmp_path, "run", "run-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _json.dumps({"scope_kind": "run", "scope_id": "run-1", "block": "s1"}) + "\n",
+        encoding="utf-8",
+    )
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    with pytest.raises(errors.SpecInvalid):
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            resolved={"task_generator": _RUN4_TASK_GENERATOR},
+        )
+
+
 def test_authorship_gate_fails_open_on_old_schema_journal(tmp_path: Path) -> None:
     """Fail-open: prior records exist but none carries a ``response`` key
     (old-schema journal) — there is no human text to derive from, so the

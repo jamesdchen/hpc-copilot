@@ -30,11 +30,15 @@ _STOP_MODULE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
 
 
 def _settings(claude_dir: Path) -> dict:
-    return json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    loaded = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
 
 
 def _post_tool_use(settings: dict) -> list:
-    return settings["hooks"]["PostToolUse"]
+    entries = settings["hooks"]["PostToolUse"]
+    assert isinstance(entries, list)
+    return entries
 
 
 def _entries_with_module(entries: list, module: str) -> list:
@@ -306,3 +310,51 @@ def test_session_start_alert_count_hook_is_wired(tmp_path: Path) -> None:
     assert second["settings_alert_count_hook"]["action"] == "already-present"
     settings = _settings(tmp_path)
     assert len(settings["hooks"]["SessionStart"]) == 1
+
+
+# ─── UserPromptSubmit utterance capture (proving run #4: authorship lock) ───
+
+
+def test_user_prompt_submit_utterance_hook_is_wired(tmp_path: Path) -> None:
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_utterance_hook"]["action"] == "added"
+    assert result["settings_utterance_hook"]["wrote"] is True
+
+    settings = _settings(tmp_path)
+    entries = _entries_with_module(
+        settings["hooks"].get("UserPromptSubmit", []),
+        "hpc_agent._kernel.hooks.utterance_capture",
+    )
+    assert len(entries) == 1
+    assert "matcher" not in entries[0]  # UserPromptSubmit has no tool to match
+
+    # Idempotent on re-run.
+    second = install_agent_assets(claude_dir=tmp_path)
+    assert second["settings_utterance_hook"]["action"] == "already-present"
+    settings = _settings(tmp_path)
+    assert len(settings["hooks"]["UserPromptSubmit"]) == 1
+
+
+# ─── Stop relay audit (conduct rule 10 staged → active) ─────────────────────
+
+
+def test_stop_relay_audit_hook_is_wired(tmp_path: Path) -> None:
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_relay_audit_hook"]["action"] == "added"
+    assert result["settings_relay_audit_hook"]["wrote"] is True
+
+    settings = _settings(tmp_path)
+    entries = _entries_with_module(
+        settings["hooks"].get("Stop", []),
+        "hpc_agent._kernel.hooks.relay_audit_stop",
+    )
+    assert len(entries) == 1
+    assert "matcher" not in entries[0]  # Stop has no tool to match
+
+    # Idempotent on re-run, and the sibling Stop guards are untouched.
+    second = install_agent_assets(claude_dir=tmp_path)
+    assert second["settings_relay_audit_hook"]["action"] == "already-present"
+    settings = _settings(tmp_path)
+    stop_entries = settings["hooks"]["Stop"]
+    assert len(_entries_with_module(stop_entries, "hpc_agent._kernel.hooks.relay_audit_stop")) == 1
+    assert len(_entries_with_module(stop_entries, _STOP_MODULE)) == 1

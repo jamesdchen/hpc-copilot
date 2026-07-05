@@ -17,8 +17,10 @@ observes run *lifecycle*; this observes the agent's outgoing *message*, and its
 primary authoritative source is the decision journal. So it belongs here.
 
 It is a pure AUDIT: it reads durable records, never writes, and never blocks a
-turn itself — it returns a verdict. Hook-level enforcement is a staged
-follow-up, out of scope for this MVP.
+turn itself — it returns a verdict. Hook-level enforcement lives in the
+``Stop`` hook (:mod:`hpc_agent._kernel.hooks.relay_audit_stop`), which runs
+this audit over the final assistant text and blocks the stop once on a
+contradiction.
 
 Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
 — prefer flagging to missing):

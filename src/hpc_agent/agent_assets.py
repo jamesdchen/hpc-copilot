@@ -224,6 +224,56 @@ _ALERT_COUNT_ENTRY: dict[str, Any] = {
     ],
 }
 
+
+# The human-utterance capture ``UserPromptSubmit`` hook (proving run #4: the
+# authorship gate verified value tokens against journal ``response`` fields the
+# agent itself writes — friction, not a lock). Fires on every prompt submit (no
+# matcher, no pre-filter — one interpreter start per human prompt is rare) and
+# appends the prompt (ts + sha256 + size-capped raw text) to the cwd repo's
+# ``<journal home>/<repo_hash>/utterances.jsonl`` — harness-written, so the
+# authorship gate can require caller values to derive from text a human
+# verifiably typed. No-scaffold: a prompt in a non-hpc repo is a silent no-op,
+# and the hook prints nothing (its record must stay out of model context).
+def _build_utterance_capture_command() -> str:
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.utterance_capture"
+
+
+_UTTERANCE_CAPTURE_COMMAND = _build_utterance_capture_command()
+_UTTERANCE_CAPTURE_NEEDLE = "hpc_agent._kernel.hooks.utterance_capture"
+_UTTERANCE_CAPTURE_ENTRY: dict[str, Any] = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": _UTTERANCE_CAPTURE_COMMAND,
+        }
+    ],
+}
+
+
+# The relay-audit ``Stop`` hook (conduct rule 10, staged → active): nothing made
+# a driving agent run ``verify-relay``, so an unaudited relay still reached the
+# human. Fires once per turn end (no matcher — the interpreter start is paid
+# rarely), reads the final assistant text from the transcript, and when it names
+# a journaled run, audits it with verify-relay; contradiction mismatches block
+# the stop ONCE (loop-safe via stop_hook_active, same as the sibling Stop
+# guards) with the itemized summary so the agent corrects the relay. Fail-open:
+# no journal / no run mention / clean audit / any error → silent pass.
+def _build_relay_audit_command() -> str:
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.relay_audit_stop"
+
+
+_RELAY_AUDIT_COMMAND = _build_relay_audit_command()
+_RELAY_AUDIT_NEEDLE = "hpc_agent._kernel.hooks.relay_audit_stop"
+_RELAY_AUDIT_ENTRY: dict[str, Any] = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": _RELAY_AUDIT_COMMAND,
+        }
+    ],
+}
+
+
 # The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
 # shell-free invocation surface for blocks (design §3, "The tool surface subsumes
 # the shell"). Registered venv-pinned via the current interpreter so it does not
@@ -696,6 +746,10 @@ def install_agent_assets(
                                               "wrote": <bool>},
             "settings_alert_count_hook": {"settings_path": "...", "action": "added",
                                           "wrote": <bool>},
+            "settings_utterance_hook": {"settings_path": "...", "action": "added",
+                                        "wrote": <bool>},
+            "settings_relay_audit_hook": {"settings_path": "...", "action": "added",
+                                          "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
             "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
@@ -816,6 +870,28 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Wire the human-utterance capture (proving run #4: harness-captured
+    # authorship evidence for the append-decision gate) — UserPromptSubmit,
+    # no matcher. Same additive + idempotent merge.
+    settings_utterance_hook = _merge_hook_entry(
+        target,
+        event="UserPromptSubmit",
+        entry=_UTTERANCE_CAPTURE_ENTRY,
+        needle=_UTTERANCE_CAPTURE_NEEDLE,
+        dry_run=dry_run,
+    )
+
+    # Wire the relay-audit Stop hook (conduct rule 10 staged → active): audits
+    # the final assistant text against the journal via verify-relay and blocks
+    # the stop once on a contradiction. Same additive + idempotent merge.
+    settings_relay_audit_hook = _merge_hook_entry(
+        target,
+        event="Stop",
+        entry=_RELAY_AUDIT_ENTRY,
+        needle=_RELAY_AUDIT_NEEDLE,
+        dry_run=dry_run,
+    )
+
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
@@ -839,6 +915,8 @@ def install_agent_assets(
         "settings_rendezvous_stop_hook": settings_rendezvous_stop_hook,
         "settings_write_fence_hook": settings_write_fence_hook,
         "settings_alert_count_hook": settings_alert_count_hook,
+        "settings_utterance_hook": settings_utterance_hook,
+        "settings_relay_audit_hook": settings_relay_audit_hook,
         "settings_permissions": settings_permissions,
         "mcp_server": mcp_server,
         "wrote": not dry_run,

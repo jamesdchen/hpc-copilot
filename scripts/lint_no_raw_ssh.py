@@ -72,8 +72,17 @@ _WORKER_PROMPT_GLOB = "hpc_agent/_kernel/extension/worker_prompts/*.md"
 
 # Cited exemptions: scan-root-relative paths of genuine human-debug docs that
 # must show a raw ssh command. Add an entry only as a reviewed decision, with a
-# comment citing why the throttled verb does not apply. Empty today.
-ALLOWLIST: frozenset[str] = frozenset()
+# comment citing why the throttled verb does not apply.
+ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # The /release skill is a HUMAN-run release procedure (its contract
+        # halts before every outward step). Its Hoffman2 wheel install is a
+        # one-off interactive scp/ssh by the human's own session — no
+        # autonomous worker executes it, and no throttled verb ships wheels
+        # to a conda env. Ported from ~/.claude/skills/release 2026-07-04.
+        "slash_commands/skills/release/SKILL.md",
+    }
+)
 
 # An ``ssh`` / ``scp`` / ``rsync`` invocation: the keyword as a standalone token
 # (not ``ssh_run`` / ``ssh-add`` / ``rsync_push`` — guarded by the lookbehind +

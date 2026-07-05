@@ -15,12 +15,16 @@ differs per call). ``read-decisions`` is a pure query.
 Two trust-seam gates run before an append is persisted: the rule-9
 brief-provenance gate (:func:`_assert_brief_provenance`) and the
 human-authorship gate (:func:`_assert_human_authorship`, proving run #4).
-Both are FRICTION at the seam, not proof — the driving agent authors the
-spec (``response`` included), so a determined agent could fabricate a human
-quote; what they mechanically kill is the observed rationalization class
-(hand-injected fields, bare-``y`` laundering). The true lock — a harness
-hook capturing the human utterance out-of-band — is staged follow-up work,
-the same posture as rule 10's verb-only MVP.
+The authorship gate's evidence source is TIERED: when the harness-side
+``UserPromptSubmit`` capture hook
+(:mod:`hpc_agent._kernel.hooks.utterance_capture`) has logged utterances for
+this repo, value tokens must derive from that log — text the harness, not
+the agent, recorded — and the gate is a lock. Without a log (hook not
+installed, older sessions) it falls back to journal ``response`` fields,
+which the driving agent itself writes: FRICTION, not proof — what it
+mechanically kills there is the observed rationalization class
+(hand-injected fields, bare-``y`` laundering), not deliberate fabrication
+of a human quote.
 """
 
 from __future__ import annotations
@@ -438,37 +442,52 @@ def _assert_human_authorship(
     prior record's ``resolved`` was gated when it was committed — subsequent
     decisions are unaffected.
 
-    **Check** — the value must be derivable from HUMAN text: this record's
-    ``response`` plus every prior record's ``response`` in the scope's
-    journal (a prior nudge that stated the sweep authorizes a later bare
-    ``y``).
+    **Check** — the value must be derivable from HUMAN text, taken from the
+    strongest source available:
+
+    * **Utterance log present** (the ``UserPromptSubmit`` capture hook,
+      :mod:`hpc_agent._kernel.hooks.utterance_capture`, has logged prompts
+      for this repo — :func:`hpc_agent.state.utterances.read_utterances`):
+      the human texts are the LOGGED UTTERANCES, written by the harness
+      out-of-band. Journal ``response`` fields — agent-authored — carry no
+      authorship weight in this mode: a substantive ``response`` cannot
+      commit a free-text field, and response numbers cannot support a
+      structured one. This is the lock the v1 gate staged.
+    * **No utterance log** (hook not installed / older sessions —
+      back-compat fail-open): this record's ``response`` plus every prior
+      record's ``response`` in the scope's journal (a prior nudge that
+      stated the sweep authorizes a later bare ``y``).
+
+    Per-field rules, against the chosen human texts:
 
     * Structured fields (``task_generator``): every number token the value
       asserts must be human-derivable (:func:`_human_derivable` — verbatim,
       magnitude-suffixed like ``1M``, zero, or a range endpoint of a stated
       count). A value with no numbers falls back to the free-text rule.
-    * Free-text fields (``goal``): the committing ``response`` must be
-      non-bare (:func:`_is_bare_ack`), OR the value's word tokens must
-      overlap some human response text.
+    * Free-text fields (``goal``): the value's word tokens must overlap some
+      human text; in journal-response mode only, a non-bare committing
+      ``response`` (:func:`_is_bare_ack`) also commits it.
 
-    **Fail-open** only where the journal genuinely lacks response text: prior
-    records exist and NONE carries a ``response`` key (old-schema journals).
-    An empty/absent value is not a commit and is never gated.
+    **Fail-open** only in journal-response mode where the journal genuinely
+    lacks response text: prior records exist and NONE carries a ``response``
+    key (old-schema journals). An empty/absent value is not a commit and is
+    never gated.
 
-    **Honesty — friction, not proof.** The driving agent authors this spec,
-    ``response`` included, so a determined agent could fabricate a human
-    quote — "a guard the LLM itself satisfies is not a guard"
-    (engineering-principles). What this gate kills is the OBSERVED failure:
-    bare-``y`` laundering, which is rationalization ("the human approved it")
-    rather than fraud (typing words the human never said). Same staged
-    posture as rule 10's verb-only MVP: the true lock — a harness hook
-    capturing the human utterance out-of-band and comparing it here — is the
-    named follow-up. This gate refuses value-commitment without a
-    human-attributed utterance on record; it does not prove human authorship.
+    **Honesty — the trust model is tiered, not uniform.** With the capture
+    hook installed, the authorship evidence is HARNESS-captured: the hook
+    fires before the model sees the prompt, so the utterance log is text a
+    human verifiably typed, and this gate is a lock — "a guard the LLM
+    itself satisfies is not a guard" (engineering-principles) no longer
+    applies to the evidence source. Without the hook, the fallback evidence
+    (journal ``response`` fields) is agent-authored, and the v1 friction
+    posture stands: it kills the OBSERVED failure — bare-``y`` laundering,
+    rationalization rather than fraud — but a determined agent could still
+    fabricate a human quote. Refusing the fallback outright would break
+    every pre-hook install, so back-compat wins there.
 
     Raises :class:`errors.SpecInvalid` naming the field(s), the underivable
-    token(s), and the remedy (ask the human for the sweep, or the human
-    restates it in their reply).
+    token(s), the evidence source consulted, and the remedy (the human
+    states the sweep in a prompt / their reply).
     """
     if not isinstance(resolved, dict) or not resolved:
         return
@@ -490,9 +509,19 @@ def _assert_human_authorship(
         return
 
     prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
-    if prior and not any("response" in rec for rec in prior):
-        # Fail-open: an old-schema journal with no response text at all —
-        # there is no human record to derive from OR to contradict.
+
+    # Tiered evidence source: prefer the harness-captured utterance log (the
+    # lock) over agent-authored journal responses (the friction fallback).
+    from hpc_agent.state.utterances import read_utterances
+
+    utterances = read_utterances(experiment_dir)
+    harness_captured = bool(utterances)
+
+    if not harness_captured and prior and not any("response" in rec for rec in prior):
+        # Fail-open (journal-response mode only): an old-schema journal with
+        # no response text at all — there is no human record to derive from
+        # OR to contradict. With an utterance log the stronger source exists,
+        # so this escape hatch never applies.
         return
 
     first_commits = [
@@ -503,13 +532,26 @@ def _assert_human_authorship(
     if not first_commits:
         return
 
-    human_texts = [str(spec.response or "")]
-    human_texts.extend(str(rec.get("response") or "") for rec in prior)
+    if harness_captured:
+        # The lock: only text the HARNESS recorded counts as human. The
+        # spec's ``response`` (and prior responses) are agent-relayed and
+        # carry no authorship weight — exactly the laundering channel the
+        # v1 gate could not close.
+        human_texts = [str(u.get("text") or "") for u in utterances]
+        response_commits = False
+        source_desc = "logged human utterance for this repo (harness-captured)"
+        remedy = "the human states it in a prompt (captured to the utterance log)"
+    else:
+        human_texts = [str(spec.response or "")]
+        human_texts.extend(str(rec.get("response") or "") for rec in prior)
+        response_commits = not _is_bare_ack(str(spec.response or ""))
+        source_desc = "human response in this scope's journal"
+        remedy = "the human restates it in their reply"
+
     human_num_strings, human_num_floats = _human_number_pool(human_texts)
     human_words: set[str] = set()
     for text in human_texts:
         human_words |= _ha_word_tokens(text)
-    bare = _is_bare_ack(str(spec.response or ""))
 
     problems: list[str] = []
     for field in first_commits:
@@ -525,23 +567,23 @@ def _assert_human_authorship(
                 )
                 if missing:
                     problems.append(
-                        f"{field} is human-authored: a bare {spec.response!r} cannot "
+                        f"{field} is human-authored: {spec.response!r} cannot "
                         "commit a value that appears only in the agent's proposal — "
-                        "ask the human for the sweep (or the human restates it in "
-                        f"their reply); value token(s) {missing} derive from no human "
-                        "response in this scope's journal"
+                        f"ask the human for the sweep (or {remedy}); value "
+                        f"token(s) {missing} derive from no {source_desc}"
                     )
                 continue
             # No number tokens — fall through to the free-text rule below.
-        if not bare:
-            continue  # a substantive human reply commits it
+        if response_commits:
+            continue  # journal-response mode: a substantive human reply commits it
         overlap_text = value if isinstance(value, str) else json.dumps(value, default=str)
         if _ha_word_tokens(overlap_text) & human_words:
-            continue  # the human's own words (this reply or a prior one) state it
+            continue  # the human's own words state it (per the evidence source)
         problems.append(
-            f"{field} is human-authored: a bare {spec.response!r} cannot commit a "
+            f"{field} is human-authored: {spec.response!r} cannot commit a "
             "value that appears only in the agent's proposal — ask the human to "
-            f"state the {field} (or the human restates it in their reply)"
+            f"state the {field} (or {remedy}); the value derives from no "
+            f"{source_desc}"
         )
 
     if problems:

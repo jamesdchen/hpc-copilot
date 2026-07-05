@@ -69,8 +69,19 @@ _SKILL_GLOB = "slash_commands/skills/*/SKILL.md"
 _WORKER_PROMPT_GLOB = "hpc_agent/_kernel/extension/worker_prompts/*.md"
 
 # Cited exemptions: ``(scan-root-relative path, category)`` for a genuine
-# human-debug doc that must show a blocked command. Empty today.
-ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
+# human-debug doc that must show a blocked command.
+ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
+    {
+        # The /release skill is a HUMAN-run release procedure (halts before
+        # every outward step; no autonomous worker executes it). Its
+        # build-purge one-liner (`python -c "import shutil; ..."`) and the
+        # WSL install (`wsl.exe -- bash -lc 'pip install ...'`) are
+        # interactive human idioms, not worker instructions. Ported from
+        # ~/.claude/skills/release 2026-07-04.
+        ("slash_commands/skills/release/SKILL.md", "python -c"),
+        ("slash_commands/skills/release/SKILL.md", "bash -c"),
+    }
+)
 
 # Commands whose chaining the auto-mode classifier permits (each segment is
 # itself allow-listed). A SKILL chain composed only of these is not flagged.

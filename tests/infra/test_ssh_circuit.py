@@ -411,3 +411,65 @@ class TestRobustness:
         expected = ssh_circuit.circuit_state_path("host:with/odd*chars")
         assert expected.name == "host_with_odd_chars.json"
         assert expected.exists()
+
+
+# ---------------------------------------------------------------------------
+# effective_state — the read-seam honesty definition (2026-07-05: stale OPEN)
+# ---------------------------------------------------------------------------
+
+
+class TestEffectiveState:
+    """The single READ-side definition every renderer (doctor, snapshot,
+    net-triage) routes through: the state FILE says "open" until traffic runs
+    the half-open probe, so an expired cooldown must read as
+    half_open_eligible, never a stale open."""
+
+    def test_missing_or_closed_doc_reads_closed(self):
+        assert ssh_circuit.effective_state(None, now=0.0) == "closed"
+        assert ssh_circuit.effective_state({"state": "closed"}, now=0.0) == "closed"
+        # Fail-open on a malformed doc without a state key.
+        assert ssh_circuit.effective_state({}, now=0.0) == "closed"
+
+    def test_open_within_cooldown_reads_open(self):
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        doc = _state()
+        assert doc["state"] == "open"
+        assert ssh_circuit.effective_state(doc, now=clock.now) == "open"
+        clock.advance(BASE_COOLDOWN_SEC - 1)
+        assert ssh_circuit.effective_state(doc, now=clock.now) == "open"
+
+    def test_expired_cooldown_reads_half_open_eligible_while_file_says_open(self):
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        clock.advance(BASE_COOLDOWN_SEC + 1)
+        doc = _state()
+        assert doc["state"] == "open"  # write semantics untouched: file is stale
+        assert ssh_circuit.effective_state(doc, now=clock.now) == "half_open_eligible"
+
+    def test_effective_state_never_writes(self):
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        clock.advance(BASE_COOLDOWN_SEC + 1)
+        before = circuit_state_path(HOST).read_text(encoding="utf-8")
+        ssh_circuit.effective_state(_state(), now=clock.now)
+        assert circuit_state_path(HOST).read_text(encoding="utf-8") == before
+
+    def test_check_circuit_agrees_with_effective_state(self):
+        """The gate and the renderer share one deadline definition: while
+        effective_state says open, check_circuit refuses; once it says
+        half_open_eligible, check_circuit grants the probe slot."""
+        clock = FakeClock()
+        _fail_n(clock, CIRCUIT_THRESHOLD)
+        assert ssh_circuit.effective_state(_state(), now=clock.now) == "open"
+        with pytest.raises(SshCircuitOpen):
+            check_circuit(TARGET, clock=clock)
+        clock.advance(BASE_COOLDOWN_SEC + 1)
+        assert ssh_circuit.effective_state(_state(), now=clock.now) == "half_open_eligible"
+        check_circuit(TARGET, clock=clock)  # claims the probe slot: no raise
+
+    def test_open_deadline_matches_opened_at_plus_cooldown(self):
+        doc = {"state": "open", "opened_at": 1000.0, "cooldown_sec": 300.0}
+        assert ssh_circuit.open_deadline(doc, now=0.0) == 1300.0
+        # Malformed opened_at falls back to now (fail-open: looks fresh).
+        assert ssh_circuit.open_deadline({"state": "open"}, now=50.0) == 50.0 + BASE_COOLDOWN_SEC

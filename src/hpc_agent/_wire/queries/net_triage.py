@@ -69,9 +69,13 @@ class BreakerState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="net-triage breaker state")
 
-    state: Literal["closed", "open", "missing"] = Field(
+    state: Literal["closed", "open", "half_open_eligible", "missing"] = Field(
         description=(
-            "Breaker state: 'open' fails SSH fast (ban-risk protection), "
+            "EFFECTIVE breaker state at read time: 'open' fails SSH fast "
+            "(ban-risk protection, still cooling), 'half_open_eligible' means "
+            "the cooldown has lapsed and the next real SSH connection will run "
+            "the single half-open probe (success closes the circuit, failure "
+            "re-opens it with a doubled cooldown) — nothing fails fast anymore, "
             "'closed' is healthy, 'missing' means no state file (never failed)."
         )
     )
@@ -82,9 +86,9 @@ class BreakerState(BaseModel):
     cooldown_until: str | None = Field(
         default=None,
         description=(
-            "When the cooldown ends and the automatic half-open probe becomes "
-            "eligible (ISO-8601 UTC). Null unless the breaker is open. A past "
-            "deadline means the breaker is waiting for one probe to succeed."
+            "When the cooldown ends/ended and the half-open probe becomes "
+            "eligible (ISO-8601 UTC). Null unless state is 'open' or "
+            "'half_open_eligible' (where it is the already-past lapse time)."
         ),
     )
     last_failure_at: str | None = Field(
@@ -132,9 +136,11 @@ class HostTriage(BaseModel):
         default=None,
         description=(
             "Whether ONE bounded TCP connect to host:22 succeeded. Null when the "
-            "probe was SKIPPED — always skipped while the breaker is open (the "
-            "half-open probe slot belongs to the breaker, never to triage) and "
-            "when DNS already failed."
+            "probe was SKIPPED — always skipped while the breaker is open and "
+            "still cooling (the half-open probe slot belongs to the breaker, "
+            "never to triage) and when DNS already failed. A half_open_eligible "
+            "breaker DOES get the probe: it is evidence only, never a circuit "
+            "transition (triage never claims the probe slot)."
         ),
     )
     tcp_detail: str | None = Field(

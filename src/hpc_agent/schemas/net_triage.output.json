@@ -46,10 +46,11 @@
       "description": "One host's SSH circuit-breaker state, read from its durable state file.\n\nRead-only: triage NEVER writes breaker state, never claims the half-open\nprobe slot, and never counts toward the failure ledger. ``missing`` means\nno state file exists (a healthy host that never failed) and is treated as\nclosed everywhere — fail-open, same posture as the breaker itself.",
       "properties": {
         "state": {
-          "description": "Breaker state: 'open' fails SSH fast (ban-risk protection), 'closed' is healthy, 'missing' means no state file (never failed).",
+          "description": "EFFECTIVE breaker state at read time: 'open' fails SSH fast (ban-risk protection, still cooling), 'half_open_eligible' means the cooldown has lapsed and the next real SSH connection will run the single half-open probe (success closes the circuit, failure re-opens it with a doubled cooldown) — nothing fails fast anymore, 'closed' is healthy, 'missing' means no state file (never failed).",
           "enum": [
             "closed",
             "open",
+            "half_open_eligible",
             "missing"
           ],
           "title": "State",
@@ -71,7 +72,7 @@
             }
           ],
           "default": null,
-          "description": "When the cooldown ends and the automatic half-open probe becomes eligible (ISO-8601 UTC). Null unless the breaker is open. A past deadline means the breaker is waiting for one probe to succeed.",
+          "description": "When the cooldown ends/ended and the half-open probe becomes eligible (ISO-8601 UTC). Null unless state is 'open' or 'half_open_eligible' (where it is the already-past lapse time).",
           "title": "Cooldown Until"
         },
         "last_failure_at": {
@@ -197,7 +198,7 @@
             }
           ],
           "default": null,
-          "description": "Whether ONE bounded TCP connect to host:22 succeeded. Null when the probe was SKIPPED — always skipped while the breaker is open (the half-open probe slot belongs to the breaker, never to triage) and when DNS already failed.",
+          "description": "Whether ONE bounded TCP connect to host:22 succeeded. Null when the probe was SKIPPED — always skipped while the breaker is open and still cooling (the half-open probe slot belongs to the breaker, never to triage) and when DNS already failed. A half_open_eligible breaker DOES get the probe: it is evidence only, never a circuit transition (triage never claims the probe slot).",
           "title": "Tcp Ok"
         },
         "tcp_detail": {

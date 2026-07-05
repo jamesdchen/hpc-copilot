@@ -15,8 +15,9 @@ durable record* — the inversion of Claude Science's LLM-audits-LLM reviewer,
 and the project's moat stated as a feature.
 
 It never blocks anything itself: it returns a verdict (``clean`` plus the
-itemized mismatches). Hook-level enforcement is a staged follow-up, out of
-scope for this MVP.
+itemized mismatches). Hook-level enforcement lives in the ``Stop`` hook
+(:mod:`hpc_agent._kernel.hooks.relay_audit_stop`), which runs this audit over
+the final assistant text at turn end.
 """
 
 from __future__ import annotations

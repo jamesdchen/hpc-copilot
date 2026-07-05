@@ -85,6 +85,10 @@ SKILL_ONLY_OK: set[str] = {
     "hpc-build-executor",
     "hpc-classify-axis",
     "hpc-wrap-entry-point",
+    # Human-run release procedure (tracked here since 2026-07-04 so it lives
+    # under the repo lints; formerly an untracked ~/.claude/skills copy that
+    # drifted). No paired slash — invoked as /release via install-commands.
+    "release",
 }
 
 # Slash-command files allowed to have no skill counterpart. Empty

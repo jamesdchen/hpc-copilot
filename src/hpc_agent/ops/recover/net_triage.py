@@ -21,9 +21,12 @@ deterministically and bounded:
 (b) one control-plane HTTPS probe (shared across hosts) + bounded DNS
     resolution of the host;
 (c) ONE bounded direct TCP connect to host:22 — SKIPPED whenever the breaker
-    is open (probing an open circuit is exactly the connection the intrusion
-    filter would count, and success/failure here must not race the breaker's
-    own probe) and when DNS already failed;
+    is open and still cooling (probing an open circuit is exactly the
+    connection the intrusion filter would count, and success/failure here must
+    not race the breaker's own probe) and when DNS already failed. A breaker
+    whose cooldown has lapsed (``half_open_eligible``, per
+    ``ssh_circuit.effective_state``) DOES get the probe — evidence only, never
+    a circuit transition;
 (d) a verdict from a fixed precedence table (see :func:`_verdict`), each arm
     carrying deterministic remediation text.
 
@@ -54,7 +57,12 @@ from hpc_agent._wire.queries.net_triage import (
     TriageVerdict,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.infra.ssh_circuit import BASE_COOLDOWN_SEC, OVERRIDE_ENV, circuit_state_path
+from hpc_agent.infra.ssh_circuit import (
+    OVERRIDE_ENV,
+    circuit_state_path,
+    effective_state,
+    open_deadline,
+)
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
@@ -95,17 +103,21 @@ def _read_doc(path: Path) -> dict[str, Any] | None:
     return doc if isinstance(doc, dict) else None
 
 
-def _breaker_from_doc(doc: dict[str, Any] | None) -> BreakerState:
-    """Project a breaker state doc into the wire model (fail-open on gaps)."""
+def _breaker_from_doc(doc: dict[str, Any] | None, *, now: float | None = None) -> BreakerState:
+    """Project a breaker state doc into the wire model (fail-open on gaps).
+
+    The reported ``state`` is the EFFECTIVE state at *now* — routed through
+    :func:`hpc_agent.infra.ssh_circuit.effective_state`, the single read-seam
+    definition — so an expired cooldown reads as ``half_open_eligible``, never
+    a stale ``open`` (the state file itself only flips on the next probe).
+    """
     if doc is None:
         return BreakerState(state="missing")
-    state: Literal["closed", "open"] = "open" if doc.get("state") == "open" else "closed"
+    now = time.time() if now is None else now
+    state: Literal["closed", "open", "half_open_eligible"] = effective_state(doc, now=now)
     cooldown_until: str | None = None
-    if state == "open":
-        deadline = _float_or(doc.get("opened_at"), time.time()) + _float_or(
-            doc.get("cooldown_sec"), BASE_COOLDOWN_SEC
-        )
-        cooldown_until = _iso(deadline)
+    if state in ("open", "half_open_eligible"):
+        cooldown_until = _iso(open_deadline(doc, now=now))
     last = doc.get("last_failure")
     last_at = last_detail = None
     if isinstance(last, dict):
@@ -128,12 +140,18 @@ def read_breaker_state(host: str) -> BreakerState:
 
 
 def open_circuit_lines() -> list[str]:
-    """One human-facing line per host whose SSH circuit is currently OPEN.
+    """One human-facing line per host whose SSH circuit is not closed.
 
     Scans every ``_ssh_circuit/*.json`` state file (fail-open: unreadable
     files and a missing dir yield nothing). ``doctor`` and ``status-snapshot``
     surface these lines so a breaker-dark host is visible on the surfaces an
     agent already reads — the 2026-07-05 incident's missing signal.
+
+    States route through :func:`hpc_agent.infra.ssh_circuit.effective_state`
+    (the read-seam definition): a genuinely-cooling breaker renders as OPEN
+    with its deadline; an expired cooldown renders as half-open eligible with
+    the actionable next step — the file still says "open" until traffic runs
+    the probe, and rendering that stale OPEN forever was the 2026-07-05 bug.
     """
     from hpc_agent.state.run_record import _current_homedir
 
@@ -143,17 +161,30 @@ def open_circuit_lines() -> list[str]:
         paths = sorted(state_dir.glob("*.json")) if state_dir.is_dir() else []
     except OSError:
         return []
+    now = time.time()
     for path in paths:
         doc = _read_doc(path)
-        if doc is None or doc.get("state") != "open":
+        if doc is None:
+            continue
+        state = effective_state(doc, now=now)
+        if state == "closed":
             continue
         host = str(doc.get("host") or path.stem)
-        breaker = _breaker_from_doc(doc)
-        lines.append(
-            f"ssh circuit for {host}: OPEN until {breaker.cooldown_until} "
-            f"({breaker.consecutive_failures} failures) — SSH to this host fails fast "
-            f"by design; run net-triage before diagnosing the network."
-        )
+        breaker = _breaker_from_doc(doc, now=now)
+        if state == "open":
+            lines.append(
+                f"ssh circuit for {host}: OPEN until {breaker.cooldown_until} "
+                f"({breaker.consecutive_failures} failures) — SSH to this host fails fast "
+                f"by design; run net-triage before diagnosing the network."
+            )
+        else:  # half_open_eligible
+            lines.append(
+                f"ssh circuit for {host}: cooldown lapsed at {breaker.cooldown_until} "
+                f"({breaker.consecutive_failures} failures) — half-open eligible: the "
+                f"next SSH connection will probe (success closes the circuit, failure "
+                f"re-opens it with a doubled cooldown); run net-triage before "
+                f"diagnosing the network."
+            )
     return lines
 
 
@@ -250,8 +281,10 @@ def _verdict(
        nothing overrides it.
     2. A failed control probe means THIS machine's network is down — the most
        fundamental cause; every host looks dark when the box is offline.
-    3. An open breaker explains SSH failing fast (and the TCP probe was
-       skipped, so there is no direct evidence to outrank it).
+    3. An open (still-cooling) breaker explains SSH failing fast (and the TCP
+       probe was skipped, so there is no direct evidence to outrank it). A
+       ``half_open_eligible`` breaker never lands here: its probe ran, so the
+       verdict comes from evidence (the breaker note rides the remediation).
     4. DNS failure — the name never resolved; nothing host-side was reached.
     5. Control passes but host:22 does not connect — cluster-side outage or a
        border filter on this source IP.
@@ -268,7 +301,25 @@ def _verdict(
 
 
 def _remediation(verdict: TriageVerdict, host: str, breaker: BreakerState) -> str:
-    """Deterministic remediation text per verdict arm."""
+    """Deterministic remediation text per verdict arm.
+
+    A ``half_open_eligible`` breaker appends its actionable note to whatever
+    the evidence-based verdict said: the cooldown has lapsed, so the next real
+    SSH attempt runs the breaker's single half-open probe.
+    """
+    text = _remediation_base(verdict, host, breaker)
+    if breaker.state == "half_open_eligible":
+        text += (
+            f" Note: the SSH circuit breaker for {host} has a lapsed cooldown "
+            f"(half-open eligible) — nothing fails fast anymore; the next real SSH "
+            f"attempt runs the single half-open probe (success closes the circuit, "
+            f"failure re-opens it with a doubled cooldown)."
+        )
+    return text
+
+
+def _remediation_base(verdict: TriageVerdict, host: str, breaker: BreakerState) -> str:
+    """The per-verdict-arm remediation text, before any breaker note."""
     if verdict == "reachable":
         return (
             f"{host}:{SSH_PORT} accepts TCP — the network path is fine. If SSH still "
@@ -322,9 +373,12 @@ def _triage_host(
 
     tcp_ok: bool | None
     if breaker.state == "open":
-        # NEVER probe through an open breaker: the connection would be one more
-        # the intrusion filter counts, and triage must not race or burn the
-        # breaker's single half-open probe slot (claimed by check_circuit).
+        # NEVER probe through a genuinely-cooling breaker: the connection would
+        # be one more the intrusion filter counts. A half_open_eligible breaker
+        # is different: its cooldown has lapsed, so the bounded TCP check runs —
+        # as EVIDENCE only. It never claims the breaker's half-open probe slot
+        # (check_circuit owns that, under the file lock) and never transitions
+        # the circuit; the next real SSH attempt still runs the probe.
         tcp_ok, tcp_detail = (
             None,
             (
@@ -366,7 +420,9 @@ def _triage_host(
             "configured cluster host (plus an optional --spec host): circuit-"
             "breaker state (read-only), one control-plane HTTPS probe, bounded "
             "DNS, and ONE bounded TCP connect to host:22 (skipped while the "
-            "breaker is open). Verdict per host with remediation — run this "
+            "breaker is open and cooling; a lapsed cooldown reads as "
+            "half_open_eligible and gets the probe as evidence). Verdict per "
+            "host with remediation — run this "
             "before concluding a network cause; never diagnose with improvised "
             "ssh probes."
         ),
@@ -385,7 +441,9 @@ def net_triage(*, spec: NetTriageSpec | None = None) -> NetTriageResult:
     Deterministic and bounded: one HTTPS control probe (shared), then per host
     a breaker-state file read, a bounded DNS resolution, and at most ONE TCP
     connect to host:22 — skipped entirely while that host's breaker is open
-    (the breaker owns the half-open probe; triage never interferes). The
+    and still cooling (the breaker owns the half-open probe; triage never
+    interferes; a lapsed cooldown reads as ``half_open_eligible`` and gets
+    the probe as evidence only). The
     verdict precedence is fixed (:func:`_verdict`): direct evidence
     (``reachable``) outranks everything; a failed control probe
     (``local_network_down``) outranks host-side conclusions; an open breaker

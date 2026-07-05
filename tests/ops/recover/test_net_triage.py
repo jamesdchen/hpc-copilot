@@ -158,6 +158,93 @@ def test_control_failure_outranks_open_breaker(probes: dict[str, Any]) -> None:
     assert out.hosts[0].breaker.state == "open"  # still surfaced as evidence
 
 
+# ─── read-seam honesty: expired cooldown is NOT a stale OPEN ─────────────────
+
+
+def _write_expired_circuit(host: str = HOST, *, failures: int = 4) -> None:
+    """A breaker opened long enough ago that its cooldown has lapsed."""
+    _write_circuit(host, failures=failures, opened_at=time.time() - 900.0, cooldown_sec=300.0)
+
+
+def test_expired_cooldown_reads_half_open_eligible_and_probes(probes: dict[str, Any]) -> None:
+    """A lapsed cooldown must not render as a stale OPEN: the effective state
+    is half_open_eligible, the bounded TCP check RUNS (evidence, not a circuit
+    transition), and the verdict comes from that evidence."""
+    _write_expired_circuit()
+    out = _one()
+    (h,) = out.hosts
+    assert h.breaker.state == "half_open_eligible"
+    assert h.breaker.cooldown_until is not None  # the (past) lapse time
+    assert probes["tcp_calls"] == 1
+    assert h.tcp_ok is True
+    assert h.verdict == "reachable"
+    # The remediation carries the actionable breaker note.
+    assert "half-open eligible" in h.remediation
+    assert "next real SSH attempt" in h.remediation
+
+
+def test_expired_cooldown_never_claims_probe_slot(probes: dict[str, Any]) -> None:
+    """Triage through a half_open_eligible breaker is read-only: the state
+    file is untouched and probe_claimed_at stays unclaimed."""
+    _write_expired_circuit()
+    before = circuit_state_path(HOST).read_text(encoding="utf-8")
+    _one()
+    assert circuit_state_path(HOST).read_text(encoding="utf-8") == before
+    assert json.loads(before)["probe_claimed_at"] is None
+
+
+def test_expired_cooldown_with_tcp_failure_uses_evidence_verdict(
+    probes: dict[str, Any],
+) -> None:
+    """half_open_eligible never yields breaker_open_cooling — the probe ran,
+    so the evidence arm (host_unreachable_network_ok here) wins."""
+    _write_expired_circuit()
+    probes["tcp"] = (False, "TimeoutError: timed out")
+    out = _one()
+    (h,) = out.hosts
+    assert h.verdict == "host_unreachable_network_ok"
+    assert h.breaker.state == "half_open_eligible"
+    assert "half-open eligible" in h.remediation
+
+
+def test_open_circuit_lines_expired_cooldown_is_actionable(probes: dict[str, Any]) -> None:
+    """The doctor/snapshot line for a lapsed cooldown must say what happens
+    next, not claim a stale OPEN-until deadline."""
+    _write_expired_circuit()
+    lines = open_circuit_lines()
+    assert len(lines) == 1
+    assert "OPEN until" not in lines[0]
+    assert f"ssh circuit for {HOST}: cooldown lapsed at" in lines[0]
+    assert "half-open eligible" in lines[0]
+    assert "next SSH connection will probe" in lines[0]
+    assert "net-triage" in lines[0]
+
+
+def test_doctor_carries_half_open_eligible_line(probes: dict[str, Any], tmp_path: Any) -> None:
+    from hpc_agent._wire.queries.doctor import DoctorSpec
+    from hpc_agent.ops.recover.doctor import doctor
+
+    _write_expired_circuit()
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now="2026-07-05T01:00:00+00:00"))
+    assert len(out["open_ssh_circuits"]) == 1
+    assert "half-open eligible" in out["open_ssh_circuits"][0]
+    assert "OPEN until" not in out["open_ssh_circuits"][0]
+
+
+def test_status_snapshot_carries_half_open_eligible_line(
+    probes: dict[str, Any], tmp_path: Any
+) -> None:
+    from hpc_agent._wire.workflows.status_blocks import StatusSnapshotSpec
+    from hpc_agent.ops.status_blocks import status_snapshot
+
+    _write_expired_circuit()
+    result = status_snapshot(tmp_path, spec=StatusSnapshotSpec())
+    lines = result.brief["open_ssh_circuits"]
+    assert len(lines) == 1
+    assert "half-open eligible" in lines[0]
+    assert "OPEN until" not in lines[0]
+
+
 # ─── fail-open + enumeration ─────────────────────────────────────────────────
 
 

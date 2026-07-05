@@ -669,7 +669,7 @@
     "output_schema": "net_triage.output.json",
     "python": "hpc_agent.ops.recover.net_triage.net_triage",
     "side_effects": [],
-    "summary": "Connectivity differential: WHY can't I reach the cluster? For each configured cluster host (plus an optional --spec host): circuit-breaker state (read-only), one control-plane HTTPS probe, bounded DNS, and ONE bounded TCP connect to host:22 (skipped while the breaker is open). Verdict per host with remediation — run this before concluding a network cause; never diagnose with improvised ssh probes.",
+    "summary": "Connectivity differential: WHY can't I reach the cluster? For each configured cluster host (plus an optional --spec host): circuit-breaker state (read-only), one control-plane HTTPS probe, bounded DNS, and ONE bounded TCP connect to host:22 (skipped while the breaker is open and cooling; a lapsed cooldown reads as half_open_eligible and gets the probe as evidence). Verdict per host with remediation — run this before concluding a network cause; never diagnose with improvised ssh probes.",
     "verb": "query"
   },
   {

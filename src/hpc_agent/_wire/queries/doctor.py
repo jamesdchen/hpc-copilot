@@ -248,12 +248,15 @@ class DoctorResult(BaseModel):
     open_ssh_circuits: list[str] = Field(
         default_factory=list,
         description=(
-            "One line per host whose SSH circuit breaker is currently OPEN "
-            "('ssh circuit for <host>: OPEN until <ts> (<n> failures) ...'). "
-            "An open breaker means SSH to that host fails fast BY DESIGN "
-            "(ban-risk protection) — run net-triage for the full connectivity "
-            "differential; never diagnose with improvised ssh probes. Empty "
-            "when every breaker is closed (fail-open on unreadable state)."
+            "One line per host whose SSH circuit breaker is not closed, in its "
+            "EFFECTIVE state: still cooling ('ssh circuit for <host>: OPEN "
+            "until <ts> (<n> failures) ...' — SSH fails fast BY DESIGN, "
+            "ban-risk protection) or cooldown-lapsed ('... cooldown lapsed at "
+            "<ts> ... half-open eligible ...' — nothing fails fast anymore; "
+            "the next SSH connection runs the probe). Run net-triage for the "
+            "full connectivity differential; never diagnose with improvised "
+            "ssh probes. Empty when every breaker is closed (fail-open on "
+            "unreadable state)."
         ),
     )
     version_skew: VersionSkew | None = Field(

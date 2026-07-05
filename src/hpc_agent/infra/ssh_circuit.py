@@ -53,7 +53,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent.errors import SshCircuitOpen
 
@@ -70,7 +70,9 @@ __all__ = [
     "check_circuit",
     "circuit_state_path",
     "classify_connection_failure",
+    "effective_state",
     "guarded_call",
+    "open_deadline",
     "record_connection_failure",
     "record_connection_success",
 ]
@@ -181,13 +183,52 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def open_deadline(doc: dict[str, Any], *, now: float) -> float:
+    """When *doc*'s open cooldown ends (``opened_at + cooldown_sec``).
+
+    *now* backstops a malformed/missing ``opened_at`` (fail-open: an
+    unparseable open looks freshly opened rather than crashing a renderer).
+    """
+    return _float_or(doc.get("opened_at"), now) + _float_or(
+        doc.get("cooldown_sec"), BASE_COOLDOWN_SEC
+    )
+
+
+def effective_state(
+    doc: dict[str, Any] | None, *, now: float
+) -> Literal["closed", "open", "half_open_eligible"]:
+    """The honest READ-side breaker state for *doc* at *now* — the single
+    definition every renderer routes through (doctor's ``open_ssh_circuits``,
+    status-snapshot, net-triage's verdict).
+
+    The state FILE keeps saying ``"open"`` after the cooldown lapses: nothing
+    rewrites it until traffic triggers the half-open probe, so a raw read
+    shows a stale OPEN indefinitely (2026-07-05: the discovery breaker read
+    "open" long past its 300s cooldown). This reports what the breaker will
+    actually DO on the next attempt:
+
+    * ``"open"`` — genuinely cooling; SSH to the host fails fast until the
+      :func:`open_deadline`.
+    * ``"half_open_eligible"`` — cooldown lapsed, no probe has run yet; the
+      next connection attempt will claim the single half-open probe slot
+      (success closes the circuit, failure re-opens it with a doubled
+      cooldown). Nothing is failing fast anymore.
+    * ``"closed"`` — healthy (also for a missing/unreadable doc: fail-open).
+
+    Read-side ONLY: never writes state and never claims the probe slot —
+    :func:`check_circuit` owns every transition.
+    """
+    if doc is None or doc.get("state") != "open":
+        return "closed"
+    return "open" if now < open_deadline(doc, now=now) else "half_open_eligible"
+
+
 def _open_error(
     host: str, doc: dict[str, Any], *, now: float, probe_in_flight: bool
 ) -> SshCircuitOpen:
     """Build the fail-fast envelope error: why, until when, how to override."""
     failures = int(_float_or(doc.get("consecutive_failures"), 0))
-    cooldown = _float_or(doc.get("cooldown_sec"), BASE_COOLDOWN_SEC)
-    deadline = _float_or(doc.get("opened_at"), now) + cooldown
+    deadline = open_deadline(doc, now=now)
     if probe_in_flight:
         detail = "a half-open probe is already in flight; failing fast until it resolves"
     else:
@@ -248,10 +289,7 @@ def check_circuit(ssh_target: str, *, clock: Callable[[], float] = time.time) ->
             doc = _read_doc(path)
             if doc is None or doc.get("state") != "open":
                 return
-            deadline = _float_or(doc.get("opened_at"), now) + _float_or(
-                doc.get("cooldown_sec"), BASE_COOLDOWN_SEC
-            )
-            if now < deadline:
+            if effective_state(doc, now=now) == "open":
                 raise _open_error(host, doc, now=now, probe_in_flight=False)
             claimed_at = doc.get("probe_claimed_at")
             if claimed_at is not None and now - _float_or(claimed_at, 0.0) < PROBE_CLAIM_TTL_SEC:
