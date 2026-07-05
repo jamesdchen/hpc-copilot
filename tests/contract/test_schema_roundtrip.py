@@ -479,3 +479,52 @@ def test_shared_block_output_schemas_resolve_in_both_resolvers() -> None:
             f"($id={resolved.get('$id')!r}) than the catalog ({expected_file!r}); "
             f"the two resolvers disagree"
         )
+
+
+# Output schemas that back NO single CLI verb — cross-cutting or composed-only
+# shapes consumed by code paths other than a verb's ``output_schema``. Each
+# needs a one-line reason; the mirror of ``documented_composed_only`` for
+# inputs. A file that isn't a verb output AND isn't here is a stranded wire
+# artifact — the state ``runtime_prior.output.json`` was in (a plugin-only
+# verb's contract left in core after the verb moved out; removed 2026-07).
+_NON_VERB_OUTPUT_SCHEMAS: dict[str, str] = {
+    "inspect_cluster.output.json": (
+        "cluster-snapshot contract validated by code via "
+        "_output_schema_for('inspect-cluster') (infra + tests), not a verb output"
+    ),
+    "worker.output.json": (
+        "sub-agent worker report (lenient floor) — consumed by the invoke / "
+        "structured-decode boundary, not emitted by a catalog verb"
+    ),
+    "worker.strict.output.json": (
+        "derived strict variant of worker.output.json for the Codex "
+        "--output-schema worker (build_schemas DERIVED_REGISTRY), not a verb output"
+    ),
+}
+
+
+def test_no_orphan_output_schemas() -> None:
+    """Every ``*.output.json`` is a verb's declared output OR a documented
+    cross-cutting shape.
+
+    Symmetric to :func:`test_no_orphan_input_schemas` — and the guard that
+    would have caught ``runtime_prior.output.json`` mechanically instead of by
+    hand-audit: an output schema that backs no verb (catalog ``output_schema``,
+    which now honors the shared-block ``SchemaRef(output=...)`` override) and
+    isn't a known cross-cutting shape is dead wire surface. The allow-list pins
+    the inventory so a NEW orphan fails loudly rather than accreting silently.
+    """
+    import hpc_agent
+    from hpc_agent._kernel.registry.operations import operations_catalog
+
+    hpc_agent.register_primitives()
+
+    files = {p.name for p in SCHEMAS_DIR.glob("*.output.json")}
+    referenced = {row["output_schema"] for row in operations_catalog() if row.get("output_schema")}
+    orphans = sorted(files - referenced - set(_NON_VERB_OUTPUT_SCHEMAS))
+    assert not orphans, (
+        f"Output schemas backing no CLI verb (and not on the cross-cutting "
+        f"allow-list): {orphans}. Either wire the verb's SchemaRef(output=...), "
+        f"delete the stranded schema, or document the cross-cutting status in "
+        f"_NON_VERB_OUTPUT_SCHEMAS."
+    )

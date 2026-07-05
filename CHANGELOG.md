@@ -125,6 +125,14 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   unreachable. `_kernel/registry/operations.py`, `_kernel/contract/schema.py`,
   `cli/_dispatch.py`, `ops/{submit,aggregate,status}_blocks.py`,
   `meta/campaign/blocks.py`, `tests/contract/test_schema_roundtrip.py`.
+- **Symmetric orphan guard for output schemas.** Added
+  `test_no_orphan_output_schemas`, the mirror of the existing
+  `test_no_orphan_input_schemas`: every `*.output.json` must back a CLI verb
+  (catalog `output_schema`, now honoring the block override above) or sit on a
+  small documented cross-cutting allow-list (`inspect_cluster`, `worker`,
+  `worker.strict`). This is the guard that would have caught the stranded
+  `runtime_prior.output.json` mechanically instead of by hand-audit — a new
+  stranded output schema now fails CI instead of accreting silently.
 
 
 ### Added — persist opaque per-trial params for provenance; warm-start stays a documented strategy pattern (#369)
