@@ -335,7 +335,13 @@ def _is_bare_ack(response: str) -> bool:
 # Number tokens in human text / field values, adapted from verify-relay's
 # claim-extraction idiom: ints, floats, comma- or underscore-grouped values,
 # plus an attached k/M/B magnitude suffix ("1M samples" states 1_000_000).
-_HA_NUM_RE = re.compile(r"(\d[\d,_]*(?:\.\d+)?)([kKmMbB])?(?![A-Za-z0-9_])")
+# A comma counts as GROUPING only in 3-digit groups ("1,000,000"); anything
+# else is an enumeration separator — proving run #5's `\d[\d,_]*` collapsed
+# the human's typed "seeds 0,1,2,...,19" into one giant token, and the gate
+# then made them retype it space-separated.
+_HA_NUM_RE = re.compile(
+    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d[\d_]*(?:\.\d+)?)([kKmMbB])?(?![A-Za-z0-9_])"
+)
 _HA_MULTIPLIERS = {"k": 1_000.0, "m": 1_000_000.0, "b": 1_000_000_000.0}
 
 # Word tokens (>= 4 chars) for the free-text overlap check.
@@ -372,13 +378,35 @@ def _human_number_pool(texts: list[str]) -> tuple[set[str], set[float]]:
     return strings, floats
 
 
+def _contiguous_int_run(obj: Any) -> tuple[int, int] | None:
+    """``(lo, hi)`` when *obj* is a list of ≥3 consecutive ascending ints.
+
+    Proving run #5: ``items_x_seeds`` materializes the sweep as ``seeds:
+    [0..19]``, but a human states it as "20 seeds" or "seeds 0 through 19" —
+    never by enumerating twenty integers (the gate forced exactly that, and
+    the friction was the finding). Interior members of a consecutive run are
+    DERIVED from its endpoints, not independently asserted, so only lo / hi /
+    length face the derivability check. A non-consecutive list (``[0, 5, 10]``)
+    still asserts every member.
+    """
+    if not isinstance(obj, (list, tuple)) or len(obj) < 3:
+        return None
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in obj):
+        return None
+    if any(b - a != 1 for a, b in zip(obj, obj[1:], strict=False)):
+        return None
+    return int(obj[0]), int(obj[-1])
+
+
 def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
     """Gather every number token a required-caller field VALUE asserts.
 
     Scalars contribute their value; strings contribute their embedded number
     tokens (grouping commas/underscores normalized, so ``samples=1_000_000``
     asserts ``1000000``); dicts contribute their values (keys are schema
-    vocabulary, not claims). Bools are skipped.
+    vocabulary, not claims). Bools are skipped. A consecutive-int list
+    (:func:`_contiguous_int_run`) asserts only its endpoints and length — the
+    range form a human actually states.
     """
     if isinstance(obj, bool):
         return
@@ -400,6 +428,12 @@ def _collect_value_numbers(obj: Any, out: dict[str, float]) -> None:
             _collect_value_numbers(v, out)
         return
     if isinstance(obj, (list, tuple)):
+        run = _contiguous_int_run(obj)
+        if run is not None:
+            lo, hi = run
+            for member in (lo, hi, len(obj)):
+                _collect_value_numbers(member, out)
+            return
         for v in obj:
             _collect_value_numbers(v, out)
 
@@ -463,7 +497,10 @@ def _assert_human_authorship(
     * Structured fields (``task_generator``): every number token the value
       asserts must be human-derivable (:func:`_human_derivable` — verbatim,
       magnitude-suffixed like ``1M``, zero, or a range endpoint of a stated
-      count). A value with no numbers falls back to the free-text rule.
+      count). A consecutive-int list asserts only its endpoints and length
+      (:func:`_contiguous_int_run` — "20 seeds" derives ``seeds=[0..19]``;
+      proving run #5's finding was the gate demanding the enumeration).
+      A value with no numbers falls back to the free-text rule.
     * Free-text fields (``goal``): the value's word tokens must overlap some
       human text; in journal-response mode only, a non-bare committing
       ``response`` (:func:`_is_bare_ack`) also commits it.

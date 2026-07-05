@@ -486,6 +486,108 @@ def test_authorship_gate_passes_when_utterance_log_states_the_sweep(tmp_path: Pa
     assert out.record.resolved["task_generator"]["seeds"] == 20
 
 
+def test_authorship_gate_derives_contiguous_seed_list_from_stated_count(
+    tmp_path: Path,
+) -> None:
+    """Proving run #5: ``items_x_seeds`` materializes ``seeds=[0..19]``, and
+    the human states that sweep as "20 seeds" — the gate must not demand the
+    twenty-integer enumeration (a consecutive run asserts only endpoints +
+    length)."""
+    _log_utterance(tmp_path, "20 seeds, n_samples=1000000")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        proposal=_RUN4_PROPOSAL,
+        resolved={
+            "task_generator": {
+                "kind": "items_x_seeds",
+                "params": {"items": [{"n_samples": 1_000_000}], "seeds": list(range(20))},
+            }
+        },
+    )
+    assert out.record.resolved["task_generator"]["params"]["seeds"] == list(range(20))
+
+
+def test_authorship_gate_derives_contiguous_seed_list_from_stated_range(
+    tmp_path: Path,
+) -> None:
+    """The range form: "seeds 0 through 19" states both endpoints; the length
+    (20) is the +1 range-endpoint derivation of a stated endpoint."""
+    _log_utterance(tmp_path, "seeds 0 through 19, n_samples=1000000")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={
+            "task_generator": {
+                "kind": "items_x_seeds",
+                "params": {"items": [{"n_samples": 1_000_000}], "seeds": list(range(20))},
+            }
+        },
+    )
+    assert out.record.resolved["task_generator"]["params"]["seeds"] == list(range(20))
+
+
+def test_authorship_gate_still_refuses_unstated_noncontiguous_seed_list(
+    tmp_path: Path,
+) -> None:
+    """The compression's fire path stays live: a NON-consecutive list asserts
+    every member, and unstated members are refused — "20 seeds" does not
+    derive ``[0, 5, 10, 15]``."""
+    _log_utterance(tmp_path, "20 seeds, n_samples=1000000")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            resolved={
+                "task_generator": {
+                    "kind": "items_x_seeds",
+                    "params": {"items": [{"n_samples": 1_000_000}], "seeds": [0, 5, 10, 15]},
+                }
+            },
+        )
+    msg = str(ei.value)
+    assert "task_generator is human-authored" in msg
+    assert "5" in msg and "15" in msg
+
+
+def test_authorship_gate_tokenizes_comma_separated_enumeration(tmp_path: Path) -> None:
+    """Run #5: ``\\d[\\d,_]*`` collapsed a typed "0,5,10,15" into one giant
+    grouped token, so the humanly-natural comma list never matched. A comma
+    binds as grouping only in 3-digit groups; otherwise it separates tokens.
+    Non-contiguous seeds isolate the tokenizer from the range compression."""
+    _log_utterance(tmp_path, "seeds 0,5,10,15 with n_samples=1,000,000")
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={
+            "task_generator": {
+                "kind": "items_x_seeds",
+                "params": {"items": [{"n_samples": 1_000_000}], "seeds": [0, 5, 10, 15]},
+            }
+        },
+    )
+    assert out.record.resolved["task_generator"]["params"]["seeds"] == [0, 5, 10, 15]
+
+
+def test_authorship_gate_still_refuses_contiguous_run_with_unstated_endpoints(
+    tmp_path: Path,
+) -> None:
+    """A consecutive run whose endpoints the human never stated is still
+    refused — compression narrows WHAT is checked, never WHETHER."""
+    _log_utterance(tmp_path, "run the pi estimation")
+    with pytest.raises(errors.SpecInvalid):
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            resolved={"task_generator": {"kind": "items_x_seeds", "seeds": list(range(3, 23))}},
+        )
+
+
 def test_authorship_gate_utterance_mode_ignores_substantive_response_for_goal(
     tmp_path: Path,
 ) -> None:

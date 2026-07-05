@@ -335,6 +335,31 @@ def test_user_prompt_submit_utterance_hook_is_wired(tmp_path: Path) -> None:
     assert len(settings["hooks"]["UserPromptSubmit"]) == 1
 
 
+# ─── PostToolUse answer capture (proving run #5: typed selector answers) ────
+
+
+def test_ask_user_question_answer_capture_hook_is_wired(tmp_path: Path) -> None:
+    result = install_agent_assets(claude_dir=tmp_path)
+    assert result["settings_answer_capture_hook"]["action"] == "added"
+    assert result["settings_answer_capture_hook"]["wrote"] is True
+
+    settings = _settings(tmp_path)
+    entries = _entries_with_module(
+        _post_tool_use(settings),
+        "hpc_agent._kernel.hooks.answer_capture",
+    )
+    assert len(entries) == 1
+    assert entries[0]["matcher"] == "AskUserQuestion"
+
+    # Idempotent on re-run, and the sibling PostToolUse entries are untouched.
+    second = install_agent_assets(claude_dir=tmp_path)
+    assert second["settings_answer_capture_hook"]["action"] == "already-present"
+    settings = _settings(tmp_path)
+    post = _post_tool_use(settings)
+    assert len(_entries_with_module(post, "hpc_agent._kernel.hooks.answer_capture")) == 1
+    assert len(_entries_with_module(post, _HOOK_MODULE)) == 1
+
+
 # ─── Stop relay audit (conduct rule 10 staged → active) ─────────────────────
 
 

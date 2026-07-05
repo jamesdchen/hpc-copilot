@@ -30,6 +30,12 @@ Defensiveness
   the journal namespace for the payload's ``cwd`` already exists
   (:func:`hpc_agent.state.utterances.append_utterance` is non-creating of the
   namespace). A prompt typed in a non-hpc project leaves zero footprint.
+* **Human-typed only** (proving run #5): harness-injected user turns —
+  ``<task-notification>`` blocks, system reminders, local-command echoes —
+  also fire ``UserPromptSubmit`` and were logged as "human" text. A prompt
+  opening with a harness tag is dropped: notification text is
+  agent-influenced, so admitting it would hand the authorship gate's trust
+  anchor back to the model.
 * **Size-capped**: stored text is capped (~4KB/entry); the sha256 always
   covers the full raw prompt.
 * For a malformed payload, an empty prompt, or any write error it is a clean
@@ -42,19 +48,35 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 __all__ = ["capture", "main"]
 
+# Harness-injected user turns (background-task notifications, system
+# reminders, local-command echoes) fire ``UserPromptSubmit`` too — proving
+# run #5 logged a ``<task-notification>`` block as a "human utterance". That
+# text is NOT human-typed, and pieces of it are agent-influenced (a
+# background command's description/summary), so letting it into the log is a
+# laundering channel into the authorship gate's trust anchor. A payload whose
+# prompt OPENS with one of these tags is dropped; a human prompt merely
+# quoting a tag mid-text still lands.
+_HARNESS_INJECTION_RE = re.compile(
+    r"^\s*<(?:task-notification|system-reminder|local-command-caveat|"
+    r"command-name|command-message|local-command-stdout)\b"
+)
+
 
 def capture(payload: Any) -> dict[str, Any] | None:
     """Pure core: append the payload's prompt to the cwd repo's utterance log.
 
     Returns the appended record, or ``None`` when the payload is not a
-    mapping, carries no non-empty string ``prompt``, or the cwd repo has no
-    journal namespace (no-scaffold rule) — all clean no-ops.
+    mapping, carries no non-empty string ``prompt``, opens with a
+    harness-injection tag (:data:`_HARNESS_INJECTION_RE` — not human-typed),
+    or the cwd repo has no journal namespace (no-scaffold rule) — all clean
+    no-ops.
     """
     from hpc_agent.state.utterances import append_utterance
 
@@ -62,6 +84,8 @@ def capture(payload: Any) -> dict[str, Any] | None:
         return None
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    if _HARNESS_INJECTION_RE.match(prompt):
         return None
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())

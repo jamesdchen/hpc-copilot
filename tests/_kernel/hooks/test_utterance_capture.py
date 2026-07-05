@@ -86,6 +86,27 @@ def test_capture_ignores_empty_and_malformed_payloads(tmp_path: Path) -> None:
     assert not utterances_path(tmp_path).exists()
 
 
+def test_capture_drops_harness_injected_payloads(tmp_path: Path) -> None:
+    """Proving run #5: a background-task ``<task-notification>`` fired the
+    hook and landed in the log as a "human utterance" — agent-influenced
+    text inside the gate's trust anchor. A prompt OPENING with a harness
+    tag is dropped; a human prompt quoting one mid-text still lands."""
+    _scaffold_namespace(tmp_path)
+    injected = [
+        "<task-notification>\n<task-id>bg1</task-id>\n</task-notification>",
+        "  <system-reminder>context stuff</system-reminder>",
+        "<local-command-caveat>Caveat: ...</local-command-caveat>",
+        "<command-name>/clear</command-name>",
+    ]
+    for prompt in injected:
+        assert utterance_capture.capture({"cwd": str(tmp_path), "prompt": prompt}) is None
+    assert read_utterances(tmp_path) == []
+
+    quoting = "why did I get a <task-notification> about 20 seeds?"
+    assert utterance_capture.capture({"cwd": str(tmp_path), "prompt": quoting}) is not None
+    assert read_utterances(tmp_path)[0]["text"] == quoting
+
+
 def test_main_writes_log_and_prints_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

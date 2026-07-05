@@ -250,6 +250,30 @@ _UTTERANCE_CAPTURE_ENTRY: dict[str, Any] = {
 }
 
 
+# The AskUserQuestion answer-capture ``PostToolUse`` hook (proving run #5:
+# answers given through the question selector never pass UserPromptSubmit, so
+# a human who TYPED the sweep into the tool's free-text field was invisible
+# to the authorship gate). Captures only TYPED answer text — a click on an
+# agent-authored option label is never logged (that would reopen the
+# laundering channel the utterance lock closes). Matched on the tool name, so
+# it fires rarely; no bash pre-filter needed.
+def _build_answer_capture_command() -> str:
+    return f"{_hook_python()} -m hpc_agent._kernel.hooks.answer_capture"
+
+
+_ANSWER_CAPTURE_COMMAND = _build_answer_capture_command()
+_ANSWER_CAPTURE_NEEDLE = "hpc_agent._kernel.hooks.answer_capture"
+_ANSWER_CAPTURE_ENTRY: dict[str, Any] = {
+    "matcher": "AskUserQuestion",
+    "hooks": [
+        {
+            "type": "command",
+            "command": _ANSWER_CAPTURE_COMMAND,
+        }
+    ],
+}
+
+
 # The relay-audit ``Stop`` hook (conduct rule 10, staged → active): nothing made
 # a driving agent run ``verify-relay``, so an unaudited relay still reached the
 # human. Fires once per turn end (no matcher — the interpreter start is paid
@@ -881,6 +905,17 @@ def install_agent_assets(
         dry_run=dry_run,
     )
 
+    # Wire the AskUserQuestion answer capture (proving run #5: typed selector
+    # answers are human-authored evidence too) — PostToolUse, matched on the
+    # tool name. Same additive + idempotent merge.
+    settings_answer_capture_hook = _merge_hook_entry(
+        target,
+        event="PostToolUse",
+        entry=_ANSWER_CAPTURE_ENTRY,
+        needle=_ANSWER_CAPTURE_NEEDLE,
+        dry_run=dry_run,
+    )
+
     # Wire the relay-audit Stop hook (conduct rule 10 staged → active): audits
     # the final assistant text against the journal via verify-relay and blocks
     # the stop once on a contradiction. Same additive + idempotent merge.
@@ -916,6 +951,7 @@ def install_agent_assets(
         "settings_write_fence_hook": settings_write_fence_hook,
         "settings_alert_count_hook": settings_alert_count_hook,
         "settings_utterance_hook": settings_utterance_hook,
+        "settings_answer_capture_hook": settings_answer_capture_hook,
         "settings_relay_audit_hook": settings_relay_audit_hook,
         "settings_permissions": settings_permissions,
         "mcp_server": mcp_server,
