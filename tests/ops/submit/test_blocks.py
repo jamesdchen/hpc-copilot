@@ -27,6 +27,7 @@ from hpc_agent._wire.workflows.submit_blocks import (
     SubmitS4Spec,
 )
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec, SubmitResources
+from hpc_agent.ops.relay_render import render_relay
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -574,6 +575,127 @@ def test_s1_ambiguity_branch_does_not_persist_without_run_id(tmp_path: Path) -> 
 
     assert result.run_id is None
     assert read_briefs(tmp_path, _RUN_ID) == []
+
+
+# ── relay rendering (finding 15: code authors the relay; agent relays verbatim) ──
+
+
+def test_render_relay_s2_canary_summary_uses_canary_one_task_not_main_total() -> None:
+    """The exact finding-15 bleed: the S2 canary relay renders the CANARY's 1
+    task, NEVER the main array's total_tasks (which rides ``cost_estimate``)."""
+    brief = {
+        "run_id": "ml_run_abcd1234",
+        "cluster": "hoffman2",
+        "canary_run_id": "ml_run_abcd1234_canary",
+        "verified": True,
+        "failure_kind": None,
+        "deduped": False,
+        "est_core_hours": 80.0,
+        "cost_estimate": {"total_tasks": 20, "walltime_s": 3600, "cores_per_task": 4},
+    }
+    relay = render_relay("s2", "canary_verified", brief)
+
+    assert "canary green" in relay
+    assert "1 task" in relay  # the canary is a one-task probe, by construction
+    assert "80" in relay  # est core-hours — legitimately shown
+    assert "hoffman2" in relay
+    # The main array's total (20) must NOT bleed into the 1-task canary summary.
+    assert "20" not in relay
+
+
+def test_render_relay_s2_canary_failed_names_the_failure() -> None:
+    brief = {
+        "run_id": "ml_run_abcd1234",
+        "cluster": "hoffman2",
+        "canary_run_id": "ml_run_abcd1234_canary",
+        "verified": False,
+        "failure_kind": "import_error",
+    }
+    relay = render_relay("s2", "canary_failed", brief)
+    assert "canary failed verification (import_error)" in relay
+    assert "propose a fix" in relay
+
+
+def test_render_relay_s2_canary_never_queued_is_distinct() -> None:
+    """A canary that never entered the queue (canary_run_id None) is rendered
+    distinctly from a genuine verification failure."""
+    brief = {"run_id": "ml_run_abcd1234", "cluster": "hoffman2", "canary_run_id": None}
+    relay = render_relay("s2", "canary_failed", brief)
+    assert "never entered the queue" in relay
+    assert "failed verification" not in relay
+
+
+def test_render_relay_s3_terminal_counts_from_summary() -> None:
+    brief = {
+        "main_run_id": "ml_run_abcd1234",
+        "cluster": "hoffman2",
+        "total_tasks": 10,
+        "last_status": {"summary": {"complete": 10, "running": 0, "pending": 0, "failed": 0}},
+    }
+    relay = render_relay("s3", "watching_terminal", brief)
+    assert "main array complete" in relay
+    assert "10/10 tasks" in relay
+    assert "ml_run_abcd1234" in relay
+
+
+def test_render_relay_s4_harvest_counts_rows() -> None:
+    brief = {"run_id": "ml_run_abcd1234", "results_table": [{"key": "a"}, {"key": "b"}]}
+    relay = render_relay("s4", "harvested", brief)
+    assert "harvest complete" in relay
+    assert "2 result row(s)" in relay
+
+
+def test_render_relay_s1_resolved_greenlights_to_canary() -> None:
+    brief = {"resolved": {"cluster": "hoffman2"}, "provenance": {}, "ambiguities": []}
+    relay = render_relay("s1", "resolved", brief)
+    assert "resolved" in relay
+    assert "hoffman2" in relay
+    assert "stage & canary" in relay
+
+
+def test_s2_result_carries_code_rendered_relay(tmp_path: Path) -> None:
+    """The S2 result carries a code-rendered relay the agent forwards verbatim —
+    canary green + the canary's 1 task + the est core-hours."""
+    spec = SubmitS2Spec(submit=_sv_spec(), detach=False)
+    _greenlight(tmp_path, "submit-s2")
+
+    with mock.patch.object(
+        blocks, "submit_and_verify", return_value=_sv_result(verified=True, job_ids=[])
+    ):
+        result = blocks.submit_s2(tmp_path, spec=spec)
+
+    assert "canary green" in result.relay
+    assert "1 task" in result.relay
+    assert f"{result.brief['est_core_hours']:g}" in result.relay
+    # The relay is NOT persisted into the brief: a stale relay string in the
+    # durable record would poison the verify-relay source pool (the audit must
+    # diff the agent's relay against the STRUCTURED facts, not a prior rendering).
+    assert "relay" not in result.brief
+
+
+def test_s3_terminal_result_carries_relay(tmp_path: Path) -> None:
+    _greenlight(tmp_path, "submit-s3")
+    with (
+        mock.patch.object(
+            blocks,
+            "launch_main_array",
+            return_value=_sv_result(verified=True, job_ids=["999"]),
+        ),
+        mock.patch.object(
+            blocks,
+            "monitor_flow",
+            return_value=_monitor_result(lifecycle_state="complete"),
+        ),
+        mock.patch.object(
+            blocks,
+            "decide_monitor_arm",
+            return_value={"arm": "none", "cadence_sec": 0},
+        ),
+    ):
+        result = blocks.submit_s3(tmp_path, spec=_s3_spec())
+
+    assert "main array complete" in result.relay
+    assert "10/10 tasks" in result.relay
 
 
 # ── registry metadata ────────────────────────────────────────────────────────

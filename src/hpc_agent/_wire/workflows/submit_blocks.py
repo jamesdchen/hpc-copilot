@@ -98,6 +98,20 @@ class SubmitBlockResult(BaseModel):
         default="",
         description="Human-readable one-line summary of the terminator.",
     )
+    relay: str = Field(
+        default="",
+        description=(
+            "The human-facing one-liner CODE renders from this block's OWN "
+            "structured evidence (run_id, canary state, verified flag, est "
+            "core-hours, status counts, cluster) — the agent relays it VERBATIM "
+            "(design §5.3, finding 15), never reconstructing numbers/state from "
+            "memory. Because the string IS the journal's rendering it cannot "
+            "contradict the record, so the relay-audit Stop hook (conduct rule "
+            "10) fires almost never. The S2 canary summary renders the CANARY's "
+            "1 task, NEVER the main array's total (the exact finding-15 bleed). "
+            "Empty only for a stage with no renderable line."
+        ),
+    )
     run_id: str | None = Field(
         default=None,
         description="The run this block operated on, when one exists yet.",

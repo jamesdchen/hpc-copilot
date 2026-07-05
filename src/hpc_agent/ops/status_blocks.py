@@ -50,6 +50,7 @@ from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.recover.notify import acknowledge_alerts, read_unacknowledged_alerts
+from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.state.index import find_in_flight_runs, find_stalled_runs
 from hpc_agent.state.journal import load_run, mark_seen_by_human
 from hpc_agent.state.run_record import TERMINAL_STATUSES
@@ -311,6 +312,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
             stage_reached="snapshot_anomaly",
             needs_decision=True,
             reason=f"{' and '.join(parts)} need a decision; each carries a proposed next action.",
+            relay=render_relay("snapshot", "snapshot_anomaly", brief),
             run_id=spec.run_id,
             brief=brief,
         )
@@ -325,6 +327,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
             f"{len(changed)} of {len(running_where)} run(s) changed since last looked; "
             "nothing needs a decision."
         ),
+        relay=render_relay("snapshot", "snapshot_clean", brief),
         run_id=spec.run_id,
         brief=brief,
         # Runtime-gated: the table's successor for a clean snapshot is status-watch,
@@ -452,6 +455,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             stage_reached="watch_terminal",
             needs_decision=False,
             reason="run complete; terminal harvest guaranteed — hand off to the harvest block.",
+            relay=render_relay("watch", "watch_terminal", brief),
             run_id=mon.run_id,
             brief=brief,
             next_block=_next_block(
@@ -485,6 +489,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             reason=(
                 "monitor wall-clock budget hit; cluster jobs may run on — keep watching or stop?"
             ),
+            relay=render_relay("watch", "watch_timeout", brief),
             run_id=mon.run_id,
             brief=brief,
             # Still in flight → the deterministic continuation is to keep watching.
@@ -506,6 +511,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             f"run reached '{lifecycle}' "
             f"({mon.escalation_reason or 'no escalation reason'}); review the evidence brief."
         ),
+        relay=render_relay("watch", "watch_anomaly", brief),
         run_id=mon.run_id,
         brief=brief,
     )

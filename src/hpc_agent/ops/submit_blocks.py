@@ -47,6 +47,7 @@ from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.block_gate import assert_greenlit_target
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor_flow import monitor_flow
+from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
 from hpc_agent.ops.submit_and_verify import launch_main_array, submit_and_verify
 from hpc_agent.ops.submit_preflight import submit_preflight
@@ -75,7 +76,17 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
     run_id yet — its greenlight then legitimately fails open). Detached / clean-
     terminal returns (``needs_decision=False``) carry nothing to greenlight, so
     nothing is persisted. Pass-through: returns *result* unchanged.
+
+    Also renders the human-facing ``relay`` from the block's OWN structured
+    evidence (design §5.3, finding 15): the single wire point every S1–S4 return
+    (including the detached handle) routes through, so the agent relays a
+    code-authored line VERBATIM instead of reconstructing numbers/state from
+    memory. The relay is NOT written into the persisted brief — a stale relay
+    string in the durable record would poison the relay-audit source pool
+    (``verify-relay``); the audit must diff the agent's relay against the
+    STRUCTURED facts, never against a prior rendering of itself.
     """
+    result.relay = render_relay(result.block, result.stage_reached, result.brief)
     if result.needs_decision and result.run_id and result.brief:
         from hpc_agent.state.decision_briefs import append_brief
 
@@ -475,6 +486,10 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     # Cost estimate from the submit spec (cost.py untouched).
     est = _estimate_for_submit(spec.submit.submit)
     brief: dict[str, Any] = {
+        # run_id + cluster ride the brief so the relay renderer is self-contained
+        # (design §5.3): the canonical line is rendered from the brief's OWN data.
+        "run_id": sv.run_id,
+        "cluster": spec.submit.submit.cluster,
         "canary_run_id": sv.canary_run_id,
         "canary_job_ids": sv.canary_job_ids,
         "verified": sv.verified,
@@ -673,6 +688,8 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         "main_run_id": main.run_id,
         "main_job_ids": main.job_ids,
         "total_tasks": main.total_tasks,
+        # cluster rides the brief for the relay renderer (design §5.3).
+        "cluster": spec.submit.submit.cluster,
         "canary_run_id": main.canary_run_id,
         "lifecycle_state": mon.lifecycle_state,
         "last_status": mon.last_status,

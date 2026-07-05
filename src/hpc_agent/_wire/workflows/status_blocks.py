@@ -82,6 +82,19 @@ class StatusBlockResult(BaseModel):
         default="",
         description="Human-readable one-line summary of the terminator.",
     )
+    relay: str = Field(
+        default="",
+        description=(
+            "The human-facing one-liner CODE renders FRESH from the journal "
+            "digest — the agent relays it VERBATIM (design §5.3, finding 15). "
+            "Rendered from the CURRENT record state on every snapshot, so the "
+            "agent relays what the snapshot returns NOW rather than a brief it "
+            "cached across a journal transition (the staleness fix). Each run's "
+            "counts are rendered from its own digest row, so a canary's 1-task "
+            "summary never bleeds the main array's total. Shares the one renderer "
+            "with the submit blocks so the two surfaces agree."
+        ),
+    )
     run_id: str | None = Field(
         default=None,
         description="The run this block operated on (null for a fleet-wide snapshot).",

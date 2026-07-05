@@ -22,6 +22,7 @@ from hpc_agent._wire.workflows.status_blocks import (
     StatusSnapshotSpec,
     StatusWatchSpec,
 )
+from hpc_agent.ops.relay_render import render_relay
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -468,6 +469,97 @@ def test_watch_timeout_no_arm_without_argv(tmp_path: Path) -> None:
     assert result.stage_reached == "watch_timeout"
     assert "monitor_arm" not in result.brief
     m_arm.assert_not_called()
+
+
+# ── relay rendering (finding 15: the snapshot relay is FRESH from the journal) ──
+
+
+def test_snapshot_relay_matches_current_journal_state(tmp_path: Path) -> None:
+    """The snapshot result carries a code-rendered relay reflecting the run's
+    CURRENT journal state and its own counts."""
+    rec = _record(status="in_flight", last_status={"running": 4, "pending": 6})
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        result = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+
+    assert "in_flight" in result.relay
+    assert "hoffman2" in result.relay
+    assert "4 running" in result.relay
+
+
+def test_snapshot_relay_renders_new_state_after_transition_not_stale(tmp_path: Path) -> None:
+    """The staleness fix (finding 15): a snapshot taken after the journal
+    advanced to ``complete`` renders the NEW state — never the prior
+    ``in_flight`` the agent may have cached in an earlier brief."""
+    before = _record(status="in_flight", last_status={"running": 1})
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(before)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        first = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+    assert "in_flight" in first.relay
+
+    after = _record(status="complete", last_status={"complete": 16})
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(after)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        second = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+
+    assert "complete" in second.relay
+    assert "16 complete" in second.relay
+    assert "in_flight" not in second.relay
+
+
+def test_snapshot_canary_row_counts_do_not_bleed_parent_total(tmp_path: Path) -> None:
+    """Status-side finding-15 guarantee: the canary row renders its OWN 1-task
+    count and the parent renders its own, so neither bleeds into the other."""
+    parent = _record(run_id=_RUN_ID, status="complete", last_status={"complete": 16})
+    canary = _record(run_id=f"{_RUN_ID}-canary", status="complete", last_status={"complete": 1})
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(parent, canary)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        result = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+
+    assert "16 complete" in result.relay  # the parent's own count
+    assert "1 complete" in result.relay  # the canary's own 1-task count
+
+
+def test_snapshot_anomaly_relay_names_state_and_action(tmp_path: Path) -> None:
+    rec = _record(status="failed", last_status={"complete": 7, "failed": 3})
+    with (
+        mock.patch.object(blocks, "load_run", side_effect=_journal_of(rec)),
+        mock.patch.object(blocks, "find_stalled_runs", return_value=[]),
+        mock.patch.object(blocks, "mark_seen_by_human"),
+    ):
+        result = blocks.status_snapshot(tmp_path, spec=StatusSnapshotSpec(run_id=_RUN_ID))
+
+    assert result.stage_reached == "snapshot_anomaly"
+    assert "failed" in result.relay
+    assert "classify-failed-tasks" in result.relay
+
+
+def test_watch_terminal_result_carries_relay(tmp_path: Path) -> None:
+    with mock.patch.object(
+        blocks, "monitor_flow", return_value=_monitor_result(lifecycle_state="complete")
+    ):
+        result = blocks.status_watch(tmp_path, spec=_watch_spec())
+
+    assert _RUN_ID in result.relay
+    assert "complete" in result.relay
+    assert "hand off to harvest" in result.relay
+
+
+def test_render_relay_unknown_block_is_empty() -> None:
+    """An unknown (block, stage) surfaces the empty string, never a fabricated line."""
+    assert render_relay("nope", "whatever", {}) == ""
 
 
 # ── registry metadata ────────────────────────────────────────────────────────
