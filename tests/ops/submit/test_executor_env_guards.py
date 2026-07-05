@@ -325,3 +325,53 @@ def test_ensure_run_sidecar_refuses_prewritten_bare_script_executor(tmp_path) ->
     )
     with pytest.raises(errors.SpecInvalid, match="bare script name"):
         _ensure_run_sidecar(tmp_path, spec)
+
+
+class TestConsumptionBoundaryGate:
+    """Run #6 F1 follow-up: a RAW-EDITED sidecar bypasses every verb-surface
+    intake guard, so _ensure_run_sidecar re-runs the static shape checks at
+    the consumption boundary -- a hand-edited file meets the same bar."""
+
+    def _spec(self, tmp_path, run_id="r1"):
+        from tests.ops.submit.test_canary_gate import _spec
+
+        return _spec(run_id=run_id)
+
+    def _write_raw_sidecar(self, tmp_path, run_id, executor):
+        import json as _json
+
+        runs = tmp_path / ".hpc" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / f"{run_id}.json").write_text(
+            _json.dumps(
+                {
+                    "run_id": run_id,
+                    "executor": executor,
+                    "result_dir_template": "results/{task_id}",
+                    "task_count": 2,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_raw_edited_format_placeholder_executor_refused(self, tmp_path) -> None:
+        from hpc_agent import errors
+        from hpc_agent.ops.submit_flow import _ensure_run_sidecar
+
+        self._write_raw_sidecar(tmp_path, "r1", "python run.py --out results/{run_id}/metrics.json")
+        with pytest.raises(errors.SpecInvalid, match="placeholder"):
+            _ensure_run_sidecar(tmp_path, self._spec(tmp_path))
+
+    def test_raw_edited_bare_module_executor_refused(self, tmp_path) -> None:
+        from hpc_agent import errors
+        from hpc_agent.ops.submit_flow import _ensure_run_sidecar
+
+        self._write_raw_sidecar(tmp_path, "r1", "pkg.mod:fn")
+        with pytest.raises(errors.SpecInvalid, match="module:function"):
+            _ensure_run_sidecar(tmp_path, self._spec(tmp_path))
+
+    def test_clean_prewritten_sidecar_still_passes(self, tmp_path) -> None:
+        from hpc_agent.ops.submit_flow import _ensure_run_sidecar
+
+        self._write_raw_sidecar(tmp_path, "r1", "python run.py --seed $SEED")
+        _ensure_run_sidecar(tmp_path, self._spec(tmp_path))  # no raise

@@ -797,6 +797,18 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         except (OSError, ValueError, AttributeError):
             existing_executor = None
         if _is_runnable_executor(existing_executor):
+            # Consumption-boundary gate (run #6 F1 follow-up): the intake
+            # guards live on the verb surfaces (write-run-sidecar / the
+            # interview), so a RAW-EDITED sidecar bypassed them all — the F1
+            # agent hand-edited executor in a text editor and no gate ran
+            # until the cluster's exit 127. Re-run the same static shape
+            # checks HERE, where the sidecar is about to be consumed, so a
+            # hand-edited file meets the identical bar as a verb-written one
+            # (format placeholders, bare module:function, bare script name,
+            # wrong-case kwargs; the interface-blind property warns).
+            from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+            check_per_task_executor(str(existing_executor), experiment_dir=experiment_dir)
             # #312: the pre-written sidecar (Step 6d / resolve-submit-inputs)
             # was authored before submit-flow could compute provenance —
             # backfill ONLY null data_sha / env_hash (additive; an explicitly
