@@ -265,3 +265,66 @@ def test_ssh_no_combiner_but_aggregate_cmd_configured_still_raises_hint(
     spec = AggregateFlowSpec(run_id=_RUN_ID, mode="combiner-only")
     with pytest.raises(errors.RemoteCommandFailed, match="combiner step never ran"):
         aggregate_flow(experiment, spec=spec)
+
+
+def _rsync_with_extra_dirs(metrics: list[dict], extra: dict[str, dict]):
+    """Like _combiner_missing_rsync, plus *extra* {relpath: metric} dirs written
+    into the pulled results tree (canary siblings / foreign runs)."""
+
+    def _stub(*_a, remote_subdir: str, local_dir: str, **_kw):
+        if remote_subdir == "_combiner":
+            return subprocess.CompletedProcess(
+                args=[], returncode=23, stdout="", stderr="No such file or directory (2)"
+            )
+        if remote_subdir == "results":
+            dest = Path(local_dir)
+            for i, m in enumerate(metrics):
+                td = dest / f"task-{i}"
+                td.mkdir(parents=True, exist_ok=True)
+                (td / "metrics.json").write_text(json.dumps(m), encoding="utf-8")
+            for rel, m in extra.items():
+                td = dest / rel
+                td.mkdir(parents=True, exist_ok=True)
+                (td / "metrics.json").write_text(json.dumps(m), encoding="utf-8")
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    return _stub
+
+
+def test_ssh_fallback_excludes_canary_sibling_results(journal_home, experiment, monkeypatch):
+    """Run #6 harvest contamination: the <run_id>-canary sibling's metrics.json
+    lives under the SAME results/ subtree (its name has the main id as a
+    prefix), so the recursive scan swept it in and the reducer averaged 11
+    rows for a 10-task run (the seed-mean 45/11 tell). The canary dir is
+    excluded via the one -canary suffix definition."""
+    _seed_run(experiment)
+    _seed_sidecar_no_reducer(experiment)
+
+    metrics = [{"pi_estimate": v, "n_samples": 1} for v in _PI_VALUES]
+    # The canary re-ran seed 0 -- an extreme duplicate value would visibly
+    # skew the mean if it contaminated the reduce.
+    canary = {f"{_RUN_ID}-canary/task-0": {"pi_estimate": 999.0, "n_samples": 1}}
+    monkeypatch.setattr(af_module, "rsync_pull", _rsync_with_extra_dirs(metrics, canary))
+
+    result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
+
+    agg = result.aggregated_metrics[_RUN_ID]
+    assert agg["pi_estimate"] == pytest.approx(_EXPECTED_MEAN)  # canary NOT averaged
+    assert agg["n_samples"] == len(_PI_VALUES)
+
+
+def test_ssh_fallback_refuses_foreign_row_overcount(journal_home, experiment, monkeypatch):
+    """More contributing rows than the run's task count (after canary
+    exclusion) is PROVABLE foreign contamination -- refuse loudly, never
+    average another run's results into this run's aggregate."""
+    _seed_run(experiment)
+    _seed_sidecar_no_reducer(experiment)
+
+    metrics = [{"pi_estimate": v, "n_samples": 1} for v in _PI_VALUES]
+    foreign = {"some-other-run/task-0": {"pi_estimate": 1.0, "n_samples": 1}}
+    monkeypatch.setattr(af_module, "rsync_pull", _rsync_with_extra_dirs(metrics, foreign))
+
+    with pytest.raises(errors.RemoteCommandFailed, match="FOREIGN"):
+        aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))

@@ -321,6 +321,35 @@ def _per_task_metrics_reduce(
     result_dirs = sorted(
         {str(p.parent) for p in results_local.rglob("metrics.json") if p.is_file()}
     )
+    # Canary anti-contamination (run #6 harvest): the ``<run_id>-canary``
+    # sibling writes its metrics.json under the SAME results/ subtree (its
+    # result_dir_template renders with the canary's run_id, whose name has the
+    # MAIN id as a prefix), so the recursive scan sweeps it in and the mean
+    # double-counts the canary's task (empirical: an 11-row average for a
+    # 10-task run — the seed-mean 45/11 tell). Exclude any dir under a path
+    # segment equal to the sibling id — the one #258 suffix definition
+    # (``_sibling_run_ids``), never a second hardcoded "-canary".
+    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+
+    (canary_id,) = _sibling_run_ids(run_id)
+    result_dirs = [d for d in result_dirs if canary_id not in Path(d).parts]
+    # Cardinality gate (finding-21 family): MORE contributing rows than the
+    # run's task count is PROVABLE foreign contamination (another run sharing
+    # the results/ subtree) — averaging them silently corrupts the aggregate,
+    # so refuse loudly naming the surplus. FEWER is a legitimate partial run
+    # (failed tasks) and stays the existing partial-machinery's concern.
+    total = int(getattr(record, "total_tasks", 0) or 0)
+    if total > 0 and len(result_dirs) > total:
+        raise errors.RemoteCommandFailed(
+            f"per-task reduce for run_id {run_id!r} found {len(result_dirs)} "
+            f"result dirs with metrics.json but the run has only {total} tasks "
+            f"— the {results_subdir}/ subtree carries FOREIGN rows (another "
+            "run's results sharing the tree), and averaging them would corrupt "
+            f"the aggregate. Contributing dirs: {result_dirs}. Remove or "
+            "relocate the foreign results (or re-run with a run-scoped "
+            "result_dir_template like 'results/{run_id}/task_{task_id}'), then "
+            "re-aggregate."
+        )
     aggregated = reduce_metrics(result_dirs)
     if not aggregated:
         raise errors.RemoteCommandFailed(
