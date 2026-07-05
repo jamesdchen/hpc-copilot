@@ -91,6 +91,17 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   from routing (left on disk; physical deletion + the #137 OAuth machinery are a
   later pass, gated on a proving run).
 
+### Removed — stranded `runtime-prior` wire model + schema
+
+- Deleted `_wire/queries/runtime_prior.py` (`RuntimePriorResult`) and
+  `schemas/runtime_prior.output.json`. `read-runtime-prior` is an
+  **optional plugin-only** verb (core never registers it; `resolve-resources`
+  probes it and treats an unregistered verb as a normal cold-start), so — like
+  the other plugin-only verb `plan-submit` — its output contract belongs in the
+  providing plugin, not core. The model was imported nowhere and the schema was
+  loaded by no verb, `$ref`, or `describe`/`validate_output` consumer: a pure
+  wire-surface removal, no behavior change. (`resolve-resources`'s probe is
+  untouched — it hand-parses the envelope and never validated against the schema.)
 
 
 ### Added — persist opaque per-trial params for provenance; warm-start stays a documented strategy pattern (#369)
