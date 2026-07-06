@@ -25,6 +25,7 @@ journal arbiter since the framework began.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -586,6 +587,10 @@ def _push_and_deploy(
     cluster sshd MaxStartups under campaign-time fan-out (see commit
     0c99e1f / the SSH-backoff commit).
     """
+    # Progress legibility (run #7: staging was silent → 0-byte worker logs read
+    # as "stuck", three false stall alarms). One line before each network leg.
+    _log = logging.getLogger(__name__)
+    _log.info("staging: pushing %s -> %s:%s ...", experiment_dir, ssh_target, remote_path)
     push_result = rsync_push(
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -597,7 +602,9 @@ def _push_and_deploy(
             f"rsync push failed (exit {push_result.returncode}): "
             f"{(push_result.stderr or '').strip()[:300]}"
         )
+    _log.info("staging: code pushed; deploying runtime files ...")
     deploy_runtime(ssh_target=ssh_target, remote_path=remote_path, scheduler=scheduler)
+    _log.info("staging: deploy complete")
 
 
 # Script-file extensions that, as a *bare* single token, need an interpreter

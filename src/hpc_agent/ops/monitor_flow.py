@@ -454,6 +454,18 @@ def monitor_flow(
                 _sleep(effective_interval)
                 continue
             last_status = dict(record.last_status or {})
+            # Progress legibility (run #7: a silent healthy watch reads as "stuck"
+            # and triggered false stall alarms) — one concise per-poll line.
+            logging.getLogger(__name__).info(
+                "monitor: run %s tick %d — %s/%s complete (running %s, pending %s, failed %s)",
+                run_id,
+                state.ticks,
+                last_status.get("complete", 0),
+                record.total_tasks,
+                last_status.get("running", 0),
+                last_status.get("pending", 0),
+                last_status.get("failed", 0),
+            )
 
             # Compute diff against the prior tick (for the tick log).
             prev_summary = state.last_summary
