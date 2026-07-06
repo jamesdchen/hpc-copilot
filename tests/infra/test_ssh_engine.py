@@ -426,3 +426,67 @@ def test_live_engine_round_trip() -> None:
         assert r.stdout.strip() == "engine-live-ok"
     finally:
         eng.shutdown_all()
+
+
+class TestMultiAddressDial:
+    """Per-address TCP dial parity with native OpenSSH (the live-hoffman2 gap:
+    round-robin login DNS + one SYN-dropping node ate asyncssh's whole
+    sequential connect budget while native ssh, which bounds each address,
+    connected fine)."""
+
+    @staticmethod
+    def _run(coro):  # tiny helper: the dialer needs a running loop
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_unresolvable_alias_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A config alias only asyncssh can resolve → None (plain path keeps
+        full HostName/Port config semantics)."""
+        import socket
+
+        def _gaierror(*_a: object, **_k: object) -> object:
+            raise socket.gaierror(11001, "getaddrinfo failed")
+
+        monkeypatch.setattr(socket, "getaddrinfo", _gaierror)
+        assert self._run(ssh_engine._dial_multi_address("my-alias", 15.0)) is None
+
+    def test_single_address_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One address: asyncssh's own dial is equivalent — no hand dial."""
+        import socket
+
+        infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 22))]
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: infos)
+        assert self._run(ssh_engine._dial_multi_address("onehost", 15.0)) is None
+
+    def test_dead_first_address_does_not_eat_the_healthy_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE guard: first address blackholes (TEST-NET, drops SYNs), second
+        is a live local listener — the dial must reach it within the
+        per-address budget instead of burning the whole budget on the first."""
+        import socket
+        import time
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        infos = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 22)),  # blackhole
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),  # alive
+        ]
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: infos)
+        try:
+            t0 = time.monotonic()
+            sock = self._run(ssh_engine._dial_multi_address("multihost", 8.0))
+            elapsed = time.monotonic() - t0
+            assert sock is not None, "must connect to the healthy second address"
+            assert sock.getpeername()[1] == port
+            sock.close()
+            # 8.0s budget / 2 addrs = 4.0s per-address slice (floor 3.0); the
+            # old sequential dial would have needed the WHOLE budget +
+            # asyncssh handshake before even trying the second address.
+            assert elapsed < 7.5, f"dead first address ate the budget ({elapsed:.1f}s)"
+        finally:
+            listener.close()

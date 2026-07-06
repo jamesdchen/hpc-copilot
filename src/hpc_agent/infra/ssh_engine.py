@@ -277,7 +277,56 @@ async def _connect(ssh_target: str) -> Any:
     user = _user_of(ssh_target)
     if user:
         kwargs["username"] = user
+    sock = await _dial_multi_address(host, _connect_timeout())
+    if sock is not None:
+        # Hand the already-connected socket to asyncssh; *host* still names
+        # the connection for known_hosts / config matching.
+        kwargs["sock"] = sock
     return await asyncssh.connect(host, **kwargs)
+
+
+async def _dial_multi_address(host: str, budget_sec: float) -> Any:
+    """Dial *host* per-address like native OpenSSH; ``None`` = let asyncssh dial.
+
+    Cluster login DNS is round-robin over several A records, and ONE
+    SYN-dropping node must not eat the whole connect budget:
+    ``asyncio.create_connection`` (what asyncssh uses) walks the addrinfo list
+    sequentially with NO per-address bound, so a dead first address burns the
+    entire ``connect_timeout`` before the healthy siblings are tried — the
+    live hoffman2 probe failed exactly this way while native ssh (which
+    bounds each address separately) connected fine. Only the multi-A case is
+    hand-dialed; a single address is equivalent either way, and an
+    unresolvable name (an ``~/.ssh/config`` Host alias whose HostName/Port
+    only asyncssh's config pass can resolve) returns ``None`` so the plain
+    path keeps full config semantics. Port 22 by design on the hand-dial
+    path: a nonstandard-port cluster reaches us as an alias (→ ``None``).
+    """
+    import asyncio
+    import socket
+
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, 22, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None  # alias / unresolvable: asyncssh's config pass owns it
+    pairs = [(info[0], info[4]) for info in infos if info[0] in (socket.AF_INET, socket.AF_INET6)]
+    if len(pairs) <= 1:
+        return None
+    per_addr = max(budget_sec / len(pairs), 3.0)
+    last_exc: Exception | None = None
+    for family, addr in pairs:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.setblocking(False)
+        try:
+            await asyncio.wait_for(loop.sock_connect(sock, addr), timeout=per_addr)
+            return sock
+        except (TimeoutError, OSError) as exc:
+            sock.close()
+            last_exc = exc
+    # Every address failed — surface the last error (TimeoutError/OSError both
+    # classify "throttle", same as the whole-budget timeout did).
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _do_connect(ssh_target: str) -> tuple[Any, asyncio.Semaphore]:
