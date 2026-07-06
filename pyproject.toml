@@ -62,6 +62,10 @@ dev = [
     "hypothesis>=6.100",
     "types-PyYAML>=6.0",
     "pre-commit>=3.5",
+    # The asyncssh SSH engine (see the ``ssh`` extra) is exercised in CI, so its
+    # optional dep must be present in the dev/test environment too. Same >=2.23
+    # floor as the extra (the Windows agent RSA SHA-2 fix, asyncssh #795).
+    "asyncssh>=2.23",
 ]
 tui = [
     "rich>=13.0",
@@ -74,6 +78,15 @@ tui = [
 otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
+]
+# asyncssh-backed SSH engine (HPC_SSH_ENGINE=asyncssh). Optional: the engine
+# module imports asyncssh lazily and only when the engine is selected, so the
+# base install stays dependency-light and the one-shot / broker paths never
+# need it. >=2.23 is REQUIRED — earlier asyncssh mis-signs RSA agent keys with
+# SHA-1 on Windows (RSA SHA-2 signature bug, asyncssh #795, fixed in 2.23.0),
+# which native-Windows key auth against a modern sshd rejects.
+ssh = [
+    "asyncssh>=2.23",
 ]
 
 [project.urls]

@@ -532,6 +532,27 @@ def ssh_run(
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
+    # Command-channel outsourcing fast path (opt-in, HPC_SSH_ENGINE=asyncssh):
+    # run the command over a held asyncssh connection (library channel, typed
+    # errors) instead of a fresh cold handshake per call — the phase-2 successor
+    # to the phase-1 in-process broker below. Capture-mode only (streaming
+    # inherits the parent's fds, which the channel can't frame). ANY engine
+    # trouble raises EngineUnavailable → fall straight through to the phase-1
+    # broker check, then the one-shot path. The ordering is deliberate: engine
+    # (library, typed errors) → phase-1 channel (native ssh) → one-shot; each
+    # rung is strictly ban-safer than the last and any engine trouble can never
+    # be worse than today (the one-shot path is the permanent hard fallback).
+    if capture:
+        from hpc_agent.infra import ssh_engine
+
+        if ssh_engine.engine_enabled():
+            try:
+                return ssh_engine.engine_ssh_run(
+                    cmd, ssh_target=ssh_target, timeout=effective_timeout
+                )
+            except ssh_engine.EngineUnavailable:
+                pass  # fall through to the phase-1 broker, then the one-shot path
+
     # Connection-broker fast path (opt-in, HPC_SSH_BROKER): reuse ONE persistent
     # ssh channel per host instead of a fresh cold handshake per call — the root
     # fix for the MaxStartups banner-throttle stalls (runs #7-#8) and strictly

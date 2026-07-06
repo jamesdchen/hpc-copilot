@@ -1,9 +1,63 @@
 # Design: per-host SSH connection broker
 
-Status: **PHASE 1 SHIPPED** (2026-07-06, `infra/ssh_broker.py`, opt-in via
-`HPC_SSH_BROKER`). Phase 2 (cross-process daemon) + phase 3 (sftp transport)
-remain PROPOSED. The probe verdict cache (`ops/preflight/probe_cache.py`)
-ships alongside as an independent connection-count reduction.
+Status: **PHASE 2 SHIPPED as the asyncssh engine** (2026-07-06,
+`infra/ssh_engine.py`, opt-in via `HPC_SSH_ENGINE=asyncssh`), wired ahead of
+phase 1 in the `ssh_run` seam. **Phase 1** (`infra/ssh_broker.py`, opt-in
+`HPC_SSH_BROKER`) is now **DEPRECATED** — retained as the middle fallback rung
+until the engine is live-validated, then retired. Phase 3 (SFTP transport pull)
+remains PROPOSED. The probe verdict cache (`ops/preflight/probe_cache.py`) ships
+alongside as an independent connection-count reduction.
+
+## Phase 2 (shipped as the asyncssh engine)
+
+The command channel is outsourced to a library — `asyncssh` (>=2.23) — rather
+than the hand-rolled `ssh -T host /bin/sh` framing of phase 1. The decision and
+what it does NOT change:
+
+- **Decision.** The per-command round-trip runs over a held
+  `asyncssh` connection (one `SSHClientConnection` per host, commands as
+  channels). The native one-shot `ssh` path stays the **permanent hard
+  fallback** — it is never removed. The phase-1 in-process channel enters
+  **DEPRECATED** status and is retired only after the engine is validated live.
+- **Transfers stay native.** rsync/tar bulk transfers keep the native binaries:
+  the `tar | ssh` pipe and rsync's delta/`--delete` semantics are not replicable
+  over a generic SSH channel, so they are out of scope. Migrating the metrics
+  *pull* to the engine's SFTP subsystem is **phase 3**, tracked separately.
+
+### Capability facts that gated the decision
+
+- **Windows named-pipe agent support.** asyncssh reaches the Windows OpenSSH
+  ssh-agent over its named pipe — the same agent the native binary uses — so
+  key auth works on this box without a Git-Bash-style agent-blind trap. The
+  gating fix is [asyncssh#795], hence the **`asyncssh>=2.23` pin**.
+- **Typed exception taxonomy.** The engine path replaces the three
+  stderr-marker string classifiers (throttle / connection-closed / auth) with
+  asyncssh's typed exceptions, funnelled through `classify_engine_failure`. The
+  native path keeps the marker classifiers (it still shells `ssh`).
+- **ControlMaster is moot.** The phase-1 note that native-Windows OpenSSH can't
+  multiplex (no `ControlMaster` socket) no longer bites: the held asyncssh
+  connection *is* the multiplexer, so OpenSSH mux config being ignored is
+  irrelevant on the engine path.
+
+### Ban-safety invariants (engine path)
+
+The engine inherits phase 1's fail-open posture; the worst case still equals
+today's one-shot path. The mapping:
+
+1. **Breaker-gated connect.** The engine's connection open is gated by
+   `ssh_circuit.check_circuit` exactly like a one-shot call — an open circuit
+   refuses to open it; connect failures feed `record_connection_failure`.
+2. **Slot-counted.** The held connection counts against the per-host
+   `ssh_slots` cap — never more than one connection per host.
+3. **Idle-close.** An idle engine connection self-closes so no login-node
+   session lingers (clusters count those too).
+4. **Hard fallback.** Any engine trouble raises `EngineUnavailable`; `ssh_run`
+   falls through to the phase-1 broker check, then the one-shot path. An
+   opt-in engine can never regress the ban-sensitive default — the enforcement
+   map binds this ("any engine failure falls back to one-shot; engine is never
+   load-bearing").
+
+[asyncssh#795]: https://github.com/ronf/asyncssh/issues/795
 
 ## What phase 1 actually built (and why it differs from the sketch below)
 
