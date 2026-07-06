@@ -320,7 +320,10 @@ async def _dial_multi_address(host: str, budget_sec: float) -> Any:
         try:
             await asyncio.wait_for(loop.sock_connect(sock, addr), timeout=per_addr)
             return sock
-        except (TimeoutError, OSError) as exc:
+        # asyncio.TimeoutError is only an alias of builtin TimeoutError from
+        # 3.11; on 3.10 wait_for raises the distinct asyncio class (Linux-CI
+        # 3.10 caught this — the local 3.13 suite cannot).
+        except (TimeoutError, asyncio.TimeoutError, OSError) as exc:
             sock.close()
             last_exc = exc
     # Every address failed — surface the last error (TimeoutError/OSError both
