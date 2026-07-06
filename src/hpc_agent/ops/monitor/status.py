@@ -139,6 +139,16 @@ def record_status(
         _sidecar = {}
 
     _record = load_run(experiment_dir, run_id)
+    # The per-run sidecar this flow writes may carry neither ``env`` NOR
+    # ``cluster``, so ``remote_activation_for_sidecar`` derives "" → the reporter
+    # runs bare login-node python → ``No module named hpc_agent`` → rc=127 every
+    # poll (run #7 live: the MAIN-array monitor rode 28+ ticks of rc=127 as
+    # "transient" while a finished array sat unread). The journal record always
+    # knows the cluster — seed it so the deriver's cluster-backfill arm (#281)
+    # fires; the sidecar's own env pins still win per-field. Sibling of the
+    # b1b05f7d verify_canary fix, on the monitor caller.
+    if _record is not None and _record.cluster and not _sidecar.get("cluster"):
+        _sidecar = {**_sidecar, "cluster": _record.cluster}
     if _record is not None and not backend_requires_ssh(_record.backend):
         # Pure-API path (#337): no login-node reporter. Prefer the backend's
         # richer ``task_statuses`` hook (real per-task complete/running/pending/

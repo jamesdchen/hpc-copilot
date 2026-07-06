@@ -79,6 +79,66 @@ def _record_status_sequence(experiment: Path, seq: list[Any]):
     return _fake
 
 
+def test_record_status_activation_seeded_from_record_cluster(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run #7 sibling of the b1b05f7d verify_canary fix, on the MONITOR caller.
+
+    The MAIN-array monitor's per-run sidecar carries neither ``env`` nor
+    ``cluster``, so ``record_status`` would derive ``""`` activation → the
+    reporter runs bare login-node python → ``import hpc_agent`` fails → rc=127
+    every poll, which the monitor rides as "transient" for the whole budget
+    while a finished array sits unread. The journal record's cluster is seeded
+    into the sidecar so the reporter activates conda.
+    """
+    from hpc_agent.ops.monitor import status as status_mod
+    from hpc_agent.state.runs import write_run_sidecar
+
+    _seed_record(experiment, cluster="hoffman2", backend="sge")
+    # The BARE sidecar shape written live: no cluster, no env.
+    write_run_sidecar(
+        experiment,
+        run_id=_RUN_ID,
+        cmd_sha="",
+        hpc_agent_version="",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=4,
+        tasks_py_sha="",
+    )
+    # Hermetic clusters.yaml (the c158f797 lesson): CI's packaged placeholder has
+    # a conda_source but no conda_envs, so assert against a written fixture.
+    clusters = experiment / "clusters_fixture.yaml"
+    clusters.write_text(
+        "hoffman2:\n  host: h.example\n  user: u\n  scratch: /s\n  scheduler: sge\n"
+        "  conda_source: /apps/conda/etc/profile.d/conda.sh\n  conda_envs: [hpc-pi]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(clusters))
+
+    captured: dict[str, object] = {}
+
+    def _fake_report(**kwargs: Any) -> dict[str, Any]:
+        captured["remote_activation"] = kwargs.get("remote_activation")
+        return {"summary": {"complete": 4, "running": 0, "pending": 0, "failed": 0}}
+
+    monkeypatch.setattr(status_mod, "_ssh_status_report", _fake_report)
+
+    status_mod.record_status(
+        experiment,
+        _RUN_ID,
+        ssh_target="user@host",
+        remote_path="/remote",
+        job_ids=["9001"],
+        job_name="myjob",
+    )
+
+    # Cluster-derived activation, NOT the bare-python "" fallthrough (→ rc=127).
+    assert captured["remote_activation"]
+    assert "conda activate hpc-pi" in str(captured["remote_activation"])
+
+
 @pytest.mark.parametrize(
     "transient",
     [errors.RemoteCommandFailed("reporter rc=1"), TimeoutError("ssh timed out")],
