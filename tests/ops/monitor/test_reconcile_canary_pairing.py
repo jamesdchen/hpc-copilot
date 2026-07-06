@@ -187,7 +187,7 @@ def test_reconcile_threads_remote_activation_to_reporter(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "hpc_agent.infra.clusters.remote_activation_for_sidecar",
-        lambda _sidecar: "source /path/to/conda.sh && conda activate hpc-pi && ",
+        lambda _sidecar, **_kw: "source /path/to/conda.sh && conda activate hpc-pi && ",
     )
 
     captured: dict = {}

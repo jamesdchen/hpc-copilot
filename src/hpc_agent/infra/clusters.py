@@ -596,7 +596,9 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     return " && ".join(parts) + " && "
 
 
-def remote_activation_for_sidecar(sidecar: dict[str, Any]) -> str:
+def remote_activation_for_sidecar(
+    sidecar: dict[str, Any], *, fallback_cluster: str | None = None
+) -> str:
     """Activation prefix for a run's control-plane ssh command — the ONE
     definition of "how to activate on this cluster", consulted by every
     reporter / reconcile / combine call.
@@ -643,7 +645,12 @@ def remote_activation_for_sidecar(sidecar: dict[str, Any]) -> str:
     # a sidecar that pins only *some* fields (a sidecar carrying just conda_env
     # still gets the cluster's conda_source — the pre-existing behaviour).
     cfg: dict[str, Any] = {}
-    cluster_key = sidecar.get("cluster")
+    # Every submit-flow sidecar today carries NO ``cluster`` (run #7), so tier-2
+    # backfill would never fire — callers pass the run record's cluster as
+    # *fallback_cluster* to close that. Consolidates the seed that was
+    # copy-pasted into verify_canary / record_status; new consumers (aggregate /
+    # reconcile) get the same via one param instead of a fourth/fifth copy.
+    cluster_key = sidecar.get("cluster") or fallback_cluster
     if cluster_key:
         try:
             cfg = load_clusters_config().get(cluster_key, {}) or {}

@@ -27,6 +27,33 @@ def test_prefix_conda_source_and_first_env() -> None:
     assert p == "source /c/conda.sh && conda activate envA && "
 
 
+def test_fallback_cluster_seeds_activation_for_a_cluster_less_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run #7: every submit-flow sidecar carries no ``cluster``, so tier-2
+    backfill never fires and the control-plane reporter/combiner/reducer runs
+    bare login python (rc=127). A consumer passing the run record's cluster as
+    ``fallback_cluster`` restores the backfill — the ONE seam replacing the
+    per-consumer seeds copy-pasted into verify_canary / record_status."""
+    monkeypatch.setattr(
+        clusters_mod,
+        "load_clusters_config",
+        lambda: {
+            "hoffman2": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-pi"]},
+            "discovery": {"conda_source": "/d/conda.sh", "conda_envs": ["other"]},
+        },
+    )
+    # A BARE sidecar with no fallback → unchanged "" (tier-3 bare python).
+    assert remote_activation_for_sidecar({}) == ""
+    # ...but the fallback restores the cluster backfill.
+    seeded = remote_activation_for_sidecar({}, fallback_cluster="hoffman2")
+    assert "conda activate hpc-pi" in seeded
+    # The sidecar's OWN cluster still wins over the fallback (precedence).
+    both = remote_activation_for_sidecar({"cluster": "discovery"}, fallback_cluster="hoffman2")
+    assert "conda activate other" in both
+    assert "hpc-pi" not in both
+
+
 def test_prefix_modules_only() -> None:
     p = remote_activation_prefix({"modules": ["python/3.10", "gcc"]})
     assert p == "module load python/3.10 && module load gcc && "

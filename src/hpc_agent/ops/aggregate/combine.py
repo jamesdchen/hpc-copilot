@@ -106,12 +106,18 @@ def combine_wave(
     # runs directly on the login node via ssh_run and would otherwise hit
     # the bare login-node python that lacks the framework.
     from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.state.journal import load_run
     from hpc_agent.state.runs import read_run_sidecar
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)
     except Exception:  # noqa: BLE001 — missing/bad sidecar → bare python (unchanged)
         _sidecar = {}
+    # fallback_cluster (run #7): the submit-flow sidecar carries no cluster, so
+    # without the record's cluster to backfill, the combiner runs bare login
+    # python (rc=127, the blind-watch class at the wave-combine surface).
+    _rec = load_run(experiment_dir, run_id)
+    _fallback_cluster = _rec.cluster if _rec is not None else None
 
     ok, stdout, stderr = transport.run_combiner_checked(
         ssh_target=ssh_target,
@@ -119,7 +125,9 @@ def combine_wave(
         wave=wave,
         run_id=run_id,
         force=force,
-        remote_activation=remote_activation_for_sidecar(_sidecar),
+        remote_activation=remote_activation_for_sidecar(
+            _sidecar, fallback_cluster=_fallback_cluster
+        ),
     )
 
     def _apply(record: RunRecord) -> None:

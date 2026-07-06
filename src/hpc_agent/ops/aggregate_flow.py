@@ -593,7 +593,12 @@ def _cluster_final_reduce(
         sidecar = read_run_sidecar(experiment_dir, run_id)
     except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
         sidecar = {}
-    remote_activation = remote_activation_for_sidecar(sidecar)
+    # fallback_cluster (run #7): the submit-flow sidecar carries no cluster, so
+    # the final reduce would run bare login python without it (rc=127, the
+    # blind-watch class at the harvest surface).
+    remote_activation = remote_activation_for_sidecar(
+        sidecar, fallback_cluster=getattr(record, "cluster", None)
+    )
 
     proc = run_final_reduce(
         ssh_target=record.ssh_target,

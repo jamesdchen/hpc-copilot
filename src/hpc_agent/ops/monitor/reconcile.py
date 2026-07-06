@@ -532,7 +532,9 @@ def _reconcile_one(
                 job_ids=record.job_ids,
                 job_name=record.job_name,
                 file_glob=file_glob,
-                remote_activation=remote_activation_for_sidecar(_sidecar),
+                remote_activation=remote_activation_for_sidecar(
+                    _sidecar, fallback_cluster=getattr(record, "cluster", None)
+                ),
             )
             fut_waves = pool.submit(
                 _ssh_list_combined_waves,
