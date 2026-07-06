@@ -45,7 +45,7 @@ from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.block_gate import assert_greenlit_target
-from hpc_agent.ops.monitor.arm import decide_monitor_arm
+from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
@@ -808,10 +808,11 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
     mon = monitor_flow(experiment_dir, spec=spec.monitor)
 
     # 3. Arm the next monitor tick from the final status snapshot.
-    summary_raw = mon.last_status.get("summary") if isinstance(mon.last_status, dict) else None
-    summary: dict[str, int] = {}
-    if isinstance(summary_raw, dict):
-        summary = {k: int(v) for k, v in summary_raw.items() if isinstance(v, (int, float))}
+    # ``last_status`` carries the counts FLAT (no "summary" nesting) — feed it
+    # through the shared both-shape projector so a 20/20-terminal run reads as
+    # complete and arms "none" instead of shearing off to a running-fallback
+    # cron (run #8).
+    summary = summary_from_last_status(mon.last_status)
     arm = decide_monitor_arm(
         spec=DecideMonitorArmSpec(
             run_id=main.run_id,

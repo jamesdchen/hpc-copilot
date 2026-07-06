@@ -371,6 +371,27 @@ def _monitor_result(*, lifecycle_state: str):
     )
 
 
+def _monitor_result_flat(*, lifecycle_state: str, last_status: dict):
+    """A MonitorFlowResult whose ``last_status`` carries the counts FLAT.
+
+    This is the real ``MonitorFlowResult.last_status`` shape (counts keyed
+    directly, alongside ``checked_at``) — the S3 arm path must project it, not
+    reach for a nonexistent ``["summary"]`` nesting (run #8 regression).
+    """
+    from hpc_agent.ops.monitor_flow import MonitorFlowResult
+
+    return MonitorFlowResult(
+        run_id=_RUN_ID,
+        lifecycle_state=lifecycle_state,
+        last_status=last_status,
+        combined_waves=[],
+        failed_waves=[],
+        ticks=3,
+        elapsed_seconds=42.0,
+        escalation_reason=None,
+    )
+
+
 def _s3_spec() -> SubmitS3Spec:
     return SubmitS3Spec(
         submit=_sv_spec(),
@@ -418,6 +439,59 @@ def test_s3_launches_main_and_arms_monitor(tmp_path: Path) -> None:
     # §5 watchdog status rides the brief arming the long wait (opt-in install —
     # the brief carries the recommendation; nothing is auto-installed).
     assert "installed" in result.brief["watchdog"]
+
+
+def test_s3_terminal_flat_last_status_arms_none(tmp_path: Path) -> None:
+    """Run #8 regression: a 20/20-complete FLAT ``last_status`` must arm "none".
+
+    The live bug reached for ``last_status["summary"]`` (which does not exist on
+    the flat shape), fed ``summary={}`` to the REAL ``decide_monitor_arm``, and
+    fell through to a ``*/1`` running-fallback cron on an already-terminal run.
+    ``decide_monitor_arm`` is NOT mocked here so the projection is exercised
+    end-to-end.
+    """
+    _greenlight(tmp_path, "submit-s3")
+    flat = {"checked_at": "2026-07-06T03:00:00Z", "complete": 10, "running": 0, "pending": 0}
+    with (
+        mock.patch.object(
+            blocks,
+            "launch_main_array",
+            return_value=_sv_result(verified=True, job_ids=["999"]),
+        ),
+        mock.patch.object(
+            blocks,
+            "monitor_flow",
+            return_value=_monitor_result_flat(lifecycle_state="complete", last_status=flat),
+        ),
+    ):
+        result = blocks.submit_s3(tmp_path, spec=_s3_spec())
+
+    assert result.brief["monitor_arm"]["arm"] == "none"
+    assert result.brief["monitor_arm"]["reason"] == "complete"
+    assert result.brief["monitor_arm"]["schedule"] is None
+
+
+def test_s3_running_flat_last_status_arms_cron(tmp_path: Path) -> None:
+    """Legit path: a still-running FLAT ``last_status`` arms an adaptive cron."""
+    _greenlight(tmp_path, "submit-s3")
+    flat = {"checked_at": "2026-07-06T03:00:00Z", "complete": 0, "running": 10, "pending": 0}
+    with (
+        mock.patch.object(
+            blocks,
+            "launch_main_array",
+            return_value=_sv_result(verified=True, job_ids=["999"]),
+        ),
+        mock.patch.object(
+            blocks,
+            "monitor_flow",
+            return_value=_monitor_result_flat(lifecycle_state="timeout", last_status=flat),
+        ),
+    ):
+        result = blocks.submit_s3(tmp_path, spec=_s3_spec())
+
+    assert result.brief["monitor_arm"]["arm"] == "cron"
+    assert result.brief["monitor_arm"]["reason"] == "running_fallback"
+    assert result.brief["monitor_arm"]["schedule"] is not None
 
 
 def test_s3_brief_recommends_watchdog_install_when_missing(tmp_path: Path) -> None:

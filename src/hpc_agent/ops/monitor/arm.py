@@ -53,6 +53,34 @@ _DELAY_RULES: tuple[tuple[str, int], ...] = (
 # so the terminal-state set stays in lock-step instead of being re-hardcoded.
 _TERMINAL_STATES: frozenset[str] = frozenset(get_args(LifecycleStateTerminal))
 
+# The per-task count keys a monitor summary carries. Shared source of truth so
+# every ``last_status`` → summary projection agrees (status_blocks / relay_render
+# keep their own local copies for rendering).
+_SUMMARY_COUNT_KEYS: tuple[str, ...] = ("complete", "running", "pending", "failed", "unknown")
+
+
+def summary_from_last_status(last_status: Any) -> dict[str, int]:
+    """Project a run's ``last_status`` into the ``decide_monitor_arm`` summary.
+
+    ``MonitorFlowResult.last_status`` carries the per-task counts FLAT
+    (``{"checked_at": ..., "complete": N, "failed": N, ...}``), but some
+    producers nest them under a ``"summary"`` key. Accept BOTH shapes so a
+    consumer feeding ``decide_monitor_arm`` can't shear the counts off and fall
+    through to the running-fallback cron on an already-terminal run (run #8:
+    a 20/20-complete S3 brief armed a ``*/1`` cron). Non-numeric bookkeeping
+    fields (e.g. ``checked_at``) are dropped.
+    """
+    if not isinstance(last_status, dict):
+        return {}
+    inner = last_status.get("summary")
+    src = inner if isinstance(inner, dict) else last_status
+    counts: dict[str, int] = {}
+    for key in _SUMMARY_COUNT_KEYS:
+        val = src.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            counts[key] = int(val)
+    return counts
+
 
 @dataclass(frozen=True)
 class MonitorArm:

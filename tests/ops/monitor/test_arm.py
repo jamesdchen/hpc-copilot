@@ -12,7 +12,7 @@ The primitive picks cron/loop/none + cadence + cron schedule. We test:
 from __future__ import annotations
 
 from hpc_agent._wire.queries.decide_monitor_arm import DecideMonitorArmSpec
-from hpc_agent.ops.monitor.arm import decide_monitor_arm
+from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 
 
 def _summary(complete: int = 0, running: int = 0, pending: int = 0, failed: int = 0) -> dict:
@@ -204,3 +204,31 @@ def test_cron_create_args_carries_invocation_argv() -> None:
     )
     assert out["cron_create_args"]["prompt"] == "/monitor-hpc --run-id r1 --foo bar"
     assert "r1" in out["cron_create_args"]["reason"]
+
+
+def test_summary_from_last_status_accepts_flat_and_nested() -> None:
+    # Flat shape — the real MonitorFlowResult.last_status (run #8): counts keyed
+    # directly, alongside non-numeric bookkeeping that must be dropped.
+    flat = {"checked_at": "2026-07-06T03:00:00Z", "complete": 20, "running": 0, "pending": 0}
+    assert summary_from_last_status(flat) == {"complete": 20, "running": 0, "pending": 0}
+    # Nested shape — some producers wrap the counts under "summary".
+    nested = {"summary": {"complete": 20, "failed": 0}}
+    assert summary_from_last_status(nested) == {"complete": 20, "failed": 0}
+    # Non-dict / empty is projected to an empty summary.
+    assert summary_from_last_status(None) == {}
+    assert summary_from_last_status({}) == {}
+
+
+def test_flat_terminal_summary_through_arm_is_none() -> None:
+    """The full shear that fired live: flat 20/20 → projected → arm="none"."""
+    flat = {"checked_at": "2026-07-06T03:00:00Z", "complete": 20, "running": 0, "pending": 0}
+    out = decide_monitor_arm(
+        spec=DecideMonitorArmSpec(
+            run_id="r1",
+            summary=summary_from_last_status(flat),
+            total_tasks=20,
+            invocation_argv="/monitor-hpc r1",
+        )
+    )
+    assert out["arm"] == "none"
+    assert out["reason"] == "complete"
