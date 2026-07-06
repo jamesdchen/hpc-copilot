@@ -119,10 +119,12 @@ def test_cluster_ssh_timeout_env_override(
     assert seen["timeout"] == 30
 
 
-def test_cluster_ssh_timeout_defaults_to_15(
+def test_cluster_ssh_timeout_defaults_to_ssh_timeout_sec(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, green_local_env: None
 ) -> None:
-    """Default per-probe timeout is 15s (up from the old hardcoded 5s)."""
+    """Default per-probe timeout is DERIVED from SSH_TIMEOUT_SEC, not restated."""
+    from hpc_agent.infra.remote import SSH_TIMEOUT_SEC
+
     monkeypatch.delenv("HPC_CLUSTER_SSH_TIMEOUT", raising=False)
     monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(_write_clusters(tmp_path)))
     seen: dict[str, Any] = {}
@@ -133,13 +135,29 @@ def test_cluster_ssh_timeout_defaults_to_15(
 
     monkeypatch.setattr("hpc_agent.infra.remote.ssh_run", _ssh_run)
     preflight.check_preflight(cluster="x", spec=None)
-    assert seen["timeout"] == 15
+    assert seen["timeout"] == int(SSH_TIMEOUT_SEC)
 
 
 def test_cluster_ssh_timeout_non_integer_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-integer override degrades to the 15s default, not a crash."""
+    """A non-integer override degrades to the derived default, not a crash."""
+    from hpc_agent.infra.remote import SSH_TIMEOUT_SEC
+
     monkeypatch.setenv("HPC_CLUSTER_SSH_TIMEOUT", "not-a-number")
-    assert preflight._cluster_ssh_timeout() == 15
+    assert preflight._cluster_ssh_timeout() == int(SSH_TIMEOUT_SEC)
+
+
+def test_probe_deadline_never_tighter_than_the_ops_it_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The f8585e9c invariant, at the preflight-check sibling: a probe stricter
+    than the submit/staging ssh budget it gates is a false-positive machine —
+    and every false trip feeds the per-host circuit breaker (run #8 live: a
+    loaded-but-healthy hoffman2 failed two 15s ``echo ok`` probes, walking the
+    breaker to 2/3 while the 60s-bounded real ops would have passed)."""
+    from hpc_agent.infra.remote import SSH_TIMEOUT_SEC
+
+    monkeypatch.delenv("HPC_CLUSTER_SSH_TIMEOUT", raising=False)
+    assert preflight._cluster_ssh_timeout() >= int(SSH_TIMEOUT_SEC)
 
 
 def test_standalone_uv_probe_without_cluster(

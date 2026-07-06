@@ -45,17 +45,24 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
 def _cluster_ssh_timeout() -> int:
     """Per-probe cluster ssh round-trip timeout in seconds (#295 Fix 1).
 
-    Env-overridable via ``HPC_CLUSTER_SSH_TIMEOUT``; default 15s. The prior
-    hardcoded 5s was too tight for login nodes under load — the empirical
-    2026-06-06 demo fired a ``cluster_ssh_timeout`` failure on a healthy cluster
-    whose round-trip momentarily exceeded 5s. 15s tolerates routine slowness;
-    ops can pin it tighter or looser. A non-integer value falls back to the
-    default rather than erroring out.
+    Env-overridable via ``HPC_CLUSTER_SSH_TIMEOUT``; the default is DERIVED
+    from :data:`~hpc_agent.infra.remote.SSH_TIMEOUT_SEC` (60s), never a
+    tighter restated constant — a probe stricter than the submit/staging ssh
+    budget it gates is a false-positive machine, and every false trip feeds
+    the per-host circuit breaker (run #8 live, 2026-07-06: a loaded-but-
+    healthy hoffman2 failed two 15s ``echo ok`` probes, walking the breaker
+    to 2/3 while a 60s-bounded real op would have passed — the
+    ``_PREFLIGHT_PROBE_TIMEOUT_SEC`` lesson's uncovered sibling). History:
+    the original 5s tripped on a healthy cluster 2026-06-06; the 15s bump
+    repeated the same mistake one size up. A non-integer override falls back
+    to the derived default rather than erroring out.
     """
+    from hpc_agent.infra.remote import SSH_TIMEOUT_SEC
+
     try:
-        return int(os.environ.get("HPC_CLUSTER_SSH_TIMEOUT", "15"))
+        return int(os.environ.get("HPC_CLUSTER_SSH_TIMEOUT", str(int(SSH_TIMEOUT_SEC))))
     except ValueError:
-        return 15
+        return int(SSH_TIMEOUT_SEC)
 
 
 def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
