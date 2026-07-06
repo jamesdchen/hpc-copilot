@@ -3,8 +3,7 @@ name: retarget-run
 verb: workflow
 side_effects:
 - writes-sidecar: <experiment>/.hpc/runs/<new_run_id>.json (the retargeted sidecar)
-- scheduler-submit: <new-cluster> (re-canary only)
-- ssh: <new-cluster> (re-canary poll) + <old-cluster> (supersession kill)
+- ssh: <old-cluster> (best-effort supersession kill; non-blocking)
 idempotent: true
 idempotency_key: old_run_id
 error_codes:

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/retarget_run.output.json",
   "title": "retarget-run output data",
-  "description": "The retarget outcome — an S2-shaped brief + the supersession audit.\n\n``stage_reached`` is the re-canary outcome the human decides on:\n``retargeted_canary_verified`` (green on the new cluster — greenlight S3),\n``retargeted_canary_failed`` (failed AGAIN — the human picks the next\nrecovery), or ``resolve_blocked`` (the fresh resolve surfaced its own\ndecision, e.g. a live sibling of the NEW run_id from a prior retarget).\n``needs_decision`` is always True: the human re-``y``s the brief through the\nEXISTING ``append-decision`` path — this verb produces the brief, it does NOT\nbypass the gates. ``superseded_run_id`` / ``applied_patch`` are the audit of\nwhat the retarget closed and changed.",
+  "description": "The retarget outcome — a resolve/supersede brief + the S2 hand-off.\n\n``stage_reached`` is what the human decides on: ``retargeted_pending_canary``\n(re-resolved on the new cluster + old attempt superseded; the canary runs in\n``submit-s2``'s DETACHED worker after the greenlight — this verb never blocks\non a canary poll, which is what makes it MCP-safe) or ``resolve_blocked``\n(the fresh resolve surfaced its own decision, e.g. a live sibling of the NEW\nrun_id from a prior retarget). ``needs_decision`` is always True: the human\nre-``y``s the brief through the EXISTING ``append-decision`` path — this verb\nproduces the brief, it does NOT bypass the gates; the canary (#160) and the\nS3 greenlight still stand, owned by submit-s2/-s3. ``next_block`` carries the\n``{verb: submit-s2, ...}`` hand-off hint (also what derives this verb into\nthe curated MCP catalog). ``superseded_run_id`` / ``applied_patch`` are the\naudit of what the retarget closed and changed.",
   "type": "object",
   "required": [
     "stage_reached",
@@ -12,10 +12,9 @@
   "additionalProperties": false,
   "properties": {
     "stage_reached": {
-      "description": "The re-canary outcome the amended brief stops at.",
+      "description": "The boundary the retarget stops at for the human's re-y.",
       "enum": [
-        "retargeted_canary_verified",
-        "retargeted_canary_failed",
+        "retargeted_pending_canary",
         "resolve_blocked"
       ],
       "title": "Stage Reached",
@@ -50,28 +49,9 @@
       "description": "The retargeted run's run_id (<new_run_name>-<cmd_sha[:8]>); None if unresolved.",
       "title": "Run Id"
     },
-    "verified": {
-      "default": false,
-      "description": "True iff the re-canary verified green on the NEW cluster (#160 gate).",
-      "title": "Verified",
-      "type": "boolean"
-    },
-    "failure_kind": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "The canary failure kind when the re-canary failed on the new cluster; else None.",
-      "title": "Failure Kind"
-    },
     "brief": {
       "additionalProperties": true,
-      "description": "The S2-shaped brief: the retargeted resolved values + the re-canary result (run_id, cluster, verified, est core-hours) + the supersession summary. The LLM relays it and takes the human's re-y.",
+      "description": "The retarget brief: the retargeted resolved values + the fresh resolve's submit_spec (what submit-s2 stages & canaries) + the pre-dispatch cost estimate + the supersession summary. The LLM relays it and takes the human's re-y.",
       "title": "Brief",
       "type": "object"
     },
@@ -80,6 +60,20 @@
       "description": "The delta actually applied {field: value} — the audit of what the retarget changed.",
       "title": "Applied Patch",
       "type": "object"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The {verb, why, spec_hint} hand-off — submit-s2 on the pending-canary path (its detached worker owns the canary poll), null when resolve_blocked. Presence of this field is also what derives retarget-run into the curated MCP catalog.",
+      "title": "Next Block"
     }
   }
 }

@@ -133,7 +133,10 @@ def test_successful_open_records_breaker_success(
 @needs_sh
 def test_idle_channel_is_reaped(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
     """An idle channel self-closes so no login-node session lingers."""
-    monkeypatch.setattr(ssh_broker, "IDLE_CLOSE_SEC", 0.0)
+    # -1.0, not 0.0: with a 0.0 threshold the reap needs idle_for() STRICTLY
+    # positive, and two back-to-back monotonic() reads can be EQUAL on a fast
+    # Windows runner (CI flake on 51175a3b) — any real idle beats -1.0.
+    monkeypatch.setattr(ssh_broker, "IDLE_CLOSE_SEC", -1.0)
     r1 = pool.run("echo one", ssh_target="u@h", timeout=15)
     assert r1.stdout.strip() == "one"
     first = pool._channels["h"]

@@ -312,6 +312,30 @@ def resolve_submit_inputs(
         spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
     )
 
+    def _caller_executor_warning(executor: str, exp_dir: Path) -> str | None:
+        """Re-capture ``check_per_task_executor``'s interface-blind RuntimeWarning.
+
+        The sidecar write above already ran the check (a refusal would have
+        raised there); this re-run is static and idempotent, existing only to
+        CAPTURE the warning text for the S1 reason instead of letting it die in
+        a detached worker's log. Never raises — a refusal-class executor never
+        reaches here, and any surprise degrades to "no warning".
+        """
+        import warnings as _warnings
+
+        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+
+        try:
+            with _warnings.catch_warnings(record=True) as caught:
+                _warnings.simplefilter("always")
+                check_per_task_executor(executor, experiment_dir=exp_dir)
+        except Exception:  # noqa: BLE001 — capture-only seam; the write already gated
+            return None
+        for w in caught:
+            if issubclass(w.category, RuntimeWarning):
+                return str(w.message)
+        return None
+
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`
     #    output is fully submit-ready. Same run_id/cmd_sha injection (after the
@@ -340,14 +364,35 @@ def resolve_submit_inputs(
         sidecar_spec = sidecar_spec.model_copy(update={"executor": materialized_executor})
     written = write_run_sidecar(experiment_dir=experiment_dir, spec=sidecar_spec)
 
+    reason = (
+        "inputs resolved: tasks.py present, no live prior, submit-flow spec "
+        "built + validated, and the per-run sidecar written (#171) — hand "
+        "submit_spec to submit-pipeline."
+    )
+    if materialized_executor is None:
+        # No interview materialized the executor → the CALLER supplied it, and
+        # the "framework, not the LLM, decides" invariant did not apply. The
+        # write above already ran check_per_task_executor, but its
+        # interface-blind RuntimeWarning lands in a detached worker's log where
+        # no human sees it until the canary fails (run #8 live: a hand-onboarded
+        # `executor: "run"` sailed to a failed canary on TWO clusters). Surface
+        # it HERE, in the S1 resolved reason, so the y/nudge boundary shows it
+        # pre-SSH and pre-cost. Warn-not-refuse stands (a legit $PATH wrapper
+        # reading $HPC_TASK_ID is the false-positive; the canary is the hard
+        # backstop) — this is legibility, not a new gate.
+        blind = _caller_executor_warning(str(sidecar_spec.executor or ""), experiment_dir)
+        if blind:
+            reason = (
+                f"WARNING (caller-supplied executor; no interview.json to derive "
+                f"from): {blind} Complete the wrap-entry-point interview to "
+                f"derive the executor mechanically, or supply a real per-task "
+                f"command. — {reason}"
+            )
+
     return ResolveSubmitInputsResult(
         stage_reached="resolved",
         needs_decision=False,
-        reason=(
-            "inputs resolved: tasks.py present, no live prior, submit-flow spec "
-            "built + validated, and the per-run sidecar written (#171) — hand "
-            "submit_spec to submit-pipeline."
-        ),
+        reason=reason,
         run_id=run_id,
         cmd_sha=cmd_sha,
         submit_spec=submit_spec,

@@ -14,10 +14,16 @@ already exist into ONE journaled decision:
    the target cluster (the finding-13 class closed by construction);
 2. ``supersede_run(old, new)`` — wave-2 supersession closes the failed attempt
    (and its ``-canary`` pairing), so the fresh run is not a scope-hop escape hatch
-   (proving run #4, finding g/h);
-3. a re-canary — ``submit-and-verify`` with ``stop_after_canary=True`` (the #160
-   gate: submit the 1-task canary on the NEW cluster and verify it BEFORE the main
-   array is ever offered).
+   (proving run #4, finding g/h). Best-effort + NON-BLOCKING: an unreachable old
+   cluster records a ``pending_closure`` marker instead of grinding on qdel
+   (run #8's MaxStartups-throttled hoffman2);
+3. a HAND-OFF to ``submit-s2`` via the ``next_block`` hint — S2's
+   detach-by-contract worker owns the re-canary poll (the #160 gate: the 1-task
+   canary on the NEW cluster, verified BEFORE the main array is offered). This
+   verb NEVER runs the canary inline, so it returns in seconds — the contract
+   that makes it safe to expose as a curated MCP tool (run #8: the agent,
+   unable to reach it over MCP, hand-ran kill→confirm→revise against the
+   throttled cluster and wedged).
 
 **Why a NEW run_name (the design point).** A run_id keys on parameters +
 run_name only (#207): a retarget keeps the SAME params (only the cluster moves),
@@ -59,7 +65,6 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.retarget_run import RetargetRunInput, RetargetRunResult
-from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
@@ -67,13 +72,13 @@ from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
 # Re-point (never duplicate) the nudge-as-delta verb's helpers: the derived-field
 # guard, the sidecar-reconstruction, and the base-resolved read are IDENTICAL to
 # ``revise-resolved``'s — a retarget differs only in that it re-resolves under a
-# FRESH run_name and then supersedes + re-canaries (proving-run-5 §4.1).
+# FRESH run_name and then supersedes + hands the re-canary to submit-s2
+# (proving-run-5 §4.1; detached hand-off since run #8).
 from hpc_agent.ops.revise_resolved import (
     _assert_patch_targets_input_fields,
     _latest_committed_resolved,
     _reconstruct_resolve_spec,
 )
-from hpc_agent.ops.submit_and_verify import submit_and_verify
 from hpc_agent.ops.supersession import supersede_run
 
 if TYPE_CHECKING:
@@ -163,29 +168,31 @@ def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
 @primitive(
     name="retarget-run",
     verb="workflow",
-    composes=["resolve-submit-inputs", "submit-and-verify"],
+    composes=["resolve-submit-inputs"],
     side_effects=[
         SideEffect(
             "writes-sidecar",
             "<experiment>/.hpc/runs/<new_run_id>.json (the retargeted sidecar)",
         ),
-        SideEffect("scheduler-submit", "<new-cluster> (re-canary only)"),
-        SideEffect("ssh", "<new-cluster> (re-canary poll) + <old-cluster> (supersession kill)"),
+        SideEffect("ssh", "<old-cluster> (best-effort supersession kill; non-blocking)"),
     ],
-    # SiblingRunLive (from the re-canary's supersession gate) shares the
+    # SiblingRunLive (from the fresh resolve's gates) shares the
     # ``spec_invalid`` error_code, so SpecInvalid already covers it in the envelope.
     error_codes=[errors.SpecInvalid, errors.ClusterUnknown],
     idempotent=True,
     idempotency_key="old_run_id",
     cli=CliShape(
         help=(
-            "Cluster-retarget recovery arm (proving-run-5 wave 5.2): re-resolve a "
-            "failed attempt under a NEW run_name + the NEW cluster (re-deriving "
-            "job_env/ssh_target/backend/activation), SUPERSEDE the old attempt, and "
-            "RE-CANARY on the new cluster — one verb, one journaled decision. The "
-            "patch must name a NEW cluster (a same-cluster delta → revise-resolved); "
-            "a derived field is REFUSED. Returns the S2-shaped brief for the human's "
-            "re-y — it does NOT bypass the append-decision / greenlight gates."
+            "Cluster-retarget recovery arm (proving-run-5 wave 5.2; detached "
+            "hand-off since run #8): re-resolve a failed attempt under a NEW "
+            "run_name + the NEW cluster (re-deriving job_env/ssh_target/backend/"
+            "activation) and SUPERSEDE the old attempt (best-effort, NON-BLOCKING "
+            "— an unreachable old cluster records pending_closure, never grinds "
+            "on qdel). Returns in seconds with next_block=submit-s2: the human's "
+            "re-y greenlights S2, whose DETACHED worker owns the re-canary poll. "
+            "The patch must name a NEW cluster (a same-cluster delta → "
+            "revise-resolved); a derived field is REFUSED. Does NOT bypass the "
+            "append-decision / canary / S3 greenlight gates."
         ),
         spec_arg=True,
         spec_model=RetargetRunInput,
@@ -196,7 +203,7 @@ def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
     agent_facing=True,
 )
 def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRunResult:
-    """Supersede the failed attempt, re-resolve on a new cluster, and re-canary.
+    """Re-resolve on a new cluster, supersede the failed attempt, hand off to S2.
 
     1. **Guards** (load-bearing): the patch may target ONLY resolver-owned input
        fields (:func:`_assert_patch_targets_input_fields`) AND must name a NEW
@@ -209,13 +216,13 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
        resume detection on the NEW run_id, so it never trips on the old attempt's
        still-live canary. A non-``resolved`` outcome surfaces as ``resolve_blocked``.
     4. **Supersede** the old attempt (:func:`supersede_run`) — close it + its
-       ``-canary`` pairing, stamp the old→new link — so the re-canary's own
-       supersession gate finds no live same-identity sibling.
-    5. **Re-canary** on the new cluster (``submit-and-verify`` with
-       ``stop_after_canary=True``): the #160 gate verifies the 1-task canary before
-       any main array. Return the S2-shaped brief with ``needs_decision=True`` — the
-       human re-``y``s it through append-decision (this verb does NOT bypass the
-       gates); the main array stays behind the S3 greenlight.
+       ``-canary`` pairing, stamp the old→new link. Best-effort + non-blocking: an
+       unreachable old cluster records ``pending_closure`` rather than grinding.
+    5. **Hand off** to ``submit-s2`` (``next_block`` + ``needs_decision=True``):
+       the human re-``y``s the brief through append-decision (this verb does NOT
+       bypass the gates), and S2's DETACHED worker owns the re-canary poll (the
+       #160 gate) — this verb never blocks on it, so it is MCP-safe. The main
+       array stays behind the S3 greenlight.
 
     Raises :class:`errors.SpecInvalid` on a derived-field / same-cluster patch, a
     scope with no resolved-run sidecar, or an unresolvable target cluster.
@@ -270,7 +277,6 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
             ),
             superseded_run_id=old_run_id,
             run_id=rr.run_id,
-            verified=False,
             brief={
                 "resolved": resolved,
                 "resolve": {
@@ -306,24 +312,27 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
         scheduler=_old_scheduler(experiment_dir, old_run_id=old_run_id, cluster=prior_cluster),
     )
 
-    # 3. Re-canary on the NEW cluster (the #160 gate: canary verified before main).
+    # 3. Hand the re-canary to submit-s2 (detach-by-contract). This verb finishes
+    #    in seconds: the supersede above is best-effort/non-blocking (an
+    #    unreachable old cluster records pending_closure instead of grinding on
+    #    qdel) and the #160 canary gate runs in S2's DETACHED worker after the
+    #    human's re-y — never inline here. That non-blocking contract is what
+    #    makes retarget-run safe as a curated MCP tool (run #8: the agent,
+    #    unable to reach this verb over MCP, hand-ran kill→confirm→revise
+    #    against a MaxStartups-throttled hoffman2 and wedged for minutes).
+    #    The canary + S3 greenlight gates still stand — owned by submit-s2/-s3.
     submit = SubmitFlowSpec.model_validate(rr.submit_spec).model_copy(update={"canary": True})
-    sv = submit_and_verify(
-        experiment_dir, spec=SubmitAndVerifySpec(submit=submit), stop_after_canary=True
-    )
-
     est = _cost_estimate(submit)
+    # The journaled greenlight must name submit-s2 (assert_greenlit_target reads
+    # the resolved's next_block), mirroring what S1's resolved brief carries.
+    resolved["next_block"] = "submit-s2"
     brief: dict[str, Any] = {
         # run_id + cluster ride the brief so a relay renders from the brief's OWN
-        # data (design §5.3): the canonical line is "canary <state> on <cluster>".
-        "run_id": sv.run_id,
+        # data (design §5.3): the canonical line is "canary PENDING on <cluster>".
+        "run_id": rr.run_id,
         "cluster": new_cluster,
         "retargeted_from": {"run_id": old_run_id, "cluster": prior_cluster},
         "resolved": resolved,
-        "canary_run_id": sv.canary_run_id,
-        "canary_job_ids": sv.canary_job_ids,
-        "verified": sv.verified,
-        "failure_kind": sv.failure_kind,
         "est_core_hours": est.est_core_hours,
         # Unknown-footprint honesty (run #6): the kernel's defensive 0.0 must
         # never render as a literal "0 core-hours" — the relay renderer reads
@@ -338,8 +347,6 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
         },
         "patch": dict(spec.patch),
     }
-    if sv.verify_result is not None:
-        brief["verify_result"] = sv.verify_result.model_dump(mode="json")
 
     # An unknown footprint says so, loudly — never "est. 0 core-hours" (run #6).
     est_phrase = (
@@ -347,29 +354,21 @@ def retarget_run(experiment_dir: Path, *, spec: RetargetRunInput) -> RetargetRun
         if est.footprint_unknown
         else f"{est.est_core_hours:g} core-hours"
     )
-    if sv.verified:
-        reason = (
-            f"retargeted to {new_cluster!r}: canary green (est. {est_phrase}); "
-            f"superseded {old_run_id!r}. Greenlight to submit & watch on "
-            f"{new_cluster}."
-        )
-        stage = "retargeted_canary_verified"
-    else:
-        reason = (
-            f"retargeted to {new_cluster!r}: canary FAILED again "
-            f"({sv.failure_kind or 'no canary'}); superseded {old_run_id!r}. Propose "
-            "the next recovery."
-        )
-        stage = "retargeted_canary_failed"
-
     return RetargetRunResult(
-        stage_reached=stage,  # type: ignore[arg-type]  # the two verified branches
+        stage_reached="retargeted_pending_canary",
         needs_decision=True,
-        reason=reason,
+        reason=(
+            f"retargeted to {new_cluster!r}: re-resolved (est. {est_phrase}) and "
+            f"superseded {old_run_id!r}; canary PENDING — greenlight submit-s2 to "
+            f"stage & canary on {new_cluster} (its detached worker owns the poll)."
+        ),
         superseded_run_id=old_run_id,
-        run_id=sv.run_id,
-        verified=sv.verified,
-        failure_kind=sv.failure_kind,
+        run_id=rr.run_id,
         brief=brief,
         applied_patch=dict(spec.patch),
+        next_block={
+            "verb": "submit-s2",
+            "why": "retarget resolved; stage & canary the retargeted run for review.",
+            "spec_hint": {"run_id": rr.run_id},
+        },
     )

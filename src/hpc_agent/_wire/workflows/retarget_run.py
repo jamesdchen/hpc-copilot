@@ -11,11 +11,18 @@ run #4/#5, findings 9/10/13).
 This verb SEQUENCES those steps in CODE, not in the model, composing pieces that
 already exist:
 
-1. ``supersede(old_run_id)`` — mark/kill the failed attempt (wave-2 supersession);
+1. ``supersede(old_run_id)`` — mark/kill the failed attempt (wave-2 supersession;
+   best-effort and NON-BLOCKING: an unreachable old cluster records a
+   ``pending_closure`` marker instead of grinding on qdel — run #8's throttled
+   hoffman2);
 2. a fresh ``resolve`` under a NEW run_name + the NEW cluster (re-derive
    ``job_env`` / ``ssh_target`` / ``backend`` / activation / the sidecar for the
    target cluster — the ``revise-resolved`` sidecar-reconstruction, re-pointed);
-3. a re-canary (``submit-and-verify`` with ``stop_after_canary=True``).
+3. a HAND-OFF to ``submit-s2`` (the ``next_block`` hint): S2's detach-by-contract
+   worker owns the re-canary poll, so this verb returns in seconds — never a
+   multi-hour blocking call, which is what makes it safe to expose as a curated
+   MCP tool (run #8: the agent, unable to reach retarget-run over MCP, hand-ran
+   kill→confirm→revise against a throttled cluster and wedged).
 
 The NEW run_name is the point: a run_id keys on parameters + run_name only (#207),
 so a retarget that KEPT the run_name would mint the SAME run_id on the new cluster
@@ -93,26 +100,28 @@ class RetargetRunInput(BaseModel):
 
 
 class RetargetRunResult(BaseModel):
-    """The retarget outcome — an S2-shaped brief + the supersession audit.
+    """The retarget outcome — a resolve/supersede brief + the S2 hand-off.
 
-    ``stage_reached`` is the re-canary outcome the human decides on:
-    ``retargeted_canary_verified`` (green on the new cluster — greenlight S3),
-    ``retargeted_canary_failed`` (failed AGAIN — the human picks the next
-    recovery), or ``resolve_blocked`` (the fresh resolve surfaced its own
-    decision, e.g. a live sibling of the NEW run_id from a prior retarget).
-    ``needs_decision`` is always True: the human re-``y``s the brief through the
-    EXISTING ``append-decision`` path — this verb produces the brief, it does NOT
-    bypass the gates. ``superseded_run_id`` / ``applied_patch`` are the audit of
-    what the retarget closed and changed.
+    ``stage_reached`` is what the human decides on: ``retargeted_pending_canary``
+    (re-resolved on the new cluster + old attempt superseded; the canary runs in
+    ``submit-s2``'s DETACHED worker after the greenlight — this verb never blocks
+    on a canary poll, which is what makes it MCP-safe) or ``resolve_blocked``
+    (the fresh resolve surfaced its own decision, e.g. a live sibling of the NEW
+    run_id from a prior retarget). ``needs_decision`` is always True: the human
+    re-``y``s the brief through the EXISTING ``append-decision`` path — this verb
+    produces the brief, it does NOT bypass the gates; the canary (#160) and the
+    S3 greenlight still stand, owned by submit-s2/-s3. ``next_block`` carries the
+    ``{verb: submit-s2, ...}`` hand-off hint (also what derives this verb into
+    the curated MCP catalog). ``superseded_run_id`` / ``applied_patch`` are the
+    audit of what the retarget closed and changed.
     """
 
     model_config = ConfigDict(extra="forbid", title="retarget-run output data")
 
     stage_reached: Literal[
-        "retargeted_canary_verified",
-        "retargeted_canary_failed",
+        "retargeted_pending_canary",
         "resolve_blocked",
-    ] = Field(description="The re-canary outcome the amended brief stops at.")
+    ] = Field(description="The boundary the retarget stops at for the human's re-y.")
     needs_decision: bool = Field(
         description="Always True — the human re-y's the retarget brief through append-decision.",
     )
@@ -127,23 +136,25 @@ class RetargetRunResult(BaseModel):
         default=None,
         description="The retargeted run's run_id (<new_run_name>-<cmd_sha[:8]>); None if unresolved.",
     )
-    verified: bool = Field(
-        default=False,
-        description="True iff the re-canary verified green on the NEW cluster (#160 gate).",
-    )
-    failure_kind: str | None = Field(
-        default=None,
-        description="The canary failure kind when the re-canary failed on the new cluster; else None.",
-    )
     brief: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "The S2-shaped brief: the retargeted resolved values + the re-canary "
-            "result (run_id, cluster, verified, est core-hours) + the supersession "
-            "summary. The LLM relays it and takes the human's re-y."
+            "The retarget brief: the retargeted resolved values + the fresh "
+            "resolve's submit_spec (what submit-s2 stages & canaries) + the "
+            "pre-dispatch cost estimate + the supersession summary. The LLM "
+            "relays it and takes the human's re-y."
         ),
     )
     applied_patch: dict[str, Any] = Field(
         default_factory=dict,
         description="The delta actually applied {field: value} — the audit of what the retarget changed.",
+    )
+    next_block: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The {verb, why, spec_hint} hand-off — submit-s2 on the pending-canary "
+            "path (its detached worker owns the canary poll), null when "
+            "resolve_blocked. Presence of this field is also what derives "
+            "retarget-run into the curated MCP catalog."
+        ),
     )

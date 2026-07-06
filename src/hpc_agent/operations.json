@@ -1452,11 +1452,10 @@
     "output_schema": "retarget_run.output.json",
     "python": "hpc_agent.ops.retarget_run.retarget_run",
     "side_effects": [
-      "scheduler-submit",
       "ssh",
       "writes-sidecar"
     ],
-    "summary": "Cluster-retarget recovery arm (proving-run-5 wave 5.2): re-resolve a failed attempt under a NEW run_name + the NEW cluster (re-deriving job_env/ssh_target/backend/activation), SUPERSEDE the old attempt, and RE-CANARY on the new cluster — one verb, one journaled decision. The patch must name a NEW cluster (a same-cluster delta → revise-resolved); a derived field is REFUSED. Returns the S2-shaped brief for the human's re-y — it does NOT bypass the append-decision / greenlight gates.",
+    "summary": "Cluster-retarget recovery arm (proving-run-5 wave 5.2; detached hand-off since run #8): re-resolve a failed attempt under a NEW run_name + the NEW cluster (re-deriving job_env/ssh_target/backend/activation) and SUPERSEDE the old attempt (best-effort, NON-BLOCKING — an unreachable old cluster records pending_closure, never grinds on qdel). Returns in seconds with next_block=submit-s2: the human's re-y greenlights S2, whose DETACHED worker owns the re-canary poll. The patch must name a NEW cluster (a same-cluster delta → revise-resolved); a derived field is REFUSED. Does NOT bypass the append-decision / canary / S3 greenlight gates.",
     "verb": "workflow"
   },
   {

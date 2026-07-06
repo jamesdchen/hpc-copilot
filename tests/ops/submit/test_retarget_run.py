@@ -1,21 +1,26 @@
 """Tests for ``retarget-run`` (proving-run #5 wave 5.2, the recovery arm).
 
-The cluster-retarget recovery arm sequences supersede → re-resolve(new run_name)
-→ re-canary in CODE. These assert:
+The cluster-retarget recovery arm sequences re-resolve(new run_name) →
+supersede → HAND-OFF to submit-s2 in CODE (detached since run #8: the canary
+poll belongs to S2's detach-by-contract worker, so this verb returns in
+seconds — MCP-safe, never a multi-hour blocking call). These assert:
 
 * the LOAD-BEARING guards — a patch naming a DERIVED field, a patch that does NOT
   change the cluster (same or missing), and a scope with no resolved sidecar are
   all refused with ``SpecInvalid``;
-* the 3-step composition — a ``{cluster: X}`` retarget re-resolves with X's
-  activation/job_env RE-DERIVED, SUPERSEDES the old attempt (old→new link
-  stamped), and re-canaries on X under a NEW run_name (distinct run_id);
+* the composition — a ``{cluster: X}`` retarget re-resolves with X's
+  activation/job_env RE-DERIVED under a NEW run_name (distinct run_id),
+  SUPERSEDES the old attempt (old→new link stamped), and returns
+  ``retargeted_pending_canary`` with the ``next_block=submit-s2`` hand-off —
+  NO inline canary, no scheduler submit, no new-cluster ssh;
 * the SUCCESSORS wiring — a cluster delta at an anomaly terminator routes to
   ``retarget-run`` via ``block_chain.recovery_arm_verb``.
 
 Idiom mirrors tests/ops/submit/test_revise_resolved.py: a REAL journal /
 clusters.yaml via env vars, with compute-run-id + find-prior-run mocked at the
-resolve seam (so build-submit-spec — the job_env derivation under test — runs for
-real) and ``submit-and-verify`` mocked at the retarget seam (no real SSH).
+resolve seam (so build-submit-spec — the job_env derivation under test — runs
+for real). No submit-and-verify seam exists anymore — that absence IS the
+contract (nothing here may block on a canary).
 """
 
 from __future__ import annotations
@@ -28,7 +33,6 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.actions.write_run_sidecar import WriteRunSidecarInput
 from hpc_agent._wire.workflows.retarget_run import RetargetRunInput
-from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifyResult
 from hpc_agent.ops.retarget_run import retarget_run
 
 if TYPE_CHECKING:
@@ -84,21 +88,6 @@ def _fp(**over: Any) -> dict[str, Any]:
     }
     base.update(over)
     return base
-
-
-def _sv(*, verified: bool = True, failure_kind: Any = None) -> SubmitAndVerifyResult:
-    """A stop_after_canary submit-and-verify result (mocked at the retarget seam)."""
-    return SubmitAndVerifyResult(
-        run_id=_NEW_RUN_ID,
-        job_ids=[],  # stop_after_canary → main array not launched
-        total_tasks=2,
-        deduped=False,
-        canary_run_id=f"{_NEW_RUN_ID}-canary",
-        canary_job_ids=["55501"],
-        verified=verified,
-        failure_kind=failure_kind,
-        verify_result=None,
-    )
 
 
 def _setup(tmp_path: Path, monkeypatch: Any, *, old_record_status: str | None = "failed") -> str:
@@ -222,33 +211,28 @@ def test_no_sidecar_is_refused(tmp_path: Path, monkeypatch: Any) -> None:
 # ── the 3-step composition ────────────────────────────────────────────────────
 
 
-def test_retarget_supersedes_reresolves_and_recanaries(tmp_path: Path, monkeypatch: Any) -> None:
-    """A ``{cluster: h2new}`` retarget: re-resolves job_env from h2new, supersedes
-    the old attempt (old→new link stamped), and re-canaries under a NEW run_id."""
+def test_retarget_supersedes_reresolves_and_hands_off_to_s2(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A ``{cluster: h2new}`` retarget: re-resolves job_env from h2new under a NEW
+    run_id, supersedes the old attempt (old→new link stamped), and returns the
+    ``next_block=submit-s2`` hand-off — NO inline canary (S2's detached worker
+    owns the poll; this verb must return in seconds to be MCP-safe)."""
     from hpc_agent.state.journal import load_run
 
     old = _setup(tmp_path, monkeypatch)
 
-    captured: dict[str, Any] = {}
-
-    def _fake_sv(experiment_dir: Any, *, spec: Any, stop_after_canary: bool = False) -> Any:
-        captured["submit"] = spec.submit
-        captured["stop_after_canary"] = stop_after_canary
-        return _sv(verified=True)
-
     with (
         mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=_cr()),
         mock.patch(f"{_RESOLVE_SEAM}.find_prior_run", return_value=_fp(found=False)),
-        mock.patch(f"{_RETARGET_SEAM}.submit_and_verify", side_effect=_fake_sv),
     ):
         res = retarget_run(
             tmp_path, spec=RetargetRunInput(old_run_id=old, patch={"cluster": "h2new"})
         )
 
     # Outcome + audit.
-    assert res.stage_reached == "retargeted_canary_verified"
+    assert res.stage_reached == "retargeted_pending_canary"
     assert res.needs_decision is True
-    assert res.verified is True
     assert res.superseded_run_id == old
     assert res.run_id == _NEW_RUN_ID
     assert res.run_id != old  # a DISTINCT run identity (not a re-attach)
@@ -270,33 +254,14 @@ def test_retarget_supersedes_reresolves_and_recanaries(tmp_path: Path, monkeypat
     assert old_rec.superseded_by == _NEW_RUN_ID
     assert res.brief["supersession"]["superseded_run_id"] == old
 
-    # Step 3 (re-canary): submit-and-verify got the h2new spec with canary on,
-    # stopped after the canary.
-    assert captured["submit"].cluster == "h2new"
-    assert captured["submit"].canary is True
-    assert captured["submit"].run_id == _NEW_RUN_ID
-    assert captured["stop_after_canary"] is True
-
-
-def test_retarget_canary_fails_again(tmp_path: Path, monkeypatch: Any) -> None:
-    """A canary that fails on the new cluster too → retargeted_canary_failed; the
-    old attempt is still superseded and the failure_kind rides the brief."""
-    old = _setup(tmp_path, monkeypatch)
-    with (
-        mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=_cr()),
-        mock.patch(f"{_RESOLVE_SEAM}.find_prior_run", return_value=_fp(found=False)),
-        mock.patch(
-            f"{_RETARGET_SEAM}.submit_and_verify",
-            return_value=_sv(verified=False, failure_kind="nonzero_exit"),
-        ),
-    ):
-        res = retarget_run(
-            tmp_path, spec=RetargetRunInput(old_run_id=old, patch={"cluster": "h2new"})
-        )
-    assert res.stage_reached == "retargeted_canary_failed"
-    assert res.verified is False
-    assert res.failure_kind == "nonzero_exit"
-    assert res.superseded_run_id == old
+    # Step 3 (hand-off): next_block points at submit-s2 with the NEW run_id;
+    # the journaled greenlight names submit-s2 via the resolved's next_block
+    # (assert_greenlit_target's read), and the reason says the canary is PENDING.
+    assert res.next_block is not None
+    assert res.next_block["verb"] == "submit-s2"
+    assert res.next_block["spec_hint"] == {"run_id": _NEW_RUN_ID}
+    assert res.brief["resolved"]["next_block"] == "submit-s2"
+    assert "PENDING" in res.reason
 
 
 def test_explicit_new_run_name_is_honored(tmp_path: Path, monkeypatch: Any) -> None:
@@ -306,7 +271,6 @@ def test_explicit_new_run_name_is_honored(tmp_path: Path, monkeypatch: Any) -> N
     with (
         mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=_cr()) as cri,
         mock.patch(f"{_RESOLVE_SEAM}.find_prior_run", return_value=_fp(found=False)),
-        mock.patch(f"{_RETARGET_SEAM}.submit_and_verify", return_value=_sv(verified=True)),
     ):
         retarget_run(
             tmp_path,
@@ -318,12 +282,11 @@ def test_explicit_new_run_name_is_honored(tmp_path: Path, monkeypatch: Any) -> N
     assert cri.call_args.kwargs["run_name"] == "exp-fresh"
 
 
-def test_resolve_blocked_short_circuits_before_recanary(tmp_path: Path, monkeypatch: Any) -> None:
+def test_resolve_blocked_short_circuits_before_handoff(tmp_path: Path, monkeypatch: Any) -> None:
     """If the fresh resolve surfaces its OWN decision (e.g. a live sibling of the
-    NEW run_id from a prior retarget), retarget stops at resolve_blocked and does
-    NOT re-canary."""
+    NEW run_id from a prior retarget), retarget stops at resolve_blocked with NO
+    submit-s2 hand-off (next_block null) — the human decides."""
     old = _setup(tmp_path, monkeypatch)
-    sv_mock = mock.MagicMock()
     with (
         mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=_cr()),
         mock.patch(
@@ -332,14 +295,27 @@ def test_resolve_blocked_short_circuits_before_recanary(tmp_path: Path, monkeypa
                 found=True, is_orphan=False, status="in_flight", prior_run_id=_NEW_RUN_ID
             ),
         ),
-        mock.patch(f"{_RETARGET_SEAM}.submit_and_verify", sv_mock),
     ):
         res = retarget_run(
             tmp_path, spec=RetargetRunInput(old_run_id=old, patch={"cluster": "h2new"})
         )
     assert res.stage_reached == "resolve_blocked"
     assert res.needs_decision is True
-    sv_mock.assert_not_called()  # never re-canaried
+    assert res.next_block is None  # no hand-off at a human branch
+
+
+def test_retarget_module_has_no_inline_canary_seam() -> None:
+    """The non-blocking contract, pinned structurally: the retarget module must
+    not import (or call) submit-and-verify — the canary belongs to submit-s2's
+    detached worker. A re-grown inline canary would turn the curated MCP tool
+    back into a multi-hour blocking call (the run-#8 class this refactor kills)."""
+    from pathlib import Path as _Path
+
+    import hpc_agent.ops.retarget_run as m
+
+    assert not hasattr(m, "submit_and_verify")
+    src = _Path(m.__file__).read_text(encoding="utf-8")
+    assert "stop_after_canary" not in src
 
 
 # ── SUCCESSORS wiring (the recovery arm) ──────────────────────────────────────

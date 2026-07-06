@@ -51,6 +51,10 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     assert {"submit-s2", "submit-s3", "submit-s4"} <= names
     assert {"doctor", "kill", "net-triage", "submit-speculate"} <= names
     assert {"block-drive", "append-decision"} <= names
+    # retarget-run derives in via its next_block hand-off field (run #8: the
+    # agent, unable to reach it over MCP, hand-ran kill→confirm→revise against
+    # a throttled cluster) — it must never silently fall back out of the catalog.
+    assert "retarget-run" in names
     assert "clusters" not in names
 
 

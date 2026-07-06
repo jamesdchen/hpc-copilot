@@ -160,6 +160,39 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     # deterministic override is a no-op on the canonical no-interview path).
     assert ws.call_args.kwargs["spec"].executor == "python -m src.ridge --alpha $alpha"
     bt.assert_not_called()  # tasks.py present → no scaffold
+    # A RUNNABLE caller-supplied executor stays warning-free (the legit path).
+    assert "WARNING" not in res.reason
+
+
+def test_no_interview_interface_blind_executor_warns_in_reason(tmp_path: Path) -> None:
+    """Run #8 live: a hand-onboarded ``executor: "run"`` (no interview.json to
+    derive from) sailed to a FAILED canary on two clusters because the
+    interface-blind RuntimeWarning only fired inside a detached worker's log.
+    With no interview, the caller supplied the executor — its warning must ride
+    the S1 resolved REASON so the human sees it at the y/nudge, pre-SSH and
+    pre-cost. Warn-not-refuse stands (a legit $PATH wrapper is the
+    false-positive; the canary remains the hard backstop)."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    spec = ResolveSubmitInputsSpec(
+        run_name="ridge",
+        submit=_submit_input(),
+        sidecar=_sidecar_input().model_copy(update={"executor": "run"}),
+    )
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built),
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()),
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=spec)
+
+    assert res.stage_reached == "resolved"
+    assert "WARNING" in res.reason
+    assert "TASK-INTERFACE-BLIND" in res.reason
+    assert "wrap-entry-point" in res.reason  # the directive to the sanctioned fix
 
 
 def test_resolved_overrides_executor_from_materialized_interview(tmp_path: Path) -> None:

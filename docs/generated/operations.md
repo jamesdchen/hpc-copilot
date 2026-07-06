@@ -166,7 +166,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`campaign-watch`](../primitives/campaign-watch.md) | ✓ | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`monitor-flow`](../primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `_(none)_` | — | — |
 | [`resolve-submit-inputs`](../primitives/resolve-submit-inputs.md) | ✓ | writes-sidecar | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`retarget-run`](../primitives/retarget-run.md) | ✓ | scheduler-submit; ssh; writes-sidecar | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`retarget-run`](../primitives/retarget-run.md) | ✓ | ssh; writes-sidecar | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`revise-resolved`](../primitives/revise-resolved.md) | ✓ | writes-sidecar | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-pipeline`](../primitives/status-pipeline.md) | ✓ | ssh; writes-tick-log | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`status-snapshot`](../primitives/status-snapshot.md) | ✓ | ssh | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
