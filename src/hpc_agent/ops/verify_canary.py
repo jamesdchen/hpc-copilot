@@ -737,6 +737,14 @@ def verify_canary(
         _canary_sidecar = read_run_sidecar(experiment_dir, canary_run_id)
     except (OSError, ValueError, errors.HpcError):
         _canary_sidecar = {}
+    # The canary sidecar this flow writes carries neither ``env`` nor
+    # ``cluster`` (run #7 live: activation derived to "" → bare login-node
+    # ``python`` → ``No module named hpc_agent`` → rc=1 every poll, riding the
+    # full wait budget). The deriver's cluster-backfill arm (#281) only fires
+    # when the sidecar names a cluster — seed it from the journal record,
+    # which always knows, so the sidecar's own pins still win per-field.
+    if not _canary_sidecar.get("cluster") and record.cluster:
+        _canary_sidecar["cluster"] = record.cluster
     remote_activation = remote_activation_for_sidecar(_canary_sidecar)
 
     deadline = time.monotonic() + int(wait_budget_sec)

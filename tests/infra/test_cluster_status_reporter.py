@@ -50,6 +50,27 @@ def test_reporter_command_pins_env_python(monkeypatch):
     assert " python -m hpc_agent" not in cmd
 
 
+def test_reporter_command_guards_module_absence_as_127(monkeypatch):
+    """Run #7 live: with an empty activation, ``python -m hpc_agent...`` on a
+    bare login node exits **1** ("No module named hpc_agent"), which the canary
+    poll loop classifies "transient" and rides the full wait budget. The
+    command must probe the import first and ``exit 127`` so module-absence
+    lands in the deterministic-env class (rc 126/127) that escalates fast."""
+    captured: dict[str, str] = {}
+
+    def fake_ssh_run(cmd, *, ssh_target):
+        captured["cmd"] = cmd
+        return _proc(0, stdout=_OK_ENVELOPE)
+
+    monkeypatch.setattr(cluster_status.remote, "ssh_run", fake_ssh_run)
+    _run()
+    cmd = captured["cmd"]
+    guard = "-c 'import hpc_agent' 2>/dev/null || exit 127; "
+    assert guard in cmd, f"import guard missing from reporter cmd: {cmd!r}"
+    # Guard runs BEFORE the reporter module in the same shell.
+    assert cmd.index(guard) < cmd.index("-m hpc_agent.execution.mapreduce.reduce.status")
+
+
 def test_rc_nonzero_surfaces_structured_stdout_over_lmod_noise(monkeypatch):
     err_doc = json.dumps(
         {"errors": [{"code": "tasks_py_import_error", "detail": ".hpc/tasks.py: boom"}]}

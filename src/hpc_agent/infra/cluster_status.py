@@ -127,9 +127,17 @@ def ssh_status_report(
     and no ``watcher_alarm`` key.
     """
     job_ids_csv = ",".join(job_ids)
+    # Import guard: when the (possibly empty) activation leaves ``hpc_agent``
+    # unimportable, ``python -m hpc_agent...`` exits **1** — which the poll
+    # loop's ``_classify_poll_failure`` reads as "transient" and rides the full
+    # wait budget (run #7 live: 30 min of rc=1 polls against a green canary).
+    # Probing the import first and exiting **127** routes module-absence into
+    # the EXISTING deterministic-env class (rc 126/127), which escalates after
+    # ~3 consecutive polls with the wrong/absent-conda-env diagnosis.
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
         f"{remote_activation}"
+        f"{_ENV_PYTHON} -c 'import hpc_agent' 2>/dev/null || exit 127; "
         f"{_ENV_PYTHON} -m hpc_agent.execution.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "

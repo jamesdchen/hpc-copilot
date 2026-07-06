@@ -903,6 +903,52 @@ def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_ho
     assert "conda activate hpc-pi" in captured["remote_activation"]
 
 
+def test_activation_derived_from_record_cluster_when_sidecar_bare(
+    tmp_path: Path, journal_home: Path
+) -> None:
+    """Run #7 live regression: the canary sidecar this flow writes carries
+    NEITHER ``env`` NOR ``cluster``, so the #176 derivation fell through to
+    ``""`` → bare login-node python → ``No module named hpc_agent`` → rc=1
+    every poll, riding the full wait budget against a green canary. The
+    journal record always knows the cluster — verify_canary seeds it into the
+    sidecar dict so the deriver's cluster-backfill arm (#281) fires."""
+    from hpc_agent.ops.verify_canary import verify_canary
+    from hpc_agent.state.runs import write_run_sidecar
+
+    _seed_canary(tmp_path)  # journal record (cluster=hoffman2)
+    # The bare shape actually written live (run #7): no cluster=, no env=.
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1-canary",
+        cmd_sha="",
+        hpc_agent_version="",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=1,
+        tasks_py_sha="",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_status(**kwargs):
+        captured["remote_activation"] = kwargs.get("remote_activation")
+        return {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_fake_status),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+
+    assert out["ok"] is True
+    # Cluster-derived activation, not the bare-python "" fallthrough.
+    assert captured["remote_activation"]
+    assert "conda activate hpc-pi" in str(captured["remote_activation"])
+
+
 def test_checkpoint_canary_petsc_structural_ok(tmp_path: Path, journal_home: Path) -> None:
     """A petsc_binary artifact verified structurally → ok=True, with the
     format and proof level surfaced (no next_iteration claim is made — the
