@@ -37,7 +37,7 @@ from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
-from hpc_agent.infra.remote import ssh_run
+from hpc_agent.infra.remote import SSH_TIMEOUT_SEC, ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import deploy_runtime, rsync_push
 from hpc_agent.ops.submit.runner import submit_and_record
@@ -128,9 +128,18 @@ def _validate_ssh_target(ssh_target: str) -> str:
 # under a hard per-attempt timeout and a small attempt budget, so its total
 # wall-clock is bounded even in the worst case: each ``ssh_run`` call is
 # itself capped at 5 backoff-ladder attempts × timeout + ~30s of sleeps, so
-# the probe cannot exceed ``max_attempts × (5 × timeout + 30s)`` (~6 min at
+# the probe cannot exceed ``max_attempts × (5 × timeout + 30s)`` (~11 min at
 # the defaults) before surfacing a structured failure.
-_PREFLIGHT_PROBE_TIMEOUT_SEC = 30.0
+#
+# The probe deadline EQUALS ``SSH_TIMEOUT_SEC`` — the budget of the staging /
+# submit ssh calls the probe gates — never tighter. A tighter probe is a
+# false-positive machine: run #7 live, Hoffman2's handshake sat at ~31s under
+# login-node load while the probe's old 30.0s bound killed it 1s short, so a
+# cluster the 60s-bounded real operations could use fine read as down and
+# false-tripped the breaker 4 straight times ("timed out after 30.0s: true").
+# Deriving (not restating) the value keeps the two budgets from drifting and
+# inherits ``HPC_SSH_TIMEOUT_SEC`` tunability for free.
+_PREFLIGHT_PROBE_TIMEOUT_SEC = float(SSH_TIMEOUT_SEC)
 _PREFLIGHT_PROBE_MAX_ATTEMPTS = 2
 
 

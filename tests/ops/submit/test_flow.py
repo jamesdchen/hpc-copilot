@@ -1936,6 +1936,17 @@ class TestPreflightProbe:
             "true", ssh_target="u@cluster", timeout=sf_module._PREFLIGHT_PROBE_TIMEOUT_SEC
         )
 
+    def test_probe_deadline_never_tighter_than_the_ops_it_gates(self) -> None:
+        """The probe deadline must be >= SSH_TIMEOUT_SEC — the budget of the
+        staging/submit ssh calls the probe predicts. A tighter probe is a
+        false-positive machine: run #7 live, Hoffman2's ~31s handshake lost to
+        the old hardcoded 30.0s bound by 1s, reading a cluster the 60s-bounded
+        real operations could use fine as down (4 straight breaker trips)."""
+        from hpc_agent.infra.remote import SSH_TIMEOUT_SEC
+        from hpc_agent.ops import submit_flow as sf_module
+
+        assert sf_module._PREFLIGHT_PROBE_TIMEOUT_SEC >= SSH_TIMEOUT_SEC
+
     def test_explicit_timeout_overrides_default(self) -> None:
         from hpc_agent.ops import submit_flow as sf_module
 
