@@ -61,6 +61,57 @@ if TYPE_CHECKING:
 __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 
 
+# The detached submit blocks (design §3): each spawns a durable worker and
+# returns a handle, so a naive re-invocation after the worker FINISHED would
+# re-spawn (the single-lease self-heals on a dead pid) — the run #7 papercut.
+# These blocks record their terminal outcome and replay it on re-invoke.
+_DETACHED_BLOCKS: frozenset[str] = frozenset({"s2", "s3"})
+
+
+def _current_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on: a nudge that re-resolves the run
+    (revise-resolved) rewrites the sidecar ``cmd_sha``, so a mismatch is exactly
+    "the tree moved → do not replay a stale outcome". An unreadable/absent
+    sidecar yields ``""`` — unprovable identity → the replay refuses (re-execute).
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _replay_recorded_terminal(
+    experiment_dir: Path, *, block: str, run_id: str
+) -> SubmitBlockResult | None:
+    """Return a prior detached worker's recorded terminal for ``(run_id, block)``
+    when the tree still matches, else ``None`` (run #7 idempotent re-invoke).
+
+    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
+    the terminal — proof the outcome still applies. A moved ``cmd_sha`` (a nudge),
+    an absent record, an unprovable identity (empty sha on either side), or a
+    corrupt record all return ``None`` so the caller re-executes (never replays a
+    possibly-stale brief). The replayed result was already finalized on first
+    completion (relay rendered, brief appended), so the caller returns it as-is.
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, block)
+    if record is None:
+        return None
+    current_sha = _current_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    try:
+        return SubmitBlockResult.model_validate(record["result"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlockResult:
     """Durably persist a decision-point brief so the provenance gate can diff it.
 
@@ -87,6 +138,37 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
     STRUCTURED facts, never against a prior rendering of itself.
     """
     result.relay = render_relay(result.block, result.stage_reached, result.brief)
+    # Idempotent-terminal record (run #7): persist the FULL terminal result of a
+    # detached block, keyed by (run_id, block, cmd_sha), so a re-invoke after the
+    # worker finished REPLAYS it (see _replay_recorded_terminal) instead of
+    # re-spawning. The detached HANDLE (stage_reached="detached") is not terminal
+    # and is skipped. The provenance brief is appended only on a FRESH terminal
+    # (first record, or a moved cmd_sha = a nudge's genuinely new outcome) — a
+    # replay returns the same result and must not double-append (the append-only
+    # briefs journal stays honest; two identical s2 briefs were seen live).
+    if result.run_id and result.block in _DETACHED_BLOCKS and result.stage_reached != "detached":
+        from hpc_agent.state.block_terminal import read_terminal, record_terminal
+
+        cmd_sha = _current_cmd_sha(experiment_dir, result.run_id)
+        prior = read_terminal(experiment_dir, result.run_id, result.block)
+        is_fresh_terminal = prior is None or str(prior.get("cmd_sha") or "") != cmd_sha
+        record_terminal(
+            experiment_dir,
+            run_id=result.run_id,
+            block=result.block,
+            cmd_sha=cmd_sha,
+            result_dump=result.model_dump(mode="json"),
+        )
+        if is_fresh_terminal and result.needs_decision and result.brief:
+            from hpc_agent.state.decision_briefs import append_brief
+
+            append_brief(
+                experiment_dir,
+                run_id=result.run_id,
+                block=result.block,
+                brief=result.brief,
+            )
+        return result
     if result.needs_decision and result.run_id and result.brief:
         from hpc_agent.state.decision_briefs import append_brief
 
@@ -491,6 +573,17 @@ def _submit_s2_impl(experiment_dir: Path, *, spec: SubmitS2Spec) -> SubmitBlockR
     # inside a detached child). With detach ON (default), spawn a durable
     # background worker to own the canary poll and return the handle immediately.
     if spec.detach:
+        # Idempotent re-invoke (run #7): a prior detached worker may have already
+        # driven this block to its terminal for the current tree — replay that
+        # recorded outcome instead of re-spawning a redundant worker (no SSH, no
+        # new canary poll). A moved cmd_sha (a nudge) or no record → fall through
+        # and spawn; a still-LIVE worker is refused by the single-lease.
+        replay = _replay_recorded_terminal(
+            experiment_dir, block="s2", run_id=spec.submit.submit.run_id
+        )
+        if replay is not None:
+            return replay
+
         from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
 
         launch = launch_submit_block_detached(
@@ -662,6 +755,20 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
         verb="submit-s3",
         predecessor="S2",
     )
+    # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
+    # the current tree BEFORE the canary-TTL re-check — the run already ran, so
+    # re-validating the 4h canary window on a replay would wrongly refuse a
+    # completed run whose window lapsed. cmd_sha match IS the drift check. This
+    # also gives the S3 CLEAN-terminal (needs_decision=False → S4) a replayable
+    # record, closing the "clean-terminal persists nothing, agent scrapes the
+    # worker log" sibling.
+    if spec.detach:
+        replay = _replay_recorded_terminal(
+            experiment_dir, block="s3", run_id=spec.submit.submit.run_id
+        )
+        if replay is not None:
+            return replay
+
     _assert_canary_verified(experiment_dir, spec.submit.submit)
 
     # Detach-by-contract (design §3), ordering PROOF: gate → drift → detach.

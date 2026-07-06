@@ -610,6 +610,139 @@ def test_s1_ambiguity_branch_does_not_persist_without_run_id(tmp_path: Path) -> 
     assert read_briefs(tmp_path, _RUN_ID) == []
 
 
+# ── idempotent terminal replay (run #7: re-invoke ≠ re-spawn) ────────────────
+
+
+def _sidecar(tmp_path: Path, *, cmd_sha: str, run_id: str = _RUN_ID) -> None:
+    """Write a per-run sidecar so ``_current_cmd_sha`` has a tree fingerprint to
+    key the terminal replay on (the replay refuses on an absent/empty sha)."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id=run_id,
+        cmd_sha=cmd_sha,
+        hpc_agent_version="0.0.0-test",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=10,
+        tasks_py_sha="",
+    )
+
+
+def test_s2_reinvoke_replays_recorded_terminal_without_respawn(tmp_path: Path) -> None:
+    """Run #7 papercut root: once a detached S2 worker has driven the block to its
+    terminal for THIS tree, a re-invoke replays that recorded outcome instead of
+    spawning a fresh worker (no SSH, no new canary)."""
+    _sidecar(tmp_path, cmd_sha="sha-A")
+    _greenlight(tmp_path, "submit-s2")
+
+    # First completion (the detached worker's synchronous body) records the terminal.
+    with mock.patch.object(
+        blocks, "submit_and_verify", return_value=_sv_result(verified=True, job_ids=[])
+    ):
+        first = blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=False))
+    assert first.stage_reached == "canary_verified"
+
+    # Re-invoke in DETACH mode: must replay, never spawn.
+    with mock.patch(
+        "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"
+    ) as m_launch:
+        replayed = blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=True))
+
+    m_launch.assert_not_called()
+    assert replayed.stage_reached == "canary_verified"
+    assert replayed.needs_decision is True
+    assert replayed.next_block is not None  # the S3 pointer survives the replay
+    assert replayed.brief["est_core_hours"] == first.brief["est_core_hours"]
+
+
+def test_s2_reinvoke_after_nudge_respawns(tmp_path: Path) -> None:
+    """A nudge moves the tree (revise-resolved rewrites the sidecar cmd_sha); the
+    recorded terminal is then STALE, so the re-invoke must re-execute (spawn),
+    never replay a canary that verified the old tree."""
+    _sidecar(tmp_path, cmd_sha="sha-A")
+    _greenlight(tmp_path, "submit-s2")
+    with mock.patch.object(
+        blocks, "submit_and_verify", return_value=_sv_result(verified=True, job_ids=[])
+    ):
+        blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=False))
+
+    _sidecar(tmp_path, cmd_sha="sha-B")  # the nudge
+
+    from hpc_agent._kernel.lifecycle.detached import DetachedLaunch
+
+    fake = DetachedLaunch(run_id=_RUN_ID, pid=4321, log_path="x.log", argv=["x"])
+    with mock.patch(
+        "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached", return_value=fake
+    ) as m_launch:
+        out = blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=True))
+
+    m_launch.assert_called_once()  # stale record → re-spawn, not replay
+    assert out.stage_reached == "detached"
+
+
+def test_s3_clean_terminal_is_replayable(tmp_path: Path) -> None:
+    """The S3-clean-terminal sibling: a clean completion is ``needs_decision=False``
+    so the provenance-brief journal never stored it (agent scraped the worker
+    log). The terminal store DOES record it — a re-invoke replays the clean result
+    with its ``submit-s4`` pointer, no re-launch of the main array + watch."""
+    _sidecar(tmp_path, cmd_sha="sha-A")
+    _greenlight(tmp_path, "submit-s3")
+    with (
+        mock.patch.object(
+            blocks, "launch_main_array", return_value=_sv_result(verified=True, job_ids=["999"])
+        ),
+        mock.patch.object(
+            blocks, "monitor_flow", return_value=_monitor_result(lifecycle_state="complete")
+        ),
+        mock.patch.object(
+            blocks, "decide_monitor_arm", return_value={"arm": "none", "cadence_sec": 0}
+        ),
+    ):
+        first = blocks.submit_s3(tmp_path, spec=_s3_spec())
+    assert first.stage_reached == "watching_terminal"
+    assert first.needs_decision is False
+
+    s3_detach = SubmitS3Spec(
+        submit=_sv_spec(),
+        canary_run_id=f"{_RUN_ID}_canary",
+        canary_job_ids=["12344"],
+        monitor=MonitorFlowSpec(run_id=_RUN_ID),
+        invocation_argv="monitor-hpc --run-id " + _RUN_ID,
+        detach=True,
+    )
+    with mock.patch(
+        "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"
+    ) as m_launch:
+        replayed = blocks.submit_s3(tmp_path, spec=s3_detach)
+
+    m_launch.assert_not_called()
+    assert replayed.stage_reached == "watching_terminal"
+    assert replayed.needs_decision is False
+    assert replayed.next_block is not None  # the S4 pointer the agent needs
+
+
+def test_replay_does_not_double_append_provenance_brief(tmp_path: Path) -> None:
+    """A replay returns the SAME terminal — it must not append a second identical
+    brief to the append-only provenance journal (two identical s2 briefs were
+    seen live before this fix)."""
+    from hpc_agent.state.decision_briefs import read_briefs
+
+    _sidecar(tmp_path, cmd_sha="sha-A")
+    _greenlight(tmp_path, "submit-s2")
+    with mock.patch.object(
+        blocks, "submit_and_verify", return_value=_sv_result(verified=True, job_ids=[])
+    ):
+        blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=False))
+    with mock.patch("hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"):
+        blocks.submit_s2(tmp_path, spec=SubmitS2Spec(submit=_sv_spec(), detach=True))
+
+    s2_briefs = [r for r in read_briefs(tmp_path, _RUN_ID) if r["block"] == "s2"]
+    assert len(s2_briefs) == 1
+
+
 # ── relay rendering (finding 15: code authors the relay; agent relays verbatim) ──
 
 
