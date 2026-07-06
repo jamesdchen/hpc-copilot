@@ -20,6 +20,7 @@ green probe; the gate skips its re-check while the marker is fresh.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import socket
@@ -36,10 +37,30 @@ from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.runtime_preflight import runtime_uv_preflight
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 from hpc_agent.infra.ssh_options import _scp_binary, _ssh_add_binary, _ssh_binary
+from hpc_agent.ops.preflight import probe_cache
 
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
+
+
+def _probe_cache_key(host: str, spec: dict[str, Any] | None) -> str:
+    """Cache key for one cluster-probe block (see :mod:`.probe_cache`).
+
+    The echo-only probe keys on the bare host; the merged echo+uv probe keys
+    on the spec's ``ssh_target`` PLUS the activation-derived uv condition —
+    a uv verdict is only reusable when the same activation would run, and
+    the two probe shapes must never collide (an echo-only verdict says
+    nothing about uv).
+    """
+    if spec is None:
+        material = f"echo::{host}"
+    else:
+        from hpc_agent.infra.runtime_preflight import uv_activation_prefix
+
+        prefix = uv_activation_prefix(dict(spec.get("job_env") or {}))
+        material = f"uv::{spec.get('ssh_target')}::{prefix}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def _cluster_ssh_timeout() -> int:
@@ -461,52 +482,75 @@ def check_preflight(
                     _check("cluster_tcp_22", False, f"{cluster!r} has no 'host' in clusters.yaml")
                 )
             else:
-                try:
-                    with socket.create_connection((host, 22), timeout=3):
-                        checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
-                    tcp_ok = True
-                except OSError as exc:
-                    checks.append(
-                        _check(
-                            "cluster_tcp_22",
-                            False,
-                            f"{host}:22 — {exc} — cluster may be offline or behind a VPN; "
-                            "verify connectivity from your network",
-                        )
+                # Verdict cache (probe_cache): a fully-passing probe block for
+                # this (host, key) within the TTL replays WITHOUT any network
+                # traffic — every funnel stage's composite preflight re-pays a
+                # full cold handshake otherwise (ControlMaster multiplexing is
+                # broken on Windows), and each elided connection is one fewer
+                # for the cluster's intrusion filter to count. SUCCESS-only,
+                # breaker-invalidated, honest "(cached: ...)" details.
+                probe_key = _probe_cache_key(host, spec if uv_pending else None)
+                cached = probe_cache.load_fresh(host, key=probe_key)
+                if cached is not None:
+                    checks.extend(cached)
+                    uv_pending = uv_pending and not any(
+                        c.get("name") == "runtime_uv" for c in cached
                     )
-                    tcp_ok = False
+                else:
+                    probe_block: list[dict[str, Any]] = []
+                    try:
+                        with socket.create_connection((host, 22), timeout=3):
+                            probe_block.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
+                        tcp_ok = True
+                    except OSError as exc:
+                        probe_block.append(
+                            _check(
+                                "cluster_tcp_22",
+                                False,
+                                f"{host}:22 — {exc} — cluster may be offline or behind a VPN; "
+                                "verify connectivity from your network",
+                            )
+                        )
+                        tcp_ok = False
 
-                # Functional SSH probe: the TCP check above is necessary
-                # but not sufficient. Port 22 open says nothing about
-                # whether the production SSH path actually works — the
-                # 2026-06-04 demo failed mid-submit with rsync hitting
-                # ``getsockname failed: Not a socket`` even though
-                # preflight had passed (the bare TCP probe never exercised
-                # the named-pipe ControlMaster bind, the Git-Bash vs
-                # native-OpenSSH binary resolution, or the ssh-agent
-                # reachability path). Run a real ``ssh <host> echo ok``
-                # round-trip through the same ``ssh_argv("ssh")`` /
-                # multiplex / crypto / runtime-fallback machinery
-                # production uses, so a green here means the production
-                # path is actually green. Skipped when the TCP probe
-                # failed (no point burning 5s on an unreachable host).
-                if tcp_ok:
-                    # ``uv_pending`` already implies ``spec`` is a dict with an
-                    # ssh_target (see its definition above); the ``isinstance``
-                    # re-states that invariant so the type checker narrows ``spec``
-                    # from ``dict | None`` here.
-                    if uv_pending and isinstance(spec, dict):
-                        # #295 Fix 2: collapse the two independent cluster probes
-                        # (echo round-trip + the #275 uv probe) into ONE ssh
-                        # round-trip. #289 fanned them concurrently (one RTT
-                        # wall-clock), but each still paid its own handshake — so
-                        # with named-pipe ControlMaster broken (Windows) this saves
-                        # a full cold handshake per submit preflight. Routed through
-                        # the spec's ssh_target (the production submit endpoint).
-                        checks.extend(_cluster_combined_probe(str(spec["ssh_target"]), spec))
-                        uv_pending = False
-                    else:
-                        checks.append(_cluster_ssh_echo_check(host))
+                    # Functional SSH probe: the TCP check above is necessary
+                    # but not sufficient. Port 22 open says nothing about
+                    # whether the production SSH path actually works — the
+                    # 2026-06-04 demo failed mid-submit with rsync hitting
+                    # ``getsockname failed: Not a socket`` even though
+                    # preflight had passed (the bare TCP probe never exercised
+                    # the named-pipe ControlMaster bind, the Git-Bash vs
+                    # native-OpenSSH binary resolution, or the ssh-agent
+                    # reachability path). Run a real ``ssh <host> echo ok``
+                    # round-trip through the same ``ssh_argv("ssh")`` /
+                    # multiplex / crypto / runtime-fallback machinery
+                    # production uses, so a green here means the production
+                    # path is actually green. Skipped when the TCP probe
+                    # failed (no point burning 5s on an unreachable host).
+                    if tcp_ok:
+                        # ``uv_pending`` already implies ``spec`` is a dict with an
+                        # ssh_target (see its definition above); the ``isinstance``
+                        # re-states that invariant so the type checker narrows ``spec``
+                        # from ``dict | None`` here.
+                        if uv_pending and isinstance(spec, dict):
+                            # #295 Fix 2: collapse the two independent cluster probes
+                            # (echo round-trip + the #275 uv probe) into ONE ssh
+                            # round-trip. #289 fanned them concurrently (one RTT
+                            # wall-clock), but each still paid its own handshake — so
+                            # with named-pipe ControlMaster broken (Windows) this saves
+                            # a full cold handshake per submit preflight. Routed through
+                            # the spec's ssh_target (the production submit endpoint).
+                            probe_block.extend(
+                                _cluster_combined_probe(str(spec["ssh_target"]), spec)
+                            )
+                            uv_pending = False
+                        else:
+                            probe_block.append(_cluster_ssh_echo_check(host))
+                        # store() is SUCCESS-only: any failing check in the
+                        # block means nothing is recorded and the next call
+                        # probes live.
+                        probe_cache.store(host, key=probe_key, checks=probe_block)
+                    checks.extend(probe_block)
 
             # Reject un-customized placeholders: a clusters.yaml entry still
             # carrying <your_user> / <your_scratch> / <your_env> would pass
