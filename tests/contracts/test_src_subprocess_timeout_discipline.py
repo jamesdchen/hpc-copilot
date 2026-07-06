@@ -68,9 +68,13 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # is MEANT to outlive this process; its lifetime is bounded by the
     # single-lease + doctor-watchdog machinery, not by a parent-side wait.
     "src/hpc_agent/_kernel/lifecycle/detached.py": {"_popen_detached"},
-    # tar->ssh streaming push: the tar Popen is bounded by the paired
-    # `ssh_proc = subprocess.run(..., timeout=timeout)` plus the explicit
-    # `tar_proc.wait(timeout=timeout)` in the same try block.
+    # tar->ssh streaming push: the local `tar c` Popen's read end feeds
+    # `run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=...)`, whose
+    # tree-kill reaps the ssh grandchild on the deadline; the paired
+    # `tar_proc.wait(timeout=timeout)` and the except-arm `tar_proc.kill()`
+    # bound the tar half. (Was a bare `subprocess.run(..., timeout=)` — NOT a
+    # hard deadline on Windows for an ssh-spawning call; run #7 S2 staging
+    # wedge, 2026-07-05. See _BOUNDED_RUNNER_REQUIRED below.)
     "src/hpc_agent/infra/transport.py": {"_tar_ssh_push"},
     # Cluster-side dispatcher launching the user's payload: runtime is the
     # task's own runtime, bounded by the scheduler's wall-clock (h_rt /
@@ -94,6 +98,30 @@ _GRANDFATHERED: set[tuple[str, str]] = set()
 # from `infra.block_chain.verb_deadline_seconds` (watch-class verbs get their
 # spec's wall_clock_budget + slack), and `drive._run_cli_step` passes the same
 # deadline as `timeout=` (stdio inherited — no pipe wedge to drain).
+
+
+# --- must route through the tree-kill bounded runner: (path) -> functions ---
+#
+# Transport-layer ssh/rsync/tar/scp pushes+pulls where a bare
+# `subprocess.run(..., timeout=)` is NOT sufficient: rsync/tar spawn `ssh` as a
+# GRANDCHILD and subprocess.run's post-kill `communicate()` is unbounded on
+# Windows, so the deadline cannot fire (run #7 S2 staging wedge, 2026-07-05 —
+# a detached submit-s2 worker parked with a 0-byte log, stuck in `_tar_ssh_push`
+# staging to Hoffman2). The syntactic scan above treats ANY timeout=-bearing
+# `subprocess.run` as compliant, so it cannot catch a regrowth here; this list
+# forbids blocking `subprocess.*` in these sites outright and asserts
+# `run_capture_bounded` is actually wired. See
+# `test_transport_ssh_sites_route_through_bounded_runner`.
+_BOUNDED_RUNNER_REQUIRED: dict[str, set[str]] = {
+    "src/hpc_agent/infra/transport.py": {
+        "_remote_preclean",
+        "_tar_ssh_push",
+        "_scp_pull",
+        "rsync_push",
+        "_rsync_deploy",
+        "rsync_pull",
+    },
+}
 
 
 def _scan_source(source: str) -> list[tuple[int, str, tuple[str, ...]]]:
@@ -254,3 +282,72 @@ def test_exempt_by_design_entries_still_exist() -> None:
             stale.append(f"  {rel}: no function named {func}")
 
     assert not stale, "Stale _EXEMPT_BY_DESIGN entries — update or remove:\n" + "\n".join(stale)
+
+
+def _bounded_runner_audit(func_node: ast.AST) -> tuple[bool, bool]:
+    """``(has_blocking_subprocess, calls_run_capture_bounded)`` over *func_node*'s
+    whole subtree — nested ``_attempt`` / ``_run`` helpers included."""
+    has_blocking = False
+    calls_bounded = False
+    for n in ast.walk(func_node):
+        if not isinstance(n, ast.Call):
+            continue
+        func = n.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "subprocess"
+            and func.attr in _BLOCKING_FUNCS
+        ):
+            has_blocking = True
+        if isinstance(func, ast.Name) and func.id == "run_capture_bounded":
+            calls_bounded = True
+    return has_blocking, calls_bounded
+
+
+def test_transport_ssh_sites_route_through_bounded_runner() -> None:
+    """Transport ssh/rsync/tar/scp pushes+pulls must use the tree-kill
+    ``run_capture_bounded``, never a bare ``subprocess.run(timeout=)`` whose
+    deadline can't fire on Windows (run #7 S2 staging wedge, 2026-07-05)."""
+    problems: list[str] = []
+    for rel, required in sorted(_BOUNDED_RUNNER_REQUIRED.items()):
+        path = _REPO_ROOT / rel
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        by_name = {
+            n.name: n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for func in sorted(required):
+            node = by_name.get(func)
+            if node is None:
+                problems.append(f"  {rel}: no function named {func} (renamed? update the set)")
+                continue
+            has_blocking, calls_bounded = _bounded_runner_audit(node)
+            if has_blocking:
+                problems.append(
+                    f"  {rel}:{func}: blocking subprocess.* present — route the "
+                    "ssh/rsync/tar/scp call through run_capture_bounded"
+                )
+            if not calls_bounded:
+                problems.append(
+                    f"  {rel}:{func}: no run_capture_bounded call — the bounded-"
+                    "runner wiring is missing"
+                )
+    assert not problems, (
+        "Transport ssh sites must funnel through the tree-kill bounded runner "
+        "(run #7 S2 staging wedge):\n" + "\n".join(problems)
+    )
+
+
+def test_bounded_runner_audit_fires() -> None:
+    """Fire path: the audit flags a bare subprocess.run and a missing wrapper."""
+    bad = ast.parse(
+        "import subprocess\ndef push():\n    subprocess.run(['ssh', 'x'], timeout=60)\n"
+    )
+    bad_fn = next(n for n in ast.walk(bad) if isinstance(n, ast.FunctionDef))
+    assert _bounded_runner_audit(bad_fn) == (True, False)
+
+    good = ast.parse("def push():\n    return run_capture_bounded(['ssh', 'x'], timeout_sec=60)\n")
+    good_fn = next(n for n in ast.walk(good) if isinstance(n, ast.FunctionDef))
+    assert _bounded_runner_audit(good_fn) == (False, True)

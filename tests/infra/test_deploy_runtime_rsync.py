@@ -45,7 +45,7 @@ def test_deploy_issues_a_single_rsync_invocation():
     with (
         _prelude_ok(),
         patch("hpc_agent.infra.transport._have_rsync", return_value=True),
-        patch("hpc_agent.infra.transport.subprocess.run", side_effect=_fake_run),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_fake_run),
     ):
         transport.deploy_runtime(
             ssh_target="u@c", remote_path="/p", scheduler="sge", use_cache=False
@@ -88,7 +88,7 @@ def test_rsync_nonzero_exit_raises():
         _prelude_ok(),
         patch("hpc_agent.infra.transport._have_rsync", return_value=True),
         patch(
-            "hpc_agent.infra.transport.subprocess.run",
+            "hpc_agent.infra.transport.run_capture_bounded",
             return_value=SimpleNamespace(returncode=23, stdout="", stderr="rsync boom"),
         ),
         pytest.raises(RuntimeError, match="rsync deploy"),

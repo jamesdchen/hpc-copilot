@@ -38,7 +38,8 @@ import os
 import signal
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import IO, Any
 
 __all__ = ["run_capture_bounded"]
 
@@ -71,7 +72,11 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def run_capture_bounded(
-    argv: Sequence[str], *, timeout_sec: float
+    argv: Sequence[str],
+    *,
+    timeout_sec: float | None,
+    stdin: IO[Any] | int | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run *argv*, capturing stdout/stderr, bounded by *timeout_sec*.
 
@@ -79,6 +84,18 @@ def run_capture_bounded(
     encoding="utf-8", timeout=timeout_sec)`` EXCEPT that on timeout it kills the
     whole process tree (not just the immediate child) before draining, so a
     grandchild holding the stdout pipe cannot outlive the deadline.
+
+    *stdin* (a file object / fd — e.g. the read end of a ``tar c`` pipe) and
+    *env* (e.g. rsync's ``RSYNC_RSH`` ssh-binary pin) are forwarded to ``Popen``
+    when given: the transport-layer ``rsync`` / ``tar | ssh`` / ``scp`` pushes
+    and pulls need them and share this runner's tree-kill discipline, because
+    ``rsync``/``tar`` spawn ``ssh`` as a GRANDCHILD — the exact orphan case a
+    bare ``subprocess.run(timeout=)`` cannot bound on Windows (run #7 S2
+    staging wedge, 2026-07-05).
+
+    *timeout_sec* may be ``None`` to disable enforcement (the documented
+    ``timeout=None`` escape hatch on the transport wrappers): the bound then
+    never fires and ``communicate`` waits for natural exit.
 
     Returns a ``subprocess.CompletedProcess`` on completion; raises
     ``subprocess.TimeoutExpired`` (after reaping the tree) on timeout. Spawn
@@ -91,6 +108,10 @@ def run_capture_bounded(
         "text": True,
         "encoding": "utf-8",
     }
+    if stdin is not None:
+        popen_kwargs["stdin"] = stdin
+    if env is not None:
+        popen_kwargs["env"] = env
     if sys.platform != "win32":
         # Own session/group so the timeout can killpg the whole tree safely.
         popen_kwargs["start_new_session"] = True
@@ -107,6 +128,6 @@ def run_capture_bounded(
         except subprocess.TimeoutExpired:
             out, err = "", ""
         raise subprocess.TimeoutExpired(
-            cmd=list(argv), timeout=timeout_sec, output=out, stderr=err
+            cmd=list(argv), timeout=timeout_sec or 0.0, output=out, stderr=err
         ) from None
     return subprocess.CompletedProcess(list(argv), proc.returncode, out, err)

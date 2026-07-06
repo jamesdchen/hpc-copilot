@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import (
     RSYNC_TIMEOUT_SEC,
     SSH_TIMEOUT_SEC,
@@ -239,13 +240,7 @@ def _remote_preclean(
         # is constant — only the ssh-side opts change.
         ssh_cmd = [*ssh_argv("ssh"), ssh_target, clean_cmd]
         try:
-            return subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=timeout,
-            )
+            return run_capture_bounded(ssh_cmd, timeout_sec=timeout)
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
                 f"remote --delete pre-clean of {remote_path} on {ssh_target} timed out "
@@ -341,14 +336,7 @@ def _tar_ssh_push(
         tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=tar_stderr_file)
         try:
             assert tar_proc.stdout is not None
-            ssh_proc = subprocess.run(
-                ssh_cmd,
-                stdin=tar_proc.stdout,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=timeout,
-            )
+            ssh_proc = run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=tar_proc.stdout)
             tar_proc.stdout.close()
             tar_proc.wait(timeout=timeout)
             tar_stderr_file.seek(0)
@@ -424,13 +412,7 @@ def _scp_pull(
     with tempfile.TemporaryDirectory() as staging:
         scp_cmd = [*ssh_argv("scp", extra_opts=["-r"]), src, staging]
         try:
-            proc = subprocess.run(
-                scp_cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=timeout,
-            )
+            proc = run_capture_bounded(scp_cmd, timeout_sec=timeout)
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
                 f"scp pull from {ssh_target} timed out after {timeout}s: "
@@ -553,12 +535,9 @@ def rsync_push(
         # master state that brought us here.
         rsync_env = {**os.environ, **ssh_env()}
         try:
-            return subprocess.run(
+            return run_capture_bounded(
                 [*flags, *exclude_flags, src, dst],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=effective_timeout,
+                timeout_sec=effective_timeout,
                 env=rsync_env,
             )
         except subprocess.TimeoutExpired as exc:
@@ -778,12 +757,9 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:
-            return subprocess.run(
+            return run_capture_bounded(
                 ["rsync", "-az", "--inplace", src, dst],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=SSH_TIMEOUT_SEC,
+                timeout_sec=SSH_TIMEOUT_SEC,
                 env=rsync_env,
             )
         except subprocess.TimeoutExpired as exc:
@@ -1184,12 +1160,9 @@ def rsync_pull(
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:
-            return subprocess.run(
+            return run_capture_bounded(
                 ["rsync", "-az", *filter_flags, src, dst],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=effective_timeout,
+                timeout_sec=effective_timeout,
                 env=rsync_env,
             )
         except subprocess.TimeoutExpired as exc:

@@ -40,7 +40,7 @@ def test_rsync_push_uses_rsync_when_available(tmp_path: Path) -> None:
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
     ):
         transport.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
     cmd = run_mock.call_args[0][0]
@@ -54,7 +54,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     fake_run = _ok()
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=fake_run) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fake_run) as run_mock,
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -92,7 +92,7 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -184,7 +184,7 @@ def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -249,7 +249,7 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -286,8 +286,8 @@ def test_rsync_push_fallback_delete_true_runs_remote_preclean(tmp_path: Path) ->
     assert "rm -rf" not in extract_cmd  # extract does not delete
     # The pre-clean got its OWN bounded timeout, strictly shorter than the
     # transfer's, so a pathological clean fails fast instead of wedging.
-    assert calls[0][1]["timeout"] == transport.PRECLEAN_TIMEOUT_SEC
-    assert calls[0][1]["timeout"] < calls[-1][1]["timeout"]
+    assert calls[0][1]["timeout_sec"] == transport.PRECLEAN_TIMEOUT_SEC
+    assert calls[0][1]["timeout_sec"] < calls[-1][1]["timeout_sec"]
 
 
 def test_tar_fallback_preclean_prunes_output_dirs_even_if_caller_omits_them(
@@ -310,7 +310,7 @@ def test_rsync_path_delete_protects_output_dirs(tmp_path: Path) -> None:
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
     ):
         transport.rsync_push(
             ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=["custom/"]
@@ -329,7 +329,7 @@ def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch(
-            "hpc_agent.infra.transport.subprocess.run",
+            "hpc_agent.infra.transport.run_capture_bounded",
             side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=300),
         ),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
@@ -349,7 +349,7 @@ def test_tar_fallback_preclean_failure_aborts_before_extract(tmp_path: Path) -> 
     fail = subprocess.CompletedProcess(args=[], returncode=5, stdout="", stderr="clean blew up")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=fail) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail) as run_mock,
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         result = transport.rsync_push(
@@ -407,7 +407,7 @@ def test_remote_clean_cmd_empty_exclude_deletes_whole_subtree() -> None:
 def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
     ):
         transport.rsync_pull(
             ssh_target="u@h",
@@ -422,7 +422,7 @@ def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
 def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
     ):
         transport.rsync_pull(
             ssh_target="u@h",
@@ -460,7 +460,7 @@ def test_scp_fallback_does_not_double_nest(tmp_path: Path) -> None:
 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", side_effect=fake_scp),
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=fake_scp),
     ):
         transport.rsync_pull(
             ssh_target="u@h",
@@ -479,7 +479,7 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
     )
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
-        patch("hpc_agent.infra.transport.subprocess.run", return_value=fail),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value

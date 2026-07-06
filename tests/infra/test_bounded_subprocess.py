@@ -83,6 +83,40 @@ def test_grandchild_pipe_does_not_hang_the_drain() -> None:
     )
 
 
+def test_forwards_stdin_pipe() -> None:
+    """``stdin=`` is forwarded to the child — the ``tar c | ssh tar x`` push
+    pattern, where the local tar Popen's read end becomes ssh's stdin."""
+    producer = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdout.write('piped-payload')"],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert producer.stdout is not None
+        proc = run_capture_bounded(
+            [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+            timeout_sec=30,
+            stdin=producer.stdout,
+        )
+    finally:
+        if producer.stdout is not None:
+            producer.stdout.close()
+        producer.wait(timeout=5)
+    assert proc.returncode == 0
+    assert "piped-payload" in proc.stdout
+
+
+def test_forwards_env() -> None:
+    """``env=`` is forwarded to the child — rsync's ``RSYNC_RSH`` ssh-binary pin."""
+    child_env = {**os.environ, "HPC_BOUNDED_TEST": "sentinel-value"}
+    proc = run_capture_bounded(
+        [sys.executable, "-c", "import os; print(os.environ.get('HPC_BOUNDED_TEST', 'MISSING'))"],
+        timeout_sec=30,
+        env=child_env,
+    )
+    assert proc.returncode == 0
+    assert "sentinel-value" in proc.stdout
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX pid-liveness probe (os.kill(pid, 0))")
 def test_grandchild_pid_is_reaped_not_orphaned() -> None:
     """Deterministic proof (Linux CI) that the tree-kill reaches the grandchild.

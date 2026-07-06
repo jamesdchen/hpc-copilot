@@ -64,7 +64,7 @@ def _cp(stdout="", stderr="", returncode=0):
 
 class TestRsyncPush:
     def test_flag_composition_with_defaults(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="alice@cluster.example",
@@ -96,7 +96,7 @@ class TestRsyncPush:
         assert dst == "alice@cluster.example:/u/home/alice/proj/"
 
     def test_delete_toggle_off(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="u@c",
@@ -108,7 +108,7 @@ class TestRsyncPush:
         assert "--delete" not in argv
 
     def test_custom_excludes_passed_in_order(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="u@c",
@@ -137,7 +137,7 @@ class TestRsyncPush:
 
 class TestRsyncPull:
     def test_with_include_list_filters_in_correct_order(self, tmp_path):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_pull(
                 ssh_target="u@c",
@@ -163,7 +163,7 @@ class TestRsyncPull:
         assert user_indices == sorted(user_indices)
 
     def test_without_include_no_filter_flags(self, tmp_path):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_pull(
                 ssh_target="u@c",
@@ -452,7 +452,7 @@ class TestSshRunTimeout:
 
 class TestRsyncPushTimeout:
     def test_default_timeout_applied_when_omitted(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="u@c",
@@ -460,10 +460,10 @@ class TestRsyncPushTimeout:
                 local_path="/tmp/x",
             )
         kwargs = mock_run.call_args.kwargs
-        assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
+        assert kwargs.get("timeout_sec") == remote.RSYNC_TIMEOUT_SEC
 
     def test_explicit_timeout_overrides_default(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="u@c",
@@ -472,10 +472,10 @@ class TestRsyncPushTimeout:
                 timeout=42,
             )
         kwargs = mock_run.call_args.kwargs
-        assert kwargs.get("timeout") == 42
+        assert kwargs.get("timeout_sec") == 42
 
     def test_explicit_none_disables_enforcement(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_push(
                 ssh_target="u@c",
@@ -484,11 +484,11 @@ class TestRsyncPushTimeout:
                 timeout=None,
             )
         kwargs = mock_run.call_args.kwargs
-        assert "timeout" in kwargs
-        assert kwargs["timeout"] is None
+        assert "timeout_sec" in kwargs
+        assert kwargs["timeout_sec"] is None
 
     def test_timeout_expired_reraised_as_timeout_error(self):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="rsync ...", timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 transport.rsync_push(
@@ -506,7 +506,7 @@ class TestRsyncPushTimeout:
 
 class TestRsyncPullTimeout:
     def test_default_timeout_applied_when_omitted(self, tmp_path):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_pull(
                 ssh_target="u@c",
@@ -515,10 +515,10 @@ class TestRsyncPullTimeout:
                 local_dir=tmp_path / "out",
             )
         kwargs = mock_run.call_args.kwargs
-        assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
+        assert kwargs.get("timeout_sec") == remote.RSYNC_TIMEOUT_SEC
 
     def test_explicit_none_disables_enforcement(self, tmp_path):
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.return_value = _cp()
             transport.rsync_pull(
                 ssh_target="u@c",
@@ -528,8 +528,8 @@ class TestRsyncPullTimeout:
                 timeout=None,
             )
         kwargs = mock_run.call_args.kwargs
-        assert "timeout" in kwargs
-        assert kwargs["timeout"] is None
+        assert "timeout_sec" in kwargs
+        assert kwargs["timeout_sec"] is None
 
 
 class TestDeployRuntimeTimeout:
@@ -541,7 +541,7 @@ class TestDeployRuntimeTimeout:
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
             patch("hpc_agent.infra.transport._have_rsync", return_value=True),
-            patch("hpc_agent.infra.remote.subprocess.run") as mock_run,
+            patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run,
         ):
             mock_ssh.return_value = _cp()
             mock_run.return_value = _cp()
@@ -555,7 +555,7 @@ class TestDeployRuntimeTimeout:
         rsync_calls = [c for c in mock_run.call_args_list if c[0][0] and c[0][0][0] == "rsync"]
         assert rsync_calls, "expected one rsync transfer call"
         for call in rsync_calls:
-            assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+            assert call.kwargs.get("timeout_sec") == remote.SSH_TIMEOUT_SEC
 
 
 class TestRunCombinerTimeout:
@@ -688,7 +688,7 @@ class TestSshBackoff:
             returncode=12,
         )
         ok_cp = _cp(returncode=0)
-        with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
+        with patch("hpc_agent.infra.transport.run_capture_bounded") as mock_run:
             mock_run.side_effect = [throttle_cp, ok_cp]
             result = transport.rsync_push(ssh_target="u@c", remote_path="/p", local_path="/tmp/x")
         assert result.returncode == 0
