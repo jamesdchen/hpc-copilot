@@ -511,7 +511,8 @@ def test_entry_point_yaml_edit_changes_cmd_sha(tmp_path: Path) -> None:
                 "params": {"items": [{"config": "x"}, {"config": "y"}]},
             },
         )
-        return record_interview(InterviewSpec.model_validate(intent), campaign_dir=sub)["cmd_sha"]
+        rec = record_interview(InterviewSpec.model_validate(intent), campaign_dir=sub)
+        return str(rec["cmd_sha"])
 
     a = _run("lr: 1e-3\n")
     b = _run("lr: 1e-3\n")  # identical content
@@ -1088,7 +1089,9 @@ def test_python_module_entry_still_rejects_genuinely_absent(tmp_path: Path) -> N
 
 
 def _read_settings(campaign_dir: Path) -> dict:
-    return json.loads((campaign_dir / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    doc = json.loads((campaign_dir / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert isinstance(doc, dict)
+    return doc
 
 
 def test_interview_writes_claude_allow_rule(tmp_path: Path) -> None:
@@ -1308,3 +1311,51 @@ class TestDerivedExecutorRunnableAssert:
             'python executors/train.py --seed $SEED --out "$RESULT_DIR/metrics.json"',
             kind="register_run",
         )
+
+
+class TestRegisterRunAmbiguity:
+    """Run #8: two ``@register_run`` functions sharing a name across files must
+    fail LOUDLY (``ambiguous_run``), not silently resolve to the first by path.
+
+    Live: a stale ``executors/monte_carlo_pi.py`` and the intended root
+    ``train.py`` both decorated ``def run``; ``discover_runs`` sorts by path so
+    ``executors/...`` won silently — the WRONG file's signature (its ``samples``
+    kwarg) and executor_cmd were materialized, and the canary failed on the run
+    the human never meant to submit. A run_name is not a unique key across files.
+    """
+
+    @staticmethod
+    def _write_run(path: Path, *, sig: str = "seed: int = 0") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = (
+            f"from hpc_agent import register_run\n\n\n"
+            f"@register_run\ndef run({sig}):\n    return {{}}\n"
+        )
+        path.write_text(body, encoding="utf-8")
+
+    def test_two_same_named_runs_raise_ambiguous(self, tmp_path: Path) -> None:
+        from hpc_agent.ops.memory.interview import _validate_register_run_entry
+
+        self._write_run(tmp_path / "train.py")
+        self._write_run(
+            tmp_path / "executors" / "monte_carlo_pi.py", sig="seed: int, samples: int = 1"
+        )
+        with pytest.raises(errors.SpecInvalid, match="ambiguous_run") as ei:
+            _validate_register_run_entry({"run_name": "run"}, tmp_path)
+        # Names EVERY colliding file so the human can make the name unique.
+        assert "train.py" in str(ei.value)
+        assert "monte_carlo_pi.py" in str(ei.value)
+
+    def test_single_run_still_resolves(self, tmp_path: Path) -> None:
+        from hpc_agent.ops.memory.interview import _validate_register_run_entry
+
+        self._write_run(tmp_path / "train.py")
+        got = _validate_register_run_entry({"run_name": "run"}, tmp_path)
+        assert got == (tmp_path / "train.py").resolve()
+
+    def test_absent_run_still_raises_not_found(self, tmp_path: Path) -> None:
+        from hpc_agent.ops.memory.interview import _validate_register_run_entry
+
+        self._write_run(tmp_path / "train.py")
+        with pytest.raises(errors.SpecInvalid, match="no @register_run function named"):
+            _validate_register_run_entry({"run_name": "nonexistent"}, tmp_path)

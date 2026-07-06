@@ -550,9 +550,27 @@ def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> P
     from hpc_agent.experiment_kit.discover import discover_runs
 
     run_name = ep["run_name"]
-    for run in discover_runs(campaign_dir):
-        if run.name == run_name:
-            return run.path
+    matches = [run for run in discover_runs(campaign_dir) if run.name == run_name]
+    if len(matches) == 1:
+        return matches[0].path
+    if len(matches) > 1:
+        # AMBIGUOUS: >1 @register_run function shares this name across files.
+        # The old code returned the FIRST match (discover_runs sorts by path, so
+        # `executors/monte_carlo_pi.py` silently beat a root `train.py` — run #8:
+        # the wrong file's run() was materialized, its `samples` kwarg and its
+        # executor_cmd, and the canary failed on the actually-intended run). A
+        # run_name is not a unique key across files; picking one silently runs
+        # the WRONG code. Fail loud, naming every file, so the human makes the
+        # name unique (rename or remove the stale one) — matching
+        # classify_axis_auto's ``ambiguous_run`` contract.
+        listed = ", ".join(str(p.path.relative_to(campaign_dir)) for p in matches)
+        raise errors.SpecInvalid(
+            f"ambiguous_run: {len(matches)} @register_run functions are named "
+            f"{run_name!r}, in: {listed}. A run_name is not unique across files, so "
+            f"the framework cannot know which one to run — rename all but one, or "
+            f"remove the stale file(s), so exactly one @register_run function has "
+            f"this name. (Scanned {campaign_dir} recursively.)"
+        )
     candidates = _undecorated_candidates(campaign_dir, run_name)
     hint = ""
     if candidates:
