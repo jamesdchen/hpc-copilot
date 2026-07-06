@@ -904,7 +904,7 @@ def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_ho
 
 
 def test_activation_derived_from_record_cluster_when_sidecar_bare(
-    tmp_path: Path, journal_home: Path
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Run #7 live regression: the canary sidecar this flow writes carries
     NEITHER ``env`` NOR ``cluster``, so the #176 derivation fell through to
@@ -914,6 +914,22 @@ def test_activation_derived_from_record_cluster_when_sidecar_bare(
     sidecar dict so the deriver's cluster-backfill arm (#281) fires."""
     from hpc_agent.ops.verify_canary import verify_canary
     from hpc_agent.state.runs import write_run_sidecar
+
+    # Hermetic cluster config: the backfill arm reads clusters.yaml[hoffman2],
+    # so pin one with a resolvable conda env — the machine's real config (or
+    # the packaged placeholder on CI, which has no conda_envs) must not leak in.
+    clusters = tmp_path / "clusters_fixture.yaml"
+    clusters.write_text(
+        "hoffman2:\n"
+        "  host: h.example\n"
+        "  user: u\n"
+        "  scratch: /s\n"
+        "  scheduler: sge\n"
+        "  conda_source: /apps/conda/etc/profile.d/conda.sh\n"
+        "  conda_envs: [hpc-pi]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(clusters))
 
     _seed_canary(tmp_path)  # journal record (cluster=hoffman2)
     # The bare shape actually written live (run #7): no cluster=, no env=.
