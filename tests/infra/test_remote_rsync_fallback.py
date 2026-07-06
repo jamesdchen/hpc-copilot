@@ -55,6 +55,13 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fake_run) as run_mock,
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -93,6 +100,13 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -185,6 +199,13 @@ def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -250,6 +271,13 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
@@ -332,6 +360,13 @@ def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
             "hpc_agent.infra.transport.run_capture_bounded",
             side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=300),
         ),
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         with pytest.raises(TimeoutError, match="pre-clean"):
@@ -350,6 +385,13 @@ def test_tar_fallback_preclean_failure_aborts_before_extract(tmp_path: Path) -> 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail) as run_mock,
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         result = transport.rsync_push(
@@ -480,6 +522,13 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail),
+        # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
+        # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
+        # module), so a cold-cache probe would otherwise run the REAL
+        # subprocess.run against the mocked Popen and explode in stdlib
+        # unpacking (the f8585e9c windows-CI failure). Assertions read the
+        # run_capture_bounded mock, so this absorber stays anonymous.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
