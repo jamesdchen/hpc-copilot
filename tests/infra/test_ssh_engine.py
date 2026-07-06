@@ -490,3 +490,26 @@ class TestMultiAddressDial:
             assert elapsed < 7.5, f"dead first address ate the budget ({elapsed:.1f}s)"
         finally:
             listener.close()
+
+
+def test_successful_command_resets_the_breaker_counter(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One-shot parity: each successful command records a breaker SUCCESS
+    (resetting the consecutive-failure counter), exactly as every successful
+    guarded_call does — a held connection actively proving the host reachable
+    must not let other processes' one-shot failures accumulate against it."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: None)
+    successes: list[object] = []
+    monkeypatch.setattr(ssh_engine.ssh_circuit, "record_connection_success", _recorder(successes))
+    _install_connect(
+        monkeypatch, lambda _t: _StubConn(lambda _c: _StubResult(returncode=0, stdout="ok"))
+    )
+    engine.run("printf ok", ssh_target="u@h", timeout=15)
+    connect_time = len(successes)
+    engine.run("printf ok", ssh_target="u@h", timeout=15)  # warm reuse, no reconnect
+    assert len(successes) > connect_time, (
+        "a successful command over the held connection must record a breaker "
+        "success (one-shot parity), not only the connect"
+    )

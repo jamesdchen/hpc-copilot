@@ -429,6 +429,11 @@ class _Engine:
                 f"engine command on {host} failed: {type(exc).__name__}: {exc}{partial}"
             ) from exc
         hc.last_used = time.monotonic()
+        # One-shot parity: every successful guarded_call RESETS the host's
+        # consecutive-failure counter, so a healthy engine session must too —
+        # otherwise one-shot failures from OTHER processes accumulate against
+        # a host this connection is actively proving reachable.
+        ssh_circuit.record_connection_success(ssh_target)
         return _to_completed(cmd, result)
 
     def _open(self, ssh_target: str, host: str) -> _HostConn:
