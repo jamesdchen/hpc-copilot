@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hpc_agent.executor_cli import Flag
-from hpc_agent.experiment_kit.signature import flags_from_ast
+from hpc_agent.experiment_kit.signature import ast_has_var_keyword, flags_from_ast
 
 __all__ = ["RunInfo", "discover_runs", "run_signature_sha"]
 
@@ -69,6 +69,11 @@ class RunInfo:
         The CLI :class:`~hpc_agent.executor_cli.Flag` list synthesised
         from the function signature (see
         :func:`hpc_agent.experiment_kit.flags_from_ast`).
+    has_var_keyword:
+        Whether the run declares a ``**kwargs`` catch-all (AST-visible; not
+        reflected in :attr:`flags`, which only synthesises named parameters).
+        A run with ``**kwargs`` absorbs any surplus kwarg, so a swept-flag
+        cross-check downgrades a name mismatch from refuse to warn.
     run_signature_sha:
         A stable SHA-256 over the synthesised :attr:`flags` — the
         run's *parallelization-relevant* fingerprint. A stored
@@ -84,6 +89,9 @@ class RunInfo:
     mpi: bool
     flags: tuple[Flag, ...]
     run_signature_sha: str
+    # Defaulted so every existing RunInfo(...) call site (the discover-cache
+    # reconstructor, tests) stays valid; discover_runs always sets it explicitly.
+    has_var_keyword: bool = False
 
 
 def discover_runs(src_dir: str | Path) -> list[RunInfo]:
@@ -128,6 +136,7 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
                         mpi=mpi,
                         flags=flags,
                         run_signature_sha=run_signature_sha(flags),
+                        has_var_keyword=ast_has_var_keyword(node),
                     )
                 )
                 break

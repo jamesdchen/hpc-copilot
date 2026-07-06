@@ -39,7 +39,13 @@ from typing import Any
 
 from hpc_agent.executor_cli import Flag, flag, generic_args, gpu_args
 
-__all__ = ["flags_from_signature", "flags_from_ast", "flags_for_run", "MPI_INJECTED_PARAMS"]
+__all__ = [
+    "flags_from_signature",
+    "flags_from_ast",
+    "flags_for_run",
+    "ast_has_var_keyword",
+    "MPI_INJECTED_PARAMS",
+]
 
 # Annotations we know how to turn into an argparse ``type=`` callable.
 _SCALARS: dict[Any, type] = {str: str, int: int, float: float}
@@ -196,6 +202,17 @@ def _choice_type(args: tuple[Any, ...]) -> type:
 
 
 # ─── AST (no-import) ────────────────────────────────────────────────────────
+
+
+def ast_has_var_keyword(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if *funcdef* declares a ``**kwargs`` catch-all parameter.
+
+    AST-visible via ``funcdef.args.kwarg`` (``None`` when absent), so it reads
+    off the same no-import walk :func:`flags_from_ast` uses — a run with
+    ``**kwargs`` swallows any surplus kwarg the flag list can't account for,
+    which lets a swept-flag check downgrade from refuse to warn.
+    """
+    return funcdef.args.kwarg is not None
 
 
 def flags_from_ast(

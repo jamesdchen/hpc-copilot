@@ -31,6 +31,7 @@ overwrites interview.json with byte-equivalent content modulo the
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,8 @@ from hpc_agent.infra.time import utcnow
 if TYPE_CHECKING:
     from argparse import Namespace
     from collections.abc import Mapping
+
+    from hpc_agent.experiment_kit.discover import RunInfo
 
 
 __all__ = ["record_interview"]
@@ -182,6 +185,9 @@ def record_interview(
     # required executor param the user didn't sweep is still supplied per task.
     fixed_params: dict[str, Any] = {}
     entry_point_materialized: dict[str, Any] | None = None
+    # Captured only for a register_run entry — the discovered RunInfo whose flag
+    # names + **kwargs visibility feed the post-tasks swept-flag cross-check.
+    register_run_info: RunInfo | None = None
     if "entry_point" in intent:
         ep = intent["entry_point"]
         kind = ep["kind"]
@@ -275,7 +281,7 @@ def record_interview(
             # mature repo with a different layout passes the path via
             # ``notebooks_dir``. The fallback to campaign_dir handles the
             # tiny-repo case where everything sits at the root.
-            run_path = _validate_register_run_entry(ep, campaign_dir)
+            register_run_info = _validate_register_run_entry(ep, campaign_dir)
             # Generate the per-task executor command the same way
             # ``shell_command`` does for its materialized wrapper. The
             # ``@register_run`` decorator injects ``compute(args)`` into
@@ -295,7 +301,7 @@ def record_interview(
                 "run_name": ep["run_name"],
                 "executor_cmd": register_run_executor_cmd(
                     campaign_dir=campaign_dir,
-                    run_path=run_path,
+                    run_path=register_run_info.path,
                     run_name=ep["run_name"],
                 ),
             }
@@ -357,6 +363,15 @@ def record_interview(
         raise errors.SpecInvalid(
             f"intent.task_count = {declared} but tasks.total() = {total_tasks}; "
             f"interview agent's stated count disagrees with the produced tasks.py"
+        )
+
+    # Swept-flag cross-check (register_run only): every key resolve(i) sweeps must
+    # name a real run() parameter, else the cluster canary is the first to notice
+    # (run #8). Deferred to here because it needs BOTH the discovered run signature
+    # and the now-loaded tasks module.
+    if register_run_info is not None:
+        _validate_swept_flags_against_run(
+            register_run_info, tasks_mod, total_tasks, fixed_params=fixed_params
         )
 
     preview = {
@@ -532,7 +547,7 @@ def _validate_python_module_entry(ep: Mapping[str, Any], campaign_dir: Path) -> 
         raise errors.SpecInvalid(f"python_module.entry_point: {module}.{function} is not callable")
 
 
-def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> Path:
+def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> RunInfo:
     """Confirm a ``@register_run`` function named ``run_name`` is discoverable.
 
     Walks ``campaign_dir`` recursively (via ``discover_runs``) — same primitive
@@ -540,19 +555,20 @@ def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> P
     discovery behavior exactly. The skip list (``.hpc``, ``.git``,
     ``__pycache__``, ``.mypy_cache``) is owned by ``discover_runs``.
 
-    Returns the absolute path of the matched run's file. The caller threads
-    this into :func:`register_run_executor_cmd` so the materialized
-    ``executor_cmd`` knows which file to import on the cluster — without
-    this the framework would default to invoking the file as a bare script
-    (``python3 <file>``), which fails because the dispatcher passes
-    kwargs only via env vars, never argv.
+    Returns the matched :class:`RunInfo`. The caller reads ``.path`` to thread
+    into :func:`register_run_executor_cmd` (so the materialized ``executor_cmd``
+    knows which file to import on the cluster — without it the framework would
+    default to invoking the file as a bare script, ``python3 <file>``, which
+    fails because the dispatcher passes kwargs only via env vars, never argv),
+    and ``.flags`` / ``.has_var_keyword`` to cross-check the swept flag names
+    against the run signature (see :func:`_validate_swept_flags_against_run`).
     """
     from hpc_agent.experiment_kit.discover import discover_runs
 
     run_name = ep["run_name"]
     matches = [run for run in discover_runs(campaign_dir) if run.name == run_name]
     if len(matches) == 1:
-        return matches[0].path
+        return matches[0]
     if len(matches) > 1:
         # AMBIGUOUS: >1 @register_run function shares this name across files.
         # The old code returned the FIRST match (discover_runs sorts by path, so
@@ -588,6 +604,98 @@ def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> P
         f"(skips .hpc/, .git/, __pycache__/, .mypy_cache/). The function "
         f"may not be decorated yet, its name may not match `run_name`, or "
         f"its file may not be on disk.{hint}"
+    )
+
+
+# Keys ``resolve(i)`` may legitimately carry that are NOT user run() parameters,
+# so they are diffed out before a swept key is judged "maps to no parameter":
+# the framework-injected result path + planner ``halo``, plus the MPI launcher's
+# ``rank`` / ``world_size`` (which ``flags_from_ast(mpi=True)`` also excludes, so
+# they'd never appear in ``RunInfo.flags``). Built lazily to keep the
+# experiment_kit.signature import off this CLI-reachable module's top level.
+_FRAMEWORK_INJECTED_KEYS: frozenset[str] | None = None
+# How many tasks to sample from resolve(i) — swept keys are uniform across tasks,
+# so a bounded sample suffices and keeps a huge campaign fast (mirrors
+# validate-executor-signatures' sample_n_tasks default).
+_SWEPT_FLAG_SAMPLE_N = 8
+
+
+def _framework_injected_keys() -> frozenset[str]:
+    global _FRAMEWORK_INJECTED_KEYS
+    if _FRAMEWORK_INJECTED_KEYS is None:
+        from hpc_agent.experiment_kit.signature import MPI_INJECTED_PARAMS
+
+        _FRAMEWORK_INJECTED_KEYS = frozenset({"output_file", "halo"}) | MPI_INJECTED_PARAMS
+    return _FRAMEWORK_INJECTED_KEYS
+
+
+def _validate_swept_flags_against_run(
+    run_info: RunInfo,
+    tasks_mod: Any,
+    total_tasks: int,
+    *,
+    fixed_params: Mapping[str, Any],
+) -> None:
+    """Cross-check every swept ``resolve(i)`` key against the run's signature.
+
+    Run #8: ``tasks.py`` swept ``flag('samples')`` while the ``@register_run``
+    function was ``run(n_samples=...)``; the mismatch surfaced only when the
+    cluster canary crashed (``HPC_KW_SAMPLES`` exported, ``--n-samples`` never
+    bound). Both sides are knowable at interview time — the AST-synthesised flag
+    names (:attr:`RunInfo.flags`) and the keys ``resolve(i)`` produces — so diff
+    them here, before any cluster round-trip.
+
+    Posture follows the survival-over-strictness split:
+
+    * a swept key mapping to NO run() parameter while the run has no ``**kwargs``
+      is a certain bug → refuse loudly (:class:`errors.SpecInvalid`, naming the
+      key(s) and the real parameter names), mirroring the ``ambiguous_run``
+      refusal and :func:`_assert_derived_executor_runnable`;
+    * a run WITH ``**kwargs`` absorbs any surplus kwarg, so the same mismatch is
+      only *possibly* a typo → warn, never refuse (mirrors
+      ``execution/mapreduce/dispatch._warn_unset_kwarg_refs``).
+
+    Exempt from the diff: framework-injected params
+    (:func:`_framework_injected_keys`) and the declared ``fixed_params`` (the
+    operator's own constant kwargs, already threaded into every task).
+    """
+    param_names = {f.name for f in run_info.flags}
+    exempt = _framework_injected_keys() | set(fixed_params)
+
+    swept_keys: set[str] = set()
+    for i in range(min(total_tasks, _SWEPT_FLAG_SAMPLE_N)):
+        kwargs = tasks_mod.resolve(i)
+        if isinstance(kwargs, dict):
+            swept_keys.update(kwargs.keys())
+
+    unknown = sorted(k for k in swept_keys if k not in param_names and k not in exempt)
+    if not unknown:
+        return
+
+    known = sorted(param_names)
+    if run_info.has_var_keyword:
+        # WARN, don't refuse: the run's **kwargs will accept the surplus key(s),
+        # so we can't prove a bug — but a typo (samples vs n_samples) would be
+        # silently swallowed, so surface it.
+        warnings.warn(
+            f"interview: tasks.py sweeps {unknown!r} but @register_run "
+            f"{run_info.name!r} declares no such parameter (its named params are "
+            f"{known!r}). The run accepts **kwargs so the surplus key(s) pass "
+            f"through rather than being refused — but if this is a typo (e.g. "
+            f"'samples' vs 'n_samples') the run silently ignores the swept value. "
+            f"Rename the swept key or the parameter if they were meant to match.",
+            stacklevel=2,
+        )
+        return
+    raise errors.SpecInvalid(
+        f"register_run.entry_point: tasks.py sweeps {unknown!r} but @register_run "
+        f"{run_info.name!r} ({run_info.path.name}) has no such parameter and no "
+        f"**kwargs to absorb it. Its parameters are {known!r}. On the cluster each "
+        f"swept key is exported as HPC_KW_<KEY> but the run's CLI never binds it, "
+        f"so every task runs with the intended value dropped (the canary fails). "
+        f"Fix the mismatch: rename the swept key to a real parameter (e.g. "
+        f"'samples' -> 'n_samples'), rename the parameter, or add **kwargs to "
+        f"{run_info.name!r} if the pass-through is intended."
     )
 
 

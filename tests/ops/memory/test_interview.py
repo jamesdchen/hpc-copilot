@@ -640,10 +640,13 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
     # Seed a discoverable @register_run function so the validator passes.
     nb = tmp_path / "notebooks"
     nb.mkdir()
+    # Signature matches the swept key (_HPARAM_TASKS_PY sweeps ``lr``) so the
+    # run #8 swept-flag cross-check passes — this test is about the pointer /
+    # no-wrapper behavior, not the flag diff.
     (nb / "forecast.py").write_text(
         "from hpc_agent.experiment_kit import register_run\n"
         "@register_run\n"
-        "def forecast(seed: int = 0) -> dict:\n"
+        "def forecast(lr: float = 0.0) -> dict:\n"
         "    return {'loss': 0.0}\n"
     )
     intent = _minimal_intent(
@@ -1351,7 +1354,10 @@ class TestRegisterRunAmbiguity:
 
         self._write_run(tmp_path / "train.py")
         got = _validate_register_run_entry({"run_name": "run"}, tmp_path)
-        assert got == (tmp_path / "train.py").resolve()
+        # Now returns the RunInfo (the caller reads .path + .flags); .path is the
+        # matched file.
+        assert got.path == (tmp_path / "train.py").resolve()
+        assert got.name == "run"
 
     def test_absent_run_still_raises_not_found(self, tmp_path: Path) -> None:
         from hpc_agent.ops.memory.interview import _validate_register_run_entry
@@ -1359,3 +1365,98 @@ class TestRegisterRunAmbiguity:
         self._write_run(tmp_path / "train.py")
         with pytest.raises(errors.SpecInvalid, match="no @register_run function named"):
             _validate_register_run_entry({"run_name": "nonexistent"}, tmp_path)
+
+
+class TestSweptFlagValidation:
+    """Run #8: interview-time cross-check of the swept ``resolve(i)`` keys against
+    the ``@register_run`` signature. A swept key naming no run() parameter — and
+    no ``**kwargs`` to absorb it — is REFUSED here, not deferred to the cluster
+    canary. Live precedent: ``tasks.py`` swept ``flag('samples')`` while the run
+    was ``run(n_samples=...)``; ``HPC_KW_SAMPLES`` was exported but ``--n-samples``
+    never bound, so every task silently dropped the intended value.
+    """
+
+    @staticmethod
+    def _write_run(campaign_dir: Path, *, sig: str) -> None:
+        (campaign_dir / "train.py").write_text(
+            f"from hpc_agent import register_run\n\n\n"
+            f"@register_run\ndef run({sig}):\n    return {{}}\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _write_swept_tasks(campaign_dir: Path, resolve_expr: str) -> None:
+        tasks = campaign_dir / ".hpc" / "tasks.py"
+        tasks.parent.mkdir(parents=True, exist_ok=True)
+        tasks.write_text(
+            f"def total(): return 2\ndef resolve(i): return {resolve_expr}\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _intent(**ep_extra) -> dict:
+        return _minimal_intent(
+            2, entry_point={"kind": "register_run", "run_name": "run", **ep_extra}
+        )
+
+    def test_swept_key_with_no_param_and_no_kwargs_refused(self, tmp_path: Path) -> None:
+        """The headline guard: ``samples`` swept, run is ``run(n_samples)``, no
+        ``**kwargs`` → SpecInvalid naming the offending key AND the real param."""
+        self._write_run(tmp_path, sig="n_samples: int")
+        self._write_swept_tasks(tmp_path, "{'samples': i * 1000}")
+        with pytest.raises(errors.SpecInvalid, match="samples") as ei:
+            record_interview(InterviewSpec.model_validate(self._intent()), campaign_dir=tmp_path)
+        msg = str(ei.value)
+        assert "'samples'" in msg  # the offending swept key is named
+        assert "n_samples" in msg  # the actual run() parameter is listed
+        # Refused before persistence — no interview.json residue (atomicity).
+        assert not (tmp_path / "interview.json").exists()
+
+    def test_matching_swept_keys_pass(self, tmp_path: Path) -> None:
+        """Legit path: the swept key IS the run() parameter → clean pass."""
+        self._write_run(tmp_path, sig="n_samples: int")
+        self._write_swept_tasks(tmp_path, "{'n_samples': i * 1000}")
+        data = record_interview(InterviewSpec.model_validate(self._intent()), campaign_dir=tmp_path)
+        assert data["total_tasks"] == 2
+        assert (tmp_path / "interview.json").is_file()
+
+    def test_var_keyword_run_warns_not_refused(self, tmp_path: Path) -> None:
+        """A run with ``**kwargs`` absorbs the surplus key, so the mismatch is
+        only *possibly* a typo → warn (never refuse); onboarding still completes."""
+        self._write_run(tmp_path, sig="n_samples: int, **kwargs")
+        self._write_swept_tasks(tmp_path, "{'samples': i * 1000}")
+        with pytest.warns(UserWarning, match="samples"):
+            data = record_interview(
+                InterviewSpec.model_validate(self._intent()), campaign_dir=tmp_path
+            )
+        assert data["total_tasks"] == 2
+        assert (tmp_path / "interview.json").is_file()
+
+    def test_framework_injected_keys_are_exempt(self, tmp_path: Path) -> None:
+        """``output_file`` / ``halo`` are framework-injected, not user params —
+        their presence in resolve() never trips the guard (the run param matches)."""
+        self._write_run(tmp_path, sig="seed: int")
+        self._write_swept_tasks(tmp_path, "{'seed': i, 'output_file': 'out.json', 'halo': 0}")
+        data = record_interview(InterviewSpec.model_validate(self._intent()), campaign_dir=tmp_path)
+        assert data["total_tasks"] == 2
+        assert (tmp_path / "interview.json").is_file()
+
+    def test_fixed_params_key_is_exempt(self, tmp_path: Path) -> None:
+        """A declared ``fixed_params`` key is the operator's own constant kwarg,
+        already threaded into every task — exempt from the swept-flag diff even
+        when it names no run() parameter."""
+        self._write_run(tmp_path, sig="seed: int")
+        intent = _minimal_intent(
+            2,
+            entry_point={
+                "kind": "register_run",
+                "run_name": "run",
+                "fixed_params": {"samples": 10000},
+            },
+            task_generator={"kind": "cartesian_product", "params": {"axes": {"seed": [0, 1]}}},
+        )
+        data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+        assert data["total_tasks"] == 2
+        # samples (a fixed_param, not a run() param) landed in every task but was
+        # exempt, so no refusal.
+        assert data["preview"]["first"] == {"seed": 0, "samples": 10000}

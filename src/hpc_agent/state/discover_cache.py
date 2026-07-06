@@ -110,6 +110,9 @@ def _run_info_to_dict(ri: Any) -> dict[str, Any]:
         # #293: multi-rank marker. ``getattr`` default keeps an older in-memory
         # RunInfo (pre-field) serialising cleanly; the read side defaults too.
         "mpi": getattr(ri, "mpi", False),
+        # Same forward-compat shape as ``mpi``: an older in-memory RunInfo
+        # without the field serialises cleanly, and the read side defaults too.
+        "has_var_keyword": getattr(ri, "has_var_keyword", False),
         "run_signature_sha": ri.run_signature_sha,
         "flags": [_flag_to_dict(f) for f in ri.flags],
     }
@@ -141,6 +144,9 @@ def _dict_to_run_info(d: dict[str, Any]) -> RunInfo:
         mpi=d.get("mpi", False),
         flags=flags,
         run_signature_sha=d["run_signature_sha"],
+        # Default False for a cache written before this field existed; a stale
+        # entry stays readable rather than forcing a full re-scan.
+        has_var_keyword=d.get("has_var_keyword", False),
     )
 
 
