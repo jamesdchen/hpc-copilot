@@ -56,6 +56,14 @@ While a run is live, **spawn a background tail of the local supervisor's output*
 
 **Reconcile is the only source of run state** (`proving-run-2-hardening.md` Move 4). The tail is liveness *display*, never state: NEVER infer "still running" from an open log, a live pid, elapsed time, or an empty output file — proving run #2's driver reported a canary as "running, no result yet" from exactly those signals while the journal already recorded it failed. Run state comes ONLY from what the blocks read from the journal/reconcile (`status-snapshot`, the returned brief, `read-decisions`): report the state those return, and when the tail looks stale, invoke `status-snapshot` instead of narrating a guess.
 
+## Monitor-arm cron lifecycle — the DELETE is yours too
+
+A brief's `monitor_arm` is the code-decided watch cadence (`decide-monitor-arm`). Creating the cron without ever deleting it leaves a `*/1` headless tick firing forever against a finished (or wiped) run — run #8's stale-monitor fallout. The full lifecycle:
+
+- `arm == "cron"` → pass `cron_create_args` to the `CronCreate` tool VERBATIM (schedule/prompt/reason are code-owned — never hand-compose a schedule). First `CronDelete` any prior cron whose prompt names this `run_id`: one run, at most one cron.
+- `arm == "none"` (terminal / no tasks) → `CronDelete` every cron whose prompt names this `run_id`. Terminal IS the cleanup point (`docs/primitives/decide-monitor-arm.md`); a clean brief with no cron to delete is the normal case, not an error.
+- A tick that cannot resolve its `run_id` (run unknown, journal wiped) → treat as `arm == "none"`: delete the cron that fired you, then stop. Never leave a cron polling a run that no longer exists.
+
 ## Inputs
 
 | Field | Source |

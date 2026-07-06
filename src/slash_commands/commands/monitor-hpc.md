@@ -37,6 +37,6 @@ Skill("hpc-status", {
 ## For monitoring that outlives the chat
 
 `/monitor-hpc` is one round-trip. To keep watching on a schedule:
-- Schedule a recurring campaign-tick / status run in cron (the headless surface).
+- Schedule a recurring campaign-tick / status run in cron (the headless surface): when a brief's `monitor_arm.arm == "cron"`, pass `cron_create_args` to `CronCreate` verbatim — and when `arm == "none"` (terminal) or the run can no longer be resolved, `CronDelete` every cron naming that `run_id` (the skill's "Monitor-arm cron lifecycle" rule; a cron must never outlive its run).
 - `/loop <interval> /monitor-hpc` — repeats the slash on an interval in-session.
 - The `status-watch` block is detached by contract, so a live run keeps being watched even across a session boundary (the doctor scan re-arms an orphan from the journal).
