@@ -39,16 +39,37 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from hpc_agent.errors import SshCircuitOpen
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.run_record import runs_dir
 
-__all__ = ["TERMINAL_CAUSES", "harvest_marker_path", "harvest_on_terminal"]
+__all__ = [
+    "CIRCUIT_WAIT_CAP_SEC",
+    "TERMINAL_CAUSES",
+    "harvest_marker_path",
+    "harvest_on_terminal",
+]
 
 _log = logging.getLogger(__name__)
+
+#: Longest remaining breaker cooldown the terminal harvest will wait out
+#: before its single retry: the breaker's BASE cooldown (300s) plus slack.
+#: A remaining cooldown past this cap means the cooldown DOUBLED — the
+#: half-open probe already failed, the host is genuinely unhealthy — and the
+#: guard records the failure without waiting, exactly as before
+#: (2026-07-06: a 3×60s hoffman2 latency spike opened the breaker mid-harvest;
+#: the guard recorded ``harvest_ok:false`` and parked a finished 20/20 run
+#: even though the exception named a deadline 292s away).
+CIRCUIT_WAIT_CAP_SEC = 330.0
+
+#: Buffer past the breaker deadline so the retry lands after the cooldown —
+#: a retry a hair early just fails fast again.
+_CIRCUIT_WAIT_SLACK_SEC = 5.0
 
 #: The named terminal causes the design enumerates (§5). Free-form causes
 #: are still accepted — the guard never rejects a caller — but these are the
@@ -85,6 +106,8 @@ def harvest_on_terminal(
     record: Any | None = None,
     _aggregate: Callable[[Path, str], Any] | None = None,
     _sweep: Callable[[str], dict[int, list[str]]] | None = None,
+    _clock: Callable[[], float] = time.time,
+    _sleep: Callable[[float], object] = time.sleep,
 ) -> dict[str, Any]:
     """Best-effort, loud, guaranteed code-harvest at any terminal path.
 
@@ -107,6 +130,7 @@ def harvest_on_terminal(
         "terminal_cause": terminal_cause,
         "metrics_harvested": False,
         "metrics_error": None,
+        "circuit_waited_sec": None,
         "aggregated_metric_keys": [],
         "escalation_reason": None,
         "error_sweep_ran": False,
@@ -124,7 +148,28 @@ def harvest_on_terminal(
     #     mid-harvest must still propagate.
     aggregate = _aggregate if _aggregate is not None else _default_aggregate
     try:
-        result = aggregate(experiment_dir, run_id)
+        try:
+            result = aggregate(experiment_dir, run_id)
+        except SshCircuitOpen as exc:
+            # The breaker names its own deadline, and a detached terminal
+            # worker has nowhere else to be: wait out one BASE cooldown and
+            # retry ONCE (the retry claims the sanctioned half-open probe
+            # slot — this is not the hammering the breaker forbids). A
+            # missing deadline or one past the cap (a DOUBLED cooldown: the
+            # probe already failed, the host is genuinely unhealthy) records
+            # the failure without waiting, as before.
+            wait = _circuit_wait_sec(exc, now=_clock())
+            if wait is None:
+                raise
+            _log.warning(
+                "terminal harvest: ssh circuit open for run %s — waiting %.0fs "
+                "for the breaker deadline, then retrying once",
+                run_id,
+                wait,
+            )
+            _sleep(wait)
+            marker["circuit_waited_sec"] = round(wait, 1)
+            result = aggregate(experiment_dir, run_id)
         marker["metrics_harvested"] = True
         agg_metrics = getattr(result, "aggregated_metrics", None) or {}
         marker["aggregated_metric_keys"] = sorted(str(k) for k in agg_metrics)
@@ -171,6 +216,23 @@ def harvest_on_terminal(
             marker,
         )
     return marker
+
+
+def _circuit_wait_sec(exc: SshCircuitOpen, *, now: float) -> float | None:
+    """Bounded wait (seconds) until *exc*'s breaker deadline, or ``None`` to give up.
+
+    ``None`` when the raiser attached no deadline (bare construction — tests,
+    older sites) or the remaining cooldown exceeds
+    :data:`CIRCUIT_WAIT_CAP_SEC` (a doubled cooldown: the half-open probe
+    already failed, so waiting would ride a genuinely unhealthy host).
+    """
+    deadline = getattr(exc, "deadline", None)
+    if deadline is None:
+        return None
+    remaining = max(0.0, float(deadline) - now)
+    if remaining > CIRCUIT_WAIT_CAP_SEC:
+        return None
+    return remaining + _CIRCUIT_WAIT_SLACK_SEC
 
 
 def _default_aggregate(experiment_dir: Path, run_id: str) -> Any:

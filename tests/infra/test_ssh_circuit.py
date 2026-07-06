@@ -473,3 +473,19 @@ class TestEffectiveState:
         assert ssh_circuit.open_deadline(doc, now=0.0) == 1300.0
         # Malformed opened_at falls back to now (fail-open: looks fresh).
         assert ssh_circuit.open_deadline({"state": "open"}, now=50.0) == 50.0 + BASE_COOLDOWN_SEC
+
+
+def test_open_error_carries_structured_host_and_deadline():
+    """The fail-fast error attaches ``host`` + ``deadline`` as structured
+    attributes — consumers (``harvest_on_terminal``'s bounded wait-and-retry)
+    must never parse the message for the cooldown deadline."""
+    clock = FakeClock()
+    _fail_n(clock, CIRCUIT_THRESHOLD)
+    with pytest.raises(SshCircuitOpen) as ei:
+        check_circuit(TARGET, clock=clock)
+    assert ei.value.host == HOST
+    assert ei.value.deadline == pytest.approx(clock.now + BASE_COOLDOWN_SEC)
+    # The class-level defaults keep bare construction (older sites) valid.
+    bare = SshCircuitOpen("bare")
+    assert bare.host == ""
+    assert bare.deadline is None

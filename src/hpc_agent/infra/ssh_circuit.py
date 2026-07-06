@@ -233,12 +233,17 @@ def _open_error(
         detail = "a half-open probe is already in flight; failing fast until it resolves"
     else:
         detail = f"failing fast until {_iso(deadline)} (~{max(0.0, deadline - now):.0f}s)"
-    return SshCircuitOpen(
+    err = SshCircuitOpen(
         f"ssh circuit for host '{host}' is OPEN after {failures} consecutive "
         f"connection-level failures (ban-risk protection: refusing to open more "
         f"connections that the cluster's intrusion filter would count); {detail}. "
         f"Override for this host only with {OVERRIDE_ENV}={host}."
     )
+    # Structured context so consumers (harvest_on_terminal's bounded
+    # wait-and-retry) never parse the message for the deadline.
+    err.host = host
+    err.deadline = deadline
+    return err
 
 
 def classify_connection_failure(cp: subprocess.CompletedProcess[str]) -> str | None:

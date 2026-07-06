@@ -17,7 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from hpc_agent.errors import SshCircuitOpen
 from hpc_agent.ops.monitor.harvest_guard import (
+    CIRCUIT_WAIT_CAP_SEC,
     TERMINAL_CAUSES,
     harvest_marker_path,
     harvest_on_terminal,
@@ -168,6 +170,137 @@ def test_marker_is_append_only_across_calls(journal_home: Path, experiment: Path
         )
     markers = _read_markers(experiment, _RUN_ID)
     assert [m["terminal_cause"] for m in markers] == ["timeout", "complete"]
+
+
+def _circuit_exc(deadline: float | None) -> SshCircuitOpen:
+    exc = SshCircuitOpen("ssh circuit for host 'h' is OPEN (test)")
+    exc.host = "h"
+    exc.deadline = deadline
+    return exc
+
+
+class TestCircuitOpenBoundedRetry:
+    """``SshCircuitOpen`` names its own deadline — the guard waits it out ONCE.
+
+    2026-07-06: a 3×60s hoffman2 latency spike opened the breaker mid-harvest;
+    the guard recorded ``harvest_ok:false`` and parked a finished 20/20 run
+    292s short of the deadline the exception itself carried. A detached
+    terminal worker has nowhere else to be: within one BASE cooldown it must
+    sleep to the deadline and retry once (the sanctioned half-open probe).
+    A doubled cooldown or a deadline-less error records as before — waiting
+    there would ride a genuinely unhealthy host.
+    """
+
+    _NOW = 1000.0
+
+    def test_near_deadline_waits_and_retries_once(
+        self, journal_home: Path, experiment: Path
+    ) -> None:
+        calls: list[int] = []
+        sleeps: list[float] = []
+
+        def _agg(experiment_dir: Path, run_id: str) -> Any:
+            calls.append(1)
+            if len(calls) == 1:
+                raise _circuit_exc(self._NOW + 120.0)
+            return SimpleNamespace(
+                aggregated_metrics={"r": {"pi": 3.14}},
+                escalation_reason=None,
+                combiner_dir_local="/c",
+            )
+
+        marker = harvest_on_terminal(
+            experiment,
+            _RUN_ID,
+            terminal_cause="complete",
+            _aggregate=_agg,
+            _sweep=lambda combiner_dir: {},
+            _clock=lambda: self._NOW,
+            _sleep=sleeps.append,
+        )
+
+        assert len(calls) == 2
+        # Slept past the deadline (remaining 120s + slack), recorded loudly.
+        assert sleeps == [pytest.approx(125.0)]
+        assert marker["circuit_waited_sec"] == pytest.approx(125.0)
+        assert marker["metrics_harvested"] is True
+        assert marker["metrics_error"] is None
+        assert marker["harvest_ok"] is True
+
+    def test_doubled_cooldown_records_without_waiting(
+        self, journal_home: Path, experiment: Path
+    ) -> None:
+        """A remaining cooldown past the cap = the half-open probe already
+        failed; the guard must NOT ride an unhealthy host."""
+        calls: list[int] = []
+
+        def _agg(experiment_dir: Path, run_id: str) -> Any:
+            calls.append(1)
+            raise _circuit_exc(self._NOW + CIRCUIT_WAIT_CAP_SEC + 1.0)
+
+        marker = harvest_on_terminal(
+            experiment,
+            _RUN_ID,
+            terminal_cause="complete",
+            _aggregate=_agg,
+            _sweep=lambda combiner_dir: {},
+            _clock=lambda: self._NOW,
+            _sleep=lambda s: pytest.fail(f"guard slept {s}s on a doubled cooldown"),
+        )
+
+        assert len(calls) == 1
+        assert marker["circuit_waited_sec"] is None
+        assert marker["metrics_harvested"] is False
+        assert marker["metrics_error"] is not None
+        assert "SshCircuitOpen" in marker["metrics_error"]
+
+    def test_deadline_less_error_records_without_waiting(
+        self, journal_home: Path, experiment: Path
+    ) -> None:
+        """Bare construction (older sites, tests) carries no deadline → no wait."""
+
+        def _agg(experiment_dir: Path, run_id: str) -> Any:
+            raise _circuit_exc(None)
+
+        marker = harvest_on_terminal(
+            experiment,
+            _RUN_ID,
+            terminal_cause="failed",
+            _aggregate=_agg,
+            _sweep=lambda combiner_dir: {},
+            _clock=lambda: self._NOW,
+            _sleep=lambda s: pytest.fail(f"guard slept {s}s with no deadline"),
+        )
+
+        assert marker["circuit_waited_sec"] is None
+        assert marker["metrics_harvested"] is False
+        assert "SshCircuitOpen" in (marker["metrics_error"] or "")
+
+    def test_retry_failure_is_recorded_with_no_third_attempt(
+        self, journal_home: Path, experiment: Path
+    ) -> None:
+        """The retry is ONCE: a second failure records loudly and stops."""
+        calls: list[int] = []
+
+        def _agg(experiment_dir: Path, run_id: str) -> Any:
+            calls.append(1)
+            raise _circuit_exc(self._NOW + 60.0)
+
+        marker = harvest_on_terminal(
+            experiment,
+            _RUN_ID,
+            terminal_cause="complete",
+            _aggregate=_agg,
+            _sweep=lambda combiner_dir: {},
+            _clock=lambda: self._NOW,
+            _sleep=lambda s: None,
+        )
+
+        assert len(calls) == 2
+        assert marker["circuit_waited_sec"] == pytest.approx(65.0)
+        assert marker["metrics_harvested"] is False
+        assert marker["metrics_error"] is not None
+        assert marker["harvest_ok"] is False
 
 
 def test_terminal_causes_vocabulary_covers_design_terms() -> None:

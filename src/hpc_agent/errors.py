@@ -90,6 +90,13 @@ class SshCircuitOpen(HpcError):
     error_code = "ssh_circuit_open"
     retry_safe = False
     category = "network"
+
+    #: Structured context the raiser (``ssh_circuit._open_error``) attaches:
+    #: the host whose circuit is open and the epoch second its cooldown ends.
+    #: Class-level defaults keep bare construction (tests, older sites) valid;
+    #: consumers must treat ``deadline is None`` as "unknown — do not wait".
+    host: str = ""
+    deadline: float | None = None
     remediation = (
         "Wait for the cooldown deadline named in the message (a single probe "
         "then re-checks the host), or verify the host is reachable out-of-band "
