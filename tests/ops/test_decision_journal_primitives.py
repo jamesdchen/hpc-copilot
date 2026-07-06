@@ -269,6 +269,20 @@ def test_gate_passes_with_prior_nudge_naming_the_key(tmp_path: Path) -> None:
     assert out.record.resolved["result_dir_template"] == "results/foo"
 
 
+def test_gate_prior_nudge_is_token_exact_not_substring(tmp_path: Path) -> None:
+    """Path (b) is token-exact (#26): a nudge mentioning the key only as a
+    SUBSTRING ("seeds") does not authorize a diverted field named "seed" — the
+    old substring match wrongly did — while naming it as a whole token does."""
+    _persist_brief(tmp_path, "run-1", "s1", {"resolved": {"cluster": "hoffman2"}})
+    _append(tmp_path, block="s1", response="use seeds 0-19")  # substring, not a token
+    with pytest.raises(errors.SpecInvalid):
+        _append(tmp_path, block="s1", response="y", resolved={"seed": 0})
+    # Naming the key as a whole token DOES authorize it.
+    _append(tmp_path, block="s1", response="set seed to 0")
+    out = _append(tmp_path, block="s1", response="y", resolved={"seed": 0})
+    assert out.record.resolved["seed"] == 0
+
+
 def test_gate_passes_with_provenance_overrides(tmp_path: Path) -> None:
     """Path (c): the key is listed in provenance.overrides."""
     _persist_brief(tmp_path, "run-1", "s1", {"resolved": {"cluster": "hoffman2"}})

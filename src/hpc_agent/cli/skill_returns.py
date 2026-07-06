@@ -118,7 +118,16 @@ def _breadcrumb_path() -> Path:
     """
     from hpc_agent.state.run_record import _current_homedir
 
-    return _current_homedir() / "_skill_return_dirs.json"
+    # Session-scoped (run #7): the Stop guard reads this per-SESSION, so a
+    # machine-global file let ONE session's committed returns nag a DIFFERENT
+    # session (a relay session pestered to fetch a demo session's envelopes).
+    # Tag by CLAUDE_CODE_SESSION_ID — the emitter + guard of the SAME session
+    # share the process env so they resolve the same file, while distinct
+    # sessions stay isolated. Absent (headless / cron / older harness), fall back
+    # to the shared name so nothing breaks.
+    session = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("CLAUDE_CODE_SESSION_ID", ""))[:64]
+    name = f"_skill_return_dirs_{session}.json" if session else "_skill_return_dirs.json"
+    return _current_homedir() / name
 
 
 def record_return_dir(experiment_dir: Path | str) -> None:

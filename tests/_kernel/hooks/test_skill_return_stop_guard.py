@@ -28,6 +28,22 @@ _KNOWN_SKILL = "hpc-wrap-entry-point"
 _SAMPLE_ENVELOPE = {"ok": True, "skill": _KNOWN_SKILL, "entry_point_kind": "register_run"}
 
 
+def test_breadcrumb_path_is_session_scoped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Run #7: the committed-return breadcrumb is tagged by CLAUDE_CODE_SESSION_ID
+    so one session's returns can't nag a DIFFERENT session (the relay-vs-demo
+    bleed); absent the env var it falls back to the shared name."""
+    from hpc_agent.cli import skill_returns
+
+    monkeypatch.setattr("hpc_agent.state.run_record._current_homedir", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sessA")
+    a = skill_returns._breadcrumb_path()
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sessB")
+    b = skill_returns._breadcrumb_path()
+    assert a != b and "sessA" in a.name and "sessB" in b.name
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert skill_returns._breadcrumb_path().name == "_skill_return_dirs.json"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_breadcrumb_home(tmp_path, monkeypatch):
     """Isolate the skill-return breadcrumb (``<home>/_skill_return_dirs.json``)
@@ -170,7 +186,8 @@ def test_non_hpc_directory_is_noop(tmp_path: Path) -> None:
 
 
 def test_malformed_payload_is_noop() -> None:
-    for bad in (None, [], "string", 42):
+    bad_payloads: tuple[object, ...] = (None, [], "string", 42)
+    for bad in bad_payloads:
         assert guard.build_hook_output(bad) is None
 
 

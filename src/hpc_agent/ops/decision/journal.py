@@ -255,13 +255,19 @@ def _prior_nudge_named(experiment_dir: Path, spec: AppendDecisionInput, key: str
     record already present predates this append) and substring-matches the key
     name, case-insensitively, in each nudge's ``response`` text.
     """
+    import re
+
     records = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
     needle = key.lower()
     for rec in records:
         response = str(rec.get("response") or "")
         if response == "y":
             continue
-        if needle in response.lower():
+        # Token-exact, not substring (#26): a nudge must NAME the field. The
+        # substring form let an unrelated mention authorize a diverted field —
+        # e.g. key "seed" matched "seeds 0-19", or "run" matched "running". Split
+        # on non-identifier chars and require the whole key as a token.
+        if needle in set(re.split(r"[^a-z0-9_]+", response.lower())):
             return True
     return False
 
