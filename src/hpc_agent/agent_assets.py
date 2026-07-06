@@ -373,7 +373,16 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
         servers = {}
 
     existing = servers.get(_MCP_SERVER_NAME)
-    if existing == _MCP_SERVER_ENTRY:
+    # A user-set ``env`` on the existing registration (e.g.
+    # ``HPC_SSH_ENGINE=asyncssh`` opting the demo server into the connection
+    # engine) is the USER'S config, not ours: an install heals OUR keys
+    # (command/args after a moved venv) but must never destroy theirs —
+    # rewriting the entry wholesale silently un-set the engine flag on every
+    # install-commands run.
+    desired: dict[str, Any] = dict(_MCP_SERVER_ENTRY)
+    if isinstance(existing, dict) and isinstance(existing.get("env"), dict) and existing["env"]:
+        desired["env"] = existing["env"]
+    if existing == desired:
         return {"config_path": str(config_path), "action": "already-present", "wrote": False}
 
     if dry_run:
@@ -382,7 +391,7 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
 
     servers = dict(servers)
     action = "updated" if existing is not None else "added"
-    servers[_MCP_SERVER_NAME] = _MCP_SERVER_ENTRY
+    servers[_MCP_SERVER_NAME] = desired
     config["mcpServers"] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
