@@ -532,6 +532,24 @@ def ssh_run(
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
+    # Connection-broker fast path (opt-in, HPC_SSH_BROKER): reuse ONE persistent
+    # ssh channel per host instead of a fresh cold handshake per call — the root
+    # fix for the MaxStartups banner-throttle stalls (runs #7-#8) and strictly
+    # ban-SAFER (fewer connections). Capture-mode only (streaming inherits the
+    # parent's fds, which the channel protocol can't frame). ANY broker trouble
+    # raises BrokerUnavailable → fall straight through to the one-shot path below,
+    # so an opt-in broker can never regress the ban-sensitive default.
+    if capture:
+        from hpc_agent.infra import ssh_broker
+
+        if ssh_broker.broker_enabled():
+            try:
+                return ssh_broker.broker_ssh_run(
+                    cmd, ssh_target=ssh_target, timeout=effective_timeout
+                )
+            except ssh_broker.BrokerUnavailable:
+                pass  # fall back to the one-shot path
+
     # Cap the connection-open *rate* to this host (ban-driver guard): a burst of
     # back-to-back ssh calls (retry storms, parallel probes) is what trips a
     # cluster's fail2ban / rate-limiter, and neither ConnectTimeout (duration)

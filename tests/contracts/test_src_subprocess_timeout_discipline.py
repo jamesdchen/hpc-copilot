@@ -84,6 +84,16 @@ _EXEMPT_BY_DESIGN: dict[str, set[str]] = {
     # Interactive TTY handover to the human's pager (`less`); returns when
     # the human quits. A timeout here would kill the pager mid-read.
     "src/hpc_agent/execution/mapreduce/reduce/tui.py": {"_open_log"},
+    # The connection broker's PERSISTENT per-host channel (`ssh -T host
+    # /bin/sh`): meant to outlive any single command — a spawn-time timeout
+    # would defeat the whole point (reuse across many polls). It is bounded
+    # differently and more tightly: each `_Channel.run` enforces a PER-COMMAND
+    # deadline (raising BrokerUnavailable → one-shot fallback), reader threads
+    # can't deadlock either pipe, `close()` tree-kills the ssh (start_new_session
+    # so killpg can't reach the caller), and an idle channel self-reaps after
+    # IDLE_CLOSE_SEC. Opt-in (HPC_SSH_BROKER); the fallback keeps the default
+    # path unchanged (run #8 MaxStartups banner-throttle fix).
+    "src/hpc_agent/infra/ssh_broker.py": {"_spawn_ssh_shell"},
 }
 
 # --- grandfathered real violations: (repo-relative path, function) ---------

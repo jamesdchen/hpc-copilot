@@ -1,7 +1,43 @@
 # Design: per-host SSH connection broker
 
-Status: PROPOSED (2026-07-06). Not scheduled; the probe verdict cache
-(`ops/preflight/probe_cache.py`) ships first and independently.
+Status: **PHASE 1 SHIPPED** (2026-07-06, `infra/ssh_broker.py`, opt-in via
+`HPC_SSH_BROKER`). Phase 2 (cross-process daemon) + phase 3 (sftp transport)
+remain PROPOSED. The probe verdict cache (`ops/preflight/probe_cache.py`)
+ships alongside as an independent connection-count reduction.
+
+## What phase 1 actually built (and why it differs from the sketch below)
+
+Phase 1 is **in-process and dependency-free**, deliberately NOT the asyncssh
+design sketched under "Shape". Two reasons drove the change:
+
+* **No new dependency.** This project ships "without paramiko or other
+  dependencies" (`infra.remote` docstring). asyncssh pulls `cryptography` +
+  native wheels and must be installed on every client env. The persistent
+  `ssh -T <host> /bin/sh` channel reuses the native `ssh` binary — which
+  already reaches the Windows named-pipe ssh-agent — so there is nothing new
+  to install and no agent-auth integration risk.
+* **Ban-safety over reach.** A connection-layer change must never make the
+  ban risk WORSE. Phase 1 is opt-in (`HPC_SSH_BROKER`, default OFF) with a
+  hard fallback: any broker trouble raises `BrokerUnavailable` and
+  `ssh_run` uses the unchanged one-shot path. So the worst case equals
+  today. It also collapses the DOMINANT case already — a single detached
+  poll/harvest worker firing repeated round-trips at one host — since those
+  all originate in one process.
+
+Framing: each command is bracketed by a per-command random-nonce sentinel on
+BOTH stdout and stderr (drained by two reader threads — Windows can't
+`select` on pipes), so streams stay separate (the throttle/error classifiers
+need stderr) and the real remote exit code rides the stdout sentinel. The
+persistent connection's handshake is a real breaker-gated ssh attempt; an
+idle channel self-closes after `IDLE_CLOSE_SEC`.
+
+Phase 2 (a cross-process daemon shared by CLI / detached workers / MCP
+server, likely then justifying asyncssh's channel model) is still the
+sketch below.
+
+---
+
+## (Original proposal — phase 2/3 reference)
 
 ## Problem
 
