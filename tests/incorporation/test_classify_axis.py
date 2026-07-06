@@ -32,6 +32,19 @@ def test_classify_axis_records_executor_entry(tmp_path) -> None:
     assert entry["classified_at"] == out["classified_at"]
 
 
+def test_classify_axis_reminds_to_verify_elision_for_non_sequential(tmp_path) -> None:
+    """#3 (deferred): a non-sequential axis carries an elision-verification
+    reminder at classification time (aggregation elides the series — verify with
+    assert_elision_equivalent in CI). A sequential axis elides nothing → no
+    reminder."""
+    non_seq = classify_axis(tmp_path, spec=_spec())  # bounded_halo (non-sequential)
+    assert "elision_verification" in non_seq
+    assert "assert_elision_equivalent" in non_seq["elision_verification"]
+
+    seq = classify_axis(tmp_path, spec=_spec(data_axis={"kind": "sequential"}))
+    assert "elision_verification" not in seq
+
+
 @pytest.mark.parametrize("value", ["interview", "recall", "manual", "agent"])
 def test_classify_axis_input_accepts_all_classified_by_literal_values(value: str) -> None:
     """Regression: the hpc-classify-axis SKILL.md prescribes

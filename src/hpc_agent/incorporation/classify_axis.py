@@ -114,7 +114,7 @@ def classify_axis(
         # write_axes' cross-validation / a schema violation surfaces here.
         raise errors.SpecInvalid(str(exc)) from exc
 
-    return {
+    result: dict[str, Any] = {
         "axes_path": str(written if written is not None else axes_path(experiment_dir)),
         "run_name": spec.run_name,
         "data_axis": data_axis,
@@ -122,3 +122,18 @@ def classify_axis(
         "classified_at": classified_at,
         "wrote": True,
     }
+    # #3 (deferred): a NON-sequential axis means aggregation ELIDES (chunks +
+    # combines) the series — results are correct ONLY if that chunking equals a
+    # whole run. Nothing downstream can prove it (that would RUN the experiment,
+    # which submit can't — cluster-only deps), so remind the author to verify it
+    # in their CI, at the moment they classify. WARN, never block (survival over
+    # strictness); the canary + reduce remain the runtime backstops.
+    if str(data_axis.get("kind") or "") not in ("", "sequential"):
+        result["elision_verification"] = (
+            f"data_axis {data_axis.get('kind')!r} is non-sequential: aggregation "
+            "chunks and combines the series, so results are correct ONLY if the "
+            "chunking is elision-equivalent to a whole run. Verify with "
+            "hpc_agent.experiment_kit.assert_elision_equivalent in this experiment's "
+            "CI — a wrong axis silently corrupts every aggregate."
+        )
+    return result

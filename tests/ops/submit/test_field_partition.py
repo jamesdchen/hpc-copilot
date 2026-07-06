@@ -133,13 +133,22 @@ def test_executor_is_code_derived() -> None:
 
 def test_journal_unauthorable_is_code_derived_minus_sanctioned_echoes() -> None:
     from hpc_agent.ops.submit.field_partition import (
+        CALLER_OVERRIDABLE_DERIVED_FIELDS,
         CODE_DERIVED_FIELDS,
         JOURNAL_UNAUTHORABLE_FIELDS,
     )
 
-    expected = CODE_DERIVED_FIELDS - {"run_id", "cmd_sha", "total_tasks"}
+    # Unauthorable = code-derived MINUS the sanctioned input echoes (run_id /
+    # cmd_sha / total_tasks) MINUS the caller-overridable-derived activation
+    # fields (13-residual: a caller pin wins, so it is not refused here).
+    expected = (
+        CODE_DERIVED_FIELDS
+        - {"run_id", "cmd_sha", "total_tasks"}
+        - CALLER_OVERRIDABLE_DERIVED_FIELDS
+    )
     assert expected == JOURNAL_UNAUTHORABLE_FIELDS
     assert "executor" in JOURNAL_UNAUTHORABLE_FIELDS
+    assert "conda_env" not in JOURNAL_UNAUTHORABLE_FIELDS
 
 
 def test_revise_resolved_binds_the_partition() -> None:

@@ -104,14 +104,18 @@ def assert_greenlit_target(
     journal has no record at all, the latest exchange is a nudge (not a ``y``),
     or the latest greenlight names a different verb.
 
-    NOTE (consumption is NOT enforced here): a single greenlight re-authorizes
-    *verb* on every re-invocation — this gate has no consumption/monotonicity
-    (it never compares the greenlight timestamp against the block's last
-    execution). Replay is backstopped downstream by ``run_id`` dedup, which
-    refuses a second cluster action for an already-acted run.
-    # TODO(wave4): greenlight consumption/monotonicity — track the block's
-    # last-execution vs the greenlight timestamp so a consumed `y` cannot
-    # re-fire. Interacts with the block-drive resume flow; out of scope here.
+    NOTE (consumption is intentionally NOT enforced here — SUPERSEDED, not a
+    gap): a single greenlight re-authorizes *verb* on every re-invocation, and
+    that is now a DESIGNED pattern. A stale ``y`` cannot cause harm because
+    (1) this gate requires the LATEST greenlight to name *verb*, so once the run
+    advances (a later ``y`` names the successor) a re-invocation of the old verb
+    fails here; (2) ``run_id`` dedup refuses a second cluster action for an
+    already-acted run; and (3) idempotent terminal-replay
+    (:mod:`hpc_agent.state.block_terminal`) makes a re-invocation with the same
+    greenlight REPLAY the recorded terminal rather than re-execute. The old
+    ``TODO(wave4)`` (greenlight consumption/monotonicity — refuse a re-fire by
+    comparing the block's last-execution against the greenlight timestamp) would
+    BREAK (3), so it is superseded by these three backstops, not deferred.
     """
     records = read_decisions(experiment_dir, "run", run_id)
     for record in reversed(records):

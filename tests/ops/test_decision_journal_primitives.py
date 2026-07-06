@@ -283,6 +283,40 @@ def test_gate_prior_nudge_is_token_exact_not_substring(tmp_path: Path) -> None:
     assert out.record.resolved["seed"] == 0
 
 
+def test_activation_is_caller_overridable_not_journal_unauthorable(tmp_path: Path) -> None:
+    """13-residual: activation (conda_env/conda_source/modules) is derived-by-
+    default but caller-overridable (remote_activation_for_sidecar honors a pin),
+    so it must NOT sit in JOURNAL_UNAUTHORABLE — a justified override commits —
+    while a genuinely code-owned derived field (executor) stays refused even with
+    the override, because it remains unauthorable."""
+    from hpc_agent.ops.submit.field_partition import (
+        CALLER_OVERRIDABLE_DERIVED_FIELDS,
+        JOURNAL_UNAUTHORABLE_FIELDS,
+    )
+
+    assert "conda_env" in CALLER_OVERRIDABLE_DERIVED_FIELDS
+    assert "conda_env" not in JOURNAL_UNAUTHORABLE_FIELDS
+    assert "executor" in JOURNAL_UNAUTHORABLE_FIELDS
+
+    _persist_brief(tmp_path, "run-1", "s1", {"resolved": {"cluster": "hoffman2"}})
+    out = _append(
+        tmp_path,
+        block="s1",
+        response="y",
+        resolved={"conda_env": "myenv"},
+        provenance={"overrides": ["conda_env"]},
+    )
+    assert out.record.resolved["conda_env"] == "myenv"
+    with pytest.raises(errors.SpecInvalid):
+        _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            resolved={"executor": "python3 x.py"},
+            provenance={"overrides": ["executor"]},
+        )
+
+
 def test_gate_passes_with_provenance_overrides(tmp_path: Path) -> None:
     """Path (c): the key is listed in provenance.overrides."""
     _persist_brief(tmp_path, "run-1", "s1", {"resolved": {"cluster": "hoffman2"}})
@@ -761,7 +795,11 @@ def test_append_refuses_code_derived_resolved_field(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["job_env", "ssh_target", "backend", "modules", "conda_source", "conda_env"]
+    # NOT modules/conda_source/conda_env — those are CALLER_OVERRIDABLE_DERIVED
+    # now (13-residual), asserted separately in
+    # test_activation_is_caller_overridable_not_journal_unauthorable.
+    "field",
+    ["job_env", "ssh_target", "backend"],
 )
 def test_append_refuses_each_journal_unauthorable_field(tmp_path: Path, field: str) -> None:
     with pytest.raises(errors.SpecInvalid, match="CODE-DERIVED"):

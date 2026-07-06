@@ -46,6 +46,7 @@ from typing import Any
 
 __all__ = [
     "AUTO_RESOLVABLE_FIELDS",
+    "CALLER_OVERRIDABLE_DERIVED_FIELDS",
     "CODE_DERIVED_FIELDS",
     "JOURNAL_UNAUTHORABLE_FIELDS",
     "REQUIRED_CALLER_FIELDS",
@@ -130,8 +131,22 @@ CODE_DERIVED_FIELDS: frozenset[str] = frozenset(
 # brief/spec flow ever asks the agent to restate — a ``resolved`` naming one
 # is the hand-authoring bug class (run #6 F1's ``executor``), refused with a
 # pointer at ``revise-resolved`` (patch the INPUT field instead).
-JOURNAL_UNAUTHORABLE_FIELDS: frozenset[str] = CODE_DERIVED_FIELDS - frozenset(
-    {"run_id", "cmd_sha", "total_tasks"}
+# Derived by DEFAULT, but a caller MAY override — the activation contract:
+# ``remote_activation_for_sidecar`` honors a sidecar-/spec-pinned activation over
+# the cluster derivation (``test_explicit_env_activation_wins_over_clusters_yaml``),
+# so ``append-decision`` must NOT refuse a caller supplying these in a
+# ``resolved`` dict. 13-residual: activation sat in JOURNAL_UNAUTHORABLE, which
+# CONTRADICTED that caller-wins contract — a legitimate override was refused as a
+# hand-authored derived field. They stay in :data:`CODE_DERIVED_FIELDS` for the
+# default derivation, but are exempt from the unauthorable refusal.
+CALLER_OVERRIDABLE_DERIVED_FIELDS: frozenset[str] = frozenset(
+    {"modules", "conda_source", "conda_env"}
+)
+
+JOURNAL_UNAUTHORABLE_FIELDS: frozenset[str] = (
+    CODE_DERIVED_FIELDS
+    - frozenset({"run_id", "cmd_sha", "total_tasks"})
+    - CALLER_OVERRIDABLE_DERIVED_FIELDS
 )
 
 
