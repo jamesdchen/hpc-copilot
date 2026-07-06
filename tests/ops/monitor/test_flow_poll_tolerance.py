@@ -139,6 +139,39 @@ def test_record_status_activation_seeded_from_record_cluster(
     assert "conda activate hpc-pi" in str(captured["remote_activation"])
 
 
+def test_deterministic_env_failure_escalates_to_reporter_unreachable(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run #7: a reporter rc=127 (broken login-node env) fails EVERY poll the
+    same way and never heals by waiting, so the monitor escalates FAST to a loud
+    reporter-unreachable TIMEOUT after _DETERMINISTIC_ENV_POLLS_TO_FAIL — instead
+    of riding the whole budget as "transient" (the S3 watch rode 28+ ticks of
+    rc=127 while a finished 20-task array sat unread)."""
+    _seed_record(experiment)
+    rc127 = errors.RemoteCommandFailed("status reporter failed (rc=127)", returncode=127)
+    monkeypatch.setattr(
+        monitor_flow_module,
+        "record_status",
+        _record_status_sequence(experiment, [rc127]),  # every poll fails rc=127
+    )
+    monkeypatch.setattr(monitor_flow_module, "_ingest_runtime_at_terminal", lambda *a, **k: 0)
+    monkeypatch.setattr(monitor_flow_module, "harvest_on_terminal", lambda *a, **k: None)
+
+    spec = MonitorFlowSpec(
+        run_id=_RUN_ID,
+        poll_interval_seconds=5,
+        wall_clock_budget_seconds=10_000,  # huge — the ONLY exit is the env escalation
+        auto_combine_waves=False,
+    )
+    # _now pinned to 0 → never over budget; escalation is the sole terminator.
+    result = monitor_flow(experiment, spec=spec, _sleep=lambda s: None, _now=lambda: 0.0)
+
+    assert result.lifecycle_state == LifecycleState.TIMEOUT
+    assert result.escalation_reason and "UNREACHABLE" in result.escalation_reason
+    # Escalated at the threshold, NOT after the whole budget of polls.
+    assert result.ticks == monitor_flow_module._DETERMINISTIC_ENV_POLLS_TO_FAIL
+
+
 @pytest.mark.parametrize(
     "transient",
     [errors.RemoteCommandFailed("reporter rc=1"), TimeoutError("ssh timed out")],

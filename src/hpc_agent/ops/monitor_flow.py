@@ -144,6 +144,27 @@ _MAX_ADAPTIVE_POLL_SECONDS: float = _env_float("HPC_STATUS_POLL_MAX_SEC", 300.0)
 #: quickly: 60s → 120 → 240 → 300 (cap) within ~10 minutes of quiet.
 _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
 
+#: Consecutive DETERMINISTIC broken-env poll failures (reporter rc 126/127:
+#: wrong/absent conda env, or ``hpc_agent`` unimportable on the login node) that
+#: escalate the monitor to a LOUD reporter-unreachable TIMEOUT instead of riding
+#: the full wall-clock budget. Such a fault repeats identically every poll and
+#: never heals by waiting (run #7: the main-array watch rode 28+ ticks of rc=127
+#: while a finished array sat unread). Mirrors verify_canary's constant.
+_DETERMINISTIC_ENV_POLLS_TO_FAIL: int = 3
+
+
+def _is_deterministic_env_failure(exc: BaseException) -> bool:
+    """A poll fault that fails EVERY poll the same way and never heals by
+    waiting: the cluster-side reporter exited 126/127 (wrong/absent conda env, or
+    ``hpc_agent`` not importable). Everything else — a network blip, an ``rc=1``
+    reporter, a timeout — is transient and rides the budget. The returncode is
+    read off the exception attribute, never string-parsed (mirrors
+    ``verify_canary._classify_poll_failure``)."""
+    return isinstance(exc, errors.RemoteCommandFailed) and getattr(exc, "returncode", None) in (
+        126,
+        127,
+    )
+
 
 def _floor_poll_interval(requested: float) -> float:
     """Apply the connection-pacing floor to a requested poll interval.
@@ -332,6 +353,10 @@ def monitor_flow(
     last_fingerprint: str | None = None
 
     terminal_cause: str | None = None
+    # Consecutive deterministic broken-env poll failures (reporter rc 126/127) —
+    # escalates to a reporter-unreachable TIMEOUT at the threshold instead of
+    # riding the whole budget silently (run #7).
+    consecutive_env_polls = 0
     try:
         while True:
             state.ticks += 1
@@ -357,16 +382,34 @@ def monitor_flow(
                     file_glob=file_glob,
                 )
             except (errors.RemoteCommandFailed, OSError) as exc:
+                # Classify: a DETERMINISTIC broken-env fault (reporter rc 126/127)
+                # fails EVERY poll identically and never heals by waiting, so
+                # escalate FAST rather than ride the whole budget silently (run #7:
+                # the main watch rode 28+ ticks of rc=127 while a finished array sat
+                # unread). A transient fault resets the count and still rides the
+                # budget → TIMEOUT with the guaranteed harvest (the tolerance below).
+                if _is_deterministic_env_failure(exc):
+                    consecutive_env_polls += 1
+                else:
+                    consecutive_env_polls = 0
+                env_broken = consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
                 logging.getLogger(__name__).warning(
-                    "monitor_flow: transient poll failure for run %s (tick %d): %s — "
-                    "continuing to the next poll",
+                    "monitor_flow: %s poll failure for run %s (tick %d): %s — %s",
+                    "deterministic-env" if _is_deterministic_env_failure(exc) else "transient",
                     run_id,
                     state.ticks,
                     exc,
+                    (
+                        f"reporter UNREACHABLE after {consecutive_env_polls} "
+                        "consecutive env failures — escalating"
+                        if env_broken
+                        else "continuing to the next poll"
+                    ),
                 )
                 # Re-derive the budget so repeated transient failures still
                 # terminate (rather than spin forever skipping the check below).
                 over_budget = (_now() - started) >= wall_clock_budget_seconds
+                terminate = over_budget or env_broken
                 _append_tick(
                     experiment_dir,
                     run_id,
@@ -377,12 +420,24 @@ def monitor_flow(
                         "newly_combined_waves": [],
                     },
                     actions=[{"kind": "poll_error", "error": str(exc)}],
-                    lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
-                    next_tick_seconds=None if over_budget else effective_interval,
+                    lifecycle_state=LifecycleState.TIMEOUT if terminate else "in_flight",
+                    next_tick_seconds=None if terminate else effective_interval,
                 )
-                if over_budget:
+                if terminate:
                     _ingest_runtime_at_terminal(experiment_dir, record=record)
-                    terminal_cause = "cap-overrun"
+                    terminal_cause = "reporter-unreachable" if env_broken else "cap-overrun"
+                    escalation = (
+                        (
+                            f"status reporter UNREACHABLE — {consecutive_env_polls} "
+                            "consecutive deterministic failures (rc 126/127: wrong/absent "
+                            "conda env, or hpc_agent not importable on the login node). The "
+                            "array may be running or already complete, but its status is "
+                            "UNREADABLE; fix the cluster env then re-watch, or harvest "
+                            f"results directly. Last poll error: {exc}"
+                        )
+                        if env_broken
+                        else None
+                    )
                     return MonitorFlowResult(
                         run_id=run_id,
                         lifecycle_state=LifecycleState.TIMEOUT,
@@ -391,7 +446,7 @@ def monitor_flow(
                         failed_waves=state.last_failed_waves,
                         ticks=state.ticks,
                         elapsed_seconds=_now() - started,
-                        escalation_reason=None,
+                        escalation_reason=escalation,
                     )
                 # Live poller, transient blip: re-stamp the watchdog so a genuinely
                 # dead poller is still doctor-visible, then back off and retry.

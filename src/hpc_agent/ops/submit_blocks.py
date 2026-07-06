@@ -860,8 +860,12 @@ def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockR
             block="s3",
             stage_reached="watching_timeout",
             needs_decision=True,
+            # A reporter-unreachable escalation (run #7: rc 126/127 env break)
+            # carries its own diagnosis in escalation_reason — surface it as the
+            # top-line reason instead of the misleading "budget hit".
             reason=(
-                "monitor wall-clock budget hit; cluster jobs may run on — keep watching or stop?"
+                mon.escalation_reason
+                or "monitor wall-clock budget hit; cluster jobs may run on — keep watching or stop?"
             ),
             run_id=main.run_id,
             brief=brief,
