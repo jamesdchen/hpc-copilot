@@ -132,18 +132,36 @@ config; **T13** the thin skill (drives draft→lint→view→relay-verbatim→
 sign-off→status; free-text elicitation; no Edit of source during audit);
 **T14** sidecar `audited_source` echo for the dossier.
 
-## The renderer plugin (the other half — PLAN NEXT SESSION)
+## The audit SURFACE — harness-first (user decision 2026-07-08, supersedes
+## the interactive-notebook renderer)
 
-`hpc-audit-render` in the plugin lane (plugins have their own CI job and dep
-budget — Q4's answer): jupytext + nbclient; renders (py + template +
-execution) → the audit notebook embedding T5's code-rendered views; collects
-per-section human responses and routes them through append-decision (the
-render is an input surface, NEVER the gate); emits the render receipt for
-v1.5 freshness. Also in its scope: the render-determinism duties
-(SOURCE_DATE_EPOCH, output normalization) core refused. Planning inputs: the
-existing plugin infrastructure (see the `plugins (hpc-agent-github-actions)`
-CI job), D-attention (the tier decides which sections even render a sign-off
-prompt), and the harxhar templates as the first consumer.
+**The Claude Code harness IS the v1 audit surface.** Rationale: the harness
+does the notebook's load-bearing jobs strictly better — sign-offs are typed
+chat utterances (the STRONGEST authorship tier; the notebook flow was always
+the degraded tier-2 path), and iteration is the existing y/nudge rendezvous
+loop pointed at code: view relayed → human signs or nudges → the LLM
+re-drafts the section (drafting is its sanctioned prelude role) → the hash
+moves → the section reads UNSIGNED again by construction → re-lint,
+re-view, re-sign. No stale approval survives an edit; every step gated,
+journaled, relay-audited. A stateful notebook kernel is what the determinism
+doctrine distrusts anyway.
+
+v1 surface work: the thin SKILL (T13, PROMOTED to v1) — drives draft → lint
+→ audit-view relayed VERBATIM → typed sign-off via append-decision → status,
+in-session; optionally a harness Artifact page for figure/diff-rich views.
+Plus the one notebook capability the harness genuinely needs supplied: an
+**execution contract** — the caller env runs the sections and emits the
+render receipt ({slug: {output_sha, error}}) + a captured-outputs directory
+the harness can display as images.
+
+The jupytext notebook DEMOTES to an **export format** (v1.5, plugin lane):
+a projection generated on demand from (source + template + receipt) — for
+the harness-less colleague, the evidence package, offline reading. Never the
+medium of iteration, so its determinism duties shrink to faithful record
+rendering. The product claim this ordering earns: the harness + this
+substrate is a REPL where every cell has provenance, every approval has
+authorship, and every edit revokes stale trust — "we also export notebooks,"
+not "we are one."
 
 ## Boundary-drift flags (Q1 watch list)
 
