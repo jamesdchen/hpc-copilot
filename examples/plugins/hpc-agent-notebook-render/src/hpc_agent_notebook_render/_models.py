@@ -99,6 +99,23 @@ class NotebookRenderResult(BaseModel):
         default_factory=list,
         description="Slugs the core record-receipt op skipped (unknown-slug).",
     )
+    canonicalizer: str | None = Field(
+        default=None,
+        description=(
+            "The output canonicalizer that produced each section output_sha "
+            "(always 'nbdime' on an executed render; None when not executed). "
+            "Core's receipt-entry model forbids extra keys, so this identity is "
+            "recorded here and in the notebook metadata, not on the receipt."
+        ),
+    )
+    canonicalizer_version: str | None = Field(
+        default=None,
+        description=(
+            "importlib.metadata version of the canonicalizer (nbdime) bound to "
+            "the output_sha values — a version shift reads as an explicit "
+            "canonicalizer change, never silent receipt drift. None when not executed."
+        ),
+    )
 
 
 # ── notebook-ingest-signoffs ─────────────────────────────────────────────────

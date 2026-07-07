@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 from pathlib import Path
 
 import nbformat
 import pytest
-from hpc_agent_notebook_render._annotate import section_output_sha
+from hpc_agent_notebook_render._annotate import (
+    CANONICALIZER,
+    canonicalizer_version,
+    section_output_sha,
+)
 from hpc_agent_notebook_render._models import NotebookRenderSpec
 from hpc_agent_notebook_render.render import notebook_render
 
@@ -99,3 +104,47 @@ def test_section_output_sha_is_stable() -> None:
     sha_b, err_b = section_output_sha(_cells(999))
     assert sha_a == sha_b
     assert err_a is err_b is False
+
+
+def test_execute_records_canonicalizer_identity(exec_experiment: Path) -> None:
+    """An executed render records {canonicalizer, canonicalizer_version} on the
+    result AND in the notebook metadata (core's receipt entry forbids the keys)."""
+    result = notebook_render(
+        experiment_dir=exec_experiment,
+        spec=_spec(source="source.py", execute=True),
+    )
+    assert result.canonicalizer == CANONICALIZER == "nbdime"
+    assert result.canonicalizer_version == importlib.metadata.version("nbdime")
+    assert result.canonicalizer_version == canonicalizer_version()
+
+    nb = nbformat.read(result.output_path, as_version=4)
+    stamp = nb.metadata["hpc_audit_canonicalizer"]
+    assert stamp["canonicalizer"] == "nbdime"
+    assert stamp["canonicalizer_version"] == result.canonicalizer_version
+
+
+def test_non_executed_render_has_no_canonicalizer(experiment: Path) -> None:
+    """A non-executed render computes no output_sha, so it stamps no identity —
+    and stays byte-deterministic (no version string in the notebook)."""
+    result = notebook_render(experiment_dir=experiment, spec=_spec(output_path="n.ipynb"))
+    assert result.canonicalizer is None
+    assert result.canonicalizer_version is None
+    nb = nbformat.read(result.output_path, as_version=4)
+    assert "hpc_audit_canonicalizer" not in nb.metadata
+
+
+def test_identical_code_identical_output_sha_across_two_executions(exec_experiment: Path) -> None:
+    """Two independent executions of identical deterministic code yield identical
+    per-section output_shas — the nbdime-canonicalized attestation is stable."""
+    spec_a = _spec(source="source.py", execute=True, record_receipts=True, output_path="a.ipynb")
+    spec_b = _spec(source="source.py", execute=True, record_receipts=True, output_path="b.ipynb")
+    notebook_render(experiment_dir=exec_experiment, spec=spec_a)
+    notebook_render(experiment_dir=exec_experiment, spec=spec_b)
+
+    receipts: dict[str, list[str]] = {}
+    for r in read_decisions(exec_experiment, "notebook", "aud-1"):
+        if r["block"] == "notebook-render-receipt":
+            receipts.setdefault(r["resolved"]["section"], []).append(r["resolved"]["output_sha"])
+    # Each section was recorded twice (two renders) with an identical sha both times.
+    assert receipts["ok"][0] == receipts["ok"][1]
+    assert receipts["boom"][0] == receipts["boom"][1]

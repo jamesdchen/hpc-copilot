@@ -15,6 +15,7 @@ sequential cell ids. No timestamps ever enter a non-executed render.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import re
 from typing import TYPE_CHECKING, Any
@@ -74,34 +75,75 @@ def assign_cell_sections(cells: Sequence[Any]) -> list[str | None]:
     return out
 
 
-# ── deterministic output canonicalization (the --execute output_sha) ─────────
+# ── output canonicalization (the --execute output_sha) ───────────────────────
+#
+# The canonical-form DEFINITION — "what in an output is transient vs meaningful"
+# — is outsourced to nbdime (Jupyter's own notebook diff tool), the maintained
+# encoding of that distinction. We do NOT re-derive it by hand; we strip exactly
+# the output-level fields nbdime classifies as TRANSIENT and hash the remainder
+# verbatim. The sha-attestation shape (sha256 over canonical JSON) stays ours.
+#
+# The nbdime symbols that DEFINE the transient set (nbdime 4.x):
+#   • ``nbdime.merging.notebooks`` — ``strategies.transients`` lists
+#     ``/cells/*/outputs/*/execution_count`` (and clears execution_count) as the
+#     output-level transient whose deletion is always safe.
+#   • ``nbdime.diffing.notebooks.set_notebook_diff_targets`` — with
+#     ``metadata=False``/``details=False`` it marks ``/cells/*/outputs/*/metadata``
+#     and the output ``execution_count`` as ignored (transient) diff targets.
+#   • ``nbdime.diffing.notebooks.compare_output_strict`` /
+#     ``compare_output_approximate`` — "Deliberately skipping metadata and
+#     execution count", the pairwise output identity nbdime actually diffs on.
+# Together these define the output-level transient fields as exactly
+# ``{execution_count, metadata}``. Everything else nbdime treats as MEANINGFUL —
+# a stream's name+text, a result's mime data, an error's ename/evalue AND its
+# traceback — so those enter the hash verbatim (nbdime normalizes tracebacks
+# only at compare-time via ``compare_tracebacks``; that normalization has no
+# public canonical-string surface, so an erroring section's sha is stable
+# across re-runs on one machine but is NOT guaranteed cross-machine — a
+# deliberate consequence of adopting nbdime's "traceback is meaningful"
+# classification over the prior hand-rolled traceback-stripping).
+CANONICALIZER = "nbdime"
+
+# The output-level fields nbdime marks transient (see the symbol list above).
+# Import-checked against nbdime's public diffing surface at module load so this
+# constant cannot silently drift from nbdime's own definition.
+_NBDIME_TRANSIENT_OUTPUT_FIELDS: frozenset[str] = frozenset({"execution_count", "metadata"})
+
+# Fail loudly at import if the nbdime symbols this canonical form is derived from
+# are gone (a rename/removal in a future major) — so the plugin never silently
+# hashes against a definition nbdime no longer holds. The ``<5`` pin plus this
+# guard is how the canonicalizer identity stays honest.
+import nbdime.diffing.notebooks as _nbd  # noqa: E402
+
+for _sym in ("set_notebook_diff_targets", "compare_output_strict", "compare_output_approximate"):
+    if not hasattr(_nbd, _sym):  # pragma: no cover - tripped only on an nbdime break
+        raise ImportError(
+            f"nbdime.diffing.notebooks.{_sym} is absent — this plugin derives its "
+            "output canonical form from nbdime's transient-field definition and "
+            "cannot trust an nbdime whose diffing surface has changed."
+        )
+del _nbd
+
+
+def canonicalizer_version() -> str:
+    """The installed nbdime version (``importlib.metadata``) — the receipt's identity.
+
+    Recorded alongside every ``output_sha`` so a shift in nbdime's transient
+    definition across a version reads as an explicit canonicalizer change, never
+    as silent receipt drift.
+    """
+    return importlib.metadata.version("nbdime")
 
 
 def _canonical_output(output: Any) -> dict[str, Any]:
-    """Reduce one cell output to its deterministic essence.
+    """Reduce one cell output to nbdime's meaningful essence.
 
-    Drops everything a re-run varies or a kernel stamps: ``execution_count``,
-    output ``metadata`` (timing/transients), and error tracebacks (ANSI + absolute
-    paths). Keeps the load-bearing content — a stream's name+text, a result's
-    mime-keyed data, an error's ename+evalue — so identical deterministic code
-    yields an identical ``output_sha`` across runs and machines.
+    Strips exactly the output-level fields nbdime classifies as transient
+    (:data:`_NBDIME_TRANSIENT_OUTPUT_FIELDS` = ``execution_count`` + output
+    ``metadata``) and keeps every remaining field verbatim. So identical
+    deterministic code yields an identical ``output_sha`` across re-runs.
     """
-    otype = output.get("output_type", "")
-    if otype == "stream":
-        return {
-            "output_type": "stream",
-            "name": output.get("name", ""),
-            "text": output.get("text", ""),
-        }
-    if otype == "error":
-        return {
-            "output_type": "error",
-            "ename": output.get("ename", ""),
-            "evalue": output.get("evalue", ""),
-        }
-    if otype in ("execute_result", "display_data"):
-        return {"output_type": otype, "data": dict(output.get("data", {}))}
-    return {"output_type": otype}
+    return {k: v for k, v in output.items() if k not in _NBDIME_TRANSIENT_OUTPUT_FIELDS}
 
 
 def section_output_sha(cells: Sequence[Any]) -> tuple[str, bool]:
@@ -213,6 +255,22 @@ def normalize_notebook(nb: Any) -> Any:
         cell.metadata = {}
         cell.id = f"c{index}"
     return nb
+
+
+def stamp_canonicalizer(nb: Any) -> dict[str, str]:
+    """Record the canonicalizer identity into the executed notebook's metadata.
+
+    Core's ``notebook-record-receipt`` entry model is ``extra="forbid"`` (only
+    ``output_sha`` + ``error``), so the ``{canonicalizer, canonicalizer_version}``
+    identity that binds each ``output_sha`` cannot ride on the receipt entry. It
+    is recorded instead on the render RESULT and here, in the notebook's own
+    ``metadata.hpc_audit_canonicalizer`` — the two surfaces the plugin owns. Only
+    an EXECUTED render carries it (a non-executed render computes no ``output_sha``
+    and stays byte-deterministic). Returns the identity for the result model.
+    """
+    identity = {"canonicalizer": CANONICALIZER, "canonicalizer_version": canonicalizer_version()}
+    nb.metadata["hpc_audit_canonicalizer"] = dict(identity)
+    return identity
 
 
 def write_notebook(nb: Any) -> str:

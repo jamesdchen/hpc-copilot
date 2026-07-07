@@ -210,7 +210,7 @@ jobs:
         run: |
           pip install -e '.[dev]'
           if [ "${{ matrix.plugin }}" = "hpc-agent-notebook-render" ]; then
-            pip install jupytext nbformat nbclient ipykernel
+            pip install jupytext nbformat nbclient ipykernel nbdime
           fi
           pip install -e "examples/plugins/${{ matrix.plugin }}" --no-deps
       - name: Plugin offline tests (fake API client, zero network)

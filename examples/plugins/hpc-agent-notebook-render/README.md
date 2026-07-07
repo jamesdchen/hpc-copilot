@@ -33,13 +33,27 @@ short `section_sha` / `view_sha` the *core* view computed), and, for each
   identical `.ipynb` (fixed notebook metadata — no jupytext version block — empty
   per-cell metadata, and deterministic sequential cell ids; no timestamps).
 - `--execute` runs the notebook via nbclient in the current env and computes a
-  per-section `output_sha`. **Canonicalization:** the sha is `sha256` over the
-  canonical JSON of each code cell's outputs with everything a re-run varies
-  stripped — `execution_count`, output `metadata` (kernel timing/transients), and
-  error tracebacks (ANSI + absolute paths). A stream keeps `name` + `text`, a
-  result keeps its mime-keyed `data`, an error keeps `ename` + `evalue`; `error`
-  is true iff any cell raised. So deterministic code yields the same `output_sha`
-  across runs and machines.
+  per-section `output_sha`. **Canonicalization (outsourced to nbdime):** the
+  attestation *shape* is ours — `sha256` over the canonical JSON of each code
+  cell's outputs — but the *definition* of what in an output is transient vs
+  meaningful is nbdime's (Jupyter's own diff tool, the maintained encoding of
+  that distinction). We strip exactly the output-level fields nbdime classifies
+  as transient — `execution_count` and output `metadata` — and hash every
+  remaining field verbatim: a stream's `name` + `text`, a result's mime `data`,
+  an error's `ename` + `evalue` **and its `traceback`** (nbdime treats the
+  traceback as meaningful, normalizing it only at compare-time). `error` is true
+  iff any cell raised. The nbdime symbols that pin this form are
+  `nbdime.merging.notebooks` (`strategies.transients`),
+  `nbdime.diffing.notebooks.set_notebook_diff_targets`, and
+  `compare_output_strict`. Consequence of adopting nbdime's classification:
+  deterministic code yields the same `output_sha` across re-runs on one machine,
+  but an **erroring** section is no longer guaranteed cross-machine-stable (the
+  traceback now enters the hash, where the prior hand-rolled form dropped it).
+  The canonicalizer identity `{canonicalizer: "nbdime", canonicalizer_version}`
+  is recorded on the render result and in the notebook's
+  `metadata.hpc_audit_canonicalizer` (core's receipt-entry model forbids extra
+  keys, so it cannot ride the receipt itself), so an nbdime version bump reads as
+  an explicit canonicalizer change, never as silent receipt drift.
 - `--record_receipts` (requires `--execute`) journals a sha-bound render receipt
   per section via the **core** `notebook-record-receipt` op, in-process — so the
   receipt is bound to the freshly-parsed section sha server-side (the plugin
@@ -97,32 +111,30 @@ utterance_log: "written" | "absent-namespace"}`.
 
 ## The receipt-emitter convention (for non-notebook callers)
 
-The execution-receipt half is ~30 lines of caller-side convention — a non-notebook
+The execution-receipt half is ~15 lines of caller-side convention — a non-notebook
 harness that already runs the sections just needs to emit
 `{slug: {output_sha, error}}` and feed the **core** `notebook-record-receipt`
-verb. This plugin's `_annotate.section_output_sha` is a reference canonicalizer;
-the shape a hand-rolled emitter produces:
+verb. This plugin's `_annotate.section_output_sha` is the reference canonicalizer;
+the shape a hand-rolled emitter reproduces (strip nbdime's transient output
+fields, hash the rest):
 
 ```python
 # For each audited section: run its cells, then —
 import hashlib, json
+_NBDIME_TRANSIENT = {"execution_count", "metadata"}  # nbdime's output-level transient set
 def output_sha(outputs):  # outputs = the section's cell outputs
-    canon = [
-        {"output_type": o["output_type"], **(
-            {"name": o.get("name",""), "text": o.get("text","")} if o["output_type"]=="stream"
-            else {"ename": o.get("ename",""), "evalue": o.get("evalue","")} if o["output_type"]=="error"
-            else {"data": dict(o.get("data",{}))}
-        )}
-        for o in outputs
-    ]
+    canon = [{k: v for k, v in o.items() if k not in _NBDIME_TRANSIENT} for o in outputs]
     blob = json.dumps(canon, sort_keys=True, separators=(",",":"), ensure_ascii=False)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 # then: hpc-agent notebook-record-receipt --spec {audit_id, source, entries:{slug:{output_sha,error}}}
 ```
 
-Core binds each receipt to the freshly-parsed section sha, so a receipt can only
-ever be recorded against current source and drifts stale when the section moves.
+An emitter should also record its canonicalizer identity
+(`{canonicalizer: "nbdime", canonicalizer_version}`) out of band, since the core
+receipt entry carries only `{output_sha, error}`. Core binds each receipt to the
+freshly-parsed section sha, so a receipt can only ever be recorded against
+current source and drifts stale when the section moves.
 
 ## Tests
 

@@ -18,6 +18,13 @@ dependencies = [
     "nbformat>=5.7",
     "nbclient>=0.7",
     "ipykernel>=6.0",
+    # nbdime OWNS the output canonical-form definition (which output fields are
+    # transient vs meaningful) that each --execute output_sha hashes over. That
+    # definition can shift across a major, so pin to the current major and record
+    # the resolved version on every receipt-bearing render (result model +
+    # notebook metadata) — a version bump then reads as an explicit canonicalizer
+    # change, never as silent receipt drift.
+    "nbdime>=4,<5",
 ]
 
 # The entire opt-in: installing this distribution makes the host's entry-point

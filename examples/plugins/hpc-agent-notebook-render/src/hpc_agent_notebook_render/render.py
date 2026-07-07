@@ -191,6 +191,17 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
     _assemble(nb, views, statuses)
     _annotate.normalize_notebook(nb)
 
+    # The canonicalizer identity that binds every output_sha. Core's receipt-entry
+    # model forbids extra keys, so it rides the render RESULT + the notebook's own
+    # metadata (recorded AFTER normalize, which resets nb.metadata) — never the
+    # receipt entry. Only an executed render has an output_sha to bind.
+    canonicalizer: str | None = None
+    canonicalizer_version: str | None = None
+    if spec.execute:
+        identity = _annotate.stamp_canonicalizer(nb)
+        canonicalizer = identity["canonicalizer"]
+        canonicalizer_version = identity["canonicalizer_version"]
+
     output_rel = spec.output_path or f"_notebooks/{spec.audit_id}.ipynb"
     output_path = Path(output_rel)
     if not output_path.is_absolute():
@@ -213,4 +224,6 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
         executed=spec.execute,
         receipts_recorded=recorded,
         receipts_skipped=skipped,
+        canonicalizer=canonicalizer,
+        canonicalizer_version=canonicalizer_version,
     )
