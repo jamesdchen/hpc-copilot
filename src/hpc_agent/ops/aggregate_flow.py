@@ -626,7 +626,15 @@ def _cluster_final_reduce(
             f"(exit {proc.returncode}): {(proc.stderr or '').strip()[:300]}"
         )
 
-    agg_local = out / "_aggregated" / run_id
+    # Land the pulled aggregate at the CANONICAL flat location
+    # ``out/metrics_aggregate.json`` — the exact path verify-reproduction reads
+    # (``_aggregated/<run_id>/metrics_aggregate.json`` when ``out`` is the
+    # default). ``out`` was already ``.../_aggregated/<run_id>``, so appending
+    # ``_aggregated/<run_id>`` again nested the file at
+    # ``_aggregated/<run_id>/_aggregated/<run_id>/`` where no comparator looks —
+    # the cluster-final arm of the same L2 gap. ``remote_subdir`` still names the
+    # cluster-side ``_aggregated/<run_id>`` source dir; only the LOCAL sink flattens.
+    agg_local = out
     pull = rsync_pull(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
@@ -660,17 +668,25 @@ def _persist_local_aggregate(
     incomplete_waves: list[int],
     source: str,
 ) -> None:
-    """Atomically persist the default-path reduce as a durable local artifact.
+    """Atomically persist a reduce path's output as the durable comparator artifact.
 
-    The default (non-``HPC_CLUSTER_FINAL_REDUCE``) aggregation returns
-    ``aggregated_metrics`` inline and otherwise persists only the pulled
-    ``_combiner/wave_*.json`` partials — there is no single durable file a
-    later consumer (verify-reproduction, which byte-diffs two runs' reduced
-    metrics) can read. Write ``<out>/metrics_aggregate.json`` matching the
-    shape :func:`_cluster_final_reduce` produces/consumes on the opt-in
-    cluster-final path: ``{"aggregated_metrics": ..., "provenance": {...}}``.
-    ``out`` is ``<experiment_dir>/_aggregated/<run_id>`` by default, so the
-    artifact lands at ``_aggregated/<run_id>/metrics_aggregate.json``.
+    The ONE persistence definition for every LOCAL-reducing path — the SSH
+    combiner-only default, the pure-API path, and the cluster-reduce path all
+    route their reduced metrics through here (verifier finding L2). Each of
+    those returns ``aggregated_metrics`` inline and otherwise persists only
+    path-specific scratch (``_combiner/wave_*.json`` partials, a reducer-named
+    output file) — none of which is the single durable file a later consumer
+    (verify-reproduction, which byte-diffs two runs' reduced metrics) can read.
+    Write ``<out>/metrics_aggregate.json`` matching the shape
+    :func:`_cluster_final_reduce` produces/consumes: ``{"aggregated_metrics":
+    ..., "provenance": {...}}``. ``out`` is
+    ``<experiment_dir>/_aggregated/<run_id>`` by default, so the artifact lands
+    at ``_aggregated/<run_id>/metrics_aggregate.json``.
+
+    The opt-in ``HPC_CLUSTER_FINAL_REDUCE`` path does NOT call this: it produces
+    a RICHER aggregate on the cluster (waves/manifest/errors_per_wave) and pulls
+    it to the SAME canonical flat location, so verify-reproduction reads it too —
+    routing it through here would downgrade that artifact to the leaner shape.
 
     Harvest-guard posture: BEST-EFFORT. A failed write logs a loud warning and
     NEVER aborts the harvest — the reduced metrics are already returned inline;
@@ -967,6 +983,18 @@ def aggregate_flow(
             mode=mode,
             aggregate_cmd=aggregate_cmd,
         )
+        # Persist the durable comparator artifact through the ONE seam every
+        # reduce path routes through (verifier finding L2): a pure-API run must
+        # leave verify-reproduction a byte-readable ``metrics_aggregate.json``
+        # just like the SSH default path does — otherwise it is honestly but
+        # needlessly ``incomparable``. No wave partials on this path, so
+        # ``incomplete_waves`` is empty. A reducer that emitted a non-dict JSON
+        # (list/scalar) already collapsed to ``{}`` above, so the persisted
+        # ``aggregated_metrics`` is that same empty dict — honestly comparable-
+        # but-empty (no keyed metrics), never a fabricated scalar.
+        _persist_local_aggregate(
+            out, run_id, aggregated=aggregated, incomplete_waves=[], source="pure_api"
+        )
         return AggregateFlowResult(
             run_id=run_id,
             combined_waves=list(record.combined_waves),
@@ -1028,13 +1056,26 @@ def aggregate_flow(
             output_path=aggregate_output_path,
             local_dir=out,
         )
+        # ``cluster_reduce`` pulls the reducer's single JSON output to
+        # ``out/<basename>.json`` (a reducer-named file), NOT the
+        # ``metrics_aggregate.json`` verify-reproduction reads. Route the
+        # reduced metrics through the ONE persistence seam (verifier finding
+        # L2) so a cluster-reduced original + reproduction are comparable
+        # end-to-end. A reducer that emitted a non-dict JSON (list/scalar) has
+        # no ``dict[str, dict]`` keyed shape, so ``cr_aggregated`` is ``{}`` and
+        # the run stays honestly incomparable (no keyed metrics to diff) — the
+        # honest equivalent, never a fabricated comparability.
+        cr_aggregated = cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}
+        _persist_local_aggregate(
+            out, run_id, aggregated=cr_aggregated, incomplete_waves=[], source="cluster_reduce"
+        )
         return AggregateFlowResult(
             run_id=run_id,
             combined_waves=list(record.combined_waves),
             failed_waves=list(record.failed_waves),
             waves_combined_this_call=[],
             combiner_dir_local=str(out),
-            aggregated_metrics=(cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}),
+            aggregated_metrics=cr_aggregated,
             # cluster-reduce performs the reduction on the cluster and
             # pulls the single reduced output; there is no separate
             # per-task summaries directory in this branch. The field is
