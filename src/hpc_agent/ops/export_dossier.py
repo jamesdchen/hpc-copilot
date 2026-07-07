@@ -1,0 +1,491 @@
+"""Export-dossier — bundle a run's core-owned record trail into one sealed archive.
+
+A ``mutate`` primitive with a single local write and NO SSH. Given a
+``run_id`` (optionally its whole supersession lineage) it gathers every
+concrete on-disk store the run left behind — the sidecar, the run decision
+journal, the emitted briefs, the detached-block terminals, the journal
+record, the scope journals + look ledgers for each scope tag the run carries,
+and the harvested aggregate artifacts — and copies each store's bytes verbatim
+into one ``.zip`` with an integrity manifest, so a repo-side renderer can build
+an evidence package FROM the bundle without the control plane ever knowing what
+any entry MEANS.
+
+Boundary posture (see ``docs/internals/engineering-principles.md`` Q1,
+"substrate, not semantics"): an entry is typed by the SOURCE STORE it came from
+— one of the closed :data:`DOSSIER_SOURCES` store nouns — and by nothing else.
+The manifest describes the bundle by IDENTITY + COUNTING (which store, where,
+its sha256, its byte size); it never names a caller-owned role. In particular
+the aggregated store is copied as RAW BYTES: this module never ``json``-parses
+anything under ``_aggregated/`` (a deliberately-invalid-JSON aggregate must
+round-trip byte-identical), so it can never grow an interpretation of the
+numbers it seals. The structured fields it DOES read (the identity projection,
+the scope tags) come back through :func:`state.runs.read_run_sidecar` /
+:func:`state.journal.load_run` — the parse lives in those modules, never here.
+
+This file lives at the ``ops/`` *role root* (sibling to the subjects, like
+``provenance_manifest.py`` and ``trace.py``) because it reads across subjects —
+``state`` sidecars, the decision/brief/terminal journals, the scope substrate,
+the journal records, and the experiment-local ``_aggregated`` tree. The
+subject-imports lint short-circuits for role-root files, so the cross-subject
+reads here are allowed by construction.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import zipfile
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
+
+from hpc_agent import errors
+from hpc_agent._build_info import full_version
+from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent._wire.actions.export_dossier import ExportDossierResult, ExportDossierSpec
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.ops.provenance_manifest import manifest_signature
+from hpc_agent.state import scopes as _scopes
+from hpc_agent.state.decision_briefs import briefs_path
+from hpc_agent.state.decision_journal import decisions_path
+from hpc_agent.state.journal import load_run
+from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+
+if TYPE_CHECKING:
+    from hpc_agent.state.run_record import RunRecord
+
+__all__ = ["DOSSIER_SCHEMA_VERSION", "DOSSIER_SOURCES", "export_dossier"]
+
+# Bump when the emitted manifest shape changes in a way a consumer (the
+# repo-side renderer, an integrity checker) would need to branch on. Mirrored
+# on the manifest's ``dossier_schema_version``.
+DOSSIER_SCHEMA_VERSION: int = 1
+
+# The closed set of source-store names a bundled entry may be typed by. Every
+# value is a concrete on-disk STORE NOUN — never a caller-owned role. The wire
+# deliberately does not carry this vocabulary (it stays an ops-layer contract);
+# ``tests/contracts/test_dossier_boundary.py`` pins the set by equality so a new
+# store name is a reviewed change, and no domain-semantics word may masquerade
+# as a store here.
+DOSSIER_SOURCES: frozenset[str] = frozenset(
+    {
+        "sidecar",  # <exp>/.hpc/runs/<run_id>.json
+        "decision-journal",  # <exp>/.hpc/runs/<run_id>.decisions.jsonl
+        "briefs",  # <exp>/.hpc/runs/<run_id>.briefs.jsonl
+        "block-terminal",  # <exp>/.hpc/runs/<run_id>.<block>.terminal.json
+        "journal-record",  # ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
+        "scope-journal",  # <exp>/.hpc/scopes/<tag>.decisions.jsonl
+        "look-ledger",  # <exp>/.hpc/scopes/<tag>.looks.jsonl
+        "aggregated",  # <exp>/_aggregated/<run_id>/** and <exp>/_aggregated/<run_id>.json
+    }
+)
+
+# Per-run identity fields lifted off the sidecar into the manifest's ``runs``
+# projection — an EXPLICIT allowlist (like provenance_manifest's
+# ``_RUN_PROVENANCE_FIELDS``), never ``**sidecar``, so a new sidecar field does
+# not silently leak into the sealed manifest until added here on purpose.
+# ``supersedes`` (journal-record only) and ``reproduces`` (sidecar, if present)
+# are projected separately below.
+_DOSSIER_RUN_FIELDS: tuple[str, ...] = (
+    "cmd_sha",  # parameter identity
+    "node_sha",  # DAG-node identity (parented runs)
+    "cluster",  # cluster key
+    "hpc_agent_version",  # writer's package version
+    "scopes",  # opaque caller-owned evidence-scope tags
+)
+
+
+def _sha256_hex(data: bytes) -> str:
+    """Return the 64-char hex SHA-256 of *data* — one entry's integrity fingerprint."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _safe_sidecar(experiment_dir: Path, run_id: str) -> dict[str, Any]:
+    """Return a run's parsed sidecar dict, or ``{}`` when none exists.
+
+    The parse happens inside :func:`state.runs.read_run_sidecar` — this module
+    itself never parses the bytes it seals (the no-parse boundary pin). A run
+    with a journal record but no sidecar (or vice versa) yields ``{}`` rather
+    than raising, so a missing store is data, not an error.
+    """
+    try:
+        return read_run_sidecar(experiment_dir, run_id)
+    except FileNotFoundError:
+        return {}
+
+
+def _project_run_identity(
+    run_id: str, sidecar: dict[str, Any], record: RunRecord | None
+) -> dict[str, Any]:
+    """Project one run to the manifest identity allowlist (never ``**sidecar``).
+
+    Merges the sidecar-owned provenance fields (:data:`_DOSSIER_RUN_FIELDS`)
+    with the journal-record-owned ``supersedes`` link; ``reproduces`` is emitted
+    only when the sidecar recorded one (the "reproduces-if-present" projection).
+    A field the sidecar never recorded is emitted as ``null`` so the shape is
+    uniform across sidecar vintages.
+    """
+    projection: dict[str, Any] = {"run_id": run_id}
+    for field in _DOSSIER_RUN_FIELDS:
+        projection[field] = sidecar.get(field)
+    # cluster can also live on the journal record for a sidecar-less run.
+    if projection.get("cluster") is None and record is not None:
+        projection["cluster"] = record.cluster or None
+    projection["supersedes"] = (record.supersedes or None) if record is not None else None
+    reproduces = sidecar.get("reproduces")
+    if reproduces is not None:
+        projection["reproduces"] = reproduces
+    return projection
+
+
+def _seal(
+    source: str,
+    disk_path: Path,
+    archive_path: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+) -> None:
+    """Read *disk_path* as RAW BYTES, register it for the zip, append its entry.
+
+    The one place a source store's bytes enter the bundle: ``read_bytes`` →
+    sha256 → a ``{source, path, sha256, bytes}`` provenance record. Content is
+    never decoded or parsed, so any store (the aggregated one especially) round-
+    trips byte-identical.
+    """
+    data = disk_path.read_bytes()
+    write_map[archive_path] = data
+    entries.append(
+        {
+            "source": source,
+            "path": archive_path,
+            "sha256": _sha256_hex(data),
+            "bytes": len(data),
+        }
+    )
+
+
+def _gather_optional(
+    source: str,
+    disk_path: Path,
+    archive_path: str,
+    run_id: str,
+    note: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal a single expected store, or record a gap when it is absent.
+
+    Absent individual stores are REPORTED (a ``{source, run_id, note}`` gap),
+    never fatal — a bundle with gaps is still written.
+    """
+    if disk_path.is_file():
+        _seal(source, disk_path, archive_path, write_map=write_map, entries=entries)
+    else:
+        gaps.append({"source": source, "run_id": run_id, "note": note})
+
+
+def _gather_run(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str]]:
+    """Gather every per-run store for *run_id*; return (identity projection, scope tags).
+
+    Seals the sidecar, the run decision journal, the emitted briefs, the journal
+    record, each detached-block terminal, and the harvested aggregate artifacts
+    (both the ``_aggregated/<run_id>/`` dir and the ``_aggregated/<run_id>.json``
+    file variant). The scope tags carried on the sidecar are returned so the
+    caller can union them across a lineage and gather each scope's stores once.
+    """
+    runs_dir = RepoLayout(experiment_dir).runs
+
+    # sidecar — <exp>/.hpc/runs/<run_id>.json
+    _gather_optional(
+        "sidecar",
+        run_sidecar_path(experiment_dir, run_id),
+        f"runs/{run_id}/sidecar.json",
+        run_id,
+        "no run sidecar on disk",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+    # decision-journal — <exp>/.hpc/runs/<run_id>.decisions.jsonl
+    _gather_optional(
+        "decision-journal",
+        decisions_path(experiment_dir, "run", run_id),
+        f"runs/{run_id}/decisions.jsonl",
+        run_id,
+        "no run decision journal on disk",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+    # briefs — <exp>/.hpc/runs/<run_id>.briefs.jsonl
+    _gather_optional(
+        "briefs",
+        briefs_path(experiment_dir, run_id),
+        f"runs/{run_id}/briefs.jsonl",
+        run_id,
+        "no emitted-brief journal on disk",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+    # journal-record — ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (honors HPC_JOURNAL_DIR)
+    _gather_optional(
+        "journal-record",
+        JournalLayout(experiment_dir).run_record(run_id),
+        f"runs/{run_id}/journal.json",
+        run_id,
+        "no journal record on disk",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+    # block-terminal — every <run_id>.<block>.terminal.json under the runs tree.
+    # Inherently multi/optional: zero terminals is normal (no gap), each present
+    # one is sealed under its block name.
+    prefix = f"{run_id}."
+    suffix = ".terminal.json"
+    for term_path in sorted(runs_dir.glob(f"{run_id}.*.terminal.json")):
+        block = term_path.name.removeprefix(prefix).removesuffix(suffix)
+        _seal(
+            "block-terminal",
+            term_path,
+            f"runs/{run_id}/{block}.terminal.json",
+            write_map=write_map,
+            entries=entries,
+        )
+
+    # aggregated — BOTH the dir and the file variant, copied as RAW BYTES.
+    _gather_aggregated(experiment_dir, run_id, write_map=write_map, entries=entries, gaps=gaps)
+
+    sidecar = _safe_sidecar(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
+    projection = _project_run_identity(run_id, sidecar, record)
+    tags = [str(t) for t in (sidecar.get("scopes") or []) if t]
+    return projection, tags
+
+
+def _gather_aggregated(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal the run's harvested aggregate artifacts — opaque bytes, never parsed.
+
+    Copies every file under ``<exp>/_aggregated/<run_id>/`` (recursively,
+    preserving the relative subpath) AND the ``<exp>/_aggregated/<run_id>.json``
+    file variant when present. NOTHING here is ``json``-parsed — a deliberately
+    invalid-JSON aggregate must round-trip byte-identical. Neither present → one
+    gap, success.
+    """
+    agg_root = Path(experiment_dir) / "_aggregated"
+    agg_dir = agg_root / run_id
+    agg_file = agg_root / f"{run_id}.json"
+    found = False
+    if agg_dir.is_dir():
+        for p in sorted(agg_dir.rglob("*")):
+            if p.is_file():
+                rel = p.relative_to(agg_dir).as_posix()
+                _seal(
+                    "aggregated",
+                    p,
+                    f"aggregated/{run_id}/{rel}",
+                    write_map=write_map,
+                    entries=entries,
+                )
+                found = True
+    if agg_file.is_file():
+        _seal(
+            "aggregated",
+            agg_file,
+            f"aggregated/{run_id}.json",
+            write_map=write_map,
+            entries=entries,
+        )
+        found = True
+    if not found:
+        gaps.append(
+            {
+                "source": "aggregated",
+                "run_id": run_id,
+                "note": "no aggregated artifacts on disk",
+            }
+        )
+
+
+def _gather_scope(
+    experiment_dir: Path,
+    tag: str,
+    declared_by: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal a scope tag's decision journal + look ledger (or gap each if absent).
+
+    A tag is opaque — sealed by IDENTITY (the slug is a path segment), never by
+    any role vocabulary. *declared_by* is the run that carried the tag, recorded
+    on a gap so a consumer can trace an absent scope store back to its run.
+    """
+    _gather_optional(
+        "scope-journal",
+        decisions_path(experiment_dir, "scope", tag),
+        f"scopes/{tag}.decisions.jsonl",
+        declared_by,
+        f"no scope decision journal on disk for tag {tag!r}",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+    _gather_optional(
+        "look-ledger",
+        _scopes.looks_path(experiment_dir, tag),
+        f"scopes/{tag}.looks.jsonl",
+        declared_by,
+        f"no look ledger on disk for tag {tag!r}",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+
+
+@primitive(
+    name="export-dossier",
+    verb="mutate",
+    side_effects=[
+        SideEffect("file_write", "<output_path> (default <experiment>/_dossier/<run_id>.zip)"),
+    ],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+    idempotency_key="run_id",
+    cli=CliShape(
+        help=(
+            "Bundle a run's core-owned record trail — sidecar, decision journal, "
+            "briefs, block terminals, journal record, scope journals + look "
+            "ledgers, and harvested aggregates — into one integrity-sealed .zip "
+            "with a provenance manifest. --include-lineage widens it to the run's "
+            "whole supersession chain. Pure local reads + one local write, no SSH."
+        ),
+        spec_arg=True,
+        experiment_dir_arg=True,
+        spec_model=ExportDossierSpec,
+        schema_ref=SchemaRef(input="export_dossier"),
+    ),
+    agent_facing=True,
+)
+def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDossierResult:
+    """Assemble the dossier bundle for a run (optionally its lineage) and seal it.
+
+    Gathers each concrete on-disk store the run left behind, copies every store's
+    bytes verbatim into a ``.zip`` (entries written in sorted path order), and
+    writes a ``manifest.json`` at the archive root pairing every entry with its
+    source store, path, sha256, and byte size. ``bundle_sha256`` is the
+    canonical signature over the path-sorted entries list ONLY (``generated_at``
+    / ``tool_version`` excluded from the pre-image), so two exports of an
+    unchanged store produce an identical fingerprint.
+
+    Raises :class:`errors.SpecInvalid` when the requested run has NEITHER a
+    sidecar NOR a journal record (nothing to bundle). Absent individual stores
+    are reported as ``gaps`` and are never fatal. An existing archive at the
+    target is overwritten (idempotent replay). Default output:
+    ``<experiment>/_dossier/<run_id>.zip`` (parents created).
+    """
+    experiment_dir = Path(experiment_dir)
+    run_id = spec.run_id
+
+    # Missing-run guard (the ops/trace.py precedent): no sidecar AND no journal
+    # record → there is nothing to bundle.
+    has_sidecar = run_sidecar_path(experiment_dir, run_id).is_file()
+    if not has_sidecar and load_run(experiment_dir, run_id) is None:
+        raise errors.SpecInvalid(
+            f"no run sidecar or journal record found for run_id {run_id!r} — nothing to bundle"
+        )
+
+    # Resolve the run set: the single run, or its whole supersession lineage
+    # (newest→root) when include_lineage is set.
+    run_ids = _scopes.lineage_chain(experiment_dir, run_id) if spec.include_lineage else [run_id]
+
+    write_map: dict[str, bytes] = {}
+    entries: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
+    run_projections: list[dict[str, Any]] = []
+    # Union of scope tags across the run set, remembering the first run that
+    # declared each so a scope gap can name its origin. Insertion-ordered.
+    tag_origin: dict[str, str] = {}
+
+    for rid in run_ids:
+        projection, tags = _gather_run(
+            experiment_dir, rid, write_map=write_map, entries=entries, gaps=gaps
+        )
+        run_projections.append(projection)
+        for tag in tags:
+            tag_origin.setdefault(tag, rid)
+
+    for tag, declared_by in tag_origin.items():
+        _gather_scope(
+            experiment_dir,
+            tag,
+            declared_by,
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
+
+    # Path-sort the entries (and the write order) so a store hashes identically
+    # regardless of gather order.
+    entries.sort(key=lambda e: e["path"])
+    # bundle_sha256 canonicalizes the path-sorted entries list ONLY — reusing
+    # provenance_manifest.manifest_signature verbatim (its json.dumps(...,
+    # sort_keys=True) canonicalizes any JSON value, list included), so there is
+    # never a second canonicalization here. generated_at / tool_version are
+    # excluded from the pre-image for hash stability across identical stores.
+    bundle_sha256 = manifest_signature(cast("Any", entries))
+
+    manifest: dict[str, Any] = {
+        "dossier_schema_version": DOSSIER_SCHEMA_VERSION,
+        "generated_at": utcnow_iso(),
+        "tool_version": full_version(),
+        "runs": run_projections,
+        "entries": entries,
+        "gaps": gaps,
+        "bundle_sha256": bundle_sha256,
+    }
+
+    # Resolve the output path (caller's or the derived default) and overwrite any
+    # existing archive there — an idempotent replay re-seals cleanly.
+    if spec.output_path:
+        archive_path = Path(spec.output_path)
+    else:
+        archive_path = experiment_dir / "_dossier" / f"{run_id}.zip"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(write_map):
+            zf.writestr(path, write_map[path])
+        # manifest.json is the seal over the entries — NOT itself an entry.
+        # json.dumps SERIALIZES provenance (allowed); the boundary ban is on
+        # json.load/loads reading opaque content back into structure.
+        zf.writestr("manifest.json", json.dumps(manifest, sort_keys=True, indent=2))
+
+    return ExportDossierResult(
+        archive_path=str(archive_path),
+        run_ids=list(run_ids),
+        bundle_sha256=bundle_sha256,
+        entry_count=len(entries),
+        gaps=gaps,
+        manifest=manifest,
+    )
