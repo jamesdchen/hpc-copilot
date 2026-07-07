@@ -69,6 +69,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'notebook-audit-view': ('notebook-audit-view', 'hpc_agent.ops.notebook.view_op'),
     'notebook-auto-clear': ('notebook-auto-clear', 'hpc_agent.ops.notebook.auto_clear_op'),
     'notebook-lint': ('notebook-lint', 'hpc_agent.ops.notebook.lint'),
+    'notebook-record-receipt': ('notebook-record-receipt', 'hpc_agent.ops.notebook.record_receipt_op'),
     'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook_status'),
     'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
     'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),

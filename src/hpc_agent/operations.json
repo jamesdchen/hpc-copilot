@@ -161,6 +161,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "notebook_record_receipt.input.json",
+    "name": "notebook-record-receipt",
+    "output_schema": "notebook_record_receipt.output.json",
+    "python": "hpc_agent.ops.notebook.record_receipt_op.notebook_record_receipt",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal CODE render receipts for the sections of an audited source .py — the emitter's evidence that a section was rendered (executed) and whether its assertions errored. Parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source, and drifts stale when the section moves), then appends a notebook-render-receipt record (attestor=code) per known slug. Unknown slugs are reported skipped. notebook-auto-clear reads these journaled receipts (sha-fresh only) — it never trusts a caller-supplied receipt. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "provenance_manifest.input.json",

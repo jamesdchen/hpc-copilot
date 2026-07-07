@@ -1,13 +1,17 @@
 # The notebook-audit substrate — design + implementation plan
 
-**Status: v1 IMPLEMENTED (2026-07-08).** Core (T0–T9) + the skill
-(`src/slash_commands/skills/hpc-notebook-audit/SKILL.md`) + three query
-verbs (`notebook-lint`, `notebook-audit-view`, `notebook-status`) + one
-mutate verb (`notebook-auto-clear` — see the drift log) are in the tree.
-v1.5 (the jupytext export, render receipts, verify-relay hash claims)
-remains scheduled. Cite `path::symbol`, never line numbers. Implementation
-drift from this plan is recorded in the drift log at the end of this
-document.
+**Status: v1 + v1.5 IMPLEMENTED (2026-07-08).** Core (T0–T9) + the skill +
+the verbs (`notebook-lint`, `notebook-audit-view`, `notebook-status`,
+`notebook-auto-clear`, `notebook-record-receipt`) are in the tree, plus
+the v1.5 layer: journaled sha-bound render receipts (T10), verify-relay
+notebook claims (T11), `attention_order` (T12), the sidecar/dossier audit
+echo (T14), the normative harness contract
+(`docs/internals/harness-contract.md`), and the jupytext EXPORT plugin
+`examples/plugins/hpc-agent-notebook-render` (`notebook-render` +
+`notebook-ingest-signoffs` — the portability artifact and the
+second-conforming-harness proof). Cite `path::symbol`, never line
+numbers. Implementation drift is recorded in the drift log at the end of
+this document.
 
 ## Product intent
 
@@ -169,7 +173,9 @@ three via hooks. The tier machinery already degrades honestly when a
 capability is absent (the journal-response tier). The CLI stays the
 invariant substrate (the block-drive doctrine); MCP and skills are
 projections. THIS CONTRACT is the vendor-lock-in defense — implementations
-compete under it.
+compete under it. The normative spec (the three capabilities + the utterance-log
+write API a second harness implements against) now lives at
+`docs/internals/harness-contract.md`.
 
 The jupytext notebook EXPORT is **SCHEDULED v1.5 (user decision 2026-07-08:
 build it — vendor-portability rationale replaces the earlier
@@ -288,6 +294,44 @@ Deviations from the plan above, each with its recorded reason:
   installer; deliberately NOT in `_KNOWN_SKILLS` (that set gates the
   sub-skill return-envelope protocol, which this in-session human-facing
   driver doesn't use — the hpc-submit posture).
+
+### v1.5 drift (2026-07-08, same day)
+
+- **The receipt-laundering hole is CLOSED (supersedes the v1 receipt
+  behavior above):** `NotebookAutoClearSpec.receipt` is DELETED — the
+  mutate path reads only JOURNALED receipts
+  (`state/notebook_audit.py::read_render_receipts`), each a code
+  attestation bound to the section sha at record time
+  (`record_render_receipt` → `attestation.bind`), stale-by-construction
+  on drift. The new `notebook-record-receipt` verb (registry 138) parses
+  the source on disk so a receipt can only ever be recorded against
+  current source. The read-only view keeps an inline `receipt` for
+  preview (journals nothing; sha-bearing entries are freshness-gated,
+  sha-less inline entries keep v1 preview behavior).
+- **T11 reuses contradiction kinds** — a wrong section-status/passed
+  claim is kind `state`, a sha mismatch is kind `number`; no wire enum
+  change, no new blocking-set entry. Notebook relay verification lives in
+  `ops/decision/verify_relay.py::verify_notebook_relay`, a sibling of the
+  run primitive (the run CLI surface is byte-identical).
+- **T12 `attention_order`** defaults to source order; listed slugs first,
+  unknown ignored, unlisted keep source order; the presented order feeds
+  the module `view_sha` (it changes what the human saw).
+- **T14 vocabulary:** dossier store nouns `audited-source` (source AND
+  template .py — same store kind, distinguished by archive path, not a
+  role field) + `notebook-journal`; `audit_id` joins the identity
+  projection (emitted only when audited, the `reproduces` precedent).
+  The sidecar echo `{source, template, audit_id}` drops
+  `rendered_notebook` (metadata, never sealed) and is stamped after the
+  graduation gate passes at resolve time.
+- **The plugin** (`hpc-agent-notebook-render`) is the first plugin to
+  register `@primitive` verbs; it ships NO JSON schemas (the Pydantic
+  spec_model validates at the CLI seam — a hand-written schema would only
+  add drift surface), re-derives the harness-injection filter rather than
+  importing the private hook regex, and keeps `--no-deps` in CI with an
+  explicit render-stack install step. `notebook-ingest-signoffs` writes
+  typed sign-off-cell text through the documented utterance-log API
+  (no-scaffold honored — absent namespace reported as the degraded tier)
+  and lands sign-offs through the ordinary append-decision gate.
 
 ## Related, planned separately
 
