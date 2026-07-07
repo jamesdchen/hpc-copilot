@@ -23,24 +23,24 @@ Every piece of per-campaign state is keyed by `campaign_id`:
 
 | State | Keyed location | Owner |
 |---|---|---|
-| Campaign scratch dir | `.hpc/campaigns/<cid>/` | `meta/campaign/dirs.py:campaign_dir` |
+| Campaign scratch dir | `.hpc/campaigns/<cid>/` | `meta/campaign/dirs.py::campaign_dir` |
 | Manifest (opt-in / budget / strategy params) | `.hpc/campaigns/<cid>/manifest.json` | `meta/campaign/manifest.py` |
 | Cursor (iteration counter, audit-only) | `.hpc/campaigns/<cid>/cursor.json` | `meta/campaign/cursor.py` |
-| In-flight set / run partition | journal records filtered by `campaign_id` | `state/index.py:find_runs_by_campaign` |
+| In-flight set / run partition | journal records filtered by `campaign_id` | `state/index.py::find_runs_by_campaign` |
 | Per-iteration history | sidecars filtered by `campaign_id` | `atoms/status.py:campaign_status` |
 
 Because `find_runs_by_campaign(experiment_dir, cid)`
-(`state/index.py:165`) returns *only* runs whose `record.campaign_id == cid`,
-two cids in the same repo partition cleanly: each cluster's driver sees its own
-in-flight set and never the other's. `campaign_status(...).in_flight`
-(`atoms/status.py:44-45`) counts that partition, so per-cid in-flight counts are
-independent. This is the whole basis of the model, and the test asserts it
-directly.
+(`state/index.py::find_runs_by_campaign`) returns *only* runs whose
+`record.campaign_id == cid`, two cids in the same repo partition cleanly: each
+cluster's driver sees its own in-flight set and never the other's.
+`campaign_status(...).in_flight` (`atoms/status.py::campaign_status`) counts that
+partition, so per-cid in-flight counts are independent. This is the whole basis
+of the model, and the test asserts it directly.
 
-`deterministic_resolver.py:_reconstruct_submit_context` (`:465`) reinforces
+`deterministic_resolver.py::_reconstruct_submit_context` reinforces
 single-cluster-per-cid: when it rebuilds the next iteration's submit context it
-**prefers the most recent run of this campaign** (`find_runs_by_campaign(...)[-1]`,
-`:495-497`), so each cid rebuilds against its own cluster / profile / remote
+**prefers the most recent run of this campaign** (`find_runs_by_campaign(...)[-1]`),
+so each cid rebuilds against its own cluster / profile / remote
 path. One cid is one cluster *by construction* — the resolver never has to pick
 between clusters, because a cid only ever has runs on one.
 
@@ -56,10 +56,10 @@ ebm_all_buckets_hoffman2
 - `<base>` is the logical experiment ("one logical campaign", §5) — also the key
   for the **shared study** (§4).
 - `<clusterkey>` is the `clusters.yaml` key
-  (`infra/clusters.py:load_clusters_config`, `:345`), so the slug names exactly
+  (`infra/clusters.py::load_clusters_config`), so the slug names exactly
   which cluster the cid deploys to and reads its env-activation from.
 
-`campaign_dir` rejects path separators (`dirs.py:32`), so the underscore-joined
+`campaign_dir` rejects path separators (`dirs.py::campaign_dir`), so the underscore-joined
 slug is always a single safe directory name under `.hpc/campaigns/`.
 
 ## 3. Per-cluster seed blocks
@@ -69,13 +69,12 @@ drivers waste budget re-evaluating the same points. The mechanism is the
 campaign manifest's `strategy.params`, materialized to `HPC_KW_*` environment
 variables at submit time.
 
-`build_submit_spec` (`incorporation/build/submit_spec.py:137`) calls
+`build_submit_spec` (`incorporation/build/submit_spec.py::build_submit_spec`) calls
 `_campaign_strategy_kw_env(experiment_dir, campaign_id)`
-(`submit_spec.py:73`), which reads `manifest.strategy.params` and emits
+(`submit_spec.py::_campaign_strategy_kw_env`), which reads `manifest.strategy.params` and emits
 `{"HPC_KW_<KEY.upper()>": str(value), ...}`. Those land in **both** (a) the
-local process env *before* task enumeration imports `tasks.py`
-(`submit_spec.py:285-289`) — so the local `cmd_sha` is computed under the right
-knobs — **and** (b) the cluster `job_env` (`submit_spec.py:400-407`), so the
+local process env *before* task enumeration imports `tasks.py` — so the local
+`cmd_sha` is computed under the right knobs — **and** (b) the cluster `job_env`, so the
 running job carries them too. A Path-B strategy `tasks.py` reads its knobs from
 `os.environ["HPC_KW_<PARAM>"]`.
 
@@ -117,7 +116,7 @@ placed *outside* any single cid's directory:
 ```
 
 NOT `.hpc/campaigns/<cid>/optuna.db` — that path
-(`meta/campaign/dirs.py:campaign_dir`, the conventional per-cid strategy-state
+(`meta/campaign/dirs.py::campaign_dir`, the conventional per-cid strategy-state
 location) is per-cid and would give each cluster its own study. For a multi-
 cluster campaign the study must straddle the cids, so it lives one level up under
 a `<base>`-keyed path that no cid owns. Every cid's `tasks.py` opens the same
@@ -177,18 +176,21 @@ Two safe driver shapes — both pure functions over disk state, no new daemon
 
 Either way, two ticks can land **concurrent submits/deploys into the same repo**.
 The per-repo `.submit_lock` exists to serialize those deploys and prevent the
-`prune_orphan_sidecars(min_age_seconds=0)` race (`ops/submit_flow.py`) from
-dropping a sidecar mid-deploy. That lock is `infra/io.py:advisory_flock`.
+`prune_orphan_sidecars(min_age_seconds=0)` race (`state/runs.py::prune_orphan_sidecars`)
+from dropping a sidecar mid-deploy. That lock is `infra/io.py::advisory_flock`.
 
-**This is the one correctness dependency.** Before Phase 0, `advisory_flock`'s
-win32 branch was a permissions-only **no-op** (`fcntl` absent on native Windows),
-so the `.submit_lock` did not actually serialize concurrent deploys on Windows —
-the race was unguarded on the one platform without `flock`. Phase 0 made the
-win32 branch a **real `msvcrt` byte-range lock** (`infra/io.py:268-309`), giving
-genuine cross-process exclusion. Safe concurrent cross-cluster deploys rely on
-this fix.
+**This is the one correctness dependency, and it is now fixed.** The win32 branch
+of `advisory_flock` was historically a permissions-only **no-op** (`fcntl` absent
+on native Windows), so the `.submit_lock` did not actually serialize concurrent
+deploys on Windows — the race was unguarded on the one platform without `flock`.
+Commit `12043d0d` replaced that branch with a real `msvcrt` byte-range lock (see
+`infra/io.py::advisory_flock` for the implementation), giving genuine
+cross-process exclusion. Safe concurrent cross-cluster deploys rely on this.
 
-Cross-process serialization is proven by Phase 0's own test,
+One live gap remains in the same area: `infra/io.py::atomic_locked_update` (which
+takes its exclusion through `advisory_flock`) still has a Windows correctness bug,
+tracked and being addressed in a separate task. Cross-process serialization of
+`advisory_flock` itself is proven by
 `tests/infra/test_atomic_locked_update.py::test_advisory_flock_serializes_cross_process_win32`.
 The multi-cluster test does not duplicate it; it pins only the exclusion contract
 (a held lock refuses a second non-blocking acquirer) the concurrent-deploy story
@@ -209,12 +211,12 @@ nothing in it conflicts with the per-cid partition here.
 
 | Concern | Reference |
 |---|---|
-| Per-cid scratch dir | `meta/campaign/dirs.py:campaign_dir` |
-| Run partition by cid | `state/index.py:find_runs_by_campaign` (`:165`) |
-| Per-cid status / in-flight count | `atoms/status.py:campaign_status` (`:44-45`) |
-| Strategy params → `HPC_KW_*` | `incorporation/build/submit_spec.py:_campaign_strategy_kw_env` (`:73`) |
-| Cluster config / env-activation | `infra/clusters.py:load_clusters_config` (`:345`) |
-| Single-cluster-per-cid rebuild | `deterministic_resolver.py:_reconstruct_submit_context` (`:465`, `:495-497`) |
-| Manifest (per-cid opt-in / params) | `meta/campaign/manifest.py:write_manifest` |
-| Windows deploy lock (Phase 0) | `infra/io.py:advisory_flock` (`:239`, win32 branch `:268-309`) |
+| Per-cid scratch dir | `meta/campaign/dirs.py::campaign_dir` |
+| Run partition by cid | `state/index.py::find_runs_by_campaign` |
+| Per-cid status / in-flight count | `atoms/status.py::campaign_status` |
+| Strategy params → `HPC_KW_*` | `incorporation/build/submit_spec.py::_campaign_strategy_kw_env` |
+| Cluster config / env-activation | `infra/clusters.py::load_clusters_config` |
+| Single-cluster-per-cid rebuild | `deterministic_resolver.py::_reconstruct_submit_context` |
+| Manifest (per-cid opt-in / params) | `meta/campaign/manifest.py::write_manifest` |
+| Windows deploy lock (fixed in `12043d0d`) | `infra/io.py::advisory_flock` (win32 branch) |
 | Driver (do not daemonize) | `meta/campaign/driver.py`, `_kernel/lifecycle/drive.py` |
