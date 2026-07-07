@@ -901,12 +901,13 @@ class TestBackoffRetryIsLoud:
 # asyncssh command-channel engine fast path (opt-in, HPC_SSH_ENGINE=asyncssh)
 # ---------------------------------------------------------------------------
 #
-# The engine is the phase-2 successor to the phase-1 in-process broker: it runs
-# the command over a held asyncssh connection (a library channel with typed
-# errors) instead of a cold one-shot handshake. Its posture in ``ssh_run`` is
-# IDENTICAL to the broker's — capture-mode only, opt-in, and a hard fallback:
-# any ``EngineUnavailable`` falls through to the phase-1 broker, then the
-# one-shot path, so an engine can never regress the ban-sensitive default.
+# The engine runs the command over a held asyncssh connection (a library
+# channel with typed errors) instead of a cold one-shot handshake. It is the
+# first (and, since the phase-1 broker was retired + deleted 2026-07-07, the
+# ONLY) fast path in ``ssh_run``: capture-mode only, opt-in, and a hard
+# fallback — any ``EngineUnavailable`` falls straight through to the one-shot
+# path (engine → one-shot), so an engine can never regress the ban-sensitive
+# default.
 #
 # The sibling module ``hpc_agent.infra.ssh_engine`` may not exist yet on disk,
 # so these tests STUB it into ``sys.modules`` (the seam lazy-imports it inside
@@ -972,7 +973,7 @@ class TestSshRunEngineFastPath:
         assert engine.last_kwargs["ssh_target"] == "u@c"
 
     def test_engine_unavailable_falls_through_to_one_shot(self, monkeypatch):
-        """EngineUnavailable → fall through to the (broker-then-)one-shot path."""
+        """EngineUnavailable → fall through to the one-shot path."""
         engine = _FakeEngine(enabled=True, raise_unavailable=True)
         _install_engine(monkeypatch, engine)
         with patch("hpc_agent.infra.remote._capture_via_select") as seam:
@@ -995,7 +996,7 @@ class TestSshRunEngineFastPath:
 
     def test_capture_false_never_consults_the_engine(self, monkeypatch):
         """Streaming mode inherits the parent fds → the engine is skipped
-        entirely (its gate isn't even checked), exactly like the broker."""
+        entirely (its gate isn't even checked)."""
         engine = _FakeEngine(enabled=True, result=_cp())
         _install_engine(monkeypatch, engine)
         with patch("hpc_agent.infra.remote.subprocess.run") as mock_run:
@@ -1005,23 +1006,15 @@ class TestSshRunEngineFastPath:
         assert engine.run_calls == 0
         assert mock_run.call_count == 1
 
-    def test_engine_is_tried_before_the_phase1_broker(self, monkeypatch):
-        """Ordering: a succeeding engine short-circuits BEFORE the phase-1
-        broker is even consulted (engine → broker → one-shot)."""
-        from hpc_agent.infra import ssh_broker
-
+    def test_engine_short_circuits_before_one_shot(self, monkeypatch):
+        """Ordering: a succeeding engine short-circuits BEFORE the one-shot
+        seam is reached (engine → one-shot). The phase-1 broker rung that once
+        sat between them was retired + deleted 2026-07-07, so one-shot is now
+        the only fallback left."""
         engine = _FakeEngine(enabled=True, result=_cp(stdout="engine\n"))
         _install_engine(monkeypatch, engine)
-        # Make the broker loudly observable: if the seam ever reached it, these
-        # would fire. A correct engine-first ordering leaves them untouched.
-        with (
-            patch.object(ssh_broker, "broker_enabled", return_value=True) as mock_enabled,
-            patch.object(ssh_broker, "broker_ssh_run") as mock_broker,
-            patch("hpc_agent.infra.remote._capture_via_select") as seam,
-        ):
+        with patch("hpc_agent.infra.remote._capture_via_select") as seam:
             result = remote.ssh_run("ls", ssh_target="u@c")
         assert result.stdout == "engine\n"
         assert engine.run_calls == 1
-        assert mock_enabled.call_count == 0  # broker gate never reached
-        assert mock_broker.call_count == 0  # broker channel never used
-        assert seam.call_count == 0
+        assert seam.call_count == 0  # one-shot never reached

@@ -1,12 +1,20 @@
 # Design: per-host SSH connection broker
 
 Status: **PHASE 2 SHIPPED as the asyncssh engine** (2026-07-06,
-`infra/ssh_engine.py`, opt-in via `HPC_SSH_ENGINE=asyncssh`), wired ahead of
-phase 1 in the `ssh_run` seam. **Phase 1** (`infra/ssh_broker.py`, opt-in
-`HPC_SSH_BROKER`) is now **DEPRECATED** — retained as the middle fallback rung
-until the engine is live-validated, then retired. Phase 3 (SFTP transport pull)
-remains PROPOSED. The probe verdict cache (`ops/preflight/probe_cache.py`) ships
-alongside as an independent connection-count reduction.
+`infra/ssh_engine.py`, opt-in via `HPC_SSH_ENGINE=asyncssh`), now the first
+(and only) fast path in the `ssh_run` seam. **Phase 1** (`infra/ssh_broker.py`,
+opt-in `HPC_SSH_BROKER`) was **RETIRED + DELETED 2026-07-07**: its retirement
+trigger (below) fired when proving run #9 (`run_id pi-mc-2e548775`) completed a
+`HPC_SSH_ENGINE=asyncssh` submit→harvest on hoffman2 with ZERO
+`EngineUnavailable`/throttle/fallback markers across all three detached worker
+logs. The seam is now **engine → one-shot**: the native one-shot `ssh` path is
+the permanent hard fallback, and the engine remains opt-in until it goes
+default-on. This document is kept as the historical decision record; the module
+`infra/ssh_broker.py`, its test, and the `HPC_SSH_BROKER` /
+`HPC_SSH_BROKER_IDLE_SEC` env vars no longer exist. Phase 3 (SFTP transport
+pull) remains PROPOSED. The probe verdict cache
+(`ops/preflight/probe_cache.py`) ships alongside as an independent
+connection-count reduction.
 
 ## Phase 2 (shipped as the asyncssh engine)
 
@@ -52,7 +60,8 @@ today's one-shot path. The mapping:
 3. **Idle-close.** An idle engine connection self-closes so no login-node
    session lingers (clusters count those too).
 4. **Hard fallback.** Any engine trouble raises `EngineUnavailable`; `ssh_run`
-   falls through to the phase-1 broker check, then the one-shot path. An
+   falls straight through to the one-shot path (the phase-1 broker rung that
+   once sat between them was retired 2026-07-07 — see the status header). An
    opt-in engine can never regress the ban-sensitive default — the enforcement
    map binds this ("any engine failure falls back to one-shot; engine is never
    load-bearing").

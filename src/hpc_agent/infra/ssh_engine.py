@@ -255,7 +255,7 @@ def _submit(coro: Coroutine[Any, Any, Any], *, deadline: float | None) -> Any:
 
 async def _connect(ssh_target: str) -> Any:
     """Open ONE persistent ``asyncssh`` connection to *ssh_target* (the seam
-    tests monkeypatch with a stub, analogous to ``ssh_broker._Pool._spawn``).
+    tests monkeypatch with a stub).
 
     ``config=()`` honours ``~/.ssh/config`` (Host/HostName/User/IdentityFile/
     ProxyJump; ControlMaster is silently ignored — fine, we hold ONE
