@@ -105,6 +105,16 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "kill",
         "net-triage",
         "read-decisions",
+        # scope-lock / scope-status (rigor primitives, T4): the scope lock-state
+        # verbs. Both accept --spec, so the inventory tracks them here.
+        "scope-lock",
+        "scope-status",
+        # reproduction receipt + dossier export + S3 archival (2026-07-07):
+        # four spec-taking verbs landed in one wave.
+        "reproduce-run",
+        "verify-reproduction",
+        "export-dossier",
+        "archive-dossier",
         "status-snapshot",
         "status-watch",
         "verify-relay",
@@ -197,14 +207,12 @@ def _run_verb_with_bad_spec(verb: str, spec: dict, tmp_path: Path) -> dict:
 # A verb that regresses (validates specs on a bespoke path that bypasses
 # the seam) will FAIL the strict-xfail-free assertion loudly; add it back
 # here with a one-line reason only if the fix must live in its own module.
-XFAIL_NO_FAILURE_FEATURES: set[str] = {
-    # aggregate-flow's spec is OPTIONAL: an empty {} bypasses spec-validation
-    # entirely and its arg_pre --run-id shortcut then dereferences a None spec
-    # (``AttributeError: 'NoneType' … run_id``) → an *internal* envelope, not
-    # spec_invalid, so the shared dispatch seam never fires. The fix is a None
-    # guard in aggregate-flow's own arg_pre/handler (out of this seam's scope).
-    "aggregate-flow",
-}
+# Emptied: aggregate-flow (the last member) is fixed at the dispatch seam —
+# an explicitly SUPPLIED empty/invalid spec now falls through to model
+# validation for optional-spec verbs instead of returning a None the body
+# dereferenced into an `internal` envelope. Only a truly ABSENT --spec defers
+# to arg_pre synthesis (aggregate-flow's --run-id shortcut).
+XFAIL_NO_FAILURE_FEATURES: set[str] = set()
 
 
 # Verbs whose schema input shape doesn't accept an empty ``{}`` and
@@ -230,6 +238,9 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # net-triage's spec is all-optional ({} is valid and would EXECUTE real
     # network probes) — probe with the bogus key so the wire model rejects it.
     "net-triage": _BOGUS_KEY_SPEC,
+    # scope-status's spec is all-optional ({} is a valid all-tags read) —
+    # probe with the bogus key so the wire model rejects it.
+    "scope-status": _BOGUS_KEY_SPEC,
     "status-snapshot": _BOGUS_KEY_SPEC,
     "walk-submit-ambiguities": _BOGUS_KEY_SPEC,
 }

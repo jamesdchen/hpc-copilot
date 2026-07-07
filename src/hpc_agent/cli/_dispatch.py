@@ -294,10 +294,15 @@ def _load_and_model_validate_spec(name: str, shape: CliShape, ns: argparse.Names
         if shape.spec_required:
             if spec_path is None:
                 raise errors.SpecInvalid(f"--spec is required for `{name}`")
-        else:
-            # Optional-spec primitive with no/empty --spec: let arg_pre
+        elif spec_path is None:
+            # Optional-spec primitive with NO --spec at all: let arg_pre
             # synthesize (e.g. ``aggregate-flow``'s ``--run-id`` shortcut).
             return None
+        # An explicitly SUPPLIED file containing ``{}`` is NOT the synthesize
+        # case — fall through to schema/model validation so a model with
+        # required fields rejects it as spec_invalid (with failure_features).
+        # Returning None here instead sent aggregate-flow's body a None spec
+        # it dereferenced into an `internal` AttributeError envelope.
     if not isinstance(raw, dict):
         raise errors.SpecInvalid(
             f"--spec for `{name}` must be a JSON object; got {type(raw).__name__}"
