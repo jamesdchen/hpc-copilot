@@ -538,6 +538,61 @@ _EntryPoint = Annotated[
 ]
 
 
+class _AuditedSource(BaseModel):
+    """Opt-in link from the campaign to an audited ``.py`` source and its audit trail (D7).
+
+    Present only when the notebook-audit prelude produced the experiment
+    code (idea → LLM draft → human audit → GRADUATION). When present the
+    downstream graduation gate refuses an entry point not hash-linked to a
+    current audit; when the whole field is ABSENT every notebook-audit gate
+    passes silently and interview.json is byte-identical to the pre-audit
+    output (the fail-safe posture).
+
+    ``source`` and ``template`` are campaign-dir-relative paths to the
+    percent-format ``.py`` (jupytext ``# %%`` cells) — the source of truth,
+    not a rendered notebook. ``audit_id`` is the CALLER-authored slug that
+    keys the audit's decision-journal trail
+    (``.hpc/notebooks/<audit_id>.decisions.jsonl``); core never invents or
+    defaults it (the fabrication class, D3). ``rendered_notebook`` is
+    opaque render metadata (the caller-side jupytext/nbclient projection):
+    recorded verbatim, NEVER hashed or validated by core — the audit
+    identity is the ``.py`` source, not its notebook render.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(
+        min_length=1,
+        description=(
+            "Campaign-dir-relative path to the audited percent-format ``.py`` "
+            "source of truth (jupytext ``# %%`` cells)."
+        ),
+    )
+    audit_id: str = Field(
+        min_length=1,
+        description=(
+            "Caller-authored slug keying the audit's decision-journal trail "
+            "(``.hpc/notebooks/<audit_id>.decisions.jsonl``). Never invented "
+            "or defaulted by core — the caller owns this identity (D3)."
+        ),
+    )
+    template: str = Field(
+        min_length=1,
+        description=(
+            "Campaign-dir-relative path to the percent-format ``.py`` template "
+            "the source was drafted from (diff-from-template is the audit view)."
+        ),
+    )
+    rendered_notebook: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional opaque render metadata (the caller-side jupytext/nbclient "
+            "notebook projection). Recorded verbatim; NEVER hashed or validated "
+            "by core — the audit identity is the ``.py`` source, not its render."
+        ),
+    )
+
+
 class InterviewSpec(BaseModel):
     """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
@@ -635,6 +690,17 @@ class InterviewSpec(BaseModel):
             "a greenfield notebook — direct decoration is a two-line code edit; "
             "the wrapper is a subprocess shim that gives the framework something "
             "to introspect when the entry point itself can't be decorated."
+        ),
+    )
+    audited_source: _AuditedSource | None = Field(
+        default=None,
+        description=(
+            "Opt-in link to an audited ``.py`` source and its audit trail (D7). "
+            "When present, the graduation gate refuses an entry point not "
+            "hash-linked to a current audit; when ABSENT every notebook-audit "
+            "gate passes silently and interview.json is byte-identical to the "
+            "pre-audit output. The caller authors the ``audit_id`` slug — core "
+            "never invents or defaults it (the fabrication class)."
         ),
     )
 

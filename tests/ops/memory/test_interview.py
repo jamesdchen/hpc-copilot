@@ -1460,3 +1460,103 @@ class TestSweptFlagValidation:
         # samples (a fixed_param, not a run() param) landed in every task but was
         # exempt, so no refusal.
         assert data["preview"]["first"] == {"seed": 0, "samples": 10000}
+
+
+# ─── D7: opt-in audited_source (notebook-audit substrate) ──────────────────
+#
+# The notebook-audit prelude threads an ``audited_source`` block onto the
+# InterviewSpec so the graduation gate can hash-link the entry point to a
+# current audit. The load-bearing invariant is the fail-safe: when the field
+# is ABSENT, interview.json is byte-identical to the pre-audit output — an
+# undisciplined repo pays nothing, every gate passes silently.
+
+
+def test_audited_source_persisted_verbatim_when_present(tmp_path: Path) -> None:
+    """Present → the whole block round-trips into interview.json unchanged,
+    ``rendered_notebook`` metadata carried verbatim (never hashed/validated)."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+        "rendered_notebook": {"path": "audits/pi.ipynb", "kernel": "python3"},
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    # The whole block round-trips byte-for-byte, including the opaque
+    # rendered_notebook metadata core deliberately never touches.
+    assert persisted["audited_source"] == audited
+
+
+def test_audited_source_omitting_rendered_notebook_round_trips(tmp_path: Path) -> None:
+    """rendered_notebook is optional; the three required fields persist and the
+    optional key is simply absent (exclude_none), never null-stamped."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["audited_source"] == audited
+    assert "rendered_notebook" not in persisted["audited_source"]
+
+
+def test_absent_audited_source_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL GUARD (D7 fail-safe): with no audited_source, interview.json is
+    byte-identical to the pre-change output — the field name never appears.
+
+    Byte-equivalence is proven the same way the idempotency test does it:
+    persist an intent with the field absent, drop the only non-deterministic
+    key (``_materialized.at``), and compare the full document against the
+    document a field-free spec produces through the same code path. If the
+    optional field ever leaked a ``"audited_source": null`` (or reordered a
+    sibling), the raw-text assertion and the doc comparison both fire.
+    """
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    raw = (tmp_path / "interview.json").read_text()
+    # The new field name must not appear anywhere in a spec that omitted it.
+    assert "audited_source" not in raw
+    # And the serialized model view carries no such key (exclude_none path).
+    dumped = InterviewSpec.model_validate(intent).model_dump(exclude_none=True, mode="json")
+    assert "audited_source" not in dumped
+
+
+def test_audited_source_requires_audit_id(tmp_path: Path) -> None:
+    """Invalid shape: audit_id is caller-authored and required — a block missing
+    it fails Pydantic validation before any disk write (no core-side default)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        audited_source={
+            "source": "src/experiment.py",
+            "template": ".hpc/templates/monte_carlo.py",
+            # audit_id deliberately omitted — core must NOT invent one.
+        },
+    )
+    with pytest.raises(ValidationError, match="audit_id"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_audited_source_rejects_empty_required_fields(tmp_path: Path) -> None:
+    """Empty required strings (source/template) are rejected — min_length=1
+    matches the file's optional-field idiom for path-shaped strings."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        audited_source={"source": "", "audit_id": "x", "template": "t.py"},
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)

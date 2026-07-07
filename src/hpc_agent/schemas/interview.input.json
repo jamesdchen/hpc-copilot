@@ -174,6 +174,18 @@
       "default": null,
       "description": "Optional declaration of the experiment's entry point. Three shapes, with a strong default: ``register_run`` (the canonical Python path — a pointer to an ``@register_run``-decorated function the framework discovers directly; no materialization) and ``python_module`` (a second canonical Python path — an importable module + function) are preferred whenever a Python entry-point function is available. ``shell_command`` (argv + signature; the interview materializes a ``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv) is the **fallback**, used only when direct ``@register_run`` decoration isn't possible (non-Python entry point, decorator conflict, vendor code). Lets a mature repo with ``main.py`` + frozen YAML configs participate in the same intake as a greenfield notebook — direct decoration is a two-line code edit; the wrapper is a subprocess shim that gives the framework something to introspect when the entry point itself can't be decorated.",
       "title": "Entry Point"
+    },
+    "audited_source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_AuditedSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in link to an audited ``.py`` source and its audit trail (D7). When present, the graduation gate refuses an entry point not hash-linked to a current audit; when ABSENT every notebook-audit gate passes silently and interview.json is byte-identical to the pre-audit output. The caller authors the ``audit_id`` slug — core never invents or defaults it (the fabrication class)."
     }
   },
   "$defs": {
@@ -196,6 +208,51 @@
         "after_tasks"
       ],
       "title": "_AbortIfSpec",
+      "type": "object"
+    },
+    "_AuditedSource": {
+      "additionalProperties": false,
+      "description": "Opt-in link from the campaign to an audited ``.py`` source and its audit trail (D7).\n\nPresent only when the notebook-audit prelude produced the experiment\ncode (idea → LLM draft → human audit → GRADUATION). When present the\ndownstream graduation gate refuses an entry point not hash-linked to a\ncurrent audit; when the whole field is ABSENT every notebook-audit gate\npasses silently and interview.json is byte-identical to the pre-audit\noutput (the fail-safe posture).\n\n``source`` and ``template`` are campaign-dir-relative paths to the\npercent-format ``.py`` (jupytext ``# %%`` cells) — the source of truth,\nnot a rendered notebook. ``audit_id`` is the CALLER-authored slug that\nkeys the audit's decision-journal trail\n(``.hpc/notebooks/<audit_id>.decisions.jsonl``); core never invents or\ndefaults it (the fabrication class, D3). ``rendered_notebook`` is\nopaque render metadata (the caller-side jupytext/nbclient projection):\nrecorded verbatim, NEVER hashed or validated by core — the audit\nidentity is the ``.py`` source, not its notebook render.",
+      "properties": {
+        "source": {
+          "description": "Campaign-dir-relative path to the audited percent-format ``.py`` source of truth (jupytext ``# %%`` cells).",
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "audit_id": {
+          "description": "Caller-authored slug keying the audit's decision-journal trail (``.hpc/notebooks/<audit_id>.decisions.jsonl``). Never invented or defaulted by core — the caller owns this identity (D3).",
+          "minLength": 1,
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "template": {
+          "description": "Campaign-dir-relative path to the percent-format ``.py`` template the source was drafted from (diff-from-template is the audit view).",
+          "minLength": 1,
+          "title": "Template",
+          "type": "string"
+        },
+        "rendered_notebook": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional opaque render metadata (the caller-side jupytext/nbclient notebook projection). Recorded verbatim; NEVER hashed or validated by core — the audit identity is the ``.py`` source, not its render.",
+          "title": "Rendered Notebook"
+        }
+      },
+      "required": [
+        "source",
+        "audit_id",
+        "template"
+      ],
+      "title": "_AuditedSource",
       "type": "object"
     },
     "_BudgetSpec": {
