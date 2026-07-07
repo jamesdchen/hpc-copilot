@@ -29,6 +29,39 @@ hpc-agent state write already claimed. Reads are equally non-creating.
 Fail-open everywhere: a missing namespace, an unwritable log, or a corrupt
 line degrades to "no utterances", never an exception — a broken capture
 channel must degrade to the v1 friction posture, not wedge the harness.
+
+HARNESS WRITE API
+-----------------
+This module is the reference implementation of the utterance-log write API
+normatively specified in ``docs/internals/harness-contract.md`` (capability 1
++ §2). :func:`append_utterance` is the SOLE writer; a SECOND conforming harness
+(the scheduled v1.5 jupytext render — a notebook sign-off cell IS out-of-band
+from the LLM) writes records the reader here accepts. The API is importable by
+HARNESS-SIDE code only.
+
+The obligations a conforming writer honors, all embodied below — change them
+here and the contract doc + a second harness drift:
+
+* the storage locator (:func:`utterances_path`) reusing
+  ``state.run_record._current_homedir`` + ``repo_hash`` (never a re-implemented
+  hash);
+* the FROZEN record schema — ``{ts, sha256, text}``, sorted-keys JSON, one per
+  line, append-only, oldest-first; ``sha256`` over the FULL raw text, ``text``
+  capped at :data:`MAX_UTTERANCE_BYTES` on a CODEPOINT boundary;
+* the NO-SCAFFOLD precondition (write only into an existing namespace dir);
+* the PROVENANCE contract (only human-TYPED text; the writer runs out-of-band
+  from the LLM's tool surface and filters harness-injected / agent-authored
+  text — the ``_HARNESS_INJECTION_RE`` / ``_is_clicked`` reference filters in
+  ``_kernel.hooks.utterance_capture`` / ``.answer_capture``);
+* FAIL-OPEN (any error → clean no-op, degrading to the friction tier).
+
+**The LLM must never gain a sanctioned write call.** There is deliberately NO
+CLI verb, MCP tool, or primitive that writes an utterance — appending one is the
+harness's exclusive, out-of-band act. A write verb would let the model author
+its own authorship evidence, exactly the laundering channel the authorship gate
+exists to close (a guard the LLM itself satisfies is not a guard). The absence
+of any utterance-writing verb is pinned by the contract test in
+``tests/contracts/``.
 """
 
 from __future__ import annotations
