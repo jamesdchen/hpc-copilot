@@ -324,6 +324,52 @@ def test_run_surfaces_harvest_ledger_tail(journal_home, experiment) -> None:
     }
 
 
+def test_harvest_ledger_tail_falls_back_over_torn_final_line(journal_home, experiment) -> None:
+    """A crash mid-append can leave a torn final line; the reader scans BACKWARD
+    for the newest PARSEABLE marker so a finished run's evidence is not stranded.
+
+    B2: the whole-line-atomic append seam keeps every prior line intact, so a
+    valid marker followed by a torn half-line still surfaces the valid marker
+    (not None) — the ledger corroboration reaches the brief.
+    """
+    from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
+
+    ledger = harvest_marker_path(experiment, _RUN_ID)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    # A whole valid marker, then a torn final line (a crash mid-write).
+    ledger.write_text(
+        '{"terminal_cause": "complete", "harvest_ok": true}\n'
+        '{"terminal_cause": "timeout", "harvest_ok": fal',
+        encoding="utf-8",
+    )
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    _greenlight(experiment, "aggregate-run")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        result = blocks.aggregate_run(experiment, spec=spec)
+
+    assert result.brief["harvest_ledger"] == {
+        "terminal_cause": "complete",
+        "harvest_ok": True,
+    }
+
+
+def test_harvest_ledger_tail_none_only_when_entirely_unparseable(journal_home, experiment) -> None:
+    """Only a ledger with no parseable line at all yields None (not a torn tail)."""
+    from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
+
+    ledger = harvest_marker_path(experiment, _RUN_ID)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("not json\n{also bad\n", encoding="utf-8")
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    _greenlight(experiment, "aggregate-run")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        result = blocks.aggregate_run(experiment, spec=spec)
+
+    assert result.brief["harvest_ledger"] is None
+
+
 # ── registry metadata ─────────────────────────────────────────────────────────
 
 

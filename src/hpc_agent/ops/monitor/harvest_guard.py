@@ -37,7 +37,6 @@ harvests partial data.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -45,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent.errors import ScopeLocked, SshCircuitOpen
+from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.run_record import runs_dir
 
@@ -296,10 +296,11 @@ def _write_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> 
     mask the terminal cause.
     """
     try:
-        path = harvest_marker_path(experiment_dir, run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(marker, default=str) + "\n")
+        # Route through the canonical JSONL-append seam (flock + fsync +
+        # sort_keys) so a torn/interleaved final line can't strand a finished
+        # run's evidence. The seam CAN raise OSError; this never-raise wrapper
+        # (the guard runs from a caller's ``finally``) swallows it into a log.
+        append_jsonl_line(harvest_marker_path(experiment_dir, run_id), marker)
     except Exception as exc:  # noqa: BLE001 — last-resort: log, never raise
         with contextlib.suppress(Exception):
             _log.warning(

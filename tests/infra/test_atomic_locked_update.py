@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent.infra.io import advisory_flock, atomic_locked_update
+from hpc_agent.infra.io import advisory_flock, append_jsonl_line, atomic_locked_update
 
 
 def test_create_new_doc(tmp_path: Path) -> None:
@@ -235,3 +235,33 @@ def test_advisory_flock_serializes_cross_process_win32(tmp_path: Path) -> None:
         if proc.is_alive():
             proc.terminate()
         proc.join(timeout=5)
+
+
+def test_append_jsonl_line_concurrent_appends_stay_whole_lines(tmp_path: Path) -> None:
+    """B2: the canonical JSONL-append seam serializes concurrent appenders under
+    the flock, so N threads produce N WHOLE, parseable lines — never interleaved
+    bytes on one line. This is the whole-line-atomicity the torn-line reader fix
+    relies on for every prior line staying intact."""
+    import threading
+
+    path = tmp_path / "ledger.jsonl"
+    n_threads, per_thread = 8, 25
+    barrier = threading.Barrier(n_threads)
+
+    def _worker(tid: int) -> None:
+        barrier.wait()  # maximize contention
+        for i in range(per_thread):
+            append_jsonl_line(path, {"tid": tid, "i": i, "pad": "x" * 200})
+
+    threads = [threading.Thread(target=_worker, args=(t,)) for t in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == n_threads * per_thread
+    # Every line is a WHOLE, parseable object (no interleaving) and the full set
+    # of (tid, i) pairs is present exactly once.
+    pairs = {(json.loads(ln)["tid"], json.loads(ln)["i"]) for ln in lines}
+    assert pairs == {(t, i) for t in range(n_threads) for i in range(per_thread)}

@@ -227,13 +227,19 @@ def _harvest_ledger_tail(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
         lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except OSError:
         return None
-    if not lines:
-        return None
-    try:
-        parsed = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    # Scan BACKWARD for the newest PARSEABLE marker. A crash mid-append can leave
+    # a torn final line; the whole-line-atomic append seam keeps every *prior*
+    # line intact, so a torn tail falls back to the last good marker rather than
+    # stranding a finished run's harvest evidence. Only an entirely-unparseable
+    # ledger yields None.
+    for line in reversed(lines):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 # ── aggregate-check ───────────────────────────────────────────────────────────

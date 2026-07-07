@@ -26,8 +26,9 @@ Resolve a name to its content from the installed package data. A delegated worke
 
 Resolution order:
 
-1. Worker-prompt procedure (`hpc_agent/_kernel/extension/worker_prompts/<name>.md`, with plugin overlay) → `kind: "procedure"`.
-2. Inline skill (`slash_commands/skills/<name>/SKILL.md`) → `kind: "skill"`.
-3. Primitive in the operations catalog → `kind: "primitive"` with its contract dict.
+1. Inline skill (`slash_commands/skills/<name>/SKILL.md`) → `kind: "skill"`.
+2. Primitive in the operations catalog → `kind: "primitive"` with its contract dict.
 
 The first match wins; an unknown name returns `error_code: spec_invalid` (`category: user`).
+
+(Worker-prompt procedures — a former first-step `kind: "procedure"` — were the bare-worker spawn transport's surface; deleted with it in the §6 worker removal, so resolution is now the two steps above.)

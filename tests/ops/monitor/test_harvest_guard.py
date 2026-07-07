@@ -339,6 +339,44 @@ def test_harvest_guard_records_locked_skip_not_failure(
     assert on_disk[-1]["harvest_skipped_reason"] == "scope_locked"
 
 
+def test_write_marker_swallows_seam_oserror_and_harvest_continues(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2: the marker write routes through the flock+fsync append seam, which CAN
+    raise OSError — the never-raise wrapper must swallow it (the guard runs from a
+    caller's ``finally`` and must not mask the terminal cause).
+    """
+    import hpc_agent.ops.monitor.harvest_guard as guard
+
+    def _boom_append(path: Any, record: Any, **kw: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(guard, "append_jsonl_line", _boom_append)
+
+    # Must NOT raise even though the seam fails.
+    marker = harvest_on_terminal(
+        experiment,
+        _RUN_ID,
+        terminal_cause="complete",
+        _aggregate=_ok_aggregate({"r": {"acc": 0.9}}),
+        _sweep=lambda combiner_dir: {},
+    )
+    assert marker["harvest_ok"] is True  # harvest itself succeeded; only the write failed
+
+
+def test_write_marker_routes_through_canonical_append_seam() -> None:
+    """B2 routing pin: the marker write goes through the ONE flock+fsync+sort_keys
+    append seam, not a bare ``open(...).write`` — so torn/interleaved final lines
+    can't strand a finished run's evidence."""
+    import inspect
+
+    from hpc_agent.ops.monitor import harvest_guard
+
+    src = inspect.getsource(harvest_guard._write_marker)
+    assert "append_jsonl_line(" in src
+    assert "open(" not in src  # no bare append path bypassing the seam
+
+
 def test_terminal_causes_vocabulary_covers_design_terms() -> None:
     """The named §5 terminal causes are all present in the vocabulary."""
     assert {

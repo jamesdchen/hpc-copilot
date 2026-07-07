@@ -35,14 +35,12 @@ Pydantic models and validates at the boundary), no SSH, no mapreduce.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent.infra.io import advisory_flock
+from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
@@ -129,27 +127,16 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
     return campaign_dir(experiment_dir, scope_id) / "decisions.jsonl"
 
 
-def _lock_path(path: Path) -> Path:
-    return path.with_suffix(path.suffix + ".lock")
-
-
 def _append_jsonl_line(path: Path, record: dict[str, Any]) -> None:
     """Append one JSON object as a line to *path* under an exclusive flock.
 
-    Append-only: opens in ``"a"`` mode so a write can never rewrite or
-    truncate a prior record. The advisory ``flock`` (real cross-process
-    exclusion on both POSIX and win32 — see
-    :func:`hpc_agent.infra.io.advisory_flock`) serializes concurrent
-    appenders so two writers can't interleave bytes on the same line. The
-    line is ``fsync``-ed so a source-of-truth decision survives a crash.
+    Thin wrapper over the canonical JSONL-append seam
+    (:func:`hpc_agent.infra.io.append_jsonl_line`) — the one definition of
+    the flock + fsync + sort_keys discipline the decision journal, decision
+    briefs, scope look ledger, and the guaranteed-harvest marker all share.
+    Retained as the state-layer name the sibling ``state/*`` modules import.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True, default=str) + "\n"
-    with advisory_flock(_lock_path(path)), path.open("a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        with contextlib.suppress(OSError):
-            os.fsync(fh.fileno())
+    append_jsonl_line(path, record)
 
 
 def append_decision(

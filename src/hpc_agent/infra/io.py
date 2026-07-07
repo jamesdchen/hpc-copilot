@@ -29,7 +29,7 @@ copies; this is the one all of them should call.
 
 from __future__ import annotations
 
-__all__ = ["atomic_locked_update", "advisory_flock", "atomic_write_json"]
+__all__ = ["atomic_locked_update", "advisory_flock", "append_jsonl_line", "atomic_write_json"]
 
 import contextlib
 import json
@@ -139,6 +139,39 @@ def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def append_jsonl_line(path: Path, record: dict[str, Any], *, sort_keys: bool = True) -> None:
+    """Append one JSON object as a line to *path* under an exclusive flock.
+
+    The canonical JSONL-append discipline every append-only ledger in the
+    package routes through — the decision journal / decision briefs / scope
+    look ledger (``state/*``) AND the guaranteed-harvest marker
+    (``ops/monitor/harvest_guard``). One definition so the torn-line hazard
+    is fixed once:
+
+    * **append-only** — opens in ``"a"`` mode, so a write can never rewrite
+      or truncate a prior record.
+    * **whole-line-atomic** — the advisory ``flock`` (real cross-process
+      exclusion on POSIX and win32, see :func:`advisory_flock`) serializes
+      concurrent appenders so two writers can't interleave bytes on one line.
+    * **crash-durable** — the line is ``flush``-ed and ``fsync``-ed so a
+      source-of-truth record survives a crash mid-write.
+
+    ``sort_keys`` defaults to True (stable on-disk key order); pass ``default=str``
+    is applied unconditionally so non-JSON-native values (``Path``, datetimes)
+    serialize rather than raising. Can raise ``OSError`` — a caller whose
+    contract is never-raise (e.g. a ``finally``-time harvest marker) must wrap
+    the call.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, sort_keys=sort_keys, default=str) + "\n"
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with advisory_flock(lock_path), path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+        with contextlib.suppress(OSError):
+            os.fsync(fh.fileno())
 
 
 def _read_json_doc(path: Path) -> dict[str, Any] | None:
