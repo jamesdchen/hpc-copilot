@@ -65,6 +65,7 @@ _EXPECTED_SOURCES = frozenset(
         "aggregated",
         "audited-source",
         "notebook-journal",
+        "renders",
     }
 )
 

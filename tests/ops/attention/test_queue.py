@@ -687,21 +687,32 @@ def test_collect_items_stamps_audit_fanout_from_sidecar_echoes(tmp_path: Path) -
     (nb / "nb1.decisions.jsonl").write_text(
         json.dumps({"schema_version": 1, "block": "noop"}) + "\n", encoding="utf-8"
     )
-    # Two run sidecars echo audited_source.audit_id == "nb1"; one echoes another.
+    # Run sidecars echo audited_source.audit_id; only PENDING (non-terminal,
+    # non-superseded) runs count toward the fan-out (F4).
     runs = tmp_path / ".hpc" / "runs"
     runs.mkdir(parents=True, exist_ok=True)
-    (runs / "r1.json").write_text(
-        json.dumps({"audited_source": {"audit_id": "nb1"}}), encoding="utf-8"
-    )
-    (runs / "r2.json").write_text(
-        json.dumps({"audited_source": {"audit_id": "nb1"}}), encoding="utf-8"
-    )
-    (runs / "r3.json").write_text(
-        json.dumps({"audited_source": {"audit_id": "other"}}), encoding="utf-8"
-    )
+    for rid, audit in (("r1", "nb1"), ("r2", "nb1"), ("r3", "other")):
+        (runs / f"{rid}.json").write_text(
+            json.dumps({"audited_source": {"audit_id": audit}}), encoding="utf-8"
+        )
+    # F4: a TERMINAL echoing run (r4) and a SUPERSEDED one (r5) must NOT inflate
+    # the count — the echo is stamped after graduation, so historical usage would
+    # otherwise grow the leverage forever.
+    for rid in ("r4", "r5"):
+        (runs / f"{rid}.json").write_text(
+            json.dumps({"audited_source": {"audit_id": "nb1"}}), encoding="utf-8"
+        )
+    # Journal records carry the status the fan-out filter reads.
+    _mk(tmp_path, "r1", status="in_flight")
+    _mk(tmp_path, "r2", status="in_flight")
+    _mk(tmp_path, "r3", status="in_flight")
+    _mk(tmp_path, "r4", status="complete")  # terminal → excluded
+    _mk(tmp_path, "r5", status="in_flight", superseded_by="r6")  # superseded → excluded
+
     items = [i for i in collect_items(tmp_path, now=_NOW).items if i.scope_kind == "notebook"]
     assert items and items[0].kind == AUDIT_SECTION_UNSIGNED
-    # The module gate blocks the two runs that opted into nb1 (r3 opted into other).
+    # The module gate blocks the two PENDING runs that opted into nb1 (r3 opted
+    # into another audit; r4 is terminal; r5 is superseded).
     assert items[0].unblocks == 2
 
 

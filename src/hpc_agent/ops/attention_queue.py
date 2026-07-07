@@ -628,26 +628,43 @@ def _fanout_for(item: AttentionItem, experiment_dir: Path) -> int:
 
 
 def _count_runs_echoing_audit(experiment_dir: Path, audit_id: str) -> int:
-    """Runs whose sidecar ``audited_source`` echo names *audit_id* (D2-rev edge).
+    """PENDING runs whose sidecar ``audited_source`` echo names *audit_id* (D2-rev edge).
 
     NON-CREATING glob of ``<experiment_dir>/.hpc/runs/*.json``: the sidecar echo of
     interview.json's ``audited_source`` opt-in (``{source, template, audit_id}``;
     notebook-audit T14) is the encoded edge from an audit to the runs that graduate
-    behind it. Opaque, fail-open read — a torn/unreadable sidecar is skipped, never
-    crashing the morning read; a missing runs dir counts 0.
+    behind it. Only runs still PENDING behind the gate are counted: a run's journal
+    record must be non-terminal AND not superseded (adversarial review F4 — the
+    echo is stamped AFTER graduation passes, so counting every echoing run measured
+    HISTORICAL usage, inflating the leverage forever instead of the pending fan-out
+    the spec intends). This mirrors the sibling ``campaign-pending`` edge's
+    ``TERMINAL_STATUSES`` posture. Opaque, fail-open read — a torn/unreadable
+    sidecar or a missing journal record is skipped, never crashing the morning
+    read; a missing runs dir counts 0.
     """
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.run_record import TERMINAL_STATUSES
+
     runs = Path(experiment_dir) / ".hpc" / "runs"
     if not runs.is_dir():
         return 0
     count = 0
     for path in sorted(runs.glob("*.json")):
+        if path.name.endswith(".last_status.json"):
+            continue
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         echo = doc.get("audited_source") if isinstance(doc, dict) else None
-        if isinstance(echo, dict) and echo.get("audit_id") == audit_id:
-            count += 1
+        if not (isinstance(echo, dict) and echo.get("audit_id") == audit_id):
+            continue
+        record = load_run(experiment_dir, path.stem)
+        if record is None or record.status in TERMINAL_STATUSES:
+            continue
+        if getattr(record, "superseded_by", "") or None:
+            continue
+        count += 1
     return count
 
 

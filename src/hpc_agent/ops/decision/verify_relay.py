@@ -918,15 +918,48 @@ def _nb_read_py(experiment_dir: Path, rel: Any) -> str | None:
         return None
 
 
+def _nb_resolved_from_journal(experiment_dir: Path, audit_id: str) -> tuple[Any, Any]:
+    """The newest notebook-journal record's ``resolved.source`` / ``.template``.
+
+    The interview-less (plugin-driven) fallback (coverage finding F5): an audit
+    signed via ``notebook-ingest-signoffs`` never writes interview.json, but every
+    sign-off it lands rides ``resolved.source`` / ``resolved.template`` (the CURRENT
+    source the section_sha/view_sha were recomputed from). Reading the newest such
+    record recovers the same paths the gate recomputed against, so an
+    interview-less audit is no longer invisible to the attention-queue collector or
+    permanently unverifiable to the Stop hook. Non-creating, fail-soft: records are
+    read append-order (newest last wins); a record with no ``resolved.source`` is
+    skipped. Returns ``(source_rel, template_rel)`` (either may be ``None``).
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    source_rel: Any = None
+    template_rel: Any = None
+    for rec in read_decisions(experiment_dir, "notebook", audit_id):
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict):
+            continue
+        src = resolved.get("source")
+        if isinstance(src, str) and src:
+            source_rel = src
+            tmpl = resolved.get("template")
+            template_rel = tmpl if isinstance(tmpl, str) and tmpl else None
+    return source_rel, template_rel
+
+
 def _nb_resolve_sources(experiment_dir: Path, audit_id: str) -> tuple[Any | None, list[str] | None]:
     """Resolve ``(parsed_source | None, required_slugs | None)`` for *audit_id*.
 
     The source ``.py`` and (optional) template are resolved from interview.json's
     ``audited_source`` block matching *audit_id* — the same lookup the T8 sign-off
     gate uses (``ops/decision/journal.py::_read_interview_audited_source``, reused
-    rather than re-implemented; same subject, lint-clean). An unresolvable /
-    unreadable / malformed source returns ``(None, ...)`` so the caller flags
-    claims UNVERIFIABLE rather than fabricating a bogus ``unsigned`` reduction.
+    rather than re-implemented; same subject, lint-clean). When no interview.json
+    block resolves (a plugin-driven, interview-less audit), it FALLS BACK to the
+    newest notebook-journal record's ``resolved.source`` / ``.template`` (F5), so a
+    signable-but-interview-less audit is still visible to the attention-queue audit
+    collector and verifiable to the Stop hook. An unresolvable / unreadable /
+    malformed source returns ``(None, ...)`` so the caller flags claims
+    UNVERIFIABLE rather than fabricating a bogus ``unsigned`` reduction.
     ``required_slugs`` are the TEMPLATE's slugs (the T9 gate's required set); a
     missing template returns ``None`` there — the module ``passed`` claim is then
     not checkable and is skipped.
@@ -935,9 +968,13 @@ def _nb_resolve_sources(experiment_dir: Path, audit_id: str) -> tuple[Any | None
     from hpc_agent.state.audit_source import parse_percent_source
 
     block = _read_interview_audited_source(experiment_dir, audit_id)
-    if block is None:
-        return None, None
-    source_text = _nb_read_py(experiment_dir, block.get("source"))
+    if block is not None:
+        source_rel: Any = block.get("source")
+        template_rel: Any = block.get("template")
+    else:
+        source_rel, template_rel = _nb_resolved_from_journal(experiment_dir, audit_id)
+
+    source_text = _nb_read_py(experiment_dir, source_rel)
     if source_text is None:
         return None, None
     try:
@@ -946,7 +983,7 @@ def _nb_resolve_sources(experiment_dir: Path, audit_id: str) -> tuple[Any | None
         return None, None
 
     required_slugs: list[str] | None = None
-    template_text = _nb_read_py(experiment_dir, block.get("template"))
+    template_text = _nb_read_py(experiment_dir, template_rel)
     if template_text is not None:
         try:
             required_slugs = list(parse_percent_source(template_text).slugs)

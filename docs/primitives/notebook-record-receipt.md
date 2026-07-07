@@ -26,8 +26,11 @@ the `audit_id` decision journal (`docs/design/notebook-audit.md` T10).
 A render receipt is the execution evidence the D-attention tier's
 **assertions-green** leg consumes: a section carrying declared `assert`s is not
 `auto_cleared` until a receipt says its render did not error. `notebook-auto-clear`
-reads these journaled receipts (sha-fresh only) — it never trusts a
-caller-supplied receipt.
+reads these journaled receipts (sha-fresh only) — it never trusts a caller's
+**inline** receipt argument (that field is deleted). What the receipt *attests*
+(`output_sha`, `error`) is still caller-supplied per the D9 execution contract;
+freshness is the part recomputed server-side (see the truthfulness boundary
+below).
 
 ## Freshness by construction (the load-bearing constraint)
 
@@ -35,10 +38,24 @@ The verb parses the source **on disk** and binds each receipt through the one
 attestation kernel against the **freshly-parsed** section sha — the parse IS the
 recompute (`record_render_receipt` → `attestation.bind`). A receipt can therefore
 only ever be recorded against the source as it currently sits on disk, and it
-reads **stale** (greening nothing) the moment the section drifts. This is what
-closes the v1 laundering hole, where `notebook-auto-clear` trusted an opaque
-caller receipt `{slug: {error: False}}` with no execution evidence and no
-freshness key.
+reads **stale** (greening nothing) the moment the section drifts. This closes the
+v1 **freshness** hole, where `notebook-auto-clear` trusted an opaque *inline*
+caller receipt `{slug: {error: False}}` with no freshness key that greened a
+section even after it drifted.
+
+### What freshness does NOT close: the truthfulness boundary
+
+T10 recomputed **freshness**, not **truthfulness**. `output_sha` and `error` are
+**caller-attested** per the D9 execution contract (the ~15-line receipt-emitter
+convention runs the section's cells and reports the outcome) — the verb does not
+execute the source, so an emitter *could* journal `error: false` without ever
+running the assertions. What the verb guarantees is narrower and honest: a receipt
+is bound to the current section sha, so it can only vouch for the exact bytes on
+disk and drifts stale the instant they move. The registration and graduation
+consumers **weigh** that caller-attested outcome (fresh + `error: false` greens
+the assertions leg); they do not re-derive it. The trust boundary is the emitter
+(the same class as a conforming harness's out-of-band writes), not this verb's
+recompute.
 
 ## Inputs
 

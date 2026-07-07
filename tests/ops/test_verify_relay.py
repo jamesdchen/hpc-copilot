@@ -450,6 +450,64 @@ def test_notebook_unresolvable_source_is_unverifiable_not_contradiction(tmp_path
     assert "audited_source" not in out.sources_consulted
 
 
+def _nb_sign_with_resolved_source(tmp_path: Path, slug: str) -> None:
+    """Sign *slug* the ingest way: ``resolved`` rides source/template (F5 fixture).
+
+    Mirrors ``notebook-ingest-signoffs`` — an interview-less, plugin-driven audit
+    whose sign-off records carry the CURRENT source/template the shas were
+    recomputed from, and no interview.json anywhere.
+    """
+    from hpc_agent.state import notebook_audit as nb
+
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=_NB_AUDIT,
+        block=nb.SIGN_OFF_BLOCK,
+        response=f"reviewed the {slug} section end to end",
+        resolved={
+            "audit_id": _NB_AUDIT,
+            "section": slug,
+            "section_sha": _nb_sha(slug),
+            "view_sha": "view-1",
+            "source": "source.py",
+            "template": "template.py",
+        },
+    )
+
+
+def test_notebook_interview_less_audit_resolves_via_journal_resolved(tmp_path: Path) -> None:
+    """F5: no interview.json, but the sign-off records ride ``resolved.source`` /
+    ``resolved.template`` — the resolver falls back to the newest such record, so
+    claims verify (the audit is no longer permanently unverifiable to the hook)."""
+    (tmp_path / "source.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (tmp_path / "template.py").write_text(_NB_SOURCE, encoding="utf-8")
+    _nb_sign_with_resolved_source(tmp_path, "load-data")
+    _nb_sign_with_resolved_source(tmp_path, "fit-model")
+
+    out = _nb_run(tmp_path, "load-data is signed_current; fit-model is signed_current too.")
+    assert out.clean is True
+    assert out.mismatches == []
+    # Resolved via the journal fallback, NOT interview.json.
+    assert not (tmp_path / "interview.json").exists()
+    assert "audited_source" in out.sources_consulted
+
+
+def test_notebook_interview_less_wrong_claim_is_a_real_contradiction(tmp_path: Path) -> None:
+    """F5: the journal-resolved source makes a wrong status claim a genuine state
+    contradiction (not merely unverifiable) — the hook can now block it."""
+    (tmp_path / "source.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (tmp_path / "template.py").write_text(_NB_SOURCE, encoding="utf-8")
+    _nb_sign_with_resolved_source(tmp_path, "load-data")  # fit-model stays unsigned
+
+    out = _nb_run(tmp_path, "The fit-model section is signed_current.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert "fit-model" in state[0].claim
+    assert state[0].nearest_source_value == "unsigned"
+
+
 def test_notebook_no_slug_mentioned_is_clean(tmp_path: Path) -> None:
     """A status word with no section slug in range is module-level noise, skipped."""
     _nb_write_interview(tmp_path)

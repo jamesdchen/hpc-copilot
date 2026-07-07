@@ -143,6 +143,21 @@ class NotebookIngestSignoffsSpec(BaseModel):
         min_length=1,
         description="Experiment-relative path to the human-edited .ipynb to ingest sign-offs from.",
     )
+    write_utterance_log: bool = Field(
+        default=False,
+        description=(
+            "HUMAN-INVOKED-ONLY (trust boundary — adversarial review F1). When true, "
+            "the typed sign-off text is ALSO appended to the out-of-band utterance "
+            "log, restoring the full-strength authorship tier for a genuine second "
+            "harness (a human who typed in Jupyter, then ran this ingest). It is "
+            "DEFAULT FALSE because this verb reads an .ipynb the agent can author: "
+            "an agent that sets this flag is laundering its own words into tier-1 "
+            "human evidence, the same contract violation as editing harness config. "
+            "Left false, sign-offs still land and the gates judge them at whatever "
+            "tier the existing log supports (the honest journal-response friction "
+            "tier when no hook-captured utterance matches)."
+        ),
+    )
 
 
 class IngestedSignoff(BaseModel):
@@ -177,11 +192,14 @@ class NotebookIngestSignoffsResult(BaseModel):
         description="Sign-off cells whose scaffold was left unchanged (no typed text).",
     )
     utterance_log: str = Field(
-        default="absent-namespace",
+        default="skipped",
         description=(
-            "'written' when typed sign-offs were appended to the out-of-band "
-            "utterance log (full-strength tier); 'absent-namespace' when the "
-            "journal namespace does not exist so the write no-oped (degraded tier, "
-            "reported honestly — no-scaffold discipline)."
+            "'skipped' (the DEFAULT) when write_utterance_log was false, so no "
+            "utterance was written and the gates judge the sign-off at whatever tier "
+            "the existing log supports (F1 trust boundary); 'written' when "
+            "write_utterance_log was true and typed sign-offs were appended to the "
+            "out-of-band utterance log (full-strength tier); 'absent-namespace' when "
+            "the write was requested but the journal namespace does not exist so the "
+            "write no-oped (degraded tier, reported honestly — no-scaffold discipline)."
         ),
     )

@@ -39,7 +39,7 @@ def _type_into_signoff(nb_path: Path, slug: str, text: str) -> None:
     nbformat.write(nb, str(nb_path))
 
 
-def _ingest(experiment: Path, nb_path: Path) -> object:
+def _ingest(experiment: Path, nb_path: Path, *, write_utterance_log: bool = False) -> object:
     return notebook_ingest_signoffs(
         experiment_dir=experiment,
         spec=NotebookIngestSignoffsSpec(
@@ -47,11 +47,41 @@ def _ingest(experiment: Path, nb_path: Path) -> object:
             source="source.py",
             template="template.py",
             notebook_path=str(nb_path.relative_to(experiment)),
+            write_utterance_log=write_utterance_log,
         ),
     )
 
 
-def test_typed_signoff_writes_utterance_and_lands(experiment: Path, journal_home: Path) -> None:
+def test_default_does_not_write_the_utterance_log_but_signoff_lands(
+    experiment: Path, journal_home: Path
+) -> None:
+    """F1 trust boundary: the DEFAULT ingest writes NO utterance (the flag is off),
+    so an agent-authored .ipynb cannot launder its words into tier-1 human evidence.
+    The sign-off still lands through the core append-decision path."""
+    # Namespace present, so a write WOULD have succeeded had it been requested.
+    (journal_home / repo_hash(experiment)).mkdir(parents=True)
+    nb_path = _render(experiment)
+    _type_into_signoff(
+        nb_path,
+        "analysis",
+        "Reviewed analysis: the value change to 42 is intentional.",
+    )
+    result = _ingest(experiment, nb_path)  # write_utterance_log defaults False
+
+    assert result.utterance_log == "skipped"  # type: ignore[attr-defined]
+    # Nothing landed on the out-of-band utterance log.
+    assert read_utterances(experiment) == []
+    # But the sign-off still landed through the gate.
+    assert [i.section for i in result.ingested] == ["analysis"]  # type: ignore[attr-defined]
+    records = read_decisions(experiment, "notebook", "aud-1")
+    assert [r for r in records if r["block"] == "notebook-sign-off"]
+
+
+def test_explicit_write_utterance_log_writes_and_lands(
+    experiment: Path, journal_home: Path
+) -> None:
+    """HUMAN-INVOKED-ONLY: with write_utterance_log=True the full-strength tier is
+    restored — the typed text lands on the out-of-band log."""
     # Create the journal namespace so the no-scaffold utterance write succeeds.
     (journal_home / repo_hash(experiment)).mkdir(parents=True)
     nb_path = _render(experiment)
@@ -60,7 +90,7 @@ def test_typed_signoff_writes_utterance_and_lands(experiment: Path, journal_home
         "analysis",
         "Reviewed analysis: the value change to 42 is intentional.",
     )
-    result = _ingest(experiment, nb_path)
+    result = _ingest(experiment, nb_path, write_utterance_log=True)
 
     assert [i.section for i in result.ingested] == ["analysis"]  # type: ignore[attr-defined]
     assert result.utterance_log == "written"  # type: ignore[attr-defined]
@@ -77,15 +107,15 @@ def test_typed_signoff_writes_utterance_and_lands(experiment: Path, journal_home
 def test_absent_namespace_degrades_but_signoff_still_lands(
     experiment: Path, journal_home: Path
 ) -> None:
-    # Namespace NOT created -> the utterance write no-ops (degraded tier), but the
-    # sign-off still lands through append-decision.
+    # write requested but namespace NOT created -> the utterance write no-ops
+    # (degraded tier), but the sign-off still lands through append-decision.
     nb_path = _render(experiment)
     _type_into_signoff(
         nb_path,
         "analysis",
         "Reviewed analysis: the value change to 42 is intentional.",
     )
-    result = _ingest(experiment, nb_path)
+    result = _ingest(experiment, nb_path, write_utterance_log=True)
     assert result.utterance_log == "absent-namespace"  # type: ignore[attr-defined]
     assert [i.section for i in result.ingested] == ["analysis"]  # type: ignore[attr-defined]
 
@@ -106,6 +136,19 @@ def test_injection_text_is_refused(experiment: Path, journal_home: Path) -> None
     assert [r.section for r in result.refused] == ["analysis"]  # type: ignore[attr-defined]
     assert result.refused[0].reason == "harness-injection-text"  # type: ignore[attr-defined]
     assert result.ingested == []  # type: ignore[attr-defined]
+
+
+def test_ingest_verb_is_not_agent_facing(experiment: Path, journal_home: Path) -> None:
+    """F1 lock: the ingest verb is agent_facing=False — a HUMAN-invoked CLI verb.
+
+    It reads an agent-authorable .ipynb and (with the flag) writes the tier-1
+    utterance log, so exposing it as an agent tool would hand the LLM a sanctioned
+    utterance writer. The registry must record it non-agent-facing."""
+    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+    register_primitives()
+    meta = get_registry()["notebook-ingest-signoffs"]
+    assert meta.agent_facing is False
 
 
 def test_bare_ack_signoff_refused_by_gate(experiment: Path, journal_home: Path) -> None:

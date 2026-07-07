@@ -27,10 +27,13 @@ archive with a manifest and a bundle fingerprint.
 When the run's sidecar echoes an `audited_source` block, the bundle also seals
 the **audit trail** — the "dossier is sealed attestations" formulation: the
 source `.py` and its template `.py` (both under the `audited-source` store noun,
-distinguished by archive path) and the `.hpc/notebooks/<audit_id>.decisions.jsonl`
-attestation journal (the `notebook-journal` noun). A missing declared file is a
-recorded gap; a run submitted without an audit is byte-identical to the pre-T14
-dossier (no audit stores, no audit gap). The opaque `audit_id` slug enters the
+distinguished by archive path), the `.hpc/notebooks/<audit_id>.decisions.jsonl`
+attestation journal (the `notebook-journal` noun), and the trusted-display
+render files under `.hpc/renders/<audit_id>/` (the `renders` noun — the
+content-addressed *what-the-human-saw* the T8 sign-off gate required, so the
+dossier can reproduce it). A missing declared file (or an audit with no renders
+on disk) is a recorded gap; a run submitted without an audit is byte-identical to
+the pre-T14 dossier (no audit stores, no audit gap). The opaque `audit_id` slug enters the
 run's identity projection (which audit sealed it) — the section-level semantics
 inside the audit stay opaque.
 

@@ -127,9 +127,10 @@ item, the count of pending downstream subjects that become actionable when
 this one verdict clears, walked over dependency edges the journals ALREADY
 encode — a committed-unadvanced greenlight blocks its whole run; an
 unsigned section blocks its module's `passed`, which blocks the graduation
-gate, which blocks every run/campaign whose sidecar `audited_source` echo
-names that audit; a campaign-pending verdict blocks the campaign's
-remaining runs. This stays inside the no-fabrication boundary because
+gate, which blocks every **pending** (non-terminal, non-superseded)
+run/campaign whose sidecar `audited_source` echo names that audit (F4 —
+already-graduated/terminal runs are historical usage, not pending fan-out); a
+campaign-pending verdict blocks the campaign's remaining runs. This stays inside the no-fabrication boundary because
 fan-out is COUNTED from record structure, never scored: where no encoded
 edge exists the fan-out is 0 and the item falls through to the class
 order. Full order: **fan-out descending → class (blocked, verdict,
@@ -429,9 +430,14 @@ un-capped with `skipped` accounting (no cap measured as needed).
   honest count — never urgency prose). The edges COUNTED (`_apply_fanout` in
   `ops/attention_queue.py`, applied in `collect_items` so both the verb and the
   snapshot embed inherit it): a `greenlight-unadvanced` → its run (1); an
-  `audit-section-unsigned`/`-stale` → the module's `passed` gate → every run whose
-  sidecar `audited_source` echo names the audit (a non-creating `.hpc/runs/*.json`
-  glob); a `campaign-pending` → the campaign's remaining (non-terminal) runs (via
+  `audit-section-unsigned`/`-stale` → the module's `passed` gate → every
+  **pending** (non-terminal, non-superseded) run whose sidecar `audited_source`
+  echo names the audit (a non-creating `.hpc/runs/*.json` glob joined to the run's
+  journal record for its status — adversarial review F4: the echo is stamped
+  *after* graduation, so counting *every* echoing run measured historical usage
+  and inflated the leverage forever instead of the pending fan-out; the filter
+  now mirrors the `campaign-pending` edge's `TERMINAL_STATUSES` posture); a
+  `campaign-pending` → the campaign's remaining (non-terminal) runs (via
   `find_runs_by_campaign` + `TERMINAL_STATUSES`). Every other kind has no encoded
   edge → 0 and falls through to the class order byte-identically with the
   pre-revision rule (the old Wave-B ordering tests still pass unchanged). The

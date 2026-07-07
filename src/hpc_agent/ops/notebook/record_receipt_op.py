@@ -14,9 +14,19 @@ every entry whose slug exists in the parsed source, journals a
 bound through the ONE attestation kernel against the FRESHLY-PARSED section sha —
 never a caller-asserted sha. A receipt can therefore only ever be recorded
 against the source as it currently sits on disk, and it reads STALE (greening
-nothing) the moment the section drifts. This is what closes the v1 laundering
-hole: ``notebook-auto-clear`` no longer trusts an opaque caller receipt; it reads
-these journaled, sha-bound receipts and greens only the fresh ones.
+nothing) the moment the section drifts. This is what closes the v1 **freshness**
+hole: ``notebook-auto-clear`` no longer accepts an opaque *inline* caller receipt;
+it reads these journaled, sha-bound receipts and greens only the fresh ones.
+
+**What this does NOT close: truthfulness.** ``output_sha`` and ``error`` are
+CALLER-ATTESTED per the D9 execution contract — the verb recomputes FRESHNESS
+(the sha bind), not the outcome: it does not execute the source, so an emitter
+could journal ``error=False`` without running the assertions. The honest
+guarantee is narrower: a receipt vouches only for the exact bytes on disk and
+drifts stale when they move; the registration/graduation consumers WEIGH that
+caller-attested outcome, they do not re-derive it. The trust boundary is the
+emitter (same class as a conforming harness's out-of-band writes), not this
+recompute.
 
 Unknown slugs (an entry naming a section the parsed source does not contain — a
 stale or mistyped slug) are reported ``skipped``, never fatal: a mismatched entry
@@ -92,8 +102,9 @@ def _read_source_file(experiment_dir: Path, relpath: str) -> str:
             "section moves), then appends a notebook-render-receipt record "
             "(attestor=code) per known slug. Unknown slugs are reported skipped. "
             "notebook-auto-clear reads these journaled receipts (sha-fresh only) — "
-            "it never trusts a caller-supplied receipt. Pure local read + journal "
-            "append, no SSH."
+            "it never accepts an inline caller receipt. Freshness (the sha bind) is "
+            "recomputed here; output_sha/error stay caller-attested (D9), weighed "
+            "by the graduation consumers. Pure local read + journal append, no SSH."
         ),
         spec_arg=True,
         experiment_dir_arg=True,

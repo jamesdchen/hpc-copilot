@@ -3,13 +3,30 @@
 Role (b) of the export. A human typing into a rendered sign-off cell is
 out-of-band from the LLM, so this verb makes the full audit loop work with NO
 Claude Code anywhere: render -> human types in Jupyter -> ingest -> full-strength
-tier. For each typed sign-off it (1) writes the raw text through the documented
-utterance-log write API (``state/utterances.py::append_utterance`` — honoring
-no-scaffold + fail-open) and (2) appends the sign-off via the CORE append-decision
+tier. For each typed sign-off it appends the sign-off via the CORE append-decision
 path (``scope_kind='notebook'``, ``block='notebook-sign-off'``), recomputing
 ``section_sha`` / ``view_sha`` from the CURRENT source + template so the T8 gate
 enforces recompute + authorship. A gate refusal for one section is reported
 per-section, never fatal to the batch.
+
+**The utterance-log trust boundary (adversarial review F1).** This verb reads an
+``.ipynb`` the agent can AUTHOR, so it must NOT hand the agent a sanctioned way to
+write the tier-1 human-utterance log — that log is the harness's exclusive
+out-of-band act (harness-contract.md lock 1), and an agent whose own words landed
+there would defeat the authorship gate for every audit. Therefore:
+
+* ``agent_facing=False`` — the verb is not exposed to the agent as a tool. It is a
+  HUMAN-INVOKED CLI verb: the human types in Jupyter, then runs the ingest.
+* the utterance-log write DEFAULTS OFF. Left off, sign-offs still land and the
+  gates judge them at whatever tier the existing log already supports (the honest
+  journal-response friction tier when no hook-captured utterance matches).
+* the full-strength authorship channel is restored only by an EXPLICIT
+  ``write_utterance_log=True``, documented HUMAN-INVOKED-ONLY. An agent that sets
+  it is violating the documented contract — the same class as editing harness
+  config; the flag is not a capability the trust model grants the LLM.
+
+The write, when requested, still goes through the documented write API
+(``state/utterances.py::append_utterance`` — honoring no-scaffold + fail-open).
 """
 
 from __future__ import annotations
@@ -23,9 +40,8 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.ops.decision.journal import append_decision
-from hpc_agent.ops.notebook.audit_view import build_audit_view
+from hpc_agent.ops.notebook.canonical import build_canonical_view, read_recorded_config
 from hpc_agent.ops.notebook.render_store import write_render
-from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.utterances import append_utterance, is_harness_injected
 
 from . import _annotate
@@ -73,20 +89,25 @@ def _read_rel(experiment_dir: Path, relpath: str, *, what: str) -> str:
     idempotent=False,
     cli=CliShape(
         help=(
-            "Ingest human sign-offs typed into a rendered notebook's sign-off cells "
-            "(the second conforming harness). For each typed sign-off: write the raw "
-            "text to the out-of-band utterance log (no-scaffold + fail-open) and "
-            "append a notebook-sign-off via the core append-decision path, "
+            "HUMAN-INVOKED: ingest human sign-offs typed into a rendered notebook's "
+            "sign-off cells (the second conforming harness). For each typed sign-off "
+            "it appends a notebook-sign-off via the core append-decision path, "
             "recomputing section_sha/view_sha from the CURRENT source so the T8 gate "
-            "enforces recompute + authorship. Unchanged scaffolds are skipped; a "
-            "gate refusal is reported per-section, never fatal. Ships no JSON schema: "
-            "the Pydantic spec model validates at the seam."
+            "enforces recompute + authorship. The out-of-band utterance-log write is "
+            "OFF by default (the F1 trust boundary — this verb reads an agent-"
+            "authorable .ipynb); pass write_utterance_log=true, HUMAN-INVOKED-ONLY, "
+            "to restore the full-strength authorship tier. Unchanged scaffolds are "
+            "skipped; a gate refusal is reported per-section, never fatal. Ships no "
+            "JSON schema: the Pydantic spec model validates at the seam."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
         spec_model=NotebookIngestSignoffsSpec,
     ),
-    agent_facing=True,
+    # NOT agent-facing (F1): a HUMAN-invoked CLI verb. Exposing it would hand the
+    # LLM a sanctioned utterance-log writer over text it can author — the exact
+    # affordance the write-API lock-1 forbids.
+    agent_facing=False,
 )
 def notebook_ingest_signoffs(
     *, experiment_dir: Path, spec: NotebookIngestSignoffsSpec
@@ -97,14 +118,23 @@ def notebook_ingest_signoffs(
     notebook (broken setup); a per-section gate refusal is REPORTED, not raised.
     """
     experiment_dir = Path(experiment_dir)
-    source_text = _read_rel(experiment_dir, spec.source, what="source")
-    template_text = _read_rel(experiment_dir, spec.template, what="template")
+    # Loud plugin-wording existence checks (the canonical build re-reads both).
+    _read_rel(experiment_dir, spec.source, what="source")
+    _read_rel(experiment_dir, spec.template, what="template")
     nb_text = _read_rel(experiment_dir, spec.notebook_path, what="notebook")
 
-    source = parse_percent_source(source_text)
-    template = parse_percent_source(template_text)
-    view = build_audit_view(source, template, ())
-    sha_by_slug = {sect.slug: sect.section_sha for sect in source.sections}
+    # Build the CANONICAL view (server-recomputed lint from the recorded roots,
+    # journaled fresh receipts) — the SAME view the core T8 sign-off gate
+    # recomputes, so an ingest-landed sign-off's view_sha matches by construction
+    # (building with lint_findings=() would be refused whenever a lint flag fires).
+    view = build_canonical_view(
+        experiment_dir,
+        audit_id=spec.audit_id,
+        source_relpath=spec.source,
+        template_relpath=spec.template,
+        cfg=read_recorded_config(experiment_dir, spec.audit_id),
+    )
+    sha_by_slug = {sv.slug: sv.section_sha for sv in view.sections}
     view_by_slug = {sv.slug: sv.view_sha for sv in view.sections}
 
     # Write the content-addressed TRUSTED-DISPLAY render for every section BEFORE
@@ -142,10 +172,12 @@ def notebook_ingest_signoffs(
             refused.append(RefusedSignoff(section=slug, reason="harness-injection-text"))
             continue
 
-        # (1) Out-of-band utterance-log write (full-strength authorship channel).
-        # Honors no-scaffold: a missing namespace returns None (degraded tier,
-        # reported honestly via utterance_log below).
-        if append_utterance(experiment_dir, typed) is not None:
+        # (1) Out-of-band utterance-log write (full-strength authorship channel) —
+        # ONLY when the human explicitly requested it (F1: default OFF, this verb
+        # reads an agent-authorable .ipynb, so the LLM must never gain a sanctioned
+        # write here). Honors no-scaffold: a missing namespace returns None
+        # (degraded tier, reported honestly via utterance_log below).
+        if spec.write_utterance_log and append_utterance(experiment_dir, typed) is not None:
             utterance_written = True
 
         # (2) The sign-off, through the CORE append-decision path. section_sha /
@@ -180,10 +212,18 @@ def notebook_ingest_signoffs(
             continue
         ingested.append(IngestedSignoff(section=slug, section_sha=section_sha, view_sha=view_sha))
 
+    # Honest utterance-log accounting (F1): 'skipped' when the write was not
+    # requested (the default trust-safe path); otherwise 'written' when at least
+    # one landed, else 'absent-namespace' (requested but the no-scaffold no-op).
+    if not spec.write_utterance_log:
+        utterance_log = "skipped"
+    else:
+        utterance_log = "written" if utterance_written else "absent-namespace"
+
     return NotebookIngestSignoffsResult(
         audit_id=spec.audit_id,
         ingested=ingested,
         refused=refused,
         skipped_empty=skipped_empty,
-        utterance_log="written" if utterance_written else "absent-namespace",
+        utterance_log=utterance_log,
     )

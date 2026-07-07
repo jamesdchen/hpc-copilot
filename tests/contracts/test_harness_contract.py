@@ -220,3 +220,43 @@ def test_no_utterance_writing_verb_in_registry() -> None:
 
     offenders = [name for name in core_only_registry() if "utterance" in name.lower()]
     assert offenders == [], f"an utterance-writing verb leaked into the registry: {offenders}"
+
+
+def test_no_agent_facing_utterance_writer_including_plugins() -> None:
+    """Lock 1, extended to INSTALLED PLUGINS (adversarial review F1): a plugin verb
+    can reach ``append_utterance`` too (the notebook-render ``notebook-ingest-
+    signoffs`` does), and the core name-scan cannot see it. Scan the FULL registry
+    (core + any installed plugin primitives) and refuse any AGENT-FACING primitive
+    whose implementation module CALLS ``append_utterance`` — an agent-reachable
+    utterance writer is the exact affordance the write-API lock forbids, no matter
+    which lane it ships in. Non-agent-facing (human-invoked) writers are allowed:
+    the ingest verb is agent_facing=False, so the human still runs it out-of-band.
+
+    A no-op in core-only CI (no core primitive calls append_utterance); it fires
+    only when a plugin that does is installed — the setting the plugin test suite
+    exercises after an editable install.
+    """
+    import inspect
+
+    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+    register_primitives()
+    offenders: list[str] = []
+    for name, meta in get_registry().items():
+        if not meta.agent_facing:
+            continue
+        module = inspect.getmodule(meta.func)
+        if module is None:
+            continue
+        try:
+            src = inspect.getsource(module)
+        except (OSError, TypeError):
+            continue
+        if "append_utterance(" in src:
+            offenders.append(name)
+    assert offenders == [], (
+        "an AGENT-FACING primitive reaches the utterance-log writer "
+        f"(append_utterance): {offenders}. The LLM must never gain a sanctioned "
+        "utterance write — make the verb agent_facing=False (human-invoked) as the "
+        "notebook-ingest-signoffs plugin verb does."
+    )

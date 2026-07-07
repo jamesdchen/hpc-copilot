@@ -64,17 +64,29 @@ short `section_sha` / `view_sha` the *core* view computed), and, for each
 
 A human typing into a rendered sign-off cell is out-of-band from the LLM, so the
 render **is** a conforming harness: `notebook-ingest-signoffs` reads the
-human-edited `.ipynb` and, for each typed sign-off, does exactly what a Claude
-Code sign-off does:
+human-edited `.ipynb` and, for each typed sign-off, does what a Claude Code
+sign-off does:
 
-1. writes the raw typed text through the documented utterance-log write API
-   ([`docs/internals/harness-contract.md`](../../../docs/internals/harness-contract.md)
-   §2 — `state/utterances.py::append_utterance`: same locator, frozen schema,
-   no-scaffold precondition, provenance filter, fail-open), and
-2. appends the sign-off through the **core** append-decision path
+1. appends the sign-off through the **core** append-decision path
    (`scope_kind="notebook"`, `block="notebook-sign-off"`), recomputing
    `section_sha` / `view_sha` from the **current** source + template so the T8
-   sign-off gate enforces recompute + authorship.
+   sign-off gate enforces recompute + authorship, and
+2. **optionally** (see the trust boundary below) writes the raw typed text through
+   the documented utterance-log write API
+   ([`docs/internals/harness-contract.md`](../../../docs/internals/harness-contract.md)
+   §2 — `state/utterances.py::append_utterance`: same locator, frozen schema,
+   no-scaffold precondition, provenance filter, fail-open).
+
+> **Trust boundary (HUMAN-INVOKED-ONLY).** This verb reads an `.ipynb` the agent
+> can *author*, so it is **`agent_facing=False`** (a human-invoked CLI verb, never
+> an agent tool) and the utterance-log write is **off by default**
+> (`write_utterance_log` defaults `false`). Left off, the sign-off still lands and
+> the gate judges it at whatever tier the existing log supports (the honest
+> journal-response friction tier when no hook-captured utterance matches). Pass
+> `write_utterance_log=true` — after a human typed in Jupyter — to restore the
+> full-strength authorship tier. An agent setting that flag is laundering its own
+> words into tier-1 human evidence, the same contract violation as editing harness
+> config.
 
 This makes the whole audit loop work with **no Claude Code anywhere**:
 
@@ -82,13 +94,16 @@ This makes the whole audit loop work with **no Claude Code anywhere**:
 notebook-render  →  human types in Jupyter  →  notebook-ingest-signoffs  →  full-strength tier
 ```
 
-Honest degradation (the no-scaffold rule): if the journal namespace for the repo
-does not exist, the utterance write is a clean no-op and the result reports
-`utterance_log: "absent-namespace"` — the sign-off still lands via append-decision,
-but the full-strength authorship channel was absent and the tier is reported
-honestly, never overclaimed. Per-section refusals (a bare ack, a slug the current
-source no longer has, an unchanged scaffold, harness-injection text) are reported
-per-section (`refused` / `skipped_empty`), never fatal to the batch.
+Honest degradation (the no-scaffold rule): with `write_utterance_log=false` (the
+default) the result reports `utterance_log: "skipped"` — no utterance was written
+and the gate judges the sign-off at the tier the existing log supports. With
+`write_utterance_log=true`, if the journal namespace for the repo does not exist
+the write is a clean no-op and the result reports `utterance_log:
+"absent-namespace"`; on success it reports `"written"` (full-strength tier). Either
+way the sign-off still lands via append-decision. Per-section refusals (a bare ack,
+a slug the current source no longer has, an unchanged scaffold, harness-injection
+text) are reported per-section (`refused` / `skipped_empty`), never fatal to the
+batch.
 
 ## Verb reference
 
@@ -101,13 +116,15 @@ lint_findings?, attention_order?}` — `output_path` defaults to
 Result: `{audit_id, output_path, sections: [{slug, status, tier}], executed,
 receipts_recorded: [slug], receipts_skipped: [slug]}`.
 
-### `notebook-ingest-signoffs` (mutate)
+### `notebook-ingest-signoffs` (mutate, **human-invoked** — `agent_facing=false`)
 
-Spec: `{audit_id, source, template, notebook_path}`.
+Spec: `{audit_id, source, template, notebook_path, write_utterance_log?}` —
+`write_utterance_log` defaults `false` (HUMAN-INVOKED-ONLY; see the trust
+boundary above).
 
 Result: `{audit_id, ingested: [{section, section_sha, view_sha}],
 refused: [{section, reason}], skipped_empty: [slug],
-utterance_log: "written" | "absent-namespace"}`.
+utterance_log: "skipped" | "written" | "absent-namespace"}`.
 
 ## The receipt-emitter convention (for non-notebook callers)
 

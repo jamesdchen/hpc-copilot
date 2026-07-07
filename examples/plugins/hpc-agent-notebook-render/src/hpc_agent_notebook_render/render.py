@@ -23,7 +23,8 @@ import jupytext
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliShape
-from hpc_agent.ops.notebook.audit_view import HUMAN_REQUIRED, build_audit_view
+from hpc_agent.ops.notebook.audit_view import HUMAN_REQUIRED
+from hpc_agent.ops.notebook.canonical import AuditConfig, build_canonical_view, read_recorded_config
 from hpc_agent.ops.notebook.render_store import write_render
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import read_decisions
@@ -161,9 +162,28 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
     source_text = _read_rel(experiment_dir, spec.source, what="source")
     template_text = _read_rel(experiment_dir, spec.template, what="template")
     source = parse_percent_source(source_text)
-    template = parse_percent_source(template_text)
-    view = build_audit_view(
-        source, template, spec.lint_findings, attention_order=spec.attention_order
+    parse_percent_source(template_text)  # loud on a malformed template
+    # Build the CANONICAL view (server-recomputed lint from the recorded roots +
+    # journaled fresh receipts) so the render files this writes are addressed by
+    # the SAME view_shas the core T8 sign-off gate recomputes — a later sign-off
+    # (typed + ingested, or committed directly) finds its trusted-display artifact.
+    # The recorded attention order is honored; an explicit spec override wins.
+    recorded_cfg = read_recorded_config(experiment_dir, spec.audit_id)
+    cfg = AuditConfig(
+        input_roots=recorded_cfg.input_roots,
+        source_roots=recorded_cfg.source_roots,
+        attention_order=(
+            spec.attention_order
+            if spec.attention_order is not None
+            else recorded_cfg.attention_order
+        ),
+    )
+    view = build_canonical_view(
+        experiment_dir,
+        audit_id=spec.audit_id,
+        source_relpath=spec.source,
+        template_relpath=spec.template,
+        cfg=cfg,
     )
     views = {sv.slug: sv for sv in view.sections}
 

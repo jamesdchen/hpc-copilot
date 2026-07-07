@@ -80,6 +80,7 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "aggregated",  # <exp>/_aggregated/<run_id>/** and <exp>/_aggregated/<run_id>.json
         "audited-source",  # the audited source .py + its template .py (notebook-audit T14)
         "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
+        "renders",  # <exp>/.hpc/renders/<audit_id>/** — the trusted-display render files
     }
 )
 
@@ -304,11 +305,13 @@ def _gather_audited_source(
     """Seal the run's audited-source trail when the sidecar echoes one (T14).
 
     The sidecar's opaque ``audited_source`` echo (``{source, template,
-    audit_id}``) points at three concrete stores: the source ``.py`` and its
+    audit_id}``) points at four concrete stores: the source ``.py`` and its
     template ``.py`` — both sealed as RAW BYTES under the ``audited-source`` store
     noun (same store KIND, distinguished by archive path, not by a role field) —
-    and the notebook attestation journal at
-    ``.hpc/notebooks/<audit_id>.decisions.jsonl`` (the ``notebook-journal`` noun).
+    the notebook attestation journal at
+    ``.hpc/notebooks/<audit_id>.decisions.jsonl`` (the ``notebook-journal`` noun),
+    and the trusted-display render files at ``.hpc/renders/<audit_id>/`` (the
+    ``renders`` noun — what-the-human-saw, F6).
     A run with no echo seals nothing and records no gap (an un-audited run
     legitimately has no audit trail); an echo whose declared file is missing
     records a gap (present-or-gap accounting, never a crash).
@@ -351,6 +354,52 @@ def _gather_audited_source(
             write_map=write_map,
             entries=entries,
             gaps=gaps,
+        )
+        _gather_renders(
+            experiment_dir, run_id, audit_id, write_map=write_map, entries=entries, gaps=gaps
+        )
+
+
+def _gather_renders(
+    experiment_dir: Path,
+    run_id: str,
+    audit_id: str,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal the TRUSTED-DISPLAY render files for *audit_id* — what-the-human-saw.
+
+    Every file under ``<exp>/.hpc/renders/<audit_id>/`` (the content-addressed
+    section render files the T8 sign-off gate required to exist on disk) is copied
+    as RAW BYTES under the ``renders`` store noun, so the dossier can reproduce
+    exactly what the human was shown when they signed — the audit's evidence was
+    incomplete without it (adversarial review F6). Present-or-gap accounting: no
+    renders dir / no files → one gap, success. Never parsed (the file bytes are
+    opaque to the bundler, same as every other store).
+    """
+    renders_dir = RepoLayout(experiment_dir).hpc / "renders" / audit_id
+    found = False
+    if renders_dir.is_dir():
+        for p in sorted(renders_dir.rglob("*")):
+            if p.is_file():
+                rel = p.relative_to(renders_dir).as_posix()
+                _seal(
+                    "renders",
+                    p,
+                    f"runs/{run_id}/renders/{rel}",
+                    write_map=write_map,
+                    entries=entries,
+                )
+                found = True
+    if not found:
+        gaps.append(
+            {
+                "source": "renders",
+                "run_id": run_id,
+                "note": f"no trusted-display renders on disk for audit_id {audit_id!r}",
+            }
         )
 
 

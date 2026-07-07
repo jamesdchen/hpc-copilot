@@ -262,6 +262,22 @@ This is the product claim the contract secures: "we also export notebooks," not
 is an attestation over a journal a conforming harness fed, and the harness is
 swappable.
 
+**The ingest verb's trust boundary (adversarial review F1).** The
+`notebook-ingest-signoffs` verb that lands those sign-offs reads a human-edited
+`.ipynb` — a file the AGENT can also author. If it wrote the tier-1 utterance log
+on the agent's behalf, the agent's own words would become tier-1 human evidence
+and defeat the authorship gate for every audit (the core no-utterance-writer pin
+cannot see plugin primitives). So the boundary is enforced two ways: the verb is
+`agent_facing=False` (a HUMAN-invoked CLI verb, never an agent tool), and the
+utterance-log write is OFF by default — a sign-off still lands and the gate judges
+it at whatever tier the existing log supports (the `_harness_human_texts` friction
+tier when no hook-captured utterance matches). The full-strength authorship
+channel is restored only by an explicit `write_utterance_log=True`, documented
+HUMAN-INVOKED-ONLY: a human who typed in Jupyter then ran the ingest is a genuine
+second harness; an agent setting that flag is violating the documented contract,
+the same class as editing harness config. (The utterance log is append-only; a
+concurrent doc edit is expected — re-read/retry.)
+
 ## Capability negotiation
 
 A conforming harness's capability set is not a self-asserted manifest — it is
