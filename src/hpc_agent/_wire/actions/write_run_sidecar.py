@@ -10,9 +10,9 @@ Python call (#200).
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from hpc_agent._wire._shared import (
     CampaignId,
@@ -20,6 +20,14 @@ from hpc_agent._wire._shared import (
     Runtime,
     SchedulerJobId,
 )
+
+# An opaque, caller-owned evidence-scope tag. Slug-validated with the SAME
+# character class as ``RunIdStrict`` (``_shared.RunIdStrict`` is the pattern
+# source; mirrored here rather than reused because a scope tag is semantically
+# distinct from a run identity). Core never INTERPRETS the string — it is
+# recorded verbatim on the sidecar — but a non-slug tag is refused HERE at the
+# wire so a malformed tag never reaches the state layer.
+ScopeTag = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$")]
 
 # Placeholders that are CONSTANT across all tasks in a run — using only
 # these in result_dir_template renders the same dir for every task, so the
@@ -140,3 +148,29 @@ class WriteRunSidecarInput(BaseModel):
     # SchedulerJobId: a sidecar's job_ids feed every alive-check/qacct probe —
     # refuse fabricated placeholders (see _shared.SchedulerJobId rationale).
     job_ids: list[SchedulerJobId] | None = None
+    # Opaque caller-owned evidence-scope tags. Slug-validated per element
+    # (^[A-Za-z0-9._\-]+$) so a malformed tag is refused at the wire; core
+    # never interprets them — they are recorded verbatim on the sidecar and
+    # route as owned-by-submit-s1.
+    scopes: list[ScopeTag] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE caller-owned evidence-scope tags (slug-validated: "
+            "^[A-Za-z0-9._\\-]+$). Core never interprets them — they are "
+            "recorded verbatim on the sidecar; a non-slug tag is refused here."
+        ),
+    )
+    # run_id of the ORIGINAL this run deliberately reproduces (the
+    # reproduction-receipt provenance field). Recorded verbatim; never
+    # interpreted here. find_run_by_cmd_sha's reproduction_of lever reads it
+    # back so a later reproduction of the same original skips this run too.
+    reproduces: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "run_id of the ORIGINAL run this submission deliberately REPRODUCES "
+            "(the reproduction-receipt provenance field). Recorded verbatim on "
+            "the sidecar; a later reproduction of the same original reads it "
+            "back (find-prior-run / submit's reproduction_of lever) to skip "
+            "this derived run too. Null = ordinary (non-reproduction) run."
+        ),
+    )

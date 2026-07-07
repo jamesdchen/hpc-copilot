@@ -215,7 +215,7 @@ def test_check_missing_waves_blocks_by_default_but_not_under_allow_partial(
 # ── aggregate-run: results table + empty interpretation slot ──────────────────
 
 
-def _agg_result(*, escalation_reason: str | None = None, failed_waves=None):
+def _agg_result(*, escalation_reason: str | None = None, failed_waves=None, scope_looks=None):
     from hpc_agent.ops.aggregate_flow import AggregateFlowResult
 
     return AggregateFlowResult(
@@ -226,6 +226,7 @@ def _agg_result(*, escalation_reason: str | None = None, failed_waves=None):
         combiner_dir_local="/tmp/agg/_combiner",
         aggregated_metrics={"ridge_h5": {"rmse": 0.12}, "ridge_h1": {"rmse": 0.20}},
         escalation_reason=escalation_reason,
+        scope_looks=scope_looks,
     )
 
 
@@ -248,6 +249,34 @@ def test_run_returns_results_table_with_empty_interpretation_slot(experiment) ->
     assert result.brief["proposed_interpretations"] == []
     # Deterministic error-sweep summary is present.
     assert result.brief["error_sweep"]["escalation_reason"] is None
+
+
+def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
+    """A reduction over a scoped run copies the aggregate-flow result's
+    ``scope_looks`` onto the brief VERBATIM — two plain integers per tag, the
+    block interprets nothing (rigor-primitives T3)."""
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    _greenlight(experiment, "aggregate-run")
+    looks = {"held_out": {"prior_looks": 2, "distinct_lineages": 1}}
+
+    with mock.patch.object(
+        blocks, "aggregate_flow", return_value=_agg_result(scope_looks=looks)
+    ):
+        result = blocks.aggregate_run(experiment, spec=spec)
+
+    assert result.brief["scope_looks"] == looks
+
+
+def test_run_brief_omits_scope_looks_key_for_scope_less_run(experiment) -> None:
+    """A scope-less reduction (``scope_looks is None``) leaves the key ABSENT —
+    not ``None`` — so a scope-less brief is byte-identical to a pre-T3 one."""
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    _greenlight(experiment, "aggregate-run")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(scope_looks=None)):
+        result = blocks.aggregate_run(experiment, spec=spec)
+
+    assert "scope_looks" not in result.brief
 
 
 def test_run_partial_harvest_when_waves_escalate(experiment) -> None:

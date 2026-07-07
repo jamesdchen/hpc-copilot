@@ -62,12 +62,15 @@ from hpc_agent.execution.mapreduce.reduce.metrics import (
     reduce_partials,
 )
 from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.io import atomic_write_json
 from hpc_agent.infra.ssh_validation import validate_ssh_target
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.infra.transport import rsync_pull
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import _is_terminal
+from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_sidecar
@@ -91,6 +94,11 @@ class AggregateFlowResult:
     nonempty_failing_task_ids: list[int] | None = None
     columns_checked: bool = False
     column_violations: list[dict[str, Any]] | None = None
+    #: Per-scope PRIOR look counts recorded by this reduction —
+    #: ``{tag: {"prior_looks": int, "distinct_lineages": int}}`` — or ``None``
+    #: for a scope-less run (existing consumers untouched). Two plain integers
+    #: per tag; no metric is ever consulted (rigor-primitives T3).
+    scope_looks: dict[str, dict[str, int]] | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         return {
@@ -106,6 +114,7 @@ class AggregateFlowResult:
             "nonempty_failing_task_ids": list(self.nonempty_failing_task_ids or []),
             "columns_checked": self.columns_checked,
             "column_violations": list(self.column_violations or []),
+            "scope_looks": self.scope_looks,
         }
 
 
@@ -371,11 +380,15 @@ def _combiner_only_reduce(
     combiner_local: Path,
     results_subdir: str = "results",
     out: Path | None = None,
-) -> tuple[dict[str, Any], list[int]]:
+) -> tuple[dict[str, Any], list[int], str]:
     """Pull the cluster ``_combiner/`` partials and reduce them locally.
 
     The default aggregation path. Returns ``(aggregated_metrics,
-    incomplete_waves)``.
+    incomplete_waves, source)`` — ``source`` is ``"local_reduce"`` when the
+    combiner partials were reduced locally, or ``"per_task_fallback"`` when
+    the no-combiner default fell back to the per-task ``metrics.json``
+    weighted-mean. The caller stamps ``source`` into the durable local
+    aggregate artifact so its provenance is honest.
 
     Incremental rsync: rather than walking the entire cluster-side
     ``_combiner/`` tree on every call (slow for runs with 1000+ waves even when
@@ -445,7 +458,7 @@ def _combiner_only_reduce(
                 # No wave partials → no per-wave incomplete-task signal to
                 # surface; the per-task fallback either reduced over readable
                 # sidecars or raised above.
-                return aggregated, []
+                return aggregated, [], "per_task_fallback"
             # has_agg_cmd is True here (the no-cmd case fell back above): the
             # caller configured a custom reducer, so cluster-reduce is the
             # right remediation — silently meaning their metrics.json would
@@ -477,7 +490,7 @@ def _combiner_only_reduce(
     # only the readable subset. Surface those waves so the caller does
     # not treat the aggregate as computed over the full task set.
     incomplete_waves = sorted(collect_wave_errors(combiner_local))
-    return aggregated, incomplete_waves
+    return aggregated, incomplete_waves, "local_reduce"
 
 
 def _pure_api_reduce(
@@ -639,6 +652,91 @@ def _cluster_final_reduce(
     return aggregated, [int(w) for w in incomplete]
 
 
+def _persist_local_aggregate(
+    out: Path,
+    run_id: str,
+    *,
+    aggregated: dict[str, Any],
+    incomplete_waves: list[int],
+    source: str,
+) -> None:
+    """Atomically persist the default-path reduce as a durable local artifact.
+
+    The default (non-``HPC_CLUSTER_FINAL_REDUCE``) aggregation returns
+    ``aggregated_metrics`` inline and otherwise persists only the pulled
+    ``_combiner/wave_*.json`` partials — there is no single durable file a
+    later consumer (verify-reproduction, which byte-diffs two runs' reduced
+    metrics) can read. Write ``<out>/metrics_aggregate.json`` matching the
+    shape :func:`_cluster_final_reduce` produces/consumes on the opt-in
+    cluster-final path: ``{"aggregated_metrics": ..., "provenance": {...}}``.
+    ``out`` is ``<experiment_dir>/_aggregated/<run_id>`` by default, so the
+    artifact lands at ``_aggregated/<run_id>/metrics_aggregate.json``.
+
+    Harvest-guard posture: BEST-EFFORT. A failed write logs a loud warning and
+    NEVER aborts the harvest — the reduced metrics are already returned inline;
+    only the durable-artifact convenience is lost until the next re-aggregate.
+    """
+    payload = {
+        "aggregated_metrics": aggregated,
+        "provenance": {
+            "incomplete_waves": list(incomplete_waves),
+            "source": source,
+            "reduced_at": utcnow_iso(),
+        },
+    }
+    agg_path = out / "metrics_aggregate.json"
+    try:
+        atomic_write_json(agg_path, payload)
+    except (OSError, ValueError, TypeError) as exc:
+        print(
+            f"[aggregate-flow] WARNING: failed to persist the durable local "
+            f"aggregate for run_id {run_id!r} at {agg_path}: {exc!r}. The reduced "
+            f"metrics are still returned inline; verify-reproduction has no "
+            f"durable artifact for this run until it is re-aggregated."
+        )
+
+
+def _record_scope_looks(
+    experiment_dir: Path, run_id: str, *, reducer_block: str
+) -> dict[str, dict[str, int]] | None:
+    """Record one look per scope tag at a success terminal; return the PRIOR counts.
+
+    Rigor-primitives T3 look recording. For every tag on the run's sidecar
+    ``scopes``: FIRST snapshot :func:`state.scopes.count_prior_looks` (PRIOR by
+    construction — this run's look is not on the ledger yet), THEN
+    :func:`state.scopes.record_look` (deduped on ``(scope, run_id)``, so a
+    replay of the same run re-reports the same counts and never double-counts).
+
+    Returns ``{tag: {"prior_looks": int, "distinct_lineages": int}}`` — two
+    plain integers per tag, no metric ever consulted — or ``None`` for a
+    scope-less / sidecar-less run so existing consumers are untouched.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError, errors.HpcError):
+        return None
+    scopes = sidecar.get("scopes")
+    if not scopes:
+        return None
+    from hpc_agent.state.scopes import count_prior_looks, lineage_root, record_look
+
+    cmd_sha = str(sidecar.get("cmd_sha") or "")
+    root = lineage_root(experiment_dir, run_id)
+    out: dict[str, dict[str, int]] = {}
+    for tag in scopes:
+        tag_str = str(tag)
+        out[tag_str] = count_prior_looks(experiment_dir, tag_str)
+        record_look(
+            experiment_dir,
+            tag_str,
+            run_id=run_id,
+            cmd_sha=cmd_sha,
+            lineage_root=root,
+            reducer_block=reducer_block,
+        )
+    return out or None
+
+
 def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
     """Resolve ``--spec`` vs ``--run-id`` shortcut for ``aggregate-flow``.
 
@@ -795,6 +893,15 @@ def aggregate_flow(
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
 
+    # Scope gate (rigor-primitives T3): a run whose caller-attached evidence
+    # scope is locked must not be reduced — a lock is deliberate human state
+    # and reducing it would spend a reserved look. Pure LOCAL read, and it
+    # fires BEFORE the opt-in reconcile poll below so a locked run triggers
+    # zero SSH of any kind (the enforcement-map contract "the gate fires
+    # before any SSH on a locked run" — verifier finding L1, 2026-07-07).
+    # Scope-less or sidecar-less runs pass untouched.
+    assert_scopes_unlocked(experiment_dir, run_id)
+
     # Skip-monitor reconcile (opt-in): the caller went straight to aggregate
     # on a short run without running monitor-flow, so the journal still says
     # in_flight. Poll the cluster ONCE and, if it confirms the run is done,
@@ -869,6 +976,7 @@ def aggregate_flow(
             aggregated_metrics=aggregated,
             summaries_dir_local=None,
             escalation_reason=None,
+            scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
     _validate_ssh_target(record.ssh_target)
@@ -936,6 +1044,7 @@ def aggregate_flow(
             # under ``combiner_dir_local`` already.
             summaries_dir_local=None,
             escalation_reason=None,
+            scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
     # Read the sidecar's wave_map (record carries combined_waves but not
@@ -982,13 +1091,28 @@ def aggregate_flow(
             experiment_dir, run_id, record=record, out=out
         )
     else:
-        aggregated, incomplete_waves = _combiner_only_reduce(
+        aggregated, incomplete_waves, reduce_source = _combiner_only_reduce(
             experiment_dir,
             run_id,
             record=record,
             combiner_local=combiner_local,
             results_subdir=results_subdir,
             out=out,
+        )
+        # Persist a durable local aggregate artifact on the DEFAULT path. The
+        # combiner-only reduce (and its per-task fallback) return
+        # ``aggregated_metrics`` inline and otherwise persist only the pulled
+        # ``_combiner/wave_*.json`` partials — there is no single durable file a
+        # later consumer (verify-reproduction, which diffs two runs) can
+        # byte-read. Mirror the cluster-final path's
+        # ``_aggregated/<run_id>/metrics_aggregate.json``. Best-effort: a failed
+        # write warns loudly and never aborts the harvest.
+        _persist_local_aggregate(
+            out,
+            run_id,
+            aggregated=aggregated,
+            incomplete_waves=incomplete_waves,
+            source=reduce_source,
         )
 
     # Ingest runtime samples (timing + axis_bindings) from the pulled
@@ -1138,4 +1262,5 @@ def aggregate_flow(
         nonempty_failing_task_ids=nonempty_failing,
         columns_checked=columns_checked,
         column_violations=column_violations,
+        scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
     )

@@ -561,7 +561,7 @@ def test_s3_anomaly_is_a_terminator(tmp_path: Path) -> None:
 # ── S4: results brief ────────────────────────────────────────────────────────
 
 
-def _agg_result(*, escalation_reason: str | None = None, failed_waves=None):
+def _agg_result(*, escalation_reason: str | None = None, failed_waves=None, scope_looks=None):
     from hpc_agent.ops.aggregate_flow import AggregateFlowResult
 
     return AggregateFlowResult(
@@ -572,6 +572,7 @@ def _agg_result(*, escalation_reason: str | None = None, failed_waves=None):
         combiner_dir_local="/tmp/agg/_combiner",
         aggregated_metrics={"ridge_h5": {"rmse": 0.12}, "ridge_h1": {"rmse": 0.20}},
         escalation_reason=escalation_reason,
+        scope_looks=scope_looks,
     )
 
 
@@ -608,6 +609,31 @@ def test_s4_partial_harvest_when_waves_escalate(tmp_path: Path) -> None:
     assert result.stage_reached == "harvest_partial"
     assert result.needs_decision is True
     assert result.brief["escalation_reason"].startswith("combiner_failed")
+
+
+def test_s4_brief_carries_scope_looks_verbatim(tmp_path: Path) -> None:
+    """The S4 sync-path brief copies ``agg.scope_looks`` VERBATIM (the
+    est_core_hours pattern) — plain counts, core interprets nothing (T3)."""
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+    _greenlight(tmp_path, "submit-s4")
+    looks = {"holdout": {"prior_looks": 2, "distinct_lineages": 1}}
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(scope_looks=looks)):
+        result = blocks.submit_s4(tmp_path, spec=spec)
+
+    assert result.brief["scope_looks"] == looks
+
+
+def test_s4_brief_omits_scope_looks_for_scopeless_run(tmp_path: Path) -> None:
+    """A scope-less result (``scope_looks=None``) leaves the key ABSENT so an old
+    brief is byte-identical."""
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+    _greenlight(tmp_path, "submit-s4")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        result = blocks.submit_s4(tmp_path, spec=spec)
+
+    assert "scope_looks" not in result.brief
 
 
 # ── brief persistence (conduct rule 9, provenance gate) ──────────────────────
@@ -880,6 +906,36 @@ def test_render_relay_s4_harvest_counts_rows() -> None:
     relay = render_relay("s4", "harvested", brief)
     assert "harvest complete" in relay
     assert "2 result row(s)" in relay
+
+
+def test_render_relay_s4_harvest_renders_scope_look_counts() -> None:
+    """When the brief carries ``scope_looks``, the relay appends a COUNTS-ONLY
+    phrase per tag from the brief's OWN data — no advice, no statistics."""
+    brief = {
+        "run_id": "ml_run_abcd1234",
+        "results_table": [{"key": "a"}],
+        "scope_looks": {"holdout": {"prior_looks": 3, "distinct_lineages": 2}},
+    }
+    relay = render_relay("s4", "harvested", brief)
+    assert "scope holdout: 3 prior reduction(s), 2 lineage(s)" in relay
+    assert "1 result row(s)" in relay
+    # Counts only — no interpretation vocabulary leaks in.
+    for word in ("significant", "p-value", "overfit", "leak", "warning", "advice"):
+        assert word not in relay.lower()
+
+
+def test_render_relay_s4_scopeless_harvest_is_byte_identical() -> None:
+    """A scope-less brief (no ``scope_looks`` key) renders the pre-existing
+    string byte-for-byte — the scope phrase adds nothing."""
+    brief = {"run_id": "ml_run_abcd1234", "results_table": [{"key": "a"}, {"key": "b"}]}
+    assert render_relay("s4", "harvested", brief) == (
+        "harvest complete (run ml_run_abcd1234): 2 result row(s)"
+        " — review the table and choose an interpretation."
+    )
+    # An explicit None is identical to the key being absent.
+    assert render_relay("s4", "harvested", {**brief, "scope_looks": None}) == render_relay(
+        "s4", "harvested", brief
+    )
 
 
 def test_render_relay_s1_resolved_greenlights_to_canary() -> None:

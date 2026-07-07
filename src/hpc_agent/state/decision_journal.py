@@ -19,6 +19,7 @@ sidecars and campaign scratch already live under)::
 
     <experiment_dir>/.hpc/runs/<run_id>.decisions.jsonl        # scope_kind="run"
     <experiment_dir>/.hpc/campaigns/<campaign_id>/decisions.jsonl  # scope_kind="campaign"
+    <experiment_dir>/.hpc/scopes/<tag>.decisions.jsonl         # scope_kind="scope"
 
 One JSONL record per exchange, newest last, **append-only**: a write
 never rewrites or truncates a prior record. Appends are serialized under
@@ -60,11 +61,15 @@ __all__ = [
 # extra keys (forward-compat) so additive fields do NOT need a bump.
 SCHEMA_VERSION = 1
 
-# The two scopes a decision can belong to. A "run" decision journals the
+# The scopes a decision can belong to. A "run" decision journals the
 # submit S1–S4 / anomaly / harvest touchpoints of a single run; a
 # "campaign" decision journals the once-at-start spec greenlight plus the
-# anomaly / completion briefs of an asynchronous campaign (design §4).
-SCOPE_KINDS = frozenset({"run", "campaign"})
+# anomaly / completion briefs of an asynchronous campaign (design §4). A
+# "scope" decision journals the lock/unlock touchpoints of a named,
+# caller-tagged experiment scope (:mod:`hpc_agent.state.scopes`) — the
+# substrate the scope lock state and look ledger hang off; the journal
+# stores the shape, never any tag vocabulary.
+SCOPE_KINDS = frozenset({"run", "campaign", "scope"})
 
 _log = logging.getLogger(__name__)
 
@@ -105,6 +110,10 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         return RepoLayout(experiment_dir).runs / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "scope":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "scopes" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign" (validated above)
     from hpc_agent.meta.campaign.dirs import campaign_dir
 

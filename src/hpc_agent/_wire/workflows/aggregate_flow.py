@@ -198,3 +198,16 @@ class AggregateFlowResult(BaseModel):
             "when the gate passed or was skipped."
         ),
     )
+    scope_looks: dict[str, dict[str, int]] | None = Field(
+        default=None,
+        description=(
+            "Per-scope look counts recorded by this reduction, PRIOR to it: "
+            "{tag: {prior_looks, distinct_lineages}}. `prior_looks` is the "
+            "number of runs whose results were reduced against the scope "
+            "BEFORE this one; `distinct_lineages` collapses supersession-"
+            "chained reruns of the same experiment to one. Two plain integers "
+            "per tag — the framework counts looks, it never interprets what "
+            "they found. Null (key omitted in spirit) for a scope-less run, so "
+            "existing consumers are untouched."
+        ),
+    )

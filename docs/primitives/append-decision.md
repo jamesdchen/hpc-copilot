@@ -70,6 +70,32 @@ A recorded `y`/nudge exchange persists exactly these fields, and no more:
 
 One JSON object per line, newest last. Appends are serialized under an advisory `flock` (same discipline as `state/journal.py` and the monitor tick log) and `fsync`-ed.
 
+## Scope unlock — the human-only relax arm
+
+A caller-tagged **scope** (`state/scopes.py`) is locked by the safe-direction
+[`scope-lock`](scope-lock.md) verb, but **unlocking has no verb** — relaxing a
+restriction is a human act, so it is journaled here as an ordinary decision:
+
+- `scope_kind="scope"`, `scope_id=<tag>`;
+- `block="scope-unlock"` (the distinct block the authorship gate keys on — a
+  lock uses `"scope-lock"`);
+- `resolved={"scope_action": "unlock"}` (the state layer reads `scope_action`
+  newest-first to decide the lock state).
+
+The **scope-unlock authorship bar** (`_assert_unlock_authorship`) refuses a
+laundered unlock:
+
+- **A bare `y` cannot unlock.** A `y` / click carries no authored rationale;
+  unlocking must be a deliberate human statement, so `response` must be a typed
+  rationale, never a bare acknowledgement.
+- **With the harness utterance log installed**, the rationale's words must
+  derive from a logged human utterance (harness-captured out-of-band), not the
+  agent-relayed `response` — the same lock the fabricated-`task_generator` gate
+  uses. Without a log, the non-bare `response` is itself the human's rationale.
+- The `scope-unlock` block is refused for any `scope_kind` other than `scope`,
+  and a scope unlock must carry exactly that block. A **lock**
+  (`scope_action="lock"`) never faces the bar — locking only restricts.
+
 ## Notes
 
 - **Separate store.** The decision journal never touches `state/run_record.py` or the `RunRecord` JSON. It generalizes `verdict_history`; it does not replace it.

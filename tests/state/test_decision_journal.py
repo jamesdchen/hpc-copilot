@@ -104,6 +104,43 @@ def test_campaign_scope_locality_and_round_trip(tmp_path: Path) -> None:
     assert records[0]["resolved"] == {"strategy": "tpe", "budget": 1000}
 
 
+def test_scope_kind_lands_under_hpc_scopes(tmp_path: Path) -> None:
+    """A ``scope`` decision journals under ``.hpc/scopes/<tag>.decisions.jsonl``."""
+    append_decision(
+        tmp_path,
+        scope_kind="scope",
+        scope_id="my-scope",
+        block="scope-lock",
+        response="freeze",
+        resolved={"scope_action": "lock"},
+    )
+    path = decisions_path(tmp_path, "scope", "my-scope")
+    assert path == tmp_path / ".hpc" / "scopes" / "my-scope.decisions.jsonl"
+    records = read_decisions(tmp_path, "scope", "my-scope")
+    assert len(records) == 1
+    assert records[0]["scope_kind"] == "scope"
+    assert records[0]["resolved"] == {"scope_action": "lock"}
+
+
+def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) -> None:
+    """Existing run/campaign locality is unchanged by the new scope kind."""
+    append_decision(tmp_path, scope_kind="run", scope_id="id", block="submit.S1", response="y")
+    append_decision(
+        tmp_path, scope_kind="campaign", scope_id="id", block="campaign.spec", response="y"
+    )
+    append_decision(tmp_path, scope_kind="scope", scope_id="id", block="scope-lock", response="y")
+    assert (
+        decisions_path(tmp_path, "run", "id") == tmp_path / ".hpc" / "runs" / "id.decisions.jsonl"
+    )
+    assert (
+        decisions_path(tmp_path, "campaign", "id")
+        == tmp_path / ".hpc" / "campaigns" / "id" / "decisions.jsonl"
+    )
+    assert len(read_decisions(tmp_path, "run", "id")) == 1
+    assert len(read_decisions(tmp_path, "campaign", "id")) == 1
+    assert len(read_decisions(tmp_path, "scope", "id")) == 1
+
+
 def test_run_and_campaign_scopes_are_separate_stores(tmp_path: Path) -> None:
     append_decision(
         tmp_path, scope_kind="run", scope_id="shared-id", block="submit.S1", response="y"

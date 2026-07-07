@@ -56,6 +56,13 @@ A `SubmitBlockResult` (`block="s4"`, `needs_decision=true`) with a `brief`:
   `aggregate-flow`.
 - `proposed_interpretations` — handed over **empty**; the slot the LLM fills at
   the `y`/nudge boundary. Concluding is the human's decision.
+- `scope_looks` — present ONLY when the run carries caller-attached evidence
+  scopes: `{tag: {prior_looks, distinct_lineages}}`, plain counts of prior
+  journaled reductions against each scope (`prior_looks` = total look records;
+  `distinct_lineages` = distinct supersession-lineage roots). Core interprets
+  nothing — no advice, no statistics; the relay renders the counts verbatim and
+  the human concludes. **Absent** for a scope-less run (an old brief stays
+  byte-identical).
 
 `stage_reached` ∈ `harvested` (every wave combined cleanly) · `harvest_partial`
 (some waves escalated — review the table before concluding) · `detached` (the
@@ -65,6 +72,19 @@ journal).
 A re-invoke after the detached worker reached its terminal for the current tree
 REPLAYS the recorded results brief (`state/block_terminal`, keyed on the sidecar
 `cmd_sha`) — no new worker, no SSH.
+
+## Scope gate
+
+Before any harvest work, S4 asserts that none of the run's caller-attached
+evidence scopes is currently **locked** (`assert_scopes_unlocked`, rigor-primitives
+T3). The check fires **synchronously in the parent, pre-detach** — same gate →
+detach ordering proof as the greenlight gate: a locked scope refuses loudly to
+the caller (`ScopeLocked`, a `precondition_failed`-coded refusal naming the tag
+and the lock timestamp), never inside a detached child's log where the refusal
+would be invisible. One definition, two call sites — the detached child re-hits
+the identical gate inside `aggregate-flow` (defense in depth). A scope-less run
+(no sidecar `scopes`) passes silently. The single exit from a locked scope is a
+human-journaled **unlock** decision on that scope.
 
 ## Errors
 

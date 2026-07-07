@@ -122,6 +122,8 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
     "data_sha",  # str — data identity of the declared input dataset(s) (#222)
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
+    "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
+    "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -164,6 +166,8 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "node_sha": None,
     "data_sha": None,
     "env_hash": None,
+    "scopes": None,
+    "reproduces": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -235,6 +239,8 @@ def write_run_sidecar(
     data_sha: str | None = None,
     env_hash: str | None = None,
     job_ids: list[str] | None = None,
+    scopes: list[str] | None = None,
+    reproduces: str | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -284,6 +290,22 @@ def write_run_sidecar(
     (:func:`hpc_agent.ops.provenance_manifest.build_provenance_manifest`)
     reads them back off the sidecars to pair every run with its full
     {code, data, env, params, cluster} fingerprint.
+
+    *scopes* is an optional list of opaque caller-owned evidence-scope tags.
+    Like *trial_tokens* / *trial_params* the framework records them verbatim
+    and never interprets them — they route as owned-by-S1 and are recovered
+    from the sidecar by downstream evidence tooling. Absent (``None``) → the
+    key is omitted entirely, so a scope-less run's sidecar is byte-identical
+    to one written before this field existed.
+
+    *reproduces* records the ``run_id`` of the ORIGINAL run this submission is
+    a deliberate reproduction of (the ``reproduction_of`` dedup lever that
+    pierced the same-params guards to let it run). Recorded verbatim, never
+    interpreted; :func:`find_run_by_cmd_sha`'s ``reproduction_of`` lever reads
+    it back so a *later* reproduction of the SAME original skips this derived
+    run too (not just the original). Absent (``None``) → the key is omitted,
+    so an ordinary run's sidecar is byte-identical to one written before this
+    field existed.
 
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
@@ -336,6 +358,14 @@ def write_run_sidecar(
         "data_sha": data_sha,
         "env_hash": env_hash,
         "job_ids": list(job_ids) if job_ids is not None else None,
+        # Opaque caller-owned evidence-scope tags. Recorded verbatim, never
+        # interpreted by core (same only-write-non-None-keys pattern as every
+        # other v2 field, so a scope-less run's sidecar is byte-identical).
+        "scopes": list(scopes) if scopes is not None else None,
+        # run_id of the ORIGINAL this run deliberately reproduces (same
+        # only-write-non-None pattern; a non-reproduction run's sidecar is
+        # byte-identical). find_run_by_cmd_sha's reproduction_of lever reads it.
+        "reproduces": reproduces,
     }
     for k, v in v2_values.items():
         if v is not None:
@@ -566,6 +596,7 @@ def find_run_by_cmd_sha(
     invalidate_on_code_change: bool = False,
     campaign_id: str | None = None,
     node_sha: str | None = None,
+    reproduction_of: str | None = None,
 ) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
@@ -663,6 +694,20 @@ def find_run_by_cmd_sha(
       the composed identity, so a parented re-submit dedups only against
       a prior run with the same params AND the same ancestry — never
       against a stale run computed from a since-changed parent.
+
+    *reproduction_of* is the reproduction-receipt rejection lever — the
+    same-campaign lever's sibling for a DELIBERATE one-off re-run of
+    identical params (a reproduction, not a campaign iteration). When set to
+    the ORIGINAL run's ``run_id``, a matched sidecar is NOT a dedup target
+    when EITHER its own ``run_id`` equals *reproduction_of* (the original
+    itself) OR its recorded ``reproduces`` equals *reproduction_of* (a prior
+    reproduction of the same original) — the scan continues past both. So a
+    reproduction never dedups against — and silently replays — the very run
+    it means to reproduce, nor against an earlier reproduction of it, while
+    an UNRELATED prior with the same params is still a valid dedup target.
+    Unset (default) → behaviour is byte-identical to the historical
+    match-on-identity version. Orthogonal to the #207 code-drift and the
+    campaign-iteration levers — each is decided independently.
     """
     if not cmd_sha:
         return None
@@ -680,6 +725,16 @@ def find_run_by_cmd_sha(
         # iteration, not a replay target — keep scanning. Orthogonal to the
         # code-drift logic below.
         if campaign_id and data.get("campaign_id") == campaign_id:
+            continue
+        # Reproduction-receipt rejection: when this submit is a deliberate
+        # reproduction of `reproduction_of`, neither the ORIGINAL (matched by
+        # run_id) nor any PRIOR reproduction of it (matched by the recorded
+        # `reproduces`) is a replay target — keep scanning so an unrelated
+        # same-params prior can still dedup. Orthogonal to the code-drift and
+        # campaign-iteration levers.
+        if reproduction_of and (
+            path.stem == reproduction_of or data.get("reproduces") == reproduction_of
+        ):
             continue
         # Param identity matched. Now consider CODE identity — the executor
         # command and the tasks.py bytes — via the single shared drift predicate

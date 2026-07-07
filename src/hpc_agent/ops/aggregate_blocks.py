@@ -460,6 +460,15 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
         # code hands over an EMPTY list; concluding is the human's decision (§2).
         "proposed_interpretations": [],
     }
+    # Per-scope PRIOR look counts recorded by the composed reduction (T3): copy
+    # verbatim, the framework interprets nothing. Key ABSENT (not None) for a
+    # scope-less run so a scope-less brief stays byte-identical to pre-T3. The
+    # scope GATE (ScopeLocked refusal + the look-ledger side effect) fires ONCE,
+    # inside the composed ``aggregate-flow`` — aggregate-run has no pre-flow seam
+    # analogous to submit-s4's pre-detach gate, and it never detaches, so there
+    # is no ordering hazard: the flow's gate + ledger write cover this block.
+    if agg.scope_looks is not None:
+        brief["scope_looks"] = agg.scope_looks
 
     partial = bool(agg.escalation_reason) or bool(agg.failed_waves)
     return AggregateBlockResult(

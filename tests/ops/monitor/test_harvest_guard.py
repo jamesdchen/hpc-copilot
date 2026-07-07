@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from hpc_agent.errors import SshCircuitOpen
+from hpc_agent.errors import ScopeLocked, SshCircuitOpen
 from hpc_agent.ops.monitor.harvest_guard import (
     CIRCUIT_WAIT_CAP_SEC,
     TERMINAL_CAUSES,
@@ -301,6 +301,42 @@ class TestCircuitOpenBoundedRetry:
         assert marker["metrics_harvested"] is False
         assert marker["metrics_error"] is not None
         assert marker["harvest_ok"] is False
+
+
+def test_harvest_guard_records_locked_skip_not_failure(
+    journal_home: Path, experiment: Path
+) -> None:
+    """A ScopeLocked reduction is a CLEAN SKIP, not a harvest failure.
+
+    A locked scope is deliberate human state (the scope gate refused on
+    purpose). The guard must record a skip reason, keep ``harvest_ok`` clean
+    (never False), never set ``metrics_error`` (no anomaly), and not sweep.
+    """
+
+    def _locked_agg(experiment_dir: Path, run_id: str) -> Any:
+        raise ScopeLocked.for_tag("holdout", locked_at="2026-07-06T12:00:00+00:00")
+
+    def _must_not_sweep(combiner_dir: str) -> dict[int, list[str]]:
+        raise AssertionError("sweep must not run on a clean scope-locked skip")
+
+    marker = harvest_on_terminal(
+        experiment,
+        _RUN_ID,
+        terminal_cause="complete",
+        _aggregate=_locked_agg,
+        _sweep=_must_not_sweep,
+    )
+
+    # Clean skip: recorded reason, not painted red, not an anomaly.
+    assert marker["harvest_skipped_reason"] == "scope_locked"
+    assert marker["harvest_ok"] is not False
+    assert marker["metrics_harvested"] is False
+    assert marker["metrics_error"] is None
+    assert marker["error_sweep_ran"] is False
+    assert marker["error_sweep_error"] is None
+    # Durable on disk.
+    on_disk = _read_markers(experiment, _RUN_ID)
+    assert on_disk[-1]["harvest_skipped_reason"] == "scope_locked"
 
 
 def test_terminal_causes_vocabulary_covers_design_terms() -> None:

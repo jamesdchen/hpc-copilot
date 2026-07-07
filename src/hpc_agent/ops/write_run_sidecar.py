@@ -228,5 +228,13 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         data_sha=spec.data_sha,
         env_hash=spec.env_hash,
         job_ids=spec.job_ids,
+        # Opaque caller-owned evidence-scope tags — passed straight through to
+        # the state layer (slug-validated at the wire model). Core never
+        # interprets them; the identity cross-checks above are untouched.
+        scopes=spec.scopes,
+        # Reproduction-receipt provenance: the ORIGINAL run_id this run
+        # reproduces, recorded verbatim (the -canary identity exemption above
+        # is untouched — this field is not part of the identity cross-check).
+        reproduces=spec.reproduces,
     )
     return {"path": str(target)}

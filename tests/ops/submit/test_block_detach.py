@@ -211,6 +211,72 @@ def test_s4_gate_fires_before_detach(tmp_path: Path) -> None:
     m_launch.assert_not_called()
 
 
+def _scoped_sidecar(experiment_dir: Path, *, scopes: list[str]) -> None:
+    """Write a sidecar carrying *scopes* so the S4 scope gate has tags to read."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=_RUN_ID,
+        cmd_sha="deadbeef",
+        hpc_agent_version="0.0.0-test",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=10,
+        tasks_py_sha="",
+        scopes=scopes,
+    )
+
+
+def test_s4_locked_scope_refuses_before_detach(tmp_path: Path) -> None:
+    """Ordering proof (rigor-primitives T3): a LOCKED evidence-scope refuses
+    SYNCHRONOUSLY in the parent — the detached launcher is NEVER reached, so the
+    refusal can never hide inside a detached child's log."""
+    from hpc_agent.state.scopes import record_lock
+
+    _greenlight(tmp_path, "submit-s4")
+    _scoped_sidecar(tmp_path, scopes=["holdout"])
+    record_lock(tmp_path, "holdout", reason="reserve this look")
+
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        pytest.raises(errors.ScopeLocked, match="holdout"),
+    ):
+        blocks.submit_s4(tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID)))
+    m_launch.assert_not_called()
+
+
+def test_s4_unlocked_scope_detaches(tmp_path: Path) -> None:
+    """The companion: a scope present but UNLOCKED (lock then a journaled
+    unlock) passes the gate and the block detaches normally."""
+    from hpc_agent.state.decision_journal import append_decision
+    from hpc_agent.state.scopes import record_lock
+
+    _greenlight(tmp_path, "submit-s4")
+    _scoped_sidecar(tmp_path, scopes=["holdout"])
+    record_lock(tmp_path, "holdout", reason="reserve this look")
+    # Journaled unlock — the newest lock/unlock record decides, so this reads
+    # unlocked while the lock history stays on disk (append-only).
+    append_decision(
+        tmp_path,
+        scope_kind="scope",
+        scope_id="holdout",
+        block="scope-lock",
+        response="release",
+        resolved={"scope_action": "unlock"},
+    )
+
+    with mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch:
+        result = blocks.submit_s4(
+            tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )
+
+    m_launch.assert_called_once()
+    assert result.stage_reached == "detached"
+    assert result.started is True
+
+
 def test_s4_detached_launcher_digs_run_id_from_aggregate(tmp_path: Path) -> None:
     """The S4 spec carries its run_id at ``aggregate.run_id`` (not the S2/S3
     ``submit.submit.run_id`` shape) — the launcher's handle must still name it."""

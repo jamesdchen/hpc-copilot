@@ -77,6 +77,12 @@ OWNERSHIP: dict[str, dict[str, str]] = {
         "frozen_configs": "submit-s1",
         "entry_point": "submit-s1",
         "uncovered_param": "submit-s1",
+        # Opaque caller-owned evidence-scope tags: authored at S1 (the resolve
+        # leg), so a scopes nudge routes as owned-by-S1 → re-run S1. NOT a
+        # CODE_DERIVED field (an invented tag is exactly the fabrication class
+        # the field partition guards) — it stays journal-authorable by absence
+        # from field_partition's refusal sets.
+        "scopes": "submit-s1",
         # S2 (stage & canary): walltime/cost-cap is FIRST CONSUMED by S2's
         # cost estimate (_estimate_for_submit) and the canary submit — the §4
         # "cap the cost" nudge lands here, editing a downstream block's input so

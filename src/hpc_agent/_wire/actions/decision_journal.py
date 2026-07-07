@@ -20,11 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._wire._shared import RunIdStrict
 
-# A decision belongs to a run or a campaign. ``run`` journals the submit
-# S1–S4 / anomaly / harvest touchpoints of a single run; ``campaign``
-# journals the once-at-start spec greenlight plus anomaly / completion
-# briefs of an asynchronous campaign (design §4).
-ScopeKind = Literal["run", "campaign"]
+# A decision belongs to a run, a campaign, or a named scope. ``run``
+# journals the submit S1–S4 / anomaly / harvest touchpoints of a single
+# run; ``campaign`` journals the once-at-start spec greenlight plus anomaly
+# / completion briefs of an asynchronous campaign (design §4); ``scope``
+# journals the lock/unlock touchpoints of a caller-tagged experiment scope
+# (``hpc_agent.state.scopes``). Kept in lockstep with
+# ``state.decision_journal.SCOPE_KINDS`` (schema regen is the integrator's job).
+ScopeKind = Literal["run", "campaign", "scope"]
 
 # The evidence the proposal was drafted over — an opaque free-text digest
 # OR a structured dict. The journal never interprets it; it round-trips it

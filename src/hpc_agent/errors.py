@@ -31,6 +31,7 @@ __all__ = [
     "Preempted",
     "AlreadyInFlight",
     "SiblingRunLive",
+    "ScopeLocked",
     "SubmissionIncomplete",
     "StructuredOutputError",
     "ModelEndpointError",
@@ -457,6 +458,49 @@ class SiblingRunLive(HpcError):
     error_code = "spec_invalid"
     retry_safe = False
     category = "user"
+
+
+class ScopeLocked(HpcError):
+    """A run's evidence-scope is locked — the ONE reduction seam refuses.
+
+    Raised by :func:`hpc_agent.ops.scope_gate.assert_scopes_unlocked` before
+    ``aggregate-flow`` does any SSH / combine / reduce work, when the run's
+    sidecar carries a scope tag whose most recent lock/unlock decision is a
+    ``lock`` (:func:`hpc_agent.state.scopes.is_scope_locked`). A lock is
+    deliberate human state — an embargo on a held-out scope, a reserved look —
+    so both the interactive aggregate and the automatic terminal harvest refuse
+    rather than spend it. There is exactly ONE exit: a human-journaled
+    scope-unlock (never a code override).
+
+    Reuses the ``precondition_failed`` error_code (the
+    :class:`PreconditionFailed` precedent, and the same widen-avoidance posture
+    as :class:`SiblingRunLive`'s ``spec_invalid`` reuse): reducing a locked
+    scope is a workflow step invoked against on-disk state that forbids it, and
+    adding a new error_code value is a breaking wire-envelope change.
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    remediation = (
+        "The scope was locked by a human decision. Unlock it deliberately "
+        "before reducing — journal a scope-unlock via `hpc-agent "
+        "append-decision` (scope_kind='scope', block='scope-unlock', "
+        "resolved={'scope_action': 'unlock'}) naming the tag. Locking exists "
+        "to reserve a look; there is no code override."
+    )
+
+    @classmethod
+    def for_tag(cls, tag: str, *, locked_at: str | None = None) -> ScopeLocked:
+        """Build the loud message naming *tag*, its lock ts, and the one exit."""
+        when = f" at {locked_at}" if locked_at else ""
+        return cls(
+            f"scope {tag!r} is locked{when} — refusing to reduce a run tagged "
+            "with it (reducing a locked scope would spend a reserved look). The "
+            "one exit is a human-journaled scope-unlock via append-decision "
+            "(scope_kind='scope', block='scope-unlock', "
+            "resolved={'scope_action': 'unlock'})."
+        )
 
 
 class SubmissionIncomplete(HpcError):

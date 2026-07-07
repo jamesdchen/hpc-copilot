@@ -71,6 +71,10 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "RemoteCommandFailed",
         "SchedulerThrottled",
         "SchemaIncompat",
+        # ScopeLocked (rigor primitives, 2026-07-07): a reduction over a locked
+        # evidence scope — precondition_failed-coded; the exit is a
+        # human-journaled scope-unlock via append-decision.
+        "ScopeLocked",
         "SiblingRunLive",
         "SpecInvalid",
         "SshCircuitOpen",

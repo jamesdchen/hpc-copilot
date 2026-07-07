@@ -44,7 +44,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from hpc_agent.errors import SshCircuitOpen
+from hpc_agent.errors import ScopeLocked, SshCircuitOpen
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.run_record import runs_dir
 
@@ -130,6 +130,7 @@ def harvest_on_terminal(
         "terminal_cause": terminal_cause,
         "metrics_harvested": False,
         "metrics_error": None,
+        "harvest_skipped_reason": None,
         "circuit_waited_sec": None,
         "aggregated_metric_keys": [],
         "escalation_reason": None,
@@ -147,6 +148,7 @@ def harvest_on_terminal(
     #     KeyboardInterrupt / SystemExit are NOT caught — a user force-quit
     #     mid-harvest must still propagate.
     aggregate = _aggregate if _aggregate is not None else _default_aggregate
+    scope_locked = False
     try:
         try:
             result = aggregate(experiment_dir, run_id)
@@ -176,6 +178,20 @@ def harvest_on_terminal(
         marker["escalation_reason"] = getattr(result, "escalation_reason", None)
         cdl = getattr(result, "combiner_dir_local", None)
         combiner_dir = str(cdl) if cdl else None
+    except ScopeLocked as exc:
+        # A LOCKED scope is deliberate human state, not a harvest failure: the
+        # scope gate refused the reduction on purpose. Record a CLEAN SKIP —
+        # never ``harvest_ok:false``, never an anomaly — so the automatic
+        # terminal harvest does not paint a human's lock red forever. The
+        # error sweep is skipped too (nothing was harvested to sweep).
+        scope_locked = True
+        marker["harvest_skipped_reason"] = "scope_locked"
+        _log.info(
+            "terminal harvest: run %s scope-locked — clean skip (cause=%s): %s",
+            run_id,
+            terminal_cause,
+            exc,
+        )
     except Exception as exc:  # noqa: BLE001 — safety net must record, not mask
         marker["metrics_error"] = f"{type(exc).__name__}: {exc}"
         _log.warning(
@@ -191,18 +207,21 @@ def harvest_on_terminal(
     #     already landed locally are still swept.
     sweep = _sweep if _sweep is not None else _default_sweep
     sweep_dir = combiner_dir or str(experiment_dir / "_aggregated" / run_id / "_combiner")
-    try:
-        errs = sweep(sweep_dir)
-        marker["error_sweep_ran"] = True
-        marker["waves_with_errors"] = {str(w): [str(e) for e in v] for w, v in (errs or {}).items()}
-    except Exception as exc:  # noqa: BLE001 — safety net must record, not mask
-        marker["error_sweep_error"] = f"{type(exc).__name__}: {exc}"
-        _log.warning(
-            "terminal harvest: error sweep failed for run %s (dir=%s): %s",
-            run_id,
-            sweep_dir,
-            marker["error_sweep_error"],
-        )
+    if not scope_locked:
+        try:
+            errs = sweep(sweep_dir)
+            marker["error_sweep_ran"] = True
+            marker["waves_with_errors"] = {
+                str(w): [str(e) for e in v] for w, v in (errs or {}).items()
+            }
+        except Exception as exc:  # noqa: BLE001 — safety net must record, not mask
+            marker["error_sweep_error"] = f"{type(exc).__name__}: {exc}"
+            _log.warning(
+                "terminal harvest: error sweep failed for run %s (dir=%s): %s",
+                run_id,
+                sweep_dir,
+                marker["error_sweep_error"],
+            )
 
     marker["harvest_ok"] = marker["metrics_error"] is None and marker["error_sweep_error"] is None
 

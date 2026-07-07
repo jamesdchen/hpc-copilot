@@ -81,6 +81,13 @@ _V2_CONFIG = frozenset(
         "node_sha",
         "data_sha",
         "env_hash",
+        # scopes (rigor primitives): the caller-attached opaque evidence-scope
+        # tags the reduction gate + look ledger key on.
+        "scopes",
+        # reproduces (reproduction-receipt): run_id of the ORIGINAL a deliberate
+        # reproduction re-runs; find_run_by_cmd_sha's reproduction_of lever
+        # reads it to skip a prior repro of the same original.
+        "reproduces",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

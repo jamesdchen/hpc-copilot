@@ -963,6 +963,22 @@ class TestSidecarGuarantee:
         sc = read_run_sidecar(tmp_path, "rNo")
         assert sc["result_dir_template"] == "results/{run_id}/task_{task_id}"
 
+    def test_synthesized_sidecar_carries_spec_scopes(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """The submit-flow-owns-the-artifact guarantee carries the caller's
+        opaque evidence-scope tags onto the synthesized sidecar even when the
+        resolve leg (Step 6d / write-run-sidecar) did not pre-write one."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        spec = _spec("rScopes", scopes=["ci.smoke", "band-A_1"])
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        assert read_run_sidecar(tmp_path, "rScopes")["scopes"] == ["ci.smoke", "band-A_1"]
+
     def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, _journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch

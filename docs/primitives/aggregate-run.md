@@ -67,6 +67,19 @@ chooses an interpretation.
 `column_violations`), the `harvest_ledger` tail (wave-1's `harvest_on_terminal`
 corroboration, read-only), and the EMPTY `proposed_interpretations` slot.
 
+When the run carries evidence scopes, `brief` also carries `scope_looks` —
+copied verbatim from the composed `aggregate-flow` result: a per-scope-tag map
+`{tag: {prior_looks, distinct_lineages}}`. `prior_looks` is the count of runs
+whose results were journaled against the scope BEFORE this reduction's own look
+was recorded; `distinct_lineages` collapses supersession-chained reruns of the
+same experiment to one. Two plain integers per tag — the framework counts looks
+and interprets nothing; the human reads the multiplicity when concluding. The
+key is ABSENT (not `null`) for a scope-less run, so a scope-less brief is
+byte-identical to a pre-scope one. The scope gate + the look-ledger write live
+in the composed `aggregate-flow` (see [aggregate-flow](aggregate-flow.md)):
+aggregate-run has no pre-flow seam and never detaches, so it neither re-gates
+nor re-records — it only surfaces what the flow already counted.
+
 ## Errors
 
 - `spec_invalid` — malformed spec or aggregate-flow spec validation.

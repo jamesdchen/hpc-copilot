@@ -12,10 +12,12 @@ audit log, so a replayed append records a second line rather than
 deduping — there is no natural idempotency key (``ts`` is auto-stamped and
 differs per call). ``read-decisions`` is a pure query.
 
-Three trust-seam gates run before an append is persisted: the code-derived
+Four trust-seam gates run before an append is persisted: the code-derived
 field gate (:func:`_assert_no_code_derived_fields`, run #6 F1), the rule-9
-brief-provenance gate (:func:`_assert_brief_provenance`) and the
-human-authorship gate (:func:`_assert_human_authorship`, proving run #4).
+brief-provenance gate (:func:`_assert_brief_provenance`), the
+human-authorship gate (:func:`_assert_human_authorship`, proving run #4) and
+the scope-unlock authorship gate (:func:`_assert_unlock_authorship`) — a scope
+unlock RELAXES a caller restriction, so a bare ``y`` cannot enact it.
 The authorship gate's evidence source is TIERED: when the harness-side
 ``UserPromptSubmit`` capture hook
 (:mod:`hpc_agent._kernel.hooks.utterance_capture`) has logged utterances for
@@ -104,6 +106,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_no_code_derived_fields(resolved)
     _assert_brief_provenance(experiment_dir, spec, resolved)
     _assert_human_authorship(experiment_dir, spec, resolved)
+    _assert_unlock_authorship(experiment_dir, spec, resolved)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -410,6 +413,26 @@ def _ha_word_tokens(text: str) -> set[str]:
     return {m.group(0).lower() for m in _HA_WORD_RE.finditer(text or "")}
 
 
+def _harness_human_texts(experiment_dir: Path) -> list[str] | None:
+    """The logged human utterances' texts, or ``None`` when none were captured.
+
+    The harness-captured evidence tier BOTH authorship gates share
+    (:func:`_assert_human_authorship`, :func:`_assert_unlock_authorship`): the
+    ``UserPromptSubmit`` capture hook (:mod:`hpc_agent._kernel.hooks.utterance_capture`)
+    writes each human prompt to :func:`hpc_agent.state.utterances.read_utterances`
+    out-of-band, so this is text a human verifiably typed — not the
+    agent-authored journal ``response``. ``None`` (no log / older session)
+    signals the caller to fall back to the journal-response friction tier;
+    a present-but-empty case reads the same.
+    """
+    from hpc_agent.state.utterances import read_utterances
+
+    utterances = read_utterances(experiment_dir)
+    if not utterances:
+        return None
+    return [str(u.get("text") or "") for u in utterances]
+
+
 def _human_number_pool(texts: list[str]) -> tuple[set[str], set[float]]:
     """Every number a human utterance stated, as normalized strings + floats.
 
@@ -659,10 +682,8 @@ def _assert_human_authorship(
 
     # Tiered evidence source: prefer the harness-captured utterance log (the
     # lock) over agent-authored journal responses (the friction fallback).
-    from hpc_agent.state.utterances import read_utterances
-
-    utterances = read_utterances(experiment_dir)
-    harness_captured = bool(utterances)
+    harness_texts = _harness_human_texts(experiment_dir)
+    harness_captured = harness_texts is not None
 
     if not harness_captured and prior and not any("response" in rec for rec in prior):
         # Fail-open (journal-response mode only): an old-schema journal with
@@ -679,12 +700,12 @@ def _assert_human_authorship(
     if not first_commits:
         return
 
-    if harness_captured:
+    if harness_texts is not None:
         # The lock: only text the HARNESS recorded counts as human. The
         # spec's ``response`` (and prior responses) are agent-relayed and
         # carry no authorship weight — exactly the laundering channel the
         # v1 gate could not close.
-        human_texts = [str(u.get("text") or "") for u in utterances]
+        human_texts = harness_texts
         response_commits = False
         source_desc = "logged human utterance for this repo (harness-captured)"
         remedy = "the human states it in a prompt (captured to the utterance log)"
@@ -743,6 +764,103 @@ def _assert_human_authorship(
 
     if problems:
         raise errors.SpecInvalid("human-authorship gate (conduct rule 9): " + "; ".join(problems))
+
+
+# ── scope-unlock authorship gate ──────────────────────────────────────────────
+
+# The block-terminator convention for a scope UNLOCK. Locking uses
+# ``state.scopes._SCOPE_LOCK_BLOCK`` ("scope-lock") and needs no bar (the safe
+# direction, ``record_lock`` routes straight through the state layer); an unlock
+# RELAXES the restriction and is a HUMAN act, journaled under this distinct block
+# so this gate can recognise — and refuse — a laundered one.
+_SCOPE_UNLOCK_BLOCK = "scope-unlock"
+
+
+def _assert_unlock_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Human-authorship gate for a scope UNLOCK — the relax direction of the lock.
+
+    A *scope* (``hpc_agent.state.scopes``) is a caller-tagged experiment scope;
+    LOCKING it only restricts, so ``record_lock`` carries no bar. UNLOCKING
+    re-opens it for another look — the one scope action that loosens a
+    restriction, so it faces the same human-authorship bar the fabricated-
+    task_generator gate does. An unlock is journaled as an ``append-decision``
+    whose ``scope_kind=="scope"``, ``block=="scope-unlock"``, and
+    ``resolved.scope_action=="unlock"`` (the state layer reads ``scope_action``
+    newest-first to decide the lock state; this block name is the convention the
+    gate keys on).
+
+    Block convention, enforced both directions:
+
+    * a ``scope-unlock`` block is refused for any ``scope_kind`` other than
+      ``scope`` (it is a scope-only action), and
+    * a ``scope`` unlock MUST carry ``block=="scope-unlock"`` — a laundered
+      unlock cannot hide under the lock block.
+
+    A LOCK (``scope_action=="lock"``) never reaches the bar; nor does any
+    non-scope record.
+
+    Authorship check, tiered exactly like :func:`_assert_human_authorship`:
+
+    * **A bare ack cannot unlock.** ``response`` in :data:`_BARE_ACK_RESPONSES`
+      (:func:`_is_bare_ack`) — a ``y`` / click carries no authored rationale, and
+      relaxing a scope must be a deliberate human statement, never a rubber-stamp.
+    * **With the harness utterance log present** (:func:`_harness_human_texts` —
+      the shared lock tier), the rationale's word tokens must derive from a logged
+      human utterance, not the agent-relayed ``response``. Without a log the
+      non-bare ``response`` itself is the human's typed rationale (the v1 friction
+      tier); an all-short rationale with no word tokens to check passes on the
+      strength of being non-bare.
+
+    Raises :class:`errors.SpecInvalid`.
+    """
+    is_unlock_block = spec.block == _SCOPE_UNLOCK_BLOCK
+    action = resolved.get("scope_action") if isinstance(resolved, dict) else None
+    is_unlock_action = action == "unlock"
+
+    # The scope-unlock block is a scope-only convention.
+    if is_unlock_block and spec.scope_kind != "scope":
+        raise errors.SpecInvalid(
+            f"block {_SCOPE_UNLOCK_BLOCK!r} is only valid for scope_kind='scope' "
+            f"(a scope unlock); got scope_kind={spec.scope_kind!r}."
+        )
+
+    if not (is_unlock_action and spec.scope_kind == "scope"):
+        return  # not a scope unlock — nothing to gate (a lock passes untouched)
+
+    # A scope unlock must be journaled under the scope-unlock block.
+    if not is_unlock_block:
+        raise errors.SpecInvalid(
+            "scope-unlock authorship gate: a scope unlock "
+            "(resolved.scope_action='unlock') must be journaled with "
+            f"block='{_SCOPE_UNLOCK_BLOCK}', not {spec.block!r} — the distinct block "
+            "is how the gate recognises an unlock (a lock uses 'scope-lock')."
+        )
+
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        raise errors.SpecInvalid(
+            "scope-unlock authorship gate: unlocking a scope re-opens it for "
+            f"another look and is a HUMAN act — a bare {spec.response!r} (a 'y' / "
+            "click) cannot unlock it. The human must type the rationale for "
+            "re-opening the scope."
+        )
+
+    harness_texts = _harness_human_texts(experiment_dir)
+    if harness_texts is not None:
+        human_words: set[str] = set()
+        for text in harness_texts:
+            human_words |= _ha_word_tokens(text)
+        rationale_words = _ha_word_tokens(response)
+        if rationale_words and not (rationale_words & human_words):
+            raise errors.SpecInvalid(
+                "scope-unlock authorship gate: with the harness utterance log "
+                "installed, the unlock rationale must derive from a logged human "
+                "utterance (harness-captured), not the agent-relayed response "
+                f"{spec.response!r}. Have the human state why the scope is being "
+                "re-opened in a prompt."
+            )
 
 
 def _chain_successor(block: str) -> str | None:

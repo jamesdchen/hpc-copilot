@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.write_run_sidecar import WriteRunSidecarInput
@@ -50,6 +51,28 @@ def test_happy_path_writes_sidecar_and_returns_path(tmp_path: Path) -> None:
     # Auto-stamped fields are present and non-empty.
     assert data["submitted_at"]
     assert data["hpc_agent_version"]
+
+
+class TestScopes:
+    """Opaque caller-owned evidence-scope tags on the wire model + pass-through."""
+
+    def test_slug_scopes_accepted_and_written(self, tmp_path: Path) -> None:
+        spec = _spec(scopes=["ci.smoke", "band-A_1"])
+        write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+        data = json.loads((tmp_path / ".hpc" / "runs" / f"{spec.run_id}.json").read_text())
+        assert data["scopes"] == ["ci.smoke", "band-A_1"]
+
+    def test_non_slug_scope_refused_at_wire_model(self) -> None:
+        # A space is not in the slug class (^[A-Za-z0-9._\-]+$) — refused at the
+        # pydantic layer, before the value ever reaches the state layer.
+        with pytest.raises(ValidationError):
+            _spec(scopes=["not a slug"])
+
+    def test_scopes_absent_omitted_from_sidecar(self, tmp_path: Path) -> None:
+        spec = _spec()
+        write_run_sidecar(experiment_dir=tmp_path, spec=spec)
+        data = json.loads((tmp_path / ".hpc" / "runs" / f"{spec.run_id}.json").read_text())
+        assert "scopes" not in data
 
 
 class TestResultDirTemplateIsolation:

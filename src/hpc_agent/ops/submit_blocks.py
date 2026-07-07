@@ -49,6 +49,7 @@ from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_stat
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.relay_render import render_relay
 from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.ops.submit_and_verify import launch_main_array, submit_and_verify
 from hpc_agent.ops.submit_preflight import submit_preflight
 from hpc_agent.ops.walk_submit_ambiguities import walk_submit_ambiguities
@@ -962,6 +963,15 @@ def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockR
         verb="submit-s4",
         predecessor="S3",
     )
+    # Scope gate (rigor-primitives T3), same gate → detach ordering PROOF as the
+    # greenlight above: a locked evidence-scope refuses SYNCHRONOUSLY in the
+    # parent, never inside a detached child's log where a "spent a reserved look"
+    # refusal is invisible. Defense in depth — ONE definition
+    # (assert_scopes_unlocked), TWO call sites: the detached CHILD re-hits the
+    # very same gate inside aggregate_flow, so a scope locked in the window
+    # between this parent check and the child's reduce is still caught. Fail-safe
+    # by construction: a scope-less run (no sidecar `scopes`) passes silently.
+    assert_scopes_unlocked(experiment_dir, spec.aggregate.run_id)
     # Detach-by-contract (design §3): the greenlight gate above fired
     # SYNCHRONOUSLY (gate → detach — a gate failure surfaces here, loudly, never
     # inside a detached child). The harvest's wall-clock is cluster-bound —
@@ -1002,6 +1012,12 @@ def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockR
         # code hands over an EMPTY list; concluding is the human's decision (§2).
         "proposed_interpretations": [],
     }
+    # Per-scope PRIOR look counts recorded by this reduction, copied VERBATIM
+    # (the est_core_hours pattern) — plain integers the relay renders as counts;
+    # core interprets nothing (rigor-primitives T3). Key ABSENT for a scope-less
+    # run so an old brief stays byte-identical.
+    if agg.scope_looks is not None:
+        brief["scope_looks"] = agg.scope_looks
 
     partial = bool(agg.escalation_reason) or bool(agg.failed_waves)
     return SubmitBlockResult(

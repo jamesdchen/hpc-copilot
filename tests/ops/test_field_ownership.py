@@ -25,6 +25,30 @@ def test_submit_walltime_owned_downstream_by_s2() -> None:
     assert field_owner("submit", "walltime_sec") == "submit-s2"
 
 
+def test_scopes_owned_by_s1() -> None:
+    """Opaque evidence-scope tags are authored at the S1 resolve leg, so a
+    scopes nudge routes as owned-by-S1 (a re-run of S1)."""
+    assert field_owner("submit", "scopes") == "submit-s1"
+
+
+def test_scopes_change_at_s1_reruns() -> None:
+    assert route("submit", "submit-s1", {"scopes"}, "resolved") == "rerun"
+
+
+def test_scopes_is_journal_authorable_not_code_derived() -> None:
+    """A ``resolved`` dict committing ``scopes`` passes the append-decision
+    code-derived gate: an OPAQUE caller-owned tag is legitimately journaled —
+    it is NOT a CODE_DERIVED field (an INVENTED tag is the fabrication class
+    the field partition guards, but a caller supplying its own tag is fine).
+    The gate is imported READ-ONLY here to prove journal-authorability."""
+    from hpc_agent.ops.decision.journal import _assert_no_code_derived_fields
+    from hpc_agent.ops.field_ownership import JOURNAL_UNAUTHORABLE_FIELDS
+
+    assert "scopes" not in JOURNAL_UNAUTHORABLE_FIELDS
+    # Must NOT raise — scopes is authorable in a committed resolved dict.
+    _assert_no_code_derived_fields({"scopes": ["ci.smoke", "band-A_1"]})
+
+
 def test_unknown_field_and_workflow_are_none() -> None:
     """Unknown field / workflow → None (treat as current-block, re-run to be safe)."""
     assert field_owner("submit", "no_such_field") is None

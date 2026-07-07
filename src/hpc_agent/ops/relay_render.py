@@ -147,6 +147,32 @@ def _brief_cluster(brief: dict[str, Any]) -> str | None:
 # ── submit S1–S4 ─────────────────────────────────────────────────────────────
 
 
+def _scope_looks_phrase(brief: dict[str, Any]) -> str:
+    """Render per-scope PRIOR-look COUNTS from the brief's OWN ``scope_looks``.
+
+    COUNTS ONLY — ``"; scope <tag>: N prior reduction(s), M lineage(s)"`` per
+    tag — no advice, no statistics vocabulary (rigor-primitives T3: core
+    interprets nothing). A scope-less brief carries no ``scope_looks`` key →
+    ``""``, so the relay is byte-identical to the pre-scope rendering. Rendered
+    from the brief's own data (finding 15), never reconstructed.
+    """
+    looks = brief.get("scope_looks")
+    if not isinstance(looks, dict):
+        return ""
+    segs: list[str] = []
+    for tag, counts in looks.items():
+        if not isinstance(counts, dict):
+            continue
+        prior = counts.get("prior_looks")
+        lineages = counts.get("distinct_lineages")
+        if not (isinstance(prior, int) and not isinstance(prior, bool)):
+            continue
+        if not (isinstance(lineages, int) and not isinstance(lineages, bool)):
+            continue
+        segs.append(f"; scope {tag}: {prior} prior reduction(s), {lineages} lineage(s)")
+    return "".join(segs)
+
+
 def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
     run_id = _brief_run_id(brief)
     cluster = _brief_cluster(brief)
@@ -247,14 +273,19 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
             f"main array {lifecycle}", cluster, run_id, tail=f" ({esc}) — propose recovery."
         )
 
-    # S4 — harvest.
+    # S4 — harvest. The scope-looks phrase (COUNTS ONLY) rides between the row
+    # count and the review clause; it renders NOTHING for a scope-less brief, so
+    # the pre-scope output is byte-identical.
     if stage == "harvested":
         n = len(brief.get("results_table") or [])
         return _line(
             "harvest complete",
             cluster,
             run_id,
-            tail=f": {n} result row(s) — review the table and choose an interpretation.",
+            tail=(
+                f": {n} result row(s){_scope_looks_phrase(brief)}"
+                " — review the table and choose an interpretation."
+            ),
         )
     if stage == "harvest_partial":
         n = len(brief.get("results_table") or [])
@@ -262,7 +293,10 @@ def _render_submit(block: str, stage: str, brief: dict[str, Any]) -> str:
             "partial harvest",
             cluster,
             run_id,
-            tail=f": {n} row(s), some waves escalated — review the table.",
+            tail=(
+                f": {n} row(s), some waves escalated{_scope_looks_phrase(brief)}"
+                " — review the table."
+            ),
         )
 
     return ""

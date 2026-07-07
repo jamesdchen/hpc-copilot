@@ -825,3 +825,90 @@ def test_append_allows_sanctioned_identity_echoes(tmp_path: Path) -> None:
 def test_append_allows_plain_input_resolved(tmp_path: Path) -> None:
     out = _append(tmp_path, resolved={"cluster": "hoffman2", "walltime_sec": 600})
     assert out.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Scope-unlock authorship gate (rigor primitives, T4): unlocking a caller
+# scope RELAXES a restriction, so a bare `y` cannot enact it.
+# ---------------------------------------------------------------------------
+
+
+def _unlock(tmp_path: Path, **overrides: object) -> AppendDecisionResult:
+    base: dict[str, object] = {
+        "scope_kind": "scope",
+        "scope_id": "holdout",
+        "block": "scope-unlock",
+        "response": "reopen for one more confirmatory sweep",
+        "resolved": {"scope_action": "unlock"},
+    }
+    base.update(overrides)
+    return append_decision(experiment_dir=tmp_path, spec=AppendDecisionInput.model_validate(base))
+
+
+def test_unlock_bare_ack_refused(tmp_path: Path) -> None:
+    """A bare `y` cannot unlock a scope — the gate names the human-rationale
+    requirement, and nothing is journaled."""
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _unlock(tmp_path, response="y")
+    msg = str(ei.value)
+    assert "scope-unlock authorship gate" in msg
+    assert "HUMAN act" in msg
+    assert "rationale" in msg
+    # The refused exchange never reaches the journal.
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "scope", "scope_id": "holdout"}),
+    )
+    assert result.count == 0
+
+
+def test_unlock_human_typed_rationale_passes_journal_response_tier(tmp_path: Path) -> None:
+    """No utterance log: the non-bare typed `response` IS the human's rationale."""
+    out = _unlock(tmp_path, response="reopen the holdout for a confirmatory sweep")
+    assert out.record.resolved["scope_action"] == "unlock"
+    assert out.count == 1
+
+
+def test_unlock_human_typed_rationale_passes_utterance_tier(tmp_path: Path) -> None:
+    """With the capture hook installed, the rationale words must derive from a
+    logged human utterance — here they do, so the unlock commits."""
+    _log_utterance(tmp_path, "please reopen the holdout scope for one more sweep")
+    out = _unlock(tmp_path, response="reopen for one more sweep")
+    assert out.record.resolved["scope_action"] == "unlock"
+    assert out.count == 1
+
+
+def test_unlock_utterance_mismatch_refused(tmp_path: Path) -> None:
+    """With a log present, an agent-relayed rationale whose words never appear in
+    any logged utterance is refused (the harness-captured lock)."""
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    with pytest.raises(errors.SpecInvalid) as ei:
+        _unlock(tmp_path, response="reopen the embargoed evaluation partition")
+    msg = str(ei.value)
+    assert "scope-unlock authorship gate" in msg
+    assert "harness-captured" in msg
+
+
+def test_unlock_block_convention_enforced_both_directions(tmp_path: Path) -> None:
+    """A `scope-unlock` block is scope-only; a scope unlock must carry that block."""
+    # scope-unlock block for a non-scope kind is refused.
+    with pytest.raises(errors.SpecInvalid, match="only valid for scope_kind='scope'"):
+        _append(tmp_path, block="scope-unlock", response="reopen it please")
+    # A scope unlock hiding under the lock block is refused.
+    with pytest.raises(errors.SpecInvalid, match="must be journaled with block='scope-unlock'"):
+        _unlock(tmp_path, block="scope-lock")
+
+
+def test_lock_append_needs_no_authorship_bar(tmp_path: Path) -> None:
+    """Locking is the SAFE direction — a lock committed via append-decision,
+    even with a bare `y`, passes without the authorship bar."""
+    out = _append(
+        tmp_path,
+        scope_kind="scope",
+        scope_id="holdout",
+        block="scope-lock",
+        response="y",
+        resolved={"scope_action": "lock"},
+    )
+    assert out.record.resolved["scope_action"] == "lock"
+    assert out.count == 1
