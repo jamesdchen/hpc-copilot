@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/run_story.output.json",
+  "title": "run-story output data",
+  "description": "The ordered timeline + its fingerprint + honest omission counts.\n\n``story_sha`` is a deterministic fingerprint over the canonical JSON of the\nWINDOWED story (header + events + counts), so it can never be passed off as\ncovering events a window dropped. ``total_events`` is the full count before\nwindowing; ``omitted_count`` is what a window dropped.",
+  "type": "object",
+  "required": [
+    "story_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_ids": {
+      "description": "The run id(s) the timeline covers (one, or a lineage chain).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Run Ids",
+      "type": "array"
+    },
+    "events": {
+      "description": "The merged, ordered, windowed timeline.",
+      "items": {
+        "$ref": "#/$defs/RunStoryEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "story_sha": {
+      "description": "sha256 fingerprint over the windowed canonical JSON.",
+      "title": "Story Sha",
+      "type": "string"
+    },
+    "markdown": {
+      "default": "",
+      "description": "The code-rendered markdown timeline (empty when not requested).",
+      "title": "Markdown",
+      "type": "string"
+    },
+    "total_events": {
+      "default": 0,
+      "description": "Full event count before any window (>= len(events)).",
+      "title": "Total Events",
+      "type": "integer"
+    },
+    "omitted_count": {
+      "default": 0,
+      "description": "Events a window dropped — a rendered, countable fact (never silent).",
+      "title": "Omitted Count",
+      "type": "integer"
+    }
+  },
+  "$defs": {
+    "RunStoryEvent": {
+      "additionalProperties": false,
+      "description": "One typed, attributed timeline entry (the D3 event model).\n\nEvery field is IDENTITY / ORDERING / COUNTING — never domain semantics.\n``evidence`` carries sha pointers + counts only; ``text`` is the human's\nverbatim words (a nudge response, an unlock reason) or ``\"\"``.",
+      "properties": {
+        "ts": {
+          "description": "Recorded ISO-8601 timestamp verbatim, or '' when absent.",
+          "title": "Ts",
+          "type": "string"
+        },
+        "stream": {
+          "description": "The source-store noun the event came from.",
+          "title": "Stream",
+          "type": "string"
+        },
+        "actor": {
+          "description": "'human' or 'code' — who authored the act.",
+          "title": "Actor",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The record-class literal (block name, 'look', 'verdict', ...).",
+          "title": "Kind",
+          "type": "string"
+        },
+        "subject_id": {
+          "description": "run_id / scope tag / audit section — opaque identity.",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "description": "Sha pointers + counts only (never a metric value).",
+          "title": "Evidence",
+          "type": "object"
+        },
+        "text": {
+          "default": "",
+          "description": "The human's verbatim words when the record carries any, else ''.",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "stream",
+        "actor",
+        "kind",
+        "subject_id"
+      ],
+      "title": "run-story event",
+      "type": "object"
+    }
+  }
+}

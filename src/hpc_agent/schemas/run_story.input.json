@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/run_story.input.json",
+  "title": "run-story input spec",
+  "description": "Inputs to ``run-story``.\n\n``run_id`` names the run whose timeline is rendered; ``include_lineage``\nwidens the read to the run's whole supersession chain. ``since_ts`` and\n``limit`` are the honest windowing controls (D6) — a lexicographic ts floor\nand a newest-last cap; a window never masquerades as the whole story\n(``total_events`` / ``omitted_count`` surface the omission).",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run whose complete journal trail is merged into one timeline.",
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "include_lineage": {
+      "default": false,
+      "description": "Widen the read to the run's whole supersession lineage (the one lineage_chain walk), not just the single run.",
+      "title": "Include Lineage",
+      "type": "boolean"
+    },
+    "since_ts": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Lexicographic ISO-8601 timestamp floor — keep only events at or after this ts. Omitted events are counted, never silently dropped.",
+      "title": "Since Ts"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Keep only the most recent N events (newest-last window). The omission count is a rendered, countable fact.",
+      "title": "Limit"
+    },
+    "markdown": {
+      "default": true,
+      "description": "Include the code-rendered markdown timeline in the result.",
+      "title": "Markdown",
+      "type": "boolean"
+    }
+  }
+}
