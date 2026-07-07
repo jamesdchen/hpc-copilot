@@ -170,7 +170,7 @@
     "side_effects": [
       "file_write"
     ],
-    "summary": "Journal CODE render receipts for the sections of an audited source .py — the emitter's evidence that a section was rendered (executed) and whether its assertions errored. Parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source, and drifts stale when the section moves), then appends a notebook-render-receipt record (attestor=code) per known slug. Unknown slugs are reported skipped. notebook-auto-clear reads these journaled receipts (sha-fresh only) — it never trusts a caller-supplied receipt. Pure local read + journal append, no SSH.",
+    "summary": "Journal CODE render receipts for the sections of an audited source .py — the emitter's evidence that a section was rendered (executed) and whether its assertions errored. Parses the source ON DISK and binds each receipt to the freshly-parsed section sha (a receipt can only be recorded against current source, and drifts stale when the section moves), then appends a notebook-render-receipt record (attestor=code) per known slug. Unknown slugs are reported skipped. notebook-auto-clear reads these journaled receipts (sha-fresh only) — it never accepts an inline caller receipt. Freshness (the sha bind) is recomputed here; output_sha/error stay caller-attested (D9), weighed by the graduation consumers. Pure local read + journal append, no SSH.",
     "verb": "mutate"
   },
   {
@@ -777,7 +777,7 @@
     "side_effects": [
       "file_write"
     ],
-    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, opaque chained lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call. Per section it also WRITES the content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its render_path — the artifact the T8 sign-off gate requires.",
+    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). By DEFAULT the CANONICAL view: lint recomputed server-side from the audit's recorded roots + journaled receipts, so its view_shas match what the T8 gate accepts (`canonical: true`); explicit findings/receipt/roots make it a preview. The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call. Per section it also WRITES the content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its render_path — the artifact the T8 sign-off gate requires.",
     "verb": "query"
   },
   {

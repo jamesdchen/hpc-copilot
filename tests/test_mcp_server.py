@@ -386,10 +386,22 @@ def test_mcp_allows_submit_s4_with_detach() -> None:
 
 
 def test_mcp_refuses_blocking_status_watch() -> None:
+    """status-watch is now detach-by-contract (connection-broker.md 2026-07-07):
+    a blocking (detach=false / absent) invocation over the synchronous server is
+    refused with the detached-path named — the same rule as submit-s2/s3/s4."""
     server = _server(allow_mutations=True)
-    resp = _call(server, "status-watch", {"spec": {"wait_terminal": True}})
+    resp = _call(server, "status-watch", {"spec": {"detach": False}})
     assert "error" in resp
+    assert "detach" in resp["error"]["message"]
     assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_status_watch_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "status-watch", {"spec": {"detach": True, "monitor": {"run_id": "r"}}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
 
 
 # ─── isolated runner deadline (src subprocess-timeout discipline) ────────────

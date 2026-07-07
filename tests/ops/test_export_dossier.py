@@ -359,6 +359,48 @@ def test_audited_run_missing_template_records_a_gap_and_still_succeeds(
     assert zipfile.is_zipfile(result.archive_path)
 
 
+def test_audited_run_seals_trusted_display_renders(journal_home: Path, experiment: Path) -> None:
+    """F6: the trusted-display render files (``.hpc/renders/<audit_id>/``) are sealed
+    under the ``renders`` store noun, so the dossier reproduces what-the-human-saw."""
+    import hashlib
+
+    from hpc_agent._kernel.contract.layout import RepoLayout
+
+    audit_id = "pi-audit-003"
+    (experiment / "src.py").write_bytes(b"# %%\n# hpc-audit-section: run\nx = 1\n")
+    _sidecar(experiment, _RID, audited_source={"source": "src.py", "audit_id": audit_id})
+    renders_dir = RepoLayout(experiment).hpc / "renders" / audit_id
+    renders_dir.mkdir(parents=True, exist_ok=True)
+    render_file = renders_dir / "run.abc123def456.md"
+    render_file.write_bytes(b"<!-- hpc-render audit_id: pi-audit-003 -->\n\nbody\n")
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    entry = by_path[f"runs/{_RID}/renders/run.abc123def456.md"]
+    assert entry["source"] == "renders"
+    assert set(entry) == {"source", "path", "sha256", "bytes"}
+    assert entry["sha256"] == hashlib.sha256(render_file.read_bytes()).hexdigest()
+    assert not [g for g in result.gaps if g["source"] == "renders"]
+
+
+def test_audited_run_missing_renders_records_a_gap_and_still_succeeds(
+    journal_home: Path, experiment: Path
+) -> None:
+    """F6: an audited run with no renders on disk records a ``renders`` gap, never
+    a crash — present-or-gap accounting."""
+    audit_id = "pi-audit-004"
+    (experiment / "src.py").write_bytes(b"# %%\n# hpc-audit-section: run\nx = 1\n")
+    _sidecar(experiment, _RID, audited_source={"source": "src.py", "audit_id": audit_id})
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    r_gaps = [g for g in result.gaps if g["source"] == "renders"]
+    assert len(r_gaps) == 1
+    assert audit_id in r_gaps[0]["note"]
+    assert r_gaps[0]["run_id"] == _RID
+
+
 def test_non_audited_run_seals_no_audit_stores(journal_home: Path, experiment: Path) -> None:
     """A run whose sidecar echoes no audited_source seals no audit stores, records
     no audit gap, and leaks no audit_id into the identity projection — byte-for-

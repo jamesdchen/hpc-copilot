@@ -364,7 +364,11 @@ def test_status_watch_runs_up_to_the_ssh_boundary(
             "run_id": "ml_run_watch",
             "poll_interval_seconds": 5,
             "wall_clock_budget_seconds": 30,
-        }
+        },
+        # detach=False drives the SYNCHRONOUS poll to the SSH seam in-process; the
+        # default (detach=True) would spawn a durable worker and return a handle
+        # (detach-by-contract, connection-broker.md 2026-07-07).
+        "detach": False,
     }
     with (
         mock.patch(_SSH_POLL_SEAM, side_effect=errors.SshUnreachable("stubbed: no host")),
