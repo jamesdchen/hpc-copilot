@@ -157,6 +157,46 @@ def _err(
     return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
 
 
+def _spec_invalid_failure_features(exc: Exception | None) -> dict[str, Any]:
+    """Build the structured ``failure_features`` block for a spec_invalid envelope.
+
+    Populates the two fields a caller can act on without re-parsing prose:
+
+    * ``error_class`` — the framework-owned ``FailureCategory`` value
+      ``"code_bug"``. A malformed / schema-failing ``--spec`` is a caller-input
+      bug that IS deterministically classifiable, so it is never the
+      ``"unknown"`` escape hatch (which means "the classifier could not
+      categorize"). Reuses the existing vocabulary; introduces no new taxonomy.
+    * ``error_class_raw`` — the producer's raw signature, preserved verbatim:
+      the exception type, plus (for a pydantic ``ValidationError``) each
+      offending field path and its pydantic error ``type`` from
+      ``exc.errors()`` — the missing / extra / invalid fields the caller must
+      fix. Open and ungoverned per the ``failure_features`` contract.
+
+    The ``exc.errors()`` extraction is duck-typed (``getattr`` + a callable
+    check) so it works for a pydantic ``ValidationError`` without importing
+    pydantic here, and degrades to the bare type name for any other exception.
+    """
+    if exc is None:
+        return {"error_class": "code_bug", "error_class_raw": "spec_invalid"}
+    raw = type(exc).__name__
+    errors_fn = getattr(exc, "errors", None)
+    if callable(errors_fn):
+        try:
+            details = list(errors_fn())
+        except Exception:  # noqa: BLE001 — not a pydantic ValidationError; keep the bare name
+            details = []
+        parts: list[str] = []
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            loc = ".".join(str(p) for p in detail.get("loc", ())) or "<root>"
+            parts.append(f"{loc} ({detail.get('type', 'invalid')})")
+        if parts:
+            raw = f"{raw}: " + "; ".join(parts)
+    return {"error_class": "code_bug", "error_class_raw": raw}
+
+
 def _err_from_hpc(exc: errors.HpcError) -> int:
     remediation = exc.remediation
     # No hard pre-flight agent gate any more: ``ssh_run`` uses
@@ -177,12 +217,21 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
             "ssh-agent; ssh-add ~/.ssh/<key>`."
         )
         remediation = f"{remediation} {hint}" if remediation else hint
+    # Structured evidence for the spec_invalid class (WS3/WS4): the pydantic
+    # dispatch seam attaches a rich ``failure_features`` (naming the offending
+    # field paths) onto the exception; every other SpecInvalid raise site
+    # (required-spec, not-a-dict, jsonschema) carries none, so synthesize the
+    # default here so EVERY spec_invalid envelope names its failure class.
+    failure_features = getattr(exc, "failure_features", None)
+    if failure_features is None and exc.error_code == "spec_invalid":
+        failure_features = _spec_invalid_failure_features(exc)
     return _err(
         error_code=exc.error_code,
         message=str(exc),
         category=exc.category,
         retry_safe=exc.retry_safe,
         remediation=remediation,
+        failure_features=failure_features,
     )
 
 

@@ -187,88 +187,23 @@ def _run_verb_with_bad_spec(verb: str, spec: dict, tmp_path: Path) -> dict:
     return parsed
 
 
-# Verbs whose primitive does not yet emit ``failure_features`` on the
-# spec_invalid envelope. This is the punch list for WS3 (the parallel
-# work wiring ``failure_features`` into ``ErrorEnvelope``). When WS3
-# lands a verb, drop it from this set; the parametrize then asserts
-# the field as a hard requirement instead of xfail-ing.
-#
-# Discovery method: every ``--spec``-bearing verb in the CLI tree was
-# fired against ``{}`` and inspected; none of them populate
-# ``failure_features`` today (the schema-aware remediation in 50a4b61d
-# was the prose-layer fix; the structured-evidence layer is WS3's
-# scope).
+# Verbs whose primitive does not emit ``failure_features`` on the
+# spec_invalid envelope. Now EMPTY: the shared dispatch seam
+# (``cli/_dispatch.py`` model-validation) attaches structured
+# ``failure_features`` (``error_class="code_bug"`` + the offending field
+# paths in ``error_class_raw``) to every SpecInvalid it raises, and
+# ``_err_from_hpc`` synthesizes the default for every other SpecInvalid
+# raise site — so every spec_invalid envelope now names its failure class.
+# A verb that regresses (validates specs on a bespoke path that bypasses
+# the seam) will FAIL the strict-xfail-free assertion loudly; add it back
+# here with a one-line reason only if the fix must live in its own module.
 XFAIL_NO_FAILURE_FEATURES: set[str] = {
-    "interview",
-    "submit-flow",
-    "submit",
-    "submit-and-verify",
-    "submit-speculate",
-    "submit-flow-batch",
-    "monitor-flow",
+    # aggregate-flow's spec is OPTIONAL: an empty {} bypasses spec-validation
+    # entirely and its arg_pre --run-id shortcut then dereferences a None spec
+    # (``AttributeError: 'NoneType' … run_id``) → an *internal* envelope, not
+    # spec_invalid, so the shared dispatch seam never fires. The fix is a None
+    # guard in aggregate-flow's own arg_pre/handler (out of this seam's scope).
     "aggregate-flow",
-    "build-submit-spec",
-    "build-tasks-py",
-    "classify-axis",
-    "recommend-partition",
-    "validate-campaign",
-    "validate-executor-signatures",
-    "validate-input-dataset",
-    "validate-self-qos-limit",
-    "validate-stochastic-marker",
-    "validate-walltime-against-history",
-    "campaign-health",
-    "dry-run-local",
-    "stages",
-    "export-package",
-    "recall",
-    "decide-monitor-arm",
-    "resubmit",
-    "update-run-constraints",
-    "summarize-submit-plan",
-    "find-prior-run",
-    "write-run-sidecar",
-    "provenance-manifest",
-    # status-pipeline / submit-pipeline / campaign-run / resolve-submit-inputs are
-    # new spec-verb composites; like the other workflow composites they do not yet
-    # thread failure_features into their spec_invalid envelope (WS3).
-    "status-pipeline",
-    "submit-pipeline",
-    "campaign-run",
-    "resolve-submit-inputs",
-    # lift-out-of-llm spec-verbs (S2/S3) — new resolvers/composites; like the
-    # other composites they do not yet thread failure_features (WS3 punch list).
-    "walk-submit-ambiguities",
-    "apply-safe-defaults",
-    "classify-axis-auto",
-    # Human-amplification block verbs + kill/doctor/decision verbs: new
-    # spec-taking composites/mutators; like the other composites they do not
-    # yet thread failure_features into their spec_invalid envelope (WS3).
-    "aggregate-check",
-    "aggregate-run",
-    "append-decision",
-    "block-drive",
-    "campaign-complete",
-    "campaign-greenlight",
-    "campaign-watch",
-    "doctor",
-    "kill",
-    "net-triage",
-    "read-decisions",
-    "status-snapshot",
-    "status-watch",
-    "verify-relay",
-    "wait-detached",
-    "submit-s1",
-    "submit-s2",
-    "submit-s3",
-    "submit-s4",
-    # revise-resolved (wave 5.1): new spec composite; like the other composites
-    # it does not yet thread failure_features into its spec_invalid envelope (WS3).
-    "revise-resolved",
-    # retarget-run (wave 5.2): new spec composite; like the other composites it
-    # does not yet thread failure_features into its spec_invalid envelope (WS3).
-    "retarget-run",
 }
 
 

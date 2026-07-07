@@ -44,6 +44,7 @@ from hpc_agent.cli._helpers import (
     _err_from_hpc,
     _load_spec,
     _ok,
+    _spec_invalid_failure_features,
     _validate_against_schema,
 )
 
@@ -308,7 +309,12 @@ def _load_and_model_validate_spec(name: str, shape: CliShape, ns: argparse.Names
     try:
         return shape.spec_model.model_validate(raw)
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError shape
-        raise errors.SpecInvalid(str(exc)) from exc
+        # Attach structured evidence (the offending field paths + pydantic
+        # error types) so the spec_invalid envelope carries failure_features —
+        # the seam that funnels ~every model-validation rejection (WS3/WS4).
+        invalid = errors.SpecInvalid(str(exc))
+        invalid.failure_features = _spec_invalid_failure_features(exc)  # type: ignore[attr-defined]
+        raise invalid from exc
 
 
 def _coerce_result(result: Any) -> dict[str, Any]:
