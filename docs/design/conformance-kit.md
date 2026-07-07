@@ -298,10 +298,19 @@ attestation export is the PORTABILITY layer over it.
   | `aggregated` | `.../aggregated/v1` |
   | `audited-source` | `.../audited-source/v1` |
   | `notebook-journal` | `.../notebook-journal/v1` |
+  | `renders` | `.../renders/v1` |
 
   The map is derived FROM `DOSSIER_SOURCES` (one closed vocabulary, one
   derivation), so a new store noun automatically fails the sibling boundary
-  test until its URI row is added deliberately.
+  test until its URI row is added deliberately. **The table above is
+  illustrative of the derivation at plan time, not normative** — the
+  equality pin in the boundary test against the live `DOSSIER_SOURCES` is
+  the normative artifact. (Proof the posture is right: the first draft of
+  this table rotted before implementation even began — `renders` landed in
+  `DOSSIER_SOURCES` the same night this plan was written and the row above
+  was added by the 2026-07-07 pre-implementation review. K3 derives from
+  the CODE's set, and phases 2–4 of the slate add more nouns before K3
+  runs — see `docs/design/slate-sequencing.md` Phase 5.)
 - **Statement form**: `_type = https://in-toto.io/Statement/v1`; `subject`
   = the entry's `{name: <archive path>, digest: {sha256: <entry sha>}}` —
   digests copied VERBATIM from the dossier manifest, never recomputed here;
@@ -318,7 +327,15 @@ attestation export is the PORTABILITY layer over it.
 - **The kit assertion** (`conformance/test_attestation_export.py`): an
   exported bundle round-trips through STOCK in-toto tooling — the
   `in-toto-attestation` Python bindings parse every Statement and the
-  subject digests verify against the bundled dossier's entries. in-toto is
+  subject digests verify against the bundled dossier's entries. **Scope of
+  the claim, pinned (pre-implementation review 2026-07-07): "verify" here
+  means parse + subject-digest comparison, NOT DSSE signature
+  verification** — whether stock verifiers accept a `signatures: []`
+  envelope as valid is UNVERIFIED (the DSSE spec arguably requires ≥1
+  signature for envelope validity) and is an implementation-time CHECK for
+  K7: if stock tooling rejects empty-signature envelopes, the kit asserts
+  the parse/digest round-trip only and the doc prose for "ecosystem tools
+  verify the bundle" is narrowed to match. in-toto is
   a **dev-dep of the kit's CI lane only** (installed in the conformance CI
   job like the plugins job installs jupytext); the test module
   `pytest.importorskip`s it, and it NEVER enters core dependencies.
@@ -339,7 +356,17 @@ Reference adapters live in `src/hpc_agent/conformance/adapters/`:
   externals: `write_utterance` materializes a rendered `.ipynb` with the
   text typed into a sign-off cell and runs the plugin's
   `notebook-ingest-signoffs` path (lazy plugin import; the CI job installs
-  `examples/plugins/hpc-agent-notebook-render` + the render stack). It
+  `examples/plugins/hpc-agent-notebook-render` + the render stack).
+  **F1 update (2026-07-07, landed after this plan was drafted): ingest's
+  `write_utterance_log` now defaults FALSE and is documented
+  HUMAN-INVOKED-ONLY** — the adapter must pass `write_utterance_log=true`
+  EXPLICITLY, which is legitimate here by the flag's own contract: the
+  adapter IS the harness's human-input channel for the test (the kit's
+  `write_utterance` semantics are "as if a human typed it"), so it models
+  the human invocation rather than an agent setting the flag. The kit must
+  also cover the default-off direction: an ingest WITHOUT the flag must
+  leave the utterance log untouched (the F1 laundering close staying
+  closed is itself conformance behavior). It
   certifies capability 1 (+ the consumer pass) and is honestly PARTIAL on
   capabilities 2–3 — the report says so; the notebook harness has never
   claimed relay enforcement.
@@ -361,7 +388,11 @@ plugin shifts the entry-point registry, which must never leak into the core
   verb's evidence keys (`docs/design/mcp-elicitation.md` E3-a) but did not
   add this field; the constant's single home is beside the verb in
   `ops/harness_capabilities.py` (which now exists), and the doc stamp and the
-  constant are pinned equal by a contract test. The kit stamps its report
+  constant are pinned equal by a contract test. Note (verified against code
+  2026-07-07): `_wire/queries/harness_capabilities.py::HarnessCapabilitiesResult`
+  is `extra="forbid"`, so "the result field that carries it" is a wire-MODEL
+  edit (a new field on the result model) + output-schema regen — not a loose
+  dict key; K10's regen tail covers it. The kit stamps its report
   with both the contract version and `hpc_agent.__version__`.
 - **What "conforming to v1" claims**: all three capabilities' kit modules
   passed, plus canonicalization and negotiation, against a named
@@ -487,3 +518,35 @@ catalog updated if exposed; `pyproject.toml` package-data for
 - **Skips stay honest.** A partial harness is reported partial with the
   contract-named degraded tier — the kit never rounds partial up to
   conforming, and never invents a tier name the contract lacks.
+
+## Drift log
+
+- **Pre-implementation verification (2026-07-07, adversarial plan review;
+  no kit code had landed):**
+  1. *D-K4 table was already stale* — `DOSSIER_SOURCES` gained `renders`
+     the same night the plan was drafted; the row was added and the table
+     demoted to illustrative (the boundary test's equality pin is the
+     normative artifact).
+  2. *D-K4 in-toto claim scoped* — "stock tooling verifies" narrowed to
+     parse + subject-digest comparison; `signatures: []` acceptance by
+     stock DSSE verifiers is an implementation-time CHECK for K7, not an
+     asserted fact.
+  3. *D-K5 notebook_render updated for F1* — ingest's `write_utterance_log`
+     now defaults false / HUMAN-INVOKED-ONLY; the adapter passes it
+     explicitly (it is the human channel under test) and the kit gains the
+     default-off no-write assertion.
+  4. *D-K5 claude_code feasibility CONFIRMED against code* — the hook cores
+     are payload-dict pure functions suitable for in-process driving:
+     `_kernel/hooks/utterance_capture.py::capture(payload)` reads
+     `prompt`/`cwd` from the dict (no stdin/env), `answer_capture.py::capture`
+     likewise, and `relay_audit_stop.py::build_hook_output(payload)` reads
+     `cwd`/`transcript_path`/`stop_hook_active` from the dict — the synthetic
+     transcript JSONL + `stop_hook_active` re-entry modeling in D-K2/D-K5 map
+     one-to-one onto the real seam. `_CONTRADICTION_KINDS` is
+     `{"number","state","run_id"}` and `verify_relay.py::verify_notebook_relay`
+     exists, as D-K3 assumes; `utterances_path` does reuse
+     `state.run_record::_current_homedir` + `repo_hash` as the storage-locator
+     assertion requires.
+  5. *K10 note added* — `HarnessCapabilitiesResult` is `extra="forbid"`;
+     the contract-version result field is a wire-model + schema-regen
+     change, owned by K10's regen tail.

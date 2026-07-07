@@ -126,10 +126,34 @@ These are store/mechanism nouns like the dossier's, never domain words:
 | Kind | Route-through (the ONE existing definition) | CURRENT means |
 |---|---|---|
 | `notebook-audit` | `state/notebook_audit.py::audit_module` (+ the linked-source drift check the gate layer owns, `ops/notebook_gate.py::_linked_source_drift`) | every required section `signed_current`/`auto_cleared` AND the recomputed `module_sha` equals the entry's `content_sha` — "audit passed at sha X", composable |
-| `reproduction` | the newest receipt in `_aggregated/<run_id>/reproduction_receipts.jsonl` (`docs/design/reproduction-receipt.md` — experiment-local, append-only) | verdict recorded, no code drift since (`state/code_drift.py::detect_code_drift`), and the `requires` evidence-tier floor met (below) |
-| `scope-budget` | `state/scopes.py` look-ledger count + lock state | the named scope's look count `<=` the caller-declared budget number in `requires` (COUNTING vs a caller number — core compares, never picks) and the scope is not locked |
+| `reproduction` | the newest receipt in `_aggregated/<subject_id>/reproduction_receipts.jsonl`, where **`subject_id` is the REPRODUCTION run's id** — the receipts ledger lives under the repro run, never the original (`ops/verify_reproduction.py::_receipt_path`; `docs/design/reproduction-receipt.md` — experiment-local, append-only) | verdict recorded, no code drift since (`state/code_drift.py::detect_code_drift` over the receipt's recorded identity vs the current tree), the receipt LINKS INTO the registration's dossier (its `original` identity block's `run_id` appears in the dossier manifest's `runs` projection — else refused: an unrelated run's receipt cannot fill the slot), and the `requires` evidence-tier floor met (below) |
+| `scope-budget` | `state/scopes.py::count_prior_looks` + `state/scopes.py::is_scope_locked` | the named scope's look count `<=` the caller-declared budget number in `requires` (COUNTING vs a caller number — core compares, never picks) and the scope is not locked |
 | `pack-receipt` | `state/pack_receipts.py` slot reduction (domain-packs S6 — **lands only after the pack plan ships**; this kind is reserved exactly as S6 reserved the seam) | the named slot's receipt reduces CURRENT and `passed=true` |
-| `attestation` | `state/attestation.py::reduce` over a named journal `{scope_kind, scope_id}` | the newest attestation for `subject_id` in that journal carries the entry's `content_sha` — the generic escape hatch; accepts NO `requires` (nothing core could interpret) |
+| `attestation` | `state/attestation.py::reduce` over a named journal `{scope_kind, scope_id}` | the newest attestation for `subject_id` in that journal carries the entry's `content_sha` — the generic escape hatch; accepts NO `requires` (nothing core could interpret). The checker echoes the satisfying record's `{block, attestor}` VERBATIM into the slot's `evidence_note`, so the brief discloses exactly what record filled the slot (an ungated journal append is visible in the evidence, never silent) |
+
+**What each entry's `content_sha` binds (recomputed at append — added
+pre-implementation verification 2026-07-07; the table's currency conditions
+alone left the recompute leg undefined for two kinds).** The uniform rule: an
+entry's `content_sha` is the canonical-JSON sha (per
+`docs/internals/harness-contract.md` "The sha canonicalization") of the
+checker's recomputed EVIDENCE for that kind — the exact state the registrant
+reviewed — except where a kind has a natural content identity:
+
+- `notebook-audit` — the module sha (`state/audit_source.py::sha256_normalized`
+  over the audited source `.py`), the natural code identity.
+- `reproduction` — the canonical-JSON sha of the NEWEST receipt record,
+  recomputed by re-reading the ledger (binds "the exact receipt evidence I
+  reviewed"; a later re-verify appends a newer receipt and the leg reads stale
+  — re-registration is the remedy, R7).
+- `scope-budget` — the canonical-JSON sha of the checker's evidence projection
+  `{prior_looks, distinct_lineages, locked}` (a new look moves it — dated
+  evidence, deliberately).
+- `pack-receipt` / `attestation` — the receipt's / newest attestation's own
+  `content_sha` (already content-identified).
+
+At VERIFY time (R7/R8), the per-slot `status` is the kind's CURRENT condition
+re-evaluated; a moved evidence sha is REPORTED as the slot's
+`recorded_sha`-vs-recomputed pair — R8's detail shape already carries both.
 
 Each kind's checker accrues an `inspect.getsource` route-through assertion
 as it lands (the `test_layers_share_one_drift_predicate` precedent). The
@@ -167,7 +191,22 @@ block already isolates. This is the
 registration-side half of the fingerprint's anti-gaming story: a thin
 envelope produces `needs_verdict` items rather than wrong auto-verdicts, and
 **registration is the seat that can demand main-scale evidence before
-"reproducible" counts**. Unknown `requires` keys for a kind are a LOUD
+"reproducible" counts**.
+
+**The address chain, pinned (pre-implementation verification 2026-07-07 —
+the seam that computes the comparison was previously unstated).** T4's
+`reproduction` checker, given the chain entry's `subject_id` (the repro
+run's id), resolves the floor mechanically: newest receipt in
+`_aggregated/<subject_id>/reproduction_receipts.jsonl` → the receipt's
+identity blocks carry `cmd_sha` verbatim
+(`ops/verify_reproduction.py::_IDENTITY_FIELDS`) → the fingerprint ledger at
+`_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` → samples loaded via the
+fingerprint store (`state/fingerprint_store.py`, that plan's T3), filtered
+to CURRENT-identity **ADMITTED** samples (the fingerprint doc's D-consume
+admission rule — unadmitted samples never satisfy a demand) → one call to
+`state/determinism.py::evidence_meets(samples, requires)`. The checker never
+re-implements the envelope or the counting; a missing ledger is an ordinary
+shortfall (`n=0`), refused with the demand named. Unknown `requires` keys for a kind are a LOUD
 `errors.SpecInvalid` (an opted-in requirement core cannot check must never
 silently pass — the dangling-reference posture, domain-packs "The bind
 event").
@@ -236,8 +275,14 @@ The append gate `ops/decision/journal.py::_assert_registration_authorship`
 every bar raised to its ceiling):
 
 - **Block convention, both directions:** block `"registration"` is refused
-  for any `scope_kind` other than `"registration"`, and vice versa (the
-  `scope-unlock` mirror).
+  for any `scope_kind` other than `"registration"`; and the registration
+  scope accepts only its BLOCK FAMILY — a maintained set starting
+  `{"registration", "registration-revoke"}` and growing by reviewed
+  addition (`registration-review` and `conformance-verdict` are already
+  planned members, `docs/design/live-conformance.md`). *(Pre-implementation
+  verification 2026-07-07: the earlier "and vice versa" wording was
+  strictly incompatible with R7's own revoke block — the mirror is a
+  family set, not a single block.)*
 - **Lock 1 — no affordance:** no registration verb / chain / next_block /
   skill; append-decision under this block is the ONLY write path. Pinned by
   the contract test (no primitive named register/registration in the mutate
@@ -398,7 +443,11 @@ regenerates.
 **Coordination note:** `ops/decision/journal.py`, `state/decision_journal.py`,
 and `ops/attention_queue.py` are HOT files touched by concurrent work —
 Wave C is strictly sequential and lands after any in-flight waves on those
-files.
+files. **Cross-slate order (`docs/design/slate-sequencing.md`, the master):
+T3 lands FIRST within Wave A** — the `compute_dossier_signature` refactor
+unblocks fingerprint T8 and packs T10, which add store nouns on top — and T7
+lands after mcp-elicitation E2 (the authorship-evidence marker in
+`ops/decision/journal.py`, which T7's fire tests inherit).
 
 **Wave A (parallel — new or disjoint files):**
 
@@ -532,6 +581,45 @@ re-register → verify `current` again → revoke with reason → verify
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **Pre-implementation verification 2026-07-07 (adversarial plan review; no
+  code had landed):**
+  1. *R3 reproduction row — receipt address corrected.* The receipts ledger
+     lives under the REPRODUCTION run
+     (`ops/verify_reproduction.py::_receipt_path` →
+     `_aggregated/<repro_run_id>/…`), so a chain entry whose `subject_id`
+     named the registered/original run would address an empty ledger. Pinned:
+     `subject_id` = the repro run's id, PLUS a dossier cross-link requirement
+     (the receipt's `original.run_id` must appear in the dossier manifest's
+     `runs` projection) so an unrelated run's receipt cannot fill the slot.
+  2. *R3 — per-kind `content_sha` semantics added.* The table gave currency
+     conditions but never defined what sha the checker RECOMPUTES for the
+     `reproduction` and `scope-budget` kinds; a literal implementer would
+     have had to invent one. Added the uniform canonical-evidence-sha rule
+     with the per-kind list.
+  3. *R4 — the fingerprint address chain pinned.* Neither doc stated how the
+     checker reaches `evidence_meets`'s `samples`: added receipt-identity
+     `cmd_sha` → `_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` →
+     fingerprint store → CURRENT-identity ADMITTED filter → one
+     `evidence_meets` call. Verified against
+     `ops/export_dossier.py::_project_run_identity` (`cmd_sha` IS in the
+     manifest's `runs` projection) and
+     `ops/verify_reproduction.py::_IDENTITY_FIELDS` (`cmd_sha` IS on every
+     receipt identity block).
+  4. *R3 attestation row — disclosure sentence added.* Arbitrary journal
+     blocks face no authorship gate, so a record satisfying the generic
+     `attestation` kind can be agent-authored; the checker now echoes
+     `{block, attestor}` verbatim into `evidence_note` so the R6 brief
+     discloses what filled the slot (disclosure, not a new gate — the
+     recorded escape-hatch posture kept).
+  5. *Task waves — cross-slate ordering note added* (T3 first; T7 after
+     mcp-elicitation E2), matching `docs/design/slate-sequencing.md`.
+  6. *Verified accurate against the tree at review time:* registry count 141
+     (`operations.json`), `SCOPE_KINDS` currently four members,
+     `manifest_signature` imported into `ops/export_dossier.py` from
+     `ops/provenance_manifest.py`, `state/scopes.py::count_prior_looks` /
+     `is_scope_locked`, the `_assert_signoff_authorship` three-lock sibling,
+     `_is_bare_ack`, and the dossier-boundary test pins all exist as cited.
+
+(Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

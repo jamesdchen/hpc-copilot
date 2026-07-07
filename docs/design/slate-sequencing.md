@@ -67,15 +67,49 @@ and fingerprint T8 (three `_EXPECTED_SOURCES` pair-edits, serial); T9 (the
 harxhar's first pack can be a kit-era fixture.
 
 **Phase 5 — the conformance kit (K1–K10).** Last, deliberately: K3's
-predicateType table derives from the FINAL `DOSSIER_SOURCES` (after phases
-2–4 added `renders`, the disclosure noun, and the two pack nouns); K10's
+predicateType table derives from the FINAL `DOSSIER_SOURCES` (`renders`
+already landed in Phase 0; phases 2–4 add the disclosure noun and the two
+pack nouns on top); K10's
 version stamp lands after E5's re-pins; and the kit then certifies the two
 reference adapters against the finished surface. Publishing mechanics
 (contract SemVer, the version constant K10 owns) close the slate.
 
-**Next planning target (not in the slate): EVIDENCE MEMORY** — the lab
-notebook over attestations. Design conversation captured in the machine-local
-memory (conclusions as evidence-bound human attestations; scope tags as the
-agnostic query key with lineage fallback; dated priors surfaced automatically
-at greenlight, advisory-only, enforcement-pinned never-blocking; the derived
-recomputable index). Plan after run #10's learnings.
+## The post-slate phases (added pre-implementation verification 2026-07-07
+## — the four later plans share three hot files and needed their own order)
+
+All four are PLANNED docs verified tonight; they serialize on
+`ops/decision/journal.py`, `ops/attention_queue.py`, and
+`state/decision_journal.py::SCOPE_KINDS` (which gains up to four more
+kinds across them — pack and registration land in the slate phases; the
+rest here, ordinals nominal throughout):
+
+**Phase 6 — evidence memory** (`docs/design/evidence-memory.md`). First
+among the four: challenge-attestation reuses its `CITATION_KINDS`
+resolver table and its T-NB never-blocking form; its `"conclusion"` scope
+kind lands here.
+
+**Phase 7 — live-conformance** (`docs/design/live-conformance.md`).
+Directly after the registration/fingerprint machinery it amends is warm:
+the `review_horizon` additive amendment (T6/T7), the registration-journal
+block-family additions (`registration-review`, `conformance-verdict` —
+coordinated with registration R6's family set), the fingerprint-envelope
+helper reuse. No new scope kind.
+
+**Phase 8 — challenge-attestation** (`docs/design/challenge-attestation.md`).
+After evidence memory (resolvers) and after fingerprint T12 (the
+`reproduction-verdict` authorship gate its promotion seam leans on); the
+`"challenge"` scope kind lands here.
+
+**Phase 9 — multi-human** (`docs/design/multi-human.md`). Deliberately
+LAST of the four: it edits the authorship gates in
+`ops/decision/journal.py` after every other plan's gate additions are in
+(registration T7, elicitation E2, challenge's gate), and — per the
+whichever-lands-second rule both docs record — Phase 9 EXECUTES the
+resolver≠challenger comparison (challenge T5's reserved follow-up, ruled
+in multi-human MH7).
+
+**Next planning target beyond all phases: none in core.** The
+jurisdiction is mapped (the scope doctrine: trust mechanisms, never
+operations; observe/judge/route, never actuate). Post-Phase-9 growth =
+consumers: packs, harnesses, domains, teams — plus the standing punch
+list in the machine-local memory.

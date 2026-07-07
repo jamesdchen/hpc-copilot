@@ -112,7 +112,7 @@ receipt (DP2).
 | S2 | **failure-features patterns** | `ops/recover/features_glue.py` (`FailureFeatures` evidence vector, #240); the resolver pattern-matches, core's catalog is substrate-only | `failure_patterns: {<pattern_id>: <regex string>, …}` — caller-opaque ids, plain regexes over stderr/log text | Core compiles and matches (COUNT), and records the HIT ids as `pack_pattern_ids: [id, …]` on the evidence vector, with the pack echo. The ids ride to the resolver/human as evidence — core never maps a hit to a category, an action, or a retry decision | A pattern→action mapping; a pattern→failure-category mapping (core's category set stays core's); any auto-recovery behavior |
 | S3 | **axis-classification heuristics** | `incorporation/classify_axis_auto.py` (the heuristic classifier); the axis-matcher dispatcher is a declared Q2 assembly point | `axis_hints: [{pattern: <name regex>, axis: <core axis literal>}, …]` — the axis value is from core's EXISTING closed `DataAxis` set (identity against a core vocabulary, not a new one) | **Hints add caution, never clearance** (the scope-lock "locking is the safe direction" posture): when a matching hint AGREES with core's structural heuristic, the classification proceeds unchanged (the hint is echoed as confirmation evidence); when it DISAGREES, the case demotes to needs-decision with both candidates named. A hint can never auto-resolve an axis core's own heuristic would not have resolved | A new axis kind; a hint that auto-resolves; any per-parameter semantics ("this is a seed", "this is a learning rate") |
 | S4 | **audit templates** | Works TODAY — say so. `_AuditedSource.template` is already a caller-referenced percent-format `.py` hashed by `state/audit_source.py`; a pack template is just such a file that happens to live in a pack | The template `.py` itself, listed in the pack manifest `files` | Nothing new mechanically. The ONLY addition: when the referenced template is a bound pack file, the `audited_source` block (and its sidecar echo, `ops/notebook_gate.py::audited_source_echo`) carries the `{pack, version, sha}` echo, so the dossier can prove which pack's template gated the audit | Already correctly bounded — template slugs stay opaque; content-meaning checks stay in the pack's own receipt-emitting CI |
-| S5 | **tolerance defaults** | `docs/design/reproduction-receipt.md` ("core never picks a tolerance — caller-owned"); `verify-reproduction` compares opaque numbers under a caller tolerance | `tolerances: {<tolerance_id>: <number>, …}` — opaque ids to plain numbers | Pure id→value RESOLUTION at the caller boundary: the caller names a `tolerance_id`, the pack-declaration resolver returns the number + echo, and the number flows down the EXISTING caller-owned-tolerance path unchanged. Core still compares; it still never picks. **Note:** the determinism fingerprint (planned separately) may demote this seam — a fingerprint that derives tolerances from observed run-to-run variance would make declared defaults a fallback, not the primary source. Design the resolver so the seam can be removed without touching consumers | A per-metric semantic ("loss uses X, accuracy uses Y" as core-visible meaning — the *caller* maps metrics to tolerance ids); a tolerance FUNCTION |
+| S5 | **tolerance defaults** | `docs/design/reproduction-receipt.md` ("core never picks a tolerance — caller-owned"); `verify-reproduction` compares opaque numbers under a caller tolerance | `tolerances: {<tolerance_id>: <number>, …}` — opaque ids to plain numbers | Pure id→value RESOLUTION at the caller boundary: the caller names a `tolerance_id`, the pack-declaration resolver returns the number + echo, and the number flows down the EXISTING caller-owned-tolerance path unchanged. Core still compares; it still never picks. **Note (corrected, pre-implementation verification 2026-07-07):** the determinism fingerprint DOES demote this seam (its doc calls the demotion "required by this design", and it lands BEFORE packs — slate Phase 3 vs Phase 4). Under the fingerprint's settled precedence (caller `tolerance_spec` override, labeled `caller_override` > measured envelope > **S5 pack default** > exact), the pack value must enter the comparison as its OWN labeled tier inside the fingerprint's precedence resolution around `ops/verify_reproduction.py::_resolve_key_tol` — it must NOT be pre-resolved "at the caller boundary" into the existing `ReproTolerance`/`tolerance_spec` path, because a pre-folded value is indistinguishable from a caller override and would OUTRANK a measured envelope (the exact inversion the fingerprint's precedence row forbids). This plan therefore ships only the shape-only `tolerances` loader + echo (T1/declarations); the consumer wiring belongs to the fingerprint's precedence seam and is deliberately NOT a task here | A per-metric semantic ("loss uses X, accuracy uses Y" as core-visible meaning — the *caller* maps metrics to tolerance ids); a tolerance FUNCTION |
 | S6 | **registration template fields** | The registration kernel (sibling, planned separately; `docs/design/notebook-audit.md` reuse-accounting + `docs/design/attention-queue.md`) | `registration_fields: [<field slug>, …]` and `required_receipts: [<slot slug>, …]` — presence lists the future kernel counts | RESERVED in this plan: the manifest schema carries the seam name and `state/pack.py` loads it shape-only, but NO core consumer lands here — the registration kernel instantiates it when it lands. Core will only ever verify PRESENCE (every declared field slug has a record; every declared slot has a current receipt) — counting, never interpreting | Field semantics, field validation logic, default values — a registration field is a slug core counts, nothing more |
 
 Shape-validation posture for all seams: `state/pack.py` validates STRUCTURE
@@ -298,7 +298,11 @@ hashed like the rest (raw bytes; its sha IS the pack identity sha):
 - `seams` — seam name → declaration-file relpath, keys drawn from the
   CLOSED seam vocabulary `state/pack.py::SEAM_NAMES` (equality-pinned, the
   `DOSSIER_SOURCES` pattern — adding a seam is a reviewed vocabulary
-  change).
+  change). *(Pre-implementation note 2026-07-07: one such reviewed
+  addition is already anticipated — `actor_policy`, reserved by
+  `docs/design/multi-human.md` MH8 for team delegation policy; it enters
+  SEAM_NAMES via this doc's own reviewed-vocabulary process when
+  multi-human lands, not before.)*
 - `fills_slots` — advisory identity list (see the gate contract).
 
 **Where it lives:** wherever the caller says — inside the experiment repo,
@@ -357,11 +361,21 @@ closed store set gains two nouns (T10, a reviewed vocabulary change).
   `ops/notebook/record_receipt_op.py`.
 - **T6** `ops/pack/status_op.py` (new) — `pack-status` query: current bind,
   per-slot receipt status, unfillable-requirement report. Read-only.
-- **T7** `ops/pack/declarations.py` (new) — the ONE seam-declaration
-  resolver: reads the opt-in block + current bind + seam files → typed
-  opaque lists/mappings + the `{pack, version, sha}` echo. Consumers (T9x)
-  call this and stay pack-ignorant in their own logic: `notebook-lint` still
-  just receives a `reader_calls` list the way it receives `input_roots`.
+- **T7** `state/pack_declarations.py` (new; **placement corrected from
+  `ops/pack/declarations.py`, pre-implementation verification 2026-07-07**) —
+  the ONE seam-declaration resolver: reads the opt-in block + current bind +
+  seam files → typed opaque lists/mappings + the `{pack, version, sha}` echo.
+  It MUST live in `state/`, not `ops/pack/`: its named consumers sit in OTHER
+  ops subjects (`ops/notebook/lint.py` = the `notebook` subject,
+  `ops/recover/features_glue.py` = the `recover` subject), and
+  `scripts/lint_subject_imports.py` refuses cross-subject `ops.pack` imports
+  from them — subjects compose only via the `state`/`infra` substrate (the
+  `ops/notebook/record_receipt_op.py` module docstring states the rule). The
+  resolver is pure I/O + reduction (opt-in read, `state/pack.py` loaders,
+  `state/pack_receipts.py::current_bind`), so state placement is natural.
+  Consumers (T9x) call this and stay pack-ignorant in their own logic:
+  `notebook-lint` still just receives a `reader_calls` list the way it
+  receives `input_roots`.
 
 **Wave C (sequential — hot files, one at a time):**
 
@@ -388,6 +402,11 @@ closed store set gains two nouns (T10, a reviewed vocabulary change).
 - **T9c** `incorporation/classify_axis_auto.py` — S3: hint
   confirmation/demotion (agreement echoes, disagreement demotes to
   needs-decision; never auto-resolves).
+- **T9d** `ops/notebook_gate.py` — S4's ONLY mechanical addition (added in
+  pre-implementation verification 2026-07-07: this edit previously had no
+  owning task): when the `audited_source` template resolves to a bound pack
+  file, `audited_source_echo` carries the `{pack, version, sha}` echo.
+  Hot file (the notebook gate); sequenced inside Wave C like T9.
 - **T10** sidecar `packs` echo + dossier: `ops/export_dossier.py` gains store
   nouns `pack-manifest` + `pack-journal`;
   `tests/contracts/test_dossier_boundary.py::_EXPECTED_SOURCES` updated in
@@ -464,6 +483,38 @@ maintainers mistake for core knowledge).
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **2026-07-07 (pre-implementation verification, adversarial review — three
+  corrections applied in place, all against the live tree):**
+  1. **S5 precedence corrected.** The original S5 cell said the fingerprint
+     "may demote" the seam and had the pack value resolve "at the caller
+     boundary" into the existing caller-owned-tolerance path. Verified
+     against `ops/verify_reproduction.py::_resolve_key_tol` (a value entering
+     via `ReproTolerance` per_key/default IS a caller tolerance) and
+     `docs/design/determinism-fingerprint.md` (demotion "required by this
+     design"; precedence caller > measured > S5 > exact; fingerprint lands
+     in slate Phase 3, before packs in Phase 4): a literal implementation
+     would have ranked pack defaults ABOVE measured envelopes. S5 now ships
+     loader + echo only; consumer wiring is the fingerprint precedence
+     seam's.
+  2. **T7 moved `ops/pack/declarations.py` → `state/pack_declarations.py`.**
+     `scripts/lint_subject_imports.py` forbids `ops/notebook/lint.py` (T9a)
+     and `ops/recover/features_glue.py` (T9b) from importing an `ops/pack/`
+     module — cross-subject. The resolver is pure I/O, so it moves to the
+     `state` substrate both subjects may import.
+  3. **T9d added.** S4's echo edit (`ops/notebook_gate.py::audited_source_echo`
+     gains the pack echo) was described in the seam table but owned by no
+     task; T10 only covers the sidecar + dossier.
+  - Cite-integrity re-verified same pass: `state/attestation.py::bind`
+    accepts a sha string for `recompute` (the bind event's "fresh manifest
+    hash" wiring is directly implementable); `SCOPE_KINDS` +
+    `decisions_path` branch shape matches the planned `"pack"` kind;
+    `_AuditedSource` (with v1.6's `input_roots`/`source_roots`/
+    `attention_order`) is landed, so T8a's sibling-field sequencing holds;
+    the notebook receipt template, gate seats
+    (`ops/resolve_submit_inputs.py`, `ops/submit_flow.py`), all six regen
+    scripts, and registry 141 (`operations.json` length, matching the
+    e1e9ab27 baseline claim) all check out.
+
+(Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

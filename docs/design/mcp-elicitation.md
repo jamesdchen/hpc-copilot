@@ -44,16 +44,44 @@ by reading `McpServer.serve` / `McpServer.handle`):
    `"error"` and no `"method"` → a response to a server-originated request →
    route to the pending table, emit nothing.
 4. **A blocking-with-timeout wait primitive callable from a tool handler.**
-   The server is synchronous and single-threaded, so "waiting" means the
-   handler itself pumps stdin: a `_request_from_client(method, params,
-   timeout_s)` that writes the outbound request, then reads/classifies
-   messages until the matching response arrives or the deadline expires —
-   servicing interleaved client REQUESTS inline while waiting (see D3), so
-   the wait does not head-of-line-block the rest of the session (the conduct
-   rule 11 lesson, `_refuse_blocking_over_mcp`).
+   The handler pumps inbound messages while blocked: a
+   `_request_from_client(method, params, timeout_s)` that writes the outbound
+   request, then consumes/classifies messages until the matching response
+   arrives or the deadline expires — servicing interleaved client REQUESTS
+   inline while waiting (see D3), so the wait does not head-of-line-block the
+   rest of the session (the conduct rule 11 lesson,
+   `_refuse_blocking_over_mcp`).
 
-Estimated size: ~120–180 lines in `mcp_server.py` plus a fake-client duplex
-test harness. No threads, no asyncio, no new dependency.
+5. **Stream plumbing the current structure lacks** (pre-implementation
+   verification 2026-07-07): the tool handler is reached via
+   `McpServer.handle → _dispatch → call_tool`, NONE of which see the
+   transport — `serve(stdin, stdout)` alone owns the streams, and
+   `handle()` is deliberately transport-free for unit tests. The wait
+   primitive therefore needs the duplex threaded onto the instance (set by
+   `serve` before the loop; `None` otherwise). When the transport is absent
+   (direct-`handle` tests, any embedding that never calls `serve`),
+   elicitation is structurally unavailable and the flow takes the degrade
+   path — which keeps every existing `handle()`-level test valid unchanged.
+
+6. **The timeout needs ONE dedicated stdin-reader thread** (pre-implementation
+   verification 2026-07-07 — this corrects the earlier "no threads" claim).
+   A single-threaded blocking `readline` has no deadline: `select()` does not
+   work on pipes/console stdin on Windows, and while the human deliberates a
+   conforming client sends NOTHING on the wire — so a readline-loop
+   implementation of the 300 s timeout can never fire and the elicitation
+   call wedges the whole server indefinitely, exactly the head-of-line class
+   D3 exists to prevent. The correct portable shape: one daemon thread is the
+   SOLE stdin reader, pushing parsed lines (and an EOF sentinel) onto a
+   `queue.Queue`; `serve`'s loop and `_request_from_client` both consume from
+   the queue — `Queue.get(timeout=…)` is what makes the deadline real.
+   Dispatch stays single-threaded (the reader thread only reads and
+   enqueues; it never touches handlers or the registry), so the state-leak
+   audit and the re-entrancy analysis (D3) are unaffected. EOF on stdin
+   during a wait = decline-equivalent, then normal shutdown.
+
+Estimated size: ~180–260 lines in `mcp_server.py` plus a fake-client duplex
+test harness. One daemon reader thread (reads/enqueues only — never
+dispatches), no asyncio, no new dependency.
 
 **Why the alternatives lose:**
 
@@ -97,14 +125,21 @@ adoption. The honest reading of the boundary test: JSON-RPC framing is
 substrate we already own correctly; elicitation adds one outbound request
 type, not a new protocol.
 
-**Recorded revisit trigger** (the scope-by-constraint discipline): the moment
-a SECOND server-initiated MCP feature is wanted (sampling, roots,
-progress-with-cancellation, subscriptions), the calculus flips — a growing
-hand-rolled bidirectional surface is exactly the divergence risk the
-outsourcing doctrine names, and SDK adoption (likely path (c), done once,
-with the parity oracle retired deliberately) becomes the default. One
-outbound request type is a bounded extension; three is a protocol
-re-implementation.
+**Recorded revisit trigger — TIGHTENED (user review, 2026-07-07)**: the
+trigger is **any further concurrency requirement**, not merely a second
+server-initiated feature: parallel elicitations, sampling, roots,
+progress-with-cancellation, subscriptions — ANY of them flips the calculus
+to SDK adoption (path (c), done once, the parity oracle retired
+deliberately). Rationale from the verification pass: the original
+no-threads plan was UNIMPLEMENTABLE (the Windows stdin-deadline problem),
+and the amended one-reader-thread facade is defensible only because it is
+the platform's own canonical shape for exactly this problem —
+CPython's `subprocess.communicate(timeout=)` spawns reader threads on
+Windows, `jupyter_client`'s blocking channels are thread-fed queues. One
+sync facade thread is the LAST cheap step; hand-rolled *async
+coordination* beyond it is precisely the divergence zone the ssh lesson
+names. One outbound request type is a bounded extension; the next one is
+a protocol re-implementation.
 
 **Risk bound:** elicitation is a *degradable* capability by contract — every
 failure mode (protocol bug, client quirk, timeout) degrades to the hook tier,
@@ -185,7 +220,8 @@ lesson applies to elicitation exactly as to blocking watches).
 table holds at most one entry. While awaiting a response, interleaved client
 REQUESTS are dispatched inline with elicitation *suppressed* (a nested tool
 call that would elicit instead takes the degrade path). A second concurrent
-elicitation cannot arise otherwise (single-threaded server), so the cap is an
+elicitation cannot arise otherwise (dispatch is single-threaded — the D1
+reader thread only enqueues), so the cap is an
 invariant assertion, not a queue. Nested in-process CLI dispatch during the
 wait is safe: `contextlib.redirect_stdout`/`redirect_stderr` nest, and
 journal writes are already flock-guarded against concurrent CLI processes.
@@ -226,13 +262,26 @@ by the fake-client harness with zero gate changes.
 
 **E2 prerequisite — the machine-readable trigger.** The refusal envelopes
 from the authorship/sign-off gates surface as `errors.SpecInvalid`
-(generic). The elicitation hook must not parse prose. Smallest correct
-change: the authorship-gate refusals carry a structured discriminator the
-envelope preserves (e.g. `data.authorship_evidence = "missing"` or a distinct
-`error_code: authorship_evidence_missing` — implementation task decides after
-checking the error-envelope contract's compatibility rules; a `data` field is
-additive and back-compatible, so it is the default). The MCP layer keys on
-that, nothing else.
+(generic). The elicitation hook must not parse prose. **Seam settled by
+pre-implementation verification (2026-07-07): the marker rides
+`failure_features`, not a `data` field and not a new `error_code`.** As
+coded, `ok:false` envelopes carry NO `data` field at all
+(`cli/_helpers.py::_err` builds exactly `{ok, error_code, message, category,
+retry_safe[, remediation][, failure_features][, escalation]}`), so
+"additive `data`" would itself be a shared-envelope change; and a new
+`error_code` is a breaking wire change by `errors.py`'s own header doctrine
+("Adding new error_code values is a breaking change"). The additive seam
+ALREADY EXISTS: `cli/_helpers.py::_err_from_hpc` lifts
+`getattr(exc, "failure_features", None)` verbatim into the envelope, the
+`failure_features` block is contractually open/ungoverned, and it rides the
+MCP `structuredContent` untouched (`mcp_server.py::_tool_result` copies the
+whole envelope). So E2 = the gate's raise sites attach
+`exc.failure_features = {..., "authorship_evidence": "missing"}` — zero
+envelope-machinery change. One trap: `_err_from_hpc` SYNTHESIZES a default
+`failure_features` for every `spec_invalid` envelope
+(`_spec_invalid_failure_features`), so the MCP trigger must key on the
+distinct KEY (`authorship_evidence`), never on the mere presence of a
+`failure_features` block. The MCP layer keys on that, nothing else.
 
 ### D5 — Trust and provenance pins
 
@@ -294,11 +343,17 @@ that, nothing else.
 
 - **E1 — the bidirectional pump.**
   `src/hpc_agent/_kernel/extension/mcp_server.py`: outbound id counter +
-  namespace, pending-response slot, message-kind classification in `serve`
-  (request vs notification vs incoming response), the
+  namespace, pending-response slot, the single daemon stdin-reader thread +
+  message queue (D1 item 6 — the reader only reads/enqueues; `serve` becomes
+  a queue consumer), message-kind classification on dequeue (request vs
+  notification vs incoming response), the transport threaded onto the
+  instance by `serve` (D1 item 5 — absent transport ⇒ elicitation
+  structurally unavailable, existing direct-`handle` tests unchanged), the
   `_request_from_client(method, params, timeout_s)` wait primitive that
-  pumps interleaved requests inline (elicitation-suppressed nested dispatch,
-  depth cap asserted), late-response drop, stderr telemetry line. Store
+  consumes the queue with a real `get(timeout=…)` deadline and dispatches
+  interleaved requests inline (elicitation-suppressed nested dispatch,
+  depth cap asserted), late-response drop, EOF-sentinel → decline +
+  shutdown, stderr telemetry line. Store
   client capabilities at `_initialize` → `self._client_elicitation`.
   `ELICITATION_SUPPORTED` → `ELICITATION_SERVER_IMPLEMENTED = True` (E3
   consumes). Tests: a fake-client duplex harness (paired in-memory streams —
@@ -388,4 +443,27 @@ that, nothing else.
 
 ## Drift log
 
-(Empty — populated during implementation, the notebook-audit.md convention.)
+- **Pre-implementation verification (2026-07-07, adversarial plan review;
+  no code had landed):**
+  1. *D1 re-shaped* — the original "no threads" + blocking-with-timeout
+     combination was unimplementable: `handle`/`call_tool` never see the
+     transport (only `serve` does), and a blocking `readline` has no
+     deadline on Windows while a waiting client sends nothing, so the 300 s
+     timeout could never fire (an indefinite server wedge — the exact class
+     D3 prohibits). D1 gained items 5–6 (instance-threaded transport; one
+     daemon stdin-reader thread + `queue.Queue`, `get(timeout=…)` as the
+     real deadline), E1's task text and the size estimate were updated to
+     match.
+  2. *E2 seam corrected* — `ok:false` envelopes carry no `data` field
+     (`cli/_helpers.py::_err`), and a new `error_code` is a breaking wire
+     change per `errors.py`'s header doctrine. The marker rides the
+     existing additive `failure_features` seam (`_err_from_hpc` lifts
+     `exc.failure_features` verbatim; MCP `structuredContent` preserves
+     it), keyed on the distinct `authorship_evidence` key — never on the
+     block's presence, which `_spec_invalid_failure_features` synthesizes
+     for every spec_invalid.
+  3. *Verified against code, no change needed*: `_initialize(params)` does
+     receive the client capability object (currently discarded — D2 is a
+     store, not a plumbing change); the gate raise sites are
+     `errors.SpecInvalid` routed through `_dispatch.py::_err_from_hpc`;
+     `_tool_result` copies the full envelope into `structuredContent`.

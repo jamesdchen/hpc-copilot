@@ -212,6 +212,25 @@ existing resolver the gate dispatches to:
 | `fingerprint` | `state/fingerprint_store.py` ledger read (determinism-fingerprint T3; slate Phase 3, before us) | a sample's `content_sha` |
 | `attestation` | `state/attestation.py::reduce` over a named journal `{scope_kind, scope_id}` — the generic escape hatch (any receipt, sign-off, registration) | the record's `content_sha` |
 
+**Dispatch placement (corrected — pre-implementation verification
+2026-07-07).** `state/evidence.py` owns `CITATION_KINDS`, the shape
+validation, and the resolvers that are themselves state-level (`run`,
+`fingerprint`, `attestation`). The `dossier` resolver
+(`compute_dossier_signature`) lives in `ops/export_dossier.py`, and the
+state substrate NEVER imports `ops` (zero such imports exist tree-wide;
+the registration precedent split exactly this way:
+`state/registration.py::check_chain` stays pure while
+`ops/registration/prereqs.py` owns the ops-touching checker dispatch). So
+the citation dispatch is composed AT THE OPS CALLERS: the append gate (T8)
+and the read-side verbs pass the dossier resolver in (a callable in the
+dispatch table's `dossier` slot — the `attestation.bind` recompute-callable
+form), or route through a thin ops-root composer; `state/evidence.py`
+itself must not gain an `ops` import. Note the import spelling at the T8
+seat: `ops/decision/journal.py` is inside the `decision` subject, so it
+reaches ops-root modules only via the established alias form
+(`from hpc_agent.ops import export_dossier`) that
+`scripts/lint_subject_imports.py` permits for non-subject root files.
+
 **How citations resolve/verify — the honest choice, recorded.** Two moments,
 two postures:
 
@@ -276,10 +295,15 @@ via non-creating globs (the D3 discipline), tolerant-read throughout:
    campaigns exist, their dates, and — joined against (1)'s `concludes`
    sets — which terminal campaigns have NO conclusion (the loop-closing
    list).
-4. **Run sidecars** — `.hpc/runs/*.json` (the `_all_run_records`
-   non-creating glob precedent): tags a run declared, `cmd_sha`, dates;
-   lineage keys via `state/scopes.py::lineage_chain` +
-   `state/run_sha.py`.
+4. **Run sidecars** — `.hpc/runs/*.json`, globbed DIRECTLY
+   (`experiment_dir / ".hpc" / "runs"` — never via
+   `RepoLayout(experiment_dir).runs`, whose property MKDIRS lazily; the
+   `_all_run_records` cite is the glob-STYLE precedent only — that helper
+   walks the journal-home namespace `<journal_home>/<repo_hash>/runs/*.json`,
+   a different store; precision recorded in pre-implementation verification
+   2026-07-07): tags a run declared (the sidecar's slug-validated `tags`
+   field — already on the wire model, verified), `cmd_sha`, dates; lineage
+   keys via `state/scopes.py::lineage_chain` + `state/run_sha.py`.
 5. **Fingerprint ledgers** — `_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl`
    (determinism-fingerprint D-store): the envelope + evidence labels
    `{n, n_full, n_partial, scales, clusters}` QUOTED VERBATIM per lineage —
@@ -410,7 +434,26 @@ the new work's declared scope tags + its lineage key (the snapshot
   brief-emitting block.
 
 Both code seats call `collect_evidence` + the render — never a private
-re-collection (the one-collector row). Tag elicitation: the interview /
+re-collection (the one-collector row).
+
+**FAIL-OPEN AT THE SEAT (specified explicitly — pre-implementation
+verification 2026-07-07).** The embed must never mint a new failure mode in
+the submit/greenlight path: the collector's tolerant-read covers expected
+I/O noise, but a BUG (an unexpected exception anywhere in
+`collect_evidence`, the cache, or the render) raised mid-greenlight would
+turn an advisory digest into a submit refusal — the never-blocking pin
+violated by accident rather than intent. Therefore each code seat wraps the
+entire embed call in a broad guard: ANY exception degrades to
+`evidence: {"unavailable": true, "reason": "<one line, exception class +
+message>"}` — disclosed in the brief, logged, never propagated. The
+greenlight/S1 decision surface (gates, `needs_decision`, `next_block`) is
+byte-identical whether evidence collected, collected empty, or failed.
+Collector failure is never a submit error; the remedy is running
+`evidence-brief` directly, where the same failure IS loud (a dedicated
+query verb may raise honestly — only the embedded advisory seats fail
+open). The APPEND gate (E-shape) is the deliberate exception: citation
+verification there is load-bearing and refuses loudly, and it never runs
+inside a greenlight. Tag elicitation: the interview /
 audit-prelude flows ASK the human for tags (free text, utterance-derived);
 an empty answer is recorded as no tags, disclosed downstream — never
 defaulted, never invented (the fabrication class).
@@ -460,7 +503,9 @@ push → CI green. Every task lands with a fires+passes test pair.
 - **T1** `state/evidence.py` (new) — `CITATION_KINDS` (closed,
   equality-pinned) + the citation-resolver dispatch table (each kind routes
   through its one existing definition; pure dispatch, the `check_chain`
-  form) + the conclusion record blocks/validation + the conclusion
+  form — with the `dossier` resolver INJECTED by ops callers per the
+  dispatch-placement note above; no `ops` import in this module, ever) +
+  the conclusion record blocks/validation + the conclusion
   reduction (`current | superseded | revoked | absent`, routing through
   `state/attestation.py::reduce`; route-through `inspect.getsource`
   assertion) + `collect_evidence` (the E-collector walk, `as_of` filter,
@@ -513,10 +558,16 @@ push → CI green. Every task lands with a fires+passes test pair.
   (a) mechanical: source scan of the embed call path (T9's seams + the
   render + `collect_evidence`) asserting no `raise` on any
   evidence-content-dependent branch (collection I/O tolerance excepted —
-  those fall through, never up); (b) behavioral: a fixture namespace with
-  ten negative-conclusion priors under the submitted tags greenlights with
-  a byte-identical decision surface (same `needs_decision`, same
-  `next_block`, same gate outcomes) as an empty namespace. This is the
+  those fall through, never up), and asserting the seat-level broad guard
+  exists (the E-embed fail-open wrapper); (b) behavioral: a fixture
+  namespace with ten negative-conclusion priors under the submitted tags
+  greenlights with a byte-identical decision surface (same
+  `needs_decision`, same `next_block`, same gate outcomes) as an empty
+  namespace; (c) fault-injection (added 2026-07-07): with
+  `collect_evidence` monkeypatched to raise (and, separately, a corrupted
+  journal fixture), the greenlight still completes with the disclosed
+  `evidence.unavailable` stub and an otherwise byte-identical decision
+  surface — a collector bug can never become a submit error. This is the
   kill-ledger decision mechanized against future contributors.
 - **T10** `ops/attention_queue.py` — the `campaign-unconcluded` kind
   (E-queue): `KIND_CLASS` entry, collector routing through
@@ -605,6 +656,45 @@ push → CI green. Every task lands with a fires+passes test pair.
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **2026-07-07 (pre-implementation verification, adversarial review — three
+  corrections applied in place, all against the live tree):**
+  1. **The embed fail-open posture made explicit (the latent defect).** The
+     plan pinned never-blocking against evidence CONTENT but did not say
+     what a collector/render EXCEPTION does mid-greenlight — a bug in
+     `collect_evidence` would have raised straight into the submit path, a
+     brand-new failure mode at the S1/greenlight seats. E-embed now
+     specifies the seat-level broad guard (`evidence.unavailable` stub,
+     disclosed, never propagated) and T-NB gains the fault-injection leg
+     (c).
+  2. **Citation-dispatch layering corrected.** T1 as written put the
+     `dossier` resolver dispatch (→ `ops/export_dossier.py::
+     compute_dossier_signature`) inside `state/evidence.py`; the state
+     substrate imports no `ops` module anywhere in the tree, and the
+     registration precedent this doc cites actually splits state-pure
+     composer / ops-side checker dispatch. The dossier resolver is now
+     injected by ops callers; the T8 seat's alias-import spelling noted
+     (subject files reach ops-root modules only via
+     `from hpc_agent.ops import X` under `scripts/lint_subject_imports.py`).
+  3. **Run-sidecar glob precision.** `_all_run_records` walks the
+     JOURNAL-HOME namespace, not `.hpc/runs/`; and `RepoLayout.runs` mkdirs
+     on access, so the collector globs `.hpc/runs/*.json` directly.
+     Verified the sidecar wire model already carries slug-validated `tags`
+     and `cmd_sha` — E2's vocabulary needs no new sidecar field.
+  - Cite-integrity re-verified same pass: `state/scopes.py::validate_tag`/
+    `lineage_chain`/`count_prior_looks`/`record_look`,
+    `state/decision_journal.py::latest_decision` + the `SCOPE_KINDS`/
+    `decisions_path` branch shape, `.hpc/campaigns/<id>/decisions.jsonl`
+    (`meta/campaign/dirs.py::campaign_dir`), `<tag>.looks.jsonl`,
+    `ops/attention_queue.py::discover_fleet_experiments` (returns
+    experiment dirs — fleet impedance OK), `state/describe_cache.py`
+    (`HPC_NO_DESCRIBE_CACHE` precedent), `RunIdStrict`,
+    `_wire/actions/decision_journal.py::ScopeKind`, the three skill lints,
+    and registry 141 (`operations.json`; 141→146 slate→148 here is
+    arithmetic-consistent with `docs/design/slate-sequencing.md`). The
+    fingerprint-ledger path and evidence-label vocabulary quoted here match
+    `docs/design/determinism-fingerprint.md` verbatim. `st_mtime_ns` is
+    available on win32 (`os.stat`), so the E-cache key is cross-platform.
+
+(Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
