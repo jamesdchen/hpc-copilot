@@ -82,6 +82,61 @@ def test_no_pending_no_workflow_skips() -> None:
     assert plan["action"] == "skip"
 
 
+# ── plan_block_action: journal-derived resume (run #9, no marker parked) ───────
+
+
+def test_no_pending_committed_greenlight_resumes_from_journal() -> None:
+    """An interview-driven chain never parks a marker (submit-s1 runs by direct
+    invocation), but the committed greenlight's next_block IS a durable cursor —
+    the tick advances there instead of skipping (run #9: the skip forced the
+    agent to hand-dispatch submit-s2)."""
+    plan = plan_block_action(
+        workflow=None,
+        pending_decision={},
+        committed_resolved={"next_block": "submit-s2", "submit": {"submit": {"run_id": "r1"}}},
+        last_run_inputs=None,
+    )
+    assert plan["action"] == "advance"
+    assert plan["verb"] == "submit-s2"
+    assert plan["workflow"] == "submit"
+
+
+def test_journal_resume_scoped_to_the_verbs_own_workflow() -> None:
+    """An explicit MISMATCHING workflow request wins over the journal cursor —
+    a status tick against a run mid-submit fresh-starts status, never re-routes
+    into the submit chain."""
+    plan = plan_block_action(
+        workflow="status",
+        pending_decision={},
+        committed_resolved={"next_block": "submit-s2"},
+        last_run_inputs=None,
+    )
+    assert plan["action"] == "fresh"
+    assert plan["verb"] == "status-snapshot"
+
+
+def test_committed_without_next_block_fresh_starts() -> None:
+    """A committed decision naming no (or an unknown) next_block verb is not a
+    cursor — the tick falls through to the plain fresh start."""
+    plan = plan_block_action(
+        workflow="submit",
+        pending_decision={},
+        committed_resolved={"goal": "estimate pi"},
+        last_run_inputs=None,
+    )
+    assert plan["action"] == "fresh"
+    assert plan["verb"] == "submit-s1"
+
+    plan = plan_block_action(
+        workflow="submit",
+        pending_decision={},
+        committed_resolved={"next_block": "not-a-verb"},
+        last_run_inputs=None,
+    )
+    assert plan["action"] == "fresh"
+    assert plan["verb"] == "submit-s1"
+
+
 # ── plan_block_action: RESUME — awaiting (uncommitted) ─────────────────────────
 
 
@@ -392,6 +447,33 @@ def test_run_tick_dry_run_does_not_execute(faked: dict[str, Any]) -> None:
     result, code = run_tick(Path("."), run_id="r1", workflow="aggregate", dry_run=True)
     assert code == 0
     assert faked["ran"] == []
+
+
+def test_run_tick_resumes_from_journal_without_marker(faked: dict[str, Any]) -> None:
+    """Run #9: an interview-driven chain has NO parked marker, only the committed
+    greenlight. The tick must run the named block under the committed resolved
+    (routing token stripped) and park at its rendezvous — re-onboarding the
+    hand-started chain onto the driver — instead of reporting nothing drivable."""
+    faked["pending"] = {}
+    faked["committed"] = {"next_block": "submit-s2", "submit": {"submit": {"run_id": "r1"}}}
+    faked["results"] = {
+        "submit-s2": {
+            "block": "s2",
+            "stage_reached": "canary_verified",
+            "needs_decision": True,
+            "run_id": "r1",
+            "brief": {"verified": True},
+            "next_block": {"verb": "submit-s3", "why": "launch", "spec_hint": {}},
+        },
+    }
+    result, code = run_tick(Path("."), run_id="r1", workflow="submit")
+    assert code == 0
+    assert [r["verb"] for r in faked["ran"]] == ["submit-s2"]
+    # The block ran under the committed resolved minus the routing token.
+    assert faked["ran"][0]["spec"] == {"submit": {"submit": {"run_id": "r1"}}}
+    # Parked at the S2 brief — the marker now exists, so later ticks resume normally.
+    assert result.action == "awaiting_decision"
+    assert len(faked["parked"]) == 1
 
 
 def test_run_tick_block_failure_surfaces_nonzero(faked: dict[str, Any], monkeypatch) -> None:

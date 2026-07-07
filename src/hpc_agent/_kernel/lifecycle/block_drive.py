@@ -146,6 +146,16 @@ def plan_block_action(
 
     * ``"fresh"`` — no pending decision → begin ``workflow``'s chain at its first
       block (``block_chain.ORDER[workflow][0]``).
+    * ``"advance"`` (journal-derived, run #9) — no pending decision, but the
+      journal's latest committed greenlight names a ``next_block`` verb → resume
+      there. An interview-driven chain starts its first blocks by DIRECT
+      invocation (``submit-s1`` is not bare-startable), so no marker was ever
+      parked — but the committed ``resolved`` IS a durable cursor. Without this,
+      every later tick reports nothing drivable and the agent hand-sequences the
+      whole chain (proving run #9: "no parked cursor → invoking submit-s2
+      directly"). Re-entering an already-finished detached block is idempotent
+      (the recorded-terminal replay), and the next park writes the marker, so one
+      tick re-onboards a hand-started chain onto the driver.
     * ``"awaiting_decision"`` — a pending decision exists but no ``response=="y"``
       is committed yet → a valid PARKED stop (exit 0, do nothing).
     * ``"advance"`` — approved spec unchanged (§4) → run the resume cursor's
@@ -160,8 +170,32 @@ def plan_block_action(
     Routing NEVER reads a nudge string — only ``committed_resolved`` (an approved
     spec) and the ownership map (§3/§4).
     """
-    # ── FRESH start: no pending decision. Begin the workflow's chain. ──────────
+    # ── FRESH start: no pending decision. ──────────────────────────────────────
     if not pending_decision:
+        # Journal-derived resume first (run #9): the latest committed greenlight's
+        # ``next_block`` is a durable cursor even when no marker was parked (the
+        # interview-driven direct-invocation start). Scoped to the journal verb's
+        # own workflow family — an explicit mismatching ``workflow`` request
+        # (e.g. a status tick against a run mid-submit) still fresh-starts.
+        next_block = (committed_resolved or {}).get("next_block")
+        if (
+            isinstance(next_block, str)
+            and next_block in block_chain.WORKFLOW_OF
+            and (workflow is None or workflow == block_chain.WORKFLOW_OF[next_block])
+        ):
+            return {
+                "action": "advance",
+                "verb": next_block,
+                "workflow": block_chain.WORKFLOW_OF[next_block],
+                "current_verb": None,
+                "next_verb": next_block,
+                "carry_fields": {},
+                "changed_fields": [],
+                "reason": (
+                    f"no pending marker, but the journal's latest committed greenlight "
+                    f"names {next_block} — resuming the chain from the journal"
+                ),
+            }
         if not workflow or workflow not in block_chain.ORDER:
             return {
                 "action": "skip",
@@ -417,10 +451,15 @@ def run_tick(
     pending = read_pending_decision(run_id, experiment_dir=experiment_dir) if run_id else {}
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
-    if pending:
-        scope_wf = pending.get("workflow") or workflow
+    if run_id:
+        # Read the latest committed greenlight even with NO pending marker: an
+        # interview-driven chain starts by direct invocation (nothing ever
+        # parked), so the committed ``resolved`` is the only durable cursor the
+        # planner has for its journal-derived resume (run #9).
+        scope_wf = (pending.get("workflow") if pending else None) or workflow
         scope_kind = "campaign" if scope_wf == "campaign" else "run"
-        committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id or "")
+        committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
+    if pending:
         cursor = pending.get("resume_cursor", {})
         last_run_inputs = cursor.get("input_spec") if isinstance(cursor, dict) else None
 
