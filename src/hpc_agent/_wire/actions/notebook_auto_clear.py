@@ -41,9 +41,15 @@ class NotebookAutoClearSpec(BaseModel):
     absolute), parsed by the same percent-format parser. ``input_roots`` /
     ``source_roots`` are the OPAQUE roots the server-side lint recompute needs (a
     missing path literal under ``input_roots`` flags its section, keeping it out
-    of the auto-clear). There is deliberately NO ``receipt`` field (T10): render
-    receipts are read from the journal (sha-fresh only), never trusted from the
-    caller — see the module docstring.
+    of the auto-clear) — but for the MUTATE verb they must NOT be supplied by the
+    caller (adversarial review F2): the roots are read UNCONDITIONALLY from the
+    audit's recorded config (interview.json) so a caller cannot point the lint at
+    a directory of planted dummy files and launder a flagged section into
+    ``auto_cleared``. Supplying either field is a loud ``SpecInvalid`` refusal.
+    (The fields remain on the wire so the refusal is explicit and self-documenting
+    rather than a silently-ignored override.) There is deliberately NO ``receipt``
+    field (T10): render receipts are read from the journal (sha-fresh only), never
+    trusted from the caller — see the module docstring.
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-auto-clear input spec")
@@ -74,14 +80,20 @@ class NotebookAutoClearSpec(BaseModel):
     input_roots: list[str] = Field(
         default_factory=list,
         description=(
-            "OPAQUE data-path roots the server-side lint recompute tests path "
-            "literals against. A section with a missing literal is flagged and "
-            "therefore NOT auto-cleared."
+            "Must be EMPTY (adversarial review F2): the mutate verb reads the "
+            "data-path roots from the audit's recorded config (interview.json), "
+            "never from the caller — supplying non-empty roots is a SpecInvalid "
+            "refusal so a section cannot be laundered into auto_cleared with "
+            "planted roots."
         ),
     )
     source_roots: list[str] = Field(
         default_factory=list,
-        description="OPAQUE import roots the server-side lint recompute resolves imports under.",
+        description=(
+            "Must be EMPTY (adversarial review F2): import roots are read from the "
+            "audit's recorded config, never from the caller — supplying non-empty "
+            "roots is a SpecInvalid refusal."
+        ),
     )
 
 

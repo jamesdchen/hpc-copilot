@@ -591,6 +591,40 @@ class _AuditedSource(BaseModel):
             "by core — the audit identity is the ``.py`` source, not its render."
         ),
     )
+    # ── the CANONICAL audit configuration (full-view-recompute upgrade) ──────
+    # The per-invocation ephemera the audit was run with — the ONLY ingredient of
+    # a section's ``view_sha`` that was never persisted. Recording it here makes a
+    # sign-off's ``view_sha`` fully recomputable by the T8 gate (the audit's lint
+    # roots + presentation order are now durable, not lost with the session). All
+    # three default to None so that when the block is written WITHOUT them the
+    # ``exclude_none`` serialization keeps interview.json byte-identical to a
+    # pre-upgrade record (a missing field reads as the conservative default: empty
+    # roots, source-order presentation). Consumers coerce None → the empty form.
+    input_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque data-path roots the executes-live lint tested path literals "
+            "against during the audit. Persisted so the graduation/sign-off gate "
+            "recomputes the SAME lint findings (a data path that later vanishes "
+            "flips the section's tier and moves its view_sha). Absent → []."
+        ),
+    )
+    source_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque import roots the linked-sources lint resolved imports under "
+            "during the audit. Persisted alongside input_roots so the canonical "
+            "view is recomputable. Absent → []."
+        ),
+    )
+    attention_order: list[str] | None = Field(
+        default=None,
+        description=(
+            "The section-slug presentation order the audit view used (T12). Feeds "
+            "the module roll-up view_sha (it changes what the human saw). Absent → "
+            "source order."
+        ),
+    )
 
 
 class InterviewSpec(BaseModel):

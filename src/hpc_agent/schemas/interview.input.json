@@ -245,6 +245,54 @@
           "default": null,
           "description": "Optional opaque render metadata (the caller-side jupytext/nbclient notebook projection). Recorded verbatim; NEVER hashed or validated by core — the audit identity is the ``.py`` source, not its render.",
           "title": "Rendered Notebook"
+        },
+        "input_roots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque data-path roots the executes-live lint tested path literals against during the audit. Persisted so the graduation/sign-off gate recomputes the SAME lint findings (a data path that later vanishes flips the section's tier and moves its view_sha). Absent → [].",
+          "title": "Input Roots"
+        },
+        "source_roots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque import roots the linked-sources lint resolved imports under during the audit. Persisted alongside input_roots so the canonical view is recomputable. Absent → [].",
+          "title": "Source Roots"
+        },
+        "attention_order": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The section-slug presentation order the audit view used (T12). Feeds the module roll-up view_sha (it changes what the human saw). Absent → source order.",
+          "title": "Attention Order"
         }
       },
       "required": [

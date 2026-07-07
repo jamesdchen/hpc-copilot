@@ -36,6 +36,12 @@
       "title": "Template Module Sha",
       "type": "string"
     },
+    "canonical": {
+      "default": true,
+      "description": "True when this view was built with the CANONICAL configuration — the audit's RECORDED lint roots + attention order, the server-recomputed lint, and the journaled receipts — so its per-section view_shas MATCH what the T8 sign-off gate recomputes and will accept. False when an OVERRIDE made it a PREVIEW (explicit roots/order differing from the recorded config, explicit lint_findings, or an inline receipt): a preview is for inspection; signing a preview view_sha is refused.",
+      "title": "Canonical",
+      "type": "boolean"
+    },
     "view_sha": {
       "description": "Deterministic roll-up sha over the section shas + the two module fingerprints; any section or preamble edit moves it.",
       "title": "View Sha",

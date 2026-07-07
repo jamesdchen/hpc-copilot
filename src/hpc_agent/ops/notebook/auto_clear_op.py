@@ -11,12 +11,18 @@ untouched sections could never pass the T9 graduation gate (which requires every
 required section auto_cleared-or-signed at its current hash).
 
 **Un-fakeability (the load-bearing constraint).** The verb RECOMPUTES everything
-server-side. It runs the ``notebook-lint`` rules in-process (calling the
-registered primitive function directly) and builds the D-attention view itself
-(:func:`build_audit_view`); it accepts NO caller-supplied lint findings and NO
-tier claims. A caller passing empty findings therefore cannot launder a flagged
-or modified section into ``auto_cleared`` — the tier is recomputed from the
-freshly-parsed source + the freshly-recomputed lint. The auto-clear record is
+server-side through the ONE canonical-view definition
+(:func:`~hpc_agent.ops.notebook.canonical.build_canonical_view`, shared with the
+T8 sign-off gate and the render plugin): real lint from the recorded roots,
+journaled fresh receipts, recorded attention order. It accepts NO caller-supplied
+lint findings, NO tier claims, and NO caller-supplied lint ROOTS (adversarial
+review F2 — supplying ``input_roots`` / ``source_roots`` is a loud ``SpecInvalid``
+refusal; the roots come from the audit's RECORDED config unconditionally, so a
+caller cannot point the lint at a directory of planted dummy files to stop a
+section flagging). A caller passing empty findings therefore cannot
+launder a flagged or modified section into ``auto_cleared`` — the tier is
+recomputed from the freshly-parsed source + the freshly-recomputed lint. The
+auto-clear record is
 then bound through the ONE attestation kernel against the freshly-parsed section
 sha (:func:`record_auto_clear` → ``attestation.bind``), so a machine clearance can
 no more assert a sha into existence than a human sign-off can (D5 lock 2).
@@ -58,13 +64,14 @@ from hpc_agent._wire.actions.notebook_auto_clear import (
     NotebookAutoClearSkipped,
     NotebookAutoClearSpec,
 )
-from hpc_agent._wire.actions.notebook_lint import NotebookLintInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.notebook.audit_view import AUTO_CLEARED as VIEW_AUTO_CLEARED
-from hpc_agent.ops.notebook.audit_view import build_audit_view
-from hpc_agent.ops.notebook.lint import notebook_lint
+from hpc_agent.ops.notebook.canonical import (
+    AuditConfig,
+    build_canonical_view,
+    read_recorded_config,
+)
 from hpc_agent.state import notebook_audit
-from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import read_decisions
 
 __all__ = ["notebook_auto_clear"]
@@ -146,43 +153,49 @@ def notebook_auto_clear(
     (via :func:`record_auto_clear`) on a sha that fails the recompute bind.
     """
     experiment_dir = Path(experiment_dir)
-    # Read + parse ourselves (we need the ParsedModules for the view); the lint
-    # re-reads them independently — a deterministic double parse.
-    source_text = _read_source_file(experiment_dir, spec.source, kind="source")
-    template_text = _read_source_file(experiment_dir, spec.template, kind="template")
-    source = parse_percent_source(source_text)
-    template = parse_percent_source(template_text)
+    # Loud existence check with the notebook-auto-clear wording (build_canonical_view
+    # would also refuse, but with generic wording); the canonical builder re-reads.
+    _read_source_file(experiment_dir, spec.source, kind="source")
+    _read_source_file(experiment_dir, spec.template, kind="template")
 
-    # RECOMPUTE the lint findings server-side (the un-fakeability constraint) by
-    # calling the registered notebook-lint function in-process. Its findings
-    # carry a ``section`` slug key, so build_audit_view attributes each to its
-    # section and a flagged section can never tier auto_cleared.
-    lint_result = notebook_lint(
-        experiment_dir=experiment_dir,
-        spec=NotebookLintInput(
-            source=spec.source,
-            template=spec.template,
-            input_roots=spec.input_roots,
-            source_roots=spec.source_roots,
-        ),
+    # LAUNDERING GUARD (adversarial review F2). The auto-clear tier is recomputed
+    # from the audit's RECORDED roots ONLY — a caller may NOT supply its own lint
+    # roots. Accepting ``spec.input_roots`` / ``spec.source_roots`` was a journal-
+    # effective laundering vector: a hostile caller could point ``input_roots`` at
+    # a directory of PLANTED dummy files so an executes-live section stops flagging
+    # its missing literal, launder it into ``auto_cleared``, and journal that code
+    # clearance for the graduation gate to honor. The roots come from
+    # interview.json unconditionally; supplying either field is a loud refusal, so
+    # the boundary is documented at the seam rather than silently overridden.
+    if spec.input_roots or spec.source_roots:
+        raise errors.SpecInvalid(
+            "notebook-auto-clear does not accept caller-supplied input_roots / "
+            "source_roots (journal-effective laundering class): the server-side "
+            "lint recompute uses the audit's RECORDED roots (interview.json's "
+            "audited_source block) so a section cannot be laundered into "
+            "auto_cleared with planted roots. Remove them from the spec."
+        )
+
+    # RECOMPUTE the CANONICAL view SERVER-SIDE through the ONE definition
+    # (``build_canonical_view``): real lint from the recorded roots, journaled
+    # fresh receipts, recorded attention order — the SAME view the T8 sign-off gate
+    # recomputes, so an auto-clear's view_sha agrees with a later sign-off's by
+    # construction (the un-fakeability constraint: caller findings / tier claims are
+    # never trusted). The roots are the audit's RECORDED roots
+    # (interview.json audited_source), read UNCONDITIONALLY — never a caller override.
+    recorded = read_recorded_config(experiment_dir, spec.audit_id)
+    cfg = AuditConfig(
+        input_roots=recorded.input_roots,
+        source_roots=recorded.source_roots,
+        attention_order=recorded.attention_order,
     )
-    findings = [f.model_dump() for f in lint_result.findings]
-
-    # Read the JOURNALED render receipts (never a caller-supplied receipt: the
-    # spec has no receipt field). A receipt is a code attestation bound to a
-    # section sha (notebook-record-receipt → record_render_receipt), so only the
-    # entries STILL FRESH at the current section sha are evidence — a receipt for
-    # a drifted sha greens nothing. This closes the T10 laundering hole: a section
-    # can only be greened by execution evidence journaled against its current
-    # source, never by an opaque {slug: {error: False}} passed at call time.
-    current_shas = {sect.slug: sect.section_sha for sect in source.sections}
-    journaled = notebook_audit.read_render_receipts(
-        experiment_dir, spec.audit_id, current_shas=current_shas
+    view = build_canonical_view(
+        experiment_dir,
+        audit_id=spec.audit_id,
+        source_relpath=spec.source,
+        template_relpath=spec.template,
+        cfg=cfg,
     )
-    receipt = {slug: entry for slug, entry in journaled.items() if entry["fresh"]}
-
-    # RECOMPUTE the D-attention tier ourselves — the caller never asserts it.
-    view = build_audit_view(source, template, findings, receipt=receipt)
 
     # Read the journal once; each section's idempotency decision is independent
     # (distinct slugs), so appends within this call don't affect one another.

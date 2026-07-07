@@ -20,6 +20,8 @@ from hpc_agent.ops.decision.journal import append_decision, read_decisions
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewResult
+
 
 def _append(tmp_path: Path, **overrides: object) -> AppendDecisionResult:
     base: dict[str, object] = {
@@ -1187,32 +1189,23 @@ def test_signoff_source_via_resolved_path_overrides_interview(tmp_path: Path) ->
     assert out.count == 1
 
 
-def test_signoff_no_template_forces_human_required(tmp_path: Path) -> None:
-    """With no template resolvable the tier cannot be auto-cleared — even the
-    normally-inherited ``load-data`` section reads HUMAN_REQUIRED and demands
-    engagement (conservative, never auto-soften)."""
+def test_signoff_no_template_refused(tmp_path: Path) -> None:
+    """FULL-VIEW RECOMPUTE (v1.6, supersedes the retired conservative-empty-template
+    boundary): the canonical view is a diff-from-template projection, so a sign-off
+    whose template cannot be resolved (no resolved['template'], no interview.json)
+    is REFUSED loudly — the signed view_sha is not reproducible without the
+    template."""
     (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
     section_sha, view_sha = _nb_shas("load-data")
-    # Generic praise is refused because the section is forced human-required.
-    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited .py TEMPLATE"):
         _signoff(
             tmp_path,
             section="load-data",
-            response="load-data looks fine to me",
+            response="load-data: read_csv on input.csv is correct",
             section_sha=section_sha,
             view_sha=view_sha,
             resolved_extra={"source": "s.py"},
         )
-    # Engaging a real identifier from the (now whole-section) diff passes.
-    out = _signoff(
-        tmp_path,
-        section="load-data",
-        response="load-data: read_csv on input.csv is correct",
-        section_sha=section_sha,
-        view_sha=view_sha,
-        resolved_extra={"source": "s.py"},
-    )
-    assert out.count == 1
 
 
 def test_signoff_block_is_notebook_only(tmp_path: Path) -> None:
@@ -1249,6 +1242,18 @@ def test_signoff_gate_routes_through_attestation_kernel(tmp_path: Path) -> None:
 
     src = inspect.getsource(_journal._assert_signoff_authorship)
     assert "attestation.bind(" in src
+
+
+def test_signoff_gate_routes_through_canonical_view(tmp_path: Path) -> None:
+    """One-definition route-through (v1.6 full-view recompute): the gate builds the
+    view via the shared ``build_canonical_view`` (through the notebook_view facade),
+    never a re-inlined view build — so its view_shas match the verbs' + plugin's."""
+    import inspect
+
+    from hpc_agent.ops.decision import journal as _journal
+
+    src = inspect.getsource(_journal._assert_signoff_authorship)
+    assert "build_canonical_view(" in src
 
 
 def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
@@ -1391,3 +1396,190 @@ def test_signoff_redundant_requires_render(tmp_path: Path) -> None:
     )
     assert out.count == 1
     assert out.record.resolved["redundant"] is True
+
+
+# ---------------------------------------------------------------------------
+# FULL-VIEW RECOMPUTE (v1.6): the gate RECOMPUTES view_sha from the canonical
+# ingredients — real lint (recorded roots), journaled receipts, recorded order —
+# and refuses a mismatch. A section human-required SOLELY by a lint flag now
+# refuses a bare-slug sign-off (the closed conservative-floor gap).
+# ---------------------------------------------------------------------------
+
+# ``load-data`` reads a path literal (``data/input.csv``) and is byte-identical to
+# the template (inherited). Present data file → the section is auto_cleared; a
+# MISSING data file makes the executes-live lint flag the section, flipping it to
+# human_required and MOVING its per-section view_sha.
+_LINT_TEMPLATE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("data/input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data)
+"""
+
+_LINT_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("data/input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data, regularization=0.5)
+assert model.converged
+"""
+
+
+def _write_lint_fixture(
+    tmp_path: Path, *, data_present: bool, audit_id: str = "audit-lint"
+) -> None:
+    """Source/template + interview.json recording input_roots; optional data file."""
+    import json as _json
+
+    (tmp_path / "source.py").write_text(_LINT_SOURCE, encoding="utf-8")
+    (tmp_path / "template.py").write_text(_LINT_TEMPLATE, encoding="utf-8")
+    (tmp_path / "interview.json").write_text(
+        _json.dumps(
+            {
+                "audited_source": {
+                    "source": "source.py",
+                    "template": "template.py",
+                    "audit_id": audit_id,
+                    "input_roots": ["."],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    if data_present:
+        (tmp_path / "data").mkdir(exist_ok=True)
+        (tmp_path / "data" / "input.csv").write_text("x\n1\n", encoding="utf-8")
+
+
+def _canonical_view(tmp_path: Path, audit_id: str = "audit-lint") -> NotebookAuditViewResult:
+    """Run notebook-audit-view (CANONICAL) — writes the renders, returns the result."""
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewSpec
+    from hpc_agent.ops.notebook.view_op import notebook_audit_view
+
+    return notebook_audit_view(
+        experiment_dir=tmp_path,
+        spec=NotebookAuditViewSpec.model_validate(
+            {"audit_id": audit_id, "source": "source.py", "template": "template.py"}
+        ),
+    )
+
+
+def test_signoff_stale_view_sha_refused_when_lint_input_vanishes(tmp_path: Path) -> None:
+    """The core defect fix: view once (data present → load-data auto_cleared, its
+    view_sha V1, render written at V1), THEN the data file vanishes, THEN sign V1.
+    The section BODY is unchanged (bind passes) and the render exists (section_sha
+    still current), so the gate's FULL recompute catches the moved lint ingredient —
+    the recomputed view_sha differs from V1 → refused, naming the ingredient class."""
+    _write_lint_fixture(tmp_path, data_present=True)
+    result = _canonical_view(tmp_path)
+    by_slug = {s.slug: s for s in result.sections}
+    assert result.canonical is True
+    ld = by_slug["load-data"]
+
+    # The data file vanishes AFTER the view was rendered/signed.
+    (tmp_path / "data" / "input.csv").unlink()
+
+    with pytest.raises(errors.SpecInvalid, match="full-view recompute"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data: read_csv on data/input.csv reviewed",
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,  # the V1 render is already on disk from the view call
+        )
+
+
+def test_signoff_tier_by_real_lint_flag_refuses_bare_slug(tmp_path: Path) -> None:
+    """Closed gap: a section human-required SOLELY by a lint flag (a missing data
+    path — no diff, no assertion) now recomputes as HUMAN_REQUIRED at the gate, so a
+    bare-slug sign-off that does not ENGAGE the change is refused."""
+    from hpc_agent.ops.notebook.audit_view import HUMAN_REQUIRED
+
+    _write_lint_fixture(tmp_path, data_present=False)  # data missing → lint flags load-data
+    result = _canonical_view(tmp_path)
+    ld = {s.slug: s for s in result.sections}["load-data"]
+    assert ld.tier == HUMAN_REQUIRED  # the lint flag forced it
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data reviewed, looks good",  # names slug, engages nothing
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,
+        )
+
+
+def test_signoff_canonical_flow_end_to_end(tmp_path: Path) -> None:
+    """lint → auto-clear → view → sign with REAL flags: the default canonical flow
+    produces a gate-accepted sign-off. model-fit (modified) is signed with an
+    engaging response; the canonical view_sha is accepted."""
+    from hpc_agent._wire.actions.notebook_auto_clear import NotebookAutoClearSpec
+    from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
+
+    _write_lint_fixture(tmp_path, data_present=True)
+    ac = notebook_auto_clear(
+        experiment_dir=tmp_path,
+        spec=NotebookAutoClearSpec.model_validate(
+            {"audit_id": "audit-lint", "source": "source.py", "template": "template.py"}
+        ),
+    )
+    assert "load-data" in [c.section for c in ac.cleared]
+    result = _canonical_view(tmp_path)
+    mf = {s.slug: s for s in result.sections}["model-fit"]
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=mf.section_sha,
+        view_sha=mf.view_sha,
+        audit_id="audit-lint",
+        render=False,
+    )
+    # The scope journal now holds the load-data auto-clear + this model-fit sign-off.
+    assert out.record.resolved["section"] == "model-fit"
+    assert "redundant" not in out.record.resolved
+
+
+def test_signoff_preview_view_sha_refused(tmp_path: Path) -> None:
+    """A PREVIEW view (canonical=false — built with an explicit lint_findings
+    override) carries per-section view_shas the gate recomputes differently, so
+    signing a preview view_sha is refused."""
+    from hpc_agent._wire.queries.notebook_audit_view import NotebookAuditViewSpec
+    from hpc_agent.ops.notebook.view_op import notebook_audit_view
+
+    _write_lint_fixture(tmp_path, data_present=True)
+    preview = notebook_audit_view(
+        experiment_dir=tmp_path,
+        spec=NotebookAuditViewSpec.model_validate(
+            {
+                "audit_id": "audit-lint",
+                "source": "source.py",
+                "template": "template.py",
+                "lint_findings": [{"rule": "executes_live", "section": "load-data", "detail": "x"}],
+            }
+        ),
+    )
+    assert preview.canonical is False
+    ld = {s.slug: s for s in preview.sections}["load-data"]
+    with pytest.raises(errors.SpecInvalid, match="full-view recompute"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data: read_csv on data/input.csv reviewed",
+            section_sha=ld.section_sha,
+            view_sha=ld.view_sha,
+            audit_id="audit-lint",
+            render=False,
+        )

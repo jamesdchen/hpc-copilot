@@ -29,10 +29,14 @@ the graduation gate (`docs/design/notebook-audit.md` D-attention + D5).
 
 The verb **recomputes everything server-side**. It runs the `notebook-lint` rules
 in-process and builds the D-attention view itself; it accepts **no**
-caller-supplied lint findings and **no** tier claims. A caller passing empty
-findings therefore cannot launder a flagged or modified section into
-`auto_cleared` — the tier is recomputed from the freshly-parsed source + the
-freshly-recomputed lint. The record is then bound through the one attestation
+caller-supplied lint findings, **no** tier claims, and **no** caller-supplied lint
+**roots**. A caller passing empty findings therefore cannot launder a flagged or
+modified section into `auto_cleared` — the tier is recomputed from the
+freshly-parsed source + the freshly-recomputed lint. The lint roots
+(`input_roots` / `source_roots`) come from the audit's **recorded** config
+(`interview.json`) unconditionally; a caller that supplies either field is
+**refused** (`spec_invalid`), closing the laundering vector where planted
+dummy-file roots stop an executes-live section flagging its missing literal. The record is then bound through the one attestation
 kernel against the recomputed section sha (`record_auto_clear` →
 `attestation.bind`), so a machine clearance can no more assert a sha into
 existence than a human sign-off can (D5 lock 2). The only caller inputs are
@@ -62,11 +66,13 @@ A `NotebookAutoClearSpec` (`hpc_agent._wire.actions.notebook_auto_clear`):
 - `template` (string, required) — experiment-relative path to the template `.py`.
   A section auto-clears only when it is byte-identical (inherited) to its template
   section.
-- `input_roots` (list of strings, default `[]`) — **opaque** data-path roots the
-  server-side lint recompute tests path literals against. A section with a missing
-  literal is flagged and therefore **not** auto-cleared.
-- `source_roots` (list of strings, default `[]`) — **opaque** import roots the
-  server-side lint recompute resolves imports under.
+- `input_roots` (list of strings, must be `[]`) — the data-path roots the
+  server-side lint recompute tests path literals against are read from the audit's
+  recorded config (`interview.json`), **not** from the caller. Supplying a
+  non-empty value is a `spec_invalid` refusal (the laundering guard: planted roots
+  could stop an executes-live section flagging its missing literal).
+- `source_roots` (list of strings, must be `[]`) — likewise the import roots are
+  read from the recorded config; a non-empty value is refused.
 
 There is deliberately **no** `receipt` input (T10): render receipts are read from
 the journal (sha-fresh only, via `notebook-record-receipt`), never trusted from

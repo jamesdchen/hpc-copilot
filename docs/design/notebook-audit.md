@@ -1,6 +1,12 @@
 # The notebook-audit substrate — design + implementation plan
 
-**Status: v1 + v1.5 IMPLEMENTED (2026-07-08).** Core (T0–T9) + the skill +
+**Status: v1 + v1.5 + v1.6 IMPLEMENTED (2026-07-08).** v1.6 = the FULL-VIEW
+RECOMPUTE upgrade: the audit's CONFIGURATION (`input_roots` / `source_roots` /
+`attention_order`) is now persisted on the `audited_source` block, so the T8
+sign-off gate RECOMPUTES `view_sha` (one definition,
+`ops/notebook/canonical.py::build_canonical_view`) instead of validating it
+present — the "statically-recomputable legs only" boundary is RETIRED (see the
+v1.6 drift note). Core (T0–T9) + the skill +
 the verbs (`notebook-lint`, `notebook-audit-view`, `notebook-status`,
 `notebook-auto-clear`, `notebook-record-receipt`) are in the tree, plus
 the v1.5 layer: journaled sha-bound render receipts (T10), verify-relay
@@ -261,13 +267,16 @@ Deviations from the plan above, each with its recorded reason:
   and create a verb-shaped affordance gap; marking keeps the attention
   ledger honest. The raised diff-token bar is waived for redundant
   sign-offs; the recompute lock and slug-naming floor still apply.
-- **T8 tier-recompute boundary:** at append time the sign-off gate checks the
-  statically-recomputable tier legs (diff classification,
-  assertions-without-receipt) with `lint_findings=()`; a section made
-  human-required solely by a lint flag is not distinguished at the gate.
-  `view_sha` is validated present but never recomputed there — it is a
-  provenance witness; the recompute lock is `section_sha`. No resolvable
-  template → every section reads added → HUMAN_REQUIRED (conservative).
+- **T8 tier-recompute boundary — RETIRED by v1.6 (see the v1.6 drift note).**
+  ~~At append time the sign-off gate checks the statically-recomputable tier
+  legs (diff classification, assertions-without-receipt) with
+  `lint_findings=()`; a section made human-required solely by a lint flag is
+  not distinguished at the gate. `view_sha` is validated present but never
+  recomputed there — it is a provenance witness; the recompute lock is
+  `section_sha`. No resolvable template → every section reads added →
+  HUMAN_REQUIRED (conservative).~~ The gate now RECOMPUTES `view_sha` in full
+  (real lint from the recorded roots, journaled receipts, recorded order), the
+  tier is real, and an absent template is REFUSED (not softened).
 - **T6 stale auto-clear reduces to `unsigned`, not a stale-flavored status:**
   drift = unsigned by construction; a machine clearance has no human to
   inform. A stale HUMAN sign-off earns the informational `signed_stale`.
@@ -308,6 +317,16 @@ Deviations from the plan above, each with its recorded reason:
   current source. The read-only view keeps an inline `receipt` for
   preview (journals nothing; sha-bearing entries are freshness-gated,
   sha-less inline entries keep v1 preview behavior).
+- **Truthfulness caveat (adversarial review F8, 2026-07-07):** T10 closed
+  **freshness**, not **truthfulness**. `output_sha`/`error` are
+  CALLER-ATTESTED per D9 — `notebook-record-receipt` recomputes the sha
+  bind, not the outcome, so an emitter *could* journal `error=False`
+  without executing. The honest claim is that a receipt vouches only for
+  the exact on-disk bytes and drifts stale on any edit; the trust boundary
+  is the emitter (same class as a conforming harness's out-of-band writes),
+  and the graduation consumers WEIGH the caller-attested outcome rather
+  than re-deriving it. Docs corrected to stop implying the verb "never
+  trusts a caller-supplied receipt" (it never trusts an *inline* one).
 - **T11 reuses contradiction kinds** — a wrong section-status/passed
   claim is kind `state`, a sha mismatch is kind `number`; no wire enum
   change, no new blocking-set entry. Notebook relay verification lives in
@@ -332,6 +351,51 @@ Deviations from the plan above, each with its recorded reason:
   typed sign-off-cell text through the documented utterance-log API
   (no-scaffold honored — absent namespace reported as the degraded tier)
   and lands sign-offs through the ordinary append-decision gate.
+
+### v1.6 drift (2026-07-07) — FULL-VIEW RECOMPUTE, the retired boundary
+
+- **The "statically-recomputable legs only" boundary is RETIRED.** The T8
+  sign-off gate no longer validates `view_sha` as merely PRESENT — it
+  RECOMPUTES it in full and refuses a mismatch. Root cause of the old
+  boundary: the audit's CONFIGURATION (`input_roots` / `source_roots` /
+  `attention_order`) was per-invocation ephemera, never persisted, so the gate
+  lacked the lint findings. It is now persisted verbatim on
+  `_AuditedSource` (interview.json's `audited_source` block), all three fields
+  OPTIONAL and defaulting to `None` so an `exclude_none` write keeps
+  interview.json byte-identical to a pre-upgrade record (absent → conservative
+  defaults: empty roots, source order). The D7 absent-block byte-identity pin
+  is untouched.
+- **One definition: `ops/notebook/canonical.py::build_canonical_view`.** It
+  parses source+template, RECOMPUTES the lint in-process from the recorded
+  roots (the auto-clear un-fakeability precedent — never caller findings),
+  reads JOURNALED fresh receipts, and builds the D-attention view with the
+  recorded order. The gate reaches it through the `ops/notebook_view.py`
+  facade (subject-imports lint); the `notebook-audit-view` /
+  `notebook-auto-clear` verbs and the render plugin all route through the SAME
+  helper, so their per-section `view_sha`s agree with the gate's by
+  construction.
+- **Refusal taxonomy (the loud, specific message).** The bind lock covers
+  section-body drift and the trusted-display lock covers a stale render, so a
+  `view_sha`-ONLY mismatch (bind + render both current) means a VIEW ingredient
+  moved: a lint finding changed (a data path under `input_roots` vanished or
+  appeared), a journaled receipt changed, or the attention order changed. The
+  refusal names that class and tells the human to re-run `notebook-audit-view`
+  and re-inspect. The tier is now REAL: a section human-required SOLELY by a
+  lint flag refuses a bare-slug sign-off (the closed gap).
+- **TEMPLATE is now REQUIRED at sign-off** (was: absent → conservative
+  HUMAN_REQUIRED). The canonical view is a diff-from-template projection and
+  every sanctioned `view_sha` was produced against a real template, so an
+  unresolvable template means the signed view is not reproducible — refused
+  loudly.
+- **`notebook-audit-view` grows `canonical: bool`** + optional
+  `input_roots`/`source_roots`. The DEFAULT flow (no override) recomputes the
+  canonical view and reports `canonical: true`; explicit roots/order differing
+  from the recorded config, explicit `lint_findings`, or an inline `receipt`
+  yield a PREVIEW (`canonical: false`) whose view_shas the gate may refuse.
+- **The plugin `notebook-render` / `notebook-ingest-signoffs` build the
+  canonical view** (was `build_audit_view(..., lint_findings=())`) so their
+  recomputed view_shas are not refused by the upgraded gate whenever a lint
+  flag fires.
 
 ## Related, planned separately
 

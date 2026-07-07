@@ -21,15 +21,23 @@ from hpc_agent.ops.notebook.audit_view import (
     SectionView,
     build_audit_view,
 )
+from hpc_agent.ops.notebook.canonical import (
+    AuditConfig,
+    build_canonical_view,
+    read_recorded_config,
+)
 from hpc_agent.ops.notebook.render_store import read_render_header, render_path
 
 __all__ = [
     "AUTO_CLEARED",
     "HUMAN_REQUIRED",
     "SUBJECT_KIND",
+    "AuditConfig",
     "AuditView",
     "SectionView",
     "build_audit_view",
+    "build_canonical_view",
+    "read_recorded_config",
     "render_path",
     "read_render_header",
 ]

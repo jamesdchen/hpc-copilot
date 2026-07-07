@@ -1560,3 +1560,46 @@ def test_audited_source_rejects_empty_required_fields(tmp_path: Path) -> None:
     )
     with pytest.raises(ValidationError):
         InterviewSpec.model_validate(intent)
+
+
+def test_audited_source_config_persisted_verbatim(tmp_path: Path) -> None:
+    """FULL-VIEW RECOMPUTE (v1.6): the canonical audit configuration (input_roots /
+    source_roots / attention_order) round-trips into interview.json unchanged — it
+    is the persisted ingredient that makes a sign-off's view_sha recomputable."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+        "input_roots": ["inputs", "data"],
+        "source_roots": ["src"],
+        "attention_order": ["load-data", "model-fit"],
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["audited_source"] == audited
+
+
+def test_audited_source_config_absent_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL: a block WITHOUT the v1.6 config fields is persisted verbatim — the
+    new field names never leak (the fields default to None so exclude_none drops
+    them), so an existing pre-upgrade record round-trips byte-for-byte."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    raw = (tmp_path / "interview.json").read_text()
+    assert "input_roots" not in raw
+    assert "source_roots" not in raw
+    assert "attention_order" not in raw
+    persisted = json.loads(raw)
+    assert persisted["audited_source"] == audited

@@ -906,11 +906,15 @@ def _section_specific_tokens(section_view: Any) -> set[str]:
     """The identifier pool the raised human-required bar checks a sign-off against.
 
     Drawn from the section's DIFF-CHANGED lines (``+``/``-`` bodies, skipping the
-    unified-diff ``+++``/``---`` file headers and ``@@`` hunk markers) — the human
-    must engage a SPECIFIC of the change, not offer generic praise. Falls back to
-    the section's declared ASSERTION identifiers when the diff is empty (a
+    unified-diff ``+++``/``---`` file headers and ``@@`` hunk markers) AND — the
+    full-view-recompute addition — from its LINT FLAGS (the identifier tokens in
+    each finding's ``detail`` + ``evidence``), so a section made human-required
+    SOLELY by a lint flag (an inherited section with no diff and no assertions, e.g.
+    a data path under ``input_roots`` that vanished) still demands the human ENGAGE
+    the flagged specific, not offer generic praise. Falls back to the section's
+    declared ASSERTION identifiers when both the diff and the flags are empty (a
     human-required-but-inherited section whose assertions are ungreen has no diff
-    tokens); when BOTH are empty the bar reduces to the slug-naming floor already
+    tokens); when ALL are empty the bar reduces to the slug-naming floor already
     enforced (a token that does not exist cannot be demanded).
     """
     tokens: set[str] = set()
@@ -919,6 +923,13 @@ def _section_specific_tokens(section_view: Any) -> set[str]:
             continue
         if line[0] in "+-":
             tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(line[1:])}
+    for flag in section_view.lint_flags:
+        detail = str(flag.get("detail") or "") if isinstance(flag, dict) else ""
+        evidence = flag.get("evidence") if isinstance(flag, dict) else None
+        evidence_text = json.dumps(evidence, default=str) if evidence else ""
+        tokens |= {
+            m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(f"{detail} {evidence_text}")
+        }
     if not tokens:
         for assertion in section_view.assertions:
             tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(assertion.test)}
@@ -972,20 +983,33 @@ def _read_signoff_source_text(experiment_dir: Path, rel: str, *, required: bool)
         return None
 
 
-def _resolve_signoff_sources(
+def _resolve_signoff_audit_config(
     experiment_dir: Path, resolved: dict[str, Any]
-) -> tuple[str, str | None]:
-    """Resolve ``(source_text, template_text_or_None)`` for a sign-off record.
+) -> tuple[str, str, Any]:
+    """Resolve ``(source_relpath, template_relpath, AuditConfig)`` for a sign-off.
 
-    Precedence: an explicit ``resolved["source"]`` / ``resolved["template"]``
-    campaign-dir-relative path wins; otherwise the interview.json
-    ``audited_source`` block (matched by ``audit_id``) supplies them. The SOURCE
-    must resolve — an unresolvable source is REFUSED loudly (this differs from
-    D7's absent-opt-in silence: an explicit notebook sign-off record is already
-    inside the opted-in surface, so it is recomputed or refused, never passed).
-    The TEMPLATE is optional here; ``None`` drives the conservative
-    human-required tier in the caller.
+    The full-view-recompute upgrade resolves the whole CANONICAL audit
+    configuration, not just the source/template text:
+
+    * **source / template relpaths** — an explicit ``resolved["source"]`` /
+      ``resolved["template"]`` wins; otherwise the interview.json
+      ``audited_source`` block (matched by ``audit_id``) supplies them. BOTH must
+      resolve now: recomputing ``view_sha`` needs the template as much as the
+      source (the diff-from-template is a view ingredient), and every sanctioned
+      ``view_sha`` was produced against a real template (``notebook-audit-view``
+      requires one), so a template that cannot be resolved means the signed view
+      is not reproducible — refused loudly, never a conservative silent pass.
+    * **lint roots + attention order** — the recorded audit configuration read
+      from the same ``audited_source`` block (``read_recorded_config``); a block
+      predating the config fields yields the conservative defaults (empty roots,
+      source order), exactly the posture the gate used before the config was
+      persisted.
+
+    An unresolvable source or template is REFUSED loudly (this is the opted-in
+    surface: recompute or refuse, never pass).
     """
+    from hpc_agent.ops import notebook_view as _notebook_view
+
     audit_id = resolved.get("audit_id")
     src_rel = resolved.get("source")
     tmpl_rel = resolved.get("template")
@@ -1001,14 +1025,16 @@ def _resolve_signoff_sources(
             "interview.json audited_source block. A sign-off must recompute the "
             "section hash from the source on disk; an unresolvable source is refused."
         )
-    source_text = _read_signoff_source_text(experiment_dir, src_rel, required=True)
-    assert source_text is not None  # required=True raises rather than returning None
-    template_text = (
-        _read_signoff_source_text(experiment_dir, tmpl_rel, required=False)
-        if isinstance(tmpl_rel, str) and tmpl_rel
-        else None
-    )
-    return source_text, template_text
+    if not isinstance(tmpl_rel, str) or not tmpl_rel:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: could not resolve the audited .py TEMPLATE for "
+            f"audit_id={audit_id!r} — no resolved['template'] and no matching "
+            "interview.json audited_source block. The full-view recompute rebuilds "
+            "the canonical view_sha (a diff-from-template projection), so the "
+            "template is a required ingredient; an unresolvable template is refused."
+        )
+    cfg = _notebook_view.read_recorded_config(experiment_dir, audit_id)
+    return src_rel, tmpl_rel, cfg
 
 
 def _assert_signoff_render_current(
@@ -1111,17 +1137,18 @@ def _assert_signoff_authorship(
 
     **Lock 3 (authorship bar, D-attention tiered)** — bare acks are refused
     (:func:`_is_bare_ack`); the response must NAME the section slug (token-exact,
-    the #26 precedent). The tier is RECOMPUTED here (``build_audit_view`` over
-    source + template, ``lint_findings=()``). What the gate can honestly check at
-    append time is the STATICALLY-recomputable tier legs — the diff classification
-    (inherited/added/modified) and assertions-without-a-receipt; it does NOT have
-    the T4 lint findings (a concurrent surface), so a section made human-required
-    *solely* by a lint flag is not distinguished here. For a **HUMAN_REQUIRED**
-    section the bar RAISES: the response must additionally ENGAGE the change —
-    contain at least one identifier drawn from the section's diff-changed lines
-    (:func:`_section_specific_tokens`). This is the boundary-drift defense: soften
-    the human-required tier only via a richer harness-captured utterance, never a
-    bare ack.
+    the #26 precedent). The tier is RECOMPUTED here over the CANONICAL view
+    (:func:`~hpc_agent.ops.notebook.canonical.build_canonical_view`) — with the
+    REAL lint findings (recomputed server-side from the recorded roots), the
+    journaled fresh receipts, and the recorded attention order. The v1 "statically
+    recomputable legs only" boundary is RETIRED: a section made human-required
+    *solely* by a lint flag IS now distinguished here (the lint is cheap local
+    static analysis; the receipts are journaled; the roots are persisted on the
+    ``audited_source`` block). For a **HUMAN_REQUIRED** section the bar RAISES: the
+    response must additionally ENGAGE the change — contain at least one identifier
+    drawn from the section's diff-changed lines (:func:`_section_specific_tokens`).
+    This is the boundary-drift defense: soften the human-required tier only via a
+    richer harness-captured utterance, never a bare ack.
 
     **AUTO_CLEARED + a human sign-off: ACCEPT, but mark ``resolved['redundant'] =
     True``.** The alternative (refuse) was rejected: refusing a human's VOLUNTARY
@@ -1132,15 +1159,22 @@ def _assert_signoff_authorship(
     (non-bare, slug-named) still apply to a redundant sign-off; only the raised
     diff-token bar is waived (an auto-cleared section has no change to engage).
 
-    **TEMPLATE absent → HUMAN_REQUIRED (conservative, never auto-soften).** When no
-    template resolves the tier cannot be honestly recomputed as auto-cleared, so an
-    empty template is used: every section then classifies as ``added`` →
-    human-required, and the diff-token pool is the whole section (the safe floor).
+    **TEMPLATE required (full-view recompute).** The canonical view is a
+    diff-from-template projection, so a template that cannot be resolved means the
+    signed ``view_sha`` is not reproducible — REFUSED loudly
+    (:func:`_resolve_signoff_audit_config`), never a conservative empty-template
+    pass. Every sanctioned ``view_sha`` was produced against a real template
+    (``notebook-audit-view`` requires one), so an absent template at append time is
+    a broken setup.
 
-    **view_sha is provenance, not recomputed here** — it is validated present and
-    non-empty (it binds what-the-human-saw into the record, D5), but the gate does
-    NOT recompute it: the view depends on lint findings the gate does not have. The
-    recompute lock is ``section_sha``; ``view_sha`` is a provenance witness.
+    **view_sha is RECOMPUTED (the defect this gate fixes).** The full-view
+    recompute rebuilds the canonical section view and REFUSES unless the section's
+    recomputed ``view_sha`` equals the resolved one. Because the section body is
+    already confirmed current (the ``section_sha`` bind) and the render is confirmed
+    current, a ``view_sha``-only mismatch pinpoints a moved VIEW ingredient — a
+    changed lint finding (e.g. a vanished data path under the recorded
+    ``input_roots``), a changed journaled receipt, or a changed attention order —
+    and the refusal says so.
 
     **Trusted-display lock (v1.5)** — the audit view an agent relays in chat is
     model-carried and unforceable, so a sign-off additionally requires the
@@ -1217,9 +1251,14 @@ def _assert_signoff_authorship(
     from hpc_agent.state import attestation
     from hpc_agent.state.audit_source import parse_percent_source
 
+    # Resolve the CANONICAL audit configuration: source/template relpaths + the
+    # recorded lint roots + attention order (the ingredients of the view_sha).
+    source_relpath, template_relpath, cfg = _resolve_signoff_audit_config(experiment_dir, resolved)
+
     # Lock 2 — recompute the section hash from the .py on disk and bind through
     # the ONE attestation kernel (D5 lock 2). Refuses an unresolvable source.
-    source_text, template_text = _resolve_signoff_sources(experiment_dir, resolved)
+    source_text = _read_signoff_source_text(experiment_dir, source_relpath, required=True)
+    assert source_text is not None  # required=True raises rather than returning None
     parsed = parse_percent_source(source_text)
     sect = next((s for s in parsed.sections if s.slug == section), None)
     if sect is None:
@@ -1252,16 +1291,44 @@ def _assert_signoff_authorship(
         recomputed_section_sha=sect.section_sha,
     )
 
-    # Lock 3 (tiered) — recompute the tier over the STATICALLY-available legs
-    # (diff classification + assertions-without-receipt). No template resolves →
-    # empty template → every section reads ``added`` → HUMAN_REQUIRED (never
-    # auto-softened). lint_findings=() because the T4 lint is a concurrent surface
-    # the gate does not have; a section human-required SOLELY by a lint flag is
-    # therefore not distinguished at append time — the honest boundary.
-    template_parsed = parse_percent_source(template_text if template_text is not None else "")
-    view = _notebook_view.build_audit_view(parsed, template_parsed, ())
+    # FULL-VIEW RECOMPUTE (the "statically-recomputable legs only" boundary is
+    # RETIRED). Build the CANONICAL view SERVER-SIDE — real lint findings from the
+    # recorded roots, journaled fresh receipts, recorded attention order (one
+    # definition: ``build_canonical_view``, shared with the verbs + the plugin) —
+    # and REFUSE unless the section's recomputed view_sha equals the resolved one.
+    # The section body is already confirmed current (the bind lock) and the render
+    # is confirmed current, so a view_sha-ONLY mismatch means a VIEW ingredient
+    # moved: a lint finding changed (a data path under input_roots vanished /
+    # appeared), a journaled receipt changed, or the attention order changed.
+    view = _notebook_view.build_canonical_view(
+        experiment_dir,
+        audit_id=audit_id,
+        source_relpath=source_relpath,
+        template_relpath=template_relpath,
+        cfg=cfg,
+    )
     section_view = next((v for v in view.sections if v.slug == section), None)
-    tier = section_view.tier if section_view is not None else _notebook_view.HUMAN_REQUIRED
+    if section_view is None:
+        raise errors.SpecInvalid(
+            f"notebook sign-off gate: section {section!r} is not in the recomputed "
+            f"canonical view (audit_id={audit_id!r}). Re-run notebook-audit-view and "
+            "sign a current section."
+        )
+    if section_view.view_sha != view_sha:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (full-view recompute): the section body is "
+            "unchanged (the section_sha bind passed) but the recomputed canonical "
+            f"view_sha ({section_view.view_sha}) does not equal the signed view_sha "
+            f"({view_sha}). An ingredient of the VIEW moved since it was rendered — a "
+            "lint finding changed (e.g. a data path under the recorded input_roots "
+            "vanished or appeared), a journaled render receipt changed, or the "
+            "attention order changed. Re-run notebook-audit-view for section "
+            f"{section!r}, re-inspect the fresh view, and sign THAT view_sha."
+        )
+    # The tier is now REAL — recomputed with the REAL lint flags (the recorded
+    # conservative-floor gap is closed). A section made human-required SOLELY by a
+    # lint flag is now distinguished here.
+    tier = section_view.tier
 
     if tier == _notebook_view.AUTO_CLEARED:
         # ACCEPT a voluntary human sign-off of an auto-cleared section, but mark it

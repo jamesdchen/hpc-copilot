@@ -69,14 +69,32 @@ class NotebookAuditViewSpec(BaseModel):
             "template section that shares its slug."
         ),
     )
+    input_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque data-path roots for the CANONICAL view's server-side lint "
+            "recompute. Default (null) uses the audit's RECORDED roots "
+            "(interview.json audited_source) — so the skill's default flow produces "
+            "CANONICAL view_shas the T8 gate accepts. Passing roots explicitly is an "
+            "OVERRIDE that makes the result a PREVIEW (`canonical: false`)."
+        ),
+    )
+    source_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque import roots for the canonical lint recompute. Default (null) "
+            "uses the recorded roots; an explicit value is a PREVIEW override."
+        ),
+    )
     lint_findings: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
-            "OPAQUE lint findings, chained in from `notebook-lint` (its `findings` "
-            "list). Each finding is embedded verbatim under the section it names "
-            "(via a `slug` / `section` / `section_slug` key); a finding with no "
-            "such key is module-scoped. Never parsed or interpreted here. A section "
-            "with zero flags is one auto-clear precondition."
+            "OPAQUE lint findings for a PREVIEW build. When NON-EMPTY the view is a "
+            "PREVIEW (`canonical: false`) built from these caller-supplied findings "
+            "instead of the server-recomputed lint — its view_shas the T8 gate may "
+            "refuse. Leave EMPTY (the default) to get the CANONICAL view whose lint "
+            "is recomputed server-side from the recorded roots. Each finding names "
+            "its section via a `slug` / `section` / `section_slug` key."
         ),
     )
     receipt: dict[str, Any] | None = Field(
@@ -177,6 +195,18 @@ class NotebookAuditViewResult(BaseModel):
     )
     source_module_sha: str
     template_module_sha: str
+    canonical: bool = Field(
+        default=True,
+        description=(
+            "True when this view was built with the CANONICAL configuration — the "
+            "audit's RECORDED lint roots + attention order, the server-recomputed "
+            "lint, and the journaled receipts — so its per-section view_shas MATCH "
+            "what the T8 sign-off gate recomputes and will accept. False when an "
+            "OVERRIDE made it a PREVIEW (explicit roots/order differing from the "
+            "recorded config, explicit lint_findings, or an inline receipt): a "
+            "preview is for inspection; signing a preview view_sha is refused."
+        ),
+    )
     view_sha: str = Field(
         description=(
             "Deterministic roll-up sha over the section shas + the two module "

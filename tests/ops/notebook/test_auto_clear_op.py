@@ -12,11 +12,13 @@ record; a receipt greens an asserted section into a clear.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError
 
+from hpc_agent import errors
 from hpc_agent._wire.actions.notebook_auto_clear import NotebookAutoClearSpec
 from hpc_agent._wire.actions.notebook_record_receipt import NotebookRecordReceiptSpec
 from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
@@ -72,6 +74,21 @@ assert train() == 42
 def _write(tmp_path: Path, source: str, template: str) -> None:
     (tmp_path / "source.py").write_text(source, encoding="utf-8")
     (tmp_path / "template.py").write_text(template, encoding="utf-8")
+
+
+def _write_interview(tmp_path: Path, *, input_roots: list[str] | None = None) -> None:
+    """Record the audit's roots on interview.json (the ONLY place lint roots come
+    from now — the mutate verb refuses caller-supplied roots, F2)."""
+    block: dict[str, object] = {
+        "source": "source.py",
+        "template": "template.py",
+        "audit_id": _AUDIT,
+    }
+    if input_roots is not None:
+        block["input_roots"] = input_roots
+    (tmp_path / "interview.json").write_text(
+        json.dumps({"audited_source": block}), encoding="utf-8"
+    )
 
 
 def _run(tmp_path: Path, **overrides: object) -> NotebookAutoClearResult:
@@ -140,14 +157,54 @@ def test_modified_section_is_skipped_not_cleared(tmp_path: Path) -> None:
 
 def test_lint_flagged_section_cannot_be_laundered(tmp_path: Path) -> None:
     # The section is byte-identical to the template (inherited) but carries a
-    # missing path literal. The caller passes NO findings — the verb recomputes
-    # them server-side, so the section is flagged and stays human_required.
+    # missing path literal. The RECORDED roots (interview.json) drive the
+    # server-side lint recompute, so the section is flagged and stays
+    # human_required — the caller supplies no findings and no roots.
     _write(tmp_path, _FLAGGED, _FLAGGED)
-    result = _run(tmp_path, input_roots=["inputs"])
+    _write_interview(tmp_path, input_roots=["inputs"])
+    result = _run(tmp_path)
 
     assert result.cleared == []
     assert [(s.section, s.reason) for s in result.skipped] == [("load", "human_required")]
     assert _records(tmp_path) == []
+
+
+# ── F2: caller-supplied roots are REFUSED (journal-effective laundering) ──────
+
+
+def test_caller_supplied_input_roots_are_refused(tmp_path: Path) -> None:
+    """Supplying roots is a loud SpecInvalid — the roots come from the recorded
+    config only, so a caller cannot point the lint at planted files."""
+    _write(tmp_path, _CLEAN, _CLEAN)
+    with pytest.raises(errors.SpecInvalid, match="laundering"):
+        _run(tmp_path, input_roots=["planted"])
+
+
+def test_caller_supplied_source_roots_are_refused(tmp_path: Path) -> None:
+    _write(tmp_path, _CLEAN, _CLEAN)
+    with pytest.raises(errors.SpecInvalid, match="laundering"):
+        _run(tmp_path, source_roots=["planted"])
+
+
+def test_planted_dummy_root_no_longer_clears_a_flagged_section(tmp_path: Path) -> None:
+    """The review's laundering scenario: an agent plants a dummy file under a root
+    of its choosing to stop the missing-literal flag. With caller roots refused,
+    the flagged section stays human_required and nothing is journaled."""
+    _write(tmp_path, _FLAGGED, _FLAGGED)
+    _write_interview(tmp_path, input_roots=["inputs"])
+    # Plant the dummy the section references, under a caller-chosen root.
+    (tmp_path / "planted").mkdir()
+    (tmp_path / "planted" / "missing.csv").write_text("x\n", encoding="utf-8")
+
+    # Passing the planted root is refused outright — no clearance, no journal.
+    with pytest.raises(errors.SpecInvalid, match="laundering"):
+        _run(tmp_path, input_roots=["planted"])
+    assert _records(tmp_path) == []
+
+    # And the honest run (recorded roots) keeps the section human_required.
+    result = _run(tmp_path)
+    assert result.cleared == []
+    assert [(s.section, s.reason) for s in result.skipped] == [("load", "human_required")]
 
 
 # ── idempotent re-run → nothing appended, already-current ─────────────────────
