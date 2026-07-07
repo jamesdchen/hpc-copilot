@@ -101,6 +101,11 @@ class AttentionItemModel(BaseModel):
         extra="forbid",
         title="attention-queue item",
         populate_by_name=True,
+        # Every dump emits the wire key ``class`` (the alias), not the Python
+        # field name — the CLI envelope and the fuzz harness both dump WITHOUT
+        # by_alias, and the baked schema (correctly) forbids ``item_class``.
+        # Linux-CI fuzz caught the divergence on 1ca77f53.
+        serialize_by_alias=True,
     )
 
     kind: str = Field(
