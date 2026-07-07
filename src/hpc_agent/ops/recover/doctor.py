@@ -18,11 +18,13 @@ version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._build_info import full_version, git_output, runtime_sha
+from hpc_agent._kernel.lifecycle.detached import _pid_alive
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.doctor import (
     AdvanceRunProposal,
@@ -35,11 +37,13 @@ from hpc_agent._wire.queries.doctor import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
+from hpc_agent.state.block_terminal import read_terminal
 from hpc_agent.state.decision_journal import (
     is_latest_committed_greenlight,
     latest_decision,
 )
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
+from hpc_agent.state.run_record import _current_homedir
 
 
 def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
@@ -198,20 +202,88 @@ def _detect_version_skew(experiment_dir: Path) -> VersionSkew | None:
     )
 
 
+def _scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[str, Any]]:
+    """Detached-worker liveness scan — the §5 stalled-run scan's blind spot.
+
+    A detached submit block (S2/S3/S4/speculate,
+    :mod:`hpc_agent._kernel.lifecycle.detached`) runs its SSH work in a
+    subprocess whose lease lives under the journal home's ``_detached/`` dir as
+    ``<block>-<run_id>.lease.json`` (carrying ``run_id``/``block``/``pid``). The
+    stalled-driver scan only walks *in-flight* runs
+    (:func:`find_stalled_runs`), so it is blind to a worker that dies on a run
+    whose journal is ALREADY terminal — most sharply the S4 *harvest*, which
+    runs AFTER the run is terminal: a dead harvest worker leaves no metrics and
+    nothing else flags it.
+
+    For each lease whose ``pid`` is DEAD (:func:`_pid_alive` false), consult the
+    block terminal-result store (:func:`read_terminal`): a dead pid WITH a
+    recorded terminal is normal completion (the worker finished, wrote its
+    terminal, exited) and is skipped. A dead pid with NO recorded terminal is a
+    worker that died mid-flight — surfaced with a DRAFTED re-invoke proposal (the
+    recorded-terminal replay makes re-running idempotent). Detection only:
+    ``doctor`` NEVER re-invokes anything.
+
+    Pure local filesystem read — the global ``_detached/`` lease dir plus the
+    per-experiment ``.hpc/runs/`` terminal store. No SSH. Fail-open: an absent
+    dir, an unreadable/pid-less lease, or a lease still naming a LIVE pid yields
+    nothing surfaced.
+    """
+    detached_dir = _current_homedir() / "_detached"
+    if not detached_dir.is_dir():
+        return []
+    findings: list[dict[str, Any]] = []
+    for lease_path in sorted(detached_dir.glob("*.lease.json")):
+        try:
+            lease = json.loads(lease_path.read_text(encoding="utf-8"))
+            run_id = lease["run_id"]
+            block = lease["block"]
+            pid = int(lease.get("pid", -1))
+        except (OSError, ValueError, TypeError, KeyError):
+            # Unreadable / malformed / pid-less lease: nothing to probe. Fail
+            # open — a torn lease must never crash the watchdog scan.
+            continue
+        if not (isinstance(run_id, str) and isinstance(block, str) and run_id and block):
+            continue
+        if pid <= 0:
+            # A legit lease is stamped with the launched pid (> 0) only AFTER a
+            # successful Popen; a non-positive pid is a never-stamped / torn
+            # lease, not a mid-flight death. Fail open — do not surface it.
+            continue
+        if _pid_alive(pid):
+            continue  # a live worker owns the lease — not our concern
+        if read_terminal(experiment_dir, run_id, block) is not None:
+            continue  # dead pid WITH a recorded terminal = normal completion
+        proposal = (
+            f"detached {block} worker for run {run_id} died with no recorded terminal "
+            f"(pid {pid} is not running, and state/block_terminal holds no {block} result "
+            f"for this run) — its SSH work (e.g. the S4 harvest, which runs after the run "
+            f"is already terminal) never completed and no in-flight scan covers it. Re-invoke "
+            f"{block} for {run_id}: the recorded-terminal replay makes this idempotent. "
+            f"doctor never enacts this — you decide whether to re-run."
+        )
+        findings.append(
+            {"run_id": run_id, "block": block, "pid": pid, "proposal": proposal}
+        )
+    return findings
+
+
 def _attention_summary(
     *,
     stalled: int,
     awaiting_advance: int,
     parked: int,
     alerts: int,
+    dead_workers: int = 0,
     open_circuits: list[str] | None = None,
 ) -> tuple[bool, str]:
     """The unmistakable top-of-envelope digest: ``(needs_attention, one-liner)``.
 
     Attention = a stalled driver, a committed-but-unadvanced run (both mean a
-    dead driver the human must re-arm), or an OPEN ssh circuit (discovery to
-    that host is dark by design — the 2026-07-05 incident: an agent holding
-    this very output improvised ssh probes and mis-diagnosed a VPN outage
+    dead driver the human must re-arm), a dead detached worker with no recorded
+    terminal (T3: a mid-flight submit-block crash — esp. the post-terminal S4
+    harvest — that the in-flight stalled scan cannot see), or an OPEN ssh circuit
+    (discovery to that host is dark by design — the 2026-07-05 incident: an agent
+    holding this very output improvised ssh probes and mis-diagnosed a VPN outage
     because the breaker state was recorded but not surfaced). Parked runs and
     unacknowledged alert-log entries are appended to the line for delivery but
     do not flip the flag on their own — parked is a valid wait, and an alert's
@@ -224,12 +296,14 @@ def _attention_summary(
         parts.append(f"{stalled} stalled driver(s)")
     if awaiting_advance:
         parts.append(f"{awaiting_advance} approved-but-unadvanced run(s)")
+    if dead_workers:
+        parts.append(f"{dead_workers} dead detached worker(s) with no harvest")
     if open_circuits:
         parts.append(f"{len(open_circuits)} open ssh circuit(s)")
     needs_attention = bool(parts)
     if needs_attention:
         line = f"NEEDS ATTENTION: {' and '.join(parts)}."
-        if stalled or awaiting_advance:
+        if stalled or awaiting_advance or dead_workers:
             line += " Drafted re-arm proposal(s) below."
     elif parked:
         line = f"no stalled drivers; {parked} run(s) parked awaiting your decision."
@@ -336,7 +410,23 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     from hpc_agent.ops.recover.net_triage import open_circuit_lines
     from hpc_agent.ops.recover.notify import read_unacknowledged_alerts
 
-    alerts = [AlertRecord(**a) for a in read_unacknowledged_alerts(experiment_dir)]
+    log_alerts = [AlertRecord(**a) for a in read_unacknowledged_alerts(experiment_dir)]
+
+    # Dead detached workers (T3): the stalled-run scan above only walks
+    # IN-FLIGHT runs, so a detached submit block (esp. the S4 harvest, which runs
+    # AFTER the run is terminal) that dies mid-flight is invisible to it. Scan the
+    # `_detached/` leases for a DEAD pid with NO recorded block-terminal and
+    # surface each as a drafted re-invoke proposal — detection only, still no SSH.
+    dead_worker_findings = _scan_dead_detached_workers(experiment_dir, now=now)
+    dead_worker_alerts = [
+        AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings
+    ]
+
+    # Both the log audit-trail entries and the dead-worker drafts ride the
+    # envelope's `alerts` list for delivery; only the log entries feed the
+    # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
+    # not log lines), while the dead workers get their own attention part.
+    alerts = log_alerts + dead_worker_alerts
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,
@@ -347,7 +437,8 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         stalled=len(proposals),
         awaiting_advance=len(advance_proposals),
         parked=len(parked_notes),
-        alerts=len(alerts),
+        alerts=len(log_alerts),
+        dead_workers=len(dead_worker_findings),
         open_circuits=circuit_lines,
     )
 
