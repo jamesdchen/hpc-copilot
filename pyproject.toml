@@ -38,6 +38,20 @@ dependencies = [
     # files by ``scripts/build_schemas.py``. Switched on for the
     # submit-flow canary; rolling out per-atom incrementally.
     "pydantic>=2.6",
+    # Cross-platform advisory file locking (infra/io.py advisory_flock +
+    # atomic_locked_update). Outsourced from hand-rolled fcntl/msvcrt
+    # branches after two win32-only serialization-loss incidents (the
+    # advisory_flock no-op fixed in 12043d0d, the lockless
+    # atomic_locked_update fixed in 1f368163) — same substrate-outsourcing
+    # doctrine as the asyncssh SSH engine. Pure-python, py3.8+, tiny.
+    "filelock>=3.13",
+    # Cross-platform PID-liveness probe (infra/proc.py pid_alive). Outsourced
+    # from two byte-divergent hand-rolled win32/POSIX copies (detached.py's
+    # STILL_ACTIVE check vs ssh_slots.py's GetLastError!=87) that disagreed on a
+    # zombie/access-denied edge — audit 2026-07-07 #1. psutil.pid_exists is the
+    # canonical probe and handles the win32 os.kill-is-TerminateProcess gotcha.
+    # Same substrate-outsourcing doctrine as filelock / the asyncssh engine.
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -66,6 +80,10 @@ dev = [
     # optional dep must be present in the dev/test environment too. Same >=2.23
     # floor as the extra (the Windows agent RSA SHA-2 fix, asyncssh #795).
     "asyncssh>=2.23",
+    # archive-dossier's S3 surface is tested with moto's mock AWS (no network);
+    # boto3 mirrors the ``s3`` extra so the dev env can exercise the verb.
+    "boto3>=1.34",
+    "moto[s3]>=5.0",
 ]
 tui = [
     "rich>=13.0",
@@ -88,10 +106,17 @@ otel = [
 ssh = [
     "asyncssh>=2.23",
 ]
+# S3-compatible dossier archival (archive-dossier). Optional: the verb lazy-
+# imports boto3 through one seam and refuses with a `pip install
+# hpc-agent[s3]` remediation when absent, so the base install stays
+# dependency-light. Credentials resolve only from the standard AWS chain.
+s3 = [
+    "boto3>=1.34",
+]
 
 [project.urls]
-Homepage = "https://github.com/jamesdchen/hpc-agent"
-Repository = "https://github.com/jamesdchen/hpc-agent"
+Homepage = "https://github.com/jamesdchen/hpc-copilot"
+Repository = "https://github.com/jamesdchen/hpc-copilot"
 Issues = "https://github.com/jamesdchen/hpc-agent/issues"
 
 [project.scripts]
