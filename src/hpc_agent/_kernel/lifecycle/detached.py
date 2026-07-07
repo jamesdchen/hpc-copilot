@@ -46,6 +46,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Zero-hpc_agent-dep substrate module — safe to import at load (no cycle, unlike
+# infra.io which detached imports lazily). This is the single PID-liveness
+# definition; _pid_alive below forwards to it.
+from hpc_agent.infra.proc import pid_alive as proc_pid_alive
+
 __all__ = [
     "DetachedLaunch",
     "DriveModeError",
@@ -235,45 +240,26 @@ def _pid_alive(pid: int) -> bool:
     """Whether *pid* names a running process on this host.
 
     The lease liveness check (a dead pid is a reclaimable stale lease; a live one
-    refuses the second launch). Kept a module-level function so tests can
-    monkeypatch it and stay deterministic — they must NOT depend on real pids or
-    wall-clock. POSIX: ``os.kill(pid, 0)`` — no signal delivered, just an
-    existence/permission probe (``PermissionError`` means the process exists but
-    is another user's, i.e. alive). win32: ``OpenProcess`` +
-    ``GetExitCodeProcess`` — a handle that opens and reports ``STILL_ACTIVE``
-    (259) is a running process; a pid that no longer exists fails to open.
-    """
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes  # noqa: PLC0415 — win32-only, imported lazily
+    refuses the second launch). This is a THIN WRAPPER over the single substrate
+    definition :func:`hpc_agent.infra.proc.pid_alive` (over ``psutil``) — the
+    win32/POSIX probe was outsourced when the audit (2026-07-07, finding #1)
+    found this copy had BYTE-DIVERGED from ``infra/ssh_slots.py``'s: this one
+    read ``STILL_ACTIVE`` (259) via ``GetExitCodeProcess`` (so an exit-code-259
+    process read alive and an exited-but-open-handle pid read dead), the other
+    keyed off ``GetLastError() != 87`` — two definitions of one fact that could
+    disagree on a zombie / access-denied edge. ``psutil.pid_exists`` is the
+    canonical cross-platform probe (and sidesteps the win32
+    ``os.kill``-is-``TerminateProcess`` footgun).
 
-        _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        _STILL_ACTIVE = 259
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]  # win32-only
-        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            exit_code = ctypes.c_ulong()
-            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return exit_code.value == _STILL_ACTIVE
-            # Couldn't read the exit code but the handle opened — treat as alive
-            # rather than reclaim a lease we can't prove is dead.
-            return True
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        # Any other errno: be conservative and treat the pid as alive so a lease
-        # is never wrongly reclaimed out from under a running worker.
-        return True
-    return True
+    The wrapper SURVIVES (rather than exporting ``proc.pid_alive`` directly)
+    because every test in this module and its consumers monkeypatches THIS
+    module attribute — ``monkeypatch.setattr(detached, "_pid_alive", ...)`` — and
+    ``_guard_single_lease`` / the lazy-importing consumers all resolve the name
+    off this module at call time. Keeping a module-level ``_pid_alive`` here
+    preserves that seam with zero call-site churn; the probe logic lives in ONE
+    place (``infra/proc.py``), this only forwards.
+    """
+    return proc_pid_alive(pid)
 
 
 def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:

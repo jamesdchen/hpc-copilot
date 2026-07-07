@@ -66,6 +66,7 @@ import time
 from typing import TYPE_CHECKING
 
 from hpc_agent.errors import SshSlotWaitTimeout
+from hpc_agent.infra.proc import pid_alive
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -176,42 +177,12 @@ def _reclaim_lock_path(host: str) -> Path:
     return _slot_dir() / f"{_safe_name(host)}.slots.lock"
 
 
-def _pid_alive(pid: int) -> bool:
-    """Best-effort same-box liveness for *pid*; ``True`` when unsure.
-
-    POSIX: signal-0 probe (EPERM still means alive). win32:
-    ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` via ctypes —
-    ``os.kill(pid, 0)`` on Windows calls ``TerminateProcess`` and must
-    never be used as a probe. Any doubt reads as alive: a false "alive"
-    only delays reclaim until :data:`SLOT_TTL_SEC`; a false "dead" would
-    over-admit.
-    """
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes  # noqa: PLC0415 — win32-only probe
-
-        process_query_limited_information = 0x1000
-        try:
-            handle = ctypes.windll.kernel32.OpenProcess(  # type: ignore[attr-defined]
-                process_query_limited_information, False, pid
-            )
-        except OSError:
-            return True
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
-            return True
-        # NULL handle: dead pid → ERROR_INVALID_PARAMETER (87); access
-        # denied (5) means it exists. Anything unexpected reads as alive.
-        last_error: int = ctypes.windll.kernel32.GetLastError()  # type: ignore[attr-defined]
-        return last_error != 87
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
+# PID liveness is one substrate fact with ONE definition (infra/proc.py, over
+# psutil). This module keeps the ``_pid_alive`` name as a pure alias so the
+# ``pid_alive=`` default arg below and any importer see the shared probe; the
+# former hand-rolled win32/POSIX copy (which diverged from detached.py's on the
+# zombie/access-denied edge) was deleted — audit 2026-07-07, finding #1.
+_pid_alive = pid_alive
 
 
 def _claim_is_stale(
