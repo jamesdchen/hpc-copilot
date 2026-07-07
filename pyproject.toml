@@ -60,7 +60,7 @@ dev = [
     # 0.15.18 disagreed on two files), so a float makes local and CI run
     # different formatters and `ruff format --check` flaps red. Bump
     # deliberately, in lock-step with CI.
-    "ruff==0.15.18",
+    "ruff==0.15.20",
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-xdist>=3.8",
