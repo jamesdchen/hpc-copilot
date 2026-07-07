@@ -107,6 +107,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_brief_provenance(experiment_dir, spec, resolved)
     _assert_human_authorship(experiment_dir, spec, resolved)
     _assert_unlock_authorship(experiment_dir, spec, resolved)
+    _assert_signoff_authorship(experiment_dir, spec, resolved)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -861,6 +862,336 @@ def _assert_unlock_authorship(
                 f"{spec.response!r}. Have the human state why the scope is being "
                 "re-opened in a prompt."
             )
+
+
+# ── notebook sign-off authorship gate (D5 three locks + D-attention, T8) ──────
+
+# The block-terminator convention for a notebook section SIGN-OFF. A sign-off
+# ATTESTS that a human reviewed a section AT A SPECIFIC HASH; it is a HUMAN
+# attestation over the ``notebook`` scope, journaled under this distinct block so
+# the gate can recognise — and lock — it (mirrors the ``scope-unlock`` block
+# convention). Lock 1 (no affordance) is organizational: there is NO sign-off
+# verb, chain, or next_block — append-decision under this block is the ONLY write
+# path (pinned by the contract test in tests/contract/).
+_SIGNOFF_BLOCK = "notebook-sign-off"
+
+# Identifier-shaped tokens: the substrate for the raised human-required bar and
+# the diff-token pool. Mirrors T5's assertion/diff vocabulary (plain identifiers).
+_SIGNOFF_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _signoff_token_names(text: str) -> set[str]:
+    """The identifier tokens in *text*, lowercased (the #26 token-exact idiom).
+
+    Splits on non-identifier chars exactly like :func:`_prior_nudge_named`, so a
+    sign-off response must NAME a thing, never merely contain it as a substring.
+    """
+    return set(re.split(r"[^a-z0-9_]+", (text or "").lower())) - {""}
+
+
+def _names_slug(response: str, slug: str) -> bool:
+    """True iff *response* names *slug* as a whole token (slug chars respected).
+
+    A slug legitimately carries ``.`` / ``-`` (the ``_RUN_ID_RE`` class), which
+    the identifier split would fragment — so the whole slug is matched with a
+    boundary regex that treats the slug's own character class as word chars.
+    """
+    if not slug:
+        return False
+    pattern = re.compile(r"(?<![A-Za-z0-9._-])" + re.escape(slug) + r"(?![A-Za-z0-9._-])")
+    return bool(pattern.search(response or ""))
+
+
+def _section_specific_tokens(section_view: Any) -> set[str]:
+    """The identifier pool the raised human-required bar checks a sign-off against.
+
+    Drawn from the section's DIFF-CHANGED lines (``+``/``-`` bodies, skipping the
+    unified-diff ``+++``/``---`` file headers and ``@@`` hunk markers) — the human
+    must engage a SPECIFIC of the change, not offer generic praise. Falls back to
+    the section's declared ASSERTION identifiers when the diff is empty (a
+    human-required-but-inherited section whose assertions are ungreen has no diff
+    tokens); when BOTH are empty the bar reduces to the slug-naming floor already
+    enforced (a token that does not exist cannot be demanded).
+    """
+    tokens: set[str] = set()
+    for line in section_view.diff:
+        if not line or line.startswith(("+++", "---", "@@")):
+            continue
+        if line[0] in "+-":
+            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(line[1:])}
+    if not tokens:
+        for assertion in section_view.assertions:
+            tokens |= {m.group(0).lower() for m in _SIGNOFF_IDENT_RE.finditer(assertion.test)}
+    return tokens
+
+
+def _read_interview_audited_source(
+    experiment_dir: Path, audit_id: str | None
+) -> dict[str, Any] | None:
+    """The interview.json ``audited_source`` block matching *audit_id*, or ``None``.
+
+    The canonical location is the campaign-dir root (where ``interview`` writes
+    it); ``.hpc/interview.json`` is accepted defensively (the ``detect_entry_point``
+    posture). A corrupt / non-object file is tolerated as "absent" here — the
+    caller then refuses on an unresolvable SOURCE, which is the load-bearing loud
+    failure; a duplicate refusal on the JSON shape would only muddy the message.
+    """
+    for rel in ("interview.json", ".hpc/interview.json"):
+        path = experiment_dir / rel
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        block = doc.get("audited_source")
+        if isinstance(block, dict) and block.get("audit_id") == audit_id:
+            return block
+    return None
+
+
+def _read_signoff_source_text(experiment_dir: Path, rel: str, *, required: bool) -> str | None:
+    """Read a source/template ``.py`` at *rel* (relative to *experiment_dir*).
+
+    A missing/unreadable REQUIRED source raises (a sign-off that cannot be
+    recomputed is refused, never skipped); a missing template returns ``None`` so
+    the caller conservatively treats a template-less audit as HUMAN-REQUIRED.
+    """
+    path = experiment_dir / rel
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        if required:
+            raise errors.SpecInvalid(
+                f"notebook sign-off gate: audited source {rel!r} is unreadable "
+                f"({exc}). A sign-off RECOMPUTES the section hash from the .py on "
+                "disk — an unresolvable source is refused, never skipped."
+            ) from exc
+        return None
+
+
+def _resolve_signoff_sources(
+    experiment_dir: Path, resolved: dict[str, Any]
+) -> tuple[str, str | None]:
+    """Resolve ``(source_text, template_text_or_None)`` for a sign-off record.
+
+    Precedence: an explicit ``resolved["source"]`` / ``resolved["template"]``
+    campaign-dir-relative path wins; otherwise the interview.json
+    ``audited_source`` block (matched by ``audit_id``) supplies them. The SOURCE
+    must resolve — an unresolvable source is REFUSED loudly (this differs from
+    D7's absent-opt-in silence: an explicit notebook sign-off record is already
+    inside the opted-in surface, so it is recomputed or refused, never passed).
+    The TEMPLATE is optional here; ``None`` drives the conservative
+    human-required tier in the caller.
+    """
+    audit_id = resolved.get("audit_id")
+    src_rel = resolved.get("source")
+    tmpl_rel = resolved.get("template")
+    if not src_rel or not tmpl_rel:
+        block = _read_interview_audited_source(experiment_dir, audit_id)
+        if block is not None:
+            src_rel = src_rel or block.get("source")
+            tmpl_rel = tmpl_rel or block.get("template")
+    if not isinstance(src_rel, str) or not src_rel:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: could not resolve the audited .py source for "
+            f"audit_id={audit_id!r} — no resolved['source'] and no matching "
+            "interview.json audited_source block. A sign-off must recompute the "
+            "section hash from the source on disk; an unresolvable source is refused."
+        )
+    source_text = _read_signoff_source_text(experiment_dir, src_rel, required=True)
+    assert source_text is not None  # required=True raises rather than returning None
+    template_text = (
+        _read_signoff_source_text(experiment_dir, tmpl_rel, required=False)
+        if isinstance(tmpl_rel, str) and tmpl_rel
+        else None
+    )
+    return source_text, template_text
+
+
+def _assert_signoff_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Human-authorship + recompute gate for a NOTEBOOK section sign-off (T8).
+
+    A sign-off is an ordinary ``append-decision`` whose ``scope_kind=="notebook"``,
+    ``block=="notebook-sign-off"``, and ``resolved={audit_id, section, section_sha,
+    view_sha}`` (D3). It ATTESTS that a human reviewed one section at a specific
+    hash — a HUMAN attestation, so it faces both the un-fakeable recompute lock and
+    the tiered authorship bar (``docs/design/notebook-audit.md`` D5 + D-attention).
+
+    Block convention, enforced both directions (mirrors ``scope-unlock``): a
+    ``notebook-sign-off`` block is refused for any ``scope_kind`` other than
+    ``notebook``; every other record passes untouched.
+
+    **Lock 1 (no affordance)** is organizational: there is no sign-off verb / chain
+    / next_block — append-decision under this block is the only write path. Pinned
+    by the contract test in ``tests/contract/`` (no primitive is named sign-off).
+
+    **Lock 2 (recompute, un-fakeable)** — the audited ``.py`` is resolved (from
+    ``resolved['source']`` or the interview.json ``audited_source`` block), parsed
+    (:func:`parse_percent_source`), the named section located, and its
+    ``section_sha`` RECOMPUTED. The record binds through the ONE attestation kernel
+    (``state.attestation.bind``, D5 lock 2 extracted once): the asserted
+    ``section_sha`` must equal the recomputed one or the append is refused — a hash
+    cannot be asserted into existence. An unresolvable source / missing section is
+    REFUSED loudly, never skipped.
+
+    **Lock 3 (authorship bar, D-attention tiered)** — bare acks are refused
+    (:func:`_is_bare_ack`); the response must NAME the section slug (token-exact,
+    the #26 precedent). The tier is RECOMPUTED here (``build_audit_view`` over
+    source + template, ``lint_findings=()``). What the gate can honestly check at
+    append time is the STATICALLY-recomputable tier legs — the diff classification
+    (inherited/added/modified) and assertions-without-a-receipt; it does NOT have
+    the T4 lint findings (a concurrent surface), so a section made human-required
+    *solely* by a lint flag is not distinguished here. For a **HUMAN_REQUIRED**
+    section the bar RAISES: the response must additionally ENGAGE the change —
+    contain at least one identifier drawn from the section's diff-changed lines
+    (:func:`_section_specific_tokens`). This is the boundary-drift defense: soften
+    the human-required tier only via a richer harness-captured utterance, never a
+    bare ack.
+
+    **AUTO_CLEARED + a human sign-off: ACCEPT, but mark ``resolved['redundant'] =
+    True``.** The alternative (refuse) was rejected: refusing a human's VOLUNTARY
+    review would delete information and create a verb-shaped affordance gap
+    (a human who looked would have no way to record it). Marking keeps the
+    attention ledger honest — the record shows a real human sign-off that the
+    tiering deemed unnecessary. The recompute lock and the base authorship floor
+    (non-bare, slug-named) still apply to a redundant sign-off; only the raised
+    diff-token bar is waived (an auto-cleared section has no change to engage).
+
+    **TEMPLATE absent → HUMAN_REQUIRED (conservative, never auto-soften).** When no
+    template resolves the tier cannot be honestly recomputed as auto-cleared, so an
+    empty template is used: every section then classifies as ``added`` →
+    human-required, and the diff-token pool is the whole section (the safe floor).
+
+    **view_sha is provenance, not recomputed here** — it is validated present and
+    non-empty (it binds what-the-human-saw into the record, D5), but the gate does
+    NOT recompute it: the view depends on lint findings the gate does not have. The
+    recompute lock is ``section_sha``; ``view_sha`` is a provenance witness.
+
+    Raises :class:`errors.SpecInvalid` on any refusal.
+    """
+    is_signoff_block = spec.block == _SIGNOFF_BLOCK
+
+    # Block convention: notebook-sign-off is a notebook-only action.
+    if is_signoff_block and spec.scope_kind != "notebook":
+        raise errors.SpecInvalid(
+            f"block {_SIGNOFF_BLOCK!r} is only valid for scope_kind='notebook' "
+            f"(a notebook section sign-off); got scope_kind={spec.scope_kind!r}."
+        )
+    if not (is_signoff_block and spec.scope_kind == "notebook"):
+        return  # not a notebook sign-off — nothing to gate
+
+    if not isinstance(resolved, dict):
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: resolved must carry "
+            "{audit_id, section, section_sha, view_sha}."
+        )
+
+    audit_id = resolved.get("audit_id")
+    section = resolved.get("section")
+    section_sha = resolved.get("section_sha")
+    view_sha = resolved.get("view_sha")
+    missing = [
+        name
+        for name, value in (
+            ("audit_id", audit_id),
+            ("section", section),
+            ("section_sha", section_sha),
+            ("view_sha", view_sha),  # binds what-the-human-saw (D5); required.
+        )
+        if not isinstance(value, str) or not value
+    ]
+    if missing:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: resolved must carry non-empty "
+            f"{{audit_id, section, section_sha, view_sha}}; missing/empty: {missing}. "
+            "view_sha binds what-the-human-saw into the record (D5) and is required."
+        )
+    assert isinstance(section, str) and isinstance(section_sha, str)
+
+    # Base authorship floor (applies to every tier).
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
+            f"({section!r}) and state what you reviewed."
+        )
+    if not _names_slug(response, section):
+        raise errors.SpecInvalid(
+            "notebook sign-off gate: the sign-off response must NAME the section "
+            f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
+            "cannot attest a specific section. Restate, naming the section."
+        )
+
+    # Lazy, subject-lint-safe imports (state.* is allowed substrate; the ops
+    # notebook subject is reached through the top-level ``notebook_view`` facade).
+    from hpc_agent.ops import notebook_view as _notebook_view
+    from hpc_agent.state import attestation
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    # Lock 2 — recompute the section hash from the .py on disk and bind through
+    # the ONE attestation kernel (D5 lock 2). Refuses an unresolvable source.
+    source_text, template_text = _resolve_signoff_sources(experiment_dir, resolved)
+    parsed = parse_percent_source(source_text)
+    sect = next((s for s in parsed.sections if s.slug == section), None)
+    if sect is None:
+        raise errors.SpecInvalid(
+            f"notebook sign-off gate: section {section!r} not found in the audited "
+            f"source (audit_id={audit_id!r}). A sign-off must name a CURRENT section "
+            "— re-view the source and sign an existing section."
+        )
+    attestation.bind(
+        {
+            "attestor": "human",
+            "subject_kind": _notebook_view.SUBJECT_KIND,
+            "subject_id": f"{audit_id}:{section}",
+            "content_sha": section_sha,
+            "view_sha": view_sha,
+        },
+        recompute=sect.section_sha,
+    )
+
+    # Lock 3 (tiered) — recompute the tier over the STATICALLY-available legs
+    # (diff classification + assertions-without-receipt). No template resolves →
+    # empty template → every section reads ``added`` → HUMAN_REQUIRED (never
+    # auto-softened). lint_findings=() because the T4 lint is a concurrent surface
+    # the gate does not have; a section human-required SOLELY by a lint flag is
+    # therefore not distinguished at append time — the honest boundary.
+    template_parsed = parse_percent_source(template_text if template_text is not None else "")
+    view = _notebook_view.build_audit_view(parsed, template_parsed, ())
+    section_view = next((v for v in view.sections if v.slug == section), None)
+    tier = section_view.tier if section_view is not None else _notebook_view.HUMAN_REQUIRED
+
+    if tier == _notebook_view.AUTO_CLEARED:
+        # ACCEPT a voluntary human sign-off of an auto-cleared section, but mark it
+        # redundant (decision recorded in the docstring). Mutating ``resolved`` in
+        # place is visible to the append that follows (same dict object).
+        resolved["redundant"] = True
+        return
+
+    # HUMAN_REQUIRED — raise the bar: the response must engage a section specific.
+    # The slug's OWN tokens are subtracted from both sides: naming the section
+    # (already required) must not double as "engaging the change", or a slug like
+    # ``model-fit`` whose fragments appear in the diff line would satisfy the bar
+    # by itself and the raise would be a no-op.
+    slug_tokens = _signoff_token_names(section)
+    raw_specifics = _section_specific_tokens(section_view) if section_view is not None else set()
+    specifics = raw_specifics - slug_tokens
+    engaged = (_signoff_token_names(response) - slug_tokens) & specifics
+    if specifics and not engaged:
+        raise errors.SpecInvalid(
+            f"notebook sign-off gate: section {section!r} is HUMAN-REQUIRED "
+            "(nonempty diff-from-template / lint flags / ungreen assertions), so the "
+            "sign-off must ENGAGE the change — name at least one identifier from the "
+            "section's diff, not offer a generic ack (soften only via a richer "
+            "utterance, never a bare ack; the boundary-drift flag). Identifiers in "
+            f"the change include: {sorted(specifics)[:8]}."
+        )
 
 
 def _chain_successor(block: str) -> str | None:

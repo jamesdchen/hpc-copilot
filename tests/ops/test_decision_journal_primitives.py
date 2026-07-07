@@ -912,3 +912,311 @@ def test_lock_append_needs_no_authorship_bar(tmp_path: Path) -> None:
     )
     assert out.record.resolved["scope_action"] == "lock"
     assert out.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Notebook sign-off authorship gate (D5 three locks + D-attention, T8): a
+# sign-off ATTESTS a human reviewed a section at a specific hash — the section
+# sha is RECOMPUTED (un-fakeable, via the attestation kernel), the response must
+# name the slug and, for a HUMAN-REQUIRED section, engage the change.
+# ---------------------------------------------------------------------------
+
+_NB_TEMPLATE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data)
+"""
+
+# ``load-data`` is byte-identical to the template (inherited, no assertions →
+# AUTO_CLEARED); ``model-fit`` diverges and adds an assertion (modified + an
+# ungreen assert → HUMAN_REQUIRED).
+_NB_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+
+data = pd.read_csv("input.csv")
+
+# %%
+# hpc-audit-section: model-fit
+model = fit(data, regularization=0.5)
+assert model.converged
+"""
+
+
+def _write_notebook_fixture(
+    tmp_path: Path,
+    *,
+    source: str = _NB_SOURCE,
+    template: str = _NB_TEMPLATE,
+    audit_id: str = "audit-x",
+) -> None:
+    (tmp_path / "source.py").write_text(source, encoding="utf-8")
+    (tmp_path / "template.py").write_text(template, encoding="utf-8")
+    interview = {
+        "audited_source": {
+            "source": "source.py",
+            "template": "template.py",
+            "audit_id": audit_id,
+        }
+    }
+    import json as _json
+
+    (tmp_path / "interview.json").write_text(_json.dumps(interview), encoding="utf-8")
+
+
+def _nb_shas(
+    slug: str, *, source: str = _NB_SOURCE, template: str = _NB_TEMPLATE
+) -> tuple[str, str]:
+    """The current ``(section_sha, view_sha)`` for *slug* — what a real sign-off asserts."""
+    from hpc_agent.ops.notebook.audit_view import build_audit_view
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    src = parse_percent_source(source)
+    tmpl = parse_percent_source(template)
+    sect = next(s for s in src.sections if s.slug == slug)
+    sv = next(v for v in build_audit_view(src, tmpl, ()).sections if v.slug == slug)
+    return sect.section_sha, sv.view_sha
+
+
+def _signoff(
+    tmp_path: Path,
+    *,
+    section: str,
+    response: str,
+    section_sha: str,
+    view_sha: str = "view-sha-1",
+    audit_id: str = "audit-x",
+    resolved_extra: dict[str, object] | None = None,
+    **overrides: object,
+) -> AppendDecisionResult:
+    resolved: dict[str, object] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+        "view_sha": view_sha,
+    }
+    if resolved_extra:
+        resolved.update(resolved_extra)
+    base: dict[str, object] = {
+        "scope_kind": "notebook",
+        "scope_id": audit_id,
+        "block": "notebook-sign-off",
+        "response": response,
+        "resolved": resolved,
+    }
+    base.update(overrides)
+    return append_decision(experiment_dir=tmp_path, spec=AppendDecisionInput.model_validate(base))
+
+
+def test_signoff_current_sha_and_engaging_response_passes(tmp_path: Path) -> None:
+    """The green path: the asserted sha matches the recompute, the response names
+    the slug AND engages a diff identifier — the HUMAN_REQUIRED bar is met."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["section"] == "model-fit"
+    assert "redundant" not in out.record.resolved
+
+
+def test_signoff_sha_mismatch_refused(tmp_path: Path) -> None:
+    """Lock 2: an asserted section_sha that does not match the recomputed one is
+    refused — a hash cannot be asserted into existence."""
+    _write_notebook_fixture(tmp_path)
+    with pytest.raises(errors.SpecInvalid, match="does not match the recomputed"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha="deadbeef" * 8,
+        )
+    # Nothing was journaled.
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "notebook", "scope_id": "audit-x"}),
+    )
+    assert result.count == 0
+
+
+def test_signoff_bare_ack_refused(tmp_path: Path) -> None:
+    """Lock 3 floor: a bare `y` cannot sign off — signing is a HUMAN act."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="HUMAN act"):
+        _signoff(
+            tmp_path, section="model-fit", response="y", section_sha=section_sha, view_sha=view_sha
+        )
+
+
+def test_signoff_missing_slug_token_refused(tmp_path: Path) -> None:
+    """Lock 3: the response must NAME the section slug (token-exact, #26)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must NAME the section slug"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="looks good, the regularization term is fine",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_human_required_generic_praise_refused(tmp_path: Path) -> None:
+    """D-attention: a HUMAN_REQUIRED section demands the response ENGAGE the
+    change — naming the slug with only generic praise is refused."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit looks great, nice work",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_auto_cleared_accepted_and_marked_redundant(tmp_path: Path) -> None:
+    """An AUTO_CLEARED section accepts a voluntary human sign-off but marks it
+    redundant (the recorded accept-vs-refuse decision)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("load-data")
+    out = _signoff(
+        tmp_path,
+        section="load-data",
+        response="reviewed load-data anyway to be safe",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["redundant"] is True
+
+
+def test_signoff_missing_view_sha_refused(tmp_path: Path) -> None:
+    """view_sha binds what-the-human-saw (D5) and is required, non-empty."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, _ = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="view_sha"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha="",
+        )
+
+
+def test_signoff_unresolvable_source_refused(tmp_path: Path) -> None:
+    """No interview.json audited_source and no resolved['source'] → the source
+    cannot be recomputed → REFUSED loudly (never silently skipped)."""
+    section_sha, view_sha = _nb_shas("model-fit")  # a sha the gate can never confirm
+    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_source_via_resolved_path_overrides_interview(tmp_path: Path) -> None:
+    """The caller may supply the source/template paths directly in resolved."""
+    (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (tmp_path / "t.py").write_text(_NB_TEMPLATE, encoding="utf-8")
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit regularization=0.5 verified",
+        section_sha=section_sha,
+        view_sha=view_sha,
+        resolved_extra={"source": "s.py", "template": "t.py"},
+    )
+    assert out.count == 1
+
+
+def test_signoff_no_template_forces_human_required(tmp_path: Path) -> None:
+    """With no template resolvable the tier cannot be auto-cleared — even the
+    normally-inherited ``load-data`` section reads HUMAN_REQUIRED and demands
+    engagement (conservative, never auto-soften)."""
+    (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
+    section_sha, view_sha = _nb_shas("load-data")
+    # Generic praise is refused because the section is forced human-required.
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="load-data looks fine to me",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            resolved_extra={"source": "s.py"},
+        )
+    # Engaging a real identifier from the (now whole-section) diff passes.
+    out = _signoff(
+        tmp_path,
+        section="load-data",
+        response="load-data: read_csv on input.csv is correct",
+        section_sha=section_sha,
+        view_sha=view_sha,
+        resolved_extra={"source": "s.py"},
+    )
+    assert out.count == 1
+
+
+def test_signoff_block_is_notebook_only(tmp_path: Path) -> None:
+    """The notebook-sign-off block is refused for a non-notebook scope_kind."""
+    with pytest.raises(errors.SpecInvalid, match="only valid for scope_kind='notebook'"):
+        _append(tmp_path, block="notebook-sign-off", response="model-fit reviewed")
+
+
+def test_notebook_scope_non_signoff_block_unaffected(tmp_path: Path) -> None:
+    """A notebook-scoped record under a DIFFERENT block passes untouched — the
+    gate keys strictly on the notebook-sign-off block."""
+    out = append_decision(
+        experiment_dir=tmp_path,
+        spec=AppendDecisionInput.model_validate(
+            {
+                "scope_kind": "notebook",
+                "scope_id": "audit-x",
+                "block": "notebook-note",
+                "response": "y",
+                "resolved": {},
+            }
+        ),
+    )
+    assert out.count == 1
+
+
+def test_signoff_gate_routes_through_attestation_kernel(tmp_path: Path) -> None:
+    """Enforcement-map route-through (docs/internals/engineering-principles.md):
+    the sign-off recompute lock calls the ONE attestation kernel `bind`, never a
+    re-inlined recompute-and-compare (the migrating-member assertion T8 adds)."""
+    import inspect
+
+    from hpc_agent.ops.decision import journal as _journal
+
+    src = inspect.getsource(_journal._assert_signoff_authorship)
+    assert "attestation.bind(" in src
+
+
+def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
+    """Lock 1 (no affordance): NO primitive is named like a sign-off verb — a
+    sign-off is an append-decision record or nothing (D5 lock 1). append-decision
+    is the only write path."""
+    from tests._registry_helpers import core_only_registry
+
+    offenders = [name for name in core_only_registry() if "sign-off" in name or "signoff" in name]
+    assert offenders == [], f"a sign-off verb affordance leaked into the registry: {offenders}"
