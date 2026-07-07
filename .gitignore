@@ -26,3 +26,9 @@ RESEARCH.md
 DECISIONS.md
 mutants/
 .pytest_tmp/
+
+# setuptools build artifacts — a tracked-but-dirty build/ also poisons the wheel version stamp
+# (setup.py git-status check reads untracked build/ as a dirty tree; see _build_info.py).
+build/
+dist/
+*.egg-info/
