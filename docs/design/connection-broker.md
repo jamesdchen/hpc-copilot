@@ -184,3 +184,49 @@ amortizes to one handshake per session; polls become ~RTT.
    files — the worst rsync-per-file case).
 3. Retire the per-call `ssh_slots` waits for brokered hosts (the cap is
    trivially satisfied at 1).
+
+## The unattended cold-dial map (2026-07-07 investigation — the daemon's actual successor)
+
+User decision 2026-07-07: **no UNATTENDED cold-SSH dial may exist; attended
+cold dials stay, deliberately** (slow-but-bounded, human present, Ctrl-C-able
+— the daemon is NOT built; MCP-server-as-daemon remains the recorded shape if
+run #10 ever stalls CLI-driven stages).
+
+The investigation (full map in the session transcript, condensed here):
+
+- The armed monitor CRON is already SSH-free — `status-snapshot` is
+  journal-first; the arm's `invocation_argv` is an agent prompt
+  (`ops/monitor/arm.py::decide_monitor_arm`; call sites
+  `ops/status_blocks.py` watch_timeout + `ops/submit_blocks.py::_submit_s3_impl`).
+- **The dial hides in the ungated in-code chain hop**:
+  `infra/block_chain.py::SUCCESSORS` chains `(status-snapshot,
+  snapshot_clean) -> status-watch` (and `watch_timeout` self-loop, and
+  `submit-s3 watching_timeout -> status-watch`) with NO human gate
+  (`GATED_BLOCKS` excludes status-watch), and `status-watch` polls
+  SYNCHRONOUSLY IN-PROCESS by contract-pinned design (absent from
+  `SUPPORTED_DETACHED_BLOCK_VERBS`; pinned by
+  `tests/contracts/test_detached_worker_brief_guidance.py` +
+  `test_monitor_arm_cron_lifecycle_guidance.py`). So any unattended
+  `block-drive --workflow status` tick on a live run cold-dials.
+- The doctor's dead-worker scan is detection-only (drafts a proposal;
+  never re-spawns, never dials).
+
+**The staged fix (Option 1, user-preferred; land AFTER run #10 — it reverses
+a pinned invariant and must not destabilize the proving run):** give
+status-watch the submit-S3 detach-by-contract treatment — `detach` on
+`StatusWatchSpec` (default on; schema bake needed), spawn via a generalized
+`launch_submit_block_detached`, add to `SUPPORTED_DETACHED_BLOCK_VERBS`; the
+detached child owns the ONE cold dial per lifetime (warm engine, lease-single,
+watchdog, exits at terminal — never an immortal daemon); `block_drive._chain`
+already exits on a `detached` result so the ungated hop becomes
+spawn-and-return; the cron tick becomes journal-only; a dead watch worker is
+re-spawned via the existing detached machinery or doctor-surfaced, never
+re-dialed inline. Update the three skills + monitor-hpc.md prose (no pipe
+chars) and REVERSE the synchronous-status-watch contract pins honestly.
+Enforcement row when built: "no unattended ssh — the cron-fired path is
+journal-only", held by a transport-seam zero-ssh guard test on an unattended
+status tick.
+
+Rejected: Option 3 (refuse to dial outside a detached context, keep polling
+in-process) — achieves zero unattended SSH but drops self-advance on
+timed-out runs: a silent wedge traded for a silent stall.
