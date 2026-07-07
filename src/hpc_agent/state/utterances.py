@@ -115,6 +115,7 @@ def is_harness_injected(text: str) -> bool:
     """
     return bool(HARNESS_INJECTION_RE.match(text))
 
+
 _UTTERANCES_NAME = "utterances.jsonl"
 
 _log = logging.getLogger(__name__)

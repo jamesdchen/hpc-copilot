@@ -70,6 +70,20 @@ def test_doc_pins_no_scaffold_and_human_typed_provenance() -> None:
     assert "_is_clicked" in text, "the clicked-option reference filter must be cited"
 
 
+def test_doc_pins_the_sha_canonicalization() -> None:
+    """The normative sha canonicalization must be specified — a second
+    implementation recomputes view/story/content shas byte-for-byte or every
+    recompute lock reads drift. The section names the JSON form, the digest,
+    the source-text normalization reference, and the versioned escape hatch
+    (never a silent canonicalization change)."""
+    text = _doc_text()
+    assert "sort_keys" in text, "the JSON canonical form (sort_keys) must be pinned"
+    assert "sha-256" in text.lower(), "the digest algorithm must be named"
+    assert "normalize_source" in text, "the source-text normalization reference must be cited"
+    assert "canon_version" in text, "the versioned escape hatch must be recorded"
+    assert "8785" in text, "the deliberate divergence from RFC 8785/JCS must be recorded"
+
+
 def test_doc_pins_the_frozen_write_api_schema() -> None:
     """The frozen record schema a second harness implements byte-for-byte."""
     text = _doc_text()

@@ -171,6 +171,28 @@ authorship evidence, which is precisely the lock-1 posture this API exists to
 deny. The contract test in `tests/contracts/` pins the absence of any such verb
 in the operations registry.
 
+## The sha canonicalization (normative)
+
+Every content/view/story sha in the system is computed the same way, and a
+second implementation MUST reproduce it byte-for-byte or every recompute
+lock reads drift:
+
+- **Payload form**: JSON via Python-`json.dumps` semantics with
+  `sort_keys=True` (keys ordered by Unicode CODE POINT — note this differs
+  from RFC 8785/JCS, which orders by UTF-16 code units), compact separators
+  `(",", ":")`, `ensure_ascii=False`, UTF-8 encoded.
+- **Digest**: SHA-256 over that encoding, lowercase hex.
+- **Source-text shas** (`section_sha`, `module_sha`, linked-source shas) are
+  SHA-256 over NORMALIZED source text instead: newlines unified to `\n`
+  (CRLF and lone CR), trailing whitespace stripped per line — nothing else
+  (`state/audit_source.py::normalize_source` is the reference).
+
+This form is deliberately NOT RFC 8785: it predates any cross-language
+consumer, and changing it would move every stored sha (drift-revoking all
+existing attestations). The recorded escape hatch: if a non-Python
+implementation ever needs to recompute these shas, adopt JCS under a
+`canon_version` field on NEW records — never silently.
+
 ## The relay-enforcement capability (detail)
 
 The reference implementation is the Stop hook `_kernel/hooks/relay_audit_stop.py`.
