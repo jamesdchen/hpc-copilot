@@ -165,15 +165,36 @@ a projection over sealed records, buildable in isolation.
 
 Reuse accounting (why v1 is thin): greenlights, unlocks, scope locks,
 sign-offs — and the future registration kernel — are instances of ONE
-primitive: a journaled human decision bound to a content hash, verified by
-recompute, with drift auto-revoking trust. The rigor wave built that
-primitive's machinery; this feature is its next instantiation (T7 ≈ the
-scope-kind pattern, T8 shares the authorship helpers, T6 the newest-first
-reduction, T9 the two-seat fail-safe gate, T2 the sidecar-field pattern).
-Genuinely new core: the section model, the lints, the view/tier logic.
-REFACTOR TRIGGER: at the registration kernel (member four of the
-hash-bound-decision family), extract the shared gate machinery into one
-parametric form — not before.
+primitive, and **(user decision 2026-07-08) that primitive becomes a
+FIRST-CLASS foundational object: the ATTESTATION** —
+`{attestor: human|code, subject_kind (opaque), subject_id, content_sha,
+view_sha?, evidence}` riding EXISTING decision-journal records (no new
+store, no migration). Human attestations face the authorship gates; CODE
+attestations (auto-clear records, reproduction receipts, look records) face
+recompute — the machine-side records are the same object.
+
+**NEW TASK T0 (precedes T6/T8): the attestation kernel** —
+`state/attestation.py`, ~100 lines, three functions every instance routes
+through: `bind` (recompute-and-compare at append — the un-fakeable lock,
+extracted once), `reduce` (newest-first → `current | stale | absent` —
+drift-revocation defined once), and the record-shape validator. **Gates stay
+thin and per-instance and CALL the kernel** — explicitly NOT a parametric
+mega-gate (the instances differ in load-bearing ways: greenlight routes
+next_block, unlock is directionally asymmetric, sign-off carries tiers; a
+flag-soup unified gate would be harder to audit than four small gates).
+T6/T8 instantiate the kernel rather than becoming the fourth divergent
+copy; greenlight/unlock migrate opportunistically (their records already
+fit; the reducer generalizes theirs). Enforcement row required: any new
+attestation-shaped feature routes through the kernel (the one-definition
+rule applied to the primitive itself). This supersedes the earlier
+member-four refactor trigger — the cheapest moment to introduce the object
+is immediately before its next instantiation.
+
+Genuinely new core beyond the kernel: the section model, the lints, the
+view/tier logic. Product formulation: the journal is a chain of
+attestations; the dossier is sealed attestations; a receipt is a code
+attestation — every trusted thing in the system is one of these and
+nothing else.
 
 The product claim this ordering earns: the harness + this substrate is a
 REPL where every cell has provenance, every approval has authorship, and
