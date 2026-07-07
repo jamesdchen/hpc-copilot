@@ -182,7 +182,7 @@ jobs:
       fail-fast: false
       matrix:
         # Plugins that ship a ``tests/`` dir. Add a plugin here when it grows one.
-        plugin: ["hpc-agent-github-actions"]
+        plugin: ["hpc-agent-github-actions", "hpc-agent-notebook-render"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -200,8 +200,18 @@ jobs:
         # pytest harness the repo's ``addopts`` assume (``-n auto`` needs
         # pytest-xdist, the ``timeout`` ini needs pytest-timeout). The plugin
         # goes on top with ``--no-deps`` so it does not re-pull core.
+        #
+        # ``--no-deps`` also means a plugin's OWN third-party deps are not pulled,
+        # so a plugin with real deps installs them explicitly. hpc-agent-notebook-
+        # render needs the renderer stack (jupytext/nbformat/nbclient + ipykernel,
+        # which registers the ``python3`` kernelspec its --execute tests run
+        # against) — installed here, not via the plugin's dependencies, so
+        # ``--no-deps`` still keeps the workspace hpc-agent authoritative.
         run: |
           pip install -e '.[dev]'
+          if [ "${{ matrix.plugin }}" = "hpc-agent-notebook-render" ]; then
+            pip install jupytext nbformat nbclient ipykernel
+          fi
           pip install -e "examples/plugins/${{ matrix.plugin }}" --no-deps
       - name: Plugin offline tests (fake API client, zero network)
         run: pytest -q "examples/plugins/${{ matrix.plugin }}/tests"
