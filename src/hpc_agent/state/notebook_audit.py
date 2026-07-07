@@ -1,0 +1,382 @@
+"""Per-section audit-state reduction for the notebook-audit substrate (T6).
+
+Design origin: ``docs/design/notebook-audit.md`` (Wave B / T6 + decisions D3,
+D5, D-attention, and the T0 attestation-kernel section). This module answers one
+question per audited section — *is this section's current source cleared for
+graduation, and by whom?* — and rolls the per-section answers into the gate's
+whole-module pass predicate (T9 consumes the rollup).
+
+The journal is the source of truth. A notebook audit lives under the
+``"notebook"`` decision-journal scope (D3, T7): every touchpoint for an
+``audit_id`` is an append-only record in
+``.hpc/notebooks/<audit_id>.decisions.jsonl``. Two record *classes* ride that
+one journal, and they are the SAME attestation object (the reuse-accounting
+paragraph): a HUMAN sign-off and a CODE auto-clear. They differ only in the
+``attestor`` and in which additional lock applies (authorship vs recompute) —
+never in the record shape or in how drift revokes them.
+
+Record shapes (the two blocks this module reads and — for the code class —
+writes):
+
+* **Human sign-off** — ``block="notebook-sign-off"``,
+  ``resolved={audit_id, section, section_sha, view_sha?}``. The ``append-decision``
+  authorship gate (T8) is what makes it un-fakeable on the human side; here it
+  simply projects to a ``human`` attestation.
+* **Code auto-clear** — ``block="notebook-auto-clear"``,
+  ``resolved={audit_id, section, section_sha, view_sha?, attestor:"code"}``,
+  ``response="auto_cleared"``. THIS module owns the writer
+  (:func:`record_auto_clear`).
+
+**Auto-clear record-shape decision (recorded per the T6 brief).** The natural
+mirror of the sign-off block is ``block="notebook-auto-clear"`` — a distinct
+block so a reader never confuses a machine clearance with a human ack. The
+``response`` field is the honest, mechanical string ``"auto_cleared"`` and NEVER
+a human-ack token (no ``"y"``, no free text): a code record must never read as a
+human's approval when the journal is replayed or exported. The ``attestor:"code"``
+marker rides ``resolved`` so the projection can label the winner without guessing
+from the block name alone, and the writer routes the record through the kernel's
+:func:`~hpc_agent.state.attestation.bind` recompute-lock exactly as a human
+sign-off would — a code clearance still cannot assert a section sha that does not
+match the ``.py`` on disk (D5 lock 2, "CODE attestations face recompute").
+
+**The reduction routes through the ONE kernel** (``state/attestation.py``, T0):
+the drift verdict (``current`` / ``stale`` / ``absent``) is
+:func:`~hpc_agent.state.attestation.reduce`'s newest-first decision, never
+re-inlined here (the enforcement-map "one kernel" row —
+``docs/internals/engineering-principles.md``; the route-through is pinned by an
+``inspect.getsource`` assertion in ``tests/state/test_notebook_audit.py``). This
+module adds only the ATTESTOR-of-the-winner projection the kernel does not
+surface (the kernel reduces to a verdict, not to a winning record), which is a
+selection over identity — never a second copy of the drift comparison.
+
+Public per-section status vocabulary (T6):
+
+* ``signed_current``  — current verdict, newest valid record is a HUMAN sign-off.
+* ``auto_cleared``    — current verdict, newest valid record is a CODE auto-clear.
+* ``signed_stale``    — stale verdict, newest valid record is a HUMAN sign-off
+  (the section was signed, then its source moved — an informational state that
+  tells the human their approval was revoked by an edit).
+* ``unsigned``        — no valid record (absent), OR a STALE record whose newest
+  valid attestation is a CODE auto-clear. **A stale auto-clear falls through to
+  ``unsigned`` by construction** (recorded reason): drift = unsigned (the T8
+  "signed section edited afterward simply reads unsigned" property); a machine
+  clearance carries no human to inform, so — unlike a stale human sign-off, which
+  earns the distinct ``signed_stale`` signal — it has no distinct state worth
+  surfacing. Both fail the gate identically; only the label differs.
+
+The gate's pass predicate: a section passes iff its status is ``signed_current``
+or ``auto_cleared`` (both are current). :class:`ModuleAudit.passed` is that
+predicate over every REQUIRED (template) section.
+
+Pure-ish: this module reads the decision journal (I/O via
+:mod:`hpc_agent.state.decision_journal`) and writes the auto-clear record, but it
+holds no SSH, no ``_wire`` import, and no scheduler — the ``ops`` layer owns the
+Pydantic boundary and the file-reading of the ``.py`` source.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from hpc_agent.state import attestation
+from hpc_agent.state.decision_journal import append_decision, read_decisions
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+    from pathlib import Path
+    from typing import Any
+
+    from hpc_agent.state.attestation import Attestation
+    from hpc_agent.state.audit_source import ParsedModule, Section
+
+__all__ = [
+    "SIGN_OFF_BLOCK",
+    "AUTO_CLEAR_BLOCK",
+    "SUBJECT_KIND",
+    "AUTO_CLEAR_RESPONSE",
+    "SIGNED_CURRENT",
+    "AUTO_CLEARED",
+    "SIGNED_STALE",
+    "UNSIGNED",
+    "SECTION_STATUSES",
+    "PASSING_STATUSES",
+    "SectionAudit",
+    "ModuleAudit",
+    "audit_section",
+    "audit_module",
+    "record_auto_clear",
+]
+
+#: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
+#: projects to a ``human`` attestation.
+SIGN_OFF_BLOCK = "notebook-sign-off"
+
+#: The code auto-clear block — the machine mirror of the sign-off. Distinct so a
+#: reader never mistakes a mechanical clearance for a human ack.
+AUTO_CLEAR_BLOCK = "notebook-auto-clear"
+
+#: The honest, mechanical ``response`` a code auto-clear carries — never a human
+#: ack token.
+AUTO_CLEAR_RESPONSE = "auto_cleared"
+
+#: The opaque attestation ``subject_kind`` every notebook section rides. The
+#: kernel never interprets it; it distinguishes this subject class from scope
+#: locks / greenlights / receipts sharing the same journal machinery.
+SUBJECT_KIND = "notebook-section"
+
+# --- the per-section status vocabulary (T6) ---------------------------------
+SIGNED_CURRENT = "signed_current"
+AUTO_CLEARED = "auto_cleared"
+SIGNED_STALE = "signed_stale"
+UNSIGNED = "unsigned"
+
+#: Every status a section reduction can yield.
+SECTION_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED, SIGNED_STALE, UNSIGNED})
+
+#: The statuses that PASS the graduation gate — both are "current at this hash"
+#: (human-signed or machine-cleared). The rollup's :attr:`ModuleAudit.passed`
+#: requires every required section to be one of these.
+PASSING_STATUSES = frozenset({SIGNED_CURRENT, AUTO_CLEARED})
+
+# block → the attestor that block class carries. A record whose block is not a
+# notebook attestation block is not projected at all (skipped).
+_BLOCK_ATTESTOR = {SIGN_OFF_BLOCK: "human", AUTO_CLEAR_BLOCK: "code"}
+
+
+@dataclass(frozen=True)
+class SectionAudit:
+    """The reduced audit state of one section.
+
+    * ``slug`` — the section's caller-authored id.
+    * ``status`` — one of :data:`SECTION_STATUSES`.
+    * ``current_section_sha`` — the section's CURRENT sha recomputed from the
+      ``.py`` on disk (``None`` when a required/template section is absent from
+      the source entirely — nothing to sign).
+    * ``signed_section_sha`` — the ``content_sha`` of the newest valid
+      attestation (the sha the human/code actually attested), or ``None`` when
+      there is no valid record.
+    * ``view_sha`` — the projection sha the newest valid attestation recorded
+      (what the human saw), or ``None``.
+    * ``attestor`` — ``"human"`` / ``"code"`` of the newest valid record, or
+      ``None`` when unsigned-by-absence.
+    """
+
+    slug: str
+    status: str
+    current_section_sha: str | None
+    signed_section_sha: str | None = None
+    view_sha: str | None = None
+    attestor: str | None = None
+
+
+@dataclass(frozen=True)
+class ModuleAudit:
+    """The whole-module rollup over every REQUIRED (template) section.
+
+    * ``sections`` — per required-slug :class:`SectionAudit`, in template order.
+    * ``passed`` — the gate predicate: every required section is
+      :data:`PASSING_STATUSES` (``signed_current`` or ``auto_cleared``). An empty
+      required set passes vacuously (an undisciplined/absent template gates
+      nothing — the D7 fail-safe posture).
+    """
+
+    sections: tuple[SectionAudit, ...]
+    passed: bool
+
+
+def _project(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Project a decision-journal record to an attestation-record dict, or ``None``.
+
+    Returns ``None`` for any record that is not a notebook attestation (a block
+    outside :data:`_BLOCK_ATTESTOR`) — those are filtered out before the kernel
+    ever sees them. A recognised block with a malformed ``resolved`` still
+    projects; the kernel's :func:`~hpc_agent.state.attestation.validate` then
+    refuses it (missing/empty ``subject_id`` or ``content_sha``) and the reducer
+    skips it — one bad line never strands the rest of the audit trail.
+    """
+    block = record.get("block")
+    attestor = _BLOCK_ATTESTOR.get(block) if isinstance(block, str) else None
+    if attestor is None:
+        return None
+    resolved = record.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    projected: dict[str, Any] = {
+        "attestor": attestor,
+        "subject_kind": SUBJECT_KIND,
+        "subject_id": resolved.get("section"),
+        "content_sha": resolved.get("section_sha"),
+    }
+    view_sha = resolved.get("view_sha")
+    if view_sha:
+        projected["view_sha"] = view_sha
+    return projected
+
+
+def _projected_records(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every notebook-attestation projection in *records*, in append order."""
+    out: list[dict[str, Any]] = []
+    for record in records:
+        projected = _project(record)
+        if projected is not None:
+            out.append(projected)
+    return out
+
+
+def _newest_valid(projected: Sequence[dict[str, Any]], slug: str) -> Attestation | None:
+    """Return the newest VALID attestation for *slug*, or ``None``.
+
+    Selection only — the ``current``/``stale``/``absent`` DRIFT decision is
+    :func:`~hpc_agent.state.attestation.reduce`'s job and is NOT reproduced here
+    (this never compares a ``content_sha`` to the current sha). This reads the
+    attestor + attested shas of the winning record, which the kernel's verdict
+    does not surface. Append order → the last valid match is the newest (the
+    kernel's own precedence). Malformed records are skipped, never raised.
+    """
+    from hpc_agent import errors
+
+    newest: Attestation | None = None
+    for record in projected:
+        try:
+            att = attestation.validate(record)
+        except errors.SpecInvalid:
+            continue
+        if att.subject_id != slug:
+            continue
+        newest = att
+    return newest
+
+
+def audit_section(
+    records: Sequence[dict[str, Any]],
+    slug: str,
+    current_section_sha: str | None,
+) -> SectionAudit:
+    """Reduce one section's journal records to a :class:`SectionAudit`.
+
+    *records* are the whole notebook journal (append order, newest last — the
+    order :func:`~hpc_agent.state.decision_journal.read_decisions` returns); this
+    filters to *slug*'s notebook attestations. *current_section_sha* is the
+    section's sha recomputed from the ``.py`` on disk (``None`` when the section
+    is absent from the source — a required template section with no body to
+    sign, which can never be current → ``unsigned``).
+
+    The drift verdict is the kernel's; the attestor of the winning record maps
+    the verdict onto the T6 vocabulary:
+
+    * ``current``  + human → ``signed_current`` ; + code → ``auto_cleared``
+    * ``stale``    + human → ``signed_stale``   ; + code → ``unsigned``
+      (a stale auto-clear falls through to ``unsigned`` by construction)
+    * ``absent``           → ``unsigned``
+    """
+    projected = _projected_records(records)
+    newest = _newest_valid(projected, slug)
+    if current_section_sha is None or newest is None:
+        # No current content to match, or no valid attestation → unsigned. Still
+        # surface the newest record's identity when one exists (a signed section
+        # missing from the current source).
+        return SectionAudit(
+            slug=slug,
+            status=UNSIGNED,
+            current_section_sha=current_section_sha,
+            signed_section_sha=newest.content_sha if newest else None,
+            view_sha=newest.view_sha if newest else None,
+            attestor=newest.attestor if newest else None,
+        )
+
+    # Route the drift decision through the ONE kernel (never re-inlined here).
+    verdict = attestation.reduce(projected, current_sha=current_section_sha, subject_id=slug)
+    if verdict == attestation.CURRENT:
+        status = SIGNED_CURRENT if newest.attestor == "human" else AUTO_CLEARED
+    elif verdict == attestation.STALE:
+        # A stale HUMAN sign-off earns the informational signed_stale; a stale
+        # CODE auto-clear has no human to inform and falls through to unsigned
+        # (drift = unsigned by construction).
+        status = SIGNED_STALE if newest.attestor == "human" else UNSIGNED
+    else:  # attestation.ABSENT — unreachable (newest is not None here), defensive.
+        status = UNSIGNED
+    return SectionAudit(
+        slug=slug,
+        status=status,
+        current_section_sha=current_section_sha,
+        signed_section_sha=newest.content_sha,
+        view_sha=newest.view_sha,
+        attestor=newest.attestor,
+    )
+
+
+def audit_module(
+    experiment_dir: Path,
+    audit_id: str,
+    *,
+    source: ParsedModule,
+    required_slugs: Sequence[str],
+) -> ModuleAudit:
+    """Reduce every REQUIRED section to the whole-module rollup.
+
+    Reads *audit_id*'s notebook journal once, indexes *source*'s parsed sections
+    by slug, and reduces each *required_slugs* entry against its CURRENT source
+    sha. A required slug absent from *source* reduces to ``unsigned`` with a
+    ``None`` current sha (a template section the source never provided — nothing
+    to sign). :attr:`ModuleAudit.passed` is true iff every required section is
+    :data:`PASSING_STATUSES`.
+    """
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    by_slug: dict[str, Section] = {s.slug: s for s in source.sections}
+    audits: list[SectionAudit] = []
+    for slug in required_slugs:
+        section = by_slug.get(slug)
+        current_sha = section.section_sha if section is not None else None
+        audits.append(audit_section(records, slug, current_sha))
+    passed = all(a.status in PASSING_STATUSES for a in audits)
+    return ModuleAudit(sections=tuple(audits), passed=passed)
+
+
+def record_auto_clear(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    section: str,
+    section_sha: str,
+    recompute: Callable[[], str] | str,
+    view_sha: str | None = None,
+) -> dict[str, Any]:
+    """Journal a CODE auto-clear attestation for *section*, un-fakeably.
+
+    The writer this module owns for the code record class (called by the later
+    gate/skill wave). It routes the record through the kernel's
+    :func:`~hpc_agent.state.attestation.bind` recompute-lock BEFORE appending:
+    the asserted *section_sha* must equal a freshly recomputed sha (*recompute*
+    — the current sha parsed from the ``.py`` on disk, a string or a zero-arg
+    callable), so a machine clearance can no more assert a sha into existence
+    than a human can (D5 lock 2). Only after ``bind`` passes is the record
+    appended.
+
+    The record: ``block="notebook-auto-clear"``,
+    ``response="auto_cleared"`` (the honest mechanical string — never a human-ack
+    token), ``resolved={audit_id, section, section_sha, view_sha?, attestor:"code"}``.
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
+    on a sha that does not match the recompute, or (via ``append_decision``) on a
+    bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+        "attestor": "code",
+    }
+    if view_sha:
+        resolved["view_sha"] = view_sha
+    # Un-fakeable lock: the asserted section_sha must match a fresh recompute
+    # (routes through the ONE kernel; never re-inlined). Validates shape too.
+    projected = _project({"block": AUTO_CLEAR_BLOCK, "resolved": resolved}) or {}
+    attestation.bind(projected, recompute=recompute)
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=AUTO_CLEAR_BLOCK,
+        response=AUTO_CLEAR_RESPONSE,
+        resolved=resolved,
+    )

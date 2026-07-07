@@ -122,6 +122,8 @@ The verb partitions primitives into bands the reader can scan independently:
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` |
 | [net-triage](net-triage.md) | yes | _none_ | `hpc-agent net-triage [--spec <path>]` |
+| [notebook-audit-view](notebook-audit-view.md) | yes | _none_ | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
+| [notebook-status](notebook-status.md) | yes | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` |
 | [read-decisions](read-decisions.md) | yes | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` |
@@ -151,6 +153,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [check-task-generator-mismatch](check-task-generator-mismatch.md) | yes | _none_ | `hpc-agent check-task-generator-mismatch --caller-task-generator <caller_task_generator> [--cached-task-generator <cached_task_generator>]` |
 | [classify-axis-preflight](classify-axis-preflight.md) | yes | _none_ | `hpc-agent classify-axis-preflight --experiment-dir <experiment_dir> [--run-name <run_name>] [--run-signature-sha <run_signature_sha>] [--root <root>] [--task-kind <task_kind>] [--data-axis-supplied]` |
 | [dry-run-local](dry-run-local.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [notebook-lint](notebook-lint.md) | yes | _none_ | `hpc-agent notebook-lint --spec <path> [--experiment-dir <dir>]` |
 | [prepare-phase2-spec](prepare-phase2-spec.md) | yes | _none_ | `hpc-agent prepare-phase2-spec --spec <path>` |
 | [smoke-test-executor](smoke-test-executor.md) | yes | runs: `user`; filesystem: `<output_file>` | `hpc-agent smoke-test-executor --module-path <module_path> [--output-file <output_file>]` |
 | [status-preflight](status-preflight.md) | yes | _none_ | `hpc-agent status-preflight --experiment-dir <experiment_dir>` |
@@ -177,6 +180,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [export-dossier](export-dossier.md) | yes | file_write: `<output_path>` | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` |
 | [kill](kill.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
+| [notebook-auto-clear](notebook-auto-clear.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` |
 | [provenance-manifest](provenance-manifest.md) | yes | file_write: `<experiment>/.hpc/provenance/<campaign_id>.json` | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` |
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` |

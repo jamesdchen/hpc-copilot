@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_lint.input.json",
+  "title": "notebook-lint input spec",
+  "description": "Spec for ``notebook-lint`` — all paths are caller-declared.\n\n``source`` / ``template`` are ``.py`` relpaths under the experiment dir\n(or absolute). ``input_roots`` / ``source_roots`` are OPAQUE caller-declared\nroot lists — core never attaches a meaning to a root, it only joins + tests\nexistence (data roots) or resolves import origins (import roots).",
+  "type": "object",
+  "required": [
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    },
+    "input_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "source_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    }
+  }
+}

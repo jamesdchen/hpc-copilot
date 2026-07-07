@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**133 operations total**: 106 primitive atoms + 27 workflow atoms.
+**137 operations total**: 110 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (56)
+## `query` (58)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -57,6 +57,8 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`logs`](../primitives/logs.md) | ✓ | ssh | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` | `_(none)_` | — | — |
 | [`monitor-summary`](../primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
 | [`net-triage`](../primitives/net-triage.md) | ✓ | _none_ | `hpc-agent net-triage [--spec <path>]` | `_(none)_` | — | — |
+| [`notebook-audit-view`](../primitives/notebook-audit-view.md) | ✓ | _none_ | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`notebook-status`](../primitives/notebook-status.md) | ✓ | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -77,7 +79,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`wait-detached`](../primitives/wait-detached.md) | ✓ | _none_ | `hpc-agent wait-detached --spec <path>` | `_(none)_` | — | — |
 | [`walk-submit-ambiguities`](../primitives/walk-submit-ambiguities.md) | ✓ | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` | `_(none)_` | — | — |
 
-## `validate` (16)
+## `validate` (17)
 
 Read + binary health check. Same composability as `query`.
 
@@ -88,6 +90,7 @@ Read + binary health check. Same composability as `query`.
 | [`check-task-generator-mismatch`](../primitives/check-task-generator-mismatch.md) | ✓ | _none_ | `hpc-agent check-task-generator-mismatch --caller-task-generator <caller_task_generator> [--cached-task-generator <cached_task_generator>]` | `_(none)_` | — | — |
 | [`classify-axis-preflight`](../primitives/classify-axis-preflight.md) | ✓ | _none_ | `hpc-agent classify-axis-preflight --experiment-dir <experiment_dir> [--run-name <run_name>] [--run-signature-sha <run_signature_sha>] [--root <root>] [--task-kind <task_kind>] [--data-axis-supplied]` | `_(none)_` | — | — |
 | [`dry-run-local`](../primitives/dry-run-local.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
+| [`notebook-lint`](../primitives/notebook-lint.md) | ✓ | _none_ | `hpc-agent notebook-lint --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`prepare-phase2-spec`](../primitives/prepare-phase2-spec.md) | ✓ | _none_ | `hpc-agent prepare-phase2-spec --spec <path>` | `_(none)_` | — | — |
 | [`smoke-test-executor`](../primitives/smoke-test-executor.md) | ✓ | filesystem; runs | `hpc-agent smoke-test-executor --module-path <module_path> [--output-file <output_file>]` | `_(none)_` | — | — |
 | [`status-preflight`](../primitives/status-preflight.md) | ✓ | _none_ | `hpc-agent status-preflight --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
@@ -100,7 +103,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (18)
+## `mutate` (19)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -116,6 +119,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`export-dossier`](../primitives/export-dossier.md) | ✓ | file_write | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`kill`](../primitives/kill.md) | ✓ | ssh; writes-journal | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`mark-run-terminal`](../primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `_(none)_` | — | — |
+| [`notebook-auto-clear`](../primitives/notebook-auto-clear.md) | ✓ | file_write | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`provenance-manifest`](../primitives/provenance-manifest.md) | ✓ | file_write | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`prune-orphan-sidecars`](../primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `_(none)_` | — | — |
 | [`reconcile-journal`](../primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `_(none)_` | — | — |

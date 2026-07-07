@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_audit_view.output.json",
+  "title": "notebook-audit-view output data",
+  "description": "The whole-source audit view: per-section projections + a module roll-up.\n\n``markdown`` is the code-rendered human projection (the verbatim-relay\nposture — the skill relays it as-is; NO LLM-freeform prose enters the audit\npath). ``view_sha`` is the deterministic roll-up over the section shas and\nthe two module fingerprints; any section OR preamble edit moves it.",
+  "type": "object",
+  "required": [
+    "source_module_sha",
+    "template_module_sha",
+    "view_sha",
+    "markdown"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sections": {
+      "description": "One projection per SOURCE section, in source order.",
+      "items": {
+        "$ref": "#/$defs/NotebookSectionView"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "dropped_template_slugs": {
+      "description": "Template slugs absent from the source (a section the template declared but the draft dropped) — surfaced, never silently hidden. The graduation gate refuses on these; the view only shows them.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Dropped Template Slugs",
+      "type": "array"
+    },
+    "source_module_sha": {
+      "title": "Source Module Sha",
+      "type": "string"
+    },
+    "template_module_sha": {
+      "title": "Template Module Sha",
+      "type": "string"
+    },
+    "view_sha": {
+      "description": "Deterministic roll-up sha over the section shas + the two module fingerprints; any section or preamble edit moves it.",
+      "title": "View Sha",
+      "type": "string"
+    },
+    "markdown": {
+      "description": "The code-rendered markdown projection of the same fields, for VERBATIM relay. Same view → byte-identical markdown.",
+      "title": "Markdown",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "NotebookSectionView": {
+      "additionalProperties": false,
+      "description": "The deterministic projection of one SOURCE section (the primary object).\n\n``view_sha`` is the per-section sha a sign-off binds (D5). ``diff`` is the\nstdlib unified diff of the normalized template → source section (empty ⇔\n``inherited``). ``lint_flags`` embeds the caller's findings for this section\nOPAQUELY.",
+      "properties": {
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "classification": {
+          "title": "Classification",
+          "type": "string"
+        },
+        "tier": {
+          "title": "Tier",
+          "type": "string"
+        },
+        "section_sha": {
+          "title": "Section Sha",
+          "type": "string"
+        },
+        "template_section_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template Section Sha"
+        },
+        "diff": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diff",
+          "type": "array"
+        },
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/NotebookViewAssertion"
+          },
+          "title": "Assertions",
+          "type": "array"
+        },
+        "lint_flags": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Lint Flags",
+          "type": "array"
+        },
+        "view_sha": {
+          "title": "View Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "classification",
+        "tier",
+        "section_sha",
+        "view_sha"
+      ],
+      "title": "notebook-audit-view section",
+      "type": "object"
+    },
+    "NotebookViewAssertion": {
+      "additionalProperties": false,
+      "description": "One statically-discovered ``assert`` in a section (never executed).",
+      "properties": {
+        "test": {
+          "title": "Test",
+          "type": "string"
+        },
+        "lineno": {
+          "title": "Lineno",
+          "type": "integer"
+        },
+        "msg": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Msg"
+        }
+      },
+      "required": [
+        "test",
+        "lineno"
+      ],
+      "title": "notebook-audit-view assertion",
+      "type": "object"
+    }
+  }
+}

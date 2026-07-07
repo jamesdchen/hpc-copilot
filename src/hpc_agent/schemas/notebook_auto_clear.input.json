@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_auto_clear.input.json",
+  "title": "notebook-auto-clear input spec",
+  "description": "Inputs to ``notebook-auto-clear`` — all paths / ids are caller-declared.\n\n``source`` / ``template`` are ``.py`` relpaths under the experiment dir (or\nabsolute), parsed by the same percent-format parser. ``input_roots`` /\n``source_roots`` are the OPAQUE roots the server-side lint recompute needs (a\nmissing path literal under ``input_roots`` flags its section, keeping it out\nof the auto-clear). ``receipt`` is the OPAQUE v1.5 execution receipt.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) the auto-clear records are appended to (journal lives at .hpc/notebooks/<audit_id>.decisions.jsonl). Caller-authored.",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Section shas are recomputed fresh; an auto-clear binds the recomputed sha, never a caller-asserted one.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "description": "Experiment-relative path to the template .py. A section auto-clears only when it is byte-identical (inherited) to its template section.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    },
+    "input_roots": {
+      "description": "OPAQUE data-path roots the server-side lint recompute tests path literals against. A section with a missing literal is flagged and therefore NOT auto-cleared.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "source_roots": {
+      "description": "OPAQUE import roots the server-side lint recompute resolves imports under.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional OPAQUE execution receipt `{slug: {output_sha, error}}` (v1.5 forward-compat). `error is False` greens that section's declared assertions; absent a receipt, a section WITH assertions is not green and stays human_required.",
+      "title": "Receipt"
+    }
+  }
+}

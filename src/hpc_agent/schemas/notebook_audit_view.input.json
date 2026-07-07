@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_audit_view.input.json",
+  "title": "notebook-audit-view input spec",
+  "description": "Inputs to ``notebook-audit-view``.\n\n``source`` / ``template`` are ``.py`` relpaths resolved against the\n``--experiment-dir`` (jupytext percent format, parsed by the same section\nparser). ``lint_findings`` is the OPAQUE, caller-chained finding list (from\n``notebook-lint``); ``receipt`` is the opaque v1.5 execution receipt accepted\nfor forward-compat.",
+  "type": "object",
+  "required": [
+    "source",
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Every SOURCE section is projected; per-section shas are recomputed fresh on every call.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "template": {
+      "description": "Experiment-relative path to the template .py. Each source section is classified (inherited / added / modified) and diffed against the template section that shares its slug.",
+      "minLength": 1,
+      "title": "Template",
+      "type": "string"
+    },
+    "lint_findings": {
+      "description": "OPAQUE lint findings, chained in from `notebook-lint` (its `findings` list). Each finding is embedded verbatim under the section it names (via a `slug` / `section` / `section_slug` key); a finding with no such key is module-scoped. Never parsed or interpreted here. A section with zero flags is one auto-clear precondition.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Lint Findings",
+      "type": "array"
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional OPAQUE execution receipt `{slug: {output_sha, error}}` (v1.5 forward-compat). `error is False` marks that section's declared assertions GREEN; absent a receipt, a section WITH assertions is not green (unverified is not green).",
+      "title": "Receipt"
+    }
+  }
+}

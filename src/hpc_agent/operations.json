@@ -147,6 +147,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_auto_clear.input.json",
+    "name": "notebook-auto-clear",
+    "output_schema": "notebook_auto_clear.output.json",
+    "python": "hpc_agent.ops.notebook.auto_clear_op.notebook_auto_clear",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal CODE auto-clear attestations for the template-inherited, clean sections of an audited source .py — the machine mirror of a notebook sign-off. RECOMPUTES the lint + D-attention tier server-side (caller findings / tier claims are never trusted), then appends a notebook-auto-clear record (attestor=code, bound to the recomputed section hash) for every auto_cleared section not already cleared at its current hash. human_required sections are never cleared; a re-run at unchanged hashes appends nothing. Pure local reads + journal appends, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "provenance_manifest.input.json",
@@ -716,6 +730,30 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_audit_view.input.json",
+    "name": "notebook-audit-view",
+    "output_schema": "notebook_audit_view.output.json",
+    "python": "hpc_agent.ops.notebook.view_op.notebook_audit_view",
+    "side_effects": [],
+    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, opaque chained lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_status.input.json",
+    "name": "notebook-status",
+    "output_schema": "notebook_status.output.json",
+    "python": "hpc_agent.ops.notebook_status.notebook_status",
+    "side_effects": [],
+    "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. Read-only, no SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]",
     "idempotent": true,
     "input_schema": null,
@@ -1231,6 +1269,18 @@
     "python": "hpc_agent.ops.validate.dry_run_local.dry_run_local",
     "side_effects": [],
     "summary": "",
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent notebook-lint --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_lint.input.json",
+    "name": "notebook-lint",
+    "output_schema": "notebook_lint.output.json",
+    "python": "hpc_agent.ops.notebook.lint.notebook_lint",
+    "side_effects": [],
+    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Three read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; computed paths recorded as unverifiable), and linked_sources (imports resolving under source_roots reported with their module_sha). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
     "verb": "validate"
   },
   {

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_status.output.json",
+  "title": "notebook-status output data",
+  "description": "Per-section audit statuses + the whole-module gate verdict.\n\n``passed`` is the graduation-gate predicate: every required section is\ncurrent (``signed_current`` or ``auto_cleared``). It is the rollup T9\nconsumes; a false ``passed`` names the drifted/unsigned sections in\n``sections``.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "passed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "sections": {
+      "description": "Per required-section status, in template order.",
+      "items": {
+        "$ref": "#/$defs/NotebookSectionStatus"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "passed": {
+      "description": "True iff every required section is current (signed_current or auto_cleared) — the graduation gate's pass predicate.",
+      "title": "Passed",
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "NotebookSectionStatus": {
+      "additionalProperties": false,
+      "description": "The reduced audit state of one required section.",
+      "properties": {
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "current_section_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Section Sha"
+        },
+        "signed_section_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signed Section Sha"
+        },
+        "view_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "View Sha"
+        },
+        "attestor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestor"
+        }
+      },
+      "required": [
+        "slug",
+        "status"
+      ],
+      "title": "notebook section status",
+      "type": "object"
+    }
+  }
+}

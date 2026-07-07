@@ -104,6 +104,13 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "doctor-install",
         "kill",
         "net-triage",
+        # notebook-lint (notebook-audit substrate, T4): a read-only validate verb
+        # over an audit source .py. Gains a --spec CLI surface, so the inventory
+        # tracks it here. Its input schema (notebook_lint.input.json) is baked by
+        # the orchestrator AFTER this wave — until then it is absent, so the verb
+        # does not appear in the schema-file-parametrized remediation tests
+        # (_verb_targets), only in this inventory-vs-CLI drift check.
+        "notebook-lint",
         "read-decisions",
         # scope-lock / scope-status (rigor primitives, T4): the scope lock-state
         # verbs. Both accept --spec, so the inventory tracks them here.
@@ -117,6 +124,26 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "archive-dossier",
         "status-snapshot",
         "status-watch",
+        # notebook-status (notebook-audit T6): the per-section audit-state read.
+        # Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        "notebook-status",
+        # notebook-audit-view (notebook-audit T5): the deterministic per-section
+        # audit VIEW as a read-only query verb. Spec-taking; failure_features
+        # attaches at the shared dispatch seam (so it stays OUT of
+        # XFAIL_NO_FAILURE_FEATURES). Its input schema (notebook_audit_view.input.json)
+        # is baked by the orchestrator AFTER this wave — until then it is absent, so
+        # the verb does not appear in the schema-file-parametrized remediation tests
+        # (_verb_targets), only in this inventory-vs-CLI drift check.
+        "notebook-audit-view",
+        # notebook-auto-clear (notebook-audit): the CODE-attestor mutate verb — the
+        # machine mirror of notebook-sign-off. Spec-taking; failure_features
+        # attaches at the shared dispatch seam (so it stays OUT of
+        # XFAIL_NO_FAILURE_FEATURES). Its input schema (notebook_auto_clear.input.json)
+        # is baked by the orchestrator AFTER this wave — until then it is absent, so
+        # the verb does not appear in the schema-file-parametrized remediation tests
+        # (_verb_targets), only in this inventory-vs-CLI drift check.
+        "notebook-auto-clear",
         "verify-relay",
         "wait-detached",
         "submit-s1",
