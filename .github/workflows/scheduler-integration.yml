@@ -1,0 +1,173 @@
+# Scheduler-in-a-container integration CI (EXPERIMENTAL, NON-REQUIRED).
+#
+# Runs the REAL submit spine (submit_flow -> monitor_flow -> aggregate_flow)
+# against a real single-node Slurm inside a container, over SSH. This converts
+# the "found live in proving run #N" bug class into "found in CI".
+#
+# Posture (see docs/internals/scheduler-integration-ci.md):
+#   * This is a SEPARATE workflow, deliberately NOT added to branch-protection
+#     required checks — a first-run flake must never block main CI. Iterate on
+#     it here on GitHub (it cannot be exercised on the native-Windows dev box,
+#     which has no docker).
+#   * The job itself does NOT set continue-on-error, so a genuine regression
+#     shows red on the PR — it just isn't a merge gate until it has proven
+#     stable and someone promotes it to required.
+name: scheduler-integration
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    # Scope to the surfaces that can affect the submit spine or this harness,
+    # so ordinary PRs don't pay for a container spin-up.
+    paths:
+      - "ci/slurm/**"
+      - ".github/workflows/scheduler-integration.yml"
+      - "tests/integration/scheduler/**"
+      - "src/hpc_agent/ops/submit_flow.py"
+      - "src/hpc_agent/ops/monitor_flow.py"
+      - "src/hpc_agent/ops/aggregate_flow.py"
+      - "src/hpc_agent/infra/transport.py"
+      - "src/hpc_agent/infra/backends/**"
+      - "src/hpc_agent/execution/mapreduce/**"
+
+# One in-flight run per ref; a new push cancels the old container spin-up.
+concurrency:
+  group: scheduler-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  slurm-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the hpc-agent wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+          ls -l dist
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the Slurm container (gha-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/slurm/Dockerfile
+          tags: hpc-agent-slurm-ci:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate a throwaway SSH keypair
+        run: |
+          ssh-keygen -t ed25519 -N '' -f "$PWD/ci_key" -C scheduler-integration
+          chmod 600 "$PWD/ci_key"
+
+      - name: Start the Slurm container
+        run: |
+          docker run -d --name slurmci \
+            -p 2222:22 \
+            -v "$PWD/ci_key.pub:/pubkey:ro" \
+            hpc-agent-slurm-ci:latest
+          echo "waiting for the container to boot..."
+          sleep 5
+          docker logs slurmci || true
+
+      - name: Install the freshly-built wheel INTO the container python
+        run: |
+          docker cp dist/*.whl slurmci:/tmp/
+          docker exec slurmci bash -lc 'pip3 install /tmp/*.whl'
+          # The cluster-side reporter + combiner must import cleanly.
+          docker exec slurmci python3 -c 'import hpc_agent; print("container hpc_agent", hpc_agent.__version__)'
+
+      - name: Wait for Slurm + sshd to be ready
+        run: |
+          # Node IDLE within the budget.
+          for i in $(seq 1 30); do
+            state="$(docker exec slurmci sinfo -h -o '%T' 2>/dev/null | head -n1 || true)"
+            echo "attempt $i: node state=${state:-<none>}"
+            case "$state" in idle*) echo "node idle"; break ;; esac
+            sleep 2
+          done
+          docker exec slurmci sinfo || true
+
+      - name: Configure SSH access to the container
+        run: |
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/config <<EOF
+          Host slurmci
+            HostName 127.0.0.1
+            Port 2222
+            User hpcuser
+            IdentityFile $PWD/ci_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+          chmod 600 ~/.ssh/config
+          # Prove login + scheduler reachability before the test drives them.
+          for i in $(seq 1 15); do
+            if ssh slurmci 'echo ok && sbatch --version'; then break; fi
+            echo "ssh not ready yet (attempt $i)"; sleep 2
+          done
+
+      - name: Write the container's clusters.yaml
+        run: |
+          cat > "$PWD/ci_clusters.yaml" <<EOF
+          slurmci:
+            host: slurmci
+            user: hpcuser
+            scheduler: slurm
+            scratch: /home/hpcuser/scratch
+            modules: []
+            max_walltime_sec: 3600
+            constraints:
+              max_array_size: 100
+              max_walltime: "1:00:00"
+              max_concurrent_jobs: 4
+              est_spin_up: "10s"
+          EOF
+          cat "$PWD/ci_clusters.yaml"
+
+      - name: Install the wheel into the test-driver env
+        run: |
+          # The driver imports the SAME wheel the container runs (src/ layout,
+          # so cwd doesn't shadow it), plus pytest to run the smoke test.
+          python -m pip install dist/*.whl pytest
+
+      - name: Run the scheduler-integration smoke test
+        env:
+          HPC_SCHEDULER_IT: "1"
+          HPC_SCHEDULER_IT_SSH_TARGET: hpcuser@slurmci
+          HPC_SCHEDULER_IT_CLUSTER: slurmci
+          HPC_SCHEDULER_IT_REMOTE_BASE: /home/hpcuser/scratch
+          HPC_CLUSTERS_CONFIG: ${{ github.workspace }}/ci_clusters.yaml
+          HPC_JOURNAL_DIR: ${{ runner.temp }}/hpc-journal
+          # Faster polling than the 10s floor default keeps the short run snappy.
+          HPC_STATUS_POLL_INTERVAL_SEC: "5"
+        run: |
+          python -m pytest tests/integration/scheduler -q -m scheduler_integration
+
+      - name: Container diagnostics (on failure)
+        if: failure()
+        run: |
+          echo "===== docker logs ====="; docker logs slurmci || true
+          echo "===== sinfo ====="; docker exec slurmci sinfo || true
+          echo "===== squeue ====="; docker exec slurmci squeue || true
+          echo "===== sacct ====="; docker exec slurmci sacct --format=JobID,JobName,State,ExitCode -P || true
+          echo "===== slurmctld log ====="; docker exec slurmci tail -n 100 /var/log/slurm/slurmctld.log || true
+          echo "===== slurmd log ====="; docker exec slurmci tail -n 100 /var/log/slurm/slurmd.log || true
+          echo "===== remote scratch tree ====="; docker exec slurmci bash -lc 'find /home/hpcuser/scratch -maxdepth 4 -print 2>/dev/null | head -n 200' || true
+
+      - name: Tear down the container
+        if: always()
+        run: docker rm -f slurmci || true
