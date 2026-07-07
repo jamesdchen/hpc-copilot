@@ -1,5 +1,28 @@
 """In-process per-host SSH connection broker (latency + ban-risk root fix).
 
+.. admonition:: DEPRECATED / FROZEN — do not extend, retire
+
+   This phase-1 broker is **deprecated and frozen**. It survives only as the
+   *middle* fallback rung beneath the asyncssh engine
+   (:mod:`hpc_agent.infra.ssh_engine`, opt-in ``HPC_SSH_ENGINE=asyncssh``);
+   see ``docs/design/connection-broker.md`` for the authoritative status and
+   the **retirement trigger** — one clean ``HPC_SSH_ENGINE=asyncssh``
+   submit→harvest run with zero ``EngineUnavailable`` fallbacks, or the
+   engine going default-on. At that point this module is DELETED.
+
+   It has already fallen behind the engine's invariants, and these gaps are
+   left UN-PORTED on purpose so nobody "fixes" the broker instead of retiring
+   it:
+
+   * It holds **no ``ssh_slots`` slot** — the engine does
+     (``ssh_engine.py`` ``acquire``/``_SLOTS``).
+   * It records **no per-command breaker success** — the engine does (one
+     success per successful command, commit 028e64d5); the broker only
+     records success/failure at *connection open* time.
+
+   **All new SSH-layer work goes to** :mod:`hpc_agent.infra.ssh_engine`, not
+   here.
+
 The whole stack opens a FRESH cold TCP+SSH connection for every round-trip:
 each preflight probe, each status poll, each ``qdel``. On a healthy login
 node that is ~1s; on a login node applying ``MaxStartups`` throttling under

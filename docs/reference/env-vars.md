@@ -142,6 +142,15 @@ shape); for **guaranteed** strict decode use vLLM or OpenAI.
 | `HPC_AGENT_SKIP_PREFLIGHT` | (unset) | Set to `1` to skip `submit-flow`'s pre-flight probes (the ssh-reachability probe and the `command -v uv` runtime probe) — for an operator who just ran `check-preflight` and wants to save the duplicate round-trip. **Operator-only and deliberately not a spec field** (#275): an agent following the SKILL.md flow used to set a `skip_preflight: true` spec field, which silenced the uv runtime probe and launched arrays doomed by `HPC_RUNTIME=uv but 'uv' not on PATH`. Same operator-vs-agent boundary as `HPC_AGENT_INVOKER=inline` (#155); the two-phase canary gate's internal main-array launch skips the redundant probe through a Python-only kwarg, not this var. |
 | `HPC_AGENT_ALWAYS_CANARY` | (unset) | Set to `1`/`true` to fire a canary on **every** submit, winning over the agent-supplied `canary: false` opt-out and both auto-skips (the #263 tiny-batch threshold and the #249 cached-`cmd_sha` TTL). The #155/#275 operator-vs-agent boundary in the strengthening direction (#283): the documented agent opt-out stays, but the override exists only as this env var — no spec field can express it, so an unattended loop cannot talk itself out of an operator's canary policy. |
 
+### Persistent SSH engine / broker (opt-in connection reuse)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HPC_SSH_ENGINE` | (unset → off) | Set to `asyncssh` to enable the persistent asyncssh-backed SSH engine — one held connection per host reused across round-trips, replacing the cold-connection-per-op default (the `MaxStartups`-throttle / ban-risk root fix). `native`/unset leaves the engine off. **Opt-in until live-validated, with a hard fallback to the one-shot path on any engine trouble.** See the module docstring for the full design and ban-safety invariants: `hpc_agent.infra.ssh_engine`. |
+| `HPC_SSH_ENGINE_IDLE_SEC` | `600` | Seconds an idle engine connection is held open before self-closing. Owned by `hpc_agent.infra.ssh_engine` (`IDLE_CLOSE_SEC`). |
+| `HPC_SSH_BROKER` | (unset → off) | **DEPRECATED / FROZEN.** The phase-1 hand-rolled persistent `ssh -T host /bin/sh` channel. Set to a truthy value (`1`/`true`/`yes`/`on`) to enable it as the *middle* fallback rung beneath the asyncssh engine. Do not extend; it is retired once `HPC_SSH_ENGINE=asyncssh` is live-validated (or default-on) — retirement trigger and status in [`docs/design/connection-broker.md`](../design/connection-broker.md); mechanics in the module docstring `hpc_agent.infra.ssh_broker`. |
+| `HPC_SSH_BROKER_IDLE_SEC` | `600` | **DEPRECATED** (see `HPC_SSH_BROKER`). Seconds an idle broker connection is held open before self-closing. Owned by `hpc_agent.infra.ssh_broker` (`IDLE_CLOSE_SEC`); retires with the broker per [`docs/design/connection-broker.md`](../design/connection-broker.md). |
+
 ## Validation thresholds
 
 There are no env-var knobs for validators; per-rule overrides live in
