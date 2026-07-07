@@ -261,9 +261,7 @@ def _scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[
             f"{block} for {run_id}: the recorded-terminal replay makes this idempotent. "
             f"doctor never enacts this — you decide whether to re-run."
         )
-        findings.append(
-            {"run_id": run_id, "block": block, "pid": pid, "proposal": proposal}
-        )
+        findings.append({"run_id": run_id, "block": block, "pid": pid, "proposal": proposal})
     return findings
 
 
@@ -418,9 +416,7 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # `_detached/` leases for a DEAD pid with NO recorded block-terminal and
     # surface each as a drafted re-invoke proposal — detection only, still no SSH.
     dead_worker_findings = _scan_dead_detached_workers(experiment_dir, now=now)
-    dead_worker_alerts = [
-        AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings
-    ]
+    dead_worker_alerts = [AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings]
 
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the

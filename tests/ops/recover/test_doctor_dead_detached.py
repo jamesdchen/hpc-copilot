@@ -106,9 +106,7 @@ def test_dead_worker_with_recorded_terminal_is_skipped(
     assert "dead detached worker" not in out["attention_summary"]
 
 
-def test_live_worker_is_not_surfaced(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_live_worker_is_not_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A lease still naming a LIVE pid is a running worker — never flagged,
     even with no terminal yet."""
     _alive(monkeypatch)
@@ -154,16 +152,12 @@ def test_no_detached_dir_is_all_clear(tmp_path: Path) -> None:
     assert "all clear" in out["attention_summary"]
 
 
-def test_malformed_lease_is_ignored(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_malformed_lease_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A torn / pid-less lease never crashes the scan (fail-open)."""
     _dead(monkeypatch)
     detached_dir = _current_homedir() / "_detached"
     detached_dir.mkdir(parents=True, exist_ok=True)
-    (detached_dir / "submit-s4-garbage.lease.json").write_text(
-        "{not valid json", encoding="utf-8"
-    )
+    (detached_dir / "submit-s4-garbage.lease.json").write_text("{not valid json", encoding="utf-8")
     (detached_dir / "submit-s4-nopid.lease.json").write_text(
         json.dumps({"run_id": "r", "block": "submit-s4"}), encoding="utf-8"
     )

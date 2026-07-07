@@ -42,9 +42,7 @@ def _surfaces_awaiting_a_detached_worker() -> list[Path]:
     candidates = sorted(_SLASH_ROOT.glob("skills/*/SKILL.md")) + sorted(
         _SLASH_ROOT.glob("commands/*.md")
     )
-    return [
-        p for p in candidates if _DETACH_WAIT_MARKER in p.read_text(encoding="utf-8")
-    ]
+    return [p for p in candidates if _DETACH_WAIT_MARKER in p.read_text(encoding="utf-8")]
 
 
 def _paragraph_with(text: str, needle: str) -> str:
