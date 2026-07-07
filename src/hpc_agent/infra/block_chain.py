@@ -210,6 +210,7 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     ("status-watch", "watch_terminal"): "submit-s4",  # complete → harvest.
     ("status-watch", "watch_timeout"): "status-watch",  # keep watching (self-loop).
     ("status-watch", "watch_anomaly"): None,  # failed/abandoned — evidence brief.
+    ("status-watch", "detached"): None,  # detached child owns the poll; brief via the journal.
     # ── aggregate family ──────────────────────────────────────────────────────
     # aggregate-check
     ("aggregate-check", "ready"): "aggregate-run",  # clean → combine + reduce.

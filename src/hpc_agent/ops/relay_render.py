@@ -359,6 +359,11 @@ def _render_snapshot(brief: dict[str, Any]) -> str:
 def _render_watch(stage: str, brief: dict[str, Any]) -> str:
     run_id = brief.get("run_id")
     prefix = f"run {run_id}" if run_id else "run"
+    if stage == "detached":
+        return (
+            f"{prefix} status-watch detached — the poll runs in a durable "
+            "background worker; the brief arrives on completion (read the journal)."
+        )
     summary = brief.get("summary")
     counts = _counts_phrase(summary if isinstance(summary, dict) else {})
     if stage == "watch_terminal":

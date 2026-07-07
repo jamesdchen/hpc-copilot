@@ -106,6 +106,56 @@ def test_dead_worker_with_recorded_terminal_is_skipped(
     assert "dead detached worker" not in out["attention_summary"]
 
 
+def test_finished_submit_worker_uses_the_writer_key_and_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 2026-07-07 key-mismatch fix, end to end: the submit recorder keys the
+    terminal by ``terminal_block_key(result.block)`` (the canonical VERB), which is
+    the SAME string the lease stamps and this scan reads off it. A FINISHED submit
+    worker is therefore recognized (dead pid WITH terminal) and NOT mis-drafted as
+    a dead-no-terminal re-invoke."""
+    from hpc_agent.state.block_terminal import terminal_block_key
+
+    _dead(monkeypatch)
+    _write_lease(block="submit-s4", run_id="pi-train-fin", pid=999_999_999)
+    # Record under the EXACT key the submit writer now uses.
+    record_terminal(
+        tmp_path,
+        run_id="pi-train-fin",
+        block=terminal_block_key("s4"),  # -> "submit-s4"
+        cmd_sha="sha",
+        result_dump={"run_id": "pi-train-fin", "block": "s4"},
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
+
+    assert out["needs_attention"] is False
+    assert out["alerts"] == []
+
+
+def test_dead_worker_with_legacy_short_key_terminal_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deprecation-window fallback: a run whose terminal was recorded PRE-FIX under
+    the short "s2" key (lease still verb-keyed) is still recognized as finished —
+    the scan reads the verb key then falls back to the short key, so no spurious
+    re-invoke fires for a mid-flight run that predates the fix."""
+    _dead(monkeypatch)
+    _write_lease(block="submit-s2", run_id="pi-mid-flight", pid=999_999_999)
+    record_terminal(
+        tmp_path,
+        run_id="pi-mid-flight",
+        block="s2",  # the pre-fix SHORT key
+        cmd_sha="sha",
+        result_dump={"run_id": "pi-mid-flight", "block": "s2"},
+    )
+
+    out = doctor(experiment_dir=tmp_path, spec=DoctorSpec(now=_NOW))
+
+    assert out["needs_attention"] is False
+    assert out["alerts"] == []
+
+
 def test_live_worker_is_not_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A lease still naming a LIVE pid is a running worker — never flagged,
     even with no terminal yet."""

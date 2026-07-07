@@ -75,8 +75,16 @@ __all__ = [
 # returns immediately with a handle envelope. NO ``claude -p`` worker, no LLM in
 # the poll loop — the same deterministic-drive principle as the status path
 # above, carried to the submit blocks.
+# ``status-watch`` joined this set on 2026-07-07 (connection-broker.md, "The
+# unattended cold-dial map"): its monitor poll was the last UNGATED in-code chain
+# hop that dialed the cluster synchronously on an unattended cron tick. Detaching
+# it moves the ONE cold dial into a durable child (warm engine, lease-single,
+# watchdog-covered, exits at terminal), so the ``snapshot→watch`` hop becomes
+# spawn-and-return and no unattended path dials inline. The child polls the SAME
+# ``monitor-flow`` body with ``detach`` OFF; ``ops/status_blocks.py`` records its
+# terminal so a re-invoke replays instead of re-dialing.
 SUPPORTED_DETACHED_BLOCK_VERBS = frozenset(
-    {"submit-s2", "submit-s3", "submit-s4", "submit-speculate"}
+    {"submit-s2", "submit-s3", "submit-s4", "submit-speculate", "status-watch"}
 )
 
 
@@ -368,14 +376,20 @@ def _spawn_detached(
 
 
 def _block_spec_run_id(spec: dict[str, Any]) -> str:
-    """Dig the run_id out of a submit-block spec dict (for the detach handle).
+    """Dig the run_id out of a detach-supported block spec dict (for the handle).
 
     S2 / S3 / speculate embed the submit-and-verify spec under ``submit.submit``
     with the ``run_id`` on the inner submit-flow spec; S4 (harvest) carries it on
-    its embedded aggregate-flow spec at ``aggregate.run_id``. The run_id is what
-    the parent hands back as the journal-poll key, so it must be present before
-    the detach. Raises :class:`DriveModeError` when it can't be found — a
-    detached block that can't name its run can't be polled.
+    its embedded aggregate-flow spec at ``aggregate.run_id``; ``status-watch``
+    carries it on its embedded monitor-flow spec at ``monitor.run_id``. The
+    run_id is what the parent hands back as the journal-poll key, so it must be
+    present before the detach. Raises :class:`DriveModeError` when it can't be
+    found — a detached block that can't name its run can't be polled.
+
+    The submit shapes are checked FIRST and unchanged; the ``monitor`` fallback is
+    additive (a submit spec resolves its run_id before the fallback is reached, so
+    the submit paths stay byte-identical — pinned by
+    ``tests/integration/test_spec_contract.py``).
     """
     submit = spec.get("submit")
     inner = submit.get("submit") if isinstance(submit, dict) else None
@@ -384,11 +398,15 @@ def _block_spec_run_id(spec: dict[str, Any]) -> str:
         aggregate = spec.get("aggregate")
         run_id = aggregate.get("run_id") if isinstance(aggregate, dict) else None
     if not isinstance(run_id, str) or not run_id:
+        monitor = spec.get("monitor")
+        run_id = monitor.get("run_id") if isinstance(monitor, dict) else None
+    if not isinstance(run_id, str) or not run_id:
         raise DriveModeError(
-            "detached submit-block drive requires a string run_id at "
-            f"spec.submit.submit.run_id (S2/S3/speculate) or spec.aggregate.run_id "
-            f"(S4); got {run_id!r}. The detached worker polls the journal by "
-            "run_id, so it must be resolved before the detach."
+            "detached block drive requires a string run_id at "
+            f"spec.submit.submit.run_id (S2/S3/speculate), spec.aggregate.run_id "
+            f"(S4), or spec.monitor.run_id (status-watch); got {run_id!r}. The "
+            "detached worker polls the journal by run_id, so it must be resolved "
+            "before the detach."
         )
     return run_id
 
@@ -400,9 +418,17 @@ def launch_submit_block_detached(
     spec: dict[str, Any],
     hpc_agent_bin: str | None = None,
 ) -> DetachedLaunch:
-    """Launch a submit block (``submit-s2`` / ``submit-s3`` / ``submit-s4`` /
-    ``submit-speculate``) as a DETACHED ``hpc-agent <verb>`` subprocess (design
-    §3, detach-by-contract).
+    """Launch a detach-by-contract block (``submit-s2`` / ``submit-s3`` /
+    ``submit-s4`` / ``submit-speculate`` / ``status-watch``) as a DETACHED
+    ``hpc-agent <verb>`` subprocess (design §3, detach-by-contract).
+
+    Generalized 2026-07-07 to cover ``status-watch`` (connection-broker.md): the
+    launcher is block-family-agnostic — the run_id extractor
+    (:func:`_block_spec_run_id`) and :data:`SUPPORTED_DETACHED_BLOCK_VERBS` carry
+    the per-family knowledge, and the submit paths are byte-identical (the name is
+    retained for call-site stability). ``status-watch`` spawns the SAME
+    ``monitor-flow``-poll body with ``detach`` OFF so the child owns the one cold
+    dial to terminal.
 
     The parent verb has ALREADY run its synchronous gate + drift guards (the
     ordering the caller enforces: gate → drift → detach) and forced ``detach``

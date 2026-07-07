@@ -99,9 +99,12 @@ def _replay_recorded_terminal(
     possibly-stale brief). The replayed result was already finalized on first
     completion (relay rendered, brief appended), so the caller returns it as-is.
     """
-    from hpc_agent.state.block_terminal import read_terminal
+    from hpc_agent.state.block_terminal import read_terminal_with_fallback
 
-    record = read_terminal(experiment_dir, run_id, block)
+    # Read by the canonical VERB key with a legacy short-key fallback (2026-07-07
+    # key-mismatch fix): a run recorded pre-fix sits under the short "s2" key, so a
+    # mid-flight re-invoke must still find and replay it.
+    record = read_terminal_with_fallback(experiment_dir, run_id, block)
     if record is None:
         return None
     current_sha = _current_cmd_sha(experiment_dir, run_id)
@@ -148,15 +151,26 @@ def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlo
     # replay returns the same result and must not double-append (the append-only
     # briefs journal stays honest; two identical s2 briefs were seen live).
     if result.run_id and result.block in _DETACHED_BLOCKS and result.stage_reached != "detached":
-        from hpc_agent.state.block_terminal import read_terminal, record_terminal
+        from hpc_agent.state.block_terminal import (
+            read_terminal_with_fallback,
+            record_terminal,
+            terminal_block_key,
+        )
 
+        # Canonical VERB key (2026-07-07 key-mismatch fix): record under
+        # "submit-s2"/"submit-s3"/"submit-s4" — the SAME string the detached lease
+        # stamps and the doctor dead-worker scan reads off it — so a FINISHED submit
+        # worker's terminal is found (no spurious re-invoke). The prior-check read
+        # falls back to the legacy short "s2" key so a mid-flight run recorded
+        # pre-fix is still seen as a prior terminal (no double brief append).
+        block_key = terminal_block_key(result.block)
         cmd_sha = _current_cmd_sha(experiment_dir, result.run_id)
-        prior = read_terminal(experiment_dir, result.run_id, result.block)
+        prior = read_terminal_with_fallback(experiment_dir, result.run_id, block_key)
         is_fresh_terminal = prior is None or str(prior.get("cmd_sha") or "") != cmd_sha
         record_terminal(
             experiment_dir,
             run_id=result.run_id,
-            block=result.block,
+            block=block_key,
             cmd_sha=cmd_sha,
             result_dump=result.model_dump(mode="json"),
         )

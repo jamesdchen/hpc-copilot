@@ -211,21 +211,41 @@ The investigation (full map in the session transcript, condensed here):
 - The doctor's dead-worker scan is detection-only (drafts a proposal;
   never re-spawns, never dials).
 
-**The staged fix (Option 1, user-preferred; land AFTER run #10 — it reverses
-a pinned invariant and must not destabilize the proving run):** give
-status-watch the submit-S3 detach-by-contract treatment — `detach` on
-`StatusWatchSpec` (default on; schema bake needed), spawn via a generalized
-`launch_submit_block_detached`, add to `SUPPORTED_DETACHED_BLOCK_VERBS`; the
-detached child owns the ONE cold dial per lifetime (warm engine, lease-single,
-watchdog, exits at terminal — never an immortal daemon); `block_drive._chain`
-already exits on a `detached` result so the ungated hop becomes
-spawn-and-return; the cron tick becomes journal-only; a dead watch worker is
-re-spawned via the existing detached machinery or doctor-surfaced, never
-re-dialed inline. Update the three skills + monitor-hpc.md prose (no pipe
-chars) and REVERSE the synchronous-status-watch contract pins honestly.
-Enforcement row when built: "no unattended ssh — the cron-fired path is
-journal-only", held by a transport-seam zero-ssh guard test on an unattended
+**The fix (Option 1, user-preferred) — IMPLEMENTED 2026-07-07 (before run #10,
+by explicit user decision; it reverses a pinned invariant, so every behavior
+change carried its updated test):** status-watch got the submit-S3
+detach-by-contract treatment — `detach` on `StatusWatchSpec` (default on), the
+generalized `launch_submit_block_detached` (its run_id extractor + the verb set
+carry the per-family knowledge; the submit paths stay byte-identical),
+`status-watch` added to `SUPPORTED_DETACHED_BLOCK_VERBS` and to the MCP
+`_DETACH_REQUIRED_VERBS`. The detached child owns the ONE cold dial per lifetime
+(warm engine, lease-single keyed `(run_id, status-watch)`, watchdog/doctor
+dead-worker scan, exits at terminal — never an immortal daemon). `block_drive
+._chain` exits on the `detached` result so the ungated hop is spawn-and-return;
+the cron tick is journal-only (snapshot journal-first → watch detaches, ZERO
+inline ssh). A re-firing tick returns a LIVE worker's handle (no second spawn);
+a DEAD lease is re-spawned via the same launcher (never re-dialed inline); a
+GENUINE watch terminal (`watch_terminal`/`watch_anomaly`, NOT the keep-watching
+`watch_timeout`) is recorded to `state/block_terminal` so a re-invoke REPLAYS
+instead of re-dialing — the `worker_exited → one block-drive tick` seam. The
+three skills + monitor-hpc.md prose were reversed (no pipe chars) and the
+synchronous-status-watch contract pins reversed honestly. Enforcement row: "No
+UNATTENDED ssh — the cron-fired path is journal-only" (engineering-principles.md),
+held by `tests/ops/status/test_block_detach.py`'s zero-ssh guard on an unattended
 status tick.
+
+**arm.py needed NO functional change:** `decide_monitor_arm` never sets
+`reconcile` and the armed `invocation_argv` fires `block-drive --workflow status`
+(snapshot journal-first → detached watch), so the journal-first property is
+structural; the re-spawn seam is the lease self-heal, not an arm branch.
+
+**Schema bake tail (NOT run here — human runs `scripts/build_schemas.py --write`
++ the operations bake):** the two model-derived per-verb schemas
+(`status_watch.input.json` gained `detach`; `status_block.output.json` gained
+`started`/`watch`/`detached_pid` + the `detached` stage) were regenerated via the
+build module's `_emit` (byte-exact, required for the CLI validation seam + the
+roundtrip test). The orchestrator embed (`operations.json`) + docs/generated +
+primitive frontmatter still need the human's full bake.
 
 Rejected: Option 3 (refuse to dial outside a detached context, keep polling
 in-process) — achieves zero unattended SSH but drops self-advance on

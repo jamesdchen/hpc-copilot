@@ -57,7 +57,7 @@ On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`
 
 ## Never-stall contract (blocks never block the chat)
 
-Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait), `submit-s3` (main-array watch), and `submit-s4` (harvest — combine + pull can ride a throttled cluster for minutes) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification. In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.
+Slow blocks are **detached by contract** (design §3, §7): `submit-s2` (canary wait), `submit-s3` (main-array watch), `submit-s4` (harvest — combine + pull can ride a throttled cluster for minutes), and `status-watch` (the continuation a `submit-s3` timeout hands off to — connection-broker.md 2026-07-07) return a handle immediately after spawning a durable detached watcher — you do **not** sit blocked on the scheduler. Keep working; the brief arrives as a notification. In the CLI fallback, run the block through your harness's native backgrounding (Claude Code's `run_in_background`), **never** a shell `&`. Detach survives session death; a successor session (or the doctor scan) re-arms from the journal losslessly.
 
 **Await the worker — never poll on a timer.** Immediately after a block detaches, launch the waiter through the harness's backgrounding (Claude Code `run_in_background: true`):
 

@@ -89,6 +89,36 @@ def test_snapshot_attention_is_empty_and_additive_when_nothing_pending(tmp_path:
         assert key in result.brief
 
 
+def test_snapshot_alerts_and_attention_alert_items_agree(tmp_path: Path) -> None:
+    """F3: the brief's ``alerts`` and its ``attention`` alert-items agree.
+
+    The attention embed is computed BEFORE the acknowledge/watermark step, so an
+    alert this snapshot surfaces in ``brief["alerts"]`` also rides its own
+    attention field; and the acknowledge (which runs AFTER) clears it from the
+    FUTURE standing queue — its one surfacing, never hidden mid-brief.
+    """
+    from hpc_agent.state.run_record import _current_homedir, repo_hash
+
+    _mk(tmp_path, "run-live")  # a record so the snapshot has runs to digest
+    base = _current_homedir() / repo_hash(tmp_path)
+    base.mkdir(parents=True, exist_ok=True)
+    ts = "2026-07-06T09:00:00+00:00"
+    (base / "doctor.alerts.log").write_text(
+        f"{ts} driver stalled, run run-live — re-arm?\n", encoding="utf-8"
+    )
+
+    result = status_snapshot(tmp_path, spec=StatusSnapshotSpec(now_iso=_NOW, mark_seen=True))
+    brief = result.brief
+    assert [a["ts"] for a in brief["alerts"]] == [ts]
+    alert_items = [d for d in brief["attention"] if d["kind"] == "alert"]
+    assert [d["subject"]["scope_id"] for d in alert_items] == [ts]
+
+    # The acknowledge ran AFTER collecting attention, so a later standalone read no
+    # longer surfaces the alert (cleared from the standing queue, not mid-brief).
+    later = collect_queue(tmp_path, now=_NOW)
+    assert [i for i in later if i.kind == "alert"] == []
+
+
 def test_snapshot_calls_the_shared_collect_queue_seat_not_a_local_sort() -> None:
     """The one-ordering seat: status_snapshot routes through collect_queue and never
     re-implements the D2 sort inline."""

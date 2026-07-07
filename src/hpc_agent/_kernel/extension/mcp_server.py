@@ -328,17 +328,22 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
 # stalls; an abandoned agent turn does NOT kill the server-side call). The
 # blocking invocations are refused HERE, at the seam, with the detached path
 # named — never left to skill prose.
-_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4"})
+# ``status-watch`` joined this set on 2026-07-07 (connection-broker.md): it is now
+# detach-by-contract too — its monitor poll runs in a durable detached worker, so
+# a blocking (detach=false) invocation over this synchronous server would wedge it
+# exactly like an S2/S3/S4 watch.
+_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4", "status-watch"})
 
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
 
-    ``submit-s2``/``submit-s3``/``submit-s4`` must carry ``spec.detach == true``
-    (the detached worker + ``wait-detached`` is the sanctioned wait; the S4
-    harvest's combine + rsync pull + breaker wait-and-retry can hold the line
-    for many minutes on a throttled host); ``status-watch`` must not request a
-    blocking wait-to-terminal poll.
+    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch`` must carry
+    ``spec.detach == true`` (the detached worker + ``wait-detached`` is the
+    sanctioned wait; the S4 harvest's combine + rsync pull + breaker
+    wait-and-retry — and the status-watch monitor poll — can hold the line for
+    many minutes on a throttled host). The detached path returns a pid handle
+    immediately; ``wait-detached`` (via backgrounded Bash) wakes the caller once.
     """
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}
@@ -350,13 +355,6 @@ def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
             '{"detach": true} in the spec; the block returns a pid handle '
             "immediately. Then run `hpc-agent wait-detached` via backgrounded "
             "Bash to be woken when the brief is ready."
-        )
-    if name == "status-watch" and spec_dict.get("wait_terminal"):
-        raise _Invalid(
-            "status-watch with wait_terminal=true is a BLOCKING poll — it "
-            "wedges this synchronous server. Invoke it without wait_terminal "
-            "(detached-by-contract) and await the worker with `hpc-agent "
-            "wait-detached` via backgrounded Bash."
         )
 
 

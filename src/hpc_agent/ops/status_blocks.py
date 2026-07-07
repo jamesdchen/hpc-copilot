@@ -32,6 +32,7 @@ reimplement ring logic, only sequence it and digest the evidence into a brief.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -52,6 +53,7 @@ from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, 
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.recover.notify import acknowledge_alerts, read_unacknowledged_alerts
 from hpc_agent.ops.relay_render import render_relay
+from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.index import find_in_flight_runs, find_stalled_runs
 from hpc_agent.state.journal import load_run, mark_seen_by_human
 from hpc_agent.state.run_record import TERMINAL_STATUSES
@@ -293,15 +295,6 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
 
     open_ssh_circuits = open_circuit_lines()
 
-    # 5. Re-stamp the attention watermark now that the delta is computed, and
-    #    acknowledge the alerts this brief is about to surface (same mark_seen
-    #    gate: a peek-only snapshot moves neither watermark).
-    if spec.mark_seen:
-        for r in records:
-            mark_seen_by_human(r.run_id, at=now_iso, experiment_dir=experiment_dir)
-        if alerts:
-            acknowledge_alerts(experiment_dir, up_to_ts=max(a["ts"] for a in alerts))
-
     # "Status-snapshot v2" (D4): the brief gains an ADDITIVE ``attention`` field —
     # this experiment's queue items in the D2-revised total order — computed by the
     # SAME ``collect_queue`` seat the ``attention-queue`` verb calls (the one
@@ -309,7 +302,26 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
     # cannot disagree). The snapshot never re-sorts or re-collects; it embeds the
     # ordered projection verbatim as opaque dicts. Additive only: an empty queue
     # yields ``[]`` and every other brief field is byte-unchanged.
+    #
+    # Computed BEFORE the acknowledge/watermark step (adversarial review F3): the
+    # attention embed's ``alert`` items route through the SAME
+    # ``read_unacknowledged_alerts`` that populated ``brief["alerts"]`` above.
+    # Acknowledging first would advance the watermark and empty the attention
+    # embed, so this one brief would list alerts its own attention field lacked —
+    # and those alerts would be hidden from the standalone attention-queue verb
+    # forever. Collecting first makes the brief internally consistent; the
+    # acknowledge below then clears them from the FUTURE standing queue (their
+    # one surfacing, as designed).
     attention = [item.as_dict() for item in collect_queue(experiment_dir, now=now_iso)]
+
+    # 5. Re-stamp the attention watermark now that the delta AND the attention
+    #    embed are computed, and acknowledge the alerts this brief just surfaced
+    #    (same mark_seen gate: a peek-only snapshot moves neither watermark).
+    if spec.mark_seen:
+        for r in records:
+            mark_seen_by_human(r.run_id, at=now_iso, experiment_dir=experiment_dir)
+        if alerts:
+            acknowledge_alerts(experiment_dir, up_to_ts=max(a["ts"] for a in alerts))
 
     brief: dict[str, Any] = {
         "now": now_iso,
@@ -404,6 +416,145 @@ def _watch_anomaly_brief(mon: Any, summary: dict[str, int]) -> dict[str, Any]:
     }
 
 
+# The block-terminal store + the detached lease + the doctor dead-worker scan all
+# key a detached watch under its VERB ("status-watch") — the SAME string
+# ``_spawn_detached`` stamps into the lease, so ``scan_dead_detached_workers``'s
+# ``read_terminal_with_fallback(run_id, lease["block"])`` finds a finished watch's
+# terminal (a short "watch" key would make the scan mis-read every finished watch
+# as a dead-no-terminal worker). Sourced from the ONE key derivation
+# (:func:`hpc_agent.state.block_terminal.terminal_block_key`) so this recorder can
+# never drift from the submit recorder / replay reader / doctor scan — the verb is
+# already canonical, so this is an identity call that documents the shared seam.
+_WATCH_BLOCK_KEY = terminal_block_key("status-watch")
+
+
+def _detached_spec_dict(spec: StatusWatchSpec) -> dict[str, Any]:
+    """Serialize *spec* with ``detach`` forced OFF for the detached child.
+
+    The child runs the SAME monitor-poll body synchronously (its poll IS the one
+    cold dial per lifetime), so its spec must carry ``detach=False`` — a truthy
+    detach would fork forever (mirrors ``ops/submit_blocks._detached_spec_dict``).
+    """
+    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
+
+
+def _watch_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on (mirrors
+    ``ops/submit_blocks._current_cmd_sha``): a nudge that re-resolves the run
+    rewrites the sidecar ``cmd_sha``, so a mismatch is "the tree moved → do not
+    replay a stale watch outcome". A run with no sidecar (a fleet/status-only run)
+    yields ``""`` → the replay refuses (re-execute), never a false hit.
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _replay_watch_terminal(experiment_dir: Path, run_id: str) -> StatusBlockResult | None:
+    """Return a finished watch's recorded terminal for the CURRENT tree, else None.
+
+    The idempotent re-invoke seam (mirrors the S3 clean-terminal replay): after the
+    detached worker reaches a genuine terminal (``watch_terminal`` / ``watch_anomaly``
+    — NOT ``watch_timeout``, which is a keep-watching continuation and is
+    deliberately never recorded) it records the result; a later re-invoke replays it
+    with ZERO ssh instead of re-dialing a completed run. This is what makes the
+    ``worker_exited → one block-drive tick`` contract surface the terminal brief
+    (never re-detach). A moved/absent ``cmd_sha`` → None (re-execute).
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, _WATCH_BLOCK_KEY)
+    if record is None:
+        return None
+    current_sha = _watch_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    try:
+        return StatusBlockResult.model_validate(record["result"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _record_watch_terminal(experiment_dir: Path, result: StatusBlockResult) -> None:
+    """Record a watch's genuine terminal so a re-invoke replays instead of re-dialing.
+
+    Called only for the FINAL states (``watch_terminal`` / ``watch_anomaly``);
+    ``watch_timeout`` is NOT recorded — it is the "keep watching" continuation, so
+    recording it would replay a stale timeout and wedge the self-loop instead of
+    re-spawning a fresh watch. A run with no run_id carries nothing to key on.
+    """
+    if not result.run_id:
+        return
+    from hpc_agent.state.block_terminal import record_terminal
+
+    record_terminal(
+        experiment_dir,
+        run_id=result.run_id,
+        block=_WATCH_BLOCK_KEY,
+        cmd_sha=_watch_cmd_sha(experiment_dir, result.run_id),
+        result_dump=result.model_dump(mode="json"),
+    )
+
+
+def _detached_watch_result(*, run_id: str, pid: int, log_path: str | None) -> StatusBlockResult:
+    """The immediate-return handle for a detached watch (design §3).
+
+    ``needs_decision`` is False (nothing to decide yet — the brief arrives on
+    completion, read from the journal) and ``next_block`` is null (the journal, not
+    this process, carries the next-block suggestion once the worker finishes).
+    ``block_drive._chain`` exits on this via ``_is_detached`` (started / watch /
+    detached_pid / stage=="detached"), so the ungated ``snapshot→watch`` hop
+    becomes spawn-and-return.
+    """
+    brief: dict[str, Any] = {"run_id": run_id, "log_path": log_path}
+    return StatusBlockResult(
+        block="watch",
+        stage_reached="detached",
+        needs_decision=False,
+        reason=(
+            "status-watch detached — the monitor poll runs in a durable background "
+            "worker owning the one cold dial to terminal; its brief arrives on "
+            "completion (read the journal)."
+        ),
+        relay=render_relay("watch", "detached", brief),
+        run_id=run_id,
+        brief=brief,
+        started=True,
+        watch="journal",
+        detached_pid=pid,
+    )
+
+
+def _live_watch_handle(experiment_dir: Path, run_id: str) -> StatusBlockResult | None:
+    """A handle for an ALREADY-LIVE detached watch worker, else None.
+
+    The unattended cron tick re-fires ``block-drive`` while the worker is still
+    polling; without this it would try to spawn a second worker and
+    ``_guard_single_lease`` would raise. Peeks the journal-global lease (the SAME
+    store ``wait-detached`` reads); a live pid → the "already watching" handle (no
+    second spawn, no dial). A dead/absent/torn lease → None (the caller spawns; the
+    single-lease reclaims the dead pid — the dead-lease re-spawn seam).
+    """
+    from hpc_agent._kernel.lifecycle.detached import _pid_alive
+    from hpc_agent.state.run_record import _current_homedir
+
+    lease_path = _current_homedir() / "_detached" / f"{_WATCH_BLOCK_KEY}-{run_id}.lease.json"
+    try:
+        lease = json.loads(lease_path.read_text(encoding="utf-8"))
+        pid = int(lease.get("pid", -1))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if pid <= 0 or not _pid_alive(pid):
+        return None
+    return _detached_watch_result(run_id=run_id, pid=pid, log_path=lease.get("log_path"))
+
+
 @primitive(
     name="status-watch",
     verb="workflow",
@@ -448,7 +599,48 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
     (``needs_decision=False``); a ``failed``/``abandoned`` anomaly hands back a
     drafted-evidence brief; a ``timeout`` is the "keep watching?" terminator and
     arms the next tick when an ``invocation_argv`` is supplied.
+
+    Detach-by-contract (design §3; connection-broker.md 2026-07-07): with ``detach``
+    ON (default) the ONE cold dial moves into a durable detached worker so no
+    UNATTENDED path dials inline. The parent, in order: (1) replays a recorded
+    terminal for the current tree (no ssh) — the ``worker_exited → one block-drive
+    tick`` seam; (2) returns the handle of an already-live worker (the cron tick
+    re-fires mid-watch) — no second spawn; (3) spawns a fresh worker (a dead/absent
+    lease is reclaimed — the dead-lease re-spawn seam; a live sibling is refused by
+    the single-lease). The child re-enters this body with ``detach=False`` and owns
+    the poll to terminal, recording its genuine terminal for the replay.
     """
+    if spec.detach:
+        run_id = spec.monitor.run_id
+        replay = _replay_watch_terminal(experiment_dir, run_id)
+        if replay is not None:
+            return replay
+        live = _live_watch_handle(experiment_dir, run_id)
+        if live is not None:
+            return live
+        from hpc_agent._kernel.lifecycle.detached import (
+            DetachedLeaseHeld,
+            launch_submit_block_detached,
+        )
+
+        try:
+            launch = launch_submit_block_detached(
+                verb="status-watch",
+                experiment_dir=str(experiment_dir),
+                spec=_detached_spec_dict(spec),
+            )
+        except DetachedLeaseHeld:
+            # Lost the decide→spawn race to a sibling launch between the peek above
+            # and the guard inside the launcher — the sibling is now the live
+            # watcher, so return its handle rather than surfacing a lease error.
+            live = _live_watch_handle(experiment_dir, run_id)
+            if live is not None:
+                return live
+            raise
+        return _detached_watch_result(
+            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
+        )
+
     mon = monitor_flow(experiment_dir, spec=spec.monitor)
     lifecycle = mon.lifecycle_state
     summary = _summary_of(mon.last_status)
@@ -472,7 +664,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
             "harvest_marker": str(harvest_marker_path(experiment_dir, mon.run_id)),
             "next_block": "aggregate-flow / submit-s4 (harvest)",
         }
-        return StatusBlockResult(
+        result = StatusBlockResult(
             block="watch",
             stage_reached="watch_terminal",
             needs_decision=False,
@@ -487,6 +679,11 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
                 run_id=mon.run_id,
             ),
         )
+        # Record the genuine terminal so a re-invoke (the block-drive tick after the
+        # detached worker exits) REPLAYS this hand-off instead of re-dialing a
+        # completed run.
+        _record_watch_terminal(experiment_dir, result)
+        return result
 
     if lifecycle == "timeout":
         # Budget elapsed; cluster jobs may run on. Arm the next tick when the
@@ -525,7 +722,7 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
 
     # failed / abandoned → §5 anomaly terminator with a drafted-evidence brief.
     brief["anomaly"] = _watch_anomaly_brief(mon, summary)
-    return StatusBlockResult(
+    result = StatusBlockResult(
         block="watch",
         stage_reached="watch_anomaly",
         needs_decision=True,
@@ -537,3 +734,8 @@ def status_watch(experiment_dir: Path, *, spec: StatusWatchSpec) -> StatusBlockR
         run_id=mon.run_id,
         brief=brief,
     )
+    # A failed/abandoned watch is a genuine terminal — record it so a re-invoke
+    # replays the evidence brief (no re-dial). (watch_timeout above is a
+    # keep-watching continuation and is deliberately NOT recorded.)
+    _record_watch_terminal(experiment_dir, result)
+    return result

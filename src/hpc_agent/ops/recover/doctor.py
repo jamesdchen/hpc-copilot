@@ -37,7 +37,7 @@ from hpc_agent._wire.queries.doctor import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
-from hpc_agent.state.block_terminal import read_terminal
+from hpc_agent.state.block_terminal import read_terminal_with_fallback
 from hpc_agent.state.decision_journal import (
     is_latest_committed_greenlight,
     latest_decision,
@@ -218,7 +218,9 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     nothing else flags it.
 
     For each lease whose ``pid`` is DEAD (:func:`_pid_alive` false), consult the
-    block terminal-result store (:func:`read_terminal`): a dead pid WITH a
+    block terminal-result store (:func:`read_terminal_with_fallback`, keyed by the
+    lease's own ``block`` verb — the canonical key — with a legacy short-key
+    fallback so a pre-2026-07-07 record still counts): a dead pid WITH a
     recorded terminal is normal completion (the worker finished, wrote its
     terminal, exited) and is skipped. A dead pid with NO recorded terminal is a
     worker that died mid-flight — surfaced with a DRAFTED re-invoke proposal (the
@@ -253,8 +255,14 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
             continue
         if _pid_alive(pid):
             continue  # a live worker owns the lease — not our concern
-        if read_terminal(experiment_dir, run_id, block) is not None:
-            continue  # dead pid WITH a recorded terminal = normal completion
+        if read_terminal_with_fallback(experiment_dir, run_id, block) is not None:
+            # dead pid WITH a recorded terminal = normal completion. Read by the
+            # canonical VERB key (== the lease's ``block``) with the legacy short
+            # "s2" fallback (2026-07-07 key fix): a FINISHED submit worker records
+            # its terminal under the verb key now, but a run whose terminal predates
+            # the fix sits under the short key — either way it is NOT a dead worker,
+            # so no spurious re-invoke is drafted.
+            continue
         proposal = (
             f"detached {block} worker for run {run_id} died with no recorded terminal "
             f"(pid {pid} is not running, and state/block_terminal holds no {block} result "
