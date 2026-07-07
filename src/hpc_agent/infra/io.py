@@ -16,9 +16,10 @@ the helper agnostic to per-domain schema fields (``schema_version``,
 ``profile``, ``cluster``, etc.) and avoids overloading the signature.
 
 The lock is a REAL cross-process exclusion on every platform we ship
-to: :func:`advisory_flock` backs it with ``fcntl.flock`` on POSIX and
-``msvcrt`` byte-range locking on native Windows, so concurrent writers
-serialize identically and no update is silently lost on win32.
+to: :func:`advisory_flock` backs it with the ``filelock`` library
+(``fcntl.flock`` on POSIX, ``msvcrt`` byte-range locking on native
+Windows under the hood), so concurrent writers serialize identically
+and no update is silently lost on win32.
 
 Also exposes :func:`atomic_write_json` — the canonical
 crash-durable JSON writer (tempfile + fsync + replace + parent-dir
@@ -170,9 +171,10 @@ def atomic_locked_update(
 
     The lock is taken via :func:`advisory_flock` on a sibling
     ``<path>.lock`` sentinel, so it is a REAL cross-process exclusion on
-    every platform: ``fcntl.flock`` on POSIX and ``msvcrt`` byte-range
-    locking on native Windows. Concurrent writers therefore serialize
-    identically on win32 — no update is silently lost.
+    every platform: the ``filelock`` library dispatches to
+    ``fcntl.flock`` on POSIX and ``msvcrt`` byte-range locking on native
+    Windows. Concurrent writers therefore serialize identically on
+    win32 — no update is silently lost.
 
     The read happens **inside** the lock so concurrent writers see a
     serialized view. Returns the new document so callers can use the
@@ -195,8 +197,9 @@ def atomic_locked_update(
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     # Route the exclusion through advisory_flock — the one cross-platform
-    # lock (fcntl.flock on POSIX, msvcrt byte-range on win32). Blocking, so
-    # it always yields True; the read-modify-write happens inside the hold.
+    # lock (filelock: fcntl.flock on POSIX, msvcrt byte-range on win32).
+    # Blocking, so it always yields True; the read-modify-write happens
+    # inside the hold.
     with advisory_flock(lock_path):
         existing = _read_json_doc(path)
         new_doc = mutate(existing)
@@ -243,84 +246,84 @@ def advisory_flock(
     """Per-process advisory exclusive lock around a code block.
 
     Yields ``True`` if the lock was acquired, ``False`` if *blocking*
-    is False and another process held it. Backed by ``fcntl.flock`` on
-    POSIX and ``msvcrt.locking`` (byte-range lock) on win32 — both give
+    is False and another process held it. Backed by the ``filelock``
+    library, which dispatches to ``fcntl.flock`` on POSIX and
+    ``msvcrt.locking`` (byte-range lock) on native Windows — both give
     real cross-process exclusion, so the lock is NOT a no-op on any
     platform we ship to.
+
+    Why the OSS library instead of the hand-rolled msvcrt/fcntl branches
+    it replaces: this lock is commodity substrate with a maintained
+    library and a two-incident local history. The win32 branch was a
+    permissions-only **no-op** until ``12043d0d`` added the msvcrt
+    byte-range lock (the campaign multi-cluster deploy race), and
+    :func:`atomic_locked_update` was entirely **lockless** on win32 until
+    ``1f368163`` routed it through here — both silent cross-process
+    serialization losses that only fired on Windows. The same doctrine
+    that outsourced SSH to ``asyncssh`` applies: hand-rolled platform
+    locking earns its way out to ``filelock``.
 
     Use case: serialize parallel ``submit-flow`` calls from different
     shells targeting the same cluster (``~/.claude/hpc/<repo>/.submit_lock``).
     The lock is advisory — only callers who lock the same path
     coordinate; the underlying file system operations remain unprotected.
 
-    The lock file itself is created (``mkdir -p`` on the parent) and
-    left in place; it's a sentinel, never read or written. If the
-    process dies, the OS releases the lock automatically.
+    Semantics preserved exactly across the migration:
+
+    - **Blocking** (``blocking=True``) waits indefinitely
+      (``filelock`` ``timeout=-1``), matching the old ``fcntl.LOCK_EX`` /
+      msvcrt spin.
+    - **Non-blocking** (``blocking=False``) tries once and yields
+      ``False`` on contention (``filelock`` ``timeout=0`` → ``Timeout``).
+    - **Not re-entrant across calls.** A fresh :class:`filelock.FileLock`
+      is built per call, so a second ``advisory_flock`` on the same path
+      — same process or cross-process — contends at the OS lock exactly
+      like the old separate-fd design (verified: two same-process
+      instances on one path refuse each other; the two guard-fires tests
+      ``test_advisory_flock_serializes_cross_process_win32`` and
+      ``test_concurrent_writers_serialize`` pin this). ``filelock``'s
+      *per-instance* reentrancy counter is therefore never engaged; no
+      caller nests a blocking acquire on the same path (the old code would
+      have self-deadlocked, so none can rely on reentrancy).
+
+    The lock file itself is created (``mkdir -p`` on the parent) and, as
+    with the old code, left in place as a sentinel — never read or
+    written. ``filelock``'s Windows backend deletes the file on release,
+    so the release path re-touches it to preserve the historical
+    lingering-sentinel contract (pinned by
+    ``tests/state/test_session.py::test_lock_file_skipped_by_loader`` —
+    run-dir loaders must see and skip ``*.lock`` siblings). The touch
+    never truncates and the sentinel is never read, so a concurrent
+    fresh holder is unaffected. If the process dies, the OS releases the
+    lock automatically.
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import fcntl  # noqa: PLC0415 — POSIX-only import
-    except ImportError:
-        fcntl = None  # type: ignore[assignment]
 
-    if fcntl is None:
-        # win32 (no fcntl): acquire a REAL exclusive lock via msvcrt
-        # byte-range locking so concurrent submit-flow deploys serialize
-        # exactly as the POSIX branch does. Before this the win32 path
-        # degraded to a permissions-only no-op — silently dropping
-        # cross-process serialization and leaving the
-        # ``prune_orphan_sidecars(min_age_seconds=0)`` race unguarded on
-        # the one platform without flock (the campaign multi-cluster bug).
-        import msvcrt  # noqa: PLC0415 — win32-only import
+    from filelock import FileLock, Timeout  # noqa: PLC0415 — keep import lazy/local
 
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-        acquired = False
+    # A FRESH instance per call (never reused / singleton): filelock's
+    # reentrancy is per-instance, so a new instance opens its own fd and
+    # contends with any other holder of the same path — the non-reentrant
+    # cross-/same-process exclusion the callers and tests depend on.
+    lock = FileLock(str(lock_path))
+    # timeout=-1 blocks forever; timeout=0 tries exactly once. Using the
+    # numeric timeouts (not the newer ``blocking=`` kwarg) keeps us on the
+    # >=3.13 floor's API.
+    if blocking:
+        lock.acquire(timeout=-1)
+    else:
         try:
-            # ``msvcrt.locking`` locks ``nbytes`` from the current file
-            # position; lock 1 byte at offset 0 (the fd is never read /
-            # written / seeked, so the position stays 0). ``LK_NBLCK`` is
-            # the non-blocking try; ``LK_LOCK`` blocks but only retries 10×
-            # at 1s before raising, so for ``blocking=True`` we spin the
-            # non-blocking variant ourselves to get the unbounded blocking
-            # semantics ``fcntl.LOCK_EX`` provides.
-            if blocking:
-                while not acquired:
-                    try:
-                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                        acquired = True
-                    except OSError:
-                        time.sleep(0.05)
-            else:
-                try:
-                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                    acquired = True
-                except OSError:
-                    yield False
-                    return
-            yield True
-        finally:
-            if acquired:
-                with contextlib.suppress(OSError):
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            os.close(fd)
-        return
-
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    acquired = False
-    try:
-        # win32 mypy: fcntl is platform-gated (typeshed exposes flock/LOCK_*
-        # only off-win32); the runtime branch is unreachable here anyway.
-        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)  # type: ignore[attr-defined]
-        try:
-            fcntl.flock(fd, flags)  # type: ignore[attr-defined]
-            acquired = True
-        except BlockingIOError:
+            lock.acquire(timeout=0)
+        except Timeout:
             yield False
             return
+    try:
         yield True
     finally:
-        if acquired:
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
-        os.close(fd)
+        lock.release()
+        # filelock's Windows backend unlinks the lock file on release;
+        # today's contract leaves the sentinel in place (see docstring).
+        # O_CREAT without truncate — harmless if a fresh holder re-created
+        # it already, no-op on POSIX where filelock keeps the file.
+        with contextlib.suppress(OSError):
+            lock_path.touch()

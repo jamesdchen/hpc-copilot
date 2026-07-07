@@ -134,9 +134,12 @@ def _concurrent_appender(args: tuple[str, int]) -> None:
 def test_concurrent_writers_serialize(tmp_path: Path) -> None:
     """Spawn 8 processes each appending one value; all 8 must land.
 
-    Runs on win32 too: ``atomic_locked_update`` now routes through
-    ``advisory_flock``'s msvcrt byte-range lock, so concurrent writers
-    serialize on Windows exactly as they do under POSIX ``fcntl``.
+    Runs on win32 too: ``atomic_locked_update`` routes through
+    ``advisory_flock``, backed by the ``filelock`` library (msvcrt
+    byte-range locking on win32, ``fcntl`` on POSIX under the hood), so
+    concurrent writers serialize identically on every platform. This is
+    a BEHAVIOR pin (no lost updates), not a mechanism pin — it must keep
+    passing unchanged across any locking-backend swap.
     """
     path = tmp_path / "doc.json"
     path.write_text(json.dumps({"entries": []}))
@@ -190,15 +193,16 @@ def _child_hold_lock(args: tuple[str, str, str]) -> None:
 
 @pytest.mark.skipif(
     not sys.platform.startswith("win"),
-    reason="msvcrt byte-range locking is the win32-only branch; POSIX uses fcntl",
+    reason="pins the win32 lock path (filelock->msvcrt); POSIX uses filelock->fcntl",
 )
 def test_advisory_flock_serializes_cross_process_win32(tmp_path: Path) -> None:
     """A second process cannot acquire the lock while the first holds it (win32).
 
-    Proves the msvcrt branch is a REAL cross-process exclusion, not the old
+    Proves the win32 path is a REAL cross-process exclusion, not the old
     permissions-only no-op: while a child holds the blocking lock, a
     ``blocking=False`` acquire yields ``False``; once the child releases,
-    the same non-blocking acquire yields ``True``.
+    the same non-blocking acquire yields ``True``. A behavior pin, agnostic
+    to the backend (hand-rolled msvcrt historically; ``filelock`` today).
     """
     lock = tmp_path / "submit.lock"
     held = tmp_path / "held.flag"
