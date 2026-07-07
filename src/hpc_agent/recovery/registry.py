@@ -61,7 +61,6 @@ RecoveryKind = Literal[
     # Prose-only / slash-skill-emitted kinds — the empirical drift cases.
     "already_in_flight",
     "submission_incomplete",
-    "spawn_worker_died",
 ]
 
 
@@ -237,44 +236,7 @@ _SUBMISSION_INCOMPLETE = RecoveryMenu(
             safety_rank=2,
         ),
     ),
-    references=("SESSION_HANDOFF.md:179",),
-)
-
-
-_SPAWN_WORKER_DIED = RecoveryMenu(
-    kind="spawn_worker_died",
-    summary=(
-        "The spawned ``claude -p --bare`` worker exited 1 before emitting a "
-        "valid report — typically a credential or quota failure that the "
-        "worker hit but the parent session does not (e.g. workspace API key "
-        "over quota while the operator's OAuth session is fine)."
-    ),
-    options=(
-        RecoveryOption(
-            cli_command=("HPC_AGENT_INVOKER=inline /submit-hpc <your original args>"),
-            when_to_use=(
-                "The framework's malformed-report remediation hints inline "
-                "as the fallback. Set the env var explicitly (the operator "
-                "opt-in form) and the orchestrator runs the procedure in its "
-                "own context instead of spawning a fresh worker. The "
-                "preemptive ``--inline`` flag is still refused under #155 — "
-                "this is the post-failure recovery form."
-            ),
-            safety_rank=0,
-        ),
-        RecoveryOption(
-            cli_command=(
-                "$env:ANTHROPIC_API_KEY = '<fresh-key>'; /submit-hpc <your original args>"
-            ),
-            when_to_use=(
-                "When the worker dies from a quota / auth failure on the "
-                "current API key. Set a fresh key in the parent shell and "
-                "retry — the spawn path will inherit it."
-            ),
-            safety_rank=1,
-        ),
-    ),
-    references=("29fbac9f", "88a3869a"),
+    references=("docs/proposals/recovery-registry.md",),
 )
 
 
@@ -358,7 +320,6 @@ _NODE_FAILURE = RecoveryMenu(
 REGISTRY: dict[str, RecoveryMenu] = {
     _ALREADY_IN_FLIGHT.kind: _ALREADY_IN_FLIGHT,
     _SUBMISSION_INCOMPLETE.kind: _SUBMISSION_INCOMPLETE,
-    _SPAWN_WORKER_DIED.kind: _SPAWN_WORKER_DIED,
     _WALLTIME.kind: _WALLTIME,
     _NODE_FAILURE.kind: _NODE_FAILURE,
 }

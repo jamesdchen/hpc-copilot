@@ -32,7 +32,6 @@ __all__ = [
     "AlreadyInFlight",
     "SiblingRunLive",
     "SubmissionIncomplete",
-    "SpawnWorkerDied",
     "StructuredOutputError",
     "ModelEndpointError",
 ]
@@ -466,10 +465,12 @@ class SubmissionIncomplete(HpcError):
     no ``job_ids``, so scheduler state cannot be polled.
 
     Distinct from ``abandoned`` (job_ids existed but no longer live) and
-    from a network-unreachable cluster. The open ``verify-canary`` gap
-    (SESSION_HANDOFF.md "Still open") — today the verifier silently
-    classifies this as "abandoned"; this exception is the typed channel
-    that makes the distinction observable.
+    from a network-unreachable cluster. Closes the ``verify-canary``
+    ``job_ids in (None, [])`` gap (see
+    ``docs/proposals/recovery-registry.md``, the ``submission_incomplete``
+    section) — previously the verifier silently classified this as
+    "abandoned"; this exception is the typed channel that makes the
+    distinction observable.
     """
 
     error_code = "spec_invalid"
@@ -503,25 +504,6 @@ class SubmissionIncomplete(HpcError):
         super().__init__(message, remediation=remediation)
 
 
-class SpawnWorkerDied(HpcError):
-    """The spawned ``claude -p --bare`` worker exited 1 before emitting a
-    valid report.
-
-    Typically a credential or quota failure the worker hit but the parent
-    session does not (e.g. workspace API key over quota while the
-    operator's OAuth session is fine — see commit ``29fbac9f``).
-    """
-
-    error_code = "internal"
-    retry_safe = True
-    category = "internal"
-
-    def __init__(self, message: str, *, remediation: str | None = None) -> None:
-        if remediation is None:
-            remediation = _registry_remediation("spawn_worker_died")
-        super().__init__(message, remediation=remediation)
-
-
 class StructuredOutputError(HpcError):
     """A raw model completion failed to yield a valid structured object.
 
@@ -533,8 +515,7 @@ class StructuredOutputError(HpcError):
     Classed as an internal, retry-safe failure: a malformed completion
     after the repair budget is the model boundary misbehaving (not the
     caller's input), and re-running the funnel with a fresh sample is the
-    natural recovery — the same posture as :class:`SpawnWorkerDied` for
-    the spawned-worker floor.
+    natural recovery.
     """
 
     error_code = "internal"

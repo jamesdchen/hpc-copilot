@@ -7,10 +7,9 @@ Two-part contract:
     kinds, which is the migration punch list).
 (b) Every place ``ErrorEnvelope.remediation`` is set from the registry
     derives that string from :func:`remediation_for` rather than a literal.
-    The ported error classes (``AlreadyInFlight``, ``SubmissionIncomplete``,
-    ``SpawnWorkerDied``) are checked positively; for the un-ported error
-    classes, only a smoke "raises and round-trips remediation through
-    pydantic" check fires.
+    The ported error classes (``AlreadyInFlight``, ``SubmissionIncomplete``)
+    are checked positively; for the un-ported error classes, only a smoke
+    "raises and round-trips remediation through pydantic" check fires.
 
 See ``docs/proposals/recovery-registry.md`` for the design + migration
 plan; un-ported kinds in the ``xfail`` list ARE the punch list.
@@ -113,13 +112,6 @@ def test_submission_incomplete_remediation_from_registry() -> None:
         },
     )
     assert exc.remediation == expected
-
-
-def test_spawn_worker_died_remediation_from_registry() -> None:
-    """``SpawnWorkerDied``'s remediation must be byte-equal to
-    ``remediation_for("spawn_worker_died")``."""
-    exc = errors.SpawnWorkerDied("claude -p --bare exited 1")
-    assert exc.remediation == remediation_for("spawn_worker_died")
 
 
 def test_per_instance_remediation_override_wins() -> None:

@@ -72,7 +72,6 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "SchedulerThrottled",
         "SchemaIncompat",
         "SiblingRunLive",
-        "SpawnWorkerDied",
         "SpecInvalid",
         "SshCircuitOpen",
         "SshSlotWaitTimeout",
