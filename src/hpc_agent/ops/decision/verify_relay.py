@@ -84,6 +84,28 @@ records honestly reports the empty/short list rather than a fabricated one.
 The per-run briefs log (``<experiment>/.hpc/runs/<run_id>.briefs.jsonl``) is
 read TOLERANTLY — another agent owns its creation; this verb never creates or
 writes it, and a missing/partial file is simply skipped.
+
+Notebook-audit relay (v1.5, T11)
+--------------------------------
+:func:`verify_notebook_relay` is the sibling audit for prose relayed about a
+NOTEBOOK audit (``docs/design/notebook-audit.md`` D6: "prose relayed about a
+section goes through the rule-10 verify-relay machinery"). The audit VIEW
+(markdown projection) states verifiable strings — a section's status
+(``auto_cleared`` / ``signed_current`` / ``signed_stale`` / ``unsigned``), the
+module ``passed`` verdict, and section/view sha hexes — and an LLM paraphrasing
+one wrongly is the same conduct class as misrelaying a run's state. It reduces
+each claim against the SAME sources of truth the T6 status reduction uses (the
+``"notebook"`` decision journal + the ``.py`` source recomputed on disk) and
+returns the same :class:`VerifyRelayResult` shape, so the Stop hook blocks a
+contradiction identically. Contradiction KINDS are REUSED, never extended (no
+new wire enum / schema regen): a wrong status or ``passed`` verdict is a
+``state`` mismatch (a status IS a lifecycle-family claim); a sha-hex matching
+neither the current nor any recorded sha is a ``number`` mismatch (the
+task-sanctioned reuse — a value claim contradicting the recorded value). An
+UNRESOLVABLE source (no interview.json ``audited_source``, unreadable/malformed
+``.py``) makes every claim ``unverifiable`` (flagged, never a contradiction) —
+the useful-conservative posture, dropped by the hook exactly like a run's
+unverifiable claims.
 """
 
 from __future__ import annotations
@@ -762,3 +784,344 @@ def _is_conversational_number(text: str, start: int, end: int, raw: str) -> bool
         except ValueError:
             return False
     return False
+
+
+# ── notebook-audit relay (v1.5 / T11) ──────────────────────────────────────────
+
+# The per-section status vocabulary a relay can claim (``state`` metaphor: a
+# status IS a lifecycle-family word). Surface forms with ``_`` / ``-`` / space /
+# no separator all normalize to the canonical status the T6 reduction yields.
+_NB_STATUS_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:auto[ _-]?cleared|signed[ _-]?current|signed[ _-]?stale|unsigned)"
+    r"(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_NB_STATUS_CANON: dict[str, str] = {
+    # sep-stripped surface → the canonical status string (== state.notebook_audit
+    # constants; these are wire-visible vocabulary and do not drift).
+    "autocleared": "auto_cleared",
+    "signedcurrent": "signed_current",
+    "signedstale": "signed_stale",
+    "unsigned": "unsigned",
+}
+
+# A sha-hex token: 12–64 hex chars, boundary-guarded. Requiring >= one ``a-f``
+# letter (checked at use) excludes pure-decimal counts (``1000000``) that are
+# hex-valid but are NUMBER claims, not shas.
+_NB_HEX_RE = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{12,64}(?![A-Za-z0-9])")
+
+# How near (chars) a status word / sha-hex must sit to a section slug to be a
+# claim ABOUT that section. A status word with no slug in range is module-level
+# noise, not a section claim — skipped (conservative: prefer precision).
+_NB_PROXIMITY = 80
+
+# Verdict tokens for the module ``passed`` claim (checked only within a window of
+# the audit-id mention). Negators flip a positive token (``cannot graduate``).
+_NB_PASS_TOKENS = frozenset({"pass", "passed", "passes", "graduate", "graduated", "graduates"})
+_NB_FAIL_TOKENS = frozenset({"fail", "failed", "fails", "block", "blocked", "blocks"})
+_NB_NEGATORS = frozenset(
+    {"not", "no", "never", "cannot", "cant", "wont", "isnt", "arent", "doesnt", "didnt", "hasnt"}
+)
+
+
+def _nb_canon_status(raw: str) -> str | None:
+    """Canonical status for a matched surface form (sep-stripped), or None."""
+    return _NB_STATUS_CANON.get(re.sub(r"[\s_-]+", "", raw.lower()))
+
+
+def _nb_slug_spans(text: str, slug: str) -> list[tuple[int, int]]:
+    """Every whole-token occurrence span of *slug* in *text*.
+
+    Slugs carry ``.`` / ``-`` (the ``_RUN_ID_RE`` class); the boundary guard
+    treats those as slug chars so ``fit-model`` is not fragmented (mirrors
+    ``ops/decision/journal.py::_names_slug``).
+    """
+    if not slug:
+        return []
+    pat = re.compile(r"(?<![A-Za-z0-9._-])" + re.escape(slug) + r"(?![A-Za-z0-9._-])")
+    return [(m.start(), m.end()) for m in pat.finditer(text)]
+
+
+def _nb_nearest_slug(
+    start: int, end: int, slug_spans: dict[str, list[tuple[int, int]]]
+) -> str | None:
+    """The mentioned slug whose nearest occurrence is within :data:`_NB_PROXIMITY`."""
+    best: str | None = None
+    best_dist: int | None = None
+    for slug, spans in slug_spans.items():
+        for s, e in spans:
+            if e <= start:
+                dist = start - e
+            elif s >= end:
+                dist = s - end
+            else:
+                dist = 0
+            if dist <= _NB_PROXIMITY and (best_dist is None or dist < best_dist):
+                best_dist, best = dist, slug
+    return best
+
+
+def _nb_hex_matches(token: str, candidates: Iterable[str]) -> bool:
+    """True iff *token* equals or is a shared prefix of some candidate sha."""
+    t = token.lower()
+    for cand in candidates:
+        c = cand.lower()
+        if t == c or (len(t) >= 7 and (c.startswith(t) or t.startswith(c))):
+            return True
+    return False
+
+
+def _nb_verdict_near(text: str, start: int, end: int) -> bool | None:
+    """The module-``passed`` polarity claimed within a window of an audit mention.
+
+    Returns True (a pass/graduate claim), False (a fail/block or negated-pass
+    claim), or None (no verdict word in range). The first verdict token found
+    wins; a pass token preceded within 3 tokens by a negator flips to False
+    (``cannot graduate`` / ``did not pass``).
+    """
+    lo = max(0, start - _NB_PROXIMITY)
+    hi = min(len(text), end + _NB_PROXIMITY)
+    tokens = re.findall(r"[a-z']+", text[lo:hi].lower())
+    tokens = [t.replace("'", "") for t in tokens]
+    for i, tok in enumerate(tokens):
+        if tok in _NB_PASS_TOKENS:
+            return not any(prev in _NB_NEGATORS for prev in tokens[max(0, i - 3) : i])
+        if tok in _NB_FAIL_TOKENS:
+            return False
+    return None
+
+
+def _nb_journal_slugs(records: Iterable[dict[str, Any]]) -> set[str]:
+    """Section slugs named by the notebook-attestation records in *records*."""
+    from hpc_agent.state import notebook_audit as nb
+
+    attestation_blocks = {nb.SIGN_OFF_BLOCK, nb.AUTO_CLEAR_BLOCK}
+    out: set[str] = set()
+    for rec in records:
+        if rec.get("block") not in attestation_blocks:
+            continue
+        resolved = rec.get("resolved")
+        if isinstance(resolved, dict):
+            sec = resolved.get("section")
+            if isinstance(sec, str) and sec:
+                out.add(sec)
+    return out
+
+
+def _nb_read_py(experiment_dir: Path, rel: Any) -> str | None:
+    """Read a campaign-dir-relative ``.py`` tolerantly, or None (never raises)."""
+    if not isinstance(rel, str) or not rel:
+        return None
+    try:
+        return (experiment_dir / rel).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _nb_resolve_sources(experiment_dir: Path, audit_id: str) -> tuple[Any | None, list[str] | None]:
+    """Resolve ``(parsed_source | None, required_slugs | None)`` for *audit_id*.
+
+    The source ``.py`` and (optional) template are resolved from interview.json's
+    ``audited_source`` block matching *audit_id* — the same lookup the T8 sign-off
+    gate uses (``ops/decision/journal.py::_read_interview_audited_source``, reused
+    rather than re-implemented; same subject, lint-clean). An unresolvable /
+    unreadable / malformed source returns ``(None, ...)`` so the caller flags
+    claims UNVERIFIABLE rather than fabricating a bogus ``unsigned`` reduction.
+    ``required_slugs`` are the TEMPLATE's slugs (the T9 gate's required set); a
+    missing template returns ``None`` there — the module ``passed`` claim is then
+    not checkable and is skipped.
+    """
+    from hpc_agent.ops.decision.journal import _read_interview_audited_source
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    block = _read_interview_audited_source(experiment_dir, audit_id)
+    if block is None:
+        return None, None
+    source_text = _nb_read_py(experiment_dir, block.get("source"))
+    if source_text is None:
+        return None, None
+    try:
+        parsed = parse_percent_source(source_text)
+    except errors.SpecInvalid:
+        return None, None
+
+    required_slugs: list[str] | None = None
+    template_text = _nb_read_py(experiment_dir, block.get("template"))
+    if template_text is not None:
+        try:
+            required_slugs = list(parse_percent_source(template_text).slugs)
+        except errors.SpecInvalid:
+            required_slugs = None
+    return parsed, required_slugs
+
+
+def verify_notebook_relay(
+    experiment_dir: Path, audit_id: str, relay_text: str
+) -> VerifyRelayResult:
+    """Audit *relay_text*'s claims about notebook audit *audit_id* (T11).
+
+    The notebook sibling of :func:`verify_relay`: it extracts the VERIFIABLE
+    claims the audit view states — a section's status, the module ``passed``
+    verdict, and section/view sha hexes — and diffs each against the ``"notebook"``
+    decision journal (the T6 reduction) plus the ``.py`` source recomputed on
+    disk. Returns the same :class:`VerifyRelayResult`; the Stop hook blocks a
+    ``state`` / ``number`` contradiction identically to a run's.
+
+    Claim grammar (all co-occurrence, useful-conservative — prefer precision):
+
+    * **status** — a status word (``auto_cleared`` / ``signed_current`` /
+      ``signed_stale`` / ``unsigned``, any separator) within :data:`_NB_PROXIMITY`
+      chars of a mentioned section slug → a claim that section HAS that status.
+      Verified via ``state.notebook_audit.audit_section``; a mismatch is a
+      ``state`` contradiction carrying the actual status.
+    * **passed** — a pass/graduate (or negated / fail) verdict word within range
+      of the audit-id mention → a claim about ``ModuleAudit.passed`` (rolled up
+      over the TEMPLATE's required slugs). A wrong verdict is a ``state``
+      contradiction. Skipped when no template resolves.
+    * **sha** — a 12–64 hex token (with >= one ``a-f`` letter, so decimals are
+      excluded) attributed to a nearby slug must equal/prefix that section's
+      current ``section_sha`` OR a recorded sign-off ``section_sha`` / ``view_sha``;
+      otherwise a ``number`` contradiction.
+
+    An UNRESOLVABLE source makes every status/sha claim ``unverifiable`` (flagged,
+    never a contradiction — the hook drops it). Slugs are drawn from the current
+    source AND the journal records (a signed-then-deleted section is still named).
+    Read-only and fail-safe: a corrupt journal line is skipped by the reader.
+    """
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import read_decisions
+
+    experiment_dir = Path(experiment_dir)
+    relay = relay_text or ""
+
+    sources_consulted: list[str] = []
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    if records:
+        sources_consulted.append("notebook_journal")
+
+    parsed, required_slugs = _nb_resolve_sources(experiment_dir, audit_id)
+    if parsed is not None:
+        sources_consulted.append("audited_source")
+
+    source_by_slug = {s.slug: s for s in parsed.sections} if parsed is not None else {}
+    slug_universe = set(source_by_slug) | _nb_journal_slugs(records)
+    # Only slugs the relay actually mentions can carry a claim.
+    slug_spans = {slug: spans for slug in slug_universe if (spans := _nb_slug_spans(relay, slug))}
+
+    mismatches: list[RelayMismatch] = []
+    claims_checked = 0
+
+    def _section_status(slug: str) -> nb.SectionAudit:
+        current_sha = source_by_slug[slug].section_sha if slug in source_by_slug else None
+        return nb.audit_section(records, slug, current_sha)
+
+    # ── (a) status claims ──────────────────────────────────────────────────────
+    for m in _NB_STATUS_RE.finditer(relay):
+        claimed = _nb_canon_status(m.group(0))
+        if claimed is None:
+            continue
+        slug = _nb_nearest_slug(m.start(), m.end(), slug_spans)
+        if slug is None:
+            continue  # not attributable to a section — module-level / noise
+        claims_checked += 1
+        if parsed is None:
+            mismatches.append(
+                RelayMismatch(
+                    claim=f"{slug} {claimed}",
+                    kind="unverifiable",
+                    detail=(
+                        f"status claim {claimed!r} about section {slug!r} cannot be "
+                        f"verified — the audited .py source for audit_id={audit_id!r} "
+                        "did not resolve"
+                    ),
+                    nearest_source_value=None,
+                )
+            )
+            continue
+        actual = _section_status(slug).status
+        if claimed != actual:
+            mismatches.append(
+                RelayMismatch(
+                    claim=f"{slug} {claimed}",
+                    kind="state",
+                    detail=(
+                        f"section {slug!r} is relayed as {claimed!r} but the journal + "
+                        f"current source reduce it to {actual!r}"
+                    ),
+                    nearest_source_value=actual,
+                )
+            )
+
+    # ── (b) module passed / gate verdict ───────────────────────────────────────
+    if parsed is not None and required_slugs is not None and _nb_slug_spans(relay, audit_id):
+        rollup = nb.audit_module(
+            experiment_dir, audit_id, source=parsed, required_slugs=required_slugs
+        )
+        for start, end in _nb_slug_spans(relay, audit_id):
+            claimed_pass = _nb_verdict_near(relay, start, end)
+            if claimed_pass is None:
+                continue
+            claims_checked += 1
+            if claimed_pass != rollup.passed:
+                mismatches.append(
+                    RelayMismatch(
+                        claim=f"audit {audit_id} {'passed' if claimed_pass else 'not passed'}",
+                        kind="state",
+                        detail=(
+                            f"audit {audit_id!r} is relayed as "
+                            f"{'passed' if claimed_pass else 'not passed'} but the "
+                            f"graduation rollup computes passed={rollup.passed}"
+                        ),
+                        nearest_source_value="passed" if rollup.passed else "not passed",
+                    )
+                )
+
+    # ── (c) sha-hex claims ─────────────────────────────────────────────────────
+    for m in _NB_HEX_RE.finditer(relay):
+        token = m.group(0)
+        if not any(c in "abcdefABCDEF" for c in token):
+            continue  # pure-decimal token — a number claim, not a sha
+        slug = _nb_nearest_slug(m.start(), m.end(), slug_spans)
+        if slug is None:
+            continue  # a hex not attributed to a section — unverifiable, not surfaced
+        claims_checked += 1
+        if parsed is None:
+            mismatches.append(
+                RelayMismatch(
+                    claim=token,
+                    kind="unverifiable",
+                    detail=(
+                        f"sha claim {token!r} about section {slug!r} cannot be verified "
+                        f"— the audited .py source for audit_id={audit_id!r} did not "
+                        "resolve"
+                    ),
+                    nearest_source_value=None,
+                )
+            )
+            continue
+        audit = _section_status(slug)
+        candidates = [
+            c
+            for c in (audit.current_section_sha, audit.signed_section_sha, audit.view_sha)
+            if isinstance(c, str) and c
+        ]
+        if not _nb_hex_matches(token, candidates):
+            mismatches.append(
+                RelayMismatch(
+                    claim=token,
+                    kind="number",
+                    detail=(
+                        f"hex {token!r} attributed to section {slug!r} matches neither "
+                        "its current section_sha nor a recorded sign-off sha/view_sha"
+                    ),
+                    nearest_source_value=audit.current_section_sha or audit.signed_section_sha,
+                )
+            )
+
+    mismatches = _dedupe_mismatches(mismatches)
+    return VerifyRelayResult(
+        clean=not mismatches,
+        claims_checked=claims_checked,
+        mismatches=mismatches,
+        sources_consulted=sources_consulted,
+    )

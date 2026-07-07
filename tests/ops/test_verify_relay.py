@@ -312,3 +312,162 @@ def test_bare_state_word_after_count_phrase_still_flagged(tmp_path: Path) -> Non
     assert len(state) == 1
     assert state[0].claim.lower() == "failed"
     assert state[0].nearest_source_value == "complete"
+
+
+# ── notebook-audit relay (T11): status / passed / sha claims ────────────────────
+
+_NB_AUDIT = "demo-audit"
+
+_NB_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+data = pd.read_csv("in.csv")
+
+# %%
+# hpc-audit-section: fit-model
+model = fit(data)
+"""
+
+
+def _nb_sha(slug: str) -> str:
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    return next(s.section_sha for s in parse_percent_source(_NB_SOURCE).sections if s.slug == slug)
+
+
+def _nb_write_interview(tmp_path: Path, *, with_template: bool = True) -> None:
+    import json
+
+    (tmp_path / "source.py").write_text(_NB_SOURCE, encoding="utf-8")
+    block: dict[str, object] = {"source": "source.py", "audit_id": _NB_AUDIT}
+    if with_template:
+        # Template shares both slugs → required = {load-data, fit-model}.
+        (tmp_path / "template.py").write_text(_NB_SOURCE, encoding="utf-8")
+        block["template"] = "template.py"
+    (tmp_path / "interview.json").write_text(
+        json.dumps({"audited_source": block}), encoding="utf-8"
+    )
+
+
+def _nb_sign(tmp_path: Path, slug: str, *, view_sha: str = "view-1") -> None:
+    from hpc_agent.state import notebook_audit as nb
+
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=_NB_AUDIT,
+        block=nb.SIGN_OFF_BLOCK,
+        response=f"reviewed the {slug} section",
+        resolved={
+            "audit_id": _NB_AUDIT,
+            "section": slug,
+            "section_sha": _nb_sha(slug),
+            "view_sha": view_sha,
+        },
+    )
+
+
+def _nb_run(tmp_path: Path, relay: str) -> VerifyRelayResult:
+    from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+
+    return verify_notebook_relay(tmp_path, _NB_AUDIT, relay)
+
+
+def test_notebook_correct_status_claim_passes(tmp_path: Path) -> None:
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")
+    _nb_sign(tmp_path, "fit-model")
+
+    out = _nb_run(tmp_path, "load-data is signed_current; fit-model is signed-current too.")
+    assert out.clean is True
+    assert out.mismatches == []
+    assert out.claims_checked >= 2
+    assert "notebook_journal" in out.sources_consulted
+    assert "audited_source" in out.sources_consulted
+
+
+def test_notebook_wrong_status_claim_flagged(tmp_path: Path) -> None:
+    """The section is unsigned (no record), relayed as auto_cleared → state mismatch."""
+    _nb_write_interview(tmp_path)
+    # Sign nothing → load-data reduces to unsigned.
+
+    out = _nb_run(tmp_path, "The load-data section is auto-cleared, ready to go.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert "load-data" in state[0].claim
+    assert state[0].nearest_source_value == "unsigned"
+
+
+def test_notebook_passed_verdict_contradiction_flagged(tmp_path: Path) -> None:
+    """Only one required section signed → rollup passed is False; relay claims passed."""
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")  # fit-model stays unsigned → passed=False
+
+    out = _nb_run(tmp_path, "The demo-audit graduation gate passed; ready to submit.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert any("passed" in m.detail and "passed=False" in m.detail for m in state)
+
+
+def test_notebook_passed_verdict_correct_passes(tmp_path: Path) -> None:
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")
+    _nb_sign(tmp_path, "fit-model")
+
+    out = _nb_run(tmp_path, "The demo-audit gate passed — every section is signed.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_notebook_sha_mismatch_flagged(tmp_path: Path) -> None:
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")
+
+    out = _nb_run(tmp_path, f"Section load-data was signed at {'f' * 64}.")
+    assert out.clean is False
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == "f" * 64
+
+
+def test_notebook_correct_sha_passes(tmp_path: Path) -> None:
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")
+
+    out = _nb_run(tmp_path, f"Section load-data is at {_nb_sha('load-data')}.")
+    assert [m for m in out.mismatches if m.kind == "number"] == []
+
+
+def test_notebook_unresolvable_source_is_unverifiable_not_contradiction(tmp_path: Path) -> None:
+    """No interview.json → the .py cannot resolve → claims are unverifiable, not
+    contradictions (the hook drops them; nothing blocks)."""
+    _nb_sign(tmp_path, "load-data")  # a journal record exists, but no source resolves
+
+    out = _nb_run(tmp_path, "The load-data section is auto_cleared.")
+    assert [m for m in out.mismatches if m.kind in ("state", "number")] == []
+    unv = [m for m in out.mismatches if m.kind == "unverifiable"]
+    assert len(unv) == 1  # the slug came from the journal record
+    assert "audited_source" not in out.sources_consulted
+
+
+def test_notebook_no_slug_mentioned_is_clean(tmp_path: Path) -> None:
+    """A status word with no section slug in range is module-level noise, skipped."""
+    _nb_write_interview(tmp_path)
+
+    out = _nb_run(tmp_path, "Everything is unsigned in the abstract sense of the word.")
+    assert out.clean is True
+    assert out.claims_checked == 0
+
+
+def test_notebook_malformed_journal_line_skipped(tmp_path: Path) -> None:
+    """A corrupt JSONL line does not strand the audit — a valid claim still verifies."""
+    from hpc_agent.state.decision_journal import decisions_path
+
+    _nb_write_interview(tmp_path)
+    _nb_sign(tmp_path, "load-data")
+    path = decisions_path(tmp_path, "notebook", _NB_AUDIT)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{not valid json\n")
+
+    out = _nb_run(tmp_path, "load-data is signed_current.")
+    assert out.clean is True

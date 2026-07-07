@@ -27,20 +27,28 @@ On a Stop event the hook:
    silent pass;
 2. reads the session transcript (``transcript_path``) and extracts the final
    assistant message text (the trailing run of assistant entries);
-3. finds which journaled run ids the text actually mentions — number/state
-   claims are only attributable to a run the relay names, so a final message
-   naming no journaled run is a silent pass;
+3. finds which journaled run ids AND notebook audit ids the text actually
+   mentions — number/state/status claims are only attributable to a run/audit
+   the relay names, so a final message naming neither is a silent pass;
 4. runs :func:`~hpc_agent.ops.decision.verify_relay.verify_relay` in-process
-   for each mentioned run (the hook idiom: hook modules import the ops
-   function directly — ``alert_count`` → ``notify``, the stop guards →
-   ``skill_returns`` — rather than shelling out to a second subprocess);
+   for each mentioned run, and
+   :func:`~hpc_agent.ops.decision.verify_relay.verify_notebook_relay` for each
+   mentioned audit (the hook idiom: hook modules import the ops function
+   directly — ``alert_count`` → ``notify``, the stop guards →
+   ``skill_returns`` — rather than shelling out to a second subprocess). The
+   notebook path does ZERO work — not even a journal read — when the final
+   message names no audit;
 5. on **contradiction** mismatches (``number`` / ``state`` / ``run_id``),
    blocks the stop once with the itemized mismatch summary as the reason, so
-   the agent corrects the relay to match the journal. ``unverifiable`` claims
-   are NOT surfaced here: a final message legitimately carries numbers the
-   run's records never saw (test counts, line numbers); the hook is a
-   seatbelt against *contradicting* the durable record, and the
-   useful-conservative unverifiable policy stays a verb-level concern.
+   the agent corrects the relay to match the journal. A notebook relay reuses
+   these kinds (a wrong section status / module ``passed`` verdict → ``state``;
+   a mismatched sha-hex → ``number``), so no new blocking kind is introduced.
+   ``unverifiable`` claims are NOT surfaced here: a final message legitimately
+   carries numbers the run's records never saw (test counts, line numbers), and
+   a notebook claim whose ``.py`` source cannot resolve is likewise
+   unverifiable, not a contradiction; the hook is a seatbelt against
+   *contradicting* the durable record, and the useful-conservative unverifiable
+   policy stays a verb-level concern.
 
 Loop safety & defensiveness
 ---------------------------
@@ -62,13 +70,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
-__all__ = ["build_hook_output", "final_assistant_text", "main", "mentioned_run_ids"]
+__all__ = [
+    "build_hook_output",
+    "final_assistant_text",
+    "main",
+    "mentioned_audit_ids",
+    "mentioned_run_ids",
+]
 
-# Cap how many mentioned runs one stop audits — the hook must stay cheap.
+# Cap how many mentioned runs / audits one stop audits — the hook must stay cheap.
 _MAX_RUNS_AUDITED = 5
+_MAX_AUDITS_AUDITED = 5
 
 # Mismatch kinds that contradict the durable record (surfaced); the
-# ``unverifiable`` kind is deliberately excluded (see module docstring).
+# ``unverifiable`` kind is deliberately excluded (see module docstring). The
+# notebook-audit relay (T11) deliberately REUSES these kinds — a wrong section
+# status / module ``passed`` verdict is a ``state`` contradiction, a mismatched
+# sha-hex a ``number`` one — so no new kind is added to the blocking set (and no
+# wire-enum / schema change): the semantics stay coherent (a status IS a
+# lifecycle-family claim; a sha is a value claim).
 _CONTRADICTION_KINDS = frozenset({"number", "state", "run_id"})
 
 
@@ -77,6 +97,16 @@ def _journal_runs_dir(experiment_dir: Path) -> Path:
     from hpc_agent.state.run_record import _current_homedir, repo_hash
 
     return _current_homedir() / repo_hash(experiment_dir) / "runs"
+
+
+def _notebook_audits_dir(experiment_dir: Path) -> Path:
+    """``<experiment>/.hpc/notebooks`` — WITHOUT creating (no-scaffold).
+
+    Constructed as a raw path (never ``RepoLayout(...).hpc``, which materializes
+    the ``.hpc`` tree) so the discovery probe stays side-effect-free — a repo that
+    has never run an audit is not scaffolded one by a Stop event.
+    """
+    return Path(experiment_dir).resolve() / ".hpc" / "notebooks"
 
 
 def final_assistant_text(transcript_path: Path) -> str:
@@ -148,6 +178,24 @@ def mentioned_run_ids(relay_text: str, runs_dir: Path) -> list[str]:
     return [rid for rid in stems if rid and rid in relay_text]
 
 
+def mentioned_audit_ids(relay_text: str, notebooks_dir: Path) -> list[str]:
+    """Notebook audit ids the relay text names, journal order.
+
+    Mirrors :func:`mentioned_run_ids`: keyed on substring presence of each
+    ``<notebooks>/<audit_id>.decisions.jsonl`` stem in the final text — a claim
+    is only attributable to an audit the relay mentions. A glob-only probe (no
+    journal is read) so a stop that names no audit does zero notebook work.
+    Filesystem errors yield an empty list (fail-open).
+    """
+    try:
+        ids = sorted(
+            p.name[: -len(".decisions.jsonl")] for p in notebooks_dir.glob("*.decisions.jsonl")
+        )
+    except OSError:
+        return []
+    return [aid for aid in ids if aid and aid in relay_text]
+
+
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
     """Pure core: map a Stop *payload* to a block decision, or ``None``.
 
@@ -174,8 +222,12 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
 
     runs_dir = _journal_runs_dir(cwd_dir)
-    if not runs_dir.is_dir():
-        return None  # no hpc journal for this repo — silent pass
+    notebooks_dir = _notebook_audits_dir(cwd_dir)
+    # An hpc repo has a run journal OR a notebook-audit journal (a pre-submit
+    # prelude repo audits source before any run exists). Neither → not an hpc
+    # repo — silent pass, no-scaffold.
+    if not runs_dir.is_dir() and not notebooks_dir.is_dir():
+        return None
 
     transcript = payload.get("transcript_path")
     if not isinstance(transcript, str) or not transcript:
@@ -184,27 +236,44 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     if not relay_text:
         return None
 
-    run_ids = mentioned_run_ids(relay_text, runs_dir)
-    if not run_ids:
-        return None
-
-    from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
-    from hpc_agent.ops.decision.verify_relay import verify_relay
+    run_ids = mentioned_run_ids(relay_text, runs_dir) if runs_dir.is_dir() else []
+    audit_ids = mentioned_audit_ids(relay_text, notebooks_dir) if notebooks_dir.is_dir() else []
+    if not run_ids and not audit_ids:
+        return None  # nothing attributable to audit — the run path stays untouched
 
     findings: list[str] = []
-    for run_id in run_ids[:_MAX_RUNS_AUDITED]:
-        try:
-            result = verify_relay(
-                experiment_dir=cwd_dir,
-                spec=VerifyRelayInput(run_id=run_id, relay_text=relay_text),
-            )
-        except Exception:
-            continue  # a run we cannot audit is a silent pass for that run
-        for m in result.mismatches:
-            if m.kind not in _CONTRADICTION_KINDS:
-                continue
-            nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
-            findings.append(f"[{run_id}] {m.claim!r}: {m.detail}{nearest}")
+
+    if run_ids:
+        from hpc_agent._wire.queries.verify_relay import VerifyRelayInput
+        from hpc_agent.ops.decision.verify_relay import verify_relay
+
+        for run_id in run_ids[:_MAX_RUNS_AUDITED]:
+            try:
+                result = verify_relay(
+                    experiment_dir=cwd_dir,
+                    spec=VerifyRelayInput(run_id=run_id, relay_text=relay_text),
+                )
+            except Exception:
+                continue  # a run we cannot audit is a silent pass for that run
+            for m in result.mismatches:
+                if m.kind not in _CONTRADICTION_KINDS:
+                    continue
+                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
+                findings.append(f"[{run_id}] {m.claim!r}: {m.detail}{nearest}")
+
+    if audit_ids:
+        from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+
+        for audit_id in audit_ids[:_MAX_AUDITS_AUDITED]:
+            try:
+                nb_result = verify_notebook_relay(cwd_dir, audit_id, relay_text)
+            except Exception:
+                continue  # an audit we cannot check is a silent pass for that audit
+            for m in nb_result.mismatches:
+                if m.kind not in _CONTRADICTION_KINDS:
+                    continue
+                nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
+                findings.append(f"[{audit_id}] {m.claim!r}: {m.detail}{nearest}")
 
     if not findings:
         return None

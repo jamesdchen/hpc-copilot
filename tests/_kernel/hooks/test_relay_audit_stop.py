@@ -219,3 +219,133 @@ def test_main_is_a_clean_noop_on_garbage_stdin(
     monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
     assert relay_audit_stop.main() == 0
     assert capsys.readouterr().out == ""
+
+
+# ─── notebook-audit relay (T11) ──────────────────────────────────────────────
+
+_NB_AUDIT = "demo-audit"
+
+_NB_SOURCE = """# %%
+# hpc-audit-section: load-data
+import pandas as pd
+data = pd.read_csv("in.csv")
+
+# %%
+# hpc-audit-section: fit-model
+model = fit(data)
+"""
+
+
+def _seed_notebook(exp: Path, *, sign: str | None = "load-data") -> None:
+    """A discoverable notebook audit: source + template + interview.json, and (to
+    make the journal file exist for discovery) a sign-off of *sign* if given."""
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.audit_source import parse_percent_source
+    from hpc_agent.state.decision_journal import append_decision
+
+    (exp / "source.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (exp / "template.py").write_text(_NB_SOURCE, encoding="utf-8")
+    (exp / "interview.json").write_text(
+        json.dumps(
+            {
+                "audited_source": {
+                    "source": "source.py",
+                    "template": "template.py",
+                    "audit_id": _NB_AUDIT,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    if sign is not None:
+        sha = next(
+            s.section_sha for s in parse_percent_source(_NB_SOURCE).sections if s.slug == sign
+        )
+        append_decision(
+            exp,
+            scope_kind="notebook",
+            scope_id=_NB_AUDIT,
+            block=nb.SIGN_OFF_BLOCK,
+            response=f"reviewed the {sign} section",
+            resolved={"audit_id": _NB_AUDIT, "section": sign, "section_sha": sha, "view_sha": "v1"},
+        )
+
+
+def test_blocks_on_wrong_notebook_status(tmp_path: Path) -> None:
+    """load-data is signed_current; the relay calls it unsigned → state block.
+
+    Also exercises the pre-submit repo shape: no run was ever submitted, so the
+    hook proceeds on the notebook journal alone."""
+    _seed_notebook(tmp_path, sign="load-data")
+    transcript = _transcript(tmp_path, f"For audit {_NB_AUDIT}: the load-data section is unsigned.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert _NB_AUDIT in out["reason"]
+    assert "load-data" in out["reason"]
+
+
+def test_notebook_loop_safe_on_stop_hook_active(tmp_path: Path) -> None:
+    _seed_notebook(tmp_path, sign="load-data")
+    transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: load-data is unsigned.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript, stop_hook_active=True))
+    assert out is None
+
+
+def test_silent_on_correct_notebook_status(tmp_path: Path) -> None:
+    _seed_notebook(tmp_path, sign="load-data")
+    transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: load-data is signed_current.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_no_notebook_work_when_no_audit_mentioned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run path is completely unaffected: a relay naming a run but no audit
+    does ZERO notebook work (verify_notebook_relay is never called), and the run
+    contradiction still fires."""
+    _seed_run(tmp_path, status="failed")
+    _seed_notebook(tmp_path, sign="load-data")  # a discoverable audit is present...
+
+    calls = {"n": 0}
+
+    def _counting(*_a: object, **_k: object) -> object:
+        calls["n"] += 1
+        raise AssertionError("verify_notebook_relay must not run when no audit is named")
+
+    monkeypatch.setattr("hpc_agent.ops.decision.verify_relay.verify_notebook_relay", _counting)
+
+    # ...but the relay names only the run, not the audit id.
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"  # run state mismatch still fires
+    assert RUN_ID in out["reason"]
+    assert calls["n"] == 0
+
+
+def test_notebook_unverifiable_source_not_surfaced(tmp_path: Path) -> None:
+    """A discoverable audit whose .py source cannot resolve (no interview.json)
+    yields only unverifiable claims → no block (the hook's kind filter)."""
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.audit_source import parse_percent_source
+    from hpc_agent.state.decision_journal import append_decision
+
+    # Journal file exists (discoverable) but there is NO interview.json/source.
+    sha = next(
+        s.section_sha for s in parse_percent_source(_NB_SOURCE).sections if s.slug == "load-data"
+    )
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=_NB_AUDIT,
+        block=nb.SIGN_OFF_BLOCK,
+        response="reviewed load-data",
+        resolved={
+            "audit_id": _NB_AUDIT,
+            "section": "load-data",
+            "section_sha": sha,
+            "view_sha": "v",
+        },
+    )
+    transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: load-data is auto_cleared.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
