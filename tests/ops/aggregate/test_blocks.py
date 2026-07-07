@@ -259,9 +259,7 @@ def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
     _greenlight(experiment, "aggregate-run")
     looks = {"held_out": {"prior_looks": 2, "distinct_lineages": 1}}
 
-    with mock.patch.object(
-        blocks, "aggregate_flow", return_value=_agg_result(scope_looks=looks)
-    ):
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(scope_looks=looks)):
         result = blocks.aggregate_run(experiment, spec=spec)
 
     assert result.brief["scope_looks"] == looks

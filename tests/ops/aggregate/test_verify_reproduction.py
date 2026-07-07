@@ -86,9 +86,7 @@ def _pair(
 
 
 def _run(exp: Path, tolerance: ReproTolerance | None = None):
-    spec = VerifyReproductionSpec(
-        original_run_id=ORIG, repro_run_id=REPRO, tolerance=tolerance
-    )
+    spec = VerifyReproductionSpec(original_run_id=ORIG, repro_run_id=REPRO, tolerance=tolerance)
     return verify_reproduction(exp, spec=spec)
 
 
@@ -254,8 +252,16 @@ def test_receipt_line_appended_and_self_contained(tmp_path: Path) -> None:
     assert len(lines) == 1
     record = json.loads(lines[0])
     assert record == res.receipt  # returned receipt IS the persisted line
-    for field in ("ts", "schema_version", "original", "repro", "tolerance_spec",
-                  "per_key", "overall", "sources"):
+    for field in (
+        "ts",
+        "schema_version",
+        "original",
+        "repro",
+        "tolerance_spec",
+        "per_key",
+        "overall",
+        "sources",
+    ):
         assert field in record
     assert record["schema_version"] == 1
     assert record["overall"] == "match"
@@ -264,8 +270,14 @@ def test_receipt_line_appended_and_self_contained(tmp_path: Path) -> None:
 
 def test_receipt_identity_lifted_verbatim_from_sidecar(tmp_path: Path) -> None:
     _write_sidecar(tmp_path, ORIG, cmd_sha="c" * 64, env_hash="env-orig", cluster="hoffman2")
-    _write_sidecar(tmp_path, REPRO, reproduces=ORIG, cmd_sha="c" * 64, env_hash="env-repro",
-                   cluster="discovery")
+    _write_sidecar(
+        tmp_path,
+        REPRO,
+        reproduces=ORIG,
+        cmd_sha="c" * 64,
+        env_hash="env-repro",
+        cluster="discovery",
+    )
     _write_aggregate(tmp_path, ORIG, {"gp": {"pi": 3.14}})
     _write_aggregate(tmp_path, REPRO, {"gp": {"pi": 3.14}})
     res = _run(tmp_path)
@@ -319,7 +331,13 @@ def test_compare_metrics_pure_shape() -> None:
     assert by_key["c"]["verdict"] == "incomparable"
     # numeric match carries diffs; the schema is the 7 declared fields.
     assert set(by_key["a"]) == {
-        "key", "original", "repro", "abs_diff", "rel_diff", "verdict", "tolerance_applied",
+        "key",
+        "original",
+        "repro",
+        "abs_diff",
+        "rel_diff",
+        "verdict",
+        "tolerance_applied",
     }
     assert by_key["a"]["abs_diff"] == 0.0
 

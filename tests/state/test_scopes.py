@@ -211,9 +211,7 @@ def test_lineage_chain_orders_newest_to_root(
     assert scopes.lineage_chain(tmp_path, "orphan") == ["orphan"]
 
 
-def test_chain_root_equals_lineage_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_chain_root_equals_lineage_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Property: chain[-1] == lineage_root for non-cyclic chains (one walk)."""
     _patch_records(
         monkeypatch,
