@@ -84,6 +84,10 @@ WORKFLOW_TRIGGER_SLASHES: set[str] = set()
 SKILL_ONLY_OK: set[str] = {
     "hpc-build-executor",
     "hpc-classify-axis",
+    # Notebook-audit loop (2026-07-08): agent-only in-session driver
+    # (draft -> lint -> auto-clear -> view -> sign-off -> status); no
+    # paired user-typed slash ships in v1.
+    "hpc-notebook-audit",
     "hpc-wrap-entry-point",
     # Human-run release procedure (tracked here since 2026-07-04 so it lives
     # under the repo lints; formerly an untracked ~/.claude/skills copy that

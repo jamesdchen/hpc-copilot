@@ -1,9 +1,13 @@
 # The notebook-audit substrate — design + implementation plan
 
-**Status: PLANNED (2026-07-07), not yet implemented.** This document is the
-durable hand-off of a full planning cycle (plan + two user-driven revisions);
-the next session dispatches the implementation from it. Cite `path::symbol`,
-never line numbers.
+**Status: v1 IMPLEMENTED (2026-07-08).** Core (T0–T9) + the skill
+(`src/slash_commands/skills/hpc-notebook-audit/SKILL.md`) + three query
+verbs (`notebook-lint`, `notebook-audit-view`, `notebook-status`) + one
+mutate verb (`notebook-auto-clear` — see the drift log) are in the tree.
+v1.5 (the jupytext export, render receipts, verify-relay hash claims)
+remains scheduled. Cite `path::symbol`, never line numbers. Implementation
+drift from this plan is recorded in the drift log at the end of this
+document.
 
 ## Product intent
 
@@ -227,6 +231,63 @@ would couple core to its grammar); the render receipt stays opaque
 `{slug: sha}` — parsing an output crosses Q1; sign-off UX pressure to soften
 the human-required tier is the feature working — soften only via richer
 harness-captured utterances, never bare acks.
+
+## Implementation drift log (v1, 2026-07-08)
+
+Deviations from the plan above, each with its recorded reason:
+
+- **`notebook-auto-clear` is a NEW mutate verb the plan lacked.** D-attention
+  says auto-cleared sections are "journaled as auto_cleared" but no planned
+  task owned the agent-facing writer — without it, template-inherited
+  sections could never pass the graduation gate. The verb
+  (`ops/notebook/auto_clear_op.py`) recomputes lint + view + tier entirely
+  server-side (caller supplies only paths/ids/roots), so a caller cannot
+  launder a flagged section by omitting findings; records route through
+  `state/notebook_audit.py::record_auto_clear` → `attestation.bind`.
+- **T5's view is a pure module; the interface verb is `notebook-audit-view`**
+  (`ops/notebook/view_op.py`), which takes `lint_findings` CHAINED from
+  `notebook-lint` (the lint's rules live inside its primitive body; no clean
+  shared function existed). The view result carries the code-rendered
+  `markdown` for verbatim relay.
+- **T8 accept-and-mark decision (D-attention open question resolved):** an
+  AUTO_CLEARED section ACCEPTS a human sign-off and stamps
+  `resolved["redundant"] = true` — refusing would delete a real human review
+  and create a verb-shaped affordance gap; marking keeps the attention
+  ledger honest. The raised diff-token bar is waived for redundant
+  sign-offs; the recompute lock and slug-naming floor still apply.
+- **T8 tier-recompute boundary:** at append time the sign-off gate checks the
+  statically-recomputable tier legs (diff classification,
+  assertions-without-receipt) with `lint_findings=()`; a section made
+  human-required solely by a lint flag is not distinguished at the gate.
+  `view_sha` is validated present but never recomputed there — it is a
+  provenance witness; the recompute lock is `section_sha`. No resolvable
+  template → every section reads added → HUMAN_REQUIRED (conservative).
+- **T6 stale auto-clear reduces to `unsigned`, not a stale-flavored status:**
+  drift = unsigned by construction; a machine clearance has no human to
+  inform. A stale HUMAN sign-off earns the informational `signed_stale`.
+  Both fail the gate identically.
+- **T9 refusal split:** missing/unparseable source or template in an
+  opted-in repo raises `SpecInvalid` (broken setup), not `SourceUnaudited`
+  (reserved for present-but-not-current sections). `SourceUnaudited` reuses
+  `error_code="precondition_failed"` (the ScopeLocked precedent — no new
+  wire enum).
+- **T0 kernel additions:** `reduce` takes records in append order (newest
+  LAST — the order `read_decisions` returns) and grew an optional
+  `subject_id` filter so per-section callers don't re-write the selection
+  loop. The kernel operates on the attestation *projection* built from a
+  journal record's `resolved` fields — it never learns the journal record
+  shape.
+- **T1 marker edge:** a col-0 marker that is not its cell's first non-blank
+  line is REFUSED loudly (`SpecInvalid`); an indented marker is ordinary
+  content (not a marker at all). Preamble before the first marker belongs
+  to no section but IS covered by `module_sha`.
+- **`ops/notebook_view.py` facade** exists solely so
+  `ops/decision/journal.py` can reach the view builder without tripping the
+  subject-imports lint (the `field_ownership.py` precedent).
+- **Skill registration:** `hpc-notebook-audit` is auto-discovered by the
+  installer; deliberately NOT in `_KNOWN_SKILLS` (that set gates the
+  sub-skill return-envelope protocol, which this in-session human-facing
+  driver doesn't use — the hpc-submit posture).
 
 ## Related, planned separately
 

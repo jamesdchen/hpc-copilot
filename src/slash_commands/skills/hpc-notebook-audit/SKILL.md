@@ -1,0 +1,69 @@
+---
+name: hpc-notebook-audit
+description: "Drive the notebook-audit prelude: the LLM drafts/revises a percent-format .py source, then the audit loop runs notebook-lint → notebook-auto-clear → notebook-audit-view (relayed VERBATIM) → typed human sign-off via append-decision → notebook-status, until the module passes and the submit pipeline will accept the source. The skill drafts during the prelude but NEVER edits the source during the audit; it never resolves a decision and never interprets the audit view beyond the code-rendered projection."
+allowed-tools: Bash Read Write Edit
+execution: inline
+category: agent-autonomous
+---
+
+Drive the **notebook-audit prelude** — the surface (`docs/design/notebook-audit.md`, "The audit SURFACE — harness-first") that turns a human's idea into **audited experiment code the submit pipeline will accept**. The Claude Code harness IS the audit surface: a sign-off is a typed chat utterance (the strongest authorship tier), and iteration is the existing `y`/nudge rendezvous pointed at code — the view is relayed, the human signs or nudges, the LLM re-drafts the section, the hash moves, the section reads UNSIGNED again by construction, and the loop re-runs. No stale approval survives an edit.
+
+The audit runs over a **source `.py`** in jupytext percent format (`# %%` cells) carrying opaque section markers (`# hpc-audit-section: <slug>` as the first non-blank line inside a cell), diffed against a **template `.py`** whose section slugs are the required inventory. You orchestrate four in-tree verbs — `notebook-lint`, `notebook-auto-clear`, `notebook-audit-view`, `notebook-status` — plus `append-decision` for the sign-off. The verbs compute everything; you relay their code-rendered projections and translate the human's `y`/nudge. The graduation gate (`ops/notebook_gate.py::assert_source_audited`, raising `errors.SourceUnaudited`) refuses an opted-in repo whose audit is stale, so a `passed` audit is the ticket into submit.
+
+## Skill invariants (the doctrine this skill enforces)
+
+- **The skill never resolves a decision.** Each human-required section is signed by the human, or nudged; you never sign on their behalf and never mark a section cleared yourself (auto-clear is a code verb, not your judgment).
+- **The skill never interprets the audit content.** The only human-facing rendering of a section is `notebook-audit-view`'s `markdown` projection, relayed VERBATIM — no LLM paraphrase, summary, or gloss of the diff/assertions/flags ever enters the audit path (the D6 interface; the relay-audit Stop hook enforces this posture).
+- **The skill NEVER edits the source between the view and the sign-off.** An edit moves the section hash, which invalidates the `view_sha` the human is about to bind — so an edit mid-rendezvous silently voids the relayed view. Drafting/revising the `.py` is the sanctioned **prelude** role (steps 1 and 5b below); during the audit steps the source is frozen. If a section must change, that IS a nudge: re-draft, then re-run the loop from lint.
+- **The skill never hand-authors a journal record** outside `append-decision`, and never invents an `audit_id` — the slug id is caller-authored (the fabrication class; `state/decision_journal.py`'s `"notebook"` scope kind stores it at `.hpc/notebooks/<audit_id>.decisions.jsonl`).
+- **Free-text elicitation, never pre-filled buttons.** The `audit_id` and the human's intent at a sign-off come from typed text the human authors — never an option you pre-fill and they click (the authorship doctrine; a click carries no authorship the sign-off gate will accept).
+
+## Invocation surface
+
+- **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
+- **MCP-first (preferred):** the typed `notebook-lint` / `notebook-auto-clear` / `notebook-audit-view` / `notebook-status` / `append-decision` tools from `hpc-agent mcp-serve`, called with inline args.
+- **Read-only QUERY verbs go DIRECT through MCP — never a spec-file round-trip.** `notebook-lint`, `notebook-audit-view`, `notebook-status`, `read-decisions` are pure reads: call the typed MCP tool with inline args and read the result — do NOT `Write` a `.hpc/specs/*.json` file and shell `--spec` just to read state back. Never relay a hash, tier, or count you remember; relay what the query returned.
+- **CLI fallback:** one call per verb, spec written to a file with the `Write` tool:
+  ```bash
+  hpc-agent notebook-audit-view --spec .hpc/specs/notebook-audit-view.json --experiment-dir .
+  ```
+  `--spec` takes a **file path only** — inline JSON (`--spec '{...}'`) is refused at the seam. Parse the envelope from stdout; read files with `Read`/`Grep`/`Glob`, never a shell `python -c` / `bash -c` / `jq` / `cat` (the auto-mode classifier hard-blocks those). To get a verb's input schema, use `hpc-agent describe <verb> --schema` — never `find`/`cat`/`inspect` a schema file.
+
+## The audit loop
+
+The loop threads the four verbs plus the sign-off. Each pass over a section ends in a verb call, never in your own conclusion.
+
+1. **Onboard / draft.** The human arrives with an idea and a template. Elicit the `audit_id` (a caller-authored slug) and the intent as **free text** — never a pre-filled option. Draft the source `.py` in jupytext percent format, copying each `# hpc-audit-section: <slug>` marker from the template so the template slugs appear in source order (structural completeness). This is the skill's sanctioned prelude role — the ONLY place it writes the source until a nudge sends it back (step 5b).
+2. **Lint.** Run `notebook-lint` over `{source, template, input_roots, source_roots}` and relay the `findings`, `unverifiable_paths`, and `linked_sources` HONESTLY — never mask a finding to make a section clearable. `unverifiable_paths` (computed path expressions the lint could not check) is an honest gap: say so plainly, never present it as "verified". The lint reports; it never refuses — the graduation gate is what refuses.
+3. **Auto-clear.** Run `notebook-auto-clear` over `{audit_id, source, template, input_roots, source_roots, receipt?}` — a mechanical, no-human-attention pass that journals a CODE attestation for each section with an empty template diff, zero lint flags, and green assertions. Relay which sections it reported `cleared` vs `skipped`. An auto-clear NEVER claims human review; a section it skipped is one that needs a human at step 5.
+4. **View + relay VERBATIM.** Run `notebook-audit-view` over `{source, template, lint_findings, receipt?}` — chain the step-2 `findings` list into `lint_findings` (the view does not re-lint). For each `human_required` section, relay the view's per-section `markdown` projection **VERBATIM** — the D6 interface: the diff, `ast.Assert` table, `lint_flags`, tier, `section_sha`, and `view_sha` are code-rendered, so surface them unaltered. Do NOT paraphrase, summarize, or interpret the audit content; the relay-audit Stop hook strikes an LLM-composed audit line.
+5. **Sign-off rendezvous** (per `human_required` section). Explain the bar to the human ONCE: a sign-off is a typed utterance that names the section slug token-exactly AND engages the diff specifics (e.g. "sign `construction` — the lookback-window change from 30 to 90 is intentional"), because the T8 gate refuses a bare ack and, for a human-required section, requires ≥1 token drawn from the section's diff-changed lines. A batch utterance may sign several slugs at once (the sign-off UX decision). Then:
+   - **Human signs** → commit the sign-off via `append-decision` with `scope_kind: "notebook"`, `scope_id: <audit_id>`, `block: "notebook-sign-off"`, `response: <the human's typed utterance>`, and `resolved: {audit_id, section, section_sha, view_sha}` — the `section_sha` and `view_sha` copied VERBATIM from the view for that section (the gate RECOMPUTES `section_sha` from the `.py` at append time; a hash cannot be asserted into existence). For an auto-cleared section a human sign-off is accepted but marked redundant.
+   - **Human nudges** → this IS an edit request. Re-draft that section in the `.py` (step 5b, the sanctioned prelude role), then loop back to step 2. The section hash moves, so its trust auto-revokes and it reads UNSIGNED at its new hash — EXPECT to re-lint, re-view, and re-sign it. Never edit a section AND commit its old `view_sha`; the edit voided that view.
+6. **Status.** Run `notebook-status` over `{audit_id, source, template}` and relay the per-section state (one of `auto_cleared`, `signed_current`, `signed_stale`, `unsigned`) and the whole-module `passed` predicate. The audit is DONE when `passed` is true — every template section is `auto_cleared` or `signed_current` at its current hash. Point the human at the graduation gate: submit (`ops/resolve_submit_inputs.py`, `ops/submit_flow.py`) refuses an opted-in repo whose audit is stale with `errors.SourceUnaudited`, so `passed` is the entry ticket. If a section reads `signed_stale` or `unsigned`, it is back in the loop at step 4.
+
+If the human ends the turn at a sign-off boundary without the audit passing, make a `notebook-status` (or the next verb) call the turn's last act — a closing chat message with no tool call ends the turn silently and strands the loop.
+
+## The nudge → re-draft → re-audit contract
+
+A nudge at a section is not a request for you to re-explain the view — it is a request to change the source. The cycle is fixed: re-draft the named section in the `.py` → the `section_sha` (and the module `view_sha`) move → the section's prior sign-off/auto-clear no longer matches its hash, so `notebook-status` reads it `unsigned` (or `signed_stale`) by construction → re-run `notebook-lint`, `notebook-audit-view`, and re-present the fresh VERBATIM view for a new sign-off. There is no "amend the approval in place"; trust is bound to a hash and a moved hash is a fresh audit. This is why the skill must not edit the source between a view and its sign-off — an edit there voids the view the human is signing.
+
+## Inputs
+
+| Field | Source |
+|---|---|
+| `experiment_dir` | Required (absolute path) |
+| `audit_id` | Human — a caller-authored slug, elicited as free text; NEVER core-invented |
+| `source` | The percent-format `.py` the LLM drafts (experiment-relative path) |
+| `template` | Caller — the template `.py` whose slugs are the required inventory |
+| `input_roots` | Caller — opaque data-path roots for the executes-live lint (default `[]`) |
+| `source_roots` | Caller — opaque import roots for the linked-sources lint (default `[]`) |
+| `receipt` | Caller (v1.5, optional) — the opaque `{slug: {output_sha, error}}` execution receipt that marks a section's assertions green |
+
+## Notes
+
+- **The skill never resolves a decision and never interprets raw results.** The verbs compute the classification, tier, hashes, and lint findings; the human signs. You translate at the rendezvous and relay the code-rendered `markdown` VERBATIM.
+- **Auto-clear is machine attention, sign-off is human attention** (the D-attention tiering). Never conflate them: an `auto_cleared` section spent no human judgment and its record must never read as a human ack; a `human_required` section needs an utterance that engages its specifics.
+- **Honest lint always.** Report `findings` and `unverifiable_paths` as they are — masking a finding to clear a section is exactly the posture the gate exists to defeat.
+- **No sign-off verb exists by design** (the no-unlock-verb doctrine): a section is signed through `append-decision` or not at all. Do not hunt for a `notebook-sign-off` verb; there is none.
+- **Every sign-off is journaled** (append-only, one record per exchange) at `.hpc/notebooks/<audit_id>.decisions.jsonl`.
