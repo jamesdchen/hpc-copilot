@@ -86,6 +86,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [apply-safe-defaults](apply-safe-defaults.md) | yes | _none_ | `hpc-agent apply-safe-defaults --spec <path>` |
+| [attention-queue](attention-queue.md) | yes | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` |
 | [batch-status](batch-status.md) | yes | ssh: `<cluster>` | `hpc-agent batch-status [--experiment-dir <dir>]` |
 | [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill] [--max-in-flight <max_in_flight>]` |
 | [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]` |
@@ -132,6 +133,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [recoveries-list](recoveries-list.md) | yes | _none_ | `hpc-agent recoveries list` |
 | [recoveries-show](recoveries-show.md) | yes | _none_ | `hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]` |
 | [resolve-resources](resolve-resources.md) | yes | _none_ | `hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>] [--mpi-pe <mpi_pe>] [--mpi-ranks <mpi_ranks>]` |
+| [run-story](run-story.md) | yes | _none_ | `hpc-agent run-story --spec <path> [--experiment-dir <dir>]` |
 | [scaffold-spec](scaffold-spec.md) | yes | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` |
 | [scope-status](scope-status.md) | yes | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |

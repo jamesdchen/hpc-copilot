@@ -302,6 +302,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "attention_queue.input.json",
+    "name": "attention-queue",
+    "output_schema": "attention_queue.output.json",
+    "python": "hpc_agent.ops.attention_op.attention_queue",
+    "side_effects": [],
+    "summary": "The attention queue: the fleet-wide digest ordered by needs-your-verdict-first. Collects every place a human action is the blocking edge (pending greenlights, committed-but-unadvanced decisions, anomaly briefs, campaign completion briefs, unsigned/stale audit sections, dead workers, alerts, open ssh circuits) across one experiment or the whole fleet (fleet=True), orders by leverage (unblock fan-out) then class then oldest, and renders a deterministic markdown digest relayed verbatim. Read-only, no SSH, watermark-neutral (moves no state); recomputed on every read (no cache).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent batch-status [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,
@@ -863,6 +875,18 @@
     "python": "hpc_agent.ops.resolve_resources.resolve_resources",
     "side_effects": [],
     "summary": "Resolve hpc-submit Step 6 resources in one call: walltime_sec (caller, else read-runtime-prior p95 × safety_mult, else cold-start null), gpu_type (caller, else clusters.<cluster>.gpu_types[0]), partition (caller, else recommend-partition), and mpi_pe (caller, else recommend-pe from parallel_environments when mpi_ranks is set). A missing/erroring read-runtime-prior is cold-start, not an error.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent run-story --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "run_story.input.json",
+    "name": "run-story",
+    "output_schema": "run_story.output.json",
+    "python": "hpc_agent.ops.run_story.run_story",
+    "side_effects": [],
+    "summary": "Render a run's complete journal trail as ONE deterministic, ordered, attributed timeline — decision journal, briefs, block terminals, journal-record stamps + verdict history, scope journals + look ledgers, and the notebook attestation journal — fingerprinted by story_sha. Read-only, no SSH. --include-lineage widens the read to the run's whole supersession chain. since_ts / limit window honestly: the result carries total_events / omitted_count and the markdown surfaces the omission, so a window never masquerades as the whole story. It is a PURE projection — identity, ordering, and counting over opaque records; it never interprets what any record means.",
     "verb": "query"
   },
   {

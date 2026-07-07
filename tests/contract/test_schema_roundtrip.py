@@ -73,6 +73,11 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "read-decisions",
         "status-snapshot",
         "status-watch",
+        # attention-queue (attention-queue T4): read-only fleet digest. `{}` is a
+        # valid spec and the runtime consumes it without cluster/journal state, so
+        # once attention_queue.input.json is baked it round-trips as a hard
+        # assertion (no fixture / xfail needed).
+        "attention-queue",
         "submit-s1",
         "submit-s2",
         "submit-s3",

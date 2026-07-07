@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**138 operations total**: 111 primitive atoms + 27 workflow atoms.
+**140 operations total**: 113 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,13 +14,14 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (58)
+## `query` (60)
 
 Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`apply-safe-defaults`](../primitives/apply-safe-defaults.md) | ✓ | _none_ | `hpc-agent apply-safe-defaults --spec <path>` | `_(none)_` | — | — |
+| [`attention-queue`](../primitives/attention-queue.md) | ✓ | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`batch-status`](../primitives/batch-status.md) | ✓ | ssh | `hpc-agent batch-status [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-advance`](../primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill] [--max-in-flight <max_in_flight>]` | `_(none)_` | — | — |
 | [`campaign-budget`](../primitives/campaign-budget.md) | ✓ | _none_ | `hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>]` | `_(none)_` | — | — |
@@ -67,6 +68,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`recoveries-list`](../primitives/recoveries-list.md) | ✓ | _none_ | `hpc-agent recoveries list` | `_(none)_` | — | — |
 | [`recoveries-show`](../primitives/recoveries-show.md) | ✓ | _none_ | `hpc-agent recoveries show --kind <kind> [--placeholders <placeholders>]` | `_(none)_` | — | — |
 | [`resolve-resources`](../primitives/resolve-resources.md) | ✓ | _none_ | `hpc-agent resolve-resources --cluster <cluster> [--experiment-dir <experiment_dir>] [--profile <profile>] [--cmd-sha <cmd_sha>] [--walltime-sec <walltime_sec>] [--gpu-type <gpu_type>] [--safety-mult <safety_mult>] [--partition <partition>] [--user-preferred-partition <user_preferred_partition>] [--mpi-pe <mpi_pe>] [--mpi-ranks <mpi_ranks>]` | `_(none)_` | — | — |
+| [`run-story`](../primitives/run-story.md) | ✓ | _none_ | `hpc-agent run-story --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`scaffold-spec`](../primitives/scaffold-spec.md) | ✓ | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` | `_(none)_` | — | — |
 | [`scope-status`](../primitives/scope-status.md) | ✓ | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`suggest-setup-action`](../primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `_(none)_` | — | — |
