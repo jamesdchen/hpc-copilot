@@ -131,25 +131,41 @@ def _concurrent_appender(args: tuple[str, int]) -> None:
     atomic_locked_update(Path(path_str), mutate)
 
 
-@pytest.mark.skipif(
-    sys.platform.startswith("win"),
-    reason="fcntl-based locking; Windows would race here",
-)
 def test_concurrent_writers_serialize(tmp_path: Path) -> None:
-    """Spawn 8 processes each appending one value; all 8 must land."""
+    """Spawn 8 processes each appending one value; all 8 must land.
+
+    Runs on win32 too: ``atomic_locked_update`` now routes through
+    ``advisory_flock``'s msvcrt byte-range lock, so concurrent writers
+    serialize on Windows exactly as they do under POSIX ``fcntl``.
+    """
     path = tmp_path / "doc.json"
     path.write_text(json.dumps({"entries": []}))
 
     n = 8
-    args = [(str(path), i) for i in range(n)]
     # "spawn", not "fork": this test runs inside a pytest-xdist worker, and a
-    # fork-based Pool inherits that already-threaded process — the classic
+    # fork-based child inherits that already-threaded process — the classic
     # fork-after-threads deadlock, which hung this test to the 300s timeout
     # intermittently in CI. spawn starts clean children (``_concurrent_appender``
     # is module-level, so it re-imports + pickles fine).
+    #
+    # Explicit ``Process`` children (not ``Pool.map``) with a per-child
+    # ``join(timeout=60)`` + exit-code assert: a spawn child that dies during
+    # bootstrap makes ``Pool.map`` block forever (the suspected un-diagnosable
+    # 300s CI hang on py3.12). Here a wedged child is a named, bounded failure.
     ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(processes=n) as pool:
-        pool.map(_concurrent_appender, args)
+    procs = [ctx.Process(target=_concurrent_appender, args=((str(path), i),)) for i in range(n)]
+    for proc in procs:
+        proc.start()
+    try:
+        for proc in procs:
+            proc.join(timeout=60)
+            assert not proc.is_alive(), f"child {proc.pid} did not finish within 60s"
+            assert proc.exitcode == 0, f"child {proc.pid} exited {proc.exitcode}"
+    finally:
+        for proc in procs:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=5)
 
     final = json.loads(path.read_text())
     assert isinstance(final["entries"], list)

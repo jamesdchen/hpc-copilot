@@ -15,9 +15,10 @@ Callers handle their own schema defaults inside ``mutate``. This keeps
 the helper agnostic to per-domain schema fields (``schema_version``,
 ``profile``, ``cluster``, etc.) and avoids overloading the signature.
 
-On systems without ``fcntl`` (e.g. native Windows), the helper falls
-back to a no-lock atomic write — same behaviour as the original
-``_with_locked_doc`` copies.
+The lock is a REAL cross-process exclusion on every platform we ship
+to: :func:`advisory_flock` backs it with ``fcntl.flock`` on POSIX and
+``msvcrt`` byte-range locking on native Windows, so concurrent writers
+serialize identically and no update is silently lost on win32.
 
 Also exposes :func:`atomic_write_json` — the canonical
 crash-durable JSON writer (tempfile + fsync + replace + parent-dir
@@ -164,8 +165,14 @@ def atomic_locked_update(
     path: Path,
     mutate: Callable[[dict[str, Any] | None], dict[str, Any]],
 ) -> dict[str, Any]:
-    """Acquire ``path``'s flock, read the current doc, apply ``mutate``,
-    and atomically replace ``path`` with the returned doc.
+    """Acquire ``path``'s advisory lock, read the current doc, apply
+    ``mutate``, and atomically replace ``path`` with the returned doc.
+
+    The lock is taken via :func:`advisory_flock` on a sibling
+    ``<path>.lock`` sentinel, so it is a REAL cross-process exclusion on
+    every platform: ``fcntl.flock`` on POSIX and ``msvcrt`` byte-range
+    locking on native Windows. Concurrent writers therefore serialize
+    identically on win32 — no update is silently lost.
 
     The read happens **inside** the lock so concurrent writers see a
     serialized view. Returns the new document so callers can use the
@@ -187,14 +194,10 @@ def atomic_locked_update(
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
-        import fcntl  # noqa: PLC0415 — POSIX-only import
-    except ImportError:
-        fcntl = None  # type: ignore[assignment]
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX)  # type: ignore[attr-defined]  # win32 mypy: fcntl is platform-gated
+    # Route the exclusion through advisory_flock — the one cross-platform
+    # lock (fcntl.flock on POSIX, msvcrt byte-range on win32). Blocking, so
+    # it always yields True; the read-modify-write happens inside the hold.
+    with advisory_flock(lock_path):
         existing = _read_json_doc(path)
         new_doc = mutate(existing)
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
@@ -229,11 +232,6 @@ def atomic_locked_update(
             if not tmp.closed:
                 tmp.close()
         return new_doc
-    finally:
-        if fcntl is not None:
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]  # win32 mypy: fcntl is platform-gated
-        os.close(fd)
 
 
 @contextlib.contextmanager
