@@ -14,8 +14,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+from pydantic import ValidationError
+
 from hpc_agent._wire.actions.notebook_auto_clear import NotebookAutoClearSpec
+from hpc_agent._wire.actions.notebook_record_receipt import NotebookRecordReceiptSpec
 from hpc_agent.ops.notebook.auto_clear_op import notebook_auto_clear
+from hpc_agent.ops.notebook.record_receipt_op import notebook_record_receipt
 from hpc_agent.state import notebook_audit as nb
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import read_decisions
@@ -185,20 +190,90 @@ def test_edit_after_clear_reclears_at_new_sha_append_only(tmp_path: Path) -> Non
     assert _status(tmp_path, "setup") == nb.AUTO_CLEARED
 
 
-# ── receipt greens an asserted section → cleared ──────────────────────────────
+# ── the laundering fire test FLIPS (T10) ─────────────────────────────────────
 
 
-def test_receipt_greens_asserted_section_into_a_clear(tmp_path: Path) -> None:
+def test_inline_receipt_argument_is_impossible(tmp_path: Path) -> None:
+    """The v1 laundering vector is GONE: the spec has no receipt field.
+
+    A caller can no longer hand ``notebook-auto-clear`` an opaque
+    ``{slug: {error: False}}`` to green an assertion-bearing section — the
+    ``extra="forbid"`` wire model rejects the key outright.
+    """
+    with pytest.raises(ValidationError):
+        NotebookAutoClearSpec.model_validate(
+            {
+                "audit_id": _AUDIT,
+                "source": "source.py",
+                "template": "template.py",
+                "receipt": {"model": {"error": False}},
+            }
+        )
+
+
+def _record_receipt(tmp_path: Path, slug: str, *, error: bool) -> None:
+    """Journal a render receipt for *slug* via the real record-receipt verb."""
+    notebook_record_receipt(
+        experiment_dir=tmp_path,
+        spec=NotebookRecordReceiptSpec.model_validate(
+            {
+                "audit_id": _AUDIT,
+                "source": "source.py",
+                "entries": {slug: {"output_sha": "out-abc", "error": error}},
+            }
+        ),
+    )
+
+
+def test_journaled_fresh_receipt_greens_asserted_section_end_to_end(tmp_path: Path) -> None:
     _write(tmp_path, _ASSERTED, _ASSERTED)
 
-    # Without a receipt the section's assertion is unproven → human_required.
+    # Without any journaled receipt the section's assertion is unproven →
+    # human_required (nothing cleared).
     without = _run(tmp_path)
     assert without.cleared == []
     assert [(s.section, s.reason) for s in without.skipped] == [("model", "human_required")]
     assert _records(tmp_path) == []
 
-    # A receipt marking it error-free greens the assertion → auto_cleared → cleared.
-    withr = _run(tmp_path, receipt={"model": {"output_sha": "abc", "error": False}})
+    # record-receipt → auto-clear → notebook-status reads auto_cleared.
+    _record_receipt(tmp_path, "model", error=False)
+    withr = _run(tmp_path)
     assert [c.section for c in withr.cleared] == ["model"]
     assert withr.skipped == []
     assert _status(tmp_path, "model") == nb.AUTO_CLEARED
+
+
+def test_error_true_receipt_never_greens(tmp_path: Path) -> None:
+    _write(tmp_path, _ASSERTED, _ASSERTED)
+    _record_receipt(tmp_path, "model", error=True)
+    result = _run(tmp_path)
+    assert result.cleared == []
+    assert [(s.section, s.reason) for s in result.skipped] == [("model", "human_required")]
+
+
+def test_edit_after_receipt_drift_revokes_green(tmp_path: Path) -> None:
+    """A receipt journaled at an OLD sha greens nothing after the section drifts."""
+    _write(tmp_path, _ASSERTED, _ASSERTED)
+    _record_receipt(tmp_path, "model", error=False)
+
+    # Confirm the receipt is fresh right now.
+    source = parse_percent_source((tmp_path / "source.py").read_text(encoding="utf-8"))
+    shas = {s.slug: s.section_sha for s in source.sections}
+    fresh = nb.read_render_receipts(tmp_path, _AUDIT, current_shas=shas)
+    assert fresh["model"]["fresh"] is True
+
+    # Edit the asserted section (both source + template so it stays inherited but
+    # its sha moves). The receipt now points at the OLD sha → stale.
+    _asserted_edited = _ASSERTED.replace("return 42", "return 7").replace(
+        "train() == 42", "train() == 7"
+    )
+    _write(tmp_path, _asserted_edited, _asserted_edited)
+    source2 = parse_percent_source((tmp_path / "source.py").read_text(encoding="utf-8"))
+    shas2 = {s.slug: s.section_sha for s in source2.sections}
+    stale = nb.read_render_receipts(tmp_path, _AUDIT, current_shas=shas2)
+    assert stale["model"]["fresh"] is False
+
+    # Auto-clear must NOT green the drifted section (no fresh receipt).
+    result = _run(tmp_path)
+    assert result.cleared == []
+    assert [(s.section, s.reason) for s in result.skipped] == [("model", "human_required")]

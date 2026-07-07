@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_auto_clear.input.json",
   "title": "notebook-auto-clear input spec",
-  "description": "Inputs to ``notebook-auto-clear`` — all paths / ids are caller-declared.\n\n``source`` / ``template`` are ``.py`` relpaths under the experiment dir (or\nabsolute), parsed by the same percent-format parser. ``input_roots`` /\n``source_roots`` are the OPAQUE roots the server-side lint recompute needs (a\nmissing path literal under ``input_roots`` flags its section, keeping it out\nof the auto-clear). ``receipt`` is the OPAQUE v1.5 execution receipt.",
+  "description": "Inputs to ``notebook-auto-clear`` — all paths / ids are caller-declared.\n\n``source`` / ``template`` are ``.py`` relpaths under the experiment dir (or\nabsolute), parsed by the same percent-format parser. ``input_roots`` /\n``source_roots`` are the OPAQUE roots the server-side lint recompute needs (a\nmissing path literal under ``input_roots`` flags its section, keeping it out\nof the auto-clear). There is deliberately NO ``receipt`` field (T10): render\nreceipts are read from the journal (sha-fresh only), never trusted from the\ncaller — see the module docstring.",
   "type": "object",
   "required": [
     "audit_id",
@@ -44,20 +44,6 @@
       },
       "title": "Source Roots",
       "type": "array"
-    },
-    "receipt": {
-      "anyOf": [
-        {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Optional OPAQUE execution receipt `{slug: {output_sha, error}}` (v1.5 forward-compat). `error is False` greens that section's declared assertions; absent a receipt, a section WITH assertions is not green and stays human_required.",
-      "title": "Receipt"
     }
   }
 }

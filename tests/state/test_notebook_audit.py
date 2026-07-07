@@ -316,3 +316,144 @@ def test_auto_clear_writer_routes_through_the_kernel_bind() -> None:
         "record_auto_clear must route the recompute-and-compare lock through "
         "attestation.bind, never re-inline it."
     )
+
+
+def test_render_receipt_writer_routes_through_the_kernel_bind() -> None:
+    src = inspect.getsource(nb.record_render_receipt)
+    assert "attestation.bind(" in src, (
+        "record_render_receipt must route the recompute-and-compare lock through "
+        "attestation.bind, never re-inline it."
+    )
+
+
+def test_render_receipt_reader_routes_drift_through_the_kernel() -> None:
+    src = inspect.getsource(nb.read_render_receipts)
+    assert "attestation.reduce(" in src, (
+        "read_render_receipts must route the current/stale freshness verdict "
+        "through the attestation kernel, never re-inline the sha compare."
+    )
+
+
+# ── render receipts (T10): bind + journal + newest-valid + freshness ─────────
+
+
+def test_render_receipt_binds_and_journals(tmp_path: Path) -> None:
+    sec = _section(_SOURCE, "fit-model")
+    rec = nb.record_render_receipt(
+        tmp_path,
+        audit_id=_AUDIT,
+        section="fit-model",
+        section_sha=sec.section_sha,
+        recompute=sec.section_sha,
+        output_sha="out-1",
+        error=False,
+    )
+    # A receipt is honest, mechanical evidence — never a human ack, never a clearance.
+    assert rec["block"] == nb.RENDER_RECEIPT_BLOCK == "notebook-render-receipt"
+    assert rec["response"] == nb.RENDER_RECEIPT_RESPONSE == "rendered"
+    assert rec["response"] not in ("y", "auto_cleared")
+    assert rec["resolved"]["attestor"] == "code"
+    assert rec["resolved"]["output_sha"] == "out-1"
+    assert rec["resolved"]["error"] is False
+
+
+def test_render_receipt_bind_refuses_mismatched_sha(tmp_path: Path) -> None:
+    sec = _section(_SOURCE, "fit-model")
+    with pytest.raises(errors.SpecInvalid):
+        nb.record_render_receipt(
+            tmp_path,
+            audit_id=_AUDIT,
+            section="fit-model",
+            section_sha=sec.section_sha,
+            recompute="deadbeef" * 8,  # a different sha — bind must refuse
+            output_sha="out-1",
+            error=False,
+        )
+    assert _records(tmp_path) == []  # the lock fired before the append
+
+
+def test_read_render_receipts_fresh_when_sha_matches(tmp_path: Path) -> None:
+    sec = _section(_SOURCE, "fit-model")
+    nb.record_render_receipt(
+        tmp_path,
+        audit_id=_AUDIT,
+        section="fit-model",
+        section_sha=sec.section_sha,
+        recompute=sec.section_sha,
+        output_sha="out-1",
+        error=False,
+    )
+    got = nb.read_render_receipts(tmp_path, _AUDIT, current_shas={"fit-model": sec.section_sha})
+    assert got["fit-model"]["fresh"] is True
+    assert got["fit-model"]["error"] is False
+    assert got["fit-model"]["output_sha"] == "out-1"
+    assert got["fit-model"]["section_sha"] == sec.section_sha
+
+
+def test_read_render_receipts_stale_after_edit(tmp_path: Path) -> None:
+    old = _section(_SOURCE, "fit-model")
+    nb.record_render_receipt(
+        tmp_path,
+        audit_id=_AUDIT,
+        section="fit-model",
+        section_sha=old.section_sha,
+        recompute=old.section_sha,
+        output_sha="out-1",
+        error=False,
+    )
+    new = _section(_SOURCE_EDITED, "fit-model")
+    assert new.section_sha != old.section_sha
+    got = nb.read_render_receipts(tmp_path, _AUDIT, current_shas={"fit-model": new.section_sha})
+    # The receipt was bound at the OLD sha → stale (greens nothing downstream).
+    assert got["fit-model"]["fresh"] is False
+    assert got["fit-model"]["section_sha"] == old.section_sha
+
+
+def test_read_render_receipts_newest_valid_wins(tmp_path: Path) -> None:
+    sec = _section(_SOURCE, "fit-model")
+    for out in ("out-1", "out-2"):
+        nb.record_render_receipt(
+            tmp_path,
+            audit_id=_AUDIT,
+            section="fit-model",
+            section_sha=sec.section_sha,
+            recompute=sec.section_sha,
+            output_sha=out,
+            error=False,
+        )
+    got = nb.read_render_receipts(tmp_path, _AUDIT, current_shas={"fit-model": sec.section_sha})
+    assert got["fit-model"]["output_sha"] == "out-2"  # newest wins
+
+
+def test_receipt_does_not_change_audit_section_status(tmp_path: Path) -> None:
+    # A render receipt rides the SAME journal but must never be read as a section
+    # attestation — it is not a sign-off or an auto-clear, so audit_section stays
+    # UNSIGNED for a section that only has a receipt.
+    sec = _section(_SOURCE, "fit-model")
+    nb.record_render_receipt(
+        tmp_path,
+        audit_id=_AUDIT,
+        section="fit-model",
+        section_sha=sec.section_sha,
+        recompute=sec.section_sha,
+        output_sha="out-1",
+        error=False,
+    )
+    audit = nb.audit_section(_records(tmp_path), "fit-model", sec.section_sha)
+    assert audit.status == nb.UNSIGNED
+
+
+def test_read_render_receipts_absent_section_is_not_fresh(tmp_path: Path) -> None:
+    sec = _section(_SOURCE, "fit-model")
+    nb.record_render_receipt(
+        tmp_path,
+        audit_id=_AUDIT,
+        section="fit-model",
+        section_sha=sec.section_sha,
+        recompute=sec.section_sha,
+        output_sha="out-1",
+        error=False,
+    )
+    # A section absent from current_shas cannot be fresh (nothing to compare).
+    got = nb.read_render_receipts(tmp_path, _AUDIT, current_shas={})
+    assert got["fit-model"]["fresh"] is False

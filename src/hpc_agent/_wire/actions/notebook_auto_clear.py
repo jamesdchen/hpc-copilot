@@ -14,13 +14,22 @@ claiming human review" (``docs/design/notebook-audit.md`` D-attention).
 caller-supplied lint findings and NO tier claims — it RECOMPUTES both server-side
 (runs the ``notebook-lint`` rules in-process, then :func:`build_audit_view`), so a
 caller cannot launder a flagged / modified section into ``auto_cleared`` by
-passing empty findings. The only caller inputs are paths / ids / roots and an
-OPAQUE forward-compat receipt.
+passing empty findings. The only caller inputs are paths / ids / roots.
+
+**The ``receipt`` field was REMOVED (T10, recorded decision).** v1 accepted an
+OPAQUE caller-supplied ``receipt`` (``{slug: {output_sha, error}}``) and trusted
+it verbatim — the laundering hole: a caller could green an assertion-bearing
+section with ``{slug: {error: False}}`` and no execution evidence, no freshness
+key. The honest close is to DELETE the trusted input: the mutate verb now reads
+JOURNALED render receipts (:func:`~hpc_agent.state.notebook_audit.read_render_receipts`,
+sha-fresh entries only), which are code attestations bound to the section sha at
+record time (emitted out-of-band by ``notebook-record-receipt``) and therefore
+stale-by-construction when the section drifts. The read-only ``notebook-audit-view``
+verb keeps its INLINE ``receipt`` for preview because it is read-only and journals
+nothing.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,7 +41,9 @@ class NotebookAutoClearSpec(BaseModel):
     absolute), parsed by the same percent-format parser. ``input_roots`` /
     ``source_roots`` are the OPAQUE roots the server-side lint recompute needs (a
     missing path literal under ``input_roots`` flags its section, keeping it out
-    of the auto-clear). ``receipt`` is the OPAQUE v1.5 execution receipt.
+    of the auto-clear). There is deliberately NO ``receipt`` field (T10): render
+    receipts are read from the journal (sha-fresh only), never trusted from the
+    caller — see the module docstring.
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-auto-clear input spec")
@@ -71,15 +82,6 @@ class NotebookAutoClearSpec(BaseModel):
     source_roots: list[str] = Field(
         default_factory=list,
         description="OPAQUE import roots the server-side lint recompute resolves imports under.",
-    )
-    receipt: dict[str, Any] | None = Field(
-        default=None,
-        description=(
-            "Optional OPAQUE execution receipt `{slug: {output_sha, error}}` "
-            "(v1.5 forward-compat). `error is False` greens that section's declared "
-            "assertions; absent a receipt, a section WITH assertions is not green "
-            "and stays human_required."
-        ),
     )
 
 

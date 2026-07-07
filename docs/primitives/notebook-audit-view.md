@@ -52,10 +52,20 @@ A `NotebookAuditViewSpec` (`hpc_agent._wire.queries.notebook_audit_view`):
 - `lint_findings` (list of objects, default `[]`) — **opaque** findings chained
   in from `notebook-lint` (its `findings` list). Embedded verbatim under the
   section each names; never parsed or interpreted here.
-- `receipt` (object, optional) — **opaque** v1.5 execution receipt
-  `{slug: {output_sha, error}}`. `error is False` marks that section's declared
-  assertions **green**; absent a receipt, a section *with* assertions is not
-  green (unverified is not green).
+- `receipt` (object, optional) — **opaque INLINE** execution receipt
+  `{slug: {output_sha, error}}`, for **preview only** (this read-only verb
+  journals nothing). `error is False` marks that section's declared assertions
+  **green**; absent a receipt, a section *with* assertions is not green
+  (unverified is not green). An inline entry carries no `section_sha`, so it is
+  not sha-freshness-gated here — the mutate `notebook-auto-clear` path instead
+  reads **journaled**, sha-bound receipts (`notebook-record-receipt`), which drift
+  stale by construction.
+- `attention_order` (list of strings, optional) — caller-supplied section-slug
+  ordering for the presented sections + `markdown` (T12). Default (absent) is
+  source order. Listed slugs are shown **first** in the given order; unknown slugs
+  are ignored; source slugs the order omits keep source order after the listed
+  ones. It changes what the human saw, so it participates in the module
+  `view_sha`; per-section `view_sha`s are unaffected.
 
 ## Outputs
 

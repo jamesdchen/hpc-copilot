@@ -36,7 +36,18 @@ freshly-recomputed lint. The record is then bound through the one attestation
 kernel against the recomputed section sha (`record_auto_clear` →
 `attestation.bind`), so a machine clearance can no more assert a sha into
 existence than a human sign-off can (D5 lock 2). The only caller inputs are
-paths / ids / roots and an opaque forward-compat receipt.
+paths / ids / roots.
+
+**Receipts are journaled, not trusted (T10).** The assertions-green tier leg needs
+execution evidence. v1 accepted an opaque caller `receipt` and trusted it
+verbatim — the laundering hole: `{slug: {error: False}}` greened an
+assertion-bearing section with no execution and no freshness key. That field is
+**removed**; the verb instead reads the journaled render receipts
+(`read_render_receipts`, emitted out-of-band by `notebook-record-receipt`) and
+greens a section only from an entry still **fresh** at the current section sha. A
+render receipt is a code attestation bound to the section sha, so it drifts stale
+by construction the moment the section moves — no stale render can green a
+section.
 
 ## Inputs
 
@@ -56,10 +67,11 @@ A `NotebookAutoClearSpec` (`hpc_agent._wire.actions.notebook_auto_clear`):
   literal is flagged and therefore **not** auto-cleared.
 - `source_roots` (list of strings, default `[]`) — **opaque** import roots the
   server-side lint recompute resolves imports under.
-- `receipt` (object, optional) — **opaque** v1.5 execution receipt
-  `{slug: {output_sha, error}}`. `error is False` greens that section's declared
-  assertions; absent a receipt, a section *with* assertions is not green and stays
-  `human_required`.
+
+There is deliberately **no** `receipt` input (T10): render receipts are read from
+the journal (sha-fresh only, via `notebook-record-receipt`), never trusted from
+the caller. A section with declared assertions clears only when a fresh journaled
+render receipt marks it `error: false`.
 
 ## Outputs
 

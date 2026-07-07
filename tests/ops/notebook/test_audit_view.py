@@ -168,6 +168,79 @@ def test_tier_receipt_error_true_human_required() -> None:
     assert _section(view, "model").tier == HUMAN_REQUIRED
 
 
+# ── sha-freshness of journaled receipt entries (T10) ──────────────────────────
+
+
+def test_journaled_receipt_greens_only_when_section_sha_matches() -> None:
+    # A JOURNALED receipt entry carries a section_sha; it greens only when that
+    # sha equals the section's current sha (fresh). A stale sha greens nothing.
+    src, tmpl = _mods(SOURCE_WITH_ASSERTIONS, SOURCE_WITH_ASSERTIONS)
+    model_sha = _section(build_audit_view(src, tmpl, []), "model").section_sha
+
+    fresh = {"model": {"output_sha": "abc", "error": False, "section_sha": model_sha}}
+    assert _section(build_audit_view(src, tmpl, [], receipt=fresh), "model").tier == AUTO_CLEARED
+
+    stale = {"model": {"output_sha": "abc", "error": False, "section_sha": "0" * 64}}
+    assert _section(build_audit_view(src, tmpl, [], receipt=stale), "model").tier == HUMAN_REQUIRED
+
+
+def test_inline_receipt_without_section_sha_keeps_v1_behavior() -> None:
+    # An INLINE preview entry (no section_sha) greens on error==False alone —
+    # the read-only VIEW path, which journals nothing.
+    src, tmpl = _mods(SOURCE_WITH_ASSERTIONS, SOURCE_WITH_ASSERTIONS)
+    inline = {"model": {"output_sha": "abc", "error": False}}
+    assert _section(build_audit_view(src, tmpl, [], receipt=inline), "model").tier == AUTO_CLEARED
+
+
+# ── attention_order (T12) ─────────────────────────────────────────────────────
+
+
+def test_attention_order_default_is_source_order() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    assert [s.slug for s in view.sections] == ["setup", "model", "analysis"]
+
+
+def test_attention_order_reorders_and_moves_view_sha() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    base = build_audit_view(src, tmpl, [])
+    reordered = build_audit_view(src, tmpl, [], attention_order=["analysis", "setup", "model"])
+    assert [s.slug for s in reordered.sections] == ["analysis", "setup", "model"]
+    # It changes what the human saw → the module roll-up moves.
+    assert reordered.view_sha != base.view_sha
+    # Per-section view_shas are unaffected (only the presentation order changed).
+    by_slug_base = {s.slug: s.view_sha for s in base.sections}
+    for s in reordered.sections:
+        assert s.view_sha == by_slug_base[s.slug]
+    # The markdown follows the presented order.
+    md = render_markdown(reordered)
+    assert md.index("section: analysis") < md.index("section: setup") < md.index("section: model")
+
+
+def test_attention_order_partial_list_keeps_unlisted_in_source_order() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    # Only 'model' is listed → it comes first; setup + analysis keep source order.
+    view = build_audit_view(src, tmpl, [], attention_order=["model"])
+    assert [s.slug for s in view.sections] == ["model", "setup", "analysis"]
+
+
+def test_attention_order_unknown_slug_ignored() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(
+        src, tmpl, [], attention_order=["nonexistent", "analysis", "also-missing"]
+    )
+    # Unknown slugs are ignored; 'analysis' leads, the rest keep source order.
+    assert [s.slug for s in view.sections] == ["analysis", "setup", "model"]
+
+
+def test_attention_order_same_as_source_leaves_view_sha_unchanged() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    base = build_audit_view(src, tmpl, [])
+    same = build_audit_view(src, tmpl, [], attention_order=["setup", "model", "analysis"])
+    # An order that reproduces source order is what the human saw already → same sha.
+    assert same.view_sha == base.view_sha
+
+
 # ── assertion table ──────────────────────────────────────────────────────────
 
 

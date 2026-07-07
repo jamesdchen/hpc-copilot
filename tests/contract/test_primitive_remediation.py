@@ -144,6 +144,14 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # the verb does not appear in the schema-file-parametrized remediation tests
         # (_verb_targets), only in this inventory-vs-CLI drift check.
         "notebook-auto-clear",
+        # notebook-record-receipt (notebook-audit T10): the emitter's CODE
+        # render-receipt journaling verb. Spec-taking mutate; failure_features
+        # attaches at the shared dispatch seam (so it stays OUT of
+        # XFAIL_NO_FAILURE_FEATURES). Its input schema (notebook_record_receipt.input.json)
+        # is baked by the orchestrator AFTER this wave — until then it is absent, so
+        # the verb does not appear in the schema-file-parametrized remediation tests
+        # (_verb_targets), only in this inventory-vs-CLI drift check.
+        "notebook-record-receipt",
         "verify-relay",
         "wait-detached",
         "submit-s1",

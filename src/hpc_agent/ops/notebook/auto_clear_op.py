@@ -21,6 +21,17 @@ then bound through the ONE attestation kernel against the freshly-parsed section
 sha (:func:`record_auto_clear` → ``attestation.bind``), so a machine clearance can
 no more assert a sha into existence than a human sign-off can (D5 lock 2).
 
+**Receipts are JOURNALED, not trusted from the caller (T10).** The
+assertions-green leg of the tier needs execution evidence; v1 accepted a
+caller-supplied ``receipt`` and trusted it verbatim (the laundering hole:
+``{slug: {error: False}}`` greened an asserted section with no execution and no
+freshness key). The spec's ``receipt`` field is GONE; the verb instead reads the
+journaled render receipts (:func:`~hpc_agent.state.notebook_audit.read_render_receipts`)
+and feeds only the entries still FRESH at the current section sha to
+:func:`build_audit_view` — a receipt is a code attestation bound to a section sha
+(``notebook-record-receipt``), so it drifts stale by construction the moment the
+section moves and greens nothing thereafter.
+
 **Idempotency (append-only, honest accounting).** Before appending, each
 auto_cleared candidate is reduced against the existing journal
 (:func:`hpc_agent.state.notebook_audit.audit_section`): a section already
@@ -157,8 +168,21 @@ def notebook_auto_clear(
     )
     findings = [f.model_dump() for f in lint_result.findings]
 
+    # Read the JOURNALED render receipts (never a caller-supplied receipt: the
+    # spec has no receipt field). A receipt is a code attestation bound to a
+    # section sha (notebook-record-receipt → record_render_receipt), so only the
+    # entries STILL FRESH at the current section sha are evidence — a receipt for
+    # a drifted sha greens nothing. This closes the T10 laundering hole: a section
+    # can only be greened by execution evidence journaled against its current
+    # source, never by an opaque {slug: {error: False}} passed at call time.
+    current_shas = {sect.slug: sect.section_sha for sect in source.sections}
+    journaled = notebook_audit.read_render_receipts(
+        experiment_dir, spec.audit_id, current_shas=current_shas
+    )
+    receipt = {slug: entry for slug, entry in journaled.items() if entry["fresh"]}
+
     # RECOMPUTE the D-attention tier ourselves — the caller never asserts it.
-    view = build_audit_view(source, template, findings, receipt=spec.receipt)
+    view = build_audit_view(source, template, findings, receipt=receipt)
 
     # Read the journal once; each section's idempotency decision is independent
     # (distinct slugs), so appends within this call don't affect one another.

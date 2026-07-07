@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_record_receipt.input.json",
+  "title": "notebook-record-receipt input spec",
+  "description": "Inputs to ``notebook-record-receipt``.\n\n``audit_id`` is the notebook decision-journal scope; ``source`` is the audited\nsource ``.py`` relpath (parsed on disk — the parse IS the recompute the\nreceipt binds against); ``entries`` maps each rendered section's slug to its\noutcome. A slug absent from the parsed source is reported skipped, not fatal.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "source",
+    "entries"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) the receipts are appended to (journal at .hpc/notebooks/<audit_id>.decisions.jsonl). Caller-authored.",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "source": {
+      "description": "Experiment-relative path to the audited source .py (jupytext percent format). Parsed on disk; each receipt binds the FRESHLY PARSED section sha — a receipt can only be recorded against current source.",
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "entries": {
+      "additionalProperties": {
+        "$ref": "#/$defs/NotebookReceiptEntry"
+      },
+      "description": "Map of section slug -> render outcome {output_sha, error}. One receipt is journaled per slug that exists in the parsed source; unknown slugs are reported skipped.",
+      "minProperties": 1,
+      "title": "Entries",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "NotebookReceiptEntry": {
+      "additionalProperties": false,
+      "description": "One section's render outcome — the opaque evidence a receipt carries.\n\n``output_sha`` is the caller's hash of the section's rendered output (opaque\nto core — never parsed); ``error`` is whether the render/assertions errored.\n``error is False`` is what greens the assertions-green tier leg (while the\nreceipt is fresh).",
+      "properties": {
+        "output_sha": {
+          "description": "OPAQUE caller hash of the section's rendered output. Never parsed by core.",
+          "minLength": 1,
+          "title": "Output Sha",
+          "type": "string"
+        },
+        "error": {
+          "description": "Whether the render / declared assertions errored. `false` greens the section's assertions-green tier leg (while the receipt is sha-fresh); `true` never greens.",
+          "title": "Error",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output_sha",
+        "error"
+      ],
+      "title": "notebook-record-receipt entry",
+      "type": "object"
+    }
+  }
+}

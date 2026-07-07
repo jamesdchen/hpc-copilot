@@ -42,8 +42,24 @@
         }
       ],
       "default": null,
-      "description": "Optional OPAQUE execution receipt `{slug: {output_sha, error}}` (v1.5 forward-compat). `error is False` marks that section's declared assertions GREEN; absent a receipt, a section WITH assertions is not green (unverified is not green).",
+      "description": "Optional OPAQUE INLINE execution receipt `{slug: {output_sha, error}}` for preview only (this read-only verb journals nothing). `error is False` marks that section's declared assertions GREEN; absent a receipt, a section WITH assertions is not green (unverified is not green). An inline entry carries no `section_sha`, so it is not sha-freshness-gated here — the mutate `notebook-auto-clear` path reads JOURNALED, sha-bound receipts (`notebook-record-receipt`) instead, which drift stale by construction.",
       "title": "Receipt"
+    },
+    "attention_order": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional caller-supplied section-slug ordering for the presented sections + markdown (T12). Default (null) is source order. Listed slugs are shown FIRST in the given order; unknown slugs are ignored; source slugs the order omits keep source order after the listed ones. It changes what the human saw, so it participates in the module view_sha; per-section view_shas are unaffected.",
+      "title": "Attention Order"
     }
   }
 }

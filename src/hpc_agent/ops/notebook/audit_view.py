@@ -268,7 +268,10 @@ def _assertions(section_src: str) -> tuple[Assertion, ...]:
 
 
 def _assertions_green(
-    assertions: tuple[Assertion, ...], slug: str, receipt: Mapping[str, Any] | None
+    assertions: tuple[Assertion, ...],
+    slug: str,
+    receipt: Mapping[str, Any] | None,
+    current_section_sha: str,
 ) -> bool:
     """Whether a section's declared assertions count as GREEN (the tier leg).
 
@@ -276,13 +279,28 @@ def _assertions_green(
     STATICALLY (nothing to prove); with assertions, green requires a receipt
     entry ``{slug: {..., error: False}}``. Absent a receipt (v1 default) a
     section with assertions is NOT green.
+
+    Sha-freshness (T10): a receipt entry greens a section only when its
+    ``error`` is ``False`` AND — when the entry carries a ``section_sha`` (a
+    JOURNALED receipt, produced by :func:`~hpc_agent.state.notebook_audit.read_render_receipts`)
+    — that sha equals the section's CURRENT sha. A journaled receipt for an
+    older sha is drift and greens nothing. An entry WITHOUT a ``section_sha`` is
+    an INLINE preview receipt (the read-only ``notebook-audit-view`` path, which
+    journals nothing) and keeps v1 behavior: ``error is False`` alone greens it.
+    The mutate path (``notebook-auto-clear``) only ever feeds journaled,
+    sha-bearing entries, so it cannot be greened by a drifted receipt.
     """
     if not assertions:
         return True
     if receipt is None:
         return False
     entry = receipt.get(slug)
-    return isinstance(entry, Mapping) and entry.get("error") is False
+    if not isinstance(entry, Mapping) or entry.get("error") is not False:
+        return False
+    recorded_sha = entry.get("section_sha")
+    if recorded_sha is not None:
+        return bool(recorded_sha == current_section_sha)
+    return True
 
 
 def _tier(classification: str, flags_count: int, assertions_green: bool) -> str:
@@ -301,6 +319,7 @@ def build_audit_view(
     lint_findings: Sequence[Mapping[str, Any]],
     *,
     receipt: Mapping[str, Any] | None = None,
+    attention_order: Sequence[str] | None = None,
 ) -> AuditView:
     """Build the deterministic :class:`AuditView` for *source* against *template*.
 
@@ -308,9 +327,21 @@ def build_audit_view(
     table, opaque lint flags, tier) and rolls the per-section ``view_sha`` shas
     into a whole-view ``view_sha``. *lint_findings* is consumed OPAQUELY (a
     sequence of finding mappings, each optionally naming its section slug);
-    *receipt* is the opaque v1.5 execution receipt (``{slug: {output_sha,
-    error}}``). Pure — same inputs yield the same view and shas on every
-    platform.
+    *receipt* is the opaque execution receipt (``{slug: {output_sha, error,
+    section_sha?}}``) — an entry greens a section's assertions per
+    :func:`_assertions_green` (a journaled entry carrying ``section_sha`` greens
+    only while fresh; an inline entry greens on ``error is False`` alone). Pure —
+    same inputs yield the same view and shas on every platform.
+
+    *attention_order* (T12) is a caller-supplied slug ordering applied to the
+    presented sections (and thus the markdown). The DEFAULT (``None``) is source
+    order — deterministic, no reordering. When given, listed slugs are emitted
+    FIRST in the given order; unknown slugs (not in the source) are ignored;
+    slugs the source has but the order omits keep source order AFTER the listed
+    ones. Because it changes what the human is shown, the resulting order feeds
+    the module-level ``view_sha`` (a reorder that actually moves sections moves
+    the roll-up); per-section ``view_sha`` values are unaffected. It is pure
+    caller config — never a tier or authorship input.
     """
     template_by_slug = {s.slug: s for s in template.sections}
 
@@ -322,7 +353,7 @@ def build_audit_view(
         diff = _diff_from_template(sect.source, tmpl.source if tmpl is not None else "", sect.slug)
         assertions = _assertions(sect.source)
         flags = _flags_for(sect.slug, lint_findings)
-        green = _assertions_green(assertions, sect.slug, receipt)
+        green = _assertions_green(assertions, sect.slug, receipt, sect.section_sha)
         tier = _tier(classification, len(flags), green)
 
         payload: dict[str, Any] = {
@@ -349,6 +380,17 @@ def build_audit_view(
                 payload=payload,
             )
         )
+
+    # T12: apply the caller-supplied attention ordering to the PRESENTED
+    # sections. Stable sort — listed slugs sort by their position; every unlisted
+    # slug shares the sentinel key and so keeps source order after the listed
+    # ones. Unknown slugs in the order simply never match a section. Reordering
+    # here (before the module payload) is what threads attention_order into
+    # view_sha and the markdown.
+    if attention_order is not None:
+        position = {slug: i for i, slug in enumerate(attention_order)}
+        sentinel = len(position)
+        section_views.sort(key=lambda sv: position.get(sv.slug, sentinel))
 
     source_slugs = set(source.slugs)
     dropped = tuple(s.slug for s in template.sections if s.slug not in source_slugs)

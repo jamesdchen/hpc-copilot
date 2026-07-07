@@ -83,7 +83,7 @@ from hpc_agent.state import attestation
 from hpc_agent.state.decision_journal import append_decision, read_decisions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
     from typing import Any
 
@@ -93,8 +93,10 @@ if TYPE_CHECKING:
 __all__ = [
     "SIGN_OFF_BLOCK",
     "AUTO_CLEAR_BLOCK",
+    "RENDER_RECEIPT_BLOCK",
     "SUBJECT_KIND",
     "AUTO_CLEAR_RESPONSE",
+    "RENDER_RECEIPT_RESPONSE",
     "SIGNED_CURRENT",
     "AUTO_CLEARED",
     "SIGNED_STALE",
@@ -106,6 +108,8 @@ __all__ = [
     "audit_section",
     "audit_module",
     "record_auto_clear",
+    "record_render_receipt",
+    "read_render_receipts",
 ]
 
 #: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
@@ -119,6 +123,19 @@ AUTO_CLEAR_BLOCK = "notebook-auto-clear"
 #: The honest, mechanical ``response`` a code auto-clear carries — never a human
 #: ack token.
 AUTO_CLEAR_RESPONSE = "auto_cleared"
+
+#: The code render-receipt block (T10). A third block class riding the SAME
+#: notebook journal: a CODE attestation that a section's source was RENDERED
+#: (executed) at a bound sha, evidence for the assertions-green leg of the
+#: D-attention tier. Distinct block so a reader never confuses execution
+#: evidence with a clearance (auto-clear) or a human ack (sign-off).
+RENDER_RECEIPT_BLOCK = "notebook-render-receipt"
+
+#: The honest, mechanical ``response`` a render receipt carries — the execution
+#: happened, nothing was approved. NEVER a human-ack token (no ``"y"``) and never
+#: a clearance token (not ``"auto_cleared"``): a receipt is evidence, not a
+#: sign-off class.
+RENDER_RECEIPT_RESPONSE = "rendered"
 
 #: The opaque attestation ``subject_kind`` every notebook section rides. The
 #: kernel never interprets it; it distinguishes this subject class from scope
@@ -380,3 +397,146 @@ def record_auto_clear(
         response=AUTO_CLEAR_RESPONSE,
         resolved=resolved,
     )
+
+
+# --- render receipts (T10) --------------------------------------------------
+# A receipt is a THIRD block class riding the same journal. It is READ SEPARATELY
+# from the sign-off / auto-clear reduction: :data:`_BLOCK_ATTESTOR` deliberately
+# omits :data:`RENDER_RECEIPT_BLOCK`, so a receipt can never enter
+# :func:`audit_section` and can never change the T6 status vocabulary. A receipt
+# is evidence for the assertions-green leg of the D-attention TIER (read by
+# :func:`~hpc_agent.ops.notebook.audit_view.build_audit_view`), not a clearance.
+
+
+def _project_receipt(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Project a journal record to a render-receipt attestation dict, or ``None``.
+
+    The receipt attestation binds/reduces on the SECTION sha
+    (``content_sha == section_sha``) — this is what makes a receipt STALE by
+    construction the moment its section drifts. The render's own ``output_sha``
+    and ``error`` ride opaque ``evidence`` (never interpreted by the kernel).
+    Returns ``None`` for any block other than :data:`RENDER_RECEIPT_BLOCK`, so a
+    sign-off / auto-clear record is filtered out before the kernel sees it (and,
+    symmetrically, a receipt never reaches the sign-off reducer).
+    """
+    if record.get("block") != RENDER_RECEIPT_BLOCK:
+        return None
+    resolved = record.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    return {
+        "attestor": "code",
+        "subject_kind": SUBJECT_KIND,
+        "subject_id": resolved.get("section"),
+        "content_sha": resolved.get("section_sha"),
+        "evidence": {
+            "output_sha": resolved.get("output_sha"),
+            "error": resolved.get("error"),
+        },
+    }
+
+
+def record_render_receipt(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    section: str,
+    section_sha: str,
+    recompute: Callable[[], str] | str,
+    output_sha: str,
+    error: bool,
+) -> dict[str, Any]:
+    """Journal a CODE render receipt for *section*, bound to its sha, un-fakeably.
+
+    A receipt asserts "this section's source was RENDERED (executed) and its
+    declared assertions did/did not error" — the execution evidence the
+    D-attention tier's assertions-green leg needs. It is NOT a clearance and NOT
+    a sign-off; it carries the honest mechanical response :data:`RENDER_RECEIPT_RESPONSE`
+    (``"rendered"``), never a human-ack token.
+
+    Un-fakeable + fresh-by-construction: the receipt is bound through the ONE
+    attestation kernel (:func:`~hpc_agent.state.attestation.bind`) against the
+    SECTION sha, so a caller can no more assert a receipt for a sha the ``.py``
+    does not currently carry than a human can assert a sign-off (D5 lock 2). And
+    because the receipt records the section sha it was bound at, it reads STALE
+    (see :func:`read_render_receipts`) the instant the section drifts — a receipt
+    can only ever be recorded against current source.
+
+    The record: ``block="notebook-render-receipt"``, ``response="rendered"``,
+    ``resolved={audit_id, section, section_sha, output_sha, error, attestor:"code"}``.
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
+    on a sha that does not match the recompute, or (via ``append_decision``) on a
+    bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+        "output_sha": output_sha,
+        "error": error,
+        "attestor": "code",
+    }
+    # Bind on the SECTION sha (routes through the ONE kernel; never re-inlined):
+    # the receipt is stale-by-construction when the section moves, and can only
+    # be recorded against the sha the source currently carries.
+    projected = _project_receipt({"block": RENDER_RECEIPT_BLOCK, "resolved": resolved}) or {}
+    attestation.bind(projected, recompute=recompute)
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=RENDER_RECEIPT_BLOCK,
+        response=RENDER_RECEIPT_RESPONSE,
+        resolved=resolved,
+    )
+
+
+def read_render_receipts(
+    experiment_dir: Path,
+    audit_id: str,
+    *,
+    current_shas: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Read the newest-valid render receipt per section, with a freshness flag.
+
+    Returns ``{slug: {output_sha, error, section_sha, fresh}}`` — one entry per
+    section that carries at least one VALID receipt. ``section_sha`` is the sha
+    the newest valid receipt was bound at; ``fresh`` is ``True`` iff that sha
+    still equals *current_shas[slug]* (the section has not drifted since it was
+    rendered). A section absent from *current_shas*, or whose recorded sha no
+    longer matches, reads ``fresh=False`` — a stale receipt is no evidence.
+
+    Newest-valid selection and the freshness (drift) verdict both route through
+    the SAME kernel machinery every other attestation reader uses
+    (:func:`_newest_valid` + :func:`~hpc_agent.state.attestation.reduce`), never
+    a re-inlined newest-first / sha-compare. Malformed receipt records are
+    skipped, never fatal.
+    """
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    projected: list[dict[str, Any]] = []
+    for record in records:
+        receipt = _project_receipt(record)
+        if receipt is not None:
+            projected.append(receipt)
+
+    out: dict[str, dict[str, Any]] = {}
+    slugs = {p["subject_id"] for p in projected if isinstance(p.get("subject_id"), str)}
+    for slug in slugs:
+        newest = _newest_valid(projected, slug)
+        if newest is None:
+            continue
+        current = current_shas.get(slug)
+        # Route the freshness (current/stale) verdict through the ONE kernel.
+        fresh = (
+            current is not None
+            and attestation.reduce(projected, current_sha=current, subject_id=slug)
+            == attestation.CURRENT
+        )
+        evidence = newest.evidence if isinstance(newest.evidence, dict) else {}
+        out[slug] = {
+            "output_sha": evidence.get("output_sha"),
+            "error": evidence.get("error"),
+            "section_sha": newest.content_sha,
+            "fresh": fresh,
+        }
+    return out

@@ -152,5 +152,6 @@ def notebook_audit_view(
         template,
         spec.lint_findings,
         receipt=spec.receipt,
+        attention_order=spec.attention_order,
     )
     return _to_result(view)
