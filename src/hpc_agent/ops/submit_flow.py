@@ -2343,6 +2343,23 @@ def _submit_flow_batch_locked(
         # otherwise be needed because mypy can't see the None elimination.
         return [r for r in results if r is not None]
 
+    # Graduation gate (notebook-audit D8, ONE definition — ops/notebook_gate —
+    # TWO synchronous seats): this is the PRE-STAGING seat. Before any rsync/SSH,
+    # refuse a submit whose opted-in audited `.py` (interview.json
+    # `audited_source`, D7) carries a required section not signed at its CURRENT
+    # hash. Defense in depth with the resolve-submit-inputs pre-sidecar (S1) seat:
+    # this covers the bare submit-flow path (no resolve leg) AND a source edited
+    # in the window between S1 and here (a moved hash reads unsigned by
+    # construction). Runs here, next to the other journal-home-only pre-submit
+    # guards (supersession / #191 drift), on local reads — no SSH. Per experiment,
+    # not per spec, so ONE call before the fresh-spec loops. Fail-safe: NO
+    # audited_source → byte-identical no-op (the scope-gate posture). Placed after
+    # the fresh_indices short-circuit so a fully-deduped batch (no new cluster
+    # traffic) stays a byte-identical no-op.
+    from hpc_agent.ops.notebook_gate import assert_source_audited
+
+    assert_source_audited(experiment_dir)
+
     # Supersession conduct (proving run #4, findings e/g/h): a NEW run_id
     # submitted while a SIBLING prior run_id with the SAME code identity
     # (cmd_sha/node_sha) still has live state must either be refused (the

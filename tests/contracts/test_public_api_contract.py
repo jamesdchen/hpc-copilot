@@ -76,6 +76,11 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         # human-journaled scope-unlock via append-decision.
         "ScopeLocked",
         "SiblingRunLive",
+        # SourceUnaudited (notebook-audit graduation gate, 2026-07-08): an
+        # opted-in repo whose audited source has unsigned/drifted sections —
+        # precondition_failed-coded; the exit is re-sign or auto-clear via
+        # the hpc-notebook-audit loop.
+        "SourceUnaudited",
         "SpecInvalid",
         "SshCircuitOpen",
         "SshSlotWaitTimeout",

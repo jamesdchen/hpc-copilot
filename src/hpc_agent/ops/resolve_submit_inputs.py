@@ -60,6 +60,7 @@ from hpc_agent.cli.setup_actions import find_prior_run
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
+from hpc_agent.ops.notebook_gate import assert_source_audited
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -348,6 +349,18 @@ def resolve_submit_inputs(
             if issubclass(w.category, RuntimeWarning):
                 return str(w.message)
         return None
+
+    # 4b. Graduation gate (notebook-audit D8, ONE definition — ops/notebook_gate —
+    #     TWO synchronous seats): this is the S1 human-boundary seat. Before the
+    #     per-run sidecar is committed, refuse a submit whose opted-in audited
+    #     `.py` (interview.json `audited_source`, D7) carries a required section
+    #     not signed at its CURRENT hash (unsigned, drifted, or linked-source
+    #     revoked) — so the refusal lands at the y/nudge, not buried later in a
+    #     detached submit-flow worker's log (the same gate-before-work discipline
+    #     as the submit_flow pre-staging seat). Fail-safe: NO audited_source →
+    #     byte-identical no-op (the scope-gate posture). Pre-sidecar and
+    #     pre-SSH — resolve does no cluster work, so this is purely a local read.
+    assert_source_audited(experiment_dir)
 
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`

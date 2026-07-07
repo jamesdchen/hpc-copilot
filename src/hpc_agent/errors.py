@@ -32,6 +32,7 @@ __all__ = [
     "AlreadyInFlight",
     "SiblingRunLive",
     "ScopeLocked",
+    "SourceUnaudited",
     "SubmissionIncomplete",
     "StructuredOutputError",
     "ModelEndpointError",
@@ -500,6 +501,65 @@ class ScopeLocked(HpcError):
             "one exit is a human-journaled scope-unlock via append-decision "
             "(scope_kind='scope', block='scope-unlock', "
             "resolved={'scope_action': 'unlock'})."
+        )
+
+
+class SourceUnaudited(HpcError):
+    """The submit pipeline refuses an entry point not hash-linked to a CURRENT audit.
+
+    Raised by :func:`hpc_agent.ops.notebook_gate.assert_source_audited` — the
+    graduation gate (notebook-audit substrate D8) — at its two synchronous submit
+    seats (:mod:`hpc_agent.ops.resolve_submit_inputs` pre-sidecar,
+    :mod:`hpc_agent.ops.submit_flow` pre-staging) when the interview opted in via
+    an ``audited_source`` block (D7) but one or more REQUIRED (template) sections
+    of the audited ``.py`` are not signed at their current hash: unsigned,
+    drifted (signed then edited — unsigned by construction, no drift state
+    machine), or trust-revoked by a drifted ``linked_sources`` dependency.
+
+    Opt-in and fail-safe by construction: with NO ``audited_source`` block the
+    gate is a byte-identical no-op and this never raises (the
+    :mod:`hpc_agent.ops.scope_gate` fail-safe posture). It fires ONLY inside the
+    opted-in surface.
+
+    Reuses the ``precondition_failed`` error_code (the :class:`ScopeLocked`
+    precedent, itself following :class:`PreconditionFailed`, and the same
+    widen-avoidance posture as :class:`SiblingRunLive`'s ``spec_invalid`` reuse):
+    submitting an un-audited source is a workflow step invoked against on-disk
+    state that forbids it, and adding a new error_code value is a breaking
+    wire-envelope change. ``retry_safe=False``: a bare retry re-hits the same
+    unsigned state; the one exit is a human sign-off (or a re-draft + re-sign) of
+    the named sections.
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    remediation = (
+        "One or more audited sections are unsigned or drifted. Re-sign each named "
+        "section at its CURRENT hash via `hpc-agent append-decision` "
+        "(scope_kind='notebook', block='notebook-sign-off', "
+        "resolved={audit_id, section, section_sha, view_sha}); a section edited "
+        "after signing reads unsigned by construction — re-audit and re-sign it. "
+        "A drifted linked source (a changed imported dependency) likewise revokes "
+        "the section's sign-off. There is no code override."
+    )
+
+    @classmethod
+    def for_sections(cls, audit_id: str, sections: list[tuple[str, str]]) -> SourceUnaudited:
+        """Build the loud message naming each unsigned/drifted section + its status.
+
+        *sections* is a list of ``(slug, status)`` pairs — exactly what the human
+        must re-sign. The message names every one so the refusal is actionable
+        without a separate status query.
+        """
+        detail = ", ".join(f"{slug!r} ({status})" for slug, status in sections)
+        return cls(
+            f"audited source for audit_id {audit_id!r} is not cleared for "
+            f"graduation — {len(sections)} required section(s) not signed at "
+            f"their current hash: {detail}. Re-sign each at its current hash via "
+            "append-decision (scope_kind='notebook', block='notebook-sign-off'); "
+            "an edit (or a drifted linked source) after signing reads unsigned by "
+            "construction (drift = unsigned)."
         )
 
 
