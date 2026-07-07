@@ -140,6 +140,78 @@ def test_injection_filter_has_one_definition() -> None:
     assert not utterances.is_harness_injected("sign construction — quoting a <tag> mid-text")
 
 
+def test_doc_pins_capability_negotiation() -> None:
+    """Capability negotiation is DETECTION, not a self-asserted manifest: the
+    declaration is what code can verify, the `harness-capabilities` verb is the
+    surface, it reads named seams, and the conformance kit asserts the three
+    stay aligned (declared == detected == behaved)."""
+    text = _doc_text()
+    assert "Capability negotiation" in text, "the negotiation section must be named"
+    assert "harness-capabilities" in text, "the detection verb must be named"
+    assert "declaration IS what code can verify" in text, (
+        "the detection-not-manifest posture must be pinned"
+    )
+    assert "_find_hook_entry_index" in text, (
+        "the ONE canonical entry-matcher the detection reuses must be cited"
+    )
+    assert "declared == detected == behaved" in text, (
+        "the conformance-kit alignment claim must be pinned"
+    )
+
+
+def test_doc_pins_mcp_elicitation_specified_not_implemented() -> None:
+    """MCP elicitation is a SECOND capability-1 channel, specified but not
+    implemented: the response filters through the same write API, the clicked-
+    option hazard applies (only free-text lands), the prompt MUST be code-rendered
+    (never LLM-authored), the honest flag records it, and it degrades to the hook
+    path. Client support is stated UNKNOWN, not asserted."""
+    text = _doc_text()
+    lower = text.lower()
+    assert "elicitation" in lower, "the elicitation channel must be named"
+    assert "specified, not implemented" in lower or "specified but not implemented" in lower, (
+        "elicitation must be recorded as specified-not-implemented"
+    )
+    assert "clicked-option hazard" in lower or "clicked option" in lower, (
+        "the clicked-option hazard (only free-text qualifies) must be pinned"
+    )
+    assert "code-rendered" in lower, (
+        "the code-rendered (never LLM-authored) prompt provenance rule must be pinned"
+    )
+    assert "ELICITATION_SUPPORTED" in text, "the honest server capability flag must be named"
+    assert "degrades to the hook path" in lower, "the degrade-to-hook-path fallback must be pinned"
+
+
+def test_doc_pins_capability_2_inspect_act_split() -> None:
+    """Capability 2 splits into INSPECT (OTel GenAI semantic conventions as the
+    observable-output ride) and ACT (harness hooks OR a response gateway LLM proxy
+    applying verify_relay before delivery)."""
+    text = _doc_text()
+    assert "INSPECT" in text and "ACT" in text, "the INSPECT / ACT split must be named"
+    assert "OpenTelemetry GenAI" in text or "OTel GenAI" in text, (
+        "the OTel GenAI semantic-conventions inspect ride must be cited"
+    )
+    assert "RESPONSE GATEWAY" in text or "response gateway" in text, (
+        "the response-gateway (LLM proxy) ACT implementation must be named"
+    )
+    assert "verify_relay" in text or "verify-relay" in text, (
+        "the gateway applying verify_relay before delivery must be pinned"
+    )
+
+
+def test_mcp_server_elicitation_flag_is_false() -> None:
+    """The elicitation channel is not implemented: the server capability flag the
+    harness-capabilities verb reads is False (hand-rolled synchronous JSON-RPC, no
+    server-initiated request path). Flipping it True must be a deliberate act that
+    also lands the bidirectional path — this pins the honest default."""
+    from hpc_agent._kernel.extension import mcp_server
+
+    assert mcp_server.ELICITATION_SUPPORTED is False, (
+        "ELICITATION_SUPPORTED must be False until the bidirectional server-request "
+        "path AND the code-rendered elicitation prompt both land"
+    )
+    assert "ELICITATION_SUPPORTED" in mcp_server.__all__
+
+
 def test_no_utterance_writing_verb_in_registry() -> None:
     """Lock 1 (no affordance): NO primitive is named like an utterance writer — the
     LLM must never gain a sanctioned write call (the harness writes out-of-band,

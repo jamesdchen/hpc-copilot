@@ -93,6 +93,36 @@ if TYPE_CHECKING:
 # compatibility posture for a minimal server) and fall back to this otherwise.
 _PROTOCOL_VERSION = "2025-06-18"
 
+# ─── elicitation capability flag (harness-contract capability 1, second channel)
+#
+# The 2025-06-18 MCP revision adds server-initiated ELICITATION: the server sends
+# an ``elicitation/create`` REQUEST to the client, the client renders a form, the
+# human types a response, and the client returns it. For the harness contract this
+# would be a SECOND conforming utterance channel — the typed response travels
+# client->server with the model never touching it (out-of-band satisfied), and a
+# server-side handler could filter it (free-text only, per the clicked-option
+# hazard) and ``append_utterance`` it.
+#
+# It is NOT implemented, and the flag records that HONESTLY. Two structural
+# reasons, both load-bearing:
+#
+#   1. This server is a hand-rolled JSON-RPC loop (:meth:`McpServer.serve`), NOT
+#      an SDK. There is no MCP SDK dependency in ``pyproject.toml``. ``serve`` is a
+#      strict client-request -> server-response pump: it has no outbound-request
+#      path, no id-correlation for a server-initiated request, and no way to block
+#      a tool call awaiting a client reply. Elicitation needs full bidirectional
+#      JSON-RPC — a substantial protocol change, not a small addition.
+#   2. Adding the MCP SDK (or building the bidirectional layer) is out of scope
+#      for this wave: no new dependency may be introduced here.
+#
+# So the elicitation channel DEGRADES to the hook path (capability 1's
+# ``UserPromptSubmit`` utterance-capture) exactly as the contract specifies for an
+# absent capability. ``harness-capabilities`` reads this flag; the harness-contract
+# doc's "MCP elicitation" section carries the specified-not-implemented binding.
+# Flip to ``True`` only when the bidirectional server-request path AND the
+# code-rendered (never LLM-authored) elicitation prompt both land.
+ELICITATION_SUPPORTED: bool = False
+
 # The read/act boundary, mirrored from the @primitive ``verb`` taxonomy
 # (docs/architecture.md → "The decide / act boundary"). Only these are exposed
 # without an explicit mutation opt-in.
@@ -968,6 +998,7 @@ def build_server(
 
 
 __all__ = [
+    "ELICITATION_SUPPORTED",
     "CliRunner",
     "McpServer",
     "allowed_primitives",

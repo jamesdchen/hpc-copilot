@@ -261,3 +261,111 @@ This is the product claim the contract secures: "we also export notebooks," not
 "we are one notebook tool" — every trusted thing (approval, sign-off, receipt)
 is an attestation over a journal a conforming harness fed, and the harness is
 swappable.
+
+## Capability negotiation
+
+A conforming harness's capability set is not a self-asserted manifest — it is
+**DETECTED**, and the declaration IS what code can verify. This is the LSP-style
+negotiation posture: a harness advertises what it can do, but here "advertise"
+means "expose the seams code reads", never "claim in prose". The read-only
+`harness-capabilities` verb (`ops/harness_capabilities.py`) is the negotiation
+surface; it reports the four capabilities as code OBSERVES them, each against a
+named seam:
+
+- **Capability 1 (utterance log)** — detected from the installed input-capture
+  hooks in `~/.claude/settings.json` (honoring `CLAUDE_CONFIG_DIR`), matched by
+  their module-path needles in `agent_assets.py`
+  (`_UTTERANCE_CAPTURE_NEEDLE`, `_ANSWER_CAPTURE_NEEDLE`) through the ONE canonical
+  entry-matcher `agent_assets._find_hook_entry_index` — never a re-derived scan —
+  plus the repo's utterance-log presence (`state/utterances.py::utterances_path`,
+  non-creating) and the MCP elicitation flag (below).
+- **Capability 2 (relay enforcement)** — detected from the relay-audit Stop hook's
+  needle (`_RELAY_AUDIT_NEEDLE`).
+- **Capability 3 (backgrounding)** — always present (the detached-worker machinery
+  is core-side); the watchdog alert-delivery hook (`_ALERT_COUNT_NEEDLE`) is
+  reported honestly.
+- **Capability 4 (trusted display)** — reported `"unknown"`: no detection seam
+  exists yet for a trusted-render surface, so the verb asserts nothing.
+
+**Tiers key off detection, not declaration** — this is existing behavior, not a
+new rule. The gate already reads the DETECTED presence of the log (capability 1)
+at `ops/decision/journal.py::_harness_human_texts` and picks the full-strength or
+the friction tier accordingly; `harness-capabilities` merely surfaces the same
+observation the gate acts on. So a harness cannot "declare" a capability into
+existence: if the seam is absent, both the verb's report and the gate's behavior
+degrade together.
+
+The conformance kit (planned separately, `docs/design/conformance-kit.md`) asserts
+the three stay aligned: **declared == detected == behaved** — the reported
+capability set matches what the seams observe, and what the seams observe matches
+how the gates actually behave. A drift between any two is the bug the kit catches.
+
+## MCP elicitation as a second capability-1 channel (specified, not implemented)
+
+The 2025-06-18 MCP revision adds server-initiated **elicitation**: the server sends
+an `elicitation/create` request, the client renders a form, the human types a
+response, and the client returns it. This is a natural SECOND conforming channel
+for capability 1 — the typed response travels client -> server with the model never
+touching it (out-of-band satisfied), exactly like the `UserPromptSubmit` hook.
+
+**The specified binding** (a second harness that implements elicitation MUST honor
+it, byte-for-byte with §2):
+
+- The server-side handler, on receiving an elicitation response, applies the
+  reference provenance filter (`state/utterances.py::is_harness_injected`, typed-
+  only) and then `append_utterance`s — the same write API §2 pins.
+- **The clicked-option hazard.** An elicitation form may offer server-authored
+  OPTIONS. A CLICK on an offered option is NOT typed text — it is the elicitation
+  analogue of the `answer_capture._is_clicked` case — so only FREE-TEXT fields of
+  the response qualify for the log. A response composed entirely of clicked options
+  is dropped; a typed field lands. This mirrors `answer_capture`'s `_typed_texts`
+  posture exactly.
+- **CRITICAL provenance rule.** The elicitation PROMPT shown to the human MUST be
+  CODE-RENDERED (the `relay_render` posture), NEVER LLM-authored text passed
+  through a spec. If the model could author the prompt, it would bait the human's
+  reply into the trust anchor — the same laundering channel the authorship gate
+  exists to close. A conforming elicitation prompt is built by code, from the
+  journal, like every other trusted projection.
+
+**Why it is not implemented here.** The `hpc-agent` MCP server
+(`_kernel/extension/mcp_server.py`) is a hand-rolled JSON-RPC loop, NOT an SDK —
+there is no MCP SDK dependency. Its `serve` loop is a strict client-request ->
+server-response pump: no outbound-request path, no id-correlation for a server-
+initiated request, no way for a tool call to block awaiting a client reply.
+Elicitation needs full bidirectional JSON-RPC, a substantial protocol change, and
+adding a dependency for it is out of scope. The capability is therefore recorded by
+a single honest flag — `mcp_server.ELICITATION_SUPPORTED = False` — read by
+`harness-capabilities`.
+
+**Client support reality-check.** Which MCP clients support elicitation today is
+UNKNOWN from this codebase — Claude Code's support status is not asserted here (say
+unknown, not yes). Because both the server and the client sides are unconfirmed,
+the elicitation channel **degrades to the hook path**: capability 1's
+`UserPromptSubmit` utterance-capture remains the working channel, and the gate
+behaves identically whether or not elicitation ever lands. No sign-off VERB is
+introduced (lock 1): appending an utterance stays the harness's exclusive out-of-
+band act, whichever channel captured it.
+
+## Capability 2, split: INSPECT vs ACT
+
+Capability 2 (relay/verbatim enforcement) decomposes into two conforming halves,
+so a harness can provide each independently:
+
+- **INSPECT** — the ability to OBSERVE the final agent-visible message. The
+  emerging portable ride for this is the **OpenTelemetry GenAI semantic
+  conventions** (the standardized observable-output spans/events for LLM turns): a
+  harness that emits GenAI-conformant telemetry exposes the final message as an
+  observable output the audit can read, with no Claude-Code-specific hook.
+- **ACT** — the ability to FORCE a continuation (re-answer) instead of ending the
+  turn. Two named conforming implementations:
+  1. **Harness hooks** à la Claude Code — the reference `Stop` hook
+     (`relay_audit_stop.py`) blocks the stop once and makes the agent correct the
+     relay.
+  2. **A RESPONSE GATEWAY** — an LLM proxy that applies `verify_relay` to the
+     outgoing message BEFORE delivery, holding back or amending a contradicted
+     relay. The gateway sits in front of any model, so it provides the ACT half
+     with no harness hooks at all.
+
+A harness that provides INSPECT (e.g. via OTel GenAI) plus either ACT
+implementation earns capability 2's trust property; absent both, the relay audit
+degrades to the VERB-ONLY posture named above.
