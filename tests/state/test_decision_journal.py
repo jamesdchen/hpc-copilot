@@ -122,6 +122,33 @@ def test_scope_kind_lands_under_hpc_scopes(tmp_path: Path) -> None:
     assert records[0]["resolved"] == {"scope_action": "lock"}
 
 
+def test_notebook_kind_lands_under_hpc_notebooks(tmp_path: Path) -> None:
+    """A ``notebook`` decision journals under ``.hpc/notebooks/<audit_id>.decisions.jsonl``.
+
+    Design ``docs/design/notebook-audit.md`` D3: sign-offs are ordinary
+    append-decision records under a caller-authored ``audit_id``.
+    """
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id="my-audit",
+        block="notebook-sign-off",
+        response="sign construction",
+        resolved={
+            "audit_id": "my-audit",
+            "section": "construction",
+            "section_sha": "abc",
+            "view_sha": "def",
+        },
+    )
+    path = decisions_path(tmp_path, "notebook", "my-audit")
+    assert path == tmp_path / ".hpc" / "notebooks" / "my-audit.decisions.jsonl"
+    records = read_decisions(tmp_path, "notebook", "my-audit")
+    assert len(records) == 1
+    assert records[0]["scope_kind"] == "notebook"
+    assert records[0]["resolved"]["section"] == "construction"
+
+
 def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) -> None:
     """Existing run/campaign locality is unchanged by the new scope kind."""
     append_decision(tmp_path, scope_kind="run", scope_id="id", block="submit.S1", response="y")
@@ -129,6 +156,9 @@ def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) ->
         tmp_path, scope_kind="campaign", scope_id="id", block="campaign.spec", response="y"
     )
     append_decision(tmp_path, scope_kind="scope", scope_id="id", block="scope-lock", response="y")
+    append_decision(
+        tmp_path, scope_kind="notebook", scope_id="id", block="notebook-sign-off", response="y"
+    )
     assert (
         decisions_path(tmp_path, "run", "id") == tmp_path / ".hpc" / "runs" / "id.decisions.jsonl"
     )
@@ -139,6 +169,7 @@ def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) ->
     assert len(read_decisions(tmp_path, "run", "id")) == 1
     assert len(read_decisions(tmp_path, "campaign", "id")) == 1
     assert len(read_decisions(tmp_path, "scope", "id")) == 1
+    assert len(read_decisions(tmp_path, "notebook", "id")) == 1
 
 
 def test_run_and_campaign_scopes_are_separate_stores(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ sidecars and campaign scratch already live under)::
     <experiment_dir>/.hpc/runs/<run_id>.decisions.jsonl        # scope_kind="run"
     <experiment_dir>/.hpc/campaigns/<campaign_id>/decisions.jsonl  # scope_kind="campaign"
     <experiment_dir>/.hpc/scopes/<tag>.decisions.jsonl         # scope_kind="scope"
+    <experiment_dir>/.hpc/notebooks/<audit_id>.decisions.jsonl # scope_kind="notebook"
 
 One JSONL record per exchange, newest last, **append-only**: a write
 never rewrites or truncates a prior record. Appends are serialized under
@@ -68,8 +69,12 @@ SCHEMA_VERSION = 1
 # "scope" decision journals the lock/unlock touchpoints of a named,
 # caller-tagged experiment scope (:mod:`hpc_agent.state.scopes`) — the
 # substrate the scope lock state and look ledger hang off; the journal
-# stores the shape, never any tag vocabulary.
-SCOPE_KINDS = frozenset({"run", "campaign", "scope"})
+# stores the shape, never any tag vocabulary. A "notebook" decision
+# journals the audit touchpoints of an audited source module
+# (``docs/design/notebook-audit.md`` D3) — sign-offs are ordinary
+# append-decision records under a caller-authored ``audit_id``; the
+# journal stores the shape, never any section vocabulary.
+SCOPE_KINDS = frozenset({"run", "campaign", "scope", "notebook"})
 
 _log = logging.getLogger(__name__)
 
@@ -114,6 +119,10 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         return RepoLayout(experiment_dir).hpc / "scopes" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "notebook":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "notebooks" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign" (validated above)
     from hpc_agent.meta.campaign.dirs import campaign_dir
 

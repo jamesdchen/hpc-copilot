@@ -41,7 +41,8 @@
           "enum": [
             "run",
             "campaign",
-            "scope"
+            "scope",
+            "notebook"
           ],
           "title": "Scope Kind",
           "type": "string"
