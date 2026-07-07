@@ -201,6 +201,7 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # submit-s4 (harvest) — end of the submit chain.
     ("submit-s4", "harvested"): None,
     ("submit-s4", "harvest_partial"): None,
+    ("submit-s4", "detached"): None,  # brief arrives via the journal.
     # ── status family ─────────────────────────────────────────────────────────
     # status-snapshot
     ("status-snapshot", "snapshot_clean"): "status-watch",  # live run → watch (see note).

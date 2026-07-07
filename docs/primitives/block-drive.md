@@ -37,7 +37,7 @@ A single invocation:
    exactly like campaigns. This is deliberately **not** a parked/blocking
    process.
 
-At a scheduler-bound span (detached S2/S3/speculate) the tick returns the detach
+At a cluster-bound span (detached S2/S3/S4/speculate) the tick returns the detach
 handle and exits — the detached child owns the poll.
 
 ## Inputs

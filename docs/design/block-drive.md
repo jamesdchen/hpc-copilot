@@ -22,8 +22,8 @@ Wave-4 changes the **control flow**, not the substrate. Already in the tree:
 - The **§5 recovery machine** — watchdog tick stamps + `doctor` (+ `doctor-install`),
   first-class `kill`, guaranteed harvest, cluster `watcher-install`, telemetry
   contract.
-- **Detach-by-contract** — `detach:true` default on the scheduler-bound verbs
-  (S2/S3/speculate); a detached child (no LLM) owns the poll.
+- **Detach-by-contract** — `detach:true` default on the cluster-bound verbs
+  (S2/S3/S4/speculate); a detached child (no LLM) owns the poll.
 - **The warm MCP surface** — `mcp-serve` with the **in-process runner as
   default** (reuses the loaded registry; subprocess runner kept as isolation
   fallback + parity oracle), a **curated catalog derived from the `next_block`

@@ -65,7 +65,7 @@ __all__ = ["submit_s1", "submit_s2", "submit_s3", "submit_s4"]
 # returns a handle, so a naive re-invocation after the worker FINISHED would
 # re-spawn (the single-lease self-heals on a dead pid) — the run #7 papercut.
 # These blocks record their terminal outcome and replay it on re-invoke.
-_DETACHED_BLOCKS: frozenset[str] = frozenset({"s2", "s3"})
+_DETACHED_BLOCKS: frozenset[str] = frozenset({"s2", "s3", "s4"})
 
 
 def _current_cmd_sha(experiment_dir: Path, run_id: str) -> str:
@@ -943,6 +943,12 @@ def submit_s4(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockResult:
     The terminal-or-explicitly-partial invariant is NOT re-checked here: the
     composed ``aggregate-flow`` gate owns it (compose, don't duplicate).
 
+    Detach-by-contract (design §3): with ``detach`` ON (default) the gate fires
+    synchronously, then a durable detached worker owns the harvest (combine SSH
+    round-trips + rsync pull + the breaker-deadline wait-and-retry) and the block
+    returns a ``{started, watch: journal, detached_pid}`` handle immediately —
+    the results-table brief is read from the journal on completion.
+
     The emitted results brief is persisted (``_persist_brief``) for the
     provenance gate (conduct rule 9).
     """
@@ -956,6 +962,32 @@ def _submit_s4_impl(experiment_dir: Path, *, spec: SubmitS4Spec) -> SubmitBlockR
         verb="submit-s4",
         predecessor="S3",
     )
+    # Detach-by-contract (design §3): the greenlight gate above fired
+    # SYNCHRONOUSLY (gate → detach — a gate failure surfaces here, loudly, never
+    # inside a detached child). The harvest's wall-clock is cluster-bound —
+    # per-wave combine SSH round-trips, the rsync pull, and the breaker-deadline
+    # wait-and-retry can each ride a throttled host for minutes — so with detach
+    # ON (default) a durable background worker owns it and the parent returns
+    # the handle immediately, exactly like S2/S3.
+    if spec.detach:
+        # Idempotent re-invoke (run #7): a prior detached worker may have already
+        # driven this block to its terminal for the current tree — replay that
+        # recorded outcome instead of re-spawning a redundant worker (no SSH, no
+        # re-combine). A moved cmd_sha (a nudge) or no record → fall through and
+        # spawn; a still-LIVE worker is refused by the single-lease.
+        replay = _replay_recorded_terminal(experiment_dir, block="s4", run_id=spec.aggregate.run_id)
+        if replay is not None:
+            return replay
+
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+
+        launch = launch_submit_block_detached(
+            verb="submit-s4",
+            experiment_dir=str(experiment_dir),
+            spec=_detached_spec_dict(spec),
+        )
+        return _detached_block_result("s4", "submit-s4", launch)
+
     agg = aggregate_flow(experiment_dir, spec=spec.aggregate)
 
     brief: dict[str, Any] = {

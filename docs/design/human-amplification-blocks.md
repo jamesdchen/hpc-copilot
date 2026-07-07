@@ -89,7 +89,8 @@ at the edges is acceptable; blocks should be complete enough that the agent
 never reverse-engineers the machinery mid-run.
 
 **Blocks never block the chat (decided 2026-07-03).** A block verb whose
-wall-clock is scheduler-bound (canary wait, main-array watch, speculation)
+wall-clock is cluster-bound (canary wait, main-array watch, speculation,
+harvest — S4's per-wave combine SSH + rsync pull + breaker wait-and-retry)
 returns *immediately* after spawning a durable detached worker
 (`_kernel/lifecycle/detached.py`), handing back `{started, run_id, watch:
 journal}`; the journal is the state, completion rides the tail-loop / doctor /

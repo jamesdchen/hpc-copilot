@@ -591,7 +591,7 @@ def _agg_result(*, escalation_reason: str | None = None, failed_waves=None):
 
 
 def test_s4_returns_results_brief(tmp_path: Path) -> None:
-    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(tmp_path, "submit-s4")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()) as m_agg:
@@ -610,7 +610,7 @@ def test_s4_returns_results_brief(tmp_path: Path) -> None:
 
 
 def test_s4_partial_harvest_when_waves_escalate(tmp_path: Path) -> None:
-    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(tmp_path, "submit-s4")
 
     with mock.patch.object(
@@ -650,7 +650,7 @@ def test_s2_persists_brief_for_provenance_gate(tmp_path: Path) -> None:
 def test_s4_persists_brief_for_provenance_gate(tmp_path: Path) -> None:
     from hpc_agent.state.decision_briefs import latest_brief_for_block
 
-    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(tmp_path, "submit-s4")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
@@ -796,6 +796,32 @@ def test_s3_clean_terminal_is_replayable(tmp_path: Path) -> None:
     assert replayed.stage_reached == "watching_terminal"
     assert replayed.needs_decision is False
     assert replayed.next_block is not None  # the S4 pointer the agent needs
+
+
+def test_s4_reinvoke_replays_recorded_terminal_without_respawn(tmp_path: Path) -> None:
+    """S4 joins the detached blocks (design §3): once a worker has driven the
+    harvest to its terminal for THIS tree, a re-invoke replays the recorded
+    results brief instead of spawning a fresh worker (no SSH, no re-combine)."""
+    _sidecar(tmp_path, cmd_sha="sha-A")
+    _greenlight(tmp_path, "submit-s4")
+
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        first = blocks.submit_s4(
+            tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+        )
+    assert first.stage_reached == "harvested"
+
+    with mock.patch(
+        "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"
+    ) as m_launch:
+        replayed = blocks.submit_s4(
+            tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=True)
+        )
+
+    m_launch.assert_not_called()
+    assert replayed.stage_reached == "harvested"
+    assert replayed.needs_decision is True
+    assert replayed.brief["results_table"] == first.brief["results_table"]
 
 
 def test_replay_does_not_double_append_provenance_brief(tmp_path: Path) -> None:

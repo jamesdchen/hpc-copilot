@@ -278,15 +278,17 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
 # stalls; an abandoned agent turn does NOT kill the server-side call). The
 # blocking invocations are refused HERE, at the seam, with the detached path
 # named — never left to skill prose.
-_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3"})
+_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4"})
 
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
 
-    ``submit-s2``/``submit-s3`` must carry ``spec.detach == true`` (the
-    detached worker + ``wait-detached`` is the sanctioned wait);
-    ``status-watch`` must not request a blocking wait-to-terminal poll.
+    ``submit-s2``/``submit-s3``/``submit-s4`` must carry ``spec.detach == true``
+    (the detached worker + ``wait-detached`` is the sanctioned wait; the S4
+    harvest's combine + rsync pull + breaker wait-and-retry can hold the line
+    for many minutes on a throttled host); ``status-watch`` must not request a
+    blocking wait-to-terminal poll.
     """
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}

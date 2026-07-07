@@ -58,18 +58,24 @@ __all__ = [
 # the default worker.
 _SUPPORTED = frozenset({"status"})
 
-# The human-amplification block verbs whose wall-clock is scheduler-bound and so
+# The human-amplification block verbs whose wall-clock is cluster-bound and so
 # detach-by-contract (docs/design/human-amplification-blocks.md §3, "Blocks never
-# block the chat"): the S2 canary-wait, the S3 main-array watch, and the
-# speculative canary. Each is spawned as a DETACHED ``hpc-agent <verb>``
-# subprocess running the SAME verb body with its ``detach`` spec field flipped
-# OFF, so the child owns the SSH poll to terminal (stamping the journal as it
-# goes — monitor-flow refreshes ``last_status`` and stamps ``next_tick_due`` each
-# tick, so the §5 doctor/watchdog covers a dead child via a lapsed deadline) while
-# the parent returns immediately with a handle envelope. NO ``claude -p`` worker,
-# no LLM in the poll loop — the same deterministic-drive principle as the status
-# path above, carried to the submit blocks.
-SUPPORTED_DETACHED_BLOCK_VERBS = frozenset({"submit-s2", "submit-s3", "submit-speculate"})
+# block the chat"): the S2 canary-wait, the S3 main-array watch, the speculative
+# canary, and the S4 harvest (per-wave combine SSH + rsync pull + the
+# breaker-deadline wait-and-retry — minutes on a throttled host). Each is spawned
+# as a DETACHED ``hpc-agent <verb>`` subprocess running the SAME verb body with
+# its ``detach`` spec field flipped OFF, so the child owns the SSH work to
+# terminal (the poll loops stamp the journal as they go — monitor-flow refreshes
+# ``last_status`` and stamps ``next_tick_due`` each tick, so the §5
+# doctor/watchdog covers a dead child via a lapsed deadline; a dead S4 child is
+# covered by its lease pid — ``wait-detached`` returns and the terminal record's
+# absence says the harvest must re-run, which is idempotent) while the parent
+# returns immediately with a handle envelope. NO ``claude -p`` worker, no LLM in
+# the poll loop — the same deterministic-drive principle as the status path
+# above, carried to the submit blocks.
+SUPPORTED_DETACHED_BLOCK_VERBS = frozenset(
+    {"submit-s2", "submit-s3", "submit-s4", "submit-speculate"}
+)
 
 
 class DriveModeError(ValueError):
@@ -449,20 +455,25 @@ def _spawn_detached(
 def _block_spec_run_id(spec: dict[str, Any]) -> str:
     """Dig the run_id out of a submit-block spec dict (for the detach handle).
 
-    S2 / S3 / speculate all embed the submit-and-verify spec under
-    ``submit.submit`` with the ``run_id`` on the inner submit-flow spec. The
-    run_id is what the parent hands back as the journal-poll key, so it must be
-    present before the detach. Raises :class:`DriveModeError` when it can't be
-    found — a detached block that can't name its run can't be polled.
+    S2 / S3 / speculate embed the submit-and-verify spec under ``submit.submit``
+    with the ``run_id`` on the inner submit-flow spec; S4 (harvest) carries it on
+    its embedded aggregate-flow spec at ``aggregate.run_id``. The run_id is what
+    the parent hands back as the journal-poll key, so it must be present before
+    the detach. Raises :class:`DriveModeError` when it can't be found — a
+    detached block that can't name its run can't be polled.
     """
     submit = spec.get("submit")
     inner = submit.get("submit") if isinstance(submit, dict) else None
     run_id = inner.get("run_id") if isinstance(inner, dict) else None
     if not isinstance(run_id, str) or not run_id:
+        aggregate = spec.get("aggregate")
+        run_id = aggregate.get("run_id") if isinstance(aggregate, dict) else None
+    if not isinstance(run_id, str) or not run_id:
         raise DriveModeError(
             "detached submit-block drive requires a string run_id at "
-            f"spec.submit.submit.run_id; got {run_id!r}. The detached worker polls "
-            "the journal by run_id, so it must be resolved before the detach."
+            f"spec.submit.submit.run_id (S2/S3/speculate) or spec.aggregate.run_id "
+            f"(S4); got {run_id!r}. The detached worker polls the journal by "
+            "run_id, so it must be resolved before the detach."
         )
     return run_id
 
@@ -474,8 +485,9 @@ def launch_submit_block_detached(
     spec: dict[str, Any],
     hpc_agent_bin: str | None = None,
 ) -> DetachedLaunch:
-    """Launch a submit block (``submit-s2`` / ``submit-s3`` / ``submit-speculate``)
-    as a DETACHED ``hpc-agent <verb>`` subprocess (design §3, detach-by-contract).
+    """Launch a submit block (``submit-s2`` / ``submit-s3`` / ``submit-s4`` /
+    ``submit-speculate``) as a DETACHED ``hpc-agent <verb>`` subprocess (design
+    §3, detach-by-contract).
 
     The parent verb has ALREADY run its synchronous gate + drift guards (the
     ordering the caller enforces: gate → drift → detach) and forced ``detach``

@@ -367,6 +367,24 @@ def test_mcp_allows_submit_s2_with_detach() -> None:
     assert runner.calls, "detached invocation must reach the runner"
 
 
+def test_mcp_refuses_submit_s4_without_detach() -> None:
+    """The S4 harvest (combine SSH + rsync pull + breaker wait-and-retry) can
+    hold the synchronous server for minutes — detach is required, like S2/S3."""
+    server = _server(allow_mutations=True)
+    resp = _call(server, "submit-s4", {"spec": {"detach": False}})
+    assert "error" in resp
+    assert "detach" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_submit_s4_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "submit-s4", {"spec": {"detach": True}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
+
+
 def test_mcp_refuses_blocking_status_watch() -> None:
     server = _server(allow_mutations=True)
     resp = _call(server, "status-watch", {"spec": {"wait_terminal": True}})

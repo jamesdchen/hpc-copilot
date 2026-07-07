@@ -25,9 +25,10 @@ import pytest
 import hpc_agent.ops.submit_blocks as blocks
 import hpc_agent.ops.submit_speculate as speculate
 from hpc_agent import errors
+from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
-from hpc_agent._wire.workflows.submit_blocks import SubmitS2Spec, SubmitS3Spec
+from hpc_agent._wire.workflows.submit_blocks import SubmitS2Spec, SubmitS3Spec, SubmitS4Spec
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec, SubmitResources
 from hpc_agent._wire.workflows.submit_speculate import SubmitSpeculateSpec
 
@@ -177,6 +178,68 @@ def test_s3_drift_fires_before_detach(tmp_path: Path, monkeypatch) -> None:
     ):
         blocks.submit_s3(tmp_path, spec=_s3_spec())
     m_launch.assert_not_called()
+
+
+# ── S4: gate → detach ────────────────────────────────────────────────────────
+
+
+def test_s4_detaches_by_default_after_gate(tmp_path: Path) -> None:
+    _greenlight(tmp_path, "submit-s4")
+    with (
+        mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
+        mock.patch.object(blocks, "aggregate_flow") as m_agg,
+    ):
+        result = blocks.submit_s4(
+            tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )  # detach default
+
+    # Detached: the synchronous harvest path never ran.
+    m_agg.assert_not_called()
+    m_launch.assert_called_once()
+    # The child gets the SAME verb with detach forced off.
+    assert m_launch.call_args.kwargs["verb"] == "submit-s4"
+    assert m_launch.call_args.kwargs["spec"]["detach"] is False
+    # Handle envelope.
+    assert result.stage_reached == "detached"
+    assert result.started is True
+    assert result.watch == "journal"
+    assert result.detached_pid == 4242
+    assert result.needs_decision is False
+    assert result.next_block is None
+
+
+def test_s4_gate_fires_before_detach(tmp_path: Path) -> None:
+    """Ordering proof: no greenlight → the gate raises SYNCHRONOUSLY and the
+    detached launcher is NEVER reached (never a gate failure inside the child)."""
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        pytest.raises(errors.SpecInvalid, match="no journaled greenlight"),
+    ):
+        blocks.submit_s4(tmp_path, spec=SubmitS4Spec(aggregate=AggregateFlowSpec(run_id=_RUN_ID)))
+    m_launch.assert_not_called()
+
+
+def test_s4_detached_launcher_digs_run_id_from_aggregate(tmp_path: Path) -> None:
+    """The S4 spec carries its run_id at ``aggregate.run_id`` (not the S2/S3
+    ``submit.submit.run_id`` shape) — the launcher's handle must still name it."""
+    from hpc_agent._kernel.lifecycle import detached
+
+    captured: dict[str, Any] = {}
+
+    def _capture(*, run_id: str, block: str, argv: list[str], log_path: Any, cwd: str):  # noqa: ANN401
+        captured["run_id"] = run_id
+        captured["block"] = block
+        return _FakeLaunch()
+
+    with mock.patch.object(detached, "_spawn_detached", _capture):
+        detached.launch_submit_block_detached(
+            verb="submit-s4",
+            experiment_dir=str(tmp_path),
+            spec={"aggregate": {"run_id": _RUN_ID}, "detach": False},
+        )
+
+    assert captured["run_id"] == _RUN_ID
+    assert captured["block"] == "submit-s4"
 
 
 # ── speculate: dedup → detach ────────────────────────────────────────────────

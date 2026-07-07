@@ -35,6 +35,14 @@ A `SubmitS4Spec` JSON spec with:
 
 - `aggregate` — a nested [`AggregateFlowSpec`](aggregate-flow.md) (run_id,
   output_dir, combine/pull/reduce knobs).
+- `detach` (bool, default **true**) — detach-by-contract (design §3): the
+  greenlight gate fires synchronously, then a durable detached worker owns the
+  harvest (per-wave combine SSH + rsync pull + the breaker-deadline
+  wait-and-retry can ride a throttled host for minutes) and the block returns a
+  `{started, watch: journal, detached_pid}` handle immediately. The
+  results-table brief is read from the journal on completion; await the worker
+  with [`wait-detached`](wait-detached.md). `false` runs the harvest
+  synchronously in-process (tests / CI).
 
 ## Outputs
 
@@ -50,7 +58,13 @@ A `SubmitBlockResult` (`block="s4"`, `needs_decision=true`) with a `brief`:
   the `y`/nudge boundary. Concluding is the human's decision.
 
 `stage_reached` ∈ `harvested` (every wave combined cleanly) · `harvest_partial`
-(some waves escalated — review the table before concluding).
+(some waves escalated — review the table before concluding) · `detached` (the
+default handle return — the worker owns the harvest; the brief arrives via the
+journal).
+
+A re-invoke after the detached worker reached its terminal for the current tree
+REPLAYS the recorded results brief (`state/block_terminal`, keyed on the sidecar
+`cmd_sha`) — no new worker, no SSH.
 
 ## Errors
 

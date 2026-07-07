@@ -303,3 +303,16 @@ class SubmitS4Spec(BaseModel):
     aggregate: AggregateFlowSpec = Field(
         description="The aggregate-flow spec — ensures waves combined, pulls partials, reduces.",
     )
+    detach: bool = Field(
+        default=True,
+        description=(
+            "Detach-by-contract (design §3): default ON — never-stall is the norm. "
+            "When True the greenlight gate fires SYNCHRONOUSLY (gate → detach), then "
+            "S4 spawns a durable detached worker to own the harvest (per-wave combine "
+            "SSH + rsync pull can ride a throttled cluster or an open breaker's "
+            "wait-and-retry for many minutes) and returns immediately with a "
+            "{started, watch: journal, detached_pid} handle; the results-table brief "
+            "is read from the journal on completion, never held in a process. Set "
+            "False to run the harvest synchronously in-process (tests / CI)."
+        ),
+    )
