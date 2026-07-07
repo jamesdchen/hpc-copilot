@@ -36,9 +36,15 @@ cluster** (`{"cluster": "hoffman2"}`), it:
    by construction);
 2. **supersedes** the old attempt (`supersede_run`) — closes it and its `-canary`
    pairing and stamps the old→new link, so a fresh run_id is not a scope-hop escape
-   hatch (proving run #4, finding g/h);
-3. **re-canaries** on the new cluster (`submit-and-verify`, `stop_after_canary=True`)
-   — the #160 gate verifies the 1-task canary before any main array is offered.
+   hatch (proving run #4, finding g/h). Best-effort + **non-blocking**: an unreachable
+   old cluster records a `pending_closure` marker instead of grinding on `qdel`
+   (run #8's MaxStartups-throttled hoffman2);
+3. **hands off** to `submit-s2` via the `next_block` hint — S2's detach-by-contract
+   worker owns the re-canary poll (the #160 gate: the 1-task canary on the NEW cluster,
+   verified BEFORE any main array is offered). This verb NEVER runs the canary inline,
+   so it returns in seconds — the non-blocking contract that makes it safe to expose as
+   a curated MCP tool (run #8: the agent, unable to reach it over MCP, hand-ran
+   kill→confirm→revise against the throttled cluster and wedged).
 
 **Why a NEW run_name (the design point).** A run_id keys on parameters + run_name
 only (#207): a retarget keeps the SAME params (only the cluster moves), so KEEPING
@@ -49,11 +55,12 @@ re-points `revise-resolved`'s reconstruction helper with a FRESH run_name
 (`<old_run_name>-<cluster>`, code-derived — the LLM never authors it), giving a
 distinct run_id wave-2 supersession can close cleanly.
 
-**Ordering: resolve → supersede → re-canary.** Resolve runs first — it keys its own
+**Ordering: resolve → supersede → hand-off.** Resolve runs first — it keys its own
 resume-vs-fresh detection on the NEW run_id, so it never trips on the old attempt's
 still-live canary (the retarget-under-a-live-canary case). Only then does
-`supersede_run` close the old attempt, so the re-canary's own supersession gate finds
-no live same-identity sibling and passes without a `supersedes` field.
+`supersede_run` close the old attempt, so when S2's detached worker runs the re-canary
+its own supersession gate finds no live same-identity sibling and passes without a
+`supersedes` field.
 
 **The load-bearing guard.** The `patch` must name a `cluster` *different* from the
 failed attempt's — a same-cluster (or clusterless) delta would mint a run_id that
@@ -63,11 +70,12 @@ The derived-field guard is `revise-resolved`'s own: a `patch` key naming `job_en
 `executor` / `ssh_target` / … is refused with `spec_invalid`.
 
 **It does not bypass the gates.** The re-canary is the #160 canary gate (cheap,
-sandboxed, verified before any main array); the returned brief carries
-`needs_decision=True`, so the human re-`y`s it through the EXISTING `append-decision`
-path (the authorship + brief-provenance gates still run on the re-commit), and the
-main array stays behind the S3 greenlight gate. `retarget-run` only supersedes,
-re-resolves, and re-canaries — it never launches the main array.
+sandboxed, verified before any main array) — run in S2's detached worker after the
+re-`y`, never inline here; the returned brief carries `needs_decision=True`, so the
+human re-`y`s it through the EXISTING `append-decision` path (the authorship +
+brief-provenance gates still run on the re-commit), and the main array stays behind the
+S3 greenlight gate. `retarget-run` only supersedes, re-resolves, and hands off to
+`submit-s2` — it never runs the canary itself and never launches the main array.
 
 ## Routing (the recovery arm)
 

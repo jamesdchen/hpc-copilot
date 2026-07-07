@@ -119,7 +119,27 @@ _RUN_PRIMITIVE_TOOL = "run-primitive"
 # a ``next_block`` field, so adding/removing that field moves a verb in/out of
 # the curated set with no edit here.
 _CURATED_EXTRA_VERBS = frozenset(
-    {"doctor", "kill", "net-triage", "submit-speculate", "block-drive", "append-decision"}
+    {
+        "doctor",
+        "kill",
+        "net-triage",
+        "submit-speculate",
+        "block-drive",
+        "append-decision",
+        # ``scope-lock`` is a stable human-amplification mutate that is NOT a
+        # block (no ``next_block``), so it is unioned in explicitly — the run-#8
+        # lesson: an MCP-unreachable verb gets hand-rolled. ``scope-status`` (a
+        # pure read) stays OUT of the curated set.
+        "scope-lock",
+        # ``verify-reproduction`` is the reproduction receipt QUERY — a read verb
+        # (no ``next_block``, so it does not derive in), unioned explicitly
+        # because it is the sanctioned post-repro step ``reproduce-run``'s brief
+        # directs the human to (the receipt is computed under a caller-owned
+        # tolerance). Same run-#8 lesson: an MCP-unreachable verb gets
+        # hand-rolled. (``reproduce-run`` itself needs NO entry — its Result
+        # declares ``next_block``, so it DERIVES into the catalog.)
+        "verify-reproduction",
+    }
 )
 
 # Read-only context resources, each backed by a CLI verb. The URI scheme is

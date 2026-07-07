@@ -985,6 +985,17 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         ),
         data_sha=data_sha,
         env_hash=env_hash,
+        # Carry the caller's opaque evidence-scope tags onto the synthesized
+        # sidecar so the submit-flow-owns-the-artifact guarantee tags the run
+        # even when the resolve leg (write-run-sidecar / Step 6d) did not write
+        # it. Core never interprets them; recorded verbatim.
+        scopes=spec.scopes,
+        # Reproduction-receipt provenance: when this submit reproduces an
+        # ORIGINAL run, record which one on the synthesized sidecar (the
+        # resolve leg stamps the same field when it wrote the sidecar; this
+        # covers the bare submit-flow path where no resolve leg ran). Lets a
+        # later reproduction of the same original skip this derived run too.
+        reproduces=spec.reproduction_of,
     )
 
 
@@ -2093,6 +2104,10 @@ def _submit_one_spec(
         cmd_sha=dedup_cmd_sha,
         node_sha=dedup_node_sha,
         invalidate_on_code_change=spec.invalidate_on_code_change,
+        # Reproduction-receipt lever: a deliberate reproduction of an ORIGINAL
+        # run must not dedup against it (nor a prior reproduction of it) at the
+        # layer-2 cmd_sha fallback, so it actually re-runs. None → unchanged.
+        reproduction_of=spec.reproduction_of,
         # #299 auto-resume keystone — persist what a monitor-side auto-resume
         # would re-submit *with* (the actual augmented env that shipped to the
         # scheduler, the cluster script, and the backend), plus the opt-in

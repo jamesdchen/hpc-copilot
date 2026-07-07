@@ -10,9 +10,9 @@ follow-up to this canary.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from hpc_agent._wire._shared import (
     BackendName,
@@ -21,6 +21,13 @@ from hpc_agent._wire._shared import (
     Runtime,
     SshTarget,
 )
+
+# An opaque, caller-owned evidence-scope tag — same slug character class as
+# ``RunIdStrict`` (its pattern source in ``_shared``), mirrored here because a
+# scope tag is semantically distinct from a run identity. Core never interprets
+# the string; a non-slug tag is refused at this wire model, so a malformed tag
+# never reaches the sidecar the submit flow synthesizes.
+ScopeTag = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$")]
 
 # Launchers the MPI template knows how to wrap an executor with. ``srun``
 # (SLURM-native), ``mpirun`` (OpenMPI / Intel MPI / MPICH), ``aprun`` (Cray
@@ -475,6 +482,33 @@ class SubmitFlowSpec(BaseModel):
             "forces a fresh run. Default false leaves the param-only dedup "
             "key untouched; a detected drift still warns regardless of this "
             "flag. Threads through to submit_and_record."
+        ),
+    )
+    scopes: list[ScopeTag] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE caller-owned evidence-scope tags (slug-validated: "
+            "^[A-Za-z0-9._\\-]+$). Core never interprets them — submit-flow "
+            "carries them onto the synthesized run sidecar verbatim (so the "
+            "artifact-ownership guarantee still tags the run even when the "
+            "resolve leg did not write the sidecar); a non-slug tag is refused "
+            "here at the wire."
+        ),
+    )
+    reproduction_of: RunIdStrict | None = Field(
+        default=None,
+        description=(
+            "Reproduction-receipt dedup lever (#207 sibling of campaign_id): "
+            "the run_id of an ORIGINAL run this submit deliberately REPRODUCES "
+            "with identical params. cmd_sha is parameter identity, so a re-run "
+            "of the same params would otherwise dedup against — and silently "
+            "replay — the original at both the S1 resolve guard and the "
+            "submit-time layer-2 fallback. Naming the original here pierces "
+            "both: the original (and any prior reproduction of it) is skipped "
+            "so this run actually executes, while an UNRELATED same-params "
+            "prior still dedups. submit-flow also stamps it onto the "
+            "synthesized run sidecar as ``reproduces`` (so a later reproduction "
+            "of the same original skips this one too). Null = ordinary submit."
         ),
     )
 

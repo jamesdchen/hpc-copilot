@@ -256,7 +256,13 @@ def resolve_submit_inputs(
     #    A live prior (found, not orphan, status complete/in_flight) is the
     #    only resume-vs-fresh decision the user owns; a terminal-but-not-
     #    complete record (failed/abandoned, #276) is forensic — proceed fresh.
-    fp = find_prior_run(experiment_dir, cmd_sha=cmd_sha)
+    #    Reproduction-receipt lever (#207 sibling): when this resolution is a
+    #    deliberate reproduction of an ORIGINAL run (same params → same cmd_sha),
+    #    find-prior-run skips the original (and any prior reproduction of it), so
+    #    a `complete` original no longer terminates resolve here — but ANY OTHER
+    #    live prior with the same params still fires the guard (the fork keeps
+    #    its fire path).
+    fp = find_prior_run(experiment_dir, cmd_sha=cmd_sha, reproduction_of=spec.reproduction_of)
     if fp["found"] and not fp["is_orphan"] and (fp["status"] in _LIVE_PRIOR_STATUSES):
         return ResolveSubmitInputsResult(
             stage_reached="prior_run_found",
@@ -311,6 +317,13 @@ def resolve_submit_inputs(
         experiment_dir,
         spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
     )
+    # Thread the reproduction-receipt lever onto the built submit-flow spec so
+    # the DETACHED submit-flow worker's submit-time layer-2 cmd_sha dedup pierces
+    # the same original (the S1 find-prior-run skip above only covers this call).
+    # BuildSubmitSpecInput carries no such field, so inject it into the built
+    # dict directly — SubmitFlowSpec.reproduction_of accepts it (None-default).
+    if spec.reproduction_of is not None:
+        submit_spec["reproduction_of"] = spec.reproduction_of
 
     def _caller_executor_warning(executor: str, exp_dir: Path) -> str | None:
         """Re-capture ``check_per_task_executor``'s interface-blind RuntimeWarning.
@@ -351,12 +364,18 @@ def resolve_submit_inputs(
     #    on the sidecar without the caller hand-threading them and getting them
     #    wrong. trial_tokens stays None for ordinary submits (omitted on write);
     #    trial_params makes every run's params recoverable from its sidecar.
+    #    Reproduction-receipt provenance: stamp `reproduces` onto the sidecar so
+    #    the derived run records which ORIGINAL it reproduces — a LATER
+    #    reproduction of the same original then reads it back (find_run_by_cmd_sha
+    #    reproduction_of lever) to skip this derived run too, not just the
+    #    original. None for an ordinary submit (omitted on write).
     sidecar_spec = spec.sidecar.model_copy(
         update={
             "run_id": run_id,
             "cmd_sha": cmd_sha,
             "trial_tokens": cr["trial_tokens"],
             "trial_params": cr["trial_params"],
+            "reproduces": spec.reproduction_of,
         }
     )
     materialized_executor = _materialized_executor_cmd(experiment_dir)

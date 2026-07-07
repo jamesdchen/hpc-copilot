@@ -315,6 +315,7 @@ def submit_and_record(
     tasks_py_sha: str | None = None,
     current_executor: str | None = None,
     invalidate_on_code_change: bool = False,
+    reproduction_of: str | None = None,
     script: str = "",
     backend: str = "",
     job_env: dict[str, str] | None = None,
@@ -372,6 +373,15 @@ def submit_and_record(
     own sidecar (``.hpc/runs/<run_id>.json``, written by submit-flow before
     rsync), so callers that already thread ``cmd_sha`` get the executor
     drift guard for free.
+
+    *reproduction_of* is the reproduction-receipt rejection lever, passed
+    straight to the LAYER-2 :func:`find_run_by_cmd_sha` scan (the sibling of
+    the campaign-iteration lever). When set to the ORIGINAL run's ``run_id``,
+    a deliberate reproduction of identical params does NOT dedup against the
+    original — nor a prior reproduction of it (matched by the sidecar's
+    recorded ``reproduces``) — so it actually re-runs; an unrelated
+    same-params prior still dedups. None (default) leaves the cross-machine
+    fallback byte-identical.
     """
     profile = spec.profile
     cluster = spec.cluster
@@ -484,6 +494,13 @@ def submit_and_record(
             # silently recover the prior iteration instead of submitting.
             # Empty campaign_id → None → unchanged non-campaign dedup.
             campaign_id=campaign_id or None,
+            # Reproduction-receipt lever (sibling of campaign_id): a deliberate
+            # reproduction of `reproduction_of` must NOT dedup against the
+            # original (nor a prior reproduction of it, matched by the recorded
+            # `reproduces`), so it actually re-runs instead of silently
+            # recovering the run it means to reproduce. Unrelated same-params
+            # priors still dedup. None (default) → unchanged behaviour.
+            reproduction_of=reproduction_of,
         )
         if sidecar_path is not None:
             existing_run_id = sidecar_path.stem

@@ -104,6 +104,22 @@ class ResolveSubmitInputsSpec(BaseModel):
             "composite escalates needs_scaffold_interview rather than guessing."
         ),
     )
+    reproduction_of: str | None = Field(
+        default=None,
+        description=(
+            "Reproduction-receipt lever: the run_id of an ORIGINAL run this "
+            "resolution deliberately REPRODUCES with identical params. cmd_sha "
+            "is parameter identity, so a re-run of the same params otherwise "
+            "stops at prior_run_found against the (even complete) original. "
+            "Naming it here makes find-prior-run skip the original (and any "
+            "prior reproduction of it) — so a `complete` original no longer "
+            "terminates resolve, while ANY OTHER live prior still does — and "
+            "stamps ``reproduces`` onto the derived run's sidecar so a later "
+            "reproduction of the same original skips this one too. It is also "
+            "threaded onto the built submit-flow spec so the submit-time "
+            "layer-2 dedup pierces the same original. Null = ordinary submit."
+        ),
+    )
 
 
 class ResolveSubmitInputsResult(BaseModel):

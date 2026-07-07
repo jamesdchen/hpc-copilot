@@ -224,6 +224,7 @@ def find_prior_run(
     experiment_dir: Path,
     *,
     cmd_sha: str,
+    reproduction_of: str | None = None,
 ) -> dict[str, Any]:
     """Look up a prior run by ``cmd_sha`` for resume detection.
 
@@ -231,6 +232,14 @@ def find_prior_run(
     read so the slash command's Step 6c ("I found a prior run with the
     same cmd_sha — resume or fresh?") routes through one CLI call
     instead of inline Python.
+
+    *reproduction_of* is the reproduction-receipt lever threaded straight
+    through to :func:`find_run_by_cmd_sha`: when this lookup backs a
+    deliberate reproduction of the named ORIGINAL run_id, the original (and
+    any prior reproduction of it, matched by the recorded ``reproduces``) is
+    skipped, so a reproduction is not reported as a live prior against
+    itself. An UNRELATED same-params prior is still surfaced. Unset (default)
+    → historical behaviour.
 
     Returns
     -------
@@ -255,7 +264,7 @@ def find_prior_run(
 
     from hpc_agent.state.runs import find_run_by_cmd_sha, is_orphan_sidecar
 
-    path = find_run_by_cmd_sha(experiment_dir, cmd_sha)
+    path = find_run_by_cmd_sha(experiment_dir, cmd_sha, reproduction_of=reproduction_of)
     if path is None:
         return {
             "found": False,

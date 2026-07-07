@@ -43,6 +43,8 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "submit-speculate",
         "block-drive",
         "append-decision",
+        "scope-lock",
+        "verify-reproduction",
     }
 
     assert names == expected
@@ -51,10 +53,19 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     assert {"submit-s2", "submit-s3", "submit-s4"} <= names
     assert {"doctor", "kill", "net-triage", "submit-speculate"} <= names
     assert {"block-drive", "append-decision"} <= names
-    # retarget-run derives in via its next_block hand-off field (run #8: the
-    # agent, unable to reach it over MCP, hand-ran kill→confirm→revise against
-    # a throttled cluster) — it must never silently fall back out of the catalog.
-    assert "retarget-run" in names
+    # scope-lock is a curated human-amplification mutate (an MCP-unreachable verb
+    # gets hand-rolled, run #8); scope-status stays a pure read, OUT of curated.
+    assert "scope-lock" in names
+    assert "scope-status" not in names
+    # verify-reproduction is a curated READ (no next_block): the sanctioned
+    # post-repro receipt query reproduce-run's brief directs to — same run-#8
+    # hand-rolled-if-unreachable lesson, unioned in explicitly like scope-lock.
+    assert "verify-reproduction" in names
+    # retarget-run AND reproduce-run derive in via their next_block hand-off field
+    # (run #8: the agent, unable to reach retarget over MCP, hand-ran
+    # kill→confirm→revise against a throttled cluster) — a next_block-declaring
+    # verb must never silently fall back out of the catalog.
+    assert {"retarget-run", "reproduce-run"} <= names
     assert "clusters" not in names
 
 
