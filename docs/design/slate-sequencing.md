@@ -108,6 +108,38 @@ whichever-lands-second rule both docs record — Phase 9 EXECUTES the
 resolver≠challenger comparison (challenge T5's reserved follow-up, ruled
 in multi-human MH7).
 
+## The cross-plan reuse ledger (2026-07-07 — one definition each; implementers
+## check here before building)
+
+- **JSONL append**: `infra/io.py::append_jsonl_line` (exists) — fingerprint
+  T3 and the conformance ledger RE-POINT onto it; never a third copy.
+- **The order-statistics envelope helper** (fingerprint T1a) — shared by
+  live-conformance's comparator; one definition.
+- **`CITATION_KINDS` resolvers** (evidence memory T1) — challenge-attestation
+  target resolution reuses the table; one resolver set.
+- **The fleet-discovery glob**: `ops/attention_queue.py::
+  discover_fleet_experiments` — evidence memory + any fleet reader reuse it.
+- **The fake-client duplex rig**: built ONCE (elicitation E1's test harness)
+  and consumed by the conformance kit's reference adapter — two plans, one
+  rig.
+- **Env-flag reads**: `infra/env_flags.py` — multi-human's `HPC_ACTOR`
+  routes there (and cures its stale docstring).
+- **Digest formatting**: the run-story/attention render helpers — the
+  evidence-brief/period renderers reuse them; land the punch-list
+  three-way count-summary fold BEFORE Phase 6.
+- **Block-reader idiom**: packs' manifest/opt-in reading mirrors
+  `ops/notebook_gate.py::_read_audited_source` — the one interview-block
+  reader shape.
+- **Canonical-JSON sha**: pending punch-list P-S1's helper — every NEW sha
+  site (conclusion content_sha, conformance payloads, challenge targets)
+  uses it from day one; only legacy sites carry shims.
+- **Outsource presumptions recorded**: federation rides GIT (append-only
+  content-addressed journals are git's native case — no sync daemon, no
+  CRDT libs); DSSE envelope CONSTRUCTION rides securesystemslib/in-toto
+  when signing arrives (kit lane); verified identity, if ever demanded,
+  rides SSH-key record signing — never core PKI. Statistics above the
+  order-statistics floor: scipy/statsmodels PACK-SIDE with owned alphas.
+
 **Next planning target beyond all phases: none in core.** The
 jurisdiction is mapped (the scope doctrine: trust mechanisms, never
 operations; observe/judge/route, never actuate). Post-Phase-9 growth =
