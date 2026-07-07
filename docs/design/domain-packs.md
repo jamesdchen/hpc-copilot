@@ -130,9 +130,12 @@ the manifest ON DISK, recomputes every listed file's sha (raw-bytes SHA-256,
 the `export_dossier` store posture — pack files are not necessarily Python,
 so `normalize_source` does NOT apply; see "sha discipline" below), refuses on
 any mismatch, and appends a bind record to the decision journal under a new
-**fifth scope kind `"pack"`** (`state/decision_journal.py::SCOPE_KINDS` + a
-path branch → `.hpc/packs/<pack_name>.decisions.jsonl` — the exact D3/T7
-notebook precedent). The record:
+**dedicated scope kind `"pack"`** (`state/decision_journal.py::SCOPE_KINDS` +
+a path branch → `.hpc/packs/<pack_name>.decisions.jsonl` — the exact D3/T7
+notebook precedent). The ordering is nominal only: packs and the
+registration kernel take the next two scope-kind slots in whichever order
+they land; the kinds are independent (`docs/design/registration-kernel.md`
+R9). The record:
 
 - `block="pack-bind"`, `response="bound"` (an honest mechanical string, never
   a human-ack token — the `record_auto_clear` naming discipline),
@@ -148,7 +151,10 @@ notebook precedent). The record:
 **What the echo rides on.** The experiment opts in via a `packs` block on
 `_wire/actions/interview.py::InterviewSpec` (the `audited_source` precedent —
 sibling field, persisted verbatim in interview.json, absent → byte-identical):
-`packs: [{pack, manifest: <relpath>, required_receipts: [{slot, pack}]}, …]`.
+`packs: [{pack, manifest: <relpath>, receipt_bindings: [{slot, pack}]}, …]`
+(the opt-in binding's object form is `receipt_bindings`, renamed from
+`required_receipts` in the coherence review 2026-07-07 to disambiguate it
+from S6's manifest list `required_receipts: [<slot slug>]`).
 Downstream, the opaque `{pack, version, sha}` echo is stamped on every record
 that consumed pack content: the lint result when `reader_calls` came from a
 pack, the FailureFeatures vector when a pack pattern hit, the `audited_source`
@@ -176,7 +182,7 @@ re-check, re-receipt, re-sign. No drift state machine (the D8 property).
   that never opted in never pays.
 - **A DANGLING reference from an opted-in record = LOUD.** An opted-in repo
   whose declared manifest is missing/unreadable/sha-drifted, whose bind
-  journal names files that no longer resolve, or whose `required_receipts`
+  journal names files that no longer resolve, or whose `receipt_bindings`
   name a pack with no current bind, raises `errors.SpecInvalid` naming the
   path/slot — a broken setup, never a silent pass (the
   `_read_required_py` posture: D7 silence applies ONLY to the absent
@@ -198,7 +204,7 @@ canonical-JSON shas (the normative `json.dumps(sort_keys=True, separators=
 ## Receipt naming + the gate contract
 
 **How a gate names required pack receipts: caller-authored SLOTS (DP4).**
-The `packs` opt-in block carries `required_receipts: [{slot: <slug>,
+The `packs` opt-in block carries `receipt_bindings: [{slot: <slug>,
 pack: <name>}, …]`. A slot slug is the caller's name for one obligation
 ("data-audit", "stats-check" — toy examples; slugs are opaque to core). The
 pack manifest may LIST the slots its checks can fill
@@ -237,7 +243,7 @@ route-through assertion.
 definition, the two synchronous notebook-gate seats:
 `ops/resolve_submit_inputs.py` (pre-sidecar, the S1 human boundary) and
 `ops/submit_flow.py` (pre-staging, before any SSH). Not opted in → silent
-byte-identical return. Opted in → for every `required_receipts` entry, the
+byte-identical return. Opted in → for every `receipt_bindings` entry, the
 slot's reduction must be CURRENT **and** `passed=true`; otherwise raise
 naming every failing slot and its status (missing / stale / failed). Refusal
 reuses `error_code="precondition_failed"` (the `SourceUnaudited` /
@@ -318,7 +324,8 @@ regen scripts (`scripts/bake_operations_json.py --write`,
 `scripts/build_schemas.py`, `scripts/build_primitive_index.py`,
 `scripts/build_primitive_frontmatter.py`) — the 0.8.0 lesson; registry count
 moves +3 (`pack-bind`, `pack-record-receipt`, `pack-status`; the registry
-is 140 as of 59520a41 — re-check at implementation time).
+is 141 as of e1e9ab27; cross-slate sum = 146 after packs(+3) /
+registration(+1) / kit(+1) — re-check at implementation).
 Inventory tails: `docs/generated/operations.md` regenerates; the dossier
 closed store set gains two nouns (T10, a reviewed vocabulary change).
 
@@ -358,8 +365,16 @@ closed store set gains two nouns (T10, a reviewed vocabulary change).
 
 **Wave C (sequential — hot files, one at a time):**
 
-- **T8** `state/decision_journal.py` — the fifth scope kind `"pack"` + path
-  branch (the notebook T7 precedent; contract tests updated in lockstep).
+- **T8** `state/decision_journal.py` — the dedicated scope kind `"pack"` +
+  path branch (the notebook T7 precedent; contract tests updated in
+  lockstep; packs and the registration kernel claim the next two slots in
+  whichever order they land — the kinds are independent).
+- **T8a** the InterviewSpec `packs` opt-in block —
+  `_wire/actions/interview.py::InterviewSpec` gains the
+  `packs: [{pack, manifest, receipt_bindings: [{slot, pack}]}, …]` field
+  (sibling to `audited_source`, persisted verbatim, absent → byte-identical)
+  + `ops/memory/interview.py` persistence. Sequenced after v1.6's
+  `_AuditedSource` change (landed). Regen (wire change).
 - **T9** `ops/pack_gate.py` (new) + the TWO seat wirings
   (`ops/resolve_submit_inputs.py`, `ops/submit_flow.py` — hot files) +
   enforcement rows. Refusal split per the gate contract.

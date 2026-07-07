@@ -24,12 +24,13 @@ TCK / Web-Platform-Tests pattern. The kit does two jobs at once:
 
 The protocol rides (user-approved, DECIDED inputs to this plan):
 
-- **Capability 1 rides MCP ELICITATION** where clients support it — a
-  concurrent work stream is specifying that binding as new sections of
-  `docs/internals/harness-contract.md` and a `harness-capabilities` verb.
-  This kit CONSUMES both; it builds neither. (Coordination note: at planning
-  time the elicitation sections are not yet in the doc — wave C's K10 must
-  re-read the doc before stamping the version.)
+- **Capability 1 rides MCP ELICITATION** where clients support it — the
+  elicitation sections of `docs/internals/harness-contract.md` have LANDED
+  (ba83eac3), and the `harness-capabilities` verb (`ops/harness_capabilities.py`)
+  EXISTS in the registry. This kit CONSUMES both; it builds neither. (K6
+  consumes the E3-a-reshaped `harness-capabilities` result; wave C's K10
+  re-reads the now-present elicitation sections before stamping the
+  version.)
 - **The attestation/dossier export steals the in-toto/DSSE Statement
   envelope**: subject = sealed file digests, predicateType = our record
   vocabulary, predicate = the records verbatim; v1 = unsigned Statements in
@@ -223,6 +224,35 @@ modules actually PASSED must be one set. A harness that detects a
 capability it cannot behave, or behaves one detection misses, is
 non-conforming: detection is only trustworthy if it is exact.
 
+**The projection rule (verb → kit nouns; coherence review 2026-07-07).** The
+real `harness-capabilities` verb reports FOUR capabilities, one of which —
+`trusted_display` — it always reports as `"unknown"` (core cannot verify a
+harness renders trusted content; there is no kit noun for it, and it is
+EXCLUDED from the negotiation set). The other three project onto the kit's
+three contract nouns `{"utterance-log", "relay-enforcement",
+"backgrounding"}`; the negotiation set is that projection, never the raw
+four.
+
+**Which detection leg is a per-harness SEAM vs a core-side CONSTANT** (the
+honest-detection rule):
+
+- `"backgrounding"` detection is a CORE-SIDE constant — always true (the CLI
+  substrate always supports the detached-worker path), so the kit asserts
+  only BEHAVED for it (the fixture wakes), never a per-harness detection.
+- `"relay-enforcement"` and `"utterance-log"` detection are per-harness SEAMS.
+  For **Claude Code**, capability-1 detection is by SEAM — the hook needles
+  the verb probes. For a **non-Claude-Code harness**, capability-1 detection
+  is detection-BY-BEHAVIOR: the adapter's `write_utterance` path proving the
+  reader (`read_utterances`) accepts what it wrote, NOT the Claude-Code hook
+  needles (which a foreign harness never presents). A harness providing a
+  capability through a different seam is detected by BEHAVING it.
+- An honestly-PARTIAL adapter (a capability genuinely absent) earns a SKIP on
+  that capability's modules and is reported partial — never a negotiation
+  FAILURE. Negotiation fails only on three-way DISAGREEMENT for a capability
+  the harness DOES claim (detected-but-not-behaved, or behaved-but-not-
+  detected): detection must be exact for what it claims, silent for what it
+  skips.
+
 **Canonicalization** (`test_canonicalization.py`). Fixture payloads (JSON
 values + expected digests, committed under `conformance/fixtures/canon/`)
 recomputed byte-for-byte per the normative sha section: `sort_keys=True`
@@ -326,10 +356,13 @@ plugin shifts the entry-point registry, which must never leak into the core
 - **Contract version stamp**: `docs/internals/harness-contract.md` gains a
   SemVer header line (`Contract version: 1.0.0`) and a core constant
   `HARNESS_CONTRACT_VERSION = "1.0.0"` that the `harness-capabilities` verb
-  reports (single home: wherever the concurrent verb lands it — likely
-  beside the verb; the doc stamp and the constant are pinned equal by a
-  contract test). The kit stamps its report with both the contract version
-  and `hpc_agent.__version__`.
+  reports. **K10 explicitly OWNS both the constant and the verb's result
+  field that carries it** — the concurrent elicitation stream reshaped the
+  verb's evidence keys (`docs/design/mcp-elicitation.md` E3-a) but did not
+  add this field; the constant's single home is beside the verb in
+  `ops/harness_capabilities.py` (which now exists), and the doc stamp and the
+  constant are pinned equal by a contract test. The kit stamps its report
+  with both the contract version and `hpc_agent.__version__`.
 - **What "conforming to v1" claims**: all three capabilities' kit modules
   passed, plus canonicalization and negotiation, against a named
   `hpc-agent` version — stated as "conforming: harness contract v1
@@ -353,9 +386,10 @@ plugin shifts the entry-point registry, which must never leak into the core
 
 ## Task waves (file-disjoint, Opus-sized)
 
-**Inputs from the concurrent stream (not built here):** the
-`harness-capabilities` verb + the MCP-elicitation sections of
-`harness-contract.md`. K6 and K10 depend on them; everything else does not.
+**Inputs from the concurrent stream (now landed):** the
+`harness-capabilities` verb (`ops/harness_capabilities.py`, in the registry)
++ the MCP-elicitation sections of `harness-contract.md` (ba83eac3). K6 and
+K10 consume them; everything else does not.
 
 Wave A (parallel):
 
@@ -385,7 +419,8 @@ Wave B (after A, parallel):
   claims, loop-safety, fail-open).
 - **K6** — `conformance/test_capability_backgrounding.py` + the stub worker
   fixture, and `conformance/test_negotiation.py`
-  (declared==detected==behaved; needs the `harness-capabilities` verb).
+  (declared==detected==behaved; consumes the E3-a-reshaped
+  `harness-capabilities` result — `ops/harness_capabilities.py`, present).
 - **K7** — `conformance/test_attestation_export.py` (stock in-toto
   round-trip, `importorskip`-guarded; needs K3).
 
@@ -397,9 +432,12 @@ Wave C (sequential — hot/shared files):
 - **K9** — the `conformance` CI job in `.github/workflows/ci.yml`
   (plugins-style isolation, offline, matrix of the two adapters, in-toto +
   render-stack installs).
-- **K10** — publishing: version stamp on `harness-contract.md` (SEQUENCED
-  AFTER the concurrent agent's sections land — re-read the doc first),
-  `HARNESS_CONTRACT_VERSION` pin test added to
+- **K10** — publishing: version stamp on `harness-contract.md` (the
+  elicitation sections have LANDED, ba83eac3 — re-read before stamping);
+  **K10 OWNS adding the `HARNESS_CONTRACT_VERSION` constant in
+  `ops/harness_capabilities.py` and the `harness-capabilities` result field
+  that carries it** (E3-a left the result shape open for this additive
+  field); the `HARNESS_CONTRACT_VERSION` pin test added to
   `tests/contracts/test_harness_contract.py`, README/docs pointers, and the
   MCP curated-catalog decision for `export-attestations` (expose it beside
   `export-dossier`'s posture).

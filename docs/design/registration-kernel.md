@@ -150,12 +150,20 @@ envelope (n=2, canary-scale)"). A template may therefore demand, e.g.:
 
 ```json
 {"slot": "repro-check", "kind": "reproduction", "subject_id": "<run_id>",
- "content_sha": "…", "requires": {"min_n": 3, "scale": "main"}}
+ "content_sha": "…", "requires": {"min_n": 3, "scales": ["main"]}}
 ```
 
-Core compares `n >= min_n` (counting) and requires the named scale label
-present in the recorded scales set (identity over labels the repro machinery
-itself recorded — core never learns what a scale means). This is the
+The `requires` keys are the fingerprint's exact demand vocabulary
+(`{min_n, min_n_full?, scales, clusters}`, plural — one vocabulary across
+both docs, coherence review 2026-07-07). Core compares `n >= min_n`
+(counting — where `n` counts n_full + n_partial samples both, exactly as the
+fingerprint doc separates them in evidence) and requires every named scale
+label present in the recorded scales set (identity over labels the repro
+machinery itself recorded — core never learns what a scale means). A demand
+MAY additionally specify `min_n_full` to require scale-quality — full
+(non-partial) samples — separately: `n_full >= min_n_full` is the same
+counting comparison over the quality-labeled leg the fingerprint's evidence
+block already isolates. This is the
 registration-side half of the fingerprint's anti-gaming story: a thin
 envelope produces `needs_verdict` items rather than wrong auto-verdicts, and
 **registration is the seat that can demand main-scale evidence before
@@ -192,7 +200,14 @@ which recompute consumes it, per `docs/internals/harness-contract.md`
   holes in the pipeline doc. They arrive as template content (directly, or
   via a domain pack's S6 seam — `docs/design/domain-packs.md` reserves
   `registration_fields` / `required_receipts` for exactly this consumer;
-  pack receipts enter as `pack-receipt` chain members). **Core ships NO
+  pack receipts enter as `pack-receipt` chain members). The projection is
+  mechanical: each S6 `required_receipts` slot slug becomes one chain
+  prerequisite entry `{slot: <slug>, kind: "pack-receipt"}`, checked by R3's
+  `pack-receipt` route-through. The pack's S6 declaration list stays
+  `required_receipts: [<slot slug>]` (the manifest form); the caller's
+  opt-in binding that names WHICH pack fills the slot is the `packs` block's
+  `receipt_bindings: [{slot, pack}]` (domain-packs, coherence review
+  2026-07-07). **Core ships NO
   default template, ever** — the fabrication class. No template resolvable
   in an attempted registration is a loud refusal, never a silent pass.
 - **Completeness is COUNTING, the notebook-template-marker pattern:** every
@@ -254,11 +269,16 @@ every bar raised to its ceiling):
   NO auto-cleared tier and NO redundant-mark path for a registration: the
   attestor is ALWAYS human, the bar never waives (the one instance where
   D-attention's answer is "always human-required by construction").
-- **`view_sha` required:** binds the code-rendered brief the human saw
-  (canonical-JSON sha of the `verify-registration` projection — the
-  `relay_render` posture; D5's archive-vs-interface separation). Validated
-  present, not recomputed at the gate (the T8 provenance-witness ruling —
-  the recompute locks are the three sha legs).
+- **`view_sha` required and RECOMPUTED:** binds the code-rendered brief the
+  human saw (canonical-JSON sha of the `verify-registration` projection —
+  the `relay_render` posture; D5's archive-vs-interface separation). Because
+  the registration brief is DETERMINISTICALLY renderable (T5 builds it from
+  the reduced status + chain by a pure projection), the gate RECOMPUTES the
+  brief sha and binds it as a fourth recompute leg — an upgrade from the
+  (now-retired) T8 validated-present ruling, matching v1.6's precedent that a
+  deterministically-renderable view is recomputed rather than trusted
+  (coherence review 2026-07-07; a witness you can regenerate you should
+  regenerate).
 
 ### R7 — revocation and supersession: append-only, dated evidence
 
@@ -309,7 +329,7 @@ both still hold; `stale` names every failing leg.
   pack-receipt trust story keeps check-correctness pack-side. The toy first
   consumer (T10) demonstrates the wiring end to end.
 - **The attention queue gains registration edges**
-  (`ops/attention_queue.py::_fanout_for` — the one dispatch from item kind
+  (`ops/attention_queue.py::_apply_fanout` — the one dispatch from item kind
   to encoded downstream count): new item kinds for a stale registration and
   a registration blocked on pending prerequisites, and — the leverage
   fan-out the queue exists for — an existing `AUDIT_SECTION_UNSIGNED` /
@@ -369,8 +389,9 @@ scripts (`scripts/bake_operations_json.py --write`,
 `scripts/build_verb_module_map.py`, `scripts/build_operations_index.py`,
 `scripts/build_schemas.py`, `scripts/build_primitive_index.py`,
 `scripts/build_primitive_frontmatter.py`) — the 0.8.0 lesson. Registry count
-moves +1 (`verify-registration`; the registry is 138 as of 35a954a3 —
-re-check at implementation time). The `ScopeKind` literal change also
+moves +1 (`verify-registration`; the registry is 141 as of e1e9ab27;
+cross-slate sum = 146 after packs(+3) / registration(+1) / kit(+1) —
+re-check at implementation). The `ScopeKind` literal change also
 regenerates schemas. Inventory tails: `docs/generated/operations.md`
 regenerates.
 
@@ -429,9 +450,11 @@ files.
   bare ack, response lacking the sha prefix, redundant/auto paths refused
   (there are none — assert the gate never waives).
 - **T8** `ops/attention_queue.py` — the registration item kinds + the
-  `_fanout_for` edges: a registration blocked on a prerequisite counts on
+  `_apply_fanout` edges: a registration blocked on a prerequisite counts on
   that prerequisite's item (a non-creating read of the registration
-  journals, the `_count_runs_echoing_audit` fail-open posture).
+  journals, the fail-open posture of the audit-echo edge in
+  `ops/attention_queue.py` — symbol name may differ; verify at
+  implementation).
 
 **T9** `tests/contracts/test_registration_boundary.py` (new) — the
 enforcement suite (rows below).
@@ -455,7 +478,7 @@ re-register → verify `current` again → revoke with reason → verify
 |---|---|---|
 | No registration write affordance: no primitive/chain/next_block/skill mutates a registration; append-decision under the gated block is the only write path; `verify-registration` is `verb="query"` with no side effects | `tests/contracts/test_registration_boundary.py` (registry scan — the no-sign-off-verb pin's form) | a mutate verb named register/registration lands, or the query grows a side effect |
 | Registration attestations route through the ONE kernel — bind, reduce, and the revoke/supersession winner-selection never re-inline recompute-and-compare or newest-first drift | `tests/state/test_registration.py` route-through assertions (the accruing-member rule on the existing attestation row) | a registration path bypasses `state/attestation.py::bind`/`reduce` |
-| All three recompute legs are server-computed: dossier sha via the ONE signature seam (`compute_dossier_signature`), template sha from disk, every chain sha via its kind's route-through — no wire/resolved field is trusted as a sha the gate then records | T7 fire tests (a store edited between export and append is refused; a fabricated chain sha is refused) + the T3 dry-vs-export byte-equality test | the gate starts trusting a caller-asserted sha (the receipt-laundering hole, at the capital boundary) |
+| All recompute legs are server-computed: dossier sha via the ONE signature seam (`compute_dossier_signature`), template sha from disk, every chain sha via its kind's route-through, AND the brief `view_sha` via the deterministic `verify-registration` projection (F12 upgrade) — no wire/resolved field is trusted as a sha the gate then records | T7 fire tests (a store edited between export and append is refused; a fabricated chain sha is refused; a fabricated `view_sha` is refused) + the T3 dry-vs-export byte-equality test | the gate starts trusting a caller-asserted sha (the receipt-laundering hole, at the capital boundary) |
 | `PREREQUISITE_KINDS` is CLOSED and mechanism-only: equality-pinned; each kind dispatches to a named existing checker; `requires` keys per kind are a closed set; the generic `attestation` kind accepts none | `tests/contracts/test_registration_boundary.py` (the `DOSSIER_SOURCES` equality-pin pattern) | a kind is added ad hoc, a checker re-inlines a member's currency logic, or a `requires` key core cannot check passes silently |
 | Core ships NO default template and NO registration vocabulary: no template file in package data; no field-slug/kind default in core source | same suite (package-data scan + no-literal-vocab AST pin over `ops/registration/` + `state/registration.py`) | a template lands under `src/hpc_agent/`, or core defaults a field/slot/id |
 | No domain vocabulary on the wire: verify-registration schemas expose no `_FORBIDDEN_FIELD_NAMES` member | same suite (`_schema_property_names` recursive walk, mirrored from the dossier suite) | a wire model grows a meaning-bearing field name |

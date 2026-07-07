@@ -316,6 +316,11 @@ that, nothing else.
   the renamed flag) + `tests/ops/test_harness_capabilities.py` +
   `docs/primitives/harness-capabilities.md`. Depends only on the flag rename
   landing in E1; coordinate the one-symbol rename, otherwise file-disjoint.
+  The verb's result will additionally gain a `HARNESS_CONTRACT_VERSION`
+  field, but that field is OWNED by the conformance kit's K10, not this task
+  (`docs/design/conformance-kit.md` D-K6/K10): E3-a reshapes the evidence
+  keys and leaves the result shape OPEN for that additive field — do not pin
+  it closed.
 
 **Wave 2 (after wave 1):**
 
@@ -351,8 +356,13 @@ that, nothing else.
   prove byte-stability — the 0.8.0 lesson: never assume "no regen needed".
 - **E7 — conformance-kit reservation note.** One paragraph in
   `docs/design/conformance-kit.md` pointing K6/K10 at the now-real
-  per-session capability and the elicitation-channel assertion shape. No kit
-  code (the kit is its own plan).
+  per-session capability and the elicitation-channel assertion shape. The
+  per-session detection leg is the fake-client `initialize` seam (the
+  client's declared `capabilities.elicitation` at `initialize`, D2) — NOT the
+  CLI `detect_capabilities` verb, which is a separate-process probe that
+  reports client support as `"unknown"` (D2's honesty posture) and so can
+  never witness a live session's negotiation. No kit code (the kit is its own
+  plan).
 
 **Verification (end of every wave, parallel, mechanical):** `ruff check
 --fix`, `ruff format`, `mypy --ignore-missing-imports`, full `pytest` via

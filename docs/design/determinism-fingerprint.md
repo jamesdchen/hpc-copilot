@@ -62,8 +62,9 @@ The fingerprint is a **CODE ATTESTATION** (the render-receipt pattern,
 append-only, bound via `state/attestation.py::bind` (the recompute lock — a
 sample's `content_sha` is recomputed from the on-disk metrics artifacts at
 append time, so a spread cannot be asserted into existence), and
-drift-revoking via `state/attestation.py::reduce` (a code-identity change
-reads prior samples STALE; see decision 6).
+drift-revoking via the kernel's staleness POSTURE — a code-identity change
+reads prior samples STALE, implemented by T1's CURRENT-identity filter over
+the ledger (see D-consume).
 
 Rejected: **asking the caller for a tolerance as the primary source.** The
 caller-owned `ReproTolerance` DEMOTES to an explicit override — still
@@ -164,15 +165,17 @@ dossier: `ops/export_dossier.py` gains a `determinism-fingerprint` source
 noun; the closed-set `_EXPECTED_SOURCES` pin in
 `tests/contracts/test_dossier_boundary.py` updated in the same commit).
 
-Cross-reference: **`docs/design/registration-kernel.md`** (being written
-concurrently — it does not exist in the tree at this writing). A
+Cross-reference: **`docs/design/registration-kernel.md`** (concurrent). A
 registration can DEMAND evidence tiers: e.g. `fingerprint at main-scale
 n>=3`. The fingerprint module exposes ONE pure predicate for it —
 `evidence_meets(samples, demand) -> (bool, shortfall)` — so the
 registration kernel consumes evidence without re-implementing the envelope
 reduction (the one-definition rule). The demand vocabulary is
-caller-authored `{min_n, scales, clusters}`; core matches by identity,
-never interprets.
+caller-authored `{min_n, min_n_full?, scales, clusters}` (plural `scales` /
+`clusters`); `min_n` counts n_full + n_partial samples both, and the
+optional `min_n_full` demands scale-quality — full (non-partial) samples —
+separately, over the `n_full` leg the evidence block already isolates. Core
+matches by identity and counts, never interprets.
 
 **S5 demotion (note, required by this design):** the tolerance-defaults
 seam **S5 in `docs/design/domain-packs.md`** is DEMOTED by this design from
@@ -180,8 +183,13 @@ primary source to fallback — domain-packs.md already anticipates this
 ("Related, planned separately": *"The determinism fingerprint — may demote
 the tolerance-defaults seam (S5) from primary source to fallback; the S5
 resolver is designed to be removable"*). Resolution order after this
-feature: measured envelope (well-evidenced) > caller explicit override >
-pack S5 default > exact. A pack default NEVER outranks a measurement.
+feature (settled 2026-07-07, coherence review — one order across this doc,
+matching D-consume): **caller explicit override (labeled + disclosed) >
+measured envelope (well-evidenced) > pack S5 default > exact.** An explicit
+owned override outranks a measurement because a HUMAN owns it — disclosure
+(the verdict's `caller_override` label, printed verbatim) is what keeps it
+honest; the measured envelope outranks everything UNOWNED, so a pack default
+NEVER outranks a measurement.
 
 ### 5. Derived subsets — partial reproduction folds in (the old T8)
 
@@ -506,7 +514,7 @@ edit — that friction is the pin working.
 | The double canary's rows never contaminate aggregates: the `-canary` suffix-family exclusion covers `-canary2` | fire test in the aggregate suite (a planted `-canary2` row must not enter the main reduce) | the exclusion predicate stays literal `-canary` while a second canary ships |
 | No verdict verb: the needs_verdict resolution is `append-decision` (block `reproduction-verdict`) or nothing; no chain/next_block/skill affordance writes it | the operations-registry contract test (the no-unlock-verb pin form) | a `resolve-reproduction` verb or auto-resolving skill appears |
 | A CODE attestation never satisfies a human tier: `auto_cleared` receipts appear in no human-authorship path; a needs_verdict item clears only via the human record | the existing `_assert_signoff_authorship` fire-test family + a no-affordance pin | a fingerprint receipt is accepted where a human verdict is demanded (e.g. by a registration tier) |
-| The measured envelope outranks pack defaults; caller override is disclosed: precedence measured > caller (labeled) > S5 pack default > exact | precedence table test + receipt-field pin (`tier_reason="caller_override"` present whenever a spec tolerance decided a key) | S5 or a caller tolerance silently wins over a well-evidenced measurement, or an override goes undisclosed |
+| Caller override WINS but is disclosed; the measured envelope outranks everything unowned: precedence caller (labeled) > measured > S5 pack default > exact | precedence table test + receipt-field pin (`tier_reason="caller_override"` present whenever a spec tolerance decided a key) | a caller tolerance wins UNDISCLOSED or unlabeled, or S5 silently outranks a well-evidenced measurement |
 
 ## Boundary-drift flags (the Q1 watch list)
 
