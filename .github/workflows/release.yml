@@ -1,0 +1,136 @@
+name: release
+
+# Build + publish the hpc-agent distribution to PyPI via TRUSTED PUBLISHING
+# (OIDC, no long-lived token). See docs/internals/release-pipeline.md for the
+# decision record and the ONE-TIME human setup this workflow depends on.
+#
+# Trigger model:
+#   - push of a ``v*`` tag  → build, verify, publish to PyPI + attach dist to
+#     the GitHub release. THE TAG PUSH IS THE PUBLISH TRIGGER (the release skill
+#     stops at ``git push origin v<version>``; this workflow does the rest).
+#   - workflow_dispatch     → dry-run: build + verify only, NEVER publishes.
+#
+# The three standing release hazards this retires (all documented in
+# docs/internals/release-pipeline.md):
+#   1. No PyPI token exists to rotate — trusted publishing mints a short-lived
+#      OIDC credential per run.
+#   2. The wheel is built from a CLEAN CI checkout of the committed tree, so a
+#      developer's real cluster creds in a local clusters.yaml can never ship
+#      (and the verify job greps the packaged file for the placeholder anyway).
+#   3. A fresh checkout each run means no stale ``build/`` dir can poison the
+#      BUILD_SHA stamp — and the verify job asserts the stamp landed.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A manual run is ALWAYS a dry run: it runs the build + verify gates and the
+  # publish job below is gated to tag pushes only, so a dispatch can never
+  # upload. Use it to confirm a candidate commit builds + stamps cleanly before
+  # tagging. (No inputs on purpose — an input like ``dry_run: false`` would be a
+  # footgun that promises a publish this event can't perform.)
+  workflow_dispatch: {}
+
+# Least privilege at the top; the publish job widens its own scope explicitly.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: setup.py's build_py hook runs ``git rev-parse HEAD``
+          # to stamp BUILD_SHA into the wheel. A shallow (default fetch-depth: 1)
+          # checkout still resolves HEAD, but 0 is the unconditionally-safe
+          # choice and future-proofs any describe/tag lookup the stamp may grow.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the build frontend
+        run: python -m pip install --upgrade build
+      - name: Build sdist + wheel
+        # BOTH ``--sdist`` and ``--wheel`` are passed on purpose: that builds
+        # each artifact DIRECTLY from the source checkout (which carries ``.git``).
+        # A bare ``python -m build`` builds the wheel from the unpacked sdist,
+        # which has NO ``.git`` — setup.py's stamp would fail-open to a no-op and
+        # ship an UNSTAMPED wheel. The verify step below is the hard backstop for
+        # exactly that regression.
+        run: python -m build --sdist --wheel
+      - name: Verify stamp integrity + creds placeholders (the reason this pipeline exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHEEL="$(ls dist/hpc_agent-*.whl)"
+          echo "wheel under test: ${WHEEL}"
+
+          # (1) Creds-leak gate. The packaged clusters.yaml is read straight out
+          # of the wheel zip — the exact bytes that would ship — and must still
+          # carry the ``<your_user>`` template placeholder. A real-creds leak
+          # (hazard #2) fails the build here.
+          if ! unzip -p "${WHEEL}" hpc_agent/config/clusters.yaml | grep -q '<your_user>'; then
+            echo "ABORT: packaged clusters.yaml is missing the <your_user> placeholder" >&2
+            echo "  -> real cluster credentials may have leaked into the wheel. Refusing to publish." >&2
+            exit 1
+          fi
+          echo "creds gate OK: packaged clusters.yaml ships template placeholders"
+
+          # (2) Stamp-integrity gate. Install the wheel into a scratch venv and
+          # assert ``hpc-agent --version`` reports the tag commit's short sha.
+          # This is the exact failure class the pipeline exists to kill: a stale
+          # local build/ dir once poisoned BUILD_SHA for weeks (hazard #3). On a
+          # tag push GITHUB_SHA is the tagged commit, and setup.py stamps
+          # ``git rev-parse --short=8 HEAD`` → the version reads ``...+g<sha8>``.
+          python -m venv /tmp/verify-venv
+          /tmp/verify-venv/bin/python -m pip install --quiet "${WHEEL}"
+          VERSION="$(/tmp/verify-venv/bin/hpc-agent --version)"
+          echo "reported --version: ${VERSION}"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          if [[ "${VERSION}" != *"g${SHORT_SHA}"* ]]; then
+            echo "ABORT: --version (${VERSION}) does not carry the tag commit fingerprint g${SHORT_SHA}" >&2
+            echo "  -> the BUILD_SHA stamp did not land; the wheel is not traceable to this commit." >&2
+            exit 1
+          fi
+          echo "stamp gate OK: wheel fingerprint carries g${SHORT_SHA}"
+      - name: Upload dist artifacts for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # Publish ONLY on a real ``v*`` tag push. A workflow_dispatch run (dry-run)
+    # skips this job entirely, so a manual "does it build?" check never uploads.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The ``pypi`` environment is the trusted-publishing anchor: the PyPI
+    # trusted publisher is scoped to (this repo, this workflow, this
+    # environment). It is ALSO the place to attach required reviewers as the
+    # final manual gate. Until the human creates it (see the release-pipeline
+    # doc), this job fails with an OIDC/trusted-publisher error — by design.
+    environment: pypi
+    permissions:
+      # OIDC token for PyPI trusted publishing (no password/secret).
+      id-token: write
+      # Attach the built artifacts to the GitHub release for the tag.
+      contents: write
+    steps:
+      - name: Download the verified dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI (trusted publishing — no token)
+        # Pinned to the maintainer-recommended ``release/v1`` moving tag (their
+        # documented stable pin for major v1). No ``password:`` — the action
+        # exchanges the job's OIDC id-token for a short-lived PyPI credential.
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Attach sdist + wheel to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true

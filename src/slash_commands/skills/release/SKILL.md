@@ -1,6 +1,6 @@
 ---
 name: release
-description: "Release hpc-agent SAFELY. Does every reversible local step — bump pyproject version, run the creds + regen + lint + FULL pytest gates, COMMIT the bump locally (so the wheel fingerprints clean), build the wheel, install across the local/WSL/Hoffman2 envs, refresh ~/.claude commands, update SESSION_HANDOFF.md — then STOPS and prints the destructive/outward checklist (push, tag, uv publish, token rotation) for the human to run. NEVER publishes, pushes, tags, or rotates a token itself."
+description: "Release hpc-agent SAFELY. Does every reversible local step — bump pyproject version, run the creds + regen + lint + FULL pytest gates, COMMIT the bump locally (so the wheel fingerprints clean), build the wheel, install across the local/WSL/Hoffman2 envs, refresh ~/.claude commands, update SESSION_HANDOFF.md — then STOPS and prints the destructive/outward checklist (push, tag) for the human to run. Publishing is done by the release.yml GitHub Actions workflow via PyPI trusted publishing: the tag push IS the publish trigger, so there is no token to run or rotate. NEVER publishes, pushes, or tags itself."
 allowed-tools: Bash Read Edit Write
 execution: inline
 category: agent-autonomous
@@ -10,10 +10,20 @@ category: agent-autonomous
 
 **Contract:** this skill performs only **safe, local, reversible** release prep, then
 **HALTS** and prints the irreversible/outward steps as a checklist. It must never run a
-PyPI publish, `git push`, tag push, or token rotation. The Step-5 local commit is
+PyPI publish, `git push`, or tag push. The Step-5 local commit is
 reversible (`git reset --soft HEAD~1`) and therefore inside the contract; *pushing* it
 is not, and stays manual. Run from the work repo (`jamesdchen/hpc-copilot` checkout).
 Prepend `.venv/Scripts` to PATH for all tool/regen calls.
+
+**Publishing is CI, not this skill.** The actual PyPI upload is done by the
+`.github/workflows/release.yml` GitHub Actions workflow using **PyPI trusted publishing**
+(OIDC — no long-lived token). **Pushing the `v<version>` tag IS the publish trigger.**
+The local wheel builds + cross-env installs below are for *validation and live use*, not
+for upload — the published wheel is rebuilt from the clean CI checkout of the tagged
+commit. That is what retires the three long-standing release hazards (no token to rotate,
+a creds leak is structurally impossible from a clean checkout, and no stale `build/` can
+poison the sha stamp). Decision record + the one-time human setup:
+[`docs/internals/release-pipeline.md`](../../../../docs/internals/release-pipeline.md).
 
 This is a **human-run** release procedure: the ssh/scp/`python -c` idioms below are
 executed by the human's interactive session, not by an autonomous worker (cited in
@@ -163,15 +173,24 @@ Remaining steps are yours to run — irreversible/outward, NOT run by /release:
   0. (only if ABANDONING the release) unwind the local commit:
        git reset --soft HEAD~1
   1. branch+push (branch first if on main):  git push origin <branch>
-  2. tag:
+  2. tag + push — THE TAG PUSH IS THE PUBLISH TRIGGER (fires release.yml, which
+     builds a clean wheel from this commit and publishes to PyPI via trusted
+     publishing — no token to enter, none to rotate):
        git tag v<new>
        git push origin v<new>
-  3. PUBLISH (IRREVERSIBLE):  UV_PUBLISH_TOKEN=<token> uv publish dist/hpc_agent-<new>*
-  4. ROTATE the PyPI token afterward — it leaks into the transcript:
-       https://pypi.org/manage/account/token/
-  5. (only if Step 7 deferred it) Hoffman2 install, keeping the wheel basename:
+  3. WATCH the release workflow to green (build gate = stamp + creds; publish job
+     = PyPI trusted-publish + attach dist to the GitHub release). List the run,
+     then watch it by the id the list prints (two plain commands, deliberately
+     not chained through a substitution — the harness classifier blocks those):
+       gh run list --repo jamesdchen/hpc-copilot --workflow release.yml --limit 1
+       gh run watch --repo jamesdchen/hpc-copilot <run-id-from-the-list>
+     If the publish job fails with an OIDC / "trusted publisher" error, the
+     one-time PyPI + GitHub-environment setup isn't done — see
+     docs/internals/release-pipeline.md §"One-time user setup".
+  4. (only if Step 7 deferred it) Hoffman2 install, keeping the wheel basename:
        scp dist/hpc_agent-<new>-py3-none-any.whl hoffman2:~/
        /c/Windows/System32/OpenSSH/ssh.exe hoffman2 '~/.conda/envs/hpc-pi/bin/pip install --force-reinstall --no-deps --no-cache-dir ~/hpc_agent-<new>-py3-none-any.whl'
 ```
 
-Do not push, publish, tag, or rotate — those are the human's call.
+Do not push or tag — those are the human's call. There is no publish command to run
+and no token to rotate: the tag push in step 2 triggers CI, which publishes.
