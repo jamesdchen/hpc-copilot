@@ -377,21 +377,28 @@ surfaced by user review).** Two clauses, both load-bearing:
    PRIOR evidence only; its own sample never participates in the envelope
    that judges it. (Ordering, not just bookkeeping — an envelope that
    includes the sample under judgment is self-justifying.)
-2. **Mismatch samples never widen the auto-clear envelope.** Follow the
-   naive all-samples rule adversarially: enough noisy reproductions and
-   every mismatch widens the envelope until it swallows the drift it
-   exists to catch — gradual laundering through accumulation. So samples
-   are recorded with their verdict, and the envelope derivation ADMITS
-   only samples from comparisons that were not classified `mismatch`
-   (`auto_cleared`, and `needs_verdict` ONLY once a human verdict resolves
-   it as acceptable — the human's append-decision record is the admission
-   ticket; an unresolved needs_verdict sample is recorded-but-inadmissible).
-   Mismatch samples remain in the ledger as disclosed findings — visible
-   in the envelope's evidence block as `excluded_mismatches: n` (the
-   no-silent-caps posture) — they inform the human, never the auto path.
-   Enforcement row: the envelope-admission rule has one definition, with a
-   fire test that a mismatch-verdict sample does not change the reduced
-   envelope.
+2. **ONE admission rule: a sample joins the envelope iff its comparison
+   received a PASSING verdict** — code's (`auto_cleared`) or an explicit
+   human acceptance recorded via append-decision (which faces the
+   authorship gate — deliberately effortful, the D-attention bet that
+   rarity plus typing cost buys seriousness). Consequences, spelled out:
+   an unresolved `needs_verdict` sample is recorded-but-inadmissible; a
+   `mismatch` sample is inadmissible UNLESS a human explicitly accepts it
+   (e.g. judged an environment-sensitivity finding, not a drift) — the
+   same ticket, no special case; nothing is ever admitted silently.
+   Follow the naive all-samples rule adversarially to see why: enough
+   noisy reproductions and every mismatch widens the envelope until it
+   swallows the drift it exists to catch — laundering through
+   accumulation. Inadmissible samples remain in the ledger as disclosed
+   findings — visible in the envelope's evidence block as
+   `excluded_unadmitted: n` (the no-silent-caps posture) — informing the
+   human, never the auto path. CRUCIALLY this creates NO new decision
+   point: admission always rides a verdict the tiering already routed
+   (code's, or the human resolution the human was making anyway); the
+   needs_verdict rate is front-loaded and decays as admitted evidence
+   accumulates. Enforcement row: the admission rule has one definition,
+   with fire tests that an unadmitted sample does not change the reduced
+   envelope and that a human-accepted one does.
 
 Precedence per key: caller `tolerance_spec` override (labeled
 `caller_override`, disclosed) > well-evidenced envelope (auto path) > thin
