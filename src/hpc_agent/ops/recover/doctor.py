@@ -45,6 +45,8 @@ from hpc_agent.state.decision_journal import (
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
 from hpc_agent.state.run_record import _current_homedir
 
+__all__ = ["doctor", "scan_dead_detached_workers"]
+
 
 def _overdue_seconds(next_tick_due: str | None, now: str) -> int | None:
     """Whole seconds by which *next_tick_due* precedes *now*, or ``None``."""
@@ -202,7 +204,7 @@ def _detect_version_skew(experiment_dir: Path) -> VersionSkew | None:
     )
 
 
-def _scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[str, Any]]:
+def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[str, Any]]:
     """Detached-worker liveness scan — the §5 stalled-run scan's blind spot.
 
     A detached submit block (S2/S3/S4/speculate,
@@ -415,7 +417,7 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # AFTER the run is terminal) that dies mid-flight is invisible to it. Scan the
     # `_detached/` leases for a DEAD pid with NO recorded block-terminal and
     # surface each as a drafted re-invoke proposal — detection only, still no SSH.
-    dead_worker_findings = _scan_dead_detached_workers(experiment_dir, now=now)
+    dead_worker_findings = scan_dead_detached_workers(experiment_dir, now=now)
     dead_worker_alerts = [AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings]
 
     # Both the log audit-trail entries and the dead-worker drafts ride the

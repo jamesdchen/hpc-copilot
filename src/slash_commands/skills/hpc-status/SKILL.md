@@ -16,7 +16,7 @@ The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous 
 
 - **Batch independent tool calls into one assistant message.** Multiple Bash / Read / Grep / Glob tool-call blocks in one message run concurrently. Do NOT use shell-level concurrency (`cmd1 & cmd2 & wait`, `parallel`, `xargs -P`) — trips the permission classifier as a compound command.
 - **MCP-first (preferred):** the typed `status-snapshot` / `status-watch` tools from `hpc-agent mcp-serve`.
-- **Read-only QUERY verbs go DIRECT through MCP — never a spec-file round-trip.** `status-snapshot`, `read-decisions`, `verify-relay`, `doctor`, `net-triage` are pure reads: call the typed MCP tool with inline args and read the result — do NOT `Write` a `.hpc/specs/*.json` file and shell `--spec` just to read state back (three tool calls where one MCP call suffices). Never relay a number you remember; relay what the query returned.
+- **Read-only QUERY verbs go DIRECT through MCP — never a spec-file round-trip.** `status-snapshot`, `attention-queue`, `read-decisions`, `verify-relay`, `doctor`, `net-triage` are pure reads: call the typed MCP tool with inline args and read the result — do NOT `Write` a `.hpc/specs/*.json` file and shell `--spec` just to read state back (three tool calls where one MCP call suffices). Never relay a number you remember; relay what the query returned.
 - **CLI fallback:** one call per block, spec written to a file with the `Write` tool:
   ```bash
   hpc-agent status-snapshot --spec <path> --experiment-dir <dir>
@@ -43,6 +43,14 @@ The slash `/monitor-hpc` is the human-interview wrapper; an external autonomous 
 A `status-snapshot` with nothing live is terminal (`needs_decision: false`) — nothing to watch; surface and stop. A failed/abandoned anomaly or a stalled driver carries `needs_decision: true`: recovery (classify-then-resubmit, or reconcile-then-confirm before resubmit) is a human branch — the driver surfaces the recommendation and the nudge names the action. A `status-watch` that reaches a clean `complete` hands off to harvest (`submit-s4` — the guaranteed harvest already ran inside `monitor-flow`'s terminal path); a `timeout` (budget elapsed, cluster jobs may run on) keeps watching. **NEVER hand-compute a decision or interpret raw results:** code digests the status into the brief and the recommendation DATA; the human decides; you only translate at the rendezvous.
 
 On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`, or a brief's `open_ssh_circuits` line), run `hpc-agent net-triage` — the bounded, breaker-aware connectivity differential — before concluding a network cause; never diagnose with improvised ssh probes.
+
+## The attention queue — the standing TODO ordered by leverage
+
+`attention-queue` (read-only MCP, direct — no spec-file round-trip) is the fleet-wide digest ordered by **needs-your-verdict-first**. It collects every place a human action is the blocking edge — pending greenlights, committed-but-unadvanced decisions, failed/abandoned anomalies, campaign completion briefs, unsigned or stale notebook-audit sections, dead detached workers, unacknowledged alerts, open ssh circuits — across one experiment (default) or the whole fleet (`fleet: true`). It is a **standing TODO recomputed on every read**, never persisted and never marked seen, so an item stays — with its age — until the human clears its subject. Call the verb and **relay the returned `render` VERBATIM**; it is a deterministic code-composed markdown digest, so never re-order it, re-summarize it, or narrate an urgency the code did not compute.
+
+The order is code-computed and byte-reproducible: **leverage first** — each item's `unblocks` fan-out, the honest count of pending downstream subjects that clear when this one verdict clears, counted over edges the journals already encode (a greenlight unblocks its run, an unsigned audit section unblocks every run that graduates behind it, a campaign verdict unblocks its remaining runs) — then class (`blocked`, then `verdict`, then `informational`), then oldest-waiting first. Relay the `unblocks` count as the plain fact it is; it is leverage, never a priority label the human did not set.
+
+The same projection rides `status-snapshot`'s brief as its additive `attention` field — the in-flow morning read is ordered by the identical rule, so surface whichever the human reaches for and let both agree.
 
 ## Never-stall + session tail-loop
 

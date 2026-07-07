@@ -3,7 +3,7 @@
 The §5 stalled-driver scan only walks IN-FLIGHT runs, so a detached submit
 block (S2/S3/S4/speculate) that dies mid-flight on a run whose journal is
 ALREADY terminal is invisible to it — most sharply the S4 harvest, which runs
-AFTER the run is terminal. doctor's `_scan_dead_detached_workers` closes that
+AFTER the run is terminal. doctor's `scan_dead_detached_workers` closes that
 blind spot: a lease with a DEAD pid and NO recorded block-terminal is surfaced
 as a drafted re-invoke proposal (detection only — doctor never re-runs).
 

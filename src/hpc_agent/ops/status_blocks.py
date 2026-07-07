@@ -45,6 +45,7 @@ from hpc_agent._wire.workflows.status_blocks import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
+from hpc_agent.ops.attention_queue import collect_queue
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
 from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of, reconcile
@@ -58,7 +59,18 @@ from hpc_agent.state.run_record import TERMINAL_STATUSES
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["status_snapshot", "status_watch"]
+# The anomaly reduction is promoted to importable names (T6a) so the attention
+# queue (``ops/attention_queue.py``) can AGGREGATE it — one definition of "which
+# terminal status is an anomaly", "the proposed next-action DATA", and "the
+# per-run digest" — never a second copy. Behaviour is unchanged; only the
+# underscore is dropped.
+__all__ = [
+    "status_snapshot",
+    "status_watch",
+    "ANOMALY_STATUSES",
+    "recommendation_for",
+    "digest_run",
+]
 
 
 def _next_block(
@@ -83,7 +95,7 @@ _COUNT_KEYS: tuple[str, ...] = ("complete", "running", "pending", "failed", "unk
 # Journal terminal statuses that are §5 anomaly terminators when a *snapshot*
 # lands on one (the human must decide recovery). ``complete`` is clean;
 # ``in_flight`` is live. (A timed-out run stays ``in_flight`` in the journal.)
-_ANOMALY_STATUSES: frozenset[str] = frozenset({"failed", "abandoned"})
+ANOMALY_STATUSES: frozenset[str] = frozenset({"failed", "abandoned"})
 
 # Proposed next-action DATA per anomaly class (§2: a structured recommendation
 # the LLM renders and the human greenlights — never LLM-authored prose in code).
@@ -99,7 +111,7 @@ _RECOMMEND_ABANDONED: dict[str, str] = {
 }
 
 
-def _recommendation_for(status_or_lifecycle: str) -> dict[str, str]:
+def recommendation_for(status_or_lifecycle: str) -> dict[str, str]:
     """Pick the proposed next-action DATA for an anomaly's terminal class."""
     return _RECOMMEND_ABANDONED if status_or_lifecycle == "abandoned" else _RECOMMEND_FAILED
 
@@ -140,7 +152,7 @@ def _changed_since_seen(record: Any) -> bool:
     return tick > seen
 
 
-def _digest_run(record: Any) -> dict[str, Any]:
+def digest_run(record: Any) -> dict[str, Any]:
     """Code-digest one run into a "running where / changed since seen" row.
 
     A ``-canary`` journal entry (the 1-task sibling every canary-gated submit
@@ -247,15 +259,15 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
 
     # 3. Digest BEFORE stamping — the changed-since delta must be measured
     #    against the PRIOR watermark, not the one we are about to write.
-    running_where = [_digest_run(r) for r in records]
+    running_where = [digest_run(r) for r in records]
     changed = [row for row in running_where if row["changed_since_seen"]]
     anomalies = [
-        {**row, "recommendation": _recommendation_for(row["status"])}
+        {**row, "recommendation": recommendation_for(row["status"])}
         for row in running_where
         # A superseded record is a deliberate closure (superseded_by names the
         # replacement), not an anomaly needing a recovery decision — it
         # displays as superseded, never as failed/abandoned-needs-attention.
-        if row["status"] in _ANOMALY_STATUSES and not row["is_superseded"]
+        if row["status"] in ANOMALY_STATUSES and not row["is_superseded"]
     ]
 
     # 4. Stalled-driver evidence (§5 dead-man's switch) — a live run whose
@@ -290,6 +302,15 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         if alerts:
             acknowledge_alerts(experiment_dir, up_to_ts=max(a["ts"] for a in alerts))
 
+    # "Status-snapshot v2" (D4): the brief gains an ADDITIVE ``attention`` field —
+    # this experiment's queue items in the D2-revised total order — computed by the
+    # SAME ``collect_queue`` seat the ``attention-queue`` verb calls (the one
+    # ordering definition, so the in-flow morning read and the standalone digest
+    # cannot disagree). The snapshot never re-sorts or re-collects; it embeds the
+    # ordered projection verbatim as opaque dicts. Additive only: an empty queue
+    # yields ``[]`` and every other brief field is byte-unchanged.
+    attention = [item.as_dict() for item in collect_queue(experiment_dir, now=now_iso)]
+
     brief: dict[str, Any] = {
         "now": now_iso,
         "running_where": running_where,
@@ -298,6 +319,7 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "anomalies": anomalies,
         "alerts": alerts,
         "open_ssh_circuits": open_ssh_circuits,
+        "attention": attention,
     }
 
     needs_decision = bool(stalled or anomalies)
@@ -378,7 +400,7 @@ def _watch_anomaly_brief(mon: Any, summary: dict[str, int]) -> dict[str, Any]:
         "failed_waves": list(mon.failed_waves),
         "escalation_reason": mon.escalation_reason,
         "error_digest": error_digest,
-        "recommendation": _recommendation_for(mon.lifecycle_state),
+        "recommendation": recommendation_for(mon.lifecycle_state),
     }
 
 
