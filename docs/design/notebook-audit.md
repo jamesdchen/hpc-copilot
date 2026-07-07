@@ -154,14 +154,31 @@ Plus the one notebook capability the harness genuinely needs supplied: an
 render receipt ({slug: {output_sha, error}}) + a captured-outputs directory
 the harness can display as images.
 
-The jupytext notebook DEMOTES to an **export format** (v1.5, plugin lane):
-a projection generated on demand from (source + template + receipt) — for
-the harness-less colleague, the evidence package, offline reading. Never the
-medium of iteration, so its determinism duties shrink to faithful record
-rendering. The product claim this ordering earns: the harness + this
-substrate is a REPL where every cell has provenance, every approval has
-authorship, and every edit revokes stale trust — "we also export notebooks,"
-not "we are one."
+The jupytext notebook DEMOTES to an **export format** — and the plugin
+itself is **DEFERRED entirely (user decision 2026-07-08)**: the plugin
+boundary exists for DEPENDENCIES (jupytext/nbclient), not novelty, and with
+the harness as the iteration surface the export has no consumer until a
+harness-less reader actually appears (the need-trigger). The execution-
+receipt emitter is ~30 lines of caller-side convention, not a plugin.
+**v1 = core + the skill; zero plugin.** When the export trigger fires, it is
+a projection over sealed records, buildable in isolation.
+
+Reuse accounting (why v1 is thin): greenlights, unlocks, scope locks,
+sign-offs — and the future registration kernel — are instances of ONE
+primitive: a journaled human decision bound to a content hash, verified by
+recompute, with drift auto-revoking trust. The rigor wave built that
+primitive's machinery; this feature is its next instantiation (T7 ≈ the
+scope-kind pattern, T8 shares the authorship helpers, T6 the newest-first
+reduction, T9 the two-seat fail-safe gate, T2 the sidecar-field pattern).
+Genuinely new core: the section model, the lints, the view/tier logic.
+REFACTOR TRIGGER: at the registration kernel (member four of the
+hash-bound-decision family), extract the shared gate machinery into one
+parametric form — not before.
+
+The product claim this ordering earns: the harness + this substrate is a
+REPL where every cell has provenance, every approval has authorship, and
+every edit revokes stale trust — "we also export notebooks," not "we are
+one."
 
 ## Boundary-drift flags (Q1 watch list)
 
