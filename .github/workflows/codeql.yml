@@ -1,0 +1,42 @@
+name: codeql
+
+# CodeQL static analysis for the Python source. Standard three-step
+# github/codeql-action flow (init -> autobuild -> analyze). Pure-Python:
+# autobuild is a no-op but kept for canonical shape. No custom queries —
+# the default security-and-quality suite is the whole point.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Weekly full scan (Monday 07:00 UTC) so advisories that land between
+    # pushes still get caught on a fresh baseline.
+    - cron: "0 7 * * 1"
+
+# Mirror ci.yml's concurrency pattern: cancel an in-flight run when a new
+# commit supersedes it on the same branch / PR.
+concurrency:
+  group: codeql-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for the analyze step to upload results to code scanning.
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3

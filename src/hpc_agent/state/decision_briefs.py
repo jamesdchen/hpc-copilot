@@ -33,15 +33,13 @@ Pure I/O: no ``_wire`` import, no SSH, no mapreduce (the same posture as
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent.infra.io import advisory_flock
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.decision_journal import _append_jsonl_line
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -86,27 +84,6 @@ def briefs_path(experiment_dir: Path, run_id: str) -> Path:
     from hpc_agent._kernel.contract.layout import RepoLayout
 
     return RepoLayout(experiment_dir).runs / f"{run_id}.briefs.jsonl"
-
-
-def _lock_path(path: Path) -> Path:
-    return path.with_suffix(path.suffix + ".lock")
-
-
-def _append_jsonl_line(path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON object as a line to *path* under an exclusive flock.
-
-    Append-only (``"a"`` mode), advisory-``flock``-serialized, ``fsync``-ed —
-    the identical discipline :func:`state.decision_journal._append_jsonl_line`
-    uses (the brief is the record the provenance gate trusts, so it must
-    survive a crash exactly like the decision it justifies).
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True, default=str) + "\n"
-    with advisory_flock(_lock_path(path)), path.open("a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        with contextlib.suppress(OSError):
-            os.fsync(fh.fileno())
 
 
 def append_brief(

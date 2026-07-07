@@ -1,0 +1,36 @@
+# Dependabot dependency updates.
+#
+# Two ecosystems present in this repo:
+#   - github-actions: every action pinned across .github/workflows/*.yml
+#     (ci: actions/checkout@v4, actions/setup-python@v5,
+#     stefanzweifel/git-auto-commit-action@v5, actions/upload-artifact@v4;
+#     release: actions/download-artifact@v4, pypa/gh-action-pypi-publish,
+#     softprops/action-gh-release@v2; plus any new scheduler workflow's
+#     docker/* actions). The github-actions ecosystem scans ALL workflow
+#     files, so new workflows are covered without editing this file.
+#   - pip: the project's Python dependencies declared in pyproject.toml.
+#
+# Minor/patch updates are grouped into a single PR per ecosystem to cut
+# review noise; major bumps stay ungrouped so a breaking upgrade lands as
+# its own reviewable PR.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pip-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
