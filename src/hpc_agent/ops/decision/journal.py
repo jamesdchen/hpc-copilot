@@ -1011,6 +1011,76 @@ def _resolve_signoff_sources(
     return source_text, template_text
 
 
+def _assert_signoff_render_current(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    section: str,
+    view_sha: str,
+    recomputed_section_sha: str,
+) -> None:
+    """The TRUSTED-DISPLAY lock: the render for what-the-human-saw must be CURRENT.
+
+    The audit view an agent relays in chat is model-carried and unforceable; the
+    trusted artifact is the CONTENT-ADDRESSED render file code wrote
+    (``ops/notebook/render_store.py``, the v1.5 trusted-display lock, user-approved
+    2026-07-07). This gate leg makes a sign-off unlandable unless that artifact
+    exists on disk AND was produced against CURRENT source.
+
+    Recorded boundary (the v1.5 drift log): the gate CANNOT recompute ``view_sha``
+    — the view depends on lint findings the gate does not have (the ``view_sha``-is-
+    provenance paragraph). So the check is a cross-reference, not a re-derivation:
+    the render addressed by the RESOLVED ``view_sha`` must exist, parse, and its
+    header must agree on ``view_sha`` + ``section``, and — the freshness leg — its
+    header ``section_sha`` must equal the gate's FRESHLY RECOMPUTED section sha. An
+    edit after the render moves the recomputed sha, so a stale render's header sha
+    no longer matches and the sign-off is refused (the record's own asserted sha is
+    already covered by the ``attestation.bind`` lock; this closes the case where the
+    record sha was updated but the render step was never re-run).
+
+    The check is reached through the top-level ``notebook_view`` facade — the direct
+    ``hpc_agent.ops.notebook.render_store`` spelling trips the subject-import lint
+    from inside the ``decision`` subject (the ``audit_view``/``field_ownership``
+    precedent). Same trust model as every store: the render file is code-written, so
+    tool-surface enforcement is the guarantee and filesystem forgery is out of scope
+    (the honest-limit paragraph). Applied to redundant (auto-cleared) sign-offs too:
+    the human claims to have reviewed, so the trusted artifact must exist.
+
+    Raises :class:`errors.SpecInvalid` naming the missing/stale render path.
+    """
+    from hpc_agent.ops import notebook_view as _notebook_view
+
+    path = _notebook_view.render_path(
+        experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
+    )
+    header = _notebook_view.read_render_header(path)
+    if header is None:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (trusted-display lock): no parseable render "
+            f"artifact for what-the-human-saw at {path} — the audit view relayed in "
+            "chat is model-carried and unforceable, so a sign-off requires the "
+            "code-written, content-addressed render file. Re-run notebook-audit-view "
+            "to produce it against the current source, then sign again."
+        )
+    if header.get("view_sha") != view_sha or header.get("section") != section:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (trusted-display lock): the render artifact at "
+            f"{path} does not match the signed view (its header names "
+            f"section={header.get('section')!r} / view_sha={header.get('view_sha')!r}, "
+            f"the sign-off binds section={section!r} / view_sha={view_sha!r}). "
+            "Re-run notebook-audit-view for this section and sign the fresh view."
+        )
+    if header.get("section_sha") != recomputed_section_sha:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (trusted-display lock): the render artifact at "
+            f"{path} is STALE — its header section_sha ({header.get('section_sha')}) "
+            f"does not match the current source ({recomputed_section_sha}). The source "
+            "was edited after the render, so what-the-human-saw no longer reflects the "
+            "code being signed. Re-run notebook-audit-view against the current source, "
+            "then sign again."
+        )
+
+
 def _assert_signoff_authorship(
     experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
 ) -> None:
@@ -1072,6 +1142,18 @@ def _assert_signoff_authorship(
     NOT recompute it: the view depends on lint findings the gate does not have. The
     recompute lock is ``section_sha``; ``view_sha`` is a provenance witness.
 
+    **Trusted-display lock (v1.5)** — the audit view an agent relays in chat is
+    model-carried and unforceable, so a sign-off additionally requires the
+    CONTENT-ADDRESSED render file code wrote (:func:`_assert_signoff_render_current`,
+    over ``ops/notebook/render_store.py``): the render addressed by the resolved
+    ``view_sha`` must exist, parse, agree on ``view_sha``/``section``, and carry a
+    header ``section_sha`` equal to the FRESHLY RECOMPUTED ``sect.section_sha`` — so
+    an edit-after-render (render stale vs the recomputed sha) is refused even though
+    the record's own asserted sha is already covered by the bind lock. Because the
+    gate can't recompute ``view_sha`` (the recorded boundary), the render's header is
+    the cross-reference; applied BEFORE the tier branch so redundant/auto-cleared
+    sign-offs need the artifact too.
+
     Raises :class:`errors.SpecInvalid` on any refusal.
     """
     is_signoff_block = spec.block == _SIGNOFF_BLOCK
@@ -1112,6 +1194,7 @@ def _assert_signoff_authorship(
             "view_sha binds what-the-human-saw into the record (D5) and is required."
         )
     assert isinstance(section, str) and isinstance(section_sha, str)
+    assert isinstance(audit_id, str) and isinstance(view_sha, str)
 
     # Base authorship floor (applies to every tier).
     response = str(spec.response or "")
@@ -1154,6 +1237,19 @@ def _assert_signoff_authorship(
             "view_sha": view_sha,
         },
         recompute=sect.section_sha,
+    )
+
+    # Trusted-display lock (v1.5) — the CONTENT-ADDRESSED render for
+    # what-the-human-saw must exist and be CURRENT. Reuses the freshly-recomputed
+    # ``sect.section_sha`` (never a second recompute). Applied BEFORE the tier
+    # branch so it covers redundant/auto-cleared sign-offs too (the human claims a
+    # review; the trusted artifact must exist).
+    _assert_signoff_render_current(
+        experiment_dir,
+        audit_id=audit_id,
+        section=section,
+        view_sha=view_sha,
+        recomputed_section_sha=sect.section_sha,
     )
 
     # Lock 3 (tiered) — recompute the tier over the STATICALLY-available legs

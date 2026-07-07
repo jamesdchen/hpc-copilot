@@ -1,7 +1,8 @@
 ---
 name: notebook-audit-view
 verb: query
-side_effects: []
+side_effects:
+- file_write: <experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md
 idempotent: true
 idempotency_key: none
 error_codes:

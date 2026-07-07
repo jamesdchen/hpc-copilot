@@ -14,9 +14,12 @@ template ``.py`` relpath, opaque chained ``lint_findings``, and an optional
    code-rendered ``markdown`` (the verbatim-relay projection the skill hands the
    human unchanged).
 
-Pure local read — no SSH, no scheduler, no write. Derived state, recomputed from
-the ``.py`` on disk on every call, so it can never drift from a second source of
-truth.
+Local, no SSH, no scheduler. Derived state, recomputed from the ``.py`` on disk on
+every call, so it can never drift from a second source of truth. The one write is
+the TRUSTED-DISPLAY render: per section it writes the content-addressed render
+file (:mod:`hpc_agent.ops.notebook.render_store`) the T8 sign-off gate requires —
+DETERMINISTIC bytes at a ``view_sha``-addressed path, so the write is idempotent
+(same inputs → same file) and never a second source of truth.
 
 Seam decision (recorded per the T5-verb brief): the lint module exposes NO
 reusable non-primitive function — its rule orchestration lives entirely inside
@@ -36,7 +39,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.queries.notebook_audit_view import (
     NotebookAuditViewResult,
     NotebookAuditViewSpec,
@@ -45,6 +48,7 @@ from hpc_agent._wire.queries.notebook_audit_view import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.notebook.audit_view import AuditView, build_audit_view, render_markdown
+from hpc_agent.ops.notebook.render_store import write_render
 from hpc_agent.state.audit_source import parse_percent_source
 
 __all__ = ["notebook_audit_view"]
@@ -72,25 +76,38 @@ def _read_source_file(experiment_dir: Path, relpath: str, *, kind: str) -> str:
         ) from exc
 
 
-def _to_result(view: AuditView) -> NotebookAuditViewResult:
-    """Project the pure :class:`AuditView` into the wire result + its markdown."""
-    sections = [
-        NotebookSectionView(
-            slug=sv.slug,
-            classification=sv.classification,
-            tier=sv.tier,
-            section_sha=sv.section_sha,
-            template_section_sha=sv.template_section_sha,
-            diff=list(sv.diff),
-            assertions=[
-                NotebookViewAssertion(test=a.test, lineno=a.lineno, msg=a.msg)
-                for a in sv.assertions
-            ],
-            lint_flags=[dict(f) for f in sv.lint_flags],
-            view_sha=sv.view_sha,
+def _to_result(experiment_dir: Path, audit_id: str, view: AuditView) -> NotebookAuditViewResult:
+    """Project the pure :class:`AuditView` into the wire result + its markdown.
+
+    WRITES the content-addressed TRUSTED-DISPLAY render file for EVERY section
+    (always — cheap + deterministic; the T8 sign-off gate requires the render for
+    what-the-human-saw to exist on disk, ``render_store``). Each section's wire
+    projection carries the experiment-relative ``render_path`` that was written.
+    """
+    sections = []
+    for sv in view.sections:
+        written = write_render(experiment_dir, audit_id=audit_id, view=sv)
+        try:
+            rel = str(written.relative_to(Path(experiment_dir).resolve()))
+        except ValueError:
+            rel = str(written)
+        sections.append(
+            NotebookSectionView(
+                slug=sv.slug,
+                classification=sv.classification,
+                tier=sv.tier,
+                section_sha=sv.section_sha,
+                template_section_sha=sv.template_section_sha,
+                diff=list(sv.diff),
+                assertions=[
+                    NotebookViewAssertion(test=a.test, lineno=a.lineno, msg=a.msg)
+                    for a in sv.assertions
+                ],
+                lint_flags=[dict(f) for f in sv.lint_flags],
+                view_sha=sv.view_sha,
+                render_path=rel,
+            )
         )
-        for sv in view.sections
-    ]
     return NotebookAuditViewResult(
         sections=sections,
         dropped_template_slugs=list(view.dropped_template_slugs),
@@ -104,7 +121,14 @@ def _to_result(view: AuditView) -> NotebookAuditViewResult:
 @primitive(
     name=_PRIMITIVE,
     verb="query",
-    side_effects=[],
+    # Honest registry metadata: the view MATERIALIZES the content-addressed
+    # trusted-display render per section (deterministic, idempotent cache —
+    # same inputs, byte-identical file). It stays a query verb: it appends no
+    # journal record and mutates no state a reader consumes; the render is
+    # what the T8 sign-off gate requires to exist.
+    side_effects=[
+        SideEffect("file_write", "<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md"),
+    ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key=None,
@@ -117,7 +141,10 @@ def _to_result(view: AuditView) -> NotebookAuditViewResult:
             "flags, D-attention tier (auto_cleared iff inherited + no flags + "
             "assertions green), and a per-section view_sha (what a sign-off binds). "
             "The result includes `markdown` — the code-rendered projection the "
-            "skill relays VERBATIM. Recomputed from the .py on every call."
+            "skill relays VERBATIM. Recomputed from the .py on every call. Per "
+            "section it also WRITES the content-addressed TRUSTED-DISPLAY render "
+            "file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its "
+            "render_path — the artifact the T8 sign-off gate requires."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -154,4 +181,4 @@ def notebook_audit_view(
         receipt=spec.receipt,
         attention_order=spec.attention_order,
     )
-    return _to_result(view)
+    return _to_result(experiment_dir, spec.audit_id, view)

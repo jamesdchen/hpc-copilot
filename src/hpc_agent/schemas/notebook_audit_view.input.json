@@ -5,11 +5,18 @@
   "description": "Inputs to ``notebook-audit-view``.\n\n``source`` / ``template`` are ``.py`` relpaths resolved against the\n``--experiment-dir`` (jupytext percent format, parsed by the same section\nparser). ``lint_findings`` is the OPAQUE, caller-chained finding list (from\n``notebook-lint``); ``receipt`` is the opaque v1.5 execution receipt accepted\nfor forward-compat.",
   "type": "object",
   "required": [
+    "audit_id",
     "source",
     "template"
   ],
   "additionalProperties": false,
   "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug). Names where the TRUSTED-DISPLAY render files are written: per section, this verb writes `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` — the content-addressed, code-written artifact the T8 sign-off gate requires (the audit view relayed in chat is model-carried; the render file on disk is the trusted one).",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
     "source": {
       "description": "Experiment-relative path to the audited source .py (jupytext percent format). Every SOURCE section is projected; per-section shas are recomputed fresh on every call.",
       "minLength": 1,

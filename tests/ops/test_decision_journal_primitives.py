@@ -983,6 +983,30 @@ def _nb_shas(
     return sect.section_sha, sv.view_sha
 
 
+def _write_section_render(
+    tmp_path: Path,
+    *,
+    section: str,
+    audit_id: str = "audit-x",
+    source: str = _NB_SOURCE,
+    template: str = _NB_TEMPLATE,
+) -> Path:
+    """Write the content-addressed TRUSTED-DISPLAY render for *section* (T8 lock).
+
+    Mirrors what ``notebook-audit-view`` does per section — the render-then-sign
+    contract the T8 gate now enforces. Built from the SAME (source, template) the
+    sign-off's view_sha/section_sha derive from, so the render is current.
+    """
+    from hpc_agent.ops.notebook.audit_view import build_audit_view
+    from hpc_agent.ops.notebook.render_store import write_render
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    src = parse_percent_source(source)
+    tmpl = parse_percent_source(template)
+    sv = next(v for v in build_audit_view(src, tmpl, ()).sections if v.slug == section)
+    return write_render(tmp_path, audit_id=audit_id, view=sv)
+
+
 def _signoff(
     tmp_path: Path,
     *,
@@ -992,8 +1016,23 @@ def _signoff(
     view_sha: str = "view-sha-1",
     audit_id: str = "audit-x",
     resolved_extra: dict[str, object] | None = None,
+    render: bool = True,
+    render_source: str = _NB_SOURCE,
+    render_template: str = _NB_TEMPLATE,
     **overrides: object,
 ) -> AppendDecisionResult:
+    # Render-then-sign (T8 trusted-display lock): by default write the render for
+    # this section first, so the sign-off finds the current artifact. Tests probing
+    # the missing/stale-render refusals pass ``render=False`` and stage the render
+    # (or its absence) themselves.
+    if render:
+        _write_section_render(
+            tmp_path,
+            section=section,
+            audit_id=audit_id,
+            source=render_source,
+            template=render_template,
+        )
     resolved: dict[str, object] = {
         "audit_id": audit_id,
         "section": section,
@@ -1220,3 +1259,135 @@ def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
 
     offenders = [name for name in core_only_registry() if "sign-off" in name or "signoff" in name]
     assert offenders == [], f"a sign-off verb affordance leaked into the registry: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Trusted-display lock (v1.5): a sign-off requires the content-addressed render
+# for what-the-human-saw to exist on disk AND be current at append. The audit
+# view relayed in chat is model-carried; the render file code wrote is trusted.
+# ---------------------------------------------------------------------------
+
+
+def test_signoff_no_render_file_refused(tmp_path: Path) -> None:
+    """No render artifact on disk → the sign-off is refused NAMING the path — the
+    unforceable chat relay is not enough; the code-written render must exist."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="trusted-display lock"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,  # stage NO render
+        )
+    result = read_decisions(
+        experiment_dir=tmp_path,
+        spec=ReadDecisionsInput.model_validate({"scope_kind": "notebook", "scope_id": "audit-x"}),
+    )
+    assert result.count == 0
+
+
+def test_signoff_render_present_and_current_passes(tmp_path: Path) -> None:
+    """Render present + current (its header section_sha == the recompute) → the
+    sign-off lands. The render was written by _write_section_render (the view verb's
+    job) from the same current source."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    # The render artifact is on disk at the content-addressed path.
+    from hpc_agent.ops.notebook.render_store import read_render_header, render_path
+
+    path = render_path(tmp_path, audit_id="audit-x", section="model-fit", view_sha=view_sha)
+    header = read_render_header(path)
+    assert header is not None
+    assert header["view_sha"] == view_sha and header["section"] == "model-fit"
+
+
+def test_signoff_edit_after_render_refused(tmp_path: Path) -> None:
+    """Edit-after-render: the render was produced, then the source was edited (its
+    recomputed sha moved) and the record's own sha updated so the bind lock passes —
+    the STALE render's header sha no longer matches, so the sign-off is refused. This
+    is exactly the seam the bind lock alone does NOT cover."""
+    _write_notebook_fixture(tmp_path)
+    _old_sha, old_view_sha = _nb_shas("model-fit")
+    # Render produced against the ORIGINAL source.
+    _write_section_render(tmp_path, section="model-fit")
+    # Now edit the source so model-fit's sha moves.
+    edited = _NB_SOURCE.replace("regularization=0.5", "regularization=0.9")
+    (tmp_path / "source.py").write_text(edited, encoding="utf-8")
+    new_sha, _new_view_sha = _nb_shas("model-fit", source=edited)
+    with pytest.raises(errors.SpecInvalid, match="STALE"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: regularization=0.9 change reviewed",
+            section_sha=new_sha,  # current → bind passes
+            view_sha=old_view_sha,  # addresses the now-stale render
+            render=False,  # do NOT re-render; the stale artifact stays
+        )
+
+
+def test_signoff_render_view_sha_mismatch_refused(tmp_path: Path) -> None:
+    """A render artifact at the content-addressed path whose header disagrees with
+    the signed view_sha is refused — the defensive cross-reference leg (the render
+    header must agree on view_sha/section, not merely exist)."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    from hpc_agent.ops.notebook.render_store import render_path
+
+    # Hand-write a render at the address the gate will look up, but with a WRONG
+    # header view_sha (a corrupt / wrong artifact).
+    path = render_path(tmp_path, audit_id="audit-x", section="model-fit", view_sha=view_sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "<!-- hpc-render audit_id: audit-x -->\n"
+        "<!-- hpc-render section: model-fit -->\n"
+        f"<!-- hpc-render section_sha: {section_sha} -->\n"
+        "<!-- hpc-render view_sha: not-the-signed-view -->\n\n"
+        "# stale body\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(errors.SpecInvalid, match="does not match the signed view"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,
+        )
+
+
+def test_signoff_redundant_requires_render(tmp_path: Path) -> None:
+    """The trusted-display lock applies to a REDUNDANT (auto-cleared) sign-off too:
+    the human claims a review, so the artifact must exist. Without a render it is
+    refused; with one it lands and is marked redundant."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("load-data")
+    with pytest.raises(errors.SpecInvalid, match="trusted-display lock"):
+        _signoff(
+            tmp_path,
+            section="load-data",
+            response="reviewed load-data anyway to be safe",
+            section_sha=section_sha,
+            view_sha=view_sha,
+            render=False,
+        )
+    out = _signoff(
+        tmp_path,
+        section="load-data",
+        response="reviewed load-data anyway to be safe",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+    assert out.record.resolved["redundant"] is True

@@ -105,6 +105,11 @@
         "view_sha": {
           "title": "View Sha",
           "type": "string"
+        },
+        "render_path": {
+          "description": "Experiment-relative path to the content-addressed TRUSTED-DISPLAY render file this verb wrote for the section (`.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`). Where the harness can display files, SEND this file and let chat carry only the slug + shas; the T8 sign-off gate requires it to exist and be current at append (the lock is the gate, not the relay).",
+          "title": "Render Path",
+          "type": "string"
         }
       },
       "required": [
@@ -112,7 +117,8 @@
         "classification",
         "tier",
         "section_sha",
-        "view_sha"
+        "view_sha",
+        "render_path"
       ],
       "title": "notebook-audit-view section",
       "type": "object"

@@ -24,6 +24,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.ops.notebook.audit_view import HUMAN_REQUIRED, build_audit_view
+from hpc_agent.ops.notebook.render_store import write_render
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.notebook_audit import audit_section
@@ -165,6 +166,13 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
         source, template, spec.lint_findings, attention_order=spec.attention_order
     )
     views = {sv.slug: sv for sv in view.sections}
+
+    # Write the content-addressed TRUSTED-DISPLAY render for every section via the
+    # CORE render store, against the CURRENT source. A subsequent sign-off (typed in
+    # the rendered notebook and ingested, or committed directly) needs that artifact
+    # to satisfy the core T8 sign-off gate's trusted-display lock.
+    for sv in view.sections:
+        write_render(experiment_dir, audit_id=spec.audit_id, view=sv)
 
     records = read_decisions(experiment_dir, "notebook", spec.audit_id)
     statuses = {

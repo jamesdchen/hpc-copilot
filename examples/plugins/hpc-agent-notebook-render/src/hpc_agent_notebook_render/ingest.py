@@ -24,6 +24,7 @@ from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.ops.decision.journal import append_decision
 from hpc_agent.ops.notebook.audit_view import build_audit_view
+from hpc_agent.ops.notebook.render_store import write_render
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.utterances import append_utterance, is_harness_injected
 
@@ -105,6 +106,13 @@ def notebook_ingest_signoffs(
     view = build_audit_view(source, template, ())
     sha_by_slug = {sect.slug: sect.section_sha for sect in source.sections}
     view_by_slug = {sv.slug: sv.view_sha for sv in view.sections}
+
+    # Write the content-addressed TRUSTED-DISPLAY render for every section BEFORE
+    # ingesting, against the CURRENT source (same view the section_sha/view_sha are
+    # recomputed from). The core T8 sign-off gate requires that artifact to exist and
+    # be current, so an ingest-landed sign-off (no Claude Code in the loop) passes it.
+    for sv in view.sections:
+        write_render(experiment_dir, audit_id=spec.audit_id, view=sv)
 
     try:
         notebook = nbformat.reads(nb_text, as_version=4)

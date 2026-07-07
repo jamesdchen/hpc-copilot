@@ -42,6 +42,17 @@ class NotebookAuditViewSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="notebook-audit-view input spec")
 
+    audit_id: str = Field(
+        min_length=1,
+        description=(
+            "The notebook decision-journal scope id (filesystem-safe slug). Names "
+            "where the TRUSTED-DISPLAY render files are written: per section, this "
+            "verb writes `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` "
+            "— the content-addressed, code-written artifact the T8 sign-off gate "
+            "requires (the audit view relayed in chat is model-carried; the render "
+            "file on disk is the trusted one)."
+        ),
+    )
     source: str = Field(
         min_length=1,
         description=(
@@ -129,6 +140,16 @@ class NotebookSectionView(BaseModel):
     # Opaque findings attributed to this section, in caller order.
     lint_flags: list[dict[str, Any]] = Field(default_factory=list)
     view_sha: str
+    render_path: str = Field(
+        description=(
+            "Experiment-relative path to the content-addressed TRUSTED-DISPLAY "
+            "render file this verb wrote for the section (`.hpc/renders/<audit_id>/"
+            "<slug>.<view_sha12>.md`). Where the harness can display files, SEND "
+            "this file and let chat carry only the slug + shas; the T8 sign-off gate "
+            "requires it to exist and be current at append (the lock is the gate, "
+            "not the relay)."
+        ),
+    )
 
 
 class NotebookAuditViewResult(BaseModel):

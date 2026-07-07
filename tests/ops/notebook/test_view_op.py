@@ -49,7 +49,11 @@ def _write(tmp_path: Path) -> None:
 
 
 def _view(tmp_path: Path, **overrides: object) -> NotebookAuditViewResult:
-    spec_dict: dict[str, object] = {"source": "source.py", "template": "template.py"}
+    spec_dict: dict[str, object] = {
+        "audit_id": "aud-1",
+        "source": "source.py",
+        "template": "template.py",
+    }
     spec_dict.update(overrides)
     return notebook_audit_view(
         experiment_dir=tmp_path,
@@ -82,6 +86,36 @@ def test_view_sha_stable_across_two_invocations(tmp_path: Path) -> None:
     assert first.view_sha == second.view_sha
     assert first.markdown == second.markdown
     assert [s.view_sha for s in first.sections] == [s.view_sha for s in second.sections]
+
+
+def test_view_writes_byte_deterministic_renders(tmp_path: Path) -> None:
+    """Per section the verb WRITES the content-addressed TRUSTED-DISPLAY render at
+    the returned render_path, and the bytes are DETERMINISTIC — the same inputs
+    yield a byte-identical file (the content-address / idempotence property the T8
+    lock relies on), each carrying a header current at its view_sha."""
+    from hpc_agent.ops.notebook.render_store import read_render_header
+
+    _write(tmp_path)
+    first = _view(tmp_path)
+    # Every section gained a render_path and the file exists with a valid header.
+    contents: dict[str, bytes] = {}
+    for s in first.sections:
+        assert s.render_path
+        path = tmp_path / s.render_path
+        assert path.is_file()
+        header = read_render_header(path)
+        assert header is not None
+        assert header["section"] == s.slug
+        assert header["view_sha"] == s.view_sha
+        assert header["section_sha"] == s.section_sha
+        assert header["audit_id"] == "aud-1"
+        contents[s.slug] = path.read_bytes()
+
+    # A second view over the same inputs rewrites byte-identical files.
+    second = _view(tmp_path)
+    for s in second.sections:
+        assert (tmp_path / s.render_path).read_bytes() == contents[s.slug]
+    assert [s.render_path for s in first.sections] == [s.render_path for s in second.sections]
 
 
 def test_missing_source_is_spec_invalid(tmp_path: Path) -> None:

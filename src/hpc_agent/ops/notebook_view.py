@@ -21,6 +21,7 @@ from hpc_agent.ops.notebook.audit_view import (
     SectionView,
     build_audit_view,
 )
+from hpc_agent.ops.notebook.render_store import read_render_header, render_path
 
 __all__ = [
     "AUTO_CLEARED",
@@ -29,4 +30,6 @@ __all__ = [
     "AuditView",
     "SectionView",
     "build_audit_view",
+    "render_path",
+    "read_render_header",
 ]
