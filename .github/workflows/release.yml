@@ -130,7 +130,7 @@ jobs:
         # exchanges the job's OIDC id-token for a short-lived PyPI credential.
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: Attach sdist + wheel to the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           fail_on_unmatched_files: true
