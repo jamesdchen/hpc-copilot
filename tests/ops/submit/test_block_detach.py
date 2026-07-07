@@ -31,6 +31,7 @@ from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
 from hpc_agent._wire.workflows.submit_blocks import SubmitS2Spec, SubmitS3Spec, SubmitS4Spec
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec, SubmitResources
 from hpc_agent._wire.workflows.submit_speculate import SubmitSpeculateSpec
+from tests.ops._block_fixtures import greenlight
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,16 +47,7 @@ class _FakeLaunch:
 
 
 def _greenlight(experiment_dir: Path, verb: str) -> None:
-    from hpc_agent.state.decision_journal import append_decision
-
-    append_decision(
-        experiment_dir,
-        scope_kind="run",
-        scope_id=_RUN_ID,
-        block="test-greenlight",
-        response="y",
-        resolved={"next_block": verb},
-    )
+    greenlight(experiment_dir, verb, run_id=_RUN_ID)
 
 
 def _submit_flow_spec() -> SubmitFlowSpec:

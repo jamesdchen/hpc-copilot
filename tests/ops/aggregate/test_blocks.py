@@ -21,6 +21,7 @@ from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
+from tests.ops._block_fixtures import greenlight
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,17 +64,7 @@ def _record(**overrides) -> RunRecord:
 
 
 def _greenlight(experiment_dir: Path, verb: str, *, run_id: str = _RUN_ID) -> None:
-    """Journal a human ``y`` greenlight naming *verb* (the aggregate-run gate)."""
-    from hpc_agent.state.decision_journal import append_decision
-
-    append_decision(
-        experiment_dir,
-        scope_kind="run",
-        scope_id=run_id,
-        block="test-greenlight",
-        response="y",
-        resolved={"next_block": verb},
-    )
+    greenlight(experiment_dir, verb, run_id=run_id)
 
 
 def _clean_vac() -> dict:

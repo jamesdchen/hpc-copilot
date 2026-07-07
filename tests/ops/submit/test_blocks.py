@@ -28,6 +28,7 @@ from hpc_agent._wire.workflows.submit_blocks import (
 )
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec, SubmitResources
 from hpc_agent.ops.relay_render import render_relay
+from tests.ops._block_fixtures import greenlight, sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,23 +37,7 @@ _RUN_ID = "ml_run_abcd1234"
 
 
 def _greenlight(experiment_dir: Path, verb: str, *, run_id: str = _RUN_ID) -> None:
-    """Journal a human ``y`` greenlight naming *verb* (the gate's precondition).
-
-    The sequenced block verbs (submit-s2/s3/s4, aggregate-run) refuse to act
-    unless the latest run-scoped decision is a ``y`` whose ``resolved.next_block``
-    names them (docs/design/human-amplification-blocks.md §2). Tests that drive a
-    gated block past its precondition record that greenlight first.
-    """
-    from hpc_agent.state.decision_journal import append_decision
-
-    append_decision(
-        experiment_dir,
-        scope_kind="run",
-        scope_id=run_id,
-        block="test-greenlight",
-        response="y",
-        resolved={"next_block": verb},
-    )
+    greenlight(experiment_dir, verb, run_id=run_id)
 
 
 # ── shared fixtures ──────────────────────────────────────────────────────────
@@ -688,21 +673,7 @@ def test_s1_ambiguity_branch_does_not_persist_without_run_id(tmp_path: Path) -> 
 
 
 def _sidecar(tmp_path: Path, *, cmd_sha: str, run_id: str = _RUN_ID) -> None:
-    """Write a per-run sidecar so ``_current_cmd_sha`` has a tree fingerprint to
-    key the terminal replay on (the replay refuses on an absent/empty sha)."""
-    from hpc_agent.state.runs import write_run_sidecar
-
-    write_run_sidecar(
-        tmp_path,
-        run_id=run_id,
-        cmd_sha=cmd_sha,
-        hpc_agent_version="0.0.0-test",
-        submitted_at="2026-01-01T00:00:00+00:00",
-        executor="python run.py",
-        result_dir_template="results/{task_id}",
-        task_count=10,
-        tasks_py_sha="",
-    )
+    sidecar(tmp_path, cmd_sha=cmd_sha, run_id=run_id)
 
 
 def test_s2_reinvoke_replays_recorded_terminal_without_respawn(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ import hpc_agent.ops.submit_blocks as submit_blocks
 from hpc_agent import errors
 from hpc_agent.ops.block_gate import assert_greenlit_target
 from hpc_agent.state.decision_journal import append_decision
+from tests.ops._block_fixtures import greenlight
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,14 +31,7 @@ _RUN_ID = "ml_run_gate01"
 
 
 def _greenlight(experiment_dir: Path, verb: str, *, response: str = "y") -> None:
-    append_decision(
-        experiment_dir,
-        scope_kind="run",
-        scope_id=_RUN_ID,
-        block="test-greenlight",
-        response=response,
-        resolved={"next_block": verb},
-    )
+    greenlight(experiment_dir, verb, run_id=_RUN_ID, response=response)
 
 
 # ── the gate itself ────────────────────────────────────────────────────────────
