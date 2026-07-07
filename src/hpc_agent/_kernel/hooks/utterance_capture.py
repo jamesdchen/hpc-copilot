@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -62,11 +61,11 @@ __all__ = ["capture", "main"]
 # background command's description/summary), so letting it into the log is a
 # laundering channel into the authorship gate's trust anchor. A payload whose
 # prompt OPENS with one of these tags is dropped; a human prompt merely
-# quoting a tag mid-text still lands.
-_HARNESS_INJECTION_RE = re.compile(
-    r"^\s*<(?:task-notification|system-reminder|local-command-caveat|"
-    r"command-name|command-message|local-command-stdout)\b"
-)
+# quoting a tag mid-text still lands. The filter is the write-API's PUBLIC
+# reference symbol (``state.utterances.is_harness_injected`` — one
+# definition every conforming writer shares, per
+# ``docs/internals/harness-contract.md``); this hook is its Claude Code
+# UserPromptSubmit binding.
 
 
 def capture(payload: Any) -> dict[str, Any] | None:
@@ -74,18 +73,18 @@ def capture(payload: Any) -> dict[str, Any] | None:
 
     Returns the appended record, or ``None`` when the payload is not a
     mapping, carries no non-empty string ``prompt``, opens with a
-    harness-injection tag (:data:`_HARNESS_INJECTION_RE` — not human-typed),
-    or the cwd repo has no journal namespace (no-scaffold rule) — all clean
-    no-ops.
+    harness-injection tag (:func:`hpc_agent.state.utterances.is_harness_injected`
+    — not human-typed), or the cwd repo has no journal namespace
+    (no-scaffold rule) — all clean no-ops.
     """
-    from hpc_agent.state.utterances import append_utterance
+    from hpc_agent.state.utterances import append_utterance, is_harness_injected
 
     if not isinstance(payload, dict):
         return None
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
-    if _HARNESS_INJECTION_RE.match(prompt):
+    if is_harness_injected(prompt):
         return None
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())

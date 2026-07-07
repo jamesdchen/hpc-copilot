@@ -141,7 +141,9 @@ the bullet list the PLUGIN wave implements against:
     AskUserQuestion answers, `_kernel/hooks/answer_capture.py`.)
   - The writer MUST FILTER harness-injected and agent-authored text. Reference
     filters:
-    - `_kernel/hooks/utterance_capture.py::_HARNESS_INJECTION_RE` — a prompt that
+    - `state/utterances.py::is_harness_injected` (the PUBLIC write-API symbol;
+      `HARNESS_INJECTION_RE` is the regex form — one definition every
+      conforming writer imports, never a re-derived copy) — a prompt that
       OPENS with a harness-injection tag (`<task-notification>`,
       `<system-reminder>`, `<local-command-caveat>`, `<command-name>`,
       `<command-message>`, `<local-command-stdout>`) is dropped: notification

@@ -14,7 +14,6 @@ per-section, never fatal to the batch.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import nbformat
@@ -26,7 +25,7 @@ from hpc_agent.cli._dispatch import CliShape
 from hpc_agent.ops.decision.journal import append_decision
 from hpc_agent.ops.notebook.audit_view import build_audit_view
 from hpc_agent.state.audit_source import parse_percent_source
-from hpc_agent.state.utterances import append_utterance
+from hpc_agent.state.utterances import append_utterance, is_harness_injected
 
 from . import _annotate
 from ._models import (
@@ -40,14 +39,11 @@ __all__ = ["notebook_ingest_signoffs"]
 
 _PRIMITIVE = "notebook-ingest-signoffs"
 
-# A typed sign-off that OPENS with a harness-injection tag is refused: it is not
-# human-typed but harness/agent-influenced (the write-API provenance clause). The
-# same tag set as core's _kernel/hooks/utterance_capture._HARNESS_INJECTION_RE,
-# re-derived here so the plugin never imports a private core hook symbol.
-_HARNESS_INJECTION_RE = re.compile(
-    r"^\s*<(?:task-notification|system-reminder|local-command-caveat|"
-    r"command-name|command-message|local-command-stdout)\b"
-)
+# A typed sign-off that OPENS with a harness-injection tag is refused: it is
+# not human-typed but harness/agent-influenced (the write-API provenance
+# clause). Filtered through the write-API's PUBLIC reference symbol
+# (state.utterances.is_harness_injected) — one definition, never a
+# re-derived copy.
 
 
 def _read_rel(experiment_dir: Path, relpath: str, *, what: str) -> str:
@@ -134,7 +130,7 @@ def notebook_ingest_signoffs(
         if typed is None:
             skipped_empty.append(slug)
             continue
-        if _HARNESS_INJECTION_RE.match(typed):
+        if is_harness_injected(typed):
             refused.append(RefusedSignoff(section=slug, reason="harness-injection-text"))
             continue
 

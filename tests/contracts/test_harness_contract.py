@@ -64,8 +64,9 @@ def test_doc_pins_no_scaffold_and_human_typed_provenance() -> None:
     assert "human-typed" in text or "human typed" in text, (
         "the human-TYPED-only provenance contract must be pinned"
     )
-    # The reference provenance filters a second harness mirrors.
-    assert "_harness_injection_re" in text, "the harness-injection reference filter must be cited"
+    # The reference provenance filters a second harness IMPORTS (the
+    # injection filter is the public write-API symbol, one definition).
+    assert "is_harness_injected" in text, "the harness-injection reference filter must be cited"
     assert "_is_clicked" in text, "the clicked-option reference filter must be cited"
 
 
@@ -86,8 +87,10 @@ def test_doc_pins_the_frozen_write_api_schema() -> None:
     assert "fail-open" in text.lower(), "fail-open (error → clean no-op) must be pinned"
 
 
-def test_utterances_all_carries_the_four_api_names() -> None:
-    """The harness imports exactly these four: writer, reader, locator, cap."""
+def test_utterances_all_carries_the_api_names() -> None:
+    """The harness imports these six: writer, reader, locator, cap, and the
+    two forms of the provenance filter (the ONE public injection-filter
+    definition every conforming writer shares — never a re-derived copy)."""
     from hpc_agent.state import utterances
 
     for name in (
@@ -95,9 +98,32 @@ def test_utterances_all_carries_the_four_api_names() -> None:
         "read_utterances",
         "utterances_path",
         "MAX_UTTERANCE_BYTES",
+        "HARNESS_INJECTION_RE",
+        "is_harness_injected",
     ):
         assert name in utterances.__all__, f"{name!r} must be in state.utterances.__all__"
         assert hasattr(utterances, name), f"{name!r} must be importable from state.utterances"
+
+
+def test_injection_filter_has_one_definition() -> None:
+    """The reference filter is defined ONCE (state.utterances); the Claude Code
+    hook and the notebook-render plugin both route through it — a re-derived
+    regex copy is the drift channel this pin closes."""
+    import inspect
+
+    from hpc_agent._kernel.hooks import utterance_capture
+    from hpc_agent.state import utterances
+
+    hook_src = inspect.getsource(utterance_capture)
+    assert "is_harness_injected" in hook_src, (
+        "utterance_capture must route through state.utterances.is_harness_injected"
+    )
+    assert "re.compile" not in hook_src, (
+        "utterance_capture must not carry its own filter regex (one definition)"
+    )
+    assert utterances.is_harness_injected("<task-notification>x")
+    assert utterances.is_harness_injected("  <system-reminder> hi")
+    assert not utterances.is_harness_injected("sign construction — quoting a <tag> mid-text")
 
 
 def test_no_utterance_writing_verb_in_registry() -> None:

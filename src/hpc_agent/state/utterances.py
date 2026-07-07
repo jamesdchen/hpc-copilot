@@ -51,8 +51,9 @@ here and the contract doc + a second harness drift:
 * the NO-SCAFFOLD precondition (write only into an existing namespace dir);
 * the PROVENANCE contract (only human-TYPED text; the writer runs out-of-band
   from the LLM's tool surface and filters harness-injected / agent-authored
-  text — the ``_HARNESS_INJECTION_RE`` / ``_is_clicked`` reference filters in
-  ``_kernel.hooks.utterance_capture`` / ``.answer_capture``);
+  text — :func:`is_harness_injected` below is THE public reference filter
+  every conforming writer shares; ``_is_clicked`` in
+  ``_kernel.hooks.answer_capture`` is the clicked-option reference);
 * FAIL-OPEN (any error → clean no-op, degrading to the friction tier).
 
 **The LLM must never gain a sanctioned write call.** There is deliberately NO
@@ -69,14 +70,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    "HARNESS_INJECTION_RE",
     "MAX_UTTERANCE_BYTES",
     "append_utterance",
+    "is_harness_injected",
     "read_utterances",
     "utterances_path",
 ]
@@ -85,6 +89,31 @@ __all__ = [
 # giant prompt is truncated for storage; the sha256 still covers the full raw
 # text so the entry remains a verifiable fingerprint of the whole utterance.
 MAX_UTTERANCE_BYTES = 4096
+
+# THE reference harness-injection filter (write-API provenance clause,
+# ``docs/internals/harness-contract.md``): text whose first non-blank token
+# is a harness-injected tag (background-task notifications, system
+# reminders, local-command echoes) is NOT human-typed — pieces of it are
+# agent-influenced — so a conforming writer must refuse it or it becomes a
+# laundering channel into the authorship gate's trust anchor. A human
+# merely QUOTING a tag mid-text still lands (the anchor is ``^``). ONE
+# definition: every conforming writer (the Claude Code hooks, the notebook
+# ingest verb, any second harness) filters through this symbol — never a
+# re-derived copy.
+HARNESS_INJECTION_RE = re.compile(
+    r"^\s*<(?:task-notification|system-reminder|local-command-caveat|"
+    r"command-name|command-message|local-command-stdout)\b"
+)
+
+
+def is_harness_injected(text: str) -> bool:
+    """True when *text* opens with a harness-injection tag (not human-typed).
+
+    The callable form of :data:`HARNESS_INJECTION_RE` — the write-API's
+    reference provenance filter. Conforming utterance-log writers call this
+    (or match the regex) before :func:`append_utterance`.
+    """
+    return bool(HARNESS_INJECTION_RE.match(text))
 
 _UTTERANCES_NAME = "utterances.jsonl"
 
