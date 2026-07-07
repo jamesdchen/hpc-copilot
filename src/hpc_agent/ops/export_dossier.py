@@ -78,6 +78,8 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "scope-journal",  # <exp>/.hpc/scopes/<tag>.decisions.jsonl
         "look-ledger",  # <exp>/.hpc/scopes/<tag>.looks.jsonl
         "aggregated",  # <exp>/_aggregated/<run_id>/** and <exp>/_aggregated/<run_id>.json
+        "audited-source",  # the audited source .py + its template .py (notebook-audit T14)
+        "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
     }
 )
 
@@ -136,6 +138,14 @@ def _project_run_identity(
     reproduces = sidecar.get("reproduces")
     if reproduces is not None:
         projection["reproduces"] = reproduces
+    # audit_id — the opaque audit slug that graduated this run (notebook-audit
+    # T14). Projected as run IDENTITY (which audit sealed it) only when the
+    # sidecar echoed an audited_source block; the reproduces-if-present
+    # precedent — emitted only when audited, never null-padded. The slug is
+    # identity; the section-level semantics inside the audit stay opaque.
+    audited = sidecar.get("audited_source")
+    if isinstance(audited, dict) and audited.get("audit_id") is not None:
+        projection["audit_id"] = audited.get("audit_id")
     return projection
 
 
@@ -269,10 +279,79 @@ def _gather_run(
     _gather_aggregated(experiment_dir, run_id, write_map=write_map, entries=entries, gaps=gaps)
 
     sidecar = _safe_sidecar(experiment_dir, run_id)
+    # audited-source + notebook-journal — sealed only when the sidecar echoed an
+    # audited_source block (notebook-audit T14). "The dossier is sealed
+    # attestations": the attestation journal + the source .py and template .py
+    # the graduation gate hashed.
+    _gather_audited_source(
+        experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps
+    )
     record = load_run(experiment_dir, run_id)
     projection = _project_run_identity(run_id, sidecar, record)
     tags = [str(t) for t in (sidecar.get("scopes") or []) if t]
     return projection, tags
+
+
+def _gather_audited_source(
+    experiment_dir: Path,
+    run_id: str,
+    sidecar: dict[str, Any],
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal the run's audited-source trail when the sidecar echoes one (T14).
+
+    The sidecar's opaque ``audited_source`` echo (``{source, template,
+    audit_id}``) points at three concrete stores: the source ``.py`` and its
+    template ``.py`` — both sealed as RAW BYTES under the ``audited-source`` store
+    noun (same store KIND, distinguished by archive path, not by a role field) —
+    and the notebook attestation journal at
+    ``.hpc/notebooks/<audit_id>.decisions.jsonl`` (the ``notebook-journal`` noun).
+    A run with no echo seals nothing and records no gap (an un-audited run
+    legitimately has no audit trail); an echo whose declared file is missing
+    records a gap (present-or-gap accounting, never a crash).
+    """
+    echo = sidecar.get("audited_source")
+    if not isinstance(echo, dict):
+        return
+    source_rel = echo.get("source")
+    if isinstance(source_rel, str) and source_rel:
+        _gather_optional(
+            "audited-source",
+            Path(experiment_dir) / source_rel,
+            f"runs/{run_id}/audited/source.py",
+            run_id,
+            f"audited source .py {source_rel!r} not on disk",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
+    template_rel = echo.get("template")
+    if isinstance(template_rel, str) and template_rel:
+        _gather_optional(
+            "audited-source",
+            Path(experiment_dir) / template_rel,
+            f"runs/{run_id}/audited/template.py",
+            run_id,
+            f"audited template .py {template_rel!r} not on disk",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
+    audit_id = echo.get("audit_id")
+    if isinstance(audit_id, str) and audit_id:
+        _gather_optional(
+            "notebook-journal",
+            decisions_path(experiment_dir, "notebook", audit_id),
+            f"runs/{run_id}/notebook.decisions.jsonl",
+            run_id,
+            f"no notebook attestation journal on disk for audit_id {audit_id!r}",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
 
 
 def _gather_aggregated(

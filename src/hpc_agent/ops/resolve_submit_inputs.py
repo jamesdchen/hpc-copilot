@@ -60,7 +60,7 @@ from hpc_agent.cli.setup_actions import find_prior_run
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
-from hpc_agent.ops.notebook_gate import assert_source_audited
+from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -382,6 +382,13 @@ def resolve_submit_inputs(
     #    reproduction of the same original then reads it back (find_run_by_cmd_sha
     #    reproduction_of lever) to skip this derived run too, not just the
     #    original. None for an ordinary submit (omitted on write).
+    #    Audit-trail echo (notebook-audit T14): stamp the interview.json
+    #    `audited_source` block ({source, template, audit_id}, dropping the
+    #    render metadatum) onto the sidecar so export-dossier can seal the
+    #    complete audit trail. The graduation gate at 4b has already PASSED by
+    #    here, so the echo always reflects an audit that was current at resolve
+    #    time; audited_source_echo reuses the gate's ONE interview reader. None
+    #    (not opted in) → the field is omitted on write (byte-identical sidecar).
     sidecar_spec = spec.sidecar.model_copy(
         update={
             "run_id": run_id,
@@ -389,6 +396,7 @@ def resolve_submit_inputs(
             "trial_tokens": cr["trial_tokens"],
             "trial_params": cr["trial_params"],
             "reproduces": spec.reproduction_of,
+            "audited_source": audited_source_echo(experiment_dir),
         }
     )
     materialized_executor = _materialized_executor_cmd(experiment_dir)

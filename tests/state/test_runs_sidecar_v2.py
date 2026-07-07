@@ -144,6 +144,39 @@ def test_scopes_absent_backfills_to_none_on_read(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# audited_source: opaque audit-trail echo (notebook-audit T14)
+# ---------------------------------------------------------------------------
+
+
+def test_audited_source_absent_sidecar_is_byte_identical_to_today(tmp_path: Path) -> None:
+    """A non-audited run's sidecar is byte-identical whether the new
+    ``audited_source`` kwarg is omitted (pre-feature call shape) or passed as
+    ``None`` — the only-write-non-None pattern keeps the key absent."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    write_run_sidecar(a, **_common_required_kwargs())  # pre-feature call shape
+    write_run_sidecar(b, **_common_required_kwargs(), audited_source=None)  # explicit None
+    run_id = _common_required_kwargs()["run_id"]
+    raw_a = run_sidecar_path(a, run_id).read_bytes()
+    raw_b = run_sidecar_path(b, run_id).read_bytes()
+    assert raw_a == raw_b
+    assert "audited_source" not in json.loads(raw_a)
+
+
+def test_audited_source_write_then_read_roundtrips(tmp_path: Path) -> None:
+    echo = {"source": "src/pi.py", "template": ".hpc/templates/pi.py", "audit_id": "pi-audit-001"}
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), audited_source=echo)
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["audited_source"] == echo
+
+
+def test_audited_source_absent_backfills_to_none_on_read(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["audited_source"] is None
+
+
+# ---------------------------------------------------------------------------
 # trial_tokens round-trip (campaign seam)
 # ---------------------------------------------------------------------------
 

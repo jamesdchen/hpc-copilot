@@ -174,3 +174,19 @@ class WriteRunSidecarInput(BaseModel):
             "this derived run too. Null = ordinary (non-reproduction) run."
         ),
     )
+    # OPAQUE caller-owned audit-trail identity — the sidecar echo of
+    # interview.json's audited_source block (notebook-audit T14). Core never
+    # interprets it; recorded verbatim on the sidecar so export-dossier can seal
+    # the audit trail. Stamped in CODE by resolve-submit-inputs from
+    # interview.json (not hand-authored); null = a non-audited run.
+    audited_source: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "OPAQUE caller-owned audit-trail identity — the sidecar echo of "
+            "interview.json's audited_source opt-in block ({source, template, "
+            "audit_id}; notebook-audit T14). Core never interprets it; recorded "
+            "verbatim so export-dossier can seal the audit trail (source .py + "
+            "template .py + the notebook attestation journal). Stamped in code "
+            "by resolve-submit-inputs; null = a non-audited run."
+        ),
+    )

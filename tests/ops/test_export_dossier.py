@@ -287,6 +287,94 @@ def test_include_lineage_bundles_ancestor_trail_and_unions_scope_tags(
     assert {p["run_id"] for p in result.manifest["runs"]} == {child, root}
 
 
+# --- audited-source trail (notebook-audit T14) -------------------------------
+
+
+def test_audited_run_seals_source_template_and_notebook_journal(
+    journal_home: Path, experiment: Path
+) -> None:
+    """An audited run (sidecar echoes audited_source) seals the source .py + the
+    template .py under ``audited-source`` and the attestation journal under
+    ``notebook-journal``, with correct sha256s; audit_id enters identity."""
+    import hashlib
+
+    from hpc_agent.state.decision_journal import decisions_path
+
+    audit_id = "pi-audit-001"
+    (experiment / "src.py").write_bytes(b"# %%\n# hpc-audit-section: run\nx = 1\n")
+    (experiment / "tpl.py").write_bytes(b"# %%\n# hpc-audit-section: run\ny = 2\n")
+    echo = {"source": "src.py", "template": "tpl.py", "audit_id": audit_id}
+    _sidecar(experiment, _RID, audited_source=echo)
+    append_decision(
+        experiment,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block="notebook-sign-off",
+        response="y",
+        resolved={"audit_id": audit_id, "section": "run", "section_sha": "0" * 64},
+    )
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    src_entry = by_path[f"runs/{_RID}/audited/source.py"]
+    tpl_entry = by_path[f"runs/{_RID}/audited/template.py"]
+    nb_entry = by_path[f"runs/{_RID}/notebook.decisions.jsonl"]
+    assert src_entry["source"] == "audited-source"
+    assert tpl_entry["source"] == "audited-source"
+    assert nb_entry["source"] == "notebook-journal"
+    # Correct integrity fingerprints over the sealed bytes.
+    assert src_entry["sha256"] == hashlib.sha256((experiment / "src.py").read_bytes()).hexdigest()
+    assert tpl_entry["sha256"] == hashlib.sha256((experiment / "tpl.py").read_bytes()).hexdigest()
+    nb_bytes = decisions_path(experiment, "notebook", audit_id).read_bytes()
+    assert nb_entry["sha256"] == hashlib.sha256(nb_bytes).hexdigest()
+    # Entries keep the exact 4-key store-provenance shape (no meaning field).
+    assert set(src_entry) == {"source", "path", "sha256", "bytes"}
+    # audit_id projected into run identity (the opaque slug is identity).
+    (proj,) = result.manifest["runs"]
+    assert proj["audit_id"] == audit_id
+    # No AUDIT gap — all three audit stores were present (other stores this
+    # minimal seed omitted may gap; those are unrelated to T14).
+    assert not [g for g in result.gaps if g["source"] in {"audited-source", "notebook-journal"}]
+
+
+def test_audited_run_missing_template_records_a_gap_and_still_succeeds(
+    journal_home: Path, experiment: Path
+) -> None:
+    """A declared audited file that is not on disk is a RECORDED gap, not a crash;
+    the present files are still sealed and the bundle is still written."""
+    audit_id = "pi-audit-002"
+    (experiment / "src.py").write_bytes(b"# %%\n# hpc-audit-section: run\nx = 1\n")  # tpl absent
+    echo = {"source": "src.py", "template": "missing_tpl.py", "audit_id": audit_id}
+    _sidecar(experiment, _RID, audited_source=echo)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    tpl_gaps = [g for g in result.gaps if g["source"] == "audited-source"]
+    assert len(tpl_gaps) == 1
+    assert "missing_tpl.py" in tpl_gaps[0]["note"]
+    assert tpl_gaps[0]["run_id"] == _RID
+    # The present source .py was still sealed.
+    assert f"runs/{_RID}/audited/source.py" in {e["path"] for e in result.manifest["entries"]}
+    assert zipfile.is_zipfile(result.archive_path)
+
+
+def test_non_audited_run_seals_no_audit_stores(journal_home: Path, experiment: Path) -> None:
+    """A run whose sidecar echoes no audited_source seals no audit stores, records
+    no audit gap, and leaks no audit_id into the identity projection — byte-for-
+    byte the pre-T14 dossier shape."""
+    _seed_full_run(experiment, _RID)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    sources = set(_sources_of(result.manifest))
+    assert "audited-source" not in sources
+    assert "notebook-journal" not in sources
+    assert not [g for g in result.gaps if g["source"] in {"audited-source", "notebook-journal"}]
+    (proj,) = result.manifest["runs"]
+    assert "audit_id" not in proj
+
+
 # --- missing run -------------------------------------------------------------
 
 

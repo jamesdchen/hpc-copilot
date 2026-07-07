@@ -385,6 +385,20 @@
       "default": null,
       "description": "run_id of the ORIGINAL run this submission deliberately REPRODUCES (the reproduction-receipt provenance field). Recorded verbatim on the sidecar; a later reproduction of the same original reads it back (find-prior-run / submit's reproduction_of lever) to skip this derived run too. Null = ordinary (non-reproduction) run.",
       "title": "Reproduces"
+    },
+    "audited_source": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE caller-owned audit-trail identity — the sidecar echo of interview.json's audited_source opt-in block ({source, template, audit_id}; notebook-audit T14). Core never interprets it; recorded verbatim so export-dossier can seal the audit trail (source .py + template .py + the notebook attestation journal). Stamped in code by resolve-submit-inputs; null = a non-audited run.",
+      "title": "Audited Source"
     }
   }
 }

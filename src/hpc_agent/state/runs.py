@@ -124,6 +124,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
+    "audited_source",  # dict — opaque caller-owned audit-trail identity; core never interprets it
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -168,6 +169,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "env_hash": None,
     "scopes": None,
     "reproduces": None,
+    "audited_source": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -241,6 +243,7 @@ def write_run_sidecar(
     job_ids: list[str] | None = None,
     scopes: list[str] | None = None,
     reproduces: str | None = None,
+    audited_source: dict[str, Any] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -307,6 +310,15 @@ def write_run_sidecar(
     so an ordinary run's sidecar is byte-identical to one written before this
     field existed.
 
+    *audited_source* echoes interview.json's ``audited_source`` opt-in block
+    ({``source`` py relpath, ``template`` py relpath, ``audit_id`` slug};
+    notebook-audit T14) so ``export-dossier`` can seal the complete audit trail
+    (source + template + the ``.hpc/notebooks/<audit_id>.decisions.jsonl``
+    attestation journal). Opaque — core never interprets it. Recorded verbatim
+    like *scopes* / *reproduces*; absent (``None``) → the key is omitted, so a
+    non-audited run's sidecar is byte-identical to one written before the field
+    existed.
+
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
     the picker (warm-then-cold) selects an array axis and
@@ -366,6 +378,12 @@ def write_run_sidecar(
         # only-write-non-None pattern; a non-reproduction run's sidecar is
         # byte-identical). find_run_by_cmd_sha's reproduction_of lever reads it.
         "reproduces": reproduces,
+        # Opaque caller-owned audit-trail identity — the sidecar echo of
+        # interview.json's audited_source block ({source, template, audit_id};
+        # notebook-audit T14). Recorded verbatim, never interpreted by core
+        # (same only-write-non-None pattern, so a non-audited run's sidecar is
+        # byte-identical). export-dossier reads it back to seal the audit trail.
+        "audited_source": audited_source,
     }
     for k, v in v2_values.items():
         if v is not None:

@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
     from hpc_agent.state.audit_source import ParsedModule
 
-__all__ = ["assert_source_audited"]
+__all__ = ["assert_source_audited", "audited_source_echo"]
 
 #: The two notebook-attestation blocks a sign-off/auto-clear record can carry —
 #: used to locate the winning record for a passing section's linked-source check.
@@ -178,6 +178,25 @@ def _linked_source_drift(experiment_dir: Path, record: dict[str, Any] | None) ->
         if actual != expected:
             return f"{rel} changed"
     return None
+
+
+def audited_source_echo(experiment_dir: Path) -> dict[str, Any] | None:
+    """The sidecar-sealable slice of interview.json's ``audited_source``, or ``None``.
+
+    Returns ``{source, template, audit_id}`` — the source ``.py`` relpath, the
+    template ``.py`` relpath, and the opaque audit slug — for the run sidecar to
+    echo (notebook-audit T14) so ``export-dossier`` can seal the audit trail.
+    ``rendered_notebook`` is deliberately DROPPED: it is a caller-side render
+    metadatum, never a sealed record. Reuses :func:`_read_audited_source` — the
+    ONE definition of the interview-block read — so the echo can never diverge
+    from what :func:`assert_source_audited` audited. ``None`` (not opted in) → the
+    caller omits the field → the sidecar stays byte-identical (the D7 fail-safe
+    carried onto the echo). Pure local read — no SSH.
+    """
+    block = _read_audited_source(experiment_dir)
+    if block is None:
+        return None
+    return {key: block.get(key) for key in ("source", "template", "audit_id")}
 
 
 def assert_source_audited(experiment_dir: Path) -> None:

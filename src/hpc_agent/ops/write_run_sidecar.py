@@ -236,5 +236,9 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         # reproduces, recorded verbatim (the -canary identity exemption above
         # is untouched — this field is not part of the identity cross-check).
         reproduces=spec.reproduces,
+        # Opaque audit-trail echo (notebook-audit T14) — passed straight through
+        # to the state layer, never interpreted; the identity cross-checks above
+        # are untouched. Normally stamped in code by resolve-submit-inputs.
+        audited_source=spec.audited_source,
     )
     return {"path": str(target)}

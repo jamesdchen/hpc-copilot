@@ -88,6 +88,11 @@ _V2_CONFIG = frozenset(
         # reproduction re-runs; find_run_by_cmd_sha's reproduction_of lever
         # reads it to skip a prior repro of the same original.
         "reproduces",
+        # audited_source (notebook-audit T14): opaque {source, template,
+        # audit_id} echo of interview.json's audit-trail identity, stamped
+        # at resolve after the graduation gate passes; export-dossier reads
+        # it to seal the audit trail.
+        "audited_source",
     ]
 )
 _RUNTIME_WRITTEN = frozenset(

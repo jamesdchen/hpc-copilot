@@ -380,6 +380,55 @@ def test_resolve_seat_passes_when_signed(tmp_path: Path) -> None:
     ws.assert_called_once()  # gate passed → the sidecar was written
 
 
+# ── T14: resolve stamps the audited_source echo onto the sidecar spec ─────────
+
+
+def test_resolve_stamps_audited_source_echo_when_opted_in(tmp_path: Path) -> None:
+    """Opted in + fully signed → resolve stamps {source, template, audit_id}
+    (rendered_notebook dropped) onto the sidecar spec at step 5."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    spec, cr, fp = _resolve_atom_mocks(tmp_path)
+    _write_source(tmp_path)
+    _write_template(tmp_path)
+    _write_interview(tmp_path)
+    _sign(tmp_path, "setup")
+    _sign(tmp_path, "run")
+
+    with (
+        mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=cr),
+        mock.patch(f"{_RESOLVE_SEAM}.find_prior_run", return_value=fp),
+        mock.patch(f"{_RESOLVE_SEAM}.build_submit_spec", return_value={"run_id": "pi-abcd1234"}),
+        mock.patch(
+            f"{_RESOLVE_SEAM}.write_run_sidecar", return_value={"path": "/x/pi-abcd1234.json"}
+        ) as ws,
+    ):
+        resolve_submit_inputs(tmp_path, spec=spec)
+
+    stamped = ws.call_args.kwargs["spec"].audited_source
+    assert stamped == {"source": "source.py", "template": "template.py", "audit_id": _AUDIT_ID}
+
+
+def test_resolve_omits_audited_source_when_not_opted_in(tmp_path: Path) -> None:
+    """No audited_source block on interview.json → the echo is None (the field is
+    omitted on write, byte-identical sidecar — the D7 posture)."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    spec, cr, fp = _resolve_atom_mocks(tmp_path)  # no interview.json written
+
+    with (
+        mock.patch(f"{_RESOLVE_SEAM}.compute_run_id", return_value=cr),
+        mock.patch(f"{_RESOLVE_SEAM}.find_prior_run", return_value=fp),
+        mock.patch(f"{_RESOLVE_SEAM}.build_submit_spec", return_value={"run_id": "pi-abcd1234"}),
+        mock.patch(
+            f"{_RESOLVE_SEAM}.write_run_sidecar", return_value={"path": "/x/pi-abcd1234.json"}
+        ) as ws,
+    ):
+        resolve_submit_inputs(tmp_path, spec=spec)
+
+    assert ws.call_args.kwargs["spec"].audited_source is None
+
+
 # ── SEAT: submit-flow (pre-staging, before any rsync/SSH) ─────────────────────
 
 
