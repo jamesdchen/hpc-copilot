@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_reproduction.output.json",
+  "title": "verify-reproduction output",
+  "description": "Result of a reproduction comparison.\n\nA mismatch or incomparable is a SUCCESSFUL run (exit-0, needs_decision=True)\n— a discovered nondeterminism is the feature working, never an error.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason",
+    "receipt",
+    "receipt_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Overall verdict: match, mismatch (any key mismatched), or incomparable.",
+      "enum": [
+        "match",
+        "mismatch",
+        "incomparable"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True for mismatch/incomparable (a FINDING the human decides on); False for match.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Code-rendered one-line summary: matched/mismatched/incomparable key counts + verdict.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "receipt": {
+      "additionalProperties": true,
+      "description": "The full receipt record appended to reproduction_receipts.jsonl (self-contained).",
+      "title": "Receipt",
+      "type": "object"
+    },
+    "receipt_path": {
+      "description": "Absolute path of the append-only receipts ledger this verification appended to.",
+      "title": "Receipt Path",
+      "type": "string"
+    }
+  }
+}

@@ -36,6 +36,19 @@
       ],
       "default": null,
       "description": "Optional pre-classified build-tasks-py spec (axes + flags_by_executor + optional data_axis). Used ONLY when <experiment_dir>/.hpc/tasks.py is absent and can be scaffolded deterministically. When tasks.py is absent and this is null, the composite escalates needs_scaffold_interview rather than guessing."
+    },
+    "reproduction_of": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Reproduction-receipt lever: the run_id of an ORIGINAL run this resolution deliberately REPRODUCES with identical params. cmd_sha is parameter identity, so a re-run of the same params otherwise stops at prior_run_found against the (even complete) original. Naming it here makes find-prior-run skip the original (and any prior reproduction of it) — so a `complete` original no longer terminates resolve, while ANY OTHER live prior still does — and stamps ``reproduces`` onto the derived run's sidecar so a later reproduction of the same original skips this one too. It is also threaded onto the built submit-flow spec so the submit-time layer-2 dedup pierces the same original. Null = ordinary submit.",
+      "title": "Reproduction Of"
     }
   },
   "$defs": {
@@ -839,6 +852,37 @@
           ],
           "default": null,
           "title": "Job Ids"
+        },
+        "scopes": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[A-Za-z0-9._\\-]+$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OPAQUE caller-owned evidence-scope tags (slug-validated: ^[A-Za-z0-9._\\-]+$). Core never interprets them — they are recorded verbatim on the sidecar; a non-slug tag is refused here.",
+          "title": "Scopes"
+        },
+        "reproduces": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "run_id of the ORIGINAL run this submission deliberately REPRODUCES (the reproduction-receipt provenance field). Recorded verbatim on the sidecar; a later reproduction of the same original reads it back (find-prior-run / submit's reproduction_of lever) to skip this derived run too. Null = ordinary (non-reproduction) run.",
+          "title": "Reproduces"
         }
       },
       "required": [

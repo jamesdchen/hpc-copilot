@@ -32,3 +32,6 @@ mutants/
 build/
 dist/
 *.egg-info/
+
+# Scratch state created by running hpc-agent verbs/tests against the repo dir itself.
+.hpc/

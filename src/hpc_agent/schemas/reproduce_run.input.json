@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/reproduce_run.input.json",
+  "title": "reproduce-run input spec",
+  "description": "Inputs to ``reproduce-run``: the ORIGINAL run + an optional repro name.\n\n``original_run_id`` is the finished run being reproduced — its on-disk\nsidecar (``.hpc/runs/<original_run_id>.json``, the v2 config snapshot)\nsupplies the run-owned resolve inputs to re-derive from, and it is the run\nthe drift guard pins the CURRENT tree against. ``new_run_name`` is optional:\nwhen absent it is derived in CODE as ``<original_run_name>-repro`` so the LLM\nnever authors a run name. A distinct run_name gives a distinct run_id, so the\nreproduction executes as its own run rather than re-attaching to the original\n(the ``reproduction_of`` dedup lever pierces the same-params dedup).",
+  "type": "object",
+  "required": [
+    "original_run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "original_run_id": {
+      "description": "The finished run's run_id being reproduced — its sidecar supplies the run-owned resolve inputs, and the drift guard pins the current tree's cmd_sha / executor / tasks_py_sha against its recorded identity. The reproduction records `reproduces: <this>` as a one-directional provenance link; the original is NEVER superseded.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Original Run Id",
+      "type": "string"
+    },
+    "new_run_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional explicit run name for the reproduction. When null the verb DERIVES it as <original_run_name>-repro so the LLM never authors a run name. Supply one to force a FRESH reproduction when a prior reproduction already occupies the derived run_id (the prior_repro_exists branch).",
+      "title": "New Run Name"
+    }
+  }
+}

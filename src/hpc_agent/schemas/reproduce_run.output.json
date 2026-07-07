@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/reproduce_run.output.json",
+  "title": "reproduce-run output data",
+  "description": "The reproduction outcome — a resolve brief + the S2 hand-off.\n\n``stage_reached`` is what the human decides on:\n\n* ``repro_pending_canary`` — re-resolved against the pinned identity under a\n  disjoint remote_path; the canary + array run in ``submit-s2``'s DETACHED\n  worker after the greenlight (this verb never blocks on a canary poll,\n  which is what makes it MCP-safe). ``next_block`` carries the\n  ``{verb: submit-s2, ...}`` hand-off.\n* ``resolve_blocked`` — the fresh resolve surfaced its OWN decision (an\n  UNRELATED live same-params prior, or a needed scaffold); nothing was\n  minted and NOTHING was superseded. ``next_block`` is null (a human branch).\n* ``prior_repro_exists`` — a COMPLETE reproduction of the same original\n  already occupies the derived run_id; the reason directs the human to\n  ``verify-reproduction`` (compare the existing pair) or to pass an explicit\n  ``new_run_name`` for a fresh reproduction. ``next_block`` is null.\n\n``needs_decision`` is always True — the human re-``y``s the brief through the\nEXISTING ``append-decision`` path (this verb produces the brief, it does NOT\nbypass the gates; the canary + S3 greenlight still stand). ``reproduces`` is\nthe original this run reproduces (the provenance link). ``next_block``'s\npresence on this model is also what derives ``reproduce-run`` into the\ncurated MCP catalog.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reproduces"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "The boundary the reproduction stops at for the human's re-y.",
+      "enum": [
+        "repro_pending_canary",
+        "resolve_blocked",
+        "prior_repro_exists"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "Always True — the human re-y's the reproduction brief through append-decision.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the reproduction outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The reproduction run's run_id (<repro_run_name>-<cmd_sha[:8]>); the already-recorded prior reproduction's id on prior_repro_exists; None if the resolve did not mint one.",
+      "title": "Run Id"
+    },
+    "reproduces": {
+      "description": "The ORIGINAL run this reproduction reproduces (the one-directional provenance link).",
+      "title": "Reproduces",
+      "type": "string"
+    },
+    "brief": {
+      "additionalProperties": true,
+      "description": "The reproduction brief: the resolved values + the fresh resolve's submit_spec (what submit-s2 stages & canaries) + the disjoint remote_path + the pre-dispatch cost estimate. The LLM relays it and takes the human's re-y.",
+      "title": "Brief",
+      "type": "object"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The {verb, why, spec_hint} hand-off — submit-s2 on the pending-canary path (its detached worker owns the canary poll), null on resolve_blocked / prior_repro_exists (human branches). Presence of this field is also what derives reproduce-run into the curated MCP catalog.",
+      "title": "Next Block"
+    }
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_reproduction.input.json",
+  "title": "verify-reproduction input spec",
+  "description": "Input spec for ``verify-reproduction``.\n\n``tolerance`` absent (``None``) — or present with every bound absent —\nmeans an EXACT comparison.",
+  "type": "object",
+  "required": [
+    "original_run_id",
+    "repro_run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "original_run_id": {
+      "description": "Run id of the ORIGINAL run being reproduced.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Original Run Id",
+      "type": "string"
+    },
+    "repro_run_id": {
+      "description": "Run id of the reproduction run. Its sidecar's `reproduces` field MUST name original_run_id, or the verb refuses (SpecInvalid).",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Repro Run Id",
+      "type": "string"
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReproTolerance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller-owned tolerance; None (or all-absent) → exact comparison."
+    }
+  },
+  "$defs": {
+    "KeyTolerance": {
+      "additionalProperties": false,
+      "description": "Per-metric-key tolerance override.\n\nBoth bounds optional; an absent bound is simply not applied. When BOTH\nare absent the key is compared EXACTLY (``==``) — same as supplying no\ntolerance at all.",
+      "properties": {
+        "abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance: |orig - repro| <= abs_tol counts as a match.",
+          "title": "Abs Tol"
+        },
+        "rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance: |orig - repro| / max(|orig|, |repro|) <= rel_tol counts as a match.",
+          "title": "Rel Tol"
+        }
+      },
+      "title": "per-key reproduction tolerance",
+      "type": "object"
+    },
+    "ReproTolerance": {
+      "additionalProperties": false,
+      "description": "Caller-owned tolerance for the reproduction comparison.\n\nAll fields optional. When every field is absent (and ``per_key`` empty)\nthe comparison is EXACT — numeric metrics must be bit-equal. A default\nbound applies to every numeric key that has no ``per_key`` override; a\n``per_key`` entry fully replaces the default for that key.",
+      "properties": {
+        "default_abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance applied to every numeric key lacking a per_key override.",
+          "title": "Default Abs Tol"
+        },
+        "default_rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance applied to every numeric key lacking a per_key override.",
+          "title": "Default Rel Tol"
+        },
+        "per_key": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KeyTolerance"
+          },
+          "description": "Per-metric-key tolerance overrides, keyed by the (flattened) metric key.",
+          "title": "Per Key",
+          "type": "object"
+        }
+      },
+      "title": "reproduction tolerance spec",
+      "type": "object"
+    }
+  }
+}

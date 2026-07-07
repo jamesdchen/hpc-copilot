@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/archive_dossier.input.json",
+  "title": "archive-dossier input spec",
+  "description": "Inputs to ``archive-dossier``.\n\n``archive_path`` is the local file to push (the ``export-dossier`` output,\nor any archive); ``bucket`` names the destination S3 (or S3-compatible)\nbucket. ``endpoint_url`` targets a non-AWS S3 API (Cloudflare R2,\nBackblaze B2, MinIO); omit it for AWS S3 proper. Credentials are NOT\nfields here — they resolve only from the standard AWS chain (see the\nmodule docstring).",
+  "type": "object",
+  "required": [
+    "archive_path",
+    "bucket"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "archive_path": {
+      "description": "Local path to the archive to upload — typically the export-dossier output at <experiment>/_dossier/<run_id>.zip. Uploaded verbatim as opaque bytes; a SHA-256 over the file is the integrity fingerprint. Must exist and be a regular file.",
+      "minLength": 1,
+      "title": "Archive Path",
+      "type": "string"
+    },
+    "bucket": {
+      "description": "Destination bucket name. Real immutability (versioning + S3 Object Lock) is a one-time bucket-side setup the human performs; see docs/internals/dossier-archival.md.",
+      "minLength": 1,
+      "title": "Bucket",
+      "type": "string"
+    },
+    "key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Object key to write. Omit to derive the conventional dossiers/<archive-filename> — a derived default, not an agent-authored path; the resolved key is echoed back.",
+      "title": "Key"
+    },
+    "endpoint_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "S3 API endpoint for an S3-COMPATIBLE store (Cloudflare R2, Backblaze B2, MinIO). Omit for AWS S3. Credentials still come only from the standard AWS chain, never from this spec.",
+      "title": "Endpoint Url"
+    },
+    "overwrite": {
+      "default": false,
+      "description": "When false (default), the verb HEADs the key first and REFUSES to replace an existing object (reporting already_exists=true, naming the existing object's stored sha) — the client-side immutability posture: an archive is never silently overwritten. Set true to deliberately replace.",
+      "title": "Overwrite",
+      "type": "boolean"
+    }
+  }
+}

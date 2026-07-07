@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/scope_status.input.json",
+  "title": "scope-status input spec",
+  "description": "Which scope(s) to report — one tag, or every tag when omitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scope"
+    }
+  }
+}

@@ -15,6 +15,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent archive-dossier --spec <path>",
+    "idempotent": true,
+    "input_schema": "archive_dossier.input.json",
+    "name": "archive-dossier",
+    "output_schema": "archive_dossier.output.json",
+    "python": "hpc_agent.ops.archive_dossier.archive_dossier",
+    "side_effects": [
+      "network-upload"
+    ],
+    "summary": "Upload an exported dossier archive to an S3-compatible bucket (AWS S3 / R2 / B2 / MinIO) with a SHA-256 integrity fingerprint. Refuses to overwrite an existing key unless overwrite=true (client-side immutability posture; real immutability is bucket versioning + Object Lock — see docs/internals/dossier-archival.md). Needs the [s3] extra (boto3); credentials come from the standard AWS chain, never the spec.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]",
     "idempotent": true,
     "input_schema": null,
@@ -86,6 +100,20 @@
       "filesystem"
     ],
     "summary": "Validate the staged sub-skill return envelope at <experiment_dir>/.hpc/_returns/<skill>.staged.json against the per-skill schema, then atomically rename to <skill>.json. Use as the sub-skill's FINAL tool call to hand off to the parent skill without firing an end-of-turn chat message.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "export_dossier.input.json",
+    "name": "export-dossier",
+    "output_schema": "export_dossier.output.json",
+    "python": "hpc_agent.ops.export_dossier.export_dossier",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Bundle a run's core-owned record trail — sidecar, decision journal, briefs, block terminals, journal record, scope journals + look ledgers, and harvested aggregates — into one integrity-sealed .zip with a provenance manifest. --include-lineage widens it to the run's whole supersession chain. Pure local reads + one local write, no SSH.",
     "verb": "mutate"
   },
   {
@@ -173,6 +201,20 @@
       "writes-journal"
     ],
     "summary": "Record a resubmission attempt in the journal (caller does the actual qsub).",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "scope_lock.input.json",
+    "name": "scope-lock",
+    "output_schema": "scope_lock.output.json",
+    "python": "hpc_agent.ops.decision.scope_lock.scope_lock",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Lock a caller-tagged experiment scope. Locking is the SAFE direction (it only restricts), so there is no authorship bar. Idempotent-in-effect: re-locking an already-locked scope appends an audit record but leaves the lock state unchanged (already_locked=true). Unlocking is a HUMAN act journaled via append-decision (block=scope-unlock), not a verb here.",
     "verb": "mutate"
   },
   {
@@ -785,6 +827,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent scope-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "scope_status.input.json",
+    "name": "scope-status",
+    "output_schema": "scope_status.output.json",
+    "python": "hpc_agent.ops.decision.scope_lock.scope_status",
+    "side_effects": [],
+    "summary": "Report the lock + look state of one caller-tagged scope, or every scope under .hpc/scopes/ when the tag is omitted. Pure read: {scope: {locked, looks: {prior_looks, distinct_lineages}, lock_history_len}}. Look counts are IDENTITY counts — no metric is ever consulted.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent suggest-setup-action [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,
@@ -841,6 +895,20 @@
     "python": "hpc_agent.ops.decision.verify_relay.verify_relay",
     "side_effects": [],
     "summary": "Audit an agent's draft relay text against a run's durable records (decision journal, sidecar, RunRecord, briefs). Deterministic claim-extraction — numbers, run/job ids, state words — diffed against the record. Returns a verdict; never blocks (conduct rule 10).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "verify_reproduction.input.json",
+    "name": "verify-reproduction",
+    "output_schema": "verify_reproduction.output.json",
+    "python": "hpc_agent.ops.verify_reproduction.verify_reproduction",
+    "side_effects": [
+      "filesystem"
+    ],
+    "summary": "Compare a reproduction run's reduced metrics against the original it names (sidecar `reproduces` link), under a caller-owned tolerance, and append a durable receipt. A mismatch/incomparable is a FINDING (needs_decision), never an error.",
     "verb": "query"
   },
   {
@@ -1427,6 +1495,20 @@
       "writes-journal"
     ],
     "summary": "Workflow atom: poll a run to terminal lifecycle (or wall-clock budget); auto-combine waves as they finish; write the same .monitor.jsonl tick log /monitor-hpc writes. Pairs with submit-flow for the campaign loop composition. MVP does not auto-resubmit failed tasks.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent reproduce-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "reproduce_run.input.json",
+    "name": "reproduce-run",
+    "output_schema": "reproduce_run.output.json",
+    "python": "hpc_agent.ops.reproduce_run.reproduce_run",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "summary": "Mint a pinned-identity REPRODUCTION of a finished run (reproduction receipt, task T5): re-resolve it under a NEW run_name (<orig>-repro) against the SAME code + params + env, under a DISJOINT remote_path, recording a one-directional `reproduces` provenance link (the original is NEVER superseded). Refuses if the tree has DRIFTED since the original ran — param drift (cmd_sha) OR code drift (executor/tasks_py_sha), naming the evidence. Returns in seconds with next_block=submit-s2: the human's re-y greenlights S2, whose DETACHED worker owns the re-canary poll. Never runs the canary inline. A later verify-reproduction compares the two runs' metrics + writes the receipt.",
     "verb": "workflow"
   },
   {

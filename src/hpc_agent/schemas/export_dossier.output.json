@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_dossier.output.json",
+  "title": "export-dossier output data",
+  "description": "The assembled dossier bundle's manifest and integrity fingerprint.\n\nEvery field describes the bundle by PROVENANCE (which stores, how many\nentries, what identities), never by the meaning of any entry — an entry is\ntyped by its source store, not by a caller-owned role.",
+  "type": "object",
+  "required": [
+    "archive_path",
+    "run_ids",
+    "bundle_sha256",
+    "entry_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "archive_path": {
+      "title": "Archive Path",
+      "type": "string"
+    },
+    "run_ids": {
+      "description": "The run ids bundled, in lineage order (newest first, root last) when include_lineage is set; otherwise the single requested run.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Run Ids",
+      "type": "array"
+    },
+    "bundle_sha256": {
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "entry_count": {
+      "minimum": 0,
+      "title": "Entry Count",
+      "type": "integer"
+    },
+    "gaps": {
+      "description": "Expected-but-absent stores/entries, each a record naming the missing source store and its run. Reported, not fatal — a bundle with gaps is still written.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "manifest": {
+      "additionalProperties": true,
+      "description": "The bundle manifest keyed by source-store name (vocabulary owned by the ops bundler, not the wire). Describes what each store contributed by provenance, never by an entry's meaning.",
+      "title": "Manifest",
+      "type": "object"
+    }
+  }
+}

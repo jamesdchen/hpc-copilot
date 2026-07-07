@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/archive_dossier.output.json",
+  "title": "archive-dossier output data",
+  "description": "The upload receipt — provenance and integrity of the stored object.\n\nEvery field describes the object by IDENTITY (which bucket/key, what hash,\nwhat size, which version) — never by the archive's meaning.",
+  "type": "object",
+  "required": [
+    "bucket",
+    "key",
+    "etag",
+    "sha256",
+    "size_bytes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "bucket": {
+      "title": "Bucket",
+      "type": "string"
+    },
+    "key": {
+      "description": "The resolved object key the archive was stored under.",
+      "title": "Key",
+      "type": "string"
+    },
+    "etag": {
+      "description": "The stored object's ETag (quotes stripped). For a simple upload this equals the body MD5, which the verb verifies against the local file.",
+      "title": "Etag",
+      "type": "string"
+    },
+    "sha256": {
+      "description": "The archive's SHA-256 stored as object metadata. On an upload this is the freshly-computed local hash; on an already_exists refusal it is the existing object's stored hash (empty if that object carries none).",
+      "title": "Sha256",
+      "type": "string"
+    },
+    "size_bytes": {
+      "description": "The stored object's size in bytes (verified against the local file on upload).",
+      "minimum": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    },
+    "version_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The object version id when the bucket has versioning enabled (the durable handle for this exact upload); null on an unversioned bucket.",
+      "title": "Version Id"
+    },
+    "already_exists": {
+      "default": false,
+      "description": "True when overwrite=False and the key already existed: the upload was refused (immutability posture), the object is untouched, and the fields describe the EXISTING object. Not an error — a finding.",
+      "title": "Already Exists",
+      "type": "boolean"
+    }
+  }
+}

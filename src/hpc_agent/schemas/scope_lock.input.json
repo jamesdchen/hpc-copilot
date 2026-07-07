@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/scope_lock.input.json",
+  "title": "scope-lock input spec",
+  "description": "Lock a caller-tagged scope.\n\n``scope`` reuses the ``RunIdStrict`` character class — the same\nfilesystem-safe slug the state layer's ``validate_tag`` enforces, so a tag\nis a safe path segment and never escapes the ``.hpc/scopes/`` tree.",
+  "type": "object",
+  "required": [
+    "scope",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Scope",
+      "type": "string"
+    },
+    "reason": {
+      "minLength": 1,
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}

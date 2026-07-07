@@ -310,6 +310,37 @@
       "description": "Opt-in code-iteration safety (#207). cmd_sha (the dedup key, carried in job_env['HPC_CMD_SHA']) is PARAMETER identity only: editing the executor body without changing any swept parameter keeps the same cmd_sha, so a cross-machine resubmit (journal wiped, sidecar surviving) would dedup against — and silently replay — the prior run's OLD code. When true, the run's tasks.py drift sha (already recorded on the sidecar as tasks_py_sha) is folded into the cmd_sha dedup fallback so a code-only change forces a fresh run. Default false leaves the param-only dedup key untouched; a detected drift still warns regardless of this flag. Threads through to submit_and_record.",
       "title": "Invalidate On Code Change",
       "type": "boolean"
+    },
+    "scopes": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE caller-owned evidence-scope tags (slug-validated: ^[A-Za-z0-9._\\-]+$). Core never interprets them — submit-flow carries them onto the synthesized run sidecar verbatim (so the artifact-ownership guarantee still tags the run even when the resolve leg did not write the sidecar); a non-slug tag is refused here at the wire.",
+      "title": "Scopes"
+    },
+    "reproduction_of": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Reproduction-receipt dedup lever (#207 sibling of campaign_id): the run_id of an ORIGINAL run this submit deliberately REPRODUCES with identical params. cmd_sha is parameter identity, so a re-run of the same params would otherwise dedup against — and silently replay — the original at both the S1 resolve guard and the submit-time layer-2 fallback. Naming the original here pierces both: the original (and any prior reproduction of it) is skipped so this run actually executes, while an UNRELATED same-params prior still dedups. submit-flow also stamps it onto the synthesized run sidecar as ``reproduces`` (so a later reproduction of the same original skips this one too). Null = ordinary submit.",
+      "title": "Reproduction Of"
     }
   },
   "$defs": {

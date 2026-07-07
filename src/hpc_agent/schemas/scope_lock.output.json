@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/scope_lock.output.json",
+  "title": "scope-lock output data",
+  "description": "Confirmation of a scope lock.",
+  "type": "object",
+  "required": [
+    "scope",
+    "locked",
+    "already_locked",
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "title": "Scope",
+      "type": "string"
+    },
+    "locked": {
+      "title": "Locked",
+      "type": "boolean"
+    },
+    "already_locked": {
+      "title": "Already Locked",
+      "type": "boolean"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    }
+  }
+}

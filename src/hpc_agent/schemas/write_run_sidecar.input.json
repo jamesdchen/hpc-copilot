@@ -354,6 +354,37 @@
       ],
       "default": null,
       "title": "Job Ids"
+    },
+    "scopes": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OPAQUE caller-owned evidence-scope tags (slug-validated: ^[A-Za-z0-9._\\-]+$). Core never interprets them — they are recorded verbatim on the sidecar; a non-slug tag is refused here.",
+      "title": "Scopes"
+    },
+    "reproduces": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "run_id of the ORIGINAL run this submission deliberately REPRODUCES (the reproduction-receipt provenance field). Recorded verbatim on the sidecar; a later reproduction of the same original reads it back (find-prior-run / submit's reproduction_of lever) to skip this derived run too. Null = ordinary (non-reproduction) run.",
+      "title": "Reproduces"
     }
   }
 }

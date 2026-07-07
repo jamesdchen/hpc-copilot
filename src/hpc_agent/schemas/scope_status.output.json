@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/scope_status.output.json",
+  "title": "scope-status output data",
+  "description": "Lock + look state, keyed by scope tag.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "scopes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ScopeStatusEntry"
+      },
+      "title": "Scopes",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "ScopeLooks": {
+      "additionalProperties": false,
+      "description": "Look counts for a scope — IDENTITY counts only, never a metric value.",
+      "properties": {
+        "prior_looks": {
+          "minimum": 0,
+          "title": "Prior Looks",
+          "type": "integer"
+        },
+        "distinct_lineages": {
+          "minimum": 0,
+          "title": "Distinct Lineages",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prior_looks",
+        "distinct_lineages"
+      ],
+      "title": "scope look counts",
+      "type": "object"
+    },
+    "ScopeStatusEntry": {
+      "additionalProperties": false,
+      "description": "The lock + look state of one scope.",
+      "properties": {
+        "locked": {
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "looks": {
+          "$ref": "#/$defs/ScopeLooks"
+        },
+        "lock_history_len": {
+          "minimum": 0,
+          "title": "Lock History Len",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "locked",
+        "looks",
+        "lock_history_len"
+      ],
+      "title": "scope status entry",
+      "type": "object"
+    }
+  }
+}
