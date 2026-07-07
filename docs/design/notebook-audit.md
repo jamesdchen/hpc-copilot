@@ -154,14 +154,30 @@ Plus the one notebook capability the harness genuinely needs supplied: an
 render receipt ({slug: {output_sha, error}}) + a captured-outputs directory
 the harness can display as images.
 
-The jupytext notebook DEMOTES to an **export format** — and the plugin
-itself is **DEFERRED entirely (user decision 2026-07-08)**: the plugin
-boundary exists for DEPENDENCIES (jupytext/nbclient), not novelty, and with
-the harness as the iteration surface the export has no consumer until a
-harness-less reader actually appears (the need-trigger). The execution-
-receipt emitter is ~30 lines of caller-side convention, not a plugin.
-**v1 = core + the skill; zero plugin.** When the export trigger fires, it is
-a projection over sealed records, buildable in isolation.
+**THE HARNESS CONTRACT (user decision 2026-07-08: harness-agnostic, but a
+harness is REQUIRED).** The audit loop is defined against three capabilities
+any conforming harness must provide, not against Claude Code: (1) an
+out-of-band HUMAN-UTTERANCE LOG the LLM cannot write (the full-strength
+authorship tier's channel — document the write API so alternative harnesses
+can implement it); (2) a relay/verbatim enforcement point (the Stop-hook
+role); (3) backgrounding/wake for detached waits. Claude Code satisfies all
+three via hooks. The tier machinery already degrades honestly when a
+capability is absent (the journal-response tier). The CLI stays the
+invariant substrate (the block-drive doctrine); MCP and skills are
+projections. THIS CONTRACT is the vendor-lock-in defense — implementations
+compete under it.
+
+The jupytext notebook EXPORT is **SCHEDULED v1.5 (user decision 2026-07-08:
+build it — vendor-portability rationale replaces the earlier
+wait-for-a-trigger deferral)**: a projection over sealed records (source +
+template + receipt), plugin/tools lane (jupytext never enters core). Two
+roles, in order: (a) the PORTABILITY ARTIFACT — audits readable anywhere,
+no harness; (b) the ceiling: a SECOND CONFORMING HARNESS — a human typing
+into a notebook sign-off cell IS out-of-band from the LLM, so a render that
+writes that text through the documented utterance-log API provides the
+full-strength tier with no Claude Code anywhere. The execution-receipt
+emitter remains ~30 lines of caller-side convention. **v1 = core + the
+skill; v1.5 = the export.**
 
 Reuse accounting (why v1 is thin): greenlights, unlocks, scope locks,
 sign-offs — and the future registration kernel — are instances of ONE
