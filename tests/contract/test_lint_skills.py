@@ -43,21 +43,21 @@ import lint_skills  # noqa: E402
 MAX_PER_RULE: dict[str, int] = {
     "prose-decide": 0,
     "embedded-recovery-menu": 0,
-    # 4 today (one per workflow skill: hpc-submit, hpc-status,
-    # hpc-aggregate, hpc-campaign). Ceiling held at 4; the WS3 prose
-    # patch only normalised three sub-skills, so the workflow skills'
-    # Return-step bodies still lack a per-step "Final action MUST be a
-    # tool call" guard. Drop the ceiling to 0 once Return steps either
-    # gain the guard or move the guard into the workflow skills'
-    # Execution-style blocks (the lint reads either form).
-    "return-without-tool-call-guard": 4,
+    # 0 today. The four workflow skills (hpc-submit, hpc-status,
+    # hpc-aggregate, hpc-campaign) now each carry an explicit "Your final
+    # action MUST be a tool call" guard in their driver-loop turn-ending
+    # guidance, and none of the passing skills have an un-guarded Return
+    # step. Ratcheted 4→0 — any new un-guarded Return section is a real
+    # regression.
+    "return-without-tool-call-guard": 0,
     "trailing-narration-example": 0,
-    # 29 today. Almost every "Resolve X" step is bookkeeping prose for
-    # a per-field auto-resolve; the action is implied by the branch
-    # bullets below. Drop the ceiling as steps are restructured to
-    # either name a primitive call explicitly or formalise the choice
-    # as an enumerated ambiguity.
-    "step-without-action-ending": 29,
+    # 11 today (hpc-classify-axis 4, hpc-wrap-entry-point 7). Almost
+    # every "Resolve X" step is bookkeeping prose for a per-field
+    # auto-resolve; the action is implied by the branch bullets below.
+    # Drop the ceiling as steps are restructured to either name a
+    # primitive call explicitly or formalise the choice as an enumerated
+    # ambiguity.
+    "step-without-action-ending": 11,
 }
 
 

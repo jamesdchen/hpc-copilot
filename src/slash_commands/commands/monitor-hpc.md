@@ -1,11 +1,11 @@
-`/monitor-hpc` is the **human-interview wrapper** around the `hpc-status` skill — the block-loop relay that starts with `status-snapshot` (a cheap journal-first digest of what is running where and what changed since the user last looked) and, for a live run, watches to terminal via the detached `status-watch` block. The slash parses arguments, invokes the skill, and relays each brief.
+`/monitor-hpc` is the **human-interview wrapper** around the `hpc-status` skill — the block-loop relay that starts with `status-snapshot` (a cheap journal-first digest of what is running where and what changed since the user last looked) and, for a live run, watches to terminal via the synchronously-polling `status-watch` block (run backgrounded, not detached). The slash parses arguments, invokes the skill, and relays each brief.
 
 ## The flow
 
 1. **Parse `$ARGUMENTS`** — an optional `run_id`, and whether the user asked to wait until done (`wait_terminal`).
 2. **Invoke the skill.** It runs `status-snapshot` and hands back the digest brief.
 3. **Relay the brief, collect `y` or a nudge.** Show `running_where` / `changed_since_seen` and any `anomalies` or `stalled_runs`, plus the `next_block` suggestion. For a live run the suggestion is `status-watch`; the user greenlights it with a `y` or nudges. There are no per-field `[Y/n]` dialogs — the brief carries the recommendation DATA.
-4. **Loop.** On `y`, the skill journals the greenlight and fires `status-watch` (detached — it returns immediately and the terminal/anomaly brief arrives as a notification). A clean `complete` hands off to the harvest block (`submit-s4` / `/aggregate-hpc`).
+4. **Loop.** On `y`, the skill journals the greenlight and fires `status-watch` (run synchronously in its own process via the harness's `run_in_background`, NOT detached — the terminal/anomaly brief arrives when that backgrounded call returns). A clean `complete` hands off to the harvest block (`submit-s4` / `/aggregate-hpc`).
 
 ## Invocation
 
@@ -39,4 +39,4 @@ Skill("hpc-status", {
 `/monitor-hpc` is one round-trip. To keep watching on a schedule:
 - Schedule a recurring campaign-tick / status run in cron (the headless surface): when a brief's `monitor_arm.arm == "cron"`, pass `cron_create_args` to `CronCreate` verbatim — and when `arm == "none"` (terminal) or the run can no longer be resolved, `CronDelete` every cron naming that `run_id` (the skill's "Monitor-arm cron lifecycle" rule; a cron must never outlive its run).
 - `/loop <interval> /monitor-hpc` — repeats the slash on an interval in-session.
-- The `status-watch` block is detached by contract, so a live run keeps being watched even across a session boundary (the doctor scan re-arms an orphan from the journal).
+- The `status-watch` block polls synchronously in its own backgrounded process (it is not a detach-by-contract block, so nothing survives a session death mid-poll). If the chat session dies while it is watching, the doctor scan DETECTS the stalled run and drafts a recovery proposal — it never restarts or re-arms the watch; the human greenlights a fresh `status-watch`.
