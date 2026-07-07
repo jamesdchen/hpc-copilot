@@ -668,6 +668,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent harness-capabilities [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "harness_capabilities.input.json",
+    "name": "harness-capabilities",
+    "output_schema": "harness_capabilities.output.json",
+    "python": "hpc_agent.ops.harness_capabilities.harness_capabilities",
+    "side_effects": [],
+    "summary": "Detect and report the harness capability set as CODE can observe it (LSP-style negotiation for the harness contract). Reports the four contract capabilities — the out-of-band utterance log (installed capture hooks + this repo's log presence + MCP elicitation flag), relay/verbatim enforcement (the relay-audit Stop hook), backgrounding (core-side, always present; watchdog hook reported honestly), and trusted display (unknown — no detection seam yet) — each with the named tier its absence degrades to. Read-only, no SSH, fail-open on an unreadable settings.json. The declaration IS what code can verify.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent inspect-deployment [--experiment-dir <dir>] --cluster <cluster> [--run-id <run_id>] [--path <path>] [--depth <depth>]",
     "idempotent": true,
     "input_schema": "inspect_deployment.input.json",
@@ -762,8 +774,10 @@
     "name": "notebook-audit-view",
     "output_schema": "notebook_audit_view.output.json",
     "python": "hpc_agent.ops.notebook.view_op.notebook_audit_view",
-    "side_effects": [],
-    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, opaque chained lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call.",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Render the deterministic per-section audit VIEW of a source .py against its template. Read-only, no SSH. Each SOURCE section carries its classification (inherited / added / modified, by hash), diff-from-template, static assertion table, opaque chained lint flags, D-attention tier (auto_cleared iff inherited + no flags + assertions green), and a per-section view_sha (what a sign-off binds). The result includes `markdown` — the code-rendered projection the skill relays VERBATIM. Recomputed from the .py on every call. Per section it also WRITES the content-addressed TRUSTED-DISPLAY render file (.hpc/renders/<audit_id>/<slug>.<view_sha12>.md) and returns its render_path — the artifact the T8 sign-off gate requires.",
     "verb": "query"
   },
   {

@@ -57,6 +57,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'export-package': ('export-package', 'hpc_agent.incorporation.export_package'),
     'failures': ('failures', 'hpc_agent.ops.recover.failures_atom'),
     'find-prior-run': ('find-prior-run', 'hpc_agent.cli.setup_actions'),
+    'harness-capabilities': ('harness-capabilities', 'hpc_agent.ops.harness_capabilities'),
     'inspect-deployment': ('inspect-deployment', 'hpc_agent.ops.inspect_deployment'),
     'inspect-parallel-axes': ('inspect-parallel-axes', 'hpc_agent.ops.inspect_parallel_axes'),
     'interview': ('interview', 'hpc_agent.ops.memory.interview'),

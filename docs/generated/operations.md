@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**140 operations total**: 113 primitive atoms + 27 workflow atoms.
+**141 operations total**: 114 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (60)
+## `query` (61)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -51,6 +51,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`fetch-skill-return`](../primitives/fetch-skill-return.md) | ✓ | filesystem | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` | `_(none)_` | — | — |
 | [`find`](../primitives/find.md) | ✓ | _none_ | `hpc-agent find <query> [--limit <limit>]` | `_(none)_` | — | — |
 | [`find-prior-run`](../primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` | `_(none)_` | — | — |
+| [`harness-capabilities`](../primitives/harness-capabilities.md) | ✓ | _none_ | `hpc-agent harness-capabilities [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`inspect-deployment`](../primitives/inspect-deployment.md) | ✓ | ssh | `hpc-agent inspect-deployment [--experiment-dir <dir>] --cluster <cluster> [--run-id <run_id>] [--path <path>] [--depth <depth>]` | `_(none)_` | — | — |
 | [`inspect-parallel-axes`](../primitives/inspect-parallel-axes.md) | ✓ | _none_ | `hpc-agent inspect-parallel-axes [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`list-in-flight`](../primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -58,7 +59,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`logs`](../primitives/logs.md) | ✓ | ssh | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` | `_(none)_` | — | — |
 | [`monitor-summary`](../primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
 | [`net-triage`](../primitives/net-triage.md) | ✓ | _none_ | `hpc-agent net-triage [--spec <path>]` | `_(none)_` | — | — |
-| [`notebook-audit-view`](../primitives/notebook-audit-view.md) | ✓ | _none_ | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`notebook-audit-view`](../primitives/notebook-audit-view.md) | ✓ | file_write | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-status`](../primitives/notebook-status.md) | ✓ | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |

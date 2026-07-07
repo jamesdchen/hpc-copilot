@@ -116,6 +116,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [fetch-skill-return](fetch-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` |
 | [find](find.md) | yes | _none_ | `hpc-agent find <query> [--limit <limit>]` |
 | [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` |
+| [harness-capabilities](harness-capabilities.md) | yes | _none_ | `hpc-agent harness-capabilities [--spec <path>] [--experiment-dir <dir>]` |
 | [inspect-deployment](inspect-deployment.md) | yes | ssh: `<cluster>` | `hpc-agent inspect-deployment [--experiment-dir <dir>] --cluster <cluster> [--run-id <run_id>] [--path <path>] [--depth <depth>]` |
 | [inspect-parallel-axes](inspect-parallel-axes.md) | yes | _none_ | `hpc-agent inspect-parallel-axes [--experiment-dir <dir>]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` |
@@ -123,7 +124,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` |
 | [net-triage](net-triage.md) | yes | _none_ | `hpc-agent net-triage [--spec <path>]` |
-| [notebook-audit-view](notebook-audit-view.md) | yes | _none_ | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
+| [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
 | [notebook-status](notebook-status.md) | yes | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` |

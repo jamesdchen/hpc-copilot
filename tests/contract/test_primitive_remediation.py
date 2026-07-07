@@ -144,6 +144,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # the verb does not appear in the schema-file-parametrized remediation tests
         # (_verb_targets), only in this inventory-vs-CLI drift check.
         "attention-queue",
+        # harness-capabilities (harness-contract capability negotiation): the
+        # read-only detection verb. Spec-taking query (all-optional, spec_required
+        # False); failure_features attaches at the shared dispatch seam (so it
+        # stays OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (harness_capabilities.input.json) is baked by the orchestrator AFTER this
+        # wave — until then it is absent, so the verb does not appear in the
+        # schema-file-parametrized remediation tests (_verb_targets), only in this
+        # inventory-vs-CLI drift check.
+        "harness-capabilities",
         # notebook-audit-view (notebook-audit T5): the deterministic per-section
         # audit VIEW as a read-only query verb. Spec-taking; failure_features
         # attaches at the shared dispatch seam (so it stays OUT of
@@ -288,6 +297,9 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,
     "block-drive": _BOGUS_KEY_SPEC,
+    # harness-capabilities' spec is empty/all-optional ({} is a valid detection
+    # read) — probe with the bogus key so the wire model rejects it.
+    "harness-capabilities": _BOGUS_KEY_SPEC,
     "doctor": _BOGUS_KEY_SPEC,
     # net-triage's spec is all-optional ({} is valid and would EXECUTE real
     # network probes) — probe with the bogus key so the wire model rejects it.
