@@ -1,16 +1,15 @@
-"""Deterministic detached drive mode (#connection-storm-4).
+"""Detached submit-block workers (#connection-storm-4).
 
-The default drive stays the ``claude -p --bare`` worker; ``--detached`` /
-``HPC_AGENT_DRIVE=detached`` opts into running the lifecycle composite in a
-DETACHED CLI subprocess (no LLM in the connection loop) and polling the journal
-for the outcome. These tests pin:
+The cluster-bound submit blocks (S2/S3/S4/speculate) run to terminal in a
+DETACHED ``hpc-agent`` subprocess (no LLM in the connection loop) and the
+orchestrator polls the journal for the outcome. These tests pin:
 
 * the journal-read poll helper is cluster-free and terminal-aware;
-* the status-pipeline spec is built deterministically from the run fields;
-* the CLI ``run`` path launches the detached runner (mocked Popen) and emits a
-  ``mode=detached`` envelope with the run_id to poll;
-* the mode is refused for unsupported shapes and falls through to the default
-  worker when not selected.
+* the ``status-pipeline`` spec is built deterministically from the run fields;
+* ``launch_submit_block_detached`` writes the child's spec (detach forced off),
+  re-invokes the SAME verb via ``--spec``, and never spawns a ``claude`` worker;
+* the idempotent-single lease refuses a second LIVE worker per ``(run_id, block)``
+  while self-healing on a dead pid.
 """
 
 from __future__ import annotations
@@ -195,22 +194,7 @@ def test_spec_round_trips_through_status_pipeline_model():
     assert model.monitor.poll_interval_seconds == 90
 
 
-# ─── support predicate ─────────────────────────────────────────────────────
-
-
-def test_detached_supported_only_for_blocking_status():
-    from hpc_agent._kernel.lifecycle.detached import detached_drive_supported
-
-    assert detached_drive_supported("status", {"blocking": True, "run_id": "x"}) is True
-    # snapshot status has no loop to drive
-    assert detached_drive_supported("status", {"blocking": False, "run_id": "x"}) is False
-    assert detached_drive_supported("status", {"run_id": "x"}) is False
-    # other workflows keep the default worker
-    assert detached_drive_supported("submit", {"blocking": True}) is False
-    assert detached_drive_supported("aggregate", {}) is False
-
-
-# ─── launch (mocked Popen) ─────────────────────────────────────────────────
+# ─── submit-block detached launch (design §3 detach-by-contract) ────────────
 
 
 class _FakePopen:
@@ -218,46 +202,6 @@ class _FakePopen:
         self.argv = argv
         self.kwargs = kwargs
         self.pid = 4242
-
-
-def test_launch_detached_writes_spec_and_detaches(_journal, monkeypatch):
-    from hpc_agent._kernel.lifecycle import detached
-
-    captured = {}
-
-    def _fake_popen(argv, **kwargs):
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
-        return _FakePopen(argv, **kwargs)
-
-    monkeypatch.setattr(detached.subprocess, "Popen", _fake_popen)
-
-    launch = detached.launch_status_pipeline_detached(
-        experiment_dir=str(_journal),
-        fields={"run_id": "ml-launch1", "blocking": True},
-        hpc_agent_bin="hpc-agent-stub",
-    )
-
-    assert launch.run_id == "ml-launch1"
-    assert launch.pid == 4242
-    # The launched argv runs the DETERMINISTIC composite, not a `claude -p` worker.
-    assert captured["argv"][0] == "hpc-agent-stub"
-    assert captured["argv"][1] == "status-pipeline"
-    assert "--spec" in captured["argv"]
-    assert "claude" not in " ".join(captured["argv"])
-    # Detach flags present (platform-specific).
-    kw = captured["kwargs"]
-    assert ("start_new_session" in kw) or ("creationflags" in kw)
-    # stdin is closed so a poll can never block on a tty.
-    assert kw["stdin"] == detached.subprocess.DEVNULL
-    # The spec file the runner reads validates as a real StatusPipelineSpec.
-    spec_idx = captured["argv"].index("--spec") + 1
-    spec_path = Path(captured["argv"][spec_idx])
-    written = json.loads(spec_path.read_text(encoding="utf-8"))
-    assert written == {"monitor": {"run_id": "ml-launch1"}}
-
-
-# ─── submit-block detached launch (design §3 detach-by-contract) ────────────
 
 
 def _block_spec(run_id="ml-blk1", *, detach=False):

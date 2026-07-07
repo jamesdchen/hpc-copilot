@@ -1,33 +1,38 @@
-"""Deterministic detached drive mode — run the lifecycle composite in a
-DETACHED CLI subprocess, never a ``claude -p`` worker.
+"""Detached submit-block workers — run a cluster-bound block to terminal in a
+DETACHED ``hpc-agent`` subprocess, never a ``claude -p`` worker.
 
 The connection-storm hazard (the 0.10.63 ban) was *an LLM in the connection
-loop*: ``hpc-agent run --workflow status`` spawns a ``claude -p --bare`` worker
-to **drive** the wait-until-terminal poll; the worker auto-backgrounds at 2 min,
-ends its turn mid-poll, and a fallback inline subagent then retries SSH in prose
-for ~21 minutes. The deterministic composite it was driving
-(``status-pipeline`` → ``monitor_flow``) already runs the whole poll loop in
-plain code with the connection owned by a single process and the model out of
-the loop — the principle :mod:`hpc_agent.infra.retry` states. The miss was the
-*drive layer*: the model still sat on top of it.
+loop*: a worker was spawned to **drive** a wait-until-terminal SSH poll, it
+auto-backgrounded mid-poll, and a fallback inline subagent then retried SSH in
+prose for ~21 minutes. The fix is to carry the deterministic-drive principle
+(:mod:`hpc_agent.infra.retry`) all the way to the drive layer: the poll loop
+runs in plain code with the connection owned by a single process, and the model
+is out of the loop entirely.
 
-This module carries that principle all the way to the drive layer. The
-**detached** drive mode launches the deterministic composite as a DETACHED
-subprocess of the ``hpc-agent`` CLI (NOT a ``claude -p --bare`` worker): one
-deterministic process owns the connection and runs to terminal, while the
-orchestrator learns the outcome by reading the journal
-(:mod:`hpc_agent.state.journal_poll`) — never by spawning an LLM to poke SSH.
-This mirrors DPDispatcher's "submit and poke until they finish" loop and
-jobflow-remote's Runner daemon: the lifecycle runs to completion in a
-deterministic process, the orchestrator reads state from disk.
+This module is the **detach-by-contract** launcher for the human-amplification
+submit blocks whose wall-clock is cluster-bound
+(``docs/design/human-amplification-blocks.md`` §3, "Blocks never block the
+chat"): the S2 canary-wait, the S3 main-array watch, the speculative canary, and
+the S4 harvest. Each is spawned by :func:`launch_submit_block_detached` as a
+DETACHED ``hpc-agent <verb>`` subprocess running the SAME verb body with its
+``detach`` spec field forced OFF, so the child owns the SSH work to terminal
+(stamping the journal as it polls) while the parent returns a
+:class:`DetachedLaunch` handle immediately. NO ``claude -p`` worker sits in the
+poll loop. This mirrors DPDispatcher's "submit and poke until they finish" loop
+and jobflow-remote's Runner daemon: the lifecycle runs to completion in a
+deterministic process; the orchestrator reads state from the journal
+(:mod:`hpc_agent.state.journal_poll`), never by spawning an LLM to poke SSH.
 
-Scope of the landed slice: the ``status`` workflow's blocking wait-until-terminal
-path — the exact lifecycle the LLM sat in. ``submit`` / ``aggregate`` keep the
-default ``claude -p --bare`` worker; see the module-level ``_SUPPORTED`` set and
-``docs/workflows/code-driven-orchestration.md`` for the extension plan.
+The launch is idempotent-single: a filesystem lease keyed by ``(run_id, block)``
+refuses a second LIVE worker for the same key (:class:`DetachedLeaseHeld`) while
+self-healing on a dead pid — the proving-run-#2 failure where two workers raced
+one run. The child is spawned with the platform detach flags so it OUTLIVES the
+orchestrator's session (the 0.10.63 crash killed an auto-backgrounded pipeline
+~1s after qsub).
 
-Opt-in only. The default stays the proven ``--bare`` worker (``hpc-agent run``):
-detached mode is selected with ``--detached`` or ``HPC_AGENT_DRIVE=detached``.
+(:func:`build_status_pipeline_spec` remains as the pure ``status-pipeline`` spec
+builder — a caller maps run fields to the composite's spec dict in code, no LLM
+renders it — pinned by ``tests/integration/test_spec_contract.py``.)
 """
 
 from __future__ import annotations
@@ -45,18 +50,10 @@ __all__ = [
     "DetachedLaunch",
     "DriveModeError",
     "DetachedLeaseHeld",
-    "detached_drive_supported",
     "build_status_pipeline_spec",
-    "launch_status_pipeline_detached",
     "SUPPORTED_DETACHED_BLOCK_VERBS",
     "launch_submit_block_detached",
 ]
-
-# Workflows the detached deterministic runner can drive today. ``status`` is the
-# wait-until-terminal poll the LLM used to sit in — the ban cause. ``submit`` and
-# ``aggregate`` are deferred (see the module docstring / design doc): they keep
-# the default worker.
-_SUPPORTED = frozenset({"status"})
 
 # The human-amplification block verbs whose wall-clock is cluster-bound and so
 # detach-by-contract (docs/design/human-amplification-blocks.md §3, "Blocks never
@@ -113,28 +110,12 @@ class DetachedLaunch:
     argv: list[str]
 
 
-def detached_drive_supported(workflow: str, fields: dict[str, Any]) -> bool:
-    """Whether *workflow* + *fields* can be driven deterministically detached.
-
-    True only for the ``status`` workflow on its blocking wait path (the
-    lifecycle the LLM sat in). A snapshot status (``blocking`` false/absent)
-    has no loop to drive, so it is NOT a detached candidate — the caller just
-    runs ``hpc-agent status`` once.
-    """
-    if workflow not in _SUPPORTED:
-        return False
-    if workflow == "status":
-        return bool(fields.get("blocking"))
-    return False
-
-
 def build_status_pipeline_spec(fields: dict[str, Any]) -> dict[str, Any]:
-    """Map ``run --workflow status`` *fields* to a ``status-pipeline`` spec dict.
+    """Map status run *fields* to a ``status-pipeline`` spec dict.
 
-    The ``status`` worker prompt's wait path runs ``hpc-agent status-pipeline``
-    with a spec embedding the monitor spec under ``monitor`` (``run_id`` + poll
-    cadence + wall-clock budget). The detached runner builds that spec in code
-    from the same interview fields, so no LLM renders it.
+    ``hpc-agent status-pipeline`` takes a spec embedding the monitor spec under
+    ``monitor`` (``run_id`` + poll cadence + wall-clock budget). This builds that
+    spec in code from the run fields, so no LLM renders it.
 
     Required field: ``run_id``. Optional pass-throughs (each defaulted by the
     ``MonitorFlowSpec`` model when omitted): ``poll_interval_seconds``,
@@ -227,58 +208,6 @@ def _popen_detached(argv: list[str], **popen_kwargs: Any) -> subprocess.Popen[by
             detach_kwargs["creationflags"] = flags & ~breakaway
             return subprocess.Popen(argv, **popen_kwargs, **detach_kwargs)
         raise
-
-
-def launch_status_pipeline_detached(
-    *,
-    experiment_dir: str,
-    fields: dict[str, Any],
-    hpc_agent_bin: str | None = None,
-) -> DetachedLaunch:
-    """Launch ``hpc-agent status-pipeline`` as a DETACHED CLI subprocess.
-
-    Writes the ``status-pipeline`` spec (built by :func:`build_status_pipeline_spec`)
-    to the journal home's ``_detached/`` dir, then ``Popen``s the composite
-    fully detached (no stdin; stdout/stderr → a log file under the same dir). The
-    composite owns the SSH connection and runs ``monitor_flow`` to terminal in
-    plain code, writing the journal as it goes; the orchestrator polls the
-    journal (:func:`hpc_agent.state.journal_poll.poll_until_terminal`) for the
-    outcome. NO ``claude -p`` worker is spawned anywhere on this path.
-
-    The journal home (``HPC_JOURNAL_DIR`` / ``~/.claude/hpc``) is the write
-    target — always present/writable, redirectable, and never pollutes the
-    experiment tree (the same target ``cli/spawn._maybe_persist_inline_prompt``
-    uses).
-
-    *hpc_agent_bin* overrides the launched binary (default: the running
-    interpreter via :func:`_agent_launch_prefix`, ``sys.executable -m
-    hpc_agent`` — the child runs the SAME install as the parent, never a bare
-    PATH lookup); a test passes a stub. Raises :class:`DriveModeError` via
-    :func:`build_status_pipeline_spec` when ``run_id`` is missing.
-    """
-    from hpc_agent.state.run_record import _current_homedir
-
-    spec = build_status_pipeline_spec(fields)
-    run_id: str = spec["monitor"]["run_id"]
-
-    detached_dir = _current_homedir() / "_detached"
-    detached_dir.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex[:8]
-    spec_path = detached_dir / f"status-{run_id}-{token}.spec.json"
-    log_path = detached_dir / f"status-{run_id}-{token}.log"
-    spec_path.write_text(json.dumps(spec), encoding="utf-8")
-
-    argv = [
-        *_agent_launch_prefix(hpc_agent_bin),
-        "status-pipeline",
-        "--spec",
-        str(spec_path),
-        "--experiment-dir",
-        experiment_dir,
-    ]
-    return _spawn_detached(
-        run_id=run_id, block="status", argv=argv, log_path=log_path, cwd=experiment_dir
-    )
 
 
 def _agent_launch_prefix(hpc_agent_bin: str | None) -> list[str]:
