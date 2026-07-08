@@ -261,27 +261,49 @@ def _relay_due_discharge_pass(
         record_relay_discharge,
     )
 
+    # Run-#10 #13: campaign scopes are the omission gate's SECOND source —
+    # every terminal campaign_run outcome arms a marker on its campaign
+    # journal (the run-#10 conduct strike: two exit-1 iterations read from a
+    # background log and never surfaced). Same caps, same fail-open grain.
+    scopes: list[tuple[str, str]] = [
+        ("notebook", a) for a in audit_ids[:_MAX_RELAY_DUE_AUDITS] if a
+    ]
+    try:
+        campaign_ids = sorted(
+            p.parent.name
+            for p in (Path(experiment_dir) / ".hpc" / "campaigns").glob("*/decisions.jsonl")
+        )
+        scopes += [("campaign", c) for c in campaign_ids[:_MAX_RELAY_DUE_AUDITS] if c]
+    except OSError:
+        pass
+
     lowered = relay_text.lower()
     omissions: list[str] = []
-    for audit_id in audit_ids[:_MAX_RELAY_DUE_AUDITS]:
-        if not audit_id:
-            continue
+    for scope_kind, scope_id in scopes:
         try:
-            markers = read_undischarged_relay_markers(experiment_dir, audit_id)
+            markers = read_undischarged_relay_markers(
+                experiment_dir, scope_id, scope_kind=scope_kind
+            )
         except Exception:
-            continue  # a journal we cannot read is a silent pass for that audit
+            continue  # a journal we cannot read is a silent pass for that scope
         for marker in markers:
             try:
                 tokens = [t for t in marker.get("key_tokens", []) if isinstance(t, str) and t]
                 if not tokens:
                     continue  # malformed marker — never blocks, never raises
                 if any(token.lower() in lowered for token in tokens):
-                    record_relay_discharge(experiment_dir, audit_id=audit_id, marker=marker)
+                    record_relay_discharge(
+                        experiment_dir,
+                        audit_id=scope_id,
+                        marker=marker,
+                        scope_kind=scope_kind,
+                    )
                 elif len(omissions) < _MAX_RELAY_DUE_FINDINGS:
+                    kind = str(marker.get("record_kind") or "notebook-status")
                     state = tokens[0]
                     sha12 = tokens[1] if len(tokens) > 1 else "?"
                     omissions.append(
-                        f"unrelayed terminal state: notebook-status = {state} @ "
+                        f"unrelayed terminal state: {kind} = {state} @ "
                         f"{sha12} — relay it verbatim before closing."
                     )
             except Exception:

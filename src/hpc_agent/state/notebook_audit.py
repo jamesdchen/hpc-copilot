@@ -743,9 +743,56 @@ def record_relay_due(
     )
 
 
+def record_scope_relay_due(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    record_kind: str,
+    key_tokens: Sequence[str],
+) -> dict[str, Any] | None:
+    """Journal a relay-due marker on an arbitrary journal scope (run-#10 #13).
+
+    The generalized writer behind :func:`record_relay_due` — campaign/run
+    terminal outcomes arm the same omission gate the notebook loop uses
+    (``ops/campaign_run.py`` is the first caller: every terminal
+    ``stage_reached`` of an iteration is relay-due). The marker's ``resolved``
+    keeps the ``audit_id`` FIELD NAME carrying *scope_id* — a documented wart
+    that buys zero migration: the hook's ``_marker_key`` and the discharge
+    echo work unchanged across scopes. Same dedup rule as the notebook
+    writer: an identical ``(record_kind, key_tokens)`` marker (discharged or
+    not) does not re-arm.
+    """
+    tokens = [str(t) for t in key_tokens if str(t)]
+    if not tokens:
+        return None
+    for record in read_decisions(experiment_dir, scope_kind, scope_id):
+        if record.get("block") != RELAY_DUE_BLOCK:
+            continue
+        resolved = record.get("resolved")
+        key = _marker_key(resolved) if isinstance(resolved, dict) else None
+        if key is not None and key[0] == record_kind and key[2] == tuple(tokens):
+            return None
+    resolved_out: dict[str, Any] = {
+        "record_kind": record_kind,
+        "audit_id": scope_id,
+        "key_tokens": tokens,
+        "created_at": _utcnow_iso(),
+    }
+    return append_decision(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        block=RELAY_DUE_BLOCK,
+        response=RELAY_DUE_RESPONSE,
+        resolved=resolved_out,
+    )
+
+
 def read_undischarged_relay_markers(
     experiment_dir: Path,
     audit_id: str,
+    scope_kind: str = "notebook",
 ) -> list[dict[str, Any]]:
     """Every relay-due marker ``resolved`` dict with no matching discharge.
 
@@ -758,7 +805,7 @@ def read_undischarged_relay_markers(
     """
     markers: list[dict[str, Any]] = []
     discharged: set[tuple[Any, ...]] = set()
-    for record in read_decisions(experiment_dir, "notebook", audit_id):
+    for record in read_decisions(experiment_dir, scope_kind, audit_id):
         block = record.get("block")
         resolved = record.get("resolved")
         if not isinstance(resolved, dict):
@@ -779,6 +826,7 @@ def record_relay_discharge(
     audit_id: str,
     marker: Mapping[str, Any],
     discharged_at: str | None = None,
+    scope_kind: str = "notebook",
 ) -> dict[str, Any]:
     """Journal the discharge of one relay-due *marker* (append-only, no mutate).
 
@@ -805,7 +853,7 @@ def record_relay_discharge(
     }
     return append_decision(
         experiment_dir,
-        scope_kind="notebook",
+        scope_kind=scope_kind,
         scope_id=audit_id,
         block=RELAY_DISCHARGE_BLOCK,
         response=RELAY_DISCHARGE_RESPONSE,

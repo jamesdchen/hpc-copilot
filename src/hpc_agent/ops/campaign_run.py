@@ -97,7 +97,48 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
     is set only on the failure / budget stages. ``complete`` is the clean
     terminal — the driver's advance/converge judgement for the campaign
     CURSOR is NOT part of this composite and runs after it returns.
+
+    RELAY-DUE (run-#10 #13, the omission gate's second source): every
+    terminal outcome of this composite — the failure stages AND ``complete``
+    — journals a relay-due marker on the campaign scope, so a driving agent
+    that reads the outcome from a background log and moves on without
+    relaying it gets stopped once by the relay-audit hook (the exact conduct
+    strike of run #10: two exit-1 iterations were never surfaced). Marking is
+    fail-open — a marker write error never fails the iteration.
     """
+    result = _campaign_run_impl(experiment_dir, spec=spec)
+    try:
+        if result.stage_reached in _RELAY_DUE_STAGES:
+            from hpc_agent.state.notebook_audit import record_scope_relay_due
+
+            record_scope_relay_due(
+                experiment_dir,
+                scope_kind="campaign",
+                scope_id=str(spec.campaign_id or ""),
+                record_kind="campaign-run",
+                key_tokens=[result.stage_reached, str(result.run_id or spec.campaign_id)],
+            )
+    except Exception:  # noqa: BLE001 — the gate must never fail the work it guards
+        pass
+    return result
+
+
+#: Terminal stages that arm a relay-due marker — every outcome a human must
+#: see. Deliberately the FULL terminal set (failures + complete): a campaign
+#: iteration's outcome is always load-bearing; the in-flight stages are not.
+_RELAY_DUE_STAGES = frozenset(
+    {
+        "submit_failed",
+        "run_failed",
+        "run_abandoned",
+        "run_timeout",
+        "aggregate_failed",
+        "complete",
+    }
+)
+
+
+def _campaign_run_impl(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunResult:
     cid = spec.campaign_id
 
     # 1. Submit spine. A gate failure (canary / post-qsub health) stops before
