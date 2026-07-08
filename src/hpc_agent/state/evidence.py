@@ -564,8 +564,9 @@ def _decision_journal_path(experiment_dir: Path, scope_kind: str, scope_id: str)
     if scope_kind == "notebook":
         return hpc / "notebooks" / f"{scope_id}.decisions.jsonl"
     if scope_kind == "conclusion":
-        # T7 seam: the "conclusion" scope kind lands in decision_journal later;
-        # the PATH is pinned here now (E-shape). Non-creating.
+        # The "conclusion" scope kind (T7, ``decision_journal.SCOPE_KINDS``) lands
+        # its journal here; this collector rebuilds the PATH by hand (non-creating,
+        # no ``RepoLayout``) to match ``decisions_path``'s conclusion branch.
         return hpc / "conclusions" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign"
     return hpc / "campaigns" / scope_id / "decisions.jsonl"
@@ -617,9 +618,7 @@ def _resolve_attestation(experiment_dir: Path, citation: Citation) -> CitationRe
     attestation for the subject reads :data:`attestation.CURRENT` at that sha.
     """
     if ":" not in citation.ref:
-        return CitationResolution(
-            False, False, "attestation ref must be '<scope_kind>:<scope_id>'"
-        )
+        return CitationResolution(False, False, "attestation ref must be '<scope_kind>:<scope_id>'")
     scope_kind, scope_id = citation.ref.split(":", 1)
     if scope_kind not in SCOPE_KINDS or not scope_id:
         return CitationResolution(False, False, f"unaddressable journal {citation.ref!r}")
@@ -1087,9 +1086,11 @@ def collect_evidence(
         if not _within_as_of(sidecar.get("submitted_at"), as_of):
             continue
         run_tags_raw = sidecar.get("scopes")
-        run_tags = tuple(t for t in run_tags_raw if isinstance(t, str)) if isinstance(
-            run_tags_raw, list
-        ) else ()
+        run_tags = (
+            tuple(t for t in run_tags_raw if isinstance(t, str))
+            if isinstance(run_tags_raw, list)
+            else ()
+        )
         cmd_sha = sidecar.get("cmd_sha")
         cmd_sha = cmd_sha if isinstance(cmd_sha, str) and cmd_sha else None
 
