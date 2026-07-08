@@ -89,10 +89,11 @@ def _read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]] | None:
     "not opted in" → ``None`` → the D7 silent empty result. This is the ONLY
     filesystem probe on the not-opted-in path.
 
-    # T8a seam: ``_wire/actions/interview.py::InterviewSpec`` gains a typed
-    # ``packs`` field in Wave C (not landed). Until then the block is read as a
-    # raw list of dicts by its documented shape:
-    #   packs: [{pack, manifest, receipt_bindings: [{slot, pack}]}, …]
+    # T8a seam (LANDED): ``_wire/actions/interview.py::InterviewSpec.packs`` is
+    # the typed source of this block — ``list[PackOptIn]`` where
+    # ``PackOptIn = {pack, manifest, receipt_bindings: [ReceiptBinding{slot, pack}]}``.
+    # This raw read is intentionally shape-tolerant (it is the D7 gate probe, not
+    # the writer) but agrees with the typed shape exactly: same keys, same nesting.
     """
     for rel in ("interview.json", ".hpc/interview.json"):
         path = experiment_dir / rel
