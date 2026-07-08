@@ -345,3 +345,264 @@ def test_compare_metrics_pure_shape() -> None:
 def test_compare_metrics_nan_via_pure(tmp_path: Path) -> None:
     verdicts = _compare_metrics({"x": math.nan}, {"x": math.nan}, None)
     assert verdicts[0]["verdict"] == "incomparable"
+
+
+# --------------------------------------------------------------------------- #
+# determinism-fingerprint overlay (schema_version 2 — D-consume)
+# --------------------------------------------------------------------------- #
+from hpc_agent._wire.queries.verify_reproduction import ReproductionReceipt  # noqa: E402
+from hpc_agent.infra.io import append_jsonl_line  # noqa: E402
+from hpc_agent.ops.verify_reproduction import _validate_receipt_partiality  # noqa: E402
+from hpc_agent.state.decision_journal import append_decision  # noqa: E402
+from hpc_agent.state.determinism import PerKeyDiff, build_sample_record  # noqa: E402
+from hpc_agent.state.fingerprint_store import fingerprint_path, read_samples  # noqa: E402
+
+CMD_SHA = "a" * 64  # matches _write_sidecar's default cmd_sha
+TASKS_PY_SHA = "b" * 64
+EXECUTOR = "python train.py"
+
+
+def _pi_diff(a: float, b: float) -> PerKeyDiff:
+    """One ``gp.pi`` float observation for a hand-planted ledger sample."""
+    abs_diff = abs(a - b)
+    denom = max(abs(a), abs(b))
+    return PerKeyDiff("gp.pi", a, b, abs_diff, abs_diff / denom if denom else 0.0, "float")
+
+
+def _plant_sample(
+    exp: Path,
+    *,
+    per_key: list[PerKeyDiff],
+    verdict: str = "auto_cleared",
+    scale: str = "main",
+    cluster: str = "hoffman2",
+    source: str = "verify-reproduction",
+    partial: bool = False,
+    task_indices: list[int] | None = None,
+    same_submission: bool = False,
+    content_sha: str = "d" * 64,
+    run_ids: tuple[str, str] = ("o-prior", "r-prior"),
+) -> dict[str, Any]:
+    """Append one valid fingerprint sample line to the experiment ledger."""
+    identity = {"cmd_sha": CMD_SHA, "tasks_py_sha": TASKS_PY_SHA, "executor": EXECUTOR}
+    record = build_sample_record(
+        ts="2026-01-01T00:00:00Z",
+        content_sha=content_sha,
+        identity=identity,
+        source=source,
+        run_ids=list(run_ids),
+        cluster=cluster,
+        scale=scale,
+        verdict=verdict,
+        per_key=per_key,
+        same_submission=same_submission,
+        partial=partial,
+        task_indices=task_indices,
+    )
+    append_jsonl_line(fingerprint_path(exp, CMD_SHA), record)
+    return record
+
+
+def _well_evidenced_pi(exp: Path, *, lo: float = 3.13, hi: float = 3.16) -> None:
+    """Plant 3 admitted main-scale hoffman2 samples spanning [lo, hi] on gp.pi."""
+    for _ in range(3):
+        _plant_sample(exp, per_key=[_pi_diff(lo, hi)])
+
+
+def _pair_pi(exp: Path, orig: float, repro: float, *, cluster: str = "hoffman2") -> None:
+    _write_sidecar(exp, ORIG, cluster=cluster)
+    _write_sidecar(exp, REPRO, reproduces=ORIG, cluster=cluster)
+    _write_aggregate(exp, ORIG, {"gp": {"pi": orig}})
+    _write_aggregate(exp, REPRO, {"gp": {"pi": repro}})
+
+
+def test_auto_cleared_inside_well_evidenced_envelope(tmp_path: Path) -> None:
+    _well_evidenced_pi(tmp_path)
+    _pair_pi(tmp_path, 3.14, 3.155)  # both inside [3.13, 3.16], nonzero deviation
+    res = _run(tmp_path)
+    assert res.stage_reached == "auto_cleared"
+    assert res.needs_decision is False
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert entry["tier_reason"] == "within_evidenced_envelope"
+    assert entry["envelope_applied"]["class"] == "stochastic"
+    assert entry["envelope_applied"]["evidence"]["n"] == 3
+
+
+def test_needs_verdict_thin_inside(tmp_path: Path) -> None:
+    # n=2 thin envelope: a deviation INSIDE still routes to the human.
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _pair_pi(tmp_path, 3.145, 3.155)  # inside [3.13, 3.16], nonzero
+    res = _run(tmp_path)
+    assert res.stage_reached == "needs_verdict"
+    assert res.needs_decision is True
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert entry["tier_reason"] == "within_thin_envelope"
+
+
+def test_needs_verdict_thin_outside(tmp_path: Path) -> None:
+    # n=2 thin envelope: a deviation OUTSIDE routes to the human, NOT a mismatch.
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _pair_pi(tmp_path, 3.10, 3.20)  # outside [3.13, 3.16]
+    res = _run(tmp_path)
+    assert res.stage_reached == "needs_verdict"
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert entry["tier_reason"] == "outside_thin_envelope"
+
+
+def test_mismatch_outside_well_evidenced_envelope(tmp_path: Path) -> None:
+    _well_evidenced_pi(tmp_path)
+    _pair_pi(tmp_path, 3.14, 3.30)  # well outside [3.13, 3.16]
+    res = _run(tmp_path)
+    assert res.stage_reached == "mismatch"
+    assert res.needs_decision is True
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert entry["tier_reason"] == "outside_evidenced_envelope"
+
+
+def test_caller_override_labeling(tmp_path: Path) -> None:
+    # A stochastic envelope makes the comparison tiered; a caller tolerance that
+    # decides the key is labeled caller_override with NO envelope applied.
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _pair_pi(tmp_path, 3.14, 3.20)
+    res = _run(tmp_path, ReproTolerance(default_abs_tol=0.1))
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert entry["tier_reason"] == "caller_override"
+    assert entry["envelope_applied"] is None
+    assert entry["verdict"] == "match"  # 0.06 <= 0.1
+
+
+def test_receipt_v2_fields_present_and_parse(tmp_path: Path) -> None:
+    _well_evidenced_pi(tmp_path)
+    _pair_pi(tmp_path, 3.14, 3.155)
+    res = _run(tmp_path)
+    assert res.receipt["schema_version"] == 2
+    entry = {e["key"]: e for e in res.receipt["per_key"]}["gp.pi"]
+    assert "envelope_applied" in entry
+    assert "tier_reason" in entry
+    for field in ("partial", "task_indices", "uncompared_keys", "uncompared_tasks"):
+        assert field in res.receipt
+    # The v2 receipt validates against the authoring wire model.
+    ReproductionReceipt.model_validate(res.receipt)
+
+
+def test_v1_receipt_still_parses(tmp_path: Path) -> None:
+    # An empty-ledger exact match keeps the v1 (schema_version 1) posture.
+    _pair(tmp_path, {"pi": 3.14159}, {"pi": 3.14159})
+    res = _run(tmp_path)
+    assert res.receipt["schema_version"] == 1
+    assert "envelope_applied" not in res.receipt["per_key"][0]
+    ReproductionReceipt.model_validate(res.receipt)  # v1 line parses under v2 model
+
+
+# --------------------------------------------------------------------------- #
+# append-back + judge-before-append (D-consume clause 1)
+# --------------------------------------------------------------------------- #
+def test_sample_appended_when_cluster_known(tmp_path: Path) -> None:
+    _pair_pi(tmp_path, 3.14, 3.14)  # exact, empty ledger -> match, but sample minted
+    res = _run(tmp_path)
+    assert res.appended_sample is not None
+    assert res.appended_sample.verdict == "auto_cleared"  # match -> passing verdict
+    assert res.appended_sample.scale == "main"
+    samples, _ = read_samples(tmp_path, CMD_SHA)
+    assert len(samples) == 1
+
+
+def test_judge_before_append_own_sample_does_not_flip(tmp_path: Path) -> None:
+    # 2 prior samples => n=2 THIN. If this comparison's OWN sample were counted
+    # pre-judgment, n would reach 3 (well-evidenced, same scale+cluster) and the
+    # inside deviation would auto_clear. Judge-before-append => it stays thin.
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _plant_sample(tmp_path, per_key=[_pi_diff(3.13, 3.16)])
+    _pair_pi(tmp_path, 3.145, 3.155)  # inside [3.13, 3.16]
+    res = _run(tmp_path)
+    assert res.stage_reached == "needs_verdict"  # NOT auto_cleared
+    # The comparison was appended back (now 3 lines) but its own sample is
+    # inadmissible (needs_verdict) so it never widens the envelope.
+    samples, _ = read_samples(tmp_path, CMD_SHA)
+    assert len(samples) == 3
+    assert res.appended_sample is not None
+    assert res.appended_sample.verdict == "needs_verdict"
+
+
+# --------------------------------------------------------------------------- #
+# partial (per-task) reproduction — design center 5
+# --------------------------------------------------------------------------- #
+def _write_per_task(exp: Path, run_id: str, idx: int, metrics: dict[str, Any]) -> None:
+    d = exp / "_aggregated" / run_id / "_per_task" / str(idx)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+
+
+def test_partial_per_task_compare_and_accounting(tmp_path: Path) -> None:
+    _write_sidecar(tmp_path, ORIG, cluster="hoffman2")
+    _write_sidecar(
+        tmp_path, REPRO, reproduces=ORIG, cluster="hoffman2", extra={"task_sample": [0, 2]}
+    )
+    for run in (ORIG, REPRO):
+        _write_per_task(tmp_path, run, 0, {"acc": 0.9})
+        _write_per_task(tmp_path, run, 2, {"acc": 0.8})
+    res = _run(tmp_path)
+    assert res.receipt["schema_version"] == 2
+    assert res.receipt["partial"] is True
+    assert res.receipt["task_indices"] == [0, 2]
+    assert res.receipt["uncompared_tasks"] == 0
+    assert res.receipt["uncompared_keys"] == 0
+    assert res.stage_reached == "match"  # per-task exact, empty ledger
+    keys = {e["key"] for e in res.receipt["per_key"]}
+    assert keys == {"task0.acc", "task2.acc"}
+
+
+def test_partial_uncompared_task_accounted(tmp_path: Path) -> None:
+    _write_sidecar(tmp_path, ORIG, cluster="hoffman2")
+    _write_sidecar(
+        tmp_path, REPRO, reproduces=ORIG, cluster="hoffman2", extra={"task_sample": [0, 1, 2]}
+    )
+    # Task 1 is absent on BOTH sides -> uncompared.
+    for run in (ORIG, REPRO):
+        _write_per_task(tmp_path, run, 0, {"acc": 0.9})
+        _write_per_task(tmp_path, run, 2, {"acc": 0.8})
+    res = _run(tmp_path)
+    assert res.receipt["task_indices"] == [0, 2]
+    assert res.receipt["uncompared_tasks"] == 1
+
+
+def test_partial_receipt_missing_field_refused() -> None:
+    with pytest.raises(errors.SpecInvalid):
+        _validate_receipt_partiality({"partial": True, "task_indices": None})
+    with pytest.raises(errors.SpecInvalid):
+        _validate_receipt_partiality(
+            {"partial": True, "task_indices": [0], "uncompared_keys": None, "uncompared_tasks": 0}
+        )
+    # A full receipt is never refused.
+    _validate_receipt_partiality({"partial": False})
+
+
+def test_human_acceptance_admits_a_mismatch_sample(tmp_path: Path) -> None:
+    # A planted mismatch sample is inadmissible until a reproduction-verdict
+    # accept names its content_sha; once accepted it widens the envelope.
+    sha = "e" * 64
+    _well_evidenced_pi(tmp_path, lo=3.13, hi=3.16)
+    _plant_sample(
+        tmp_path,
+        per_key=[_pi_diff(3.10, 3.40)],
+        verdict="mismatch",
+        content_sha=sha,
+        run_ids=("o-x", "r-x"),
+    )
+    # Before acceptance: 3.30 is OUTSIDE [3.13, 3.16] -> mismatch.
+    _pair_pi(tmp_path, 3.14, 3.30)
+    assert _run(tmp_path).stage_reached == "mismatch"
+    # Human accepts the planted mismatch sample on the repro run scope.
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id="r-x",
+        block="reproduction-verdict",
+        response=f"accept {sha[:8]}",
+        resolved={"accept": True, "content_sha": sha},
+    )
+    # Now the envelope spans [3.10, 3.40]; 3.30 is inside -> auto_cleared.
+    _pair_pi(tmp_path, 3.14, 3.30)
+    assert _run(tmp_path).stage_reached == "auto_cleared"

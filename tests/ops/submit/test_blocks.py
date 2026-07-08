@@ -12,6 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 
+import pytest
+
 import hpc_agent.ops.submit_blocks as blocks
 from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesInput
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
@@ -34,6 +36,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _RUN_ID = "ml_run_abcd1234"
+
+
+@pytest.fixture(autouse=True)
+def _single_canary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests assert the two-phase gate / block orchestration, not the
+    determinism-fingerprint DOUBLE canary (its own file). The two direct
+    ``submit_and_verify`` calls below would otherwise fire a real second canary;
+    pin the operator single-canary opt-out so they stay focused on the gate."""
+    monkeypatch.setenv("HPC_NO_DOUBLE_CANARY", "1")
 
 
 def _greenlight(experiment_dir: Path, verb: str, *, run_id: str = _RUN_ID) -> None:
