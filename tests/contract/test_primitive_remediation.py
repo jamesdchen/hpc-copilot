@@ -136,6 +136,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # Spec-taking query; failure_features attaches at the shared dispatch
         # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
         "notebook-status",
+        # worker-log-digest (run-#10 G2): code-rendered digest of a local worker
+        # log. Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        "worker-log-digest",
         # attention-queue (attention-queue T4): the fleet-wide read-only digest
         # ordered by needs-your-verdict-first. Spec-taking query; failure_features
         # attaches at the shared dispatch seam (so it stays OUT of

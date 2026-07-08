@@ -1071,6 +1071,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "worker_log_digest.input.json",
+    "name": "worker-log-digest",
+    "output_schema": "worker_log_digest.output.json",
+    "python": "hpc_agent.ops.worker_log_digest.worker_log_digest",
+    "side_effects": [],
+    "summary": "Code-rendered digest of a LOCAL worker log (no SSH). Counts lines carrying each known engine marker ([throttle], [dispatch] FATAL/FAILED/ERROR/WARN), reports the total line count, and echoes the last tail_lines lines verbatim in a fenced block. Fails open on a missing/unreadable file (a clear diagnostic, never a traceback). Mechanizes the premortem's manual raw-log scan (run-#10 G2). The `render` field is relayed verbatim.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes <homogeneous_axes>] [--force]",
     "idempotent": true,
     "input_schema": null,
@@ -1251,7 +1263,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]",
+    "cli": "hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]",
     "idempotent": true,
     "input_schema": null,
     "name": "scaffold-strategy",
@@ -1260,7 +1272,7 @@
     "side_effects": [
       "writes-file"
     ],
-    "summary": "Scaffold a closed-loop campaign strategy (optuna|pbt) into a repo.",
+    "summary": "Scaffold a campaign strategy (optuna|pbt ask/tell) or a fixed grid into a repo.",
     "verb": "scaffold"
   },
   {
