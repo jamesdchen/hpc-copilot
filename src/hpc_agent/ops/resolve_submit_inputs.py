@@ -61,6 +61,7 @@ from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
 from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
+from hpc_agent.ops.pack_gate import assert_pack_receipts_current
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -420,6 +421,18 @@ def resolve_submit_inputs(
     #     byte-identical no-op (the scope-gate posture). Pre-sidecar and
     #     pre-SSH — resolve does no cluster work, so this is purely a local read.
     assert_source_audited(experiment_dir)
+
+    # 4c. Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    #     ops/pack_gate — TWO synchronous seats, beside the notebook gate): this is
+    #     the S1 human-boundary seat. Before the per-run sidecar is committed,
+    #     refuse a submit whose opted-in `packs` block (interview.json, D7) carries
+    #     a required receipt_bindings slot not CURRENT + passed (missing / stale /
+    #     failed — drift = unsigned by construction), so the refusal lands at the
+    #     y/nudge, not buried later in a detached submit-flow worker's log. A broken
+    #     setup (dangling manifest, unbound pack) is a loud SpecInvalid; an
+    #     uncleared receipt is PackReceiptsMissing. Fail-safe: NO packs block →
+    #     byte-identical no-op. Pre-sidecar and pre-SSH — a purely local read.
+    assert_pack_receipts_current(experiment_dir)
 
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`
