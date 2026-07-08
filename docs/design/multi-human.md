@@ -587,6 +587,18 @@ recorded in `docs/design/slate-sequencing.md` yet, so treat cross-plan
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO.** MH8 verified CONFIRMED: the policy key
+  `"campaign-greenlight"` matches the real gated block name
+  (`ops/block_drive_op.py`), so `_assert_actor_policy(block, actor)` is a
+  guard that can actually fire — not the un-fireable-guard failure the pass
+  probed for. reviewer≠author (MH6) and resolver≠challenger (MH7) refuse only
+  when >1 actor is declared; at exactly one declared actor there is no refusal
+  (solo mode), so the constraint cannot deadlock resolution. Phase 9 lands
+  after every other plan's gate additions. Multi-human attestations route
+  through the ONE kernel (`bind`/`reduce`), never re-inlining recompute. No
+  defect surfaced.
+
+(Populate per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

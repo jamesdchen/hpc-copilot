@@ -467,3 +467,15 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
      store, not a plumbing change); the gate raise sites are
      `errors.SpecInvalid` routed through `_dispatch.py::_err_from_hpc`;
      `_tool_result` copies the full envelope into `structuredContent`.
+  4. *Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep)
+     — GO-WITH-CHANGES.* The reader-thread + `queue.Queue` timeout fix (D1.6)
+     is sound: one daemon reader thread enqueues and `Queue.get(timeout=)`
+     makes the 300 s deadline real on Windows, where a blocking `readline`
+     has no `select()`-able deadline — the `subprocess.communicate(timeout=)`
+     precedent is correctly invoked, and the daemon thread is reaped at
+     interpreter exit (no shutdown hang). Residual (minor, PLAUSIBLE): the
+     doc does not state whether the inbound queue is drained/correlated
+     between successive elicitations — a line enqueued just after one
+     exchange's deadline could be consumed by the next. The JSON-RPC `id`
+     match already disambiguates; state an explicit per-exchange
+     correlation/drain rule so the cross-talk cannot regress. No blocker.

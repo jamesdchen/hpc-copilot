@@ -710,6 +710,19 @@ and record the executed order in the drift logs).
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO.** Anchors verified present: the attestation
+  kernel and its tests, the decision-journal authorship gates, `RunIdStrict`,
+  `validate_tag`, `repo_hash`, and the attention-queue `KIND_CLASS`/collector.
+  Phase 8 lands after fingerprint T12 (case-4 promotes an addressable
+  fingerprint sample — the dependency is satisfied by ordering) and after
+  evidence-memory's resolvers. Hardest attack that FAILED: "`contested`
+  blocks nothing + code never files dissent ⇒ the mechanism is inert" —
+  refuted; C4 discloses `contested` at every reader seam and C5 routes an
+  open challenge as a verdict-class attention item, so a challenge changes
+  attention routing without gating any outcome. The `campaign-greenlight`
+  target block name matches the real gated block set. No defect surfaced.
+
+(Populate per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

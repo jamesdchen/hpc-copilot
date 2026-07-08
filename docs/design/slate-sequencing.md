@@ -145,3 +145,20 @@ jurisdiction is mapped (the scope doctrine: trust mechanisms, never
 operations; observe/judge/route, never actuate). Post-Phase-9 growth =
 consumers: packs, harnesses, domains, teams — plus the standing punch
 list in the machine-local memory.
+
+## Fifth-pass adversarial verification (2026-07-08)
+
+Independent Opus sweep over the full ten-doc slate; verdict for THIS doc:
+**GO-WITH-CHANGES.** The reconstructed dependency DAG matches the stated
+phase order on every declared edge (E2 → registration T7; registration T3 →
+fingerprint T8 / packs T10; fingerprint T4 → packs T9; fingerprint T12 →
+challenge; evidence-memory → challenge resolvers; all gate additions →
+multi-human Phase 9's resolver≠challenger execution) EXCEPT one edge the
+ordering does not serialize: registration's Phase-2 `reproduction`-kind
+prerequisite checker consumes `state/fingerprint_store.py` and
+`state/determinism.py::evidence_meets`, both Phase-3 fingerprint deliverables
+(verified absent from the current tree). Record the reproduction-kind
+cross-phase reservation (reserve the kind as a loud not-yet-available refusal
+until Phase 3, symmetric to the `pack-receipt` / T8 serialization already
+tracked) so Phase 2 does not reference not-yet-built modules. See
+`docs/design/registration-kernel.md`'s fifth-pass drift note.

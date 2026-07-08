@@ -620,6 +620,26 @@ re-register → verify `current` again → revoke with reason → verify
      `is_scope_locked`, the `_assert_signoff_authorship` three-lock sibling,
      `_is_bare_ack`, and the dossier-boundary test pins all exist as cited.
 
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO-WITH-CHANGES.** One cross-phase defect the
+  four-verifier pass did not reach: T4's `reproduction` prerequisite kind
+  routes through `state/determinism.py::evidence_meets` and
+  `state/fingerprint_store.py` — both verified ABSENT from the current tree
+  (they are determinism-fingerprint deliverables: fingerprint T3 +
+  `evidence_meets`) — yet T4 reserves ONLY the `pack-receipt` kind as "a loud
+  not-yet-available refusal until domain-packs T2 lands." Registration is
+  Phase 2 and the fingerprint is Phase 3 (`docs/design/slate-sequencing.md`),
+  so at its own phase the `reproduction` checker references not-yet-existing
+  modules. The four-verifier pass closed the empty-LEDGER case (a missing
+  ledger is an `n=0` shortfall); it did NOT close the missing-MODULE case.
+  Fix: ship the `reproduction` kind ALSO as a loud not-yet-available refusal
+  until the fingerprint store + `evidence_meets` land (the same S6 reserved
+  posture `pack-receipt` already uses), or sequence the reproduction-kind
+  wiring into Phase 3. All other cited anchors verified present and sound
+  (`_assert_signoff_authorship`, `count_prior_looks`, `is_scope_locked`,
+  `detect_code_drift`, and the R3 `original.run_id` cross-link via the
+  receipt `_identity` prepend).
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

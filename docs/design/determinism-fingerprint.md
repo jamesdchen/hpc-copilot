@@ -761,6 +761,18 @@ edit — that friction is the pin working.
      only implied; *cross-slate sequencing note added* (Phase 3 after the
      registration kernel, per `docs/design/slate-sequencing.md`).
 
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO.** Re-attacked the two load-bearing four-verifier
+  fixes. (a) The double-canary seam corrections: `submit_and_verify`,
+  `ops/monitor/reconcile.py::_sibling_run_ids` and its single-unpack call
+  sites, `reproduce_run`'s param-drift guard, and `infra/io.py::
+  append_jsonl_line` all verified present as the drift log claims. (b) The
+  D-consume admission rule + T12 gate: `_assert_reproduction_verdict_
+  authorship` refuses a bare agent ack, the double-canary sample is admitted
+  BY CONSTRUCTION (fired by the canary machinery, not an injectable claim),
+  and no verdict verb exists — so the n=2-prior contradiction stays closed
+  with no new laundering path. No surviving defect.
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

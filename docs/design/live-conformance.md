@@ -710,6 +710,19 @@ for T2; `_SPEC_VERBS` inventory tails; primitive doc pages
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO.** Anchors verified present: `evidence_meets` and
+  its `{min_n, scales, clusters}` demand vocabulary, `detect_code_drift`,
+  `count_prior_looks`, and the conformance-record status-stamp reduction
+  path. Phase 7 lands after the registration/fingerprint machinery it amends,
+  so its dependencies are warm. Hardest attacks that FAILED to find a defect:
+  (a) "sealed baselines admit NOTHING contradicts the fingerprint admission
+  rule" — refuted; the divergence is deliberate and recorded, and the
+  admission rule is explicitly scoped to the fingerprint envelope only;
+  (b) "the shared order-statistics envelope helper forks" — refuted; it is
+  one definition reused from fingerprint T1a per the reuse ledger. No defect
+  surfaced.
+
+(Populate per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

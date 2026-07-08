@@ -550,3 +550,16 @@ catalog updated if exposed; `pyproject.toml` package-data for
   5. *K10 note added* — `HarnessCapabilitiesResult` is `extra="forbid"`;
      the contract-version result field is a wire-model + schema-regen
      change, owned by K10's regen tail.
+  6. *Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep)
+     — GO-WITH-CHANGES.* Q1–Q4 machinery clean and code-verified (in-toto
+     `importorskip`-guarded; the claude-code adapter drives the hook
+     pure-functions in-process — no live harness needed). One enforcement-row
+     wording contradiction: the row "both reference adapters stay conforming"
+     overloads "conforming" — D-K5's `notebook_render` is honestly PARTIAL on
+     capabilities 2–3 and so can NEVER reach the all-three "conforming"
+     verdict D-K2 defines; the row's "fires when" column is mechanically
+     correct, only the title word is wrong. Retitle to "stay green at their
+     declared verdict" (claude-code: conforming; notebook-render: partial).
+     Minor: the D-K3 fixture "20 seeds at 1M samples" uses
+     experiment-parameter vocabulary against the toy-only fixture rule — use
+     toy (widgets) vocabulary.

@@ -515,6 +515,25 @@ maintainers mistake for core knowledge).
     scripts, and registry 141 (`operations.json` length, matching the
     e1e9ab27 baseline claim) all check out.
 
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO-WITH-CHANGES.** The named S5 re-inversion fix
+  holds where the precedence ORDER appears, but left two adjacent statements
+  stale. (1) The "Related, planned separately" bullet still says the
+  fingerprint "may demote" S5 and "the S5 resolver is designed to be
+  removable," contradicting the corrected S5 cell (demotion required; this
+  plan ships the loader + echo only, no S5 resolver) — and
+  `docs/design/determinism-fingerprint.md` quotes that "may demote … removable"
+  sentence VERBATIM, so both must be fixed in lockstep. (2) The S5 cell defers
+  S5 consumption to "the fingerprint's precedence seam around
+  `_resolve_key_tol`," but the fingerprint's concrete D-consume precedence
+  carries NO S5 pack-default tier — a numeric case (no caller override, no
+  envelope yet, pack default 5%, observed 2%) resolves two different ways
+  depending on which fingerprint precedence statement you read. Weaken the S5
+  cell to "the S5 tier is RESERVED; its consumer is unbuilt until fingerprint
+  `_resolve_key_tol` is extended." No boundary-drift, laundering, or
+  growth-trigger defect (all seams decompose to IDENTITY/COUNTING/COMPARISON;
+  the bind-as-data core is sound).
+
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

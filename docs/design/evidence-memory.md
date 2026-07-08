@@ -695,6 +695,15 @@ push → CI green. Every task lands with a fires+passes test pair.
     `docs/design/determinism-fingerprint.md` verbatim. `st_mtime_ns` is
     available on win32 (`os.stat`), so the E-cache key is cross-platform.
 
+- **Fifth-pass adversarial verification 2026-07-08 (independent Opus sweep;
+  no code had landed) — GO.** Re-attacked the four-verifier E-embed fail-open
+  catch: the entire embed call is wrapped in a broad guard, so ANY exception
+  (not just the tolerated I/O noise) degrades to `evidence: {"unavailable":
+  true, ...}` and never becomes a submit/greenlight error; the APPEND gate
+  (E-shape) is the one deliberate raise, which is correct. Fail-open holds on
+  every branch. The state→ops layering (T1 EXTRACT — `state` never imports
+  `ops`) and the `CITATION_KINDS` resolvers verified. No defect surfaced.
+
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
