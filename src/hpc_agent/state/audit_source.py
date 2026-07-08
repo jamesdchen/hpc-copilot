@@ -63,6 +63,7 @@ __all__ = [
     "normalize_source",
     "sha256_normalized",
     "parse_percent_source",
+    "percent_cell_sources",
 ]
 
 #: A jupytext percent-format CELL delimiter — any col-0 line beginning with this
@@ -174,6 +175,48 @@ def _unified_lines(text: str) -> list[str]:
     return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
 
+def _cell_starts(lines: list[str]) -> list[int]:
+    """Cell-start indices of the unified *lines*: every :data:`CELL_DELIMITER`
+    line, plus line 0 for the leading implicit cell (content before the first
+    delimiter, e.g. a module docstring).
+
+    The ONE definition of the cell-boundary grammar — both
+    :func:`parse_percent_source` (sections) and :func:`percent_cell_sources`
+    (cell bodies) segment through it.
+    """
+    delim_idxs = [i for i, line in enumerate(lines) if line.startswith(CELL_DELIMITER)]
+    return sorted({0, *delim_idxs})
+
+
+def percent_cell_sources(text: str) -> tuple[str, ...]:
+    """Cell BODIES of a percent-format module, in source order.
+
+    Each cell's ``# %%`` delimiter line is dropped (matching how an
+    ``.ipynb`` code cell carries its source without a delimiter); cells
+    whose body is blank are omitted. The leading implicit cell (content
+    before the first delimiter) is included when non-blank. Markdown-variant
+    cells (``# %% [markdown]``) are NOT special-cased — their bodies are
+    comments, which downstream AST consumers ignore; the metadata after the
+    delimiter stays opaque, per this module's boundary-only doctrine.
+
+    This is the read seam the export layer (``export-package``) consumes so
+    a percent ``.py`` notebook and an ``.ipynb`` feed the SAME exporters —
+    only the reading differs. Segmentation shares :func:`_cell_starts` with
+    :func:`parse_percent_source`: one definition of the boundary grammar.
+    """
+    lines = _unified_lines(text)
+    n = len(lines)
+    starts = _cell_starts(lines)
+    cells: list[str] = []
+    for k, cs in enumerate(starts):
+        ce = starts[k + 1] if k + 1 < len(starts) else n
+        body_start = cs + 1 if lines[cs].startswith(CELL_DELIMITER) else cs
+        body = "\n".join(lines[body_start:ce])
+        if body.strip():
+            cells.append(body)
+    return tuple(cells)
+
+
 def _extract_slug(line: str) -> str:
     """Return the validated slug from a marker *line*.
 
@@ -213,10 +256,8 @@ def parse_percent_source(text: str) -> ParsedModule:
     lines = _unified_lines(text)
     n = len(lines)
 
-    # Cell starts: every ``# %%`` delimiter line, plus line 0 for the leading
-    # implicit cell (content before the first delimiter, e.g. a module docstring).
-    delim_idxs = [i for i, line in enumerate(lines) if line.startswith(CELL_DELIMITER)]
-    cell_starts = sorted({0, *delim_idxs})
+    # Cell starts — the shared boundary grammar (see _cell_starts).
+    cell_starts = _cell_starts(lines)
 
     # Every col-0 marker-shaped line in the whole module. Each MUST turn out to
     # be some cell's first non-blank body line, else it is misplaced.

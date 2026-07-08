@@ -1188,7 +1188,7 @@
     "side_effects": [
       "writes-sidecar"
     ],
-    "summary": "Build <experiment>/src/ from the notebooks under notebooks/{pipeline,executors,scripts}/. Convention-driven: the output module name and the exporter (strict-AST for @register_run executors, # export-marker for pipeline libraries) are both derived. Content-hash caches against .hpc/.build-cache.json — a second run with no notebook edits is all cache hits.",
+    "summary": "Build <experiment>/src/ from the notebooks under notebooks/{pipeline,executors,scripts}/ — jupytext percent-format .py (the native format) plus .ipynb for back-compat. Convention-driven: the output module name and the exporter (strict-AST for @register_run executors, # export-marker for pipeline libraries) are both derived. Content-hash caches against .hpc/.build-cache.json — a second run with no notebook edits is all cache hits.",
     "verb": "scaffold"
   },
   {

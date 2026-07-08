@@ -66,7 +66,7 @@ Branch on `data.kind`:
 hpc-agent build-template --repo-dir . --shape script    # or --shape notebook
 ```
 
-The primitive injects the chosen seed file (`train.py` at repo root or `notebooks/experiment.ipynb`) alongside the framework-owned `.hpc/` assets. Then re-run `detect-entry-point --experiment-dir <experiment_dir>` against the freshly scaffolded file and proceed through Step 1 onwards.
+The primitive injects the chosen seed file (`train.py` at repo root or `notebooks/experiment.py`, jupytext percent format) alongside the framework-owned `.hpc/` assets. Then re-run `detect-entry-point --experiment-dir <experiment_dir>` against the freshly scaffolded file and proceed through Step 1 onwards.
 
 ### 1. Detect the entry point
 

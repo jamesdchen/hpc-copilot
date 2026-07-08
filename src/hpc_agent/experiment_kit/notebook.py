@@ -29,6 +29,14 @@ construction.
 
 Statements are emitted in source order (cell order, then within a cell).
 A cell that does not parse is skipped whole.
+
+**Format-agnostic cores.** The extraction rules operate on *cell sources*
+(plain strings), not on the ``.ipynb`` container: :func:`export_cells` and
+:func:`export_cells_markers` take a sequence of cell sources, and the
+``export_notebook*`` functions are the ``.ipynb``-reading wrappers. A
+jupytext percent-format ``.py`` notebook feeds the SAME cores — its cells
+are read by :func:`hpc_agent.state.audit_source.percent_cell_sources` (the
+one percent-format reader) at the ``export-package`` layer.
 """
 
 from __future__ import annotations
@@ -36,8 +44,18 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-__all__ = ["export_notebook", "export_notebook_markers", "notebook_imports_runtime"]
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+__all__ = [
+    "export_cells",
+    "export_cells_markers",
+    "export_notebook",
+    "export_notebook_markers",
+    "notebook_imports_runtime",
+]
 
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _IMPORT_NODES = (ast.Import, ast.ImportFrom)
@@ -55,22 +73,46 @@ _INLINE_HEADER = (
 )
 
 
-def export_notebook(ipynb: str | Path, out_py: str | Path) -> Path:
-    """Extract the importable surface of *ipynb* into *out_py*.
+def _code_cell_sources(ipynb: str | Path) -> list[str]:
+    """The code-cell sources of *ipynb*, in notebook order.
 
-    Returns the path written. When the notebook is a ``@register_run``
-    experiment the output is a self-contained executor (see the module
-    docstring); otherwise it is a plain importable ``.py``.
+    The one ``.ipynb`` reading seam for this module — every exporter and
+    check below consumes cell sources through it.
     """
     data = json.loads(Path(ipynb).read_text(encoding="utf-8"))
-    collected: list[tuple[ast.stmt, str]] = []
-
+    sources: list[str] = []
     for cell in data.get("cells", []):
         if cell.get("cell_type") != "code":
             continue
         src = cell.get("source", "")
         if isinstance(src, list):
             src = "".join(src)
+        sources.append(src)
+    return sources
+
+
+def export_notebook(ipynb: str | Path, out_py: str | Path) -> Path:
+    """Extract the importable surface of *ipynb* into *out_py*.
+
+    Returns the path written. When the notebook is a ``@register_run``
+    experiment the output is a self-contained executor (see the module
+    docstring); otherwise it is a plain importable ``.py``. The
+    ``.ipynb``-reading wrapper over :func:`export_cells`.
+    """
+    return export_cells(_code_cell_sources(ipynb), out_py)
+
+
+def export_cells(cell_sources: Sequence[str], out_py: str | Path) -> Path:
+    """Extract the importable surface of *cell_sources* into *out_py*.
+
+    The format-agnostic strict-AST core (see the module docstring for the
+    allowlist): *cell_sources* are plain code-cell strings, whether read
+    from an ``.ipynb`` or from a percent-format ``.py``. Returns the path
+    written.
+    """
+    collected: list[tuple[ast.stmt, str]] = []
+
+    for src in cell_sources:
         if not src.strip():
             continue
         try:
@@ -119,16 +161,22 @@ def export_notebook_markers(ipynb: str | Path, out_py: str | Path) -> Path:
     smoke tests — are skipped. A cell that does not parse is skipped.
 
     Cells are emitted in notebook order, separated by two blank lines.
+    Returns the path written. The ``.ipynb``-reading wrapper over
+    :func:`export_cells_markers`.
+    """
+    return export_cells_markers(_code_cell_sources(ipynb), out_py)
+
+
+def export_cells_markers(cell_sources: Sequence[str], out_py: str | Path) -> Path:
+    """Export the ``# export``-marked cells of *cell_sources* into *out_py*.
+
+    The format-agnostic marker core (see :func:`export_notebook_markers`
+    for the marker rule): *cell_sources* are plain code-cell strings,
+    whether read from an ``.ipynb`` or from a percent-format ``.py``.
     Returns the path written.
     """
-    data = json.loads(Path(ipynb).read_text(encoding="utf-8"))
     parts: list[str] = []
-    for cell in data.get("cells", []):
-        if cell.get("cell_type") != "code":
-            continue
-        src = cell.get("source", "")
-        if isinstance(src, list):
-            src = "".join(src)
+    for src in cell_sources:
         lines = src.splitlines()
         if not any(line.strip() == _EXPORT_MARKER for line in lines):
             continue
@@ -159,13 +207,7 @@ def notebook_imports_runtime(ipynb: str | Path) -> bool:
     classifies notebooks by the ``@register_run`` decorator (via
     :func:`~hpc_agent.experiment_kit.discover.discover_runs`) for that reason.
     """
-    data = json.loads(Path(ipynb).read_text(encoding="utf-8"))
-    for cell in data.get("cells", []):
-        if cell.get("cell_type") != "code":
-            continue
-        src = cell.get("source", "")
-        if isinstance(src, list):
-            src = "".join(src)
+    for src in _code_cell_sources(ipynb):
         try:
             tree = ast.parse(src)
         except SyntaxError:

@@ -6,24 +6,37 @@ primitive globs the experiment's notebooks, derives each output path by
 convention, auto-picks the exporter, content-hash-caches unchanged
 notebooks, and writes the whole ``src/`` package.
 
-**Convention, not a manifest.** Notebooks under ``notebooks/pipeline/``,
-``notebooks/executors/``, and ``notebooks/scripts/`` export; nothing else
-does. The output module name is the notebook stem with a leading
-``\\d+[a-z]?_`` ordering prefix stripped — ``01_loading.ipynb`` →
-``src/loading.py``. The exporter is auto-picked: a notebook that
-*applies* the ``@register_run`` decorator is a runnable executor →
-strict-AST :func:`~hpc_agent.experiment_kit.export_notebook` (runtime inlined);
+**Two notebook formats, one lane.** The native format is jupytext
+*percent* ``.py`` (``# %%`` cells) — the audit doctrine's LLM-draftable,
+diff-reviewable source (``docs/design/notebook-audit.md``); raw
+``.ipynb`` is accepted for back-compat. Percent sources are read through
+:func:`hpc_agent.state.audit_source.percent_cell_sources` — the one
+percent-format reader — and their cell sources feed the SAME exporters
+the ``.ipynb`` path uses; only the reading layer differs.
+
+**Convention, not a manifest.** Notebooks (``*.py`` percent or
+``*.ipynb``) under ``notebooks/pipeline/``, ``notebooks/executors/``, and
+``notebooks/scripts/`` export; nothing else does. The output module name
+is the notebook stem with a leading ``\\d+[a-z]?_`` ordering prefix
+stripped — ``01_loading.py`` → ``src/loading.py``. A ``foo.py`` /
+``foo.ipynb`` stem collision maps to the same output and is refused loud
+(:class:`~hpc_agent.errors.SpecInvalid`), like any duplicate stem. The
+exporter is auto-picked: a notebook that *applies* the ``@register_run``
+decorator is a runnable executor → strict-AST
+:func:`~hpc_agent.experiment_kit.export_cells` (runtime inlined);
 everything else — including pipeline-library notebooks that merely
 import the runtime seam — uses the ``# export``-marker
-:func:`~hpc_agent.experiment_kit.export_notebook_markers`. Detection is the
+:func:`~hpc_agent.experiment_kit.export_cells_markers`. Detection is the
 ``@register_run`` decorator, not the ``hpc_agent.experiment_kit`` import:
 library notebooks import the runtime (``current_slice`` /
 ``load_series``) without being experiments.
 
-**One cached build.** Each notebook's concatenated code-cell sources are
-hashed against ``.hpc/.build-cache.json``; an unchanged notebook whose
-output still exists is skipped. Export is pure AST extraction plus a
-``ruff`` post-pass — sub-second per file, no notebook execution.
+**One cached build.** Each ``.ipynb``'s concatenated code-cell sources —
+and each percent ``.py``'s normalized source
+(:func:`~hpc_agent.state.audit_source.sha256_normalized`) — are hashed
+against ``.hpc/.build-cache.json``; an unchanged notebook whose output
+still exists is skipped. Export is pure AST extraction plus a ``ruff``
+post-pass — sub-second per file, no notebook execution.
 
 Output lands at the repo-root ``src/`` (which the experiment repo
 ``.gitignore``\\ s) so ``src.<module>`` imports and ``PYTHONPATH`` are
@@ -46,7 +59,8 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 
 __all__ = ["export_package"]
 
-# Notebook subdirectories whose ``.ipynb`` files are exported to ``src/``.
+# Notebook subdirectories whose notebooks (percent-format ``*.py``, plus
+# ``*.ipynb`` for back-compat) are exported to ``src/``.
 _EXPORT_SUBDIRS = ("pipeline", "executors", "scripts")
 
 # Leading ordering prefix stripped from a notebook stem to form the
@@ -80,6 +94,21 @@ def _cell_hash(ipynb: Path) -> str:
         parts.append(src)
     blob = "\x00".join(parts)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _source_digest(nb: Path) -> str:
+    """The cache digest for notebook *nb* — format-aware.
+
+    A percent ``.py`` hashes its normalized source via
+    :func:`~hpc_agent.state.audit_source.sha256_normalized` (the one
+    hashing primitive every audit recompute site shares); an ``.ipynb``
+    keeps the historical code-cell hash so existing caches stay valid.
+    """
+    from hpc_agent.state.audit_source import sha256_normalized
+
+    if nb.suffix == ".py":
+        return sha256_normalized(nb.read_text(encoding="utf-8"))
+    return _cell_hash(nb)
 
 
 def _ruff_canonicalise(path: Path) -> None:
@@ -125,12 +154,13 @@ def _export_package_arg_pre(ns: Any) -> dict[str, Any]:
     cli=CliShape(
         help=(
             "Build <experiment>/src/ from the notebooks under "
-            "notebooks/{pipeline,executors,scripts}/. Convention-driven: "
-            "the output module name and the exporter (strict-AST for "
-            "@register_run executors, # export-marker for pipeline "
-            "libraries) are both derived. Content-hash caches against "
-            ".hpc/.build-cache.json — a second run with no notebook edits "
-            "is all cache hits."
+            "notebooks/{pipeline,executors,scripts}/ — jupytext "
+            "percent-format .py (the native format) plus .ipynb for "
+            "back-compat. Convention-driven: the output module name and "
+            "the exporter (strict-AST for @register_run executors, "
+            "# export-marker for pipeline libraries) are both derived. "
+            "Content-hash caches against .hpc/.build-cache.json — a "
+            "second run with no notebook edits is all cache hits."
         ),
         experiment_dir_arg=True,
         args=(
@@ -152,11 +182,12 @@ def export_package(
 ) -> dict[str, Any]:
     """Build ``<experiment>/src/`` from the experiment's notebooks.
 
-    Globs ``notebooks/{pipeline,executors,scripts}/*.ipynb``, derives
-    each output path by the module convention, auto-picks the exporter
-    by content, content-hash-caches against ``.hpc/.build-cache.json``,
-    and writes ``src/``. An ``src/__init__.py`` is created so the output
-    is an importable package.
+    Globs ``notebooks/{pipeline,executors,scripts}/*.py`` (jupytext
+    percent format, the native shape) and ``*.ipynb`` (back-compat),
+    derives each output path by the module convention, auto-picks the
+    exporter by content, content-hash-caches against
+    ``.hpc/.build-cache.json``, and writes ``src/``. An
+    ``src/__init__.py`` is created so the output is an importable package.
 
     Returns ``{src_dir, built, cache_hits, n_notebooks, cache_path}`` —
     ``built`` lists the modules (re)exported this call, ``cache_hits``
@@ -164,10 +195,17 @@ def export_package(
     therefore all ``cache_hits`` and byte-stable.
 
     Raises ``errors.SpecInvalid`` when two notebooks map to the same
-    ``src/`` module name, or a stem is not a valid Python identifier.
+    ``src/`` module name (including a ``foo.py`` / ``foo.ipynb`` stem
+    collision), or a stem is not a valid Python identifier.
     """
     from hpc_agent.experiment_kit.discover import discover_runs
-    from hpc_agent.experiment_kit.notebook import export_notebook, export_notebook_markers
+    from hpc_agent.experiment_kit.notebook import (
+        export_cells,
+        export_cells_markers,
+        export_notebook,
+        export_notebook_markers,
+    )
+    from hpc_agent.state.audit_source import percent_cell_sources
 
     if spec is None:
         spec = ExportPackageInput()
@@ -180,7 +218,7 @@ def export_package(
     for sub in _EXPORT_SUBDIRS:
         subdir = notebooks_root / sub
         if subdir.is_dir():
-            notebooks.extend(sorted(subdir.glob("*.ipynb")))
+            notebooks.extend(sorted([*subdir.glob("*.py"), *subdir.glob("*.ipynb")]))
 
     if not notebooks:
         return {
@@ -238,7 +276,7 @@ def export_package(
         out_stem = _output_stem(nb.stem)
         out_rel = f"src/{out_stem}.py"
         out_path = src_dir / f"{out_stem}.py"
-        digest = _cell_hash(nb)
+        digest = _source_digest(nb)
 
         prior = cache.get(rel)
         if (
@@ -251,7 +289,15 @@ def export_package(
             new_cache[rel] = {"hash": digest, "output": out_rel}
             continue
 
-        if nb.resolve() in register_run_paths:
+        # Percent .py: read the cell sources through the one percent-format
+        # reader, then feed the SAME exporters the ipynb path uses.
+        if nb.suffix == ".py":
+            cells = percent_cell_sources(nb.read_text(encoding="utf-8"))
+            if nb.resolve() in register_run_paths:
+                export_cells(cells, out_path)
+            else:
+                export_cells_markers(cells, out_path)
+        elif nb.resolve() in register_run_paths:
             export_notebook(nb, out_path)
         else:
             export_notebook_markers(nb, out_path)

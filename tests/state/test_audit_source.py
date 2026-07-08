@@ -15,6 +15,7 @@ from hpc_agent.state.audit_source import (
     format_section_marker,
     normalize_source,
     parse_percent_source,
+    percent_cell_sources,
     sha256_normalized,
 )
 
@@ -248,3 +249,44 @@ def test_format_section_marker_refuses_embedded_newline() -> None:
     # newline reads back as a DIFFERENT slug — the round-trip guard fires.
     with pytest.raises(errors.SpecInvalid):
         format_section_marker("ok\nsneaky = 1")
+
+
+# ── percent_cell_sources (the export layer's read seam) ─────────────────────
+
+
+def test_percent_cell_sources_segments_and_drops_delimiters() -> None:
+    text = "# %%\nimport os\n\n# %% [markdown]\n# a markdown cell\n\n# %%\nx = os.cpu_count()\n"
+    cells = percent_cell_sources(text)
+    assert len(cells) == 3
+    assert cells[0].strip() == "import os"
+    # The markdown-variant delimiter is opaque: its commented body is a cell.
+    assert cells[1].strip() == "# a markdown cell"
+    assert cells[2].strip() == "x = os.cpu_count()"
+    # No delimiter line survives into any body.
+    assert all(not any(line.startswith("# %%") for line in c.split("\n")) for c in cells)
+
+
+def test_percent_cell_sources_leading_implicit_cell_and_blank_cells() -> None:
+    text = '"""Module docstring — before any delimiter."""\n\n# %%\n\n\n# %%\ny = 2\n'
+    cells = percent_cell_sources(text)
+    # The pre-delimiter content is the leading implicit cell; the blank cell
+    # between the two delimiters is omitted.
+    assert len(cells) == 2
+    assert "Module docstring" in cells[0]
+    assert cells[1].strip() == "y = 2"
+
+
+def test_percent_cell_sources_crlf_unified() -> None:
+    lf = "# %%\nimport os\n# %%\nx = 1\n"
+    crlf = lf.replace("\n", "\r\n")
+    assert percent_cell_sources(crlf) == percent_cell_sources(lf)
+
+
+def test_percent_cell_sources_shares_the_boundary_grammar() -> None:
+    # One definition of the cell boundary: the same text segments into the
+    # same number of cells whether read for sections or for cell bodies.
+    text = "# %%\n# hpc-audit-section: load-data\nimport os\n\n# %%\nx = os.cpu_count()\n"
+    mod = parse_percent_source(text)
+    cells = percent_cell_sources(text)
+    assert list(mod.slugs) == ["load-data"]
+    assert len(cells) == 2
