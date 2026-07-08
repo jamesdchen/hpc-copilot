@@ -17,7 +17,8 @@
         "run",
         "campaign",
         "scope",
-        "notebook"
+        "notebook",
+        "registration"
       ],
       "title": "Scope Kind",
       "type": "string"
