@@ -33,7 +33,7 @@ from hpc_agent._wire._shared import RunIdStrict
 # ``registration`` / ``registration-revoke`` records gated by R6). Kept in lockstep
 # with ``state.decision_journal.SCOPE_KINDS`` (schema regen is the integrator's job;
 # the ScopeKind literal change regenerates schemas).
-ScopeKind = Literal["run", "campaign", "scope", "notebook", "registration"]
+ScopeKind = Literal["run", "campaign", "scope", "notebook", "registration", "pack"]
 
 # The evidence the proposal was drafted over — an opaque free-text digest
 # OR a structured dict. The journal never interprets it; it round-trips it
