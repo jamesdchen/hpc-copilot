@@ -93,6 +93,39 @@ def test_reconcile_from_canary_id_cascades_to_main(tmp_path, monkeypatch):
     assert load_run(tmp_path, "mc_pi-bdae-canary").status == "abandoned"
 
 
+def test_sibling_run_ids_covers_the_canary_family():
+    """The ONE suffix definition now returns the whole ``-canary`` FAMILY
+    (``-canary`` + ``-canary2``), and ``canary_parent_of`` strips both — the
+    double-canary widening, longest-suffix-first so ``-canary2`` maps to the main
+    run (never ``…-canary`` -> ``…2``)."""
+    assert set(recon._sibling_run_ids("main")) == {"main-canary", "main-canary2"}
+    assert set(recon._sibling_run_ids("main-canary")) == {"main", "main-canary2"}
+    assert set(recon._sibling_run_ids("main-canary2")) == {"main", "main-canary"}
+    assert recon.canary_parent_of("main-canary") == "main"
+    assert recon.canary_parent_of("main-canary2") == "main"
+    assert recon.canary_parent_of("main") is None
+    assert set(recon.canary_family("main")) == {"main-canary", "main-canary2"}
+
+
+def test_reconcile_main_cascades_to_both_canaries(tmp_path, monkeypatch):
+    """One ``reconcile --run-id <main>`` must settle EVERY canary-family entry —
+    the second canary's unsettled ``-canary2`` record would otherwise block the
+    next submit (the run-#7 unsettled-sibling stall class, re-opened)."""
+    upsert_run(tmp_path, _record("mc_pi-fam", job_ids=["1"]))
+    upsert_run(tmp_path, _record("mc_pi-fam-canary", job_ids=["2"]))
+    upsert_run(tmp_path, _record("mc_pi-fam-canary2", job_ids=["3"]))
+    _stub_cluster(monkeypatch, alive=set())
+
+    result = recon.reconcile(tmp_path, "mc_pi-fam", scheduler="sge")
+
+    assert result.status == "abandoned"
+    assert load_run(tmp_path, "mc_pi-fam-canary").status == "abandoned"
+    # THE KEY: the SECOND canary is settled by the same call.
+    assert load_run(tmp_path, "mc_pi-fam-canary2").status == "abandoned"
+    settled = {s["run_id"] for s in (result.last_status or {}).get("reconciled_siblings", [])}
+    assert settled == {"mc_pi-fam-canary", "mc_pi-fam-canary2"}
+
+
 def test_missing_sibling_is_a_noop(tmp_path, monkeypatch):
     # Only the main exists — no canary entry. Reconcile must not raise.
     upsert_run(tmp_path, _record("solo", job_ids=["999"]))
