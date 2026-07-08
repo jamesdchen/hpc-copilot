@@ -422,3 +422,24 @@ ordering/identity projections; natural siblings of T5's renderer posture.
    high-attention tiers KEEP their diff-token/typing cost; y reaches only
    the bottom of the ladder. Rarity-buys-seriousness is load-bearing;
    palatability must never reach the effortful tier.
+
+## Amendment 2 (2026-07-07, run-#10 live findings): the MCP projection
+
+Run #10's prelude priced the audit loop's MCP absence: hand-authored spec
+JSONs, two schema fumbles (caught loudly — the guard held; cost was
+latency). Ruled projection, three parts: (1) the five audit verbs join
+`_CURATED_EXTRA_VERBS` (typed tools kill hand-authored JSON; one frozenset
+edit + tests/test_mcp_curated.py) — post-run, never mid-audit (wheel move).
+(2) The SIGN-OFF rides MCP ELICITATION when Phase 1 lands — the audit loop
+is the elicitation binding's flagship seat: server→client→human-typed→
+server, the utterance never passes through the model (stronger authorship
+than agent-forwarding). (3) A block-drive-style loop driver is REJECTED:
+the audit loop's sequencing alternates with human acts at every step — the
+human is the sequencer, and run #10's live evidence is the skill-driven
+loop holding without improvisation. ALSO from the same run: standalone
+audits (no interview `audited_source`) run ROOTLESS-canonical — no seat
+records the audit configuration, so the template-mandated `source_roots`
+binding is silently inactive (view_op.py reads interview.json only). Fix:
+a config-recording seat for standalone audits + audit-preflight flagging
+rootless audits; executes-live gains an `output_roots` allowance (output
+literals currently flag as noise).
