@@ -118,16 +118,26 @@ def capture(payload: Any) -> list[dict[str, Any]]:
     ``AskUserQuestion`` PostToolUse mapping, every answer was a click on an
     agent-authored option, or the cwd repo has no journal namespace — all
     clean no-ops).
+
+    A valid ``HPC_ACTOR`` slug in the hook process env
+    (:func:`hpc_agent.infra.env_flags.env_actor`, MH2/MH4) attributes each
+    typed answer to the actor-suffixed locator; unset/invalid → the unsuffixed
+    path, byte-identical to the single-actor world.
     """
+    from hpc_agent.infra.env_flags import env_actor
     from hpc_agent.state.utterances import append_utterance
 
     if not isinstance(payload, dict) or payload.get("tool_name") != _TOOL_NAME:
         return []
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
+    # Seam: MT1 adds ``actor=`` to ``append_utterance``. Pass it only when set
+    # so this call works both before and after MT1 lands.
+    actor = env_actor()
+    kwargs = {"actor": actor} if actor else {}
     records = []
     for text in _typed_texts(payload):
-        record = append_utterance(cwd_dir, text)
+        record = append_utterance(cwd_dir, text, **kwargs)
         if record is not None:
             records.append(record)
     return records
