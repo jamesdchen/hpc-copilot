@@ -33,7 +33,7 @@ from hpc_agent._wire.workflows.submit_and_verify import (
 )
 from hpc_agent._wire.workflows.verify_canary import VerifyCanaryResult
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow
+from hpc_agent.ops.submit_flow import SubmitFlowResult, fire_second_canary, submit_flow
 from hpc_agent.ops.verify_canary import verify_canary
 
 if TYPE_CHECKING:
@@ -76,6 +76,211 @@ def _mark_canary_terminal(experiment_dir: Path, canary_run_id: str | None, *, st
             status,
             exc_info=True,
         )
+
+
+def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path:
+    """Pull a canary's task-0 ``metrics.json`` locally under the fingerprint pulls dir.
+
+    ``verify_canary`` only sha-fingerprints the metrics over SSH; the sample's
+    ``bind`` recompute needs the payload ON DISK. Reuse the
+    ``ops/aggregate_flow.py::_per_task_metrics_reduce`` rsync idiom: render the
+    canary's task-0 result dir from its sidecar ``result_dir_template`` and pull
+    ``metrics.json`` into ``_aggregated/_fingerprints/_pulls/<canary_run_id>/``
+    (T3's :func:`pulls_dir`). Returns the local ``metrics.json`` path. Raises on a
+    missing record / unrenderable template / failed pull / no file — the caller
+    treats any raise as "no sample this submit" (best-effort minting).
+    """
+    from hpc_agent.infra.transport import rsync_pull
+    from hpc_agent.state.fingerprint_store import pulls_dir
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.runs import read_run_sidecar
+
+    record = load_run(experiment_dir, canary_run_id)
+    if record is None:
+        raise errors.SpecInvalid(f"no journal record for canary {canary_run_id!r}")
+    sidecar = read_run_sidecar(experiment_dir, canary_run_id)
+    template = sidecar.get("result_dir_template")
+    if not isinstance(template, str) or not template:
+        raise errors.SpecInvalid(
+            f"canary {canary_run_id!r} sidecar carries no result_dir_template to render task 0"
+        )
+    # Task 0 result dir (relative to remote_path). A template that references a
+    # per-task kwarg cannot render locally — treated as "cannot pull" (raises).
+    result_subdir = template.format(task_id=0, run_id=canary_run_id)
+    local = pulls_dir(experiment_dir, canary_run_id)
+    pull = rsync_pull(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        remote_subdir=result_subdir,
+        local_dir=str(local),
+        include=["metrics.json"],
+    )
+    if pull.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"pull of {canary_run_id!r} task-0 metrics.json failed (exit {pull.returncode}): "
+            f"{(pull.stderr or '').strip()[:200]}"
+        )
+    hits = sorted(p for p in local.rglob("metrics.json") if p.is_file())
+    if not hits:
+        raise errors.RemoteCommandFailed(
+            f"no metrics.json pulled for canary {canary_run_id!r} under {result_subdir!r}"
+        )
+    return hits[0]
+
+
+def _mint_double_canary_sample(
+    experiment_dir: Path,
+    *,
+    base: SubmitFlowSpec,
+    first_canary_run_id: str,
+    second_canary_run_id: str,
+) -> None:
+    """Fetch both canaries' task-0 metrics, diff them, and append the n=2 prior.
+
+    Best-effort by contract: evidence collection must NEVER fail a submit whose
+    two canaries both verified ok. Any failure (pull miss, unrenderable template,
+    empty identity, malformed metrics) is warned and swallowed — the fingerprint
+    simply doesn't grow on this submit. The sample is ``source="double-canary"``,
+    ``scale="canary"``, ``same_submission=True``, ``verdict="auto_cleared"`` (both
+    executions verified ok — the passing code verdict; admitted by construction,
+    D-consume). Identity (``cmd_sha``/``tasks_py_sha``/``executor``) is lifted
+    from the main run's sidecar.
+    """
+    import json
+
+    from hpc_agent.infra.time import utcnow_iso
+    from hpc_agent.state import determinism, fingerprint_store
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        main_sidecar = read_run_sidecar(experiment_dir, base.run_id)
+        identity = {
+            "cmd_sha": str(main_sidecar.get("cmd_sha") or ""),
+            "tasks_py_sha": str(main_sidecar.get("tasks_py_sha") or ""),
+            "executor": str(main_sidecar.get("executor") or ""),
+        }
+        # Data-identity leg (Phase-3 amendment, ruled 0b): stamp the run's data
+        # identity onto the sample so a LATER comparison under rebuilt input files
+        # reads this prior as DATA DRIFT, not nondeterminism. Only when KNOWN — an
+        # absent data_manifest_sha leaves the leg off (disclosed-unknown, the
+        # exclude-none spirit; the wire SampleIdentity.data_sha defaults null).
+        data_sha = main_sidecar.get("data_manifest_sha")
+        if data_sha:
+            identity["data_sha"] = str(data_sha)
+        path_a = _pull_canary_task0_metrics(experiment_dir, first_canary_run_id)
+        path_b = _pull_canary_task0_metrics(experiment_dir, second_canary_run_id)
+        payload_a = json.loads(path_a.read_text(encoding="utf-8"))
+        payload_b = json.loads(path_b.read_text(encoding="utf-8"))
+        per_key = determinism.diff_metrics(payload_a, payload_b)
+        content_sha = fingerprint_store.content_sha_over_payloads(payload_a, payload_b)
+        record = determinism.build_sample_record(
+            ts=utcnow_iso(),
+            content_sha=content_sha,
+            identity=identity,
+            source="double-canary",
+            run_ids=[first_canary_run_id, second_canary_run_id],
+            cluster=base.cluster,
+            scale="canary",
+            verdict="auto_cleared",
+            per_key=per_key,
+            same_submission=True,
+        )
+        fingerprint_store.append_sample(
+            experiment_dir, record=record, artifact_a=path_a, artifact_b=path_b
+        )
+    except Exception:  # noqa: BLE001 — evidence minting never fails a passing submit
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "double-canary fingerprint sample not minted for run %r (both canaries "
+            "verified ok; the fingerprint simply did not grow this submit)",
+            base.run_id,
+            exc_info=True,
+        )
+
+
+def _run_double_canary(
+    experiment_dir: Path,
+    spec: SubmitAndVerifySpec,
+    canary_submit: SubmitFlowResult,
+    first_verify: VerifyCanaryResult,
+) -> SubmitAndVerifyResult | None:
+    """Fire + verify the SECOND canary, then mint the n=2 determinism prior.
+
+    Returns ``None`` to let the submit proceed (both canaries verified ok; the
+    sample is minted best-effort). Returns a BLOCKING :class:`SubmitAndVerifyResult`
+    (``verified=False``, empty ``job_ids``) when the second canary FAILS — the
+    same-code-passed-then-failed nondeterminism finding, blocking the main array
+    exactly like a failed first canary.
+
+    ``HPC_NO_DOUBLE_CANARY=1`` (operator env, the ``HPC_NO_CANARY_SKIP`` idiom)
+    reverts to the single canary — no agent-reachable spec field disables it.
+    """
+    from hpc_agent.infra.env_flags import env_flag
+
+    if env_flag("HPC_NO_DOUBLE_CANARY"):
+        return None
+
+    base = spec.submit
+    first_canary_run_id = canary_submit.canary_run_id  # ``<main>-canary``
+    second_canary_run_id = f"{base.run_id}-canary2"
+    canary_job_ids = list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
+
+    # Fire the second execution — a fresh ``-canary2`` id, so submit_flow's
+    # existing-canary replay branch never reuses the completed first canary.
+    fire_second_canary(experiment_dir, spec=base, canary_run_id=second_canary_run_id)
+
+    # Verify it the SAME way. Substitute the ``-canary2`` run_id by OMITTING
+    # expect_output/fingerprint: a path built for ``-canary`` cannot contain
+    # ``-canary2`` and verify_canary REFUSES an expect_output not naming the
+    # canary run_id (the completion count still verifies the second canary's
+    # output). checkpoint_result_dir is likewise derived from the ``-canary2``
+    # sidecar rather than the first canary's path.
+    second_verify = VerifyCanaryResult.model_validate(
+        verify_canary(
+            experiment_dir,
+            canary_run_id=second_canary_run_id,
+            expect_output=None,
+            fingerprint=None,
+            verify_checkpoint=base.auto_resume_on_kill,
+            checkpoint_result_dir=None,
+            poll_interval_sec=spec.poll_interval_sec,
+            wait_budget_sec=spec.wait_budget_sec,
+            log_dir=spec.log_dir,
+            file_glob=spec.file_glob,
+        )
+    )
+
+    if not second_verify.ok:
+        # LOUD nondeterminism finding: the SAME code passed then failed. Block the
+        # main array exactly like a failed first canary, and close the second
+        # canary's record so it doesn't linger in_flight (§5).
+        _mark_canary_terminal(experiment_dir, second_canary_run_id, status="failed")
+        return SubmitAndVerifyResult(
+            run_id=canary_submit.run_id,
+            job_ids=[],
+            total_tasks=canary_submit.total_tasks,
+            deduped=False,
+            canary_run_id=first_canary_run_id,
+            canary_job_ids=canary_job_ids,
+            verified=False,
+            # The second verify always sets a failure_kind on ok=False; surface it
+            # verbatim (the wire vocabulary is closed) — the nondeterminism framing
+            # lives in the details/verify_result, not a new failure_kind literal.
+            failure_kind=second_verify.failure_kind,
+            verify_result=second_verify,
+        )
+
+    # Second canary verified too. Close its record, then mint the n=2 prior from
+    # both executions' task-0 metrics (best-effort — never fails the gate).
+    _mark_canary_terminal(experiment_dir, second_canary_run_id, status="complete")
+    _mint_double_canary_sample(
+        experiment_dir,
+        base=base,
+        first_canary_run_id=first_canary_run_id or f"{base.run_id}-canary",
+        second_canary_run_id=second_canary_run_id,
+    )
+    return None
 
 
 def _launch_main_array(experiment_dir: Path, base: SubmitFlowSpec) -> SubmitFlowResult:
@@ -331,6 +536,22 @@ def submit_and_verify(
     # in_flight run (both the stop_after_canary S2 return and the Phase-2 launch
     # below are reached only past this point, so one call covers both).
     _mark_canary_terminal(experiment_dir, canary_submit.canary_run_id, status="complete")
+
+    # THE DOUBLE CANARY (docs/design/determinism-fingerprint.md, D-double-canary).
+    # The first canary verified ok — fire a SECOND canary (``<main>-canary2``),
+    # verify it the same way, and mint the n=2 determinism-fingerprint prior from
+    # the two executions' task-0 metrics. Placed HERE, past the first verify and
+    # before BOTH the stop_after_canary S2 return and the fused Phase-2 launch, so
+    # every fingerprint-minting submit runs it exactly once. A cache-skipped first
+    # canary never reaches this point (Phase 1 always fires a canary_only probe
+    # here, so the skip only bites the non-gated submit_flow path — the design's
+    # "skip skips BOTH executions" holds by construction). A FAILED second canary
+    # is a loud nondeterminism finding that blocks the main array exactly like a
+    # failed first canary (returns non-None). ``HPC_NO_DOUBLE_CANARY=1`` reverts
+    # to the single canary.
+    blocked = _run_double_canary(experiment_dir, spec, canary_submit, verify_result)
+    if blocked is not None:
+        return blocked
 
     # Canary verified. The block boundary (submit-s2): STOP before the main
     # array so the human can review "canary green, est N core-hours" and

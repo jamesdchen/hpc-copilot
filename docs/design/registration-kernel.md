@@ -668,6 +668,74 @@ re-register → verify `current` again → revoke with reason → verify
      `_canonical_sha` (`json.dumps(sort_keys=True, separators=(",", ":"),
      ensure_ascii=False)` → sha256).
 
+- **T6 implementation 2026-07-08 (`state/decision_journal.py` + wire):**
+  1. *The `"registration"` scope kind + path branch landed.* `SCOPE_KINDS` gained
+     a SIXTH member; `decisions_path` branches to
+     `.hpc/registrations/<registration_id>.decisions.jsonl`; the wire `ScopeKind`
+     Literal followed in lockstep. T5's `# T6 seam` glob in
+     `ops/registration/verify_op.py::_all_registration_ids` was RECONCILED to
+     DERIVE the registrations directory from the one `decisions_path` definition
+     (`decisions_path(exp, "registration", "_").parent`) — never a second path
+     constant. **Regen debt (deferred per the Wave-C dispatch — NOT run):** the
+     `ScopeKind` literal + the `verify-registration` verb owe the six regen scripts
+     (`operations.json` registry count, indices, frontmatter). The schema-freshness
+     contract test (`tests/_wire/test_schema_models_roundtrip.py`) is GREEN as
+     landed.
+
+- **T7 implementation 2026-07-08 (`ops/decision/journal.py` + facade):**
+  1. *Registration authorship refusals carry the E2 elicitation marker.* The
+     Lock-3 refusals (bare ack, un-named `registration_id`, missing prerequisite
+     sha-prefix) and the revoke floor's bare-ack / un-named-id refusals route
+     through `_refuse_missing_authorship`, attaching
+     `failure_features={"authorship_evidence": "missing"}`; the SINGLE
+     `append-decision` firing site therefore covers registration sign-offs over
+     MCP too (no new surface). Lock-2 sha / structural refusals (dossier bind
+     mismatch, template sha drift, view_sha mismatch, partial chain, missing
+     field/slot, block-convention, missing reason) stay UNMARKED — a re-elicited
+     utterance cannot fix a moved hash (the E2 scoping).
+  2. *The `view_sha` fourth leg recomputes with `registered_at=None` /
+     `status="current"`.* At append the record has no timestamp yet (the one field
+     no caller asserts), so the gate recomputes the deterministic
+     verify-registration projection over its append-time legs (all `current`) with
+     `registered_at=None`. `verify_op.build_view` was extracted as the ONE renderer
+     both the T5 reporter and the T7 gate call, so a witness the gate recomputes is
+     byte-identical to the one the reporter renders over the same inputs. NOTE the
+     coherence gap for T10 to close: a POST-registration `verify-registration` reads
+     `registered_at=<ts>`, so its view_sha differs from the bound one; the human's
+     binding witness derives from the pre-append projection, not a post-hoc verify.
+  3. *The decision subject reaches the registration subject through a facade.*
+     `ops/decision/journal.py` (subject `decision`) cannot import the
+     `ops/registration` subject directly (the subject-import lint). A top-level
+     facade `ops/registration_view.py` re-exports `check_chain` + `build_view` (the
+     `ops/notebook_view.py` precedent); `compute_dossier_signature` is reached via
+     the `from hpc_agent.ops import export_dossier` facade form. The pre-existing
+     Wave-B cross-subject import reds (`verify_op`/`prereqs` used the direct
+     spelling of `ops.export_dossier` / `ops.verify_reproduction`) were fixed to the
+     facade form at the same time, restoring the lint contract test to green.
+  4. *The dossier cross-link is enforced at append.* The gate passes
+     `dossier_run_ids=set(sig.run_ids)` (the live re-gather's resolved run set) into
+     `check_chain`, so a `reproduction` slot whose receipt names an unrelated run is
+     refused — stronger than the T5 reporter, which passes `None`.
+
+- **T8 implementation 2026-07-08 (`ops/attention_queue.py`):**
+  1. *Two registration item kinds.* `registration-blocked` (a registration whose
+     winning chain has a NON-CURRENT prerequisite → BLOCKED class, "blocks capital,
+     not just a run") and `registration-stale` (a registration whose live dossier
+     signature DRIFTED → VERDICT class, a re-registration verdict is owed). A
+     `revoked` / `absent` id contributes nothing. The collector routes both
+     verdicts through the ONE definitions — `reduce_registration` (dossier drift)
+     and `check_chain` (prerequisite currency) — and re-derives nothing (D6).
+     Fail-open per registration (a torn journal, a moved run whose dossier cannot
+     be re-gathered, or an unparseable chain is skipped, never crashing the read).
+  2. *The audit→registration leverage fan-out.* `_fanout_for` for an
+     `audit-section-unsigned` / `audit-section-stale` item now adds
+     `_count_registrations_naming_audit` to the existing runs-echoing count: an
+     unsigned prerequisite blocking a registration blocks CAPITAL, so the audit
+     section that gates it earns that leverage. A non-creating, fail-open read of
+     the registration journals, winner-selected through `reduce_registration`
+     (never a re-inlined newest-first); a revoked/absent registration no longer
+     depends on the audit and is not counted.
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)

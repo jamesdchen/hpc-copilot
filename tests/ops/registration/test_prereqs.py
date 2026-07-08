@@ -149,17 +149,71 @@ _REPRO = "widget-repro-run"
 _ORIG = "widget-orig-run"
 
 
-def _write_receipt(tmp_path: Path, *, tasks_py_sha: str, original_run_id: str = _ORIG) -> dict:
+_CMD_SHA = "widget-cmd"
+
+
+def _write_receipt(
+    tmp_path: Path,
+    *,
+    tasks_py_sha: str,
+    original_run_id: str = _ORIG,
+    cmd_sha: str = _CMD_SHA,
+) -> dict:
     receipt = {
         "ts": "2026-01-01T00:00:00Z",
         "overall": "match",
-        "original": {"run_id": original_run_id, "tasks_py_sha": "orig-code"},
-        "repro": {"run_id": _REPRO, "tasks_py_sha": tasks_py_sha},
+        "original": {"run_id": original_run_id, "cmd_sha": cmd_sha, "tasks_py_sha": "orig-code"},
+        "repro": {"run_id": _REPRO, "cmd_sha": cmd_sha, "tasks_py_sha": tasks_py_sha},
     }
     path = _receipt_path(tmp_path, _REPRO)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
     return receipt
+
+
+def _write_fingerprint_sample(
+    tmp_path: Path,
+    *,
+    cmd_sha: str = _CMD_SHA,
+    tasks_py_sha: str = "widget-code",
+    executor: str = "run.py",
+    scale: str = "main",
+    cluster: str = "widget-cluster",
+    key: str = "widget.jam",
+    a: float = 1.0,
+    b: float = 1.0,
+) -> None:
+    """Append ONE admitted (``auto_cleared``, admitted-by-construction) sample.
+
+    Written straight to the ledger path (bypassing ``append_sample``'s bind, which
+    would need on-disk canary artifacts) — the floor checker only tolerant-reads
+    and identity-filters, so a valid sample dict suffices. Identity matches the
+    receipt's ``repro`` block + the sidecar's executor.
+    """
+    from hpc_agent.infra.io import append_jsonl_line
+    from hpc_agent.state import determinism
+    from hpc_agent.state.fingerprint_store import fingerprint_path
+
+    diff = determinism.PerKeyDiff(
+        key=key,
+        a=a,
+        b=b,
+        abs_diff=abs(a - b),
+        rel_diff=(abs(a - b) / max(abs(a), abs(b)) if max(abs(a), abs(b)) else 0.0),
+        static_class="float",
+    )
+    record = determinism.build_sample_record(
+        ts="2026-01-01T00:00:00Z",
+        content_sha="deadbeef" * 8,
+        identity={"cmd_sha": cmd_sha, "tasks_py_sha": tasks_py_sha, "executor": executor},
+        source="verify-reproduction",
+        run_ids=[f"{cmd_sha}-orig", f"{cmd_sha}-repro"],
+        cluster=cluster,
+        scale=scale,
+        verdict="auto_cleared",
+        per_key=[diff],
+    )
+    append_jsonl_line(fingerprint_path(tmp_path, cmd_sha), record)
 
 
 def _write_repro_sidecar(tmp_path: Path, *, tasks_py_sha: str) -> None:
@@ -220,10 +274,62 @@ def test_reproduction_absent_without_receipt(tmp_path: Path) -> None:
     assert v.recomputed_sha is None
 
 
-def test_reproduction_requires_is_loud_not_yet_available(tmp_path: Path) -> None:
-    _write_receipt(tmp_path, tasks_py_sha="widget-code")
-    with pytest.raises(errors.SpecInvalid, match="determinism-fingerprint"):
-        prereqs.check_chain(tmp_path, [_repro_entry("abc", requires={"min_n": 3})])
+def test_reproduction_requires_floor_met(tmp_path: Path) -> None:
+    # The R4 seam WIRED: a base-current receipt + a ledger meeting the floor → current.
+    receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
+    _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
+    for _ in range(3):
+        _write_fingerprint_sample(tmp_path, scale="main", cluster="widget-cluster")
+    sha = prereqs._canonical_sha(receipt)
+    demand = {"min_n": 3, "scales": ["main"], "clusters": ["widget-cluster"]}
+    [v] = prereqs.check_chain(
+        tmp_path, [_repro_entry(sha, requires=demand)], dossier_run_ids={_ORIG}
+    )
+    assert v.status == "current"
+    assert "fingerprint floor" in v.evidence_note and "met" in v.evidence_note
+
+
+def test_reproduction_requires_floor_unmet_n(tmp_path: Path) -> None:
+    # Base current, but only 1 admitted sample against a min_n of 3 → stale, demand named.
+    receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
+    _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
+    _write_fingerprint_sample(tmp_path, scale="main")
+    sha = prereqs._canonical_sha(receipt)
+    [v] = prereqs.check_chain(
+        tmp_path, [_repro_entry(sha, requires={"min_n": 3})], dossier_run_ids={_ORIG}
+    )
+    assert v.status == "stale"
+    assert "fingerprint evidence floor unmet" in v.evidence_note
+    assert "min_n" in v.evidence_note
+
+
+def test_reproduction_requires_floor_unmet_scale(tmp_path: Path) -> None:
+    # Enough samples, but all canary-scale against a main-scale demand → stale.
+    receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
+    _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
+    for _ in range(3):
+        _write_fingerprint_sample(tmp_path, scale="canary")
+    sha = prereqs._canonical_sha(receipt)
+    [v] = prereqs.check_chain(
+        tmp_path,
+        [_repro_entry(sha, requires={"min_n": 3, "scales": ["main"]})],
+        dossier_run_ids={_ORIG},
+    )
+    assert v.status == "stale"
+    assert "fingerprint evidence floor unmet" in v.evidence_note
+    assert "scales" in v.evidence_note
+
+
+def test_reproduction_requires_floor_missing_ledger_is_shortfall(tmp_path: Path) -> None:
+    # No ledger at all → an ordinary n=0 shortfall, NOT a fabricated pass / crash.
+    receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
+    _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
+    sha = prereqs._canonical_sha(receipt)
+    [v] = prereqs.check_chain(
+        tmp_path, [_repro_entry(sha, requires={"min_n": 1})], dossier_run_ids={_ORIG}
+    )
+    assert v.status == "stale"
+    assert "fingerprint evidence floor unmet" in v.evidence_note
 
 
 def test_reproduction_unknown_requires_key_is_spec_invalid(tmp_path: Path) -> None:

@@ -11,11 +11,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest import mock
 
+import pytest
+
 from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _no_double_canary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the double canary out of the pure composition tests.
+
+    These tests assert the two-phase gate's short-circuits + envelope shape; the
+    determinism-fingerprint SECOND canary is its own concern (see
+    ``test_double_canary.py``). Patch ``_run_double_canary`` to a no-op that lets
+    the submit proceed (returns None) so ``verify_canary`` / ``submit_flow`` call
+    counts stay about the FIRST canary + main array only.
+    """
+    monkeypatch.setattr(
+        "hpc_agent.ops.submit_and_verify._run_double_canary",
+        lambda *_a, **_k: None,
+    )
 
 
 def _spec(*, canary: bool = True) -> SubmitAndVerifySpec:

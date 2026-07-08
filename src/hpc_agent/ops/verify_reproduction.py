@@ -1,18 +1,46 @@
 """``verify-reproduction`` — compare a reproduction run's metrics to the original.
 
 The COMPARISON half of the reproduction receipt
-(``docs/design/reproduction-receipt.md``). Given a reproduction run whose
-sidecar ``reproduces`` link names the original, load each run's reduced metrics
-via the artifact ladder, compare them per-key under a caller-owned tolerance,
-fold a single verdict, and append a durable, self-contained receipt line to
-``_aggregated/<repro_run_id>/reproduction_receipts.jsonl``.
+(``docs/design/reproduction-receipt.md``) and the CONSUMER of the determinism
+fingerprint (``docs/design/determinism-fingerprint.md`` D-consume). Given a
+reproduction run whose sidecar ``reproduces`` link names the original, load each
+run's reduced metrics (via the artifact ladder, or per-task for a partial
+reproduction), read the experiment's fingerprint LEDGER for prior evidence,
+reduce the observed envelope FRESH, classify the comparison into a TIERED
+verdict, append a durable receipt, and — judgment always preceding append —
+append THIS comparison back as one more fingerprint sample.
 
 The comparator carries **NO metric vocabulary** — it never names a metric,
-never privileges one, never picks a tolerance. It compares opaque numbers with
-equality-within-tolerance (or exact equality when no tolerance is supplied),
-and everything else (non-numeric values, NaN, keys present on one side only) is
-``incomparable`` rather than a raw ``!=`` surprise. ``n_samples`` compares like
-any other number — there is no metric-name special-casing anywhere.
+never privileges one, never invents a tolerance. It compares opaque numbers with
+equality-within-tolerance (or exact equality when no measured envelope and no
+caller tolerance apply), and everything else (non-numeric values, NaN, keys
+present on one side only) is ``incomparable`` rather than a raw ``!=`` surprise.
+``n_samples`` compares like any other number — there is no metric-name
+special-casing anywhere.
+
+The verdict is three-tiered (design center 3, the D-attention pattern):
+
+* **``auto_cleared``** — every float deviation comfortably inside a
+  WELL-EVIDENCED envelope (``n>=3`` + scale + cluster coverage, mechanized never
+  judged). A code attestation, zero human attention. An empty-ledger EXACT match
+  keeps the historical ``match`` posture (a "pre-fingerprint" comparison behaves
+  byte-for-byte as before — no invented tolerance).
+* **``needs_verdict``** — a THIN-envelope deviation (either direction), a novel
+  scale/cluster, or an ``incomparable`` key: routed to the human WITH the
+  code-rendered calibrated evidence (deviation vs envelope at n, scale) — never
+  an LLM-authored number.
+* **``mismatch``** — a deviation outside a WELL-EVIDENCED envelope, or an
+  exact-class key that moved. A FINDING (``needs_decision``, exit-0) — the
+  discovered-nondeterminism-is-the-feature posture, byte-preserved.
+
+The n=2 double-canary prior that seeds a ledger is a LABELED prior, not a truth;
+the recorded n=2 failure modes (carried verbatim from the design's decision
+center 2, and WHY a thin envelope only ever routes to the human):
+(1) rare-event nondeterminism looks ``exact`` at n=2 and is not; (2) canary-scale
+!= main-scale — BLAS/GPU libraries pick algorithms by problem size, so
+canary-scale evidence is THIN for a main-scale verdict; (3) same-node correlated
+samples — the double canary's two executions may land on one node/SKU
+(``same_submission: true`` records it).
 
 A mismatch or an incomparable is a SUCCESSFUL run (exit-0, ``needs_decision``):
 a discovered nondeterminism is the feature working, never an error. The verb
@@ -22,15 +50,16 @@ does not name the original) or a run's identity sidecar is missing.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import math
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent._wire.queries.determinism import DeterminismSampleRecord
 from hpc_agent._wire.queries.verify_reproduction import (
     ReproTolerance,
     VerifyReproductionResult,
@@ -39,10 +68,25 @@ from hpc_agent._wire.queries.verify_reproduction import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_partials
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.determinism import (
+    Sample,
+    build_sample_record,
+    classify,
+    diff_metrics,
+    flatten_metrics,
+    reduce_envelope,
+    validate_sample,
+)
+from hpc_agent.state.fingerprint_store import (
+    append_sample,
+    content_sha_over_payloads,
+    load_evidence,
+    pulls_dir,
+)
 from hpc_agent.state.runs import read_run_sidecar
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
 # Identity fields lifted VERBATIM off each run's sidecar into the receipt —
 # never re-derived. These are the run's {params, code, env, data, cluster,
@@ -58,8 +102,31 @@ _IDENTITY_FIELDS: tuple[str, ...] = (
     "submitted_at",
 )
 
+# The CODE-identity fields the fingerprint ledger keys + filters on (the
+# ``state/determinism.py::IDENTITY_FIELDS`` discipline). A drift on any reads
+# prior samples STALE. These three are the sample's ``identity`` block — the
+# wire ``SampleIdentity`` forbids extra keys, so the data-identity leg
+# (Amendment 1) is NOT folded in here until that wire model gains the field.
+_FINGERPRINT_IDENTITY_FIELDS: tuple[str, ...] = ("cmd_sha", "tasks_py_sha", "executor")
+
 #: Receipt record schema version (append-only ledger; bump on shape change).
+#: A comparison with no fingerprint evidence and no partiality stays v1 (a
+#: "pre-fingerprint" receipt, byte-identical to the historical shape); a tiered
+#: or partial comparison emits v2 (per-key envelope + partiality accounting).
 RECEIPT_SCHEMA_VERSION = 1
+RECEIPT_SCHEMA_VERSION_TIERED = 2
+
+#: Map the overall comparison verdict AT APPEND onto the sample's verdict
+#: vocabulary (``auto_cleared`` | ``needs_verdict`` | ``mismatch``). A ``match``
+#: (empty-ledger exact) is a PASSING verdict → ``auto_cleared`` (admitted by
+#: construction); an ``incomparable`` routes to the human → ``needs_verdict``.
+_SAMPLE_VERDICT_MAP: dict[str, str] = {
+    "match": "auto_cleared",
+    "auto_cleared": "auto_cleared",
+    "needs_verdict": "needs_verdict",
+    "mismatch": "mismatch",
+    "incomparable": "needs_verdict",
+}
 
 
 def _is_number(value: Any) -> bool:
@@ -76,28 +143,6 @@ def _is_number(value: Any) -> bool:
 def _is_nan(value: Any) -> bool:
     """True only for a float NaN (never raises for ints / large values)."""
     return isinstance(value, float) and math.isnan(value)
-
-
-def _flatten_metrics(metrics: Mapping[str, Any]) -> dict[str, Any]:
-    """Flatten a nested metrics mapping to scalar leaves, joining keys with ``.``.
-
-    Both artifact-ladder rungs yield the reducer's ``{grid_key: {metric: value}}``
-    shape (see :func:`reduce_partials` and the combiner's ``metrics_aggregate.json``
-    ``aggregated_metrics``). This flattens ONE uniform way — recursing into dict
-    values only — so a single-grid-point run becomes ``{"<grid>.<metric>": v}`` and
-    an already-flat dict stays flat. Non-dict leaves (numbers, strings, lists) are
-    preserved RAW — no reduction — so the comparator sees non-numeric values and
-    applies its equality/incomparable rules rather than dropping them.
-    """
-    flat: dict[str, Any] = {}
-    for key, value in metrics.items():
-        skey = str(key)
-        if isinstance(value, dict):
-            for sub_key, sub_val in _flatten_metrics(value).items():
-                flat[f"{skey}.{sub_key}"] = sub_val
-        else:
-            flat[skey] = value
-    return flat
 
 
 def _load_run_metrics(experiment_dir: Path, run_id: str) -> tuple[dict[str, Any] | None, str]:
@@ -126,13 +171,13 @@ def _load_run_metrics(experiment_dir: Path, run_id: str) -> tuple[dict[str, Any]
         if isinstance(data, dict):
             aggregated = data.get("aggregated_metrics")
             if isinstance(aggregated, dict):
-                return _flatten_metrics(aggregated), str(metrics_aggregate)
+                return flatten_metrics(aggregated), str(metrics_aggregate)
 
     # Rung 2 — reduce the per-wave partials locally with the shared reducer.
     if combiner_dir.is_dir():
         reduced = reduce_partials(combiner_dir)  # {grid_key: metrics}, {} when no waves
         if reduced:
-            return _flatten_metrics(reduced), str(combiner_dir)
+            return flatten_metrics(reduced), str(combiner_dir)
 
     # Rung 3 — nothing to compare on this side.
     return (
@@ -140,6 +185,92 @@ def _load_run_metrics(experiment_dir: Path, run_id: str) -> tuple[dict[str, Any]
         f"no metrics artifact for run {run_id!r} "
         f"(looked for {metrics_aggregate} and {combiner_dir}/wave_*.json)",
     )
+
+
+# --- partial (per-task) load path (design center 5) --------------------------
+#
+# A partial reproduction compares PER-TASK, never pooled-vs-subset — the
+# artifact ladder above loads REDUCED aggregates, which is wrong for a subset.
+# This is the NEW named load path the design pins so it isn't improvised: each
+# side's per-task ``metrics.json`` for the compared indices is loaded LOCALLY
+# when present (under ``_aggregated/<run_id>/_per_task/<idx>/metrics.json``),
+# else via the remote filtered-pull seam (T6-era). Each task's leaves are
+# prefixed ``task<idx>.`` so the SAME opaque comparator compares them honestly.
+
+
+def _partial_dir(experiment_dir: Path, run_id: str) -> Path:
+    """``_aggregated/<run_id>/_per_task/`` — the local per-task metrics home."""
+    return experiment_dir / "_aggregated" / run_id / "_per_task"
+
+
+def _partial_indices(sidecar: Mapping[str, Any]) -> list[int] | None:
+    """The compared task indices a partial reproduction recorded on its sidecar.
+
+    T6 records ``task_sample`` (the derived-or-caller subset) on the reproduction
+    sidecar; this reads it back so T5 can compare per-task. It rides the
+    sanctioned ``extra`` free-form pocket (``extra["task_sample"]``) — the
+    schema-stable seam for run-scoped metadata pre-T6 — so this read never
+    references an unwritten first-class sidecar key. Returns ``None`` when
+    absent/empty (a FULL reproduction) or malformed (bools/non-ints refuse the
+    partial path rather than guessing).
+    """
+    extra = sidecar.get("extra")
+    raw = extra.get("task_sample") if isinstance(extra, dict) else None
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    indices: list[int] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        indices.append(value)
+    return indices
+
+
+def _pull_partial_task_metrics(
+    experiment_dir: Path, run_id: str, task_index: int
+) -> dict[str, Any] | None:
+    """Remote filtered-pull seam for one task's ``metrics.json`` (named, not improvised).
+
+    The ``ops/aggregate_flow.py::_per_task_metrics_reduce`` idiom (``rsync_pull``
+    a single task's ``metrics.json`` when it isn't already local). T5 implements
+    the LOCAL leg only; the remote pull lands with T6 (it needs the run's journal
+    record for the ssh target). Returns ``None`` (not available) so the local
+    path is authoritative and the missing task is counted UNCOMPARED — never
+    silently dropped.
+    """
+    return None
+
+
+def _load_partial_side(
+    experiment_dir: Path, run_id: str, indices: Sequence[int]
+) -> tuple[dict[str, Any], list[int]]:
+    """Load one side's per-task metrics for *indices* → (flat_metrics, present).
+
+    Each present task's leaves are prefixed ``task<idx>.`` so the comparator sees
+    per-task keys. ``present`` is the subset of *indices* that yielded a readable
+    ``metrics.json`` (local, else the remote seam) — the rest are UNCOMPARED.
+    """
+    flat: dict[str, Any] = {}
+    present: list[int] = []
+    for idx in indices:
+        path = _partial_dir(experiment_dir, run_id) / str(idx) / "metrics.json"
+        payload: Any = None
+        if path.is_file():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = None
+        if payload is None:
+            payload = _pull_partial_task_metrics(experiment_dir, run_id, idx)
+        if not isinstance(payload, dict):
+            continue
+        present.append(idx)
+        for key, value in flatten_metrics(payload).items():
+            flat[f"task{idx}.{key}"] = value
+    return flat, present
+
+
+# --- the byte-preserved v1 comparator (NO metric vocabulary) -----------------
 
 
 def _resolve_key_tol(
@@ -266,6 +397,76 @@ def _render_reason(verdicts: list[dict[str, Any]], overall: str) -> str:
     )
 
 
+def _render_tiered_reason(stage: str, per_key: list[dict[str, Any]]) -> str:
+    """Code-rendered summary for a tiered (fingerprint-consulted) comparison.
+
+    Names the tier verdict + the per-tier key counts + the calibrated spread of
+    the worst deviation vs its envelope — every number is READ off the receipt
+    keys, never LLM-authored (the D6 archive/interface split).
+    """
+    n_auto = sum(
+        1 for e in per_key if e.get("tier_reason") in ("exact", "within_evidenced_envelope")
+    )
+    n_thin = sum(
+        1
+        for e in per_key
+        if e.get("tier_reason") in ("within_thin_envelope", "outside_thin_envelope")
+    )
+    n_incomp = sum(1 for e in per_key if e.get("verdict") == "incomparable")
+    total = len(per_key)
+    detail = ""
+    # Surface the widest evidenced deviation as the calibrated brief number.
+    worst: dict[str, Any] | None = None
+    for e in per_key:
+        env = e.get("envelope_applied")
+        if not isinstance(env, dict) or e.get("rel_diff") is None:
+            continue
+        if worst is None or (e["rel_diff"] or 0.0) > (worst.get("rel_diff") or 0.0):
+            worst = e
+    if worst is not None and isinstance(worst.get("envelope_applied"), dict):
+        env = worst["envelope_applied"]
+        ev = env.get("evidence", {})
+        detail = (
+            f"; worst {worst['key']}: rel_diff={worst.get('rel_diff')} vs "
+            f"[{env.get('lo')}, {env.get('hi')}] (n={ev.get('n')}, "
+            f"scales={ev.get('scales')})"
+        )
+    return (
+        f"reproduction verdict: {stage} — {n_auto} auto-clearable, {n_thin} thin/novel, "
+        f"{n_incomp} incomparable of {total} metric key{'s' if total != 1 else ''}{detail}"
+    )
+
+
+def _data_dimension_phrase(excluded_data_drift: int, data_identity_unknown: int) -> str:
+    """Code-rendered clause NAMING the data dimension (amendment leg 2), or ``""``.
+
+    The verdict states which dimension moved: prior samples EXCLUDED as data drift
+    (a different data identity — a rebuilt input, not nondeterminism), and priors
+    with NO recorded manifest counted UNKNOWN ("data identity unknown, no manifest
+    at record time") — disclosed, never blocking, never fabricated. Both counts
+    only arise when the CURRENT comparison's data identity is KNOWN (the data leg
+    was applied); empty string when the data leg had nothing to say, so a
+    no-manifest verify stays byte-identical to a pre-amendment one.
+    """
+    parts: list[str] = []
+    if excluded_data_drift:
+        parts.append(
+            f"{excluded_data_drift} prior sample"
+            f"{'s' if excluded_data_drift != 1 else ''} excluded as DATA DRIFT "
+            "(different data identity — a rebuilt input reads as data drift, not "
+            "nondeterminism)"
+        )
+    if data_identity_unknown:
+        parts.append(
+            f"{data_identity_unknown} prior sample"
+            f"{'s' if data_identity_unknown != 1 else ''} with data identity unknown "
+            "(no manifest at record time)"
+        )
+    if not parts:
+        return ""
+    return "; data dimension: " + ", ".join(parts)
+
+
 def _identity(sidecar: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     """Lift a run's identity off its sidecar VERBATIM (never re-derived)."""
     ident: dict[str, Any] = {"run_id": run_id}
@@ -279,24 +480,154 @@ def _receipt_path(experiment_dir: Path, repro_run_id: str) -> Path:
     return experiment_dir / "_aggregated" / repro_run_id / "reproduction_receipts.jsonl"
 
 
-def _append_receipt(path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON line under an exclusive flock + fsync (append-only).
+def _validate_receipt_partiality(receipt: Mapping[str, Any]) -> None:
+    """Refuse a partial receipt that omits any partiality field (no-silent-caps).
 
-    The harvest-ledger / decision-brief idiom: advisory-``flock``-serialized so
-    two concurrent verifications cannot interleave a torn line, ``fsync``-ed so
-    the durable scientific record survives a crash. No dedup — each verification
-    is its own event, so a re-verify appends a SECOND line.
+    A partial comparison's receipt MUST disclose the exact task indices compared
+    and what it did NOT compare (uncompared key/task counts) — a subset receipt
+    that prints like a full one is the silent-caps failure this pins. Raises
+    :class:`errors.SpecInvalid` naming the missing field.
     """
-    from hpc_agent.infra.io import advisory_flock
+    if receipt.get("partial") is not True:
+        return
+    task_indices = receipt.get("task_indices")
+    if not isinstance(task_indices, (list, tuple)) or not task_indices:
+        raise errors.SpecInvalid(
+            "verify-reproduction: a partial receipt must record the exact task_indices "
+            f"it compared (no-silent-caps); got {task_indices!r}"
+        )
+    for field in ("uncompared_keys", "uncompared_tasks"):
+        if receipt.get(field) is None:
+            raise errors.SpecInvalid(
+                f"verify-reproduction: a partial receipt must record {field} "
+                "(no-silent-caps); it is null"
+            )
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True, default=str) + "\n"
-    lock = path.with_suffix(path.suffix + ".lock")
-    with advisory_flock(lock), path.open("a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        with contextlib.suppress(OSError):
-            os.fsync(fh.fileno())
+
+def _append_receipt(path: Path, record: dict[str, Any]) -> None:
+    """Append one JSON line via the ONE shared JSONL-append helper (append-only).
+
+    Re-pointed onto ``infra/io.py::append_jsonl_line`` (the shared flock+fsync
+    ledger discipline every append-only store routes through) — never a second
+    definition. No dedup: each verification is its own event, so a re-verify
+    appends a SECOND line.
+    """
+    from hpc_agent.infra.io import append_jsonl_line
+
+    append_jsonl_line(path, record)
+
+
+# --- the fingerprint overlay (D-consume) -------------------------------------
+
+
+def _adapt_tolerance(
+    tolerance: ReproTolerance | None,
+) -> Callable[[str], tuple[float | None, float | None] | None] | None:
+    """Adapt the caller ``ReproTolerance`` into the classifier's tolerance callable.
+
+    T1's ``classify`` takes ``tolerance(key) -> (abs_tol, rel_tol) | None`` and
+    labels a key it decides ``caller_override`` (disclosed). ``None`` (no
+    tolerance, or an all-absent per-key entry) leaves the key to the measured /
+    exact path.
+    """
+    if tolerance is None:
+        return None
+
+    def _resolver(key: str) -> tuple[float | None, float | None] | None:
+        abs_tol, rel_tol, supplied = _resolve_key_tol(tolerance, key)
+        if not supplied:
+            return None
+        return (abs_tol, rel_tol)
+
+    return _resolver
+
+
+def _load_ledger_evidence(
+    experiment_dir: Path, cmd_sha: str, identity: Mapping[str, Any]
+) -> tuple[list[Sample], list[bool]]:
+    """Read the fingerprint ledger for *cmd_sha* → CURRENT-identity (samples, admitted).
+
+    The store layer (T3) does the tolerant read + CURRENT-identity partition +
+    the admission JOIN; this validates each surviving record to a :class:`Sample`
+    (dropping any that fail the sample-shape check, keeping the admitted flags
+    aligned) so the pure kernel (T1) can reduce the envelope. Returns empty when
+    the ledger does not exist (a first, "pre-fingerprint" comparison).
+    """
+    if not cmd_sha:
+        return [], []
+    try:
+        evidence = load_evidence(experiment_dir, cmd_sha=cmd_sha, identity=identity)
+    except errors.SpecInvalid:
+        return [], []
+    samples: list[Sample] = []
+    admitted: list[bool] = []
+    for record, flag in zip(evidence.samples, evidence.admitted_flags, strict=False):
+        try:
+            samples.append(validate_sample(record))
+        except errors.SpecInvalid:
+            continue
+        admitted.append(bool(flag))
+    return samples, admitted
+
+
+def _append_fingerprint_sample(
+    experiment_dir: Path,
+    *,
+    original_run_id: str,
+    repro_run_id: str,
+    identity: Mapping[str, Any],
+    cluster: str | None,
+    stage: str,
+    orig_metrics: Mapping[str, Any],
+    repro_metrics: Mapping[str, Any],
+    partial: bool,
+    task_indices: list[int] | None,
+) -> dict[str, Any] | None:
+    """Append THIS comparison back as one more fingerprint sample (best-effort).
+
+    D-consume: after verdicting (judgment ALWAYS precedes append — the envelope
+    was reduced from PRIOR evidence only), the comparison becomes a sample. The
+    two compared payloads are persisted on disk under the ledger's ``_pulls``
+    area so the bind-recompute has artifacts to re-hash; the sample's ``verdict``
+    is the comparison's verdict AT APPEND (``auto_cleared`` samples are admitted
+    by construction; ``needs_verdict``/``mismatch`` are recorded-but-inadmissible
+    until a human ``reproduction-verdict`` acceptance — T12).
+
+    Best-effort: a comparison with no known measuring cluster or an unbuildable
+    sample shape mints NO sample (returns ``None``) rather than failing the
+    verdict — the receipt is the durable record; the sample is the accreting
+    evidence.
+    """
+    if not cluster:
+        return None
+    try:
+        area = pulls_dir(experiment_dir, repro_run_id)
+        area.mkdir(parents=True, exist_ok=True)
+        artifact_a = area / "compare_a.json"
+        artifact_b = area / "compare_b.json"
+        payload_a = dict(orig_metrics)
+        payload_b = dict(repro_metrics)
+        artifact_a.write_text(json.dumps(payload_a, sort_keys=True), encoding="utf-8")
+        artifact_b.write_text(json.dumps(payload_b, sort_keys=True), encoding="utf-8")
+        content_sha = content_sha_over_payloads(payload_a, payload_b)
+        record = build_sample_record(
+            ts=utcnow_iso(),
+            content_sha=content_sha,
+            identity=dict(identity),
+            source="verify-reproduction",
+            run_ids=[original_run_id, repro_run_id],
+            cluster=cluster,
+            scale="main",
+            verdict=_SAMPLE_VERDICT_MAP.get(stage, "needs_verdict"),
+            per_key=diff_metrics(payload_a, payload_b),
+            same_submission=False,
+            partial=partial,
+            task_indices=task_indices if partial else None,
+        )
+        append_sample(experiment_dir, record=record, artifact_a=artifact_a, artifact_b=artifact_b)
+        return record
+    except (errors.SpecInvalid, OSError):
+        return None
 
 
 @primitive(
@@ -307,16 +638,22 @@ def _append_receipt(path: Path, record: dict[str, Any]) -> None:
             "filesystem",
             "<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl (append-only)",
         ),
+        SideEffect(
+            "filesystem",
+            "<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl (append-only sample)",
+        ),
     ],
     error_codes=[errors.SpecInvalid],
-    idempotent=False,  # append-only receipt: each verification accretes a line
+    idempotent=False,  # append-only receipt + sample: each verification accretes
     idempotency_key=None,
     agent_facing=True,
     cli=CliShape(
         help=(
             "Compare a reproduction run's reduced metrics against the original it "
-            "names (sidecar `reproduces` link), under a caller-owned tolerance, and "
-            "append a durable receipt. A mismatch/incomparable is a FINDING "
+            "names (sidecar `reproduces` link), reduce the experiment's determinism "
+            "envelope, tier the verdict (auto_cleared / needs_verdict / mismatch), "
+            "append a durable receipt, and append the comparison back as a "
+            "fingerprint sample. A mismatch/incomparable is a FINDING "
             "(needs_decision), never an error."
         ),
         spec_arg=True,
@@ -328,13 +665,13 @@ def _append_receipt(path: Path, record: dict[str, Any]) -> None:
 def verify_reproduction(
     experiment_dir: Path, *, spec: VerifyReproductionSpec
 ) -> VerifyReproductionResult:
-    """Verdict + durable receipt for a reproduction pair.
+    """Tiered verdict + durable receipt + accreting sample for a reproduction pair.
 
     Refuses (``SpecInvalid``) when the pair is not a genuine reproduction — the
     reproduction run's sidecar ``reproduces`` field must name ``original_run_id``
     — or when either run's identity sidecar is missing. Otherwise it always
-    succeeds (exit-0): a mismatch or incomparable is a ``needs_decision`` finding,
-    never an error.
+    succeeds (exit-0): a mismatch, incomparable, or needs_verdict is a
+    ``needs_decision`` finding, never an error.
     """
     original_run_id = spec.original_run_id
     repro_run_id = spec.repro_run_id
@@ -369,15 +706,37 @@ def verify_reproduction(
             "reproduction via `reproduce-run` so the provenance link is recorded."
         )
 
-    # Load each run's reduced metrics via the artifact ladder.
-    orig_metrics, orig_source = _load_run_metrics(experiment_dir, original_run_id)
-    repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
+    # Load each run's metrics — FULL via the artifact ladder, or PER-TASK when
+    # the reproduction recorded a task subset (design center 5: a subset compares
+    # per-task, never pooled-vs-subset).
+    indices = _partial_indices(repro_sidecar)
+    partial = indices is not None
+    compared_indices: list[int] | None = None
+    uncompared_keys: int | None = None
+    uncompared_tasks: int | None = None
+    # The data-dimension disclosure (amendment leg 3) — populated only on the
+    # tiered path (an envelope exists to have applied the data leg); stays None on
+    # the incomparable / empty-ledger paths.
+    data_identity_disclosure: dict[str, Any] | None = None
+
+    if partial:
+        assert indices is not None
+        orig_flat, orig_present = _load_partial_side(experiment_dir, original_run_id, indices)
+        repro_flat, repro_present = _load_partial_side(experiment_dir, repro_run_id, indices)
+        orig_source = str(_partial_dir(experiment_dir, original_run_id))
+        repro_source = str(_partial_dir(experiment_dir, repro_run_id))
+        orig_metrics: dict[str, Any] | None = orig_flat if orig_present else None
+        repro_metrics: dict[str, Any] | None = repro_flat if repro_present else None
+        compared_indices = sorted(set(orig_present) & set(repro_present))
+    else:
+        orig_metrics, orig_source = _load_run_metrics(experiment_dir, original_run_id)
+        repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
 
     if orig_metrics is None or repro_metrics is None:
         # A missing metrics artifact is an incomparable FINDING (not an error):
-        # the run may simply not have been aggregated yet.
+        # the run may simply not have been aggregated yet. No envelope, no sample.
         per_key: list[dict[str, Any]] = []
-        overall = "incomparable"
+        stage = "incomparable"
         missing = []
         if orig_metrics is None:
             missing.append(f"original [{orig_source}]")
@@ -387,14 +746,133 @@ def verify_reproduction(
             "reproduction verdict: incomparable — missing metrics artifact for "
             + " and ".join(missing)
         )
+        schema_version = RECEIPT_SCHEMA_VERSION_TIERED if partial else RECEIPT_SCHEMA_VERSION
+        appended_record = None
     else:
-        per_key = _compare_metrics(orig_metrics, repro_metrics, spec.tolerance)
-        overall = _fold_overall(per_key)
-        reason = _render_reason(per_key, overall)
+        # v1 comparator (BYTE-PRESERVED, no metric vocabulary) — the base per-key
+        # observation + verdict every path starts from.
+        per_key_v1 = _compare_metrics(orig_metrics, repro_metrics, spec.tolerance)
+        overall_v1 = _fold_overall(per_key_v1)
+
+        if partial:
+            assert indices is not None
+            assert compared_indices is not None
+            uncompared_tasks = len(indices) - len(compared_indices)
+            uncompared_keys = len(set(orig_metrics) ^ set(repro_metrics))
+
+        # Fingerprint overlay: reduce the envelope FRESH from PRIOR evidence only
+        # (judge-before-append), then tier the verdict via the ONE classifier.
+        cmd_sha = str(repro_sidecar.get("cmd_sha") or "")
+        cluster = repro_sidecar.get("cluster")
+        code_identity = {field: repro_sidecar.get(field) for field in _FINGERPRINT_IDENTITY_FIELDS}
+        # Data-identity leg (Phase-3 amendment, ruled 0b): the repro's data
+        # identity, lifted from its sidecar's data_manifest_sha. Known → the
+        # envelope EXCLUDES cross-data prior samples as data drift (disclosed
+        # excluded_data_drift), never admitting a parquet-rebuild sample as
+        # nondeterminism; None → the data leg is not applied (unknown, disclosed,
+        # never blocking). The SAMPLE this comparison appends carries the leg so a
+        # FUTURE comparison can filter on it — code_identity feeds the store-layer
+        # read (which keys on the three code fields), the data leg rides separately.
+        data_sha_raw = repro_sidecar.get("data_manifest_sha")
+        data_sha = str(data_sha_raw) if data_sha_raw else None
+        identity = dict(code_identity)
+        if data_sha:
+            identity["data_sha"] = data_sha
+        samples, admitted = _load_ledger_evidence(experiment_dir, cmd_sha, code_identity)
+        envelope = reduce_envelope(
+            samples, admitted, identity=code_identity, data_identity=data_sha
+        )
+        # The data-dimension disclosure (amendment leg 2): what the data leg did to
+        # the prior evidence — cross-data samples EXCLUDED as drift, or priors with
+        # no manifest counted UNKNOWN. Surfaced on the v2 receipt + the reason so
+        # the verdict NAMES the data dimension when it moved (never fabricated). The
+        # block rides the receipt only when the CURRENT data identity is KNOWN — a
+        # no-manifest verify stays byte-identical to a pre-amendment one.
+        data_moved = bool(envelope.excluded_data_drift or envelope.data_identity_unknown)
+        data_phrase = _data_dimension_phrase(
+            envelope.excluded_data_drift, envelope.data_identity_unknown
+        )
+        if data_sha is not None:
+            data_identity_disclosure = {
+                "current": data_sha,
+                "excluded_data_drift": envelope.excluded_data_drift,
+                "data_identity_unknown": envelope.data_identity_unknown,
+            }
+        diffs = diff_metrics(orig_metrics, repro_metrics)
+        classification = classify(
+            diffs,
+            envelope,
+            current_scale="main",
+            current_cluster=str(cluster or ""),
+            tolerance=_adapt_tolerance(spec.tolerance),
+        )
+
+        # A comparison the fingerprint actually judged (a non-empty envelope)
+        # runs the TIERED verdict; an empty-ledger comparison keeps the
+        # historical v1 posture (no invented tolerance — a "pre-fingerprint"
+        # comparison is byte-identical to before). Partiality forces v2 (the
+        # receipt must carry the partiality accounting) but reuses the v1
+        # verdicts when there is no envelope to consult.
+        # data_moved forces v2 even on an empty envelope: when ALL priors were
+        # excluded as data drift the envelope is empty (untiered), yet the
+        # exclusion is exactly what must be disclosed (a rebuilt input).
+        tiered = bool(envelope.per_key)
+        schema_version = (
+            RECEIPT_SCHEMA_VERSION_TIERED
+            if (tiered or partial or data_moved)
+            else RECEIPT_SCHEMA_VERSION
+        )
+
+        if tiered:
+            kv_by_key = {kv.key: kv for kv in classification.per_key}
+            per_key = []
+            for entry in per_key_v1:
+                kv = kv_by_key.get(entry["key"])
+                merged = dict(entry)
+                if kv is not None:
+                    merged["verdict"] = kv.verdict
+                    merged["tier_reason"] = kv.tier_reason
+                    merged["envelope_applied"] = kv.envelope_applied
+                else:
+                    merged["tier_reason"] = None
+                    merged["envelope_applied"] = None
+                per_key.append(merged)
+            stage = classification.stage_reached
+            reason = _render_tiered_reason(stage, per_key) + data_phrase
+        else:
+            per_key = []
+            for entry in per_key_v1:
+                if schema_version == RECEIPT_SCHEMA_VERSION_TIERED:
+                    merged = dict(entry)
+                    if entry["tolerance_applied"] is not None:
+                        merged["tier_reason"] = "caller_override"
+                    elif entry["verdict"] == "match":
+                        merged["tier_reason"] = "exact"
+                    else:
+                        merged["tier_reason"] = None
+                    merged["envelope_applied"] = None
+                    per_key.append(merged)
+                else:
+                    per_key.append(entry)
+            stage = overall_v1
+            reason = _render_reason(per_key_v1, overall_v1) + data_phrase
+
+        appended_record = _append_fingerprint_sample(
+            experiment_dir,
+            original_run_id=original_run_id,
+            repro_run_id=repro_run_id,
+            identity=identity,
+            cluster=cluster,
+            stage=stage,
+            orig_metrics=orig_metrics,
+            repro_metrics=repro_metrics,
+            partial=partial,
+            task_indices=compared_indices,
+        )
 
     receipt: dict[str, Any] = {
         "ts": utcnow_iso(),
-        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "original": _identity(original_sidecar, original_run_id),
         "repro": _identity(repro_sidecar, repro_run_id),
         # Verbatim echo of the caller-owned tolerance (null when exact).
@@ -402,17 +880,46 @@ def verify_reproduction(
             spec.tolerance.model_dump(mode="json") if spec.tolerance is not None else None
         ),
         "per_key": per_key,
-        "overall": overall,
+        "overall": stage,
         "sources": {"original_artifact": orig_source, "repro_artifact": repro_source},
     }
+    if schema_version == RECEIPT_SCHEMA_VERSION_TIERED:
+        # v2 partiality accounting (design center 5 — no-silent-caps).
+        receipt["partial"] = partial
+        receipt["task_indices"] = compared_indices if partial else None
+        receipt["uncompared_keys"] = uncompared_keys
+        receipt["uncompared_tasks"] = uncompared_tasks
+        # v2 data-identity disclosure (amendment leg 3): the current data identity
+        # + what the data leg did to the prior evidence. None on an empty-ledger v2
+        # (partial-but-untiered) receipt — no envelope applied the data leg.
+        receipt["data_identity"] = data_identity_disclosure
+
+    # No-silent-caps: refuse a partial receipt missing any partiality field.
+    _validate_receipt_partiality(receipt)
 
     path = _receipt_path(experiment_dir, repro_run_id)
     _append_receipt(path, receipt)
 
-    return VerifyReproductionResult(
-        stage_reached=overall,  # type: ignore[arg-type]
-        needs_decision=overall != "match",
-        reason=reason,
-        receipt=receipt,
-        receipt_path=str(path),
-    )
+    # Echo the appended sample only when it validates against the wire model —
+    # a shape the wire cannot represent (e.g. a non-scalar leaf) is still
+    # recorded in the ledger by the store, but not surfaced on the result.
+    sample_echo: dict[str, Any] | None = None
+    if appended_record is not None:
+        try:
+            DeterminismSampleRecord.model_validate(appended_record)
+            sample_echo = appended_record
+        except ValidationError:
+            sample_echo = None
+
+    # Constructed via ``model_validate`` (a dict payload) rather than keyword
+    # args so the result carries the schema_version-2 ``appended_sample`` echo
+    # even where a stale installed wire model is on the type-checker's path.
+    result_payload: dict[str, Any] = {
+        "stage_reached": stage,
+        "needs_decision": stage not in ("match", "auto_cleared"),
+        "reason": reason,
+        "receipt": receipt,
+        "receipt_path": str(path),
+        "appended_sample": sample_echo,
+    }
+    return VerifyReproductionResult.model_validate(result_payload)

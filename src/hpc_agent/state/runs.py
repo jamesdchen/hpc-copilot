@@ -121,6 +121,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
     "node_sha",  # str — compose_node_sha(cmd_sha, parents) when parent_run_ids set
     "data_sha",  # str — data identity of the declared input dataset(s) (#222)
+    "data_manifest_sha",  # str — data-manifest identity of declared input roots (amendment 0b)
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
@@ -166,6 +167,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "parent_run_ids": None,
     "node_sha": None,
     "data_sha": None,
+    "data_manifest_sha": None,
     "env_hash": None,
     "scopes": None,
     "reproduces": None,
@@ -239,6 +241,7 @@ def write_run_sidecar(
     parent_run_ids: list[str] | None = None,
     node_sha: str | None = None,
     data_sha: str | None = None,
+    data_manifest_sha: str | None = None,
     env_hash: str | None = None,
     job_ids: list[str] | None = None,
     scopes: list[str] | None = None,
@@ -368,6 +371,11 @@ def write_run_sidecar(
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,
         "node_sha": node_sha,
         "data_sha": data_sha,
+        # Data-manifest identity of the declared input ROOTS (Phase-3 amendment,
+        # ruled 0b) — DISTINCT from data_sha (which is the input_datasets/DVC
+        # identity, #222). Same only-write-non-None pattern, so a run with no
+        # minted manifest is byte-identical to a pre-amendment sidecar.
+        "data_manifest_sha": data_manifest_sha,
         "env_hash": env_hash,
         "job_ids": list(job_ids) if job_ids is not None else None,
         # Opaque caller-owned evidence-scope tags. Recorded verbatim, never
@@ -903,6 +911,7 @@ def backfill_run_sidecar_provenance(
     *,
     data_sha: str | None,
     env_hash: str | None,
+    data_manifest_sha: str | None = None,
 ) -> Path:
     """Fill *null* provenance fields on an existing sidecar; return its path.
 
@@ -925,7 +934,11 @@ def backfill_run_sidecar_provenance(
     def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
         if existing is None:
             raise FileNotFoundError(f"run sidecar not found: {target}")
-        for field, value in (("data_sha", data_sha), ("env_hash", env_hash)):
+        for field, value in (
+            ("data_sha", data_sha),
+            ("env_hash", env_hash),
+            ("data_manifest_sha", data_manifest_sha),
+        ):
             if value is not None and existing.get(field) is None:
                 existing[field] = value
         return existing

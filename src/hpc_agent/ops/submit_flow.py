@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from hpc_agent.infra.backends import HPCBackend
 
-__all__ = ["SubmitFlowResult", "submit_flow", "submit_flow_batch"]
+__all__ = ["SubmitFlowResult", "fire_second_canary", "submit_flow", "submit_flow_batch"]
 
 
 @dataclass(frozen=True)
@@ -733,8 +733,10 @@ def _run_constant_spec_kwargs(experiment_dir: Path) -> dict[str, Any]:
     return {str(k): v for k, v in fixed_params.items()}
 
 
-def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | None, str]:
-    """The (data_sha, env_hash) pair the spec's provenance capture records (#222/#312).
+def _spec_provenance(
+    experiment_dir: Path, spec: SubmitFlowSpec
+) -> tuple[str | None, str, str | None]:
+    """The (data_sha, env_hash, data_manifest_sha) provenance the spec records.
 
     ``env_hash`` folds the resolved activation the cluster preamble consumes
     ($MODULES / $CONDA_SOURCE / $CONDA_ENV in job_env) plus the runtime
@@ -743,7 +745,16 @@ def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | 
     ("not captured" must stay distinguishable from the real digest of an
     empty declaration), and a declared-but-missing path contributes
     ``compute_data_sha``'s "absent" sentinel inside the hash.
+
+    ``data_manifest_sha`` (Phase-3 amendment, ruled 0b) is the DISTINCT
+    data-identity leg: the canonical sha over the DATA MANIFEST's declared-input
+    files record (``state/data_manifest.py::data_identity``). It is ``None``
+    (disclosed-absent downstream, never fabricated) when the experiment declares
+    no input roots or has minted no manifest — a run with no manifest thus writes
+    a byte-identical sidecar. It rides the fingerprint's data-identity leg so a
+    parquet rebuild reads as data drift, not nondeterminism.
     """
+    from hpc_agent.state.data_manifest import data_identity
     from hpc_agent.state.run_sha import compute_data_sha, compute_env_hash
 
     job_env = spec.job_env or {}
@@ -760,7 +771,8 @@ def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | 
         if spec.input_datasets
         else None
     )
-    return data_sha, env_hash
+    data_manifest_sha = data_identity(experiment_dir)
+    return data_sha, env_hash, data_manifest_sha
 
 
 def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
@@ -832,9 +844,13 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
             # backfill_run_sidecar_provenance).
             from hpc_agent.state.runs import backfill_run_sidecar_provenance
 
-            data_sha, env_hash = _spec_provenance(experiment_dir, spec)
+            data_sha, env_hash, data_manifest_sha = _spec_provenance(experiment_dir, spec)
             backfill_run_sidecar_provenance(
-                experiment_dir, spec.run_id, data_sha=data_sha, env_hash=env_hash
+                experiment_dir,
+                spec.run_id,
+                data_sha=data_sha,
+                env_hash=env_hash,
+                data_manifest_sha=data_manifest_sha,
             )
             return
         raise _write_first_error(
@@ -934,7 +950,7 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # $CONDA_ENV) and the $HPC_RUNTIME selector — i.e. exactly what this run
     # executes under. ``$MODULES`` is a space-joined string in job_env; split
     # it back to the ordered list compute_env_hash expects.
-    data_sha, env_hash = _spec_provenance(experiment_dir, spec)
+    data_sha, env_hash, data_manifest_sha = _spec_provenance(experiment_dir, spec)
 
     # #339 provenance precedence rule for the wave_map: when the sweep exceeds
     # the effective array cap (it must be submitted as N concurrency-bounded
@@ -1841,6 +1857,134 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowRes
     )
 
 
+def _fire_canary(
+    *,
+    experiment_dir: Path,
+    spec: SubmitFlowSpec,
+    canary_run_id: str,
+    backend_obj: HPCBackend,
+    job_env_full: dict[str, str],
+) -> list[str]:
+    """Mirror sidecar + qsub the 1-task canary + record it — the canary leg.
+
+    Extracted VERBATIM from :func:`_submit_one_spec`'s fresh-canary branch so a
+    SECOND canary (the determinism fingerprint's ``<run_id>-canary2``, fired from
+    ``submit_and_verify``) drives the IDENTICAL machinery — sidecar mirror, MPI /
+    checkpoint canary env, crash-safety pre-stamp, journal record. The
+    existing-canary REPLAY branch stays the caller's concern: it keys on
+    *canary_run_id*, and a fresh id (``-canary2``) simply never matches the
+    completed first canary, so this leg always fires a genuinely new probe.
+
+    Returns the parsed canary job ids.
+    """
+    # Mirror the main sidecar to <canary_run_id>.json so the canary dispatches
+    # the SAME per-task executor (#162a) — otherwise it errors 'sidecar not
+    # found' and the canary gate is a no-op (#160).
+    _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
+    canary_env = dict(job_env_full)
+    canary_env["HPC_RUN_ID"] = canary_run_id
+    canary_env["HPC_TASK_COUNT"] = "1"
+    # #294 PR4: a run that opted into auto_resume_on_kill must prove its
+    # checkpoint format round-trips BEFORE the long main array launches —
+    # otherwise it discovers an unreloadable checkpoint only at resume, hours in.
+    # Stamp the canary as a CHECKPOINT canary: an executor driving its loop
+    # through run_iterations then writes a checkpoint at iteration 1 and kills
+    # itself at iteration 2 (the dispatcher SIGTERM path), and verify-canary
+    # (verify_checkpoint=True) asserts the checkpoint survived + reloads. No-op
+    # for executors that don't use run_iterations.
+    if spec.auto_resume_on_kill:
+        canary_env["HPC_CHECKPOINT_CANARY"] = "1"
+    # #293 PR4: an MPI canary runs the smallest meaningful job — ranks=2, one
+    # node — so it validates the launcher + MPI library without queueing for the
+    # full multi-node allocation. The reduced rank count must reach the in-job
+    # launcher too, so override HPC_MPI_RANKS.
+    canary_resources, canary_mpi_ranks = _mpi_canary_resources(spec.resources)
+    if canary_mpi_ranks is not None:
+        canary_env["HPC_MPI_RANKS"] = str(canary_mpi_ranks)
+    canary_job_ids = _make_single_array_submission(
+        backend_obj,
+        job_name=f"{spec.job_name}_canary",
+        total_tasks=1,
+        job_env=canary_env,
+        cwd=experiment_dir,
+        resources=canary_resources,
+    )
+    # Crash-safety pre-stamp: persist the just-parsed job ids to the sidecar
+    # IMMEDIATELY. If this process dies before submit_and_record lands the
+    # journal entry, the scheduler id is otherwise lost with zero trace on disk
+    # and the run becomes unrecoverable bookkeeping-wise. Best-effort — the
+    # canonical stamp inside submit_and_record is idempotent over this one, and a
+    # stamp failure must never fail a submission that already landed.
+    from hpc_agent.state.runs import update_run_sidecar_job_ids
+
+    with contextlib.suppress(Exception):
+        update_run_sidecar_job_ids(experiment_dir, canary_run_id, canary_job_ids)
+    from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
+
+    submit_and_record(
+        experiment_dir,
+        spec=_SubmitSpec(
+            profile=spec.profile,
+            cluster=spec.cluster,
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            job_name=f"{spec.job_name}_canary",
+            run_id=canary_run_id,
+            job_ids=canary_job_ids,
+            total_tasks=1,
+            campaign_id=spec.campaign_id or None,
+        ),
+    )
+    return canary_job_ids
+
+
+def fire_second_canary(
+    experiment_dir: Path,
+    *,
+    spec: SubmitFlowSpec,
+    canary_run_id: str,
+) -> list[str]:
+    """Fire a SECOND 1-task canary for the determinism-fingerprint double canary.
+
+    ``submit_and_verify`` calls this AFTER the first canary verified ``ok`` to
+    fire ``<main_run_id>-canary2`` (the n=2 prior's second execution). It builds
+    the same backend and augmented job_env :func:`_submit_one_spec` would, then
+    reuses :func:`_fire_canary` — so the second canary mirrors the SAME sidecar
+    and dispatches the SAME command as the first. rsync/deploy already ran in the
+    two-phase gate's Phase 1, so this only mirrors + qsubs + records (no
+    transport). Returns the parsed canary job ids for provenance.
+
+    A naive second ``submit_flow`` call could NOT do this: its canary leg
+    hardcodes ``<run_id>-canary`` and its replay branch would reuse the just
+    completed first canary instead of firing a second — the seam the design
+    (docs/design/determinism-fingerprint.md, D-double-canary) pins.
+    """
+    job_env_full = _augment_job_env(
+        job_env=spec.job_env,
+        runtime=spec.runtime,
+        campaign_id=spec.campaign_id,
+        cluster=spec.cluster,
+    )
+    backend_obj = build_remote_backend(
+        backend_name=spec.backend,
+        script=spec.script,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        pass_env_keys=tuple(spec.pass_env_keys) if spec.pass_env_keys is not None else None,
+        job_env_keys=tuple(job_env_full.keys()),
+        slurm_account=spec.slurm_account,
+        slurm_cluster=spec.slurm_cluster,
+        scheduler_profile=spec.scheduler_profile,
+    )
+    return _fire_canary(
+        experiment_dir=experiment_dir,
+        spec=spec,
+        canary_run_id=canary_run_id,
+        backend_obj=backend_obj,
+        job_env_full=job_env_full,
+    )
+
+
 def _submit_one_spec(
     *,
     experiment_dir: Path,
@@ -1912,67 +2056,16 @@ def _submit_one_spec(
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
-            # Mirror the main sidecar to <run_id>-canary.json so the canary
-            # dispatches the SAME per-task executor (#162a) — otherwise it
-            # errors 'sidecar not found' and the canary gate is a no-op (#160).
-            _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
-            canary_env = dict(job_env_full)
-            canary_env["HPC_RUN_ID"] = canary_run_id
-            canary_env["HPC_TASK_COUNT"] = "1"
-            # #294 PR4: a run that opted into auto_resume_on_kill must prove its
-            # checkpoint format round-trips BEFORE the long main array launches —
-            # otherwise it discovers an unreloadable checkpoint only at resume,
-            # hours in. Stamp the canary as a CHECKPOINT canary: an executor
-            # driving its loop through run_iterations then writes a checkpoint at
-            # iteration 1 and kills itself at iteration 2 (the dispatcher SIGTERM
-            # path), and verify-canary (verify_checkpoint=True) asserts the
-            # checkpoint survived + reloads. No-op for executors that don't use
-            # run_iterations, so a non-checkpoint run is unaffected.
-            if spec.auto_resume_on_kill:
-                canary_env["HPC_CHECKPOINT_CANARY"] = "1"
-            # #293 PR4: an MPI canary runs the smallest meaningful job — ranks=2,
-            # one node — so it validates the launcher + MPI library without
-            # queueing for the full multi-node allocation. The reduced rank count
-            # must reach the in-job launcher too, so override HPC_MPI_RANKS.
-            canary_resources, canary_mpi_ranks = _mpi_canary_resources(spec.resources)
-            if canary_mpi_ranks is not None:
-                canary_env["HPC_MPI_RANKS"] = str(canary_mpi_ranks)
-            canary_job_ids = _make_single_array_submission(
-                backend_obj,
-                job_name=f"{spec.job_name}_canary",
-                total_tasks=1,
-                job_env=canary_env,
-                cwd=experiment_dir,
-                resources=canary_resources,
-            )
-            # Crash-safety pre-stamp: persist the just-parsed job ids to the
-            # sidecar IMMEDIATELY. If this process dies before
-            # submit_and_record lands the journal entry (empirical 2026-06-11
-            # demo: the worker exited with the pipeline auto-backgrounded, the
-            # harness killed it ~1s after the main qsub), the scheduler id is
-            # otherwise lost with zero trace on disk and the run becomes
-            # unrecoverable bookkeeping-wise. Best-effort — the canonical
-            # stamp inside submit_and_record is idempotent over this one, and
-            # a stamp failure must never fail a submission that already landed.
-            from hpc_agent.state.runs import update_run_sidecar_job_ids
-
-            with contextlib.suppress(Exception):
-                update_run_sidecar_job_ids(experiment_dir, canary_run_id, canary_job_ids)
-            from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
-
-            submit_and_record(
-                experiment_dir,
-                spec=_SubmitSpec(
-                    profile=spec.profile,
-                    cluster=spec.cluster,
-                    ssh_target=spec.ssh_target,
-                    remote_path=spec.remote_path,
-                    job_name=f"{spec.job_name}_canary",
-                    run_id=canary_run_id,
-                    job_ids=canary_job_ids,
-                    total_tasks=1,
-                    campaign_id=spec.campaign_id or None,
-                ),
+            # Fresh canary: mirror the main sidecar + qsub the 1-task probe +
+            # record it. Extracted to :func:`_fire_canary` so the determinism
+            # fingerprint's SECOND canary (submit-and-verify's ``-canary2``) can
+            # reuse the IDENTICAL leg without tripping this replay branch.
+            canary_job_ids = _fire_canary(
+                experiment_dir=experiment_dir,
+                spec=spec,
+                canary_run_id=canary_run_id,
+                backend_obj=backend_obj,
+                job_env_full=job_env_full,
             )
             canary_done = True
 
