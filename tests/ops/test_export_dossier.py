@@ -21,6 +21,7 @@ Pinned properties:
 
 from __future__ import annotations
 
+import json
 import zipfile
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +29,11 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.export_dossier import ExportDossierSpec
-from hpc_agent.ops.export_dossier import DOSSIER_SOURCES, export_dossier
+from hpc_agent.ops.export_dossier import (
+    DOSSIER_SOURCES,
+    compute_dossier_signature,
+    export_dossier,
+)
 from hpc_agent.state import run_record
 from hpc_agent.state.block_terminal import record_terminal
 from hpc_agent.state.decision_briefs import append_brief
@@ -451,3 +456,91 @@ def test_second_export_overwrites_the_archive_cleanly(journal_home: Path, experi
     assert len(names) == len(set(names))  # no duplicate members
     assert names.count("manifest.json") == 1
     assert len(names) == r2.entry_count + 1  # entries + manifest.json
+
+
+# --- compute_dossier_signature — the ONE signature seam (T3) ------------------
+
+
+def test_dry_signature_equals_exported_bundle_sha_byte_for_byte(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The dry seam's ``bundle_sha256`` is byte-for-byte the exported archive's
+    ``bundle_sha256`` (and the manifest's) — export routes through the seam, so
+    there is never a second signature definition (the enforcement row)."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    sig = compute_dossier_signature(experiment, _RID)
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    # The seam's signature IS the exported one, char-for-char.
+    assert sig.bundle_sha256 == result.bundle_sha256
+    assert sig.bundle_sha256 == result.manifest["bundle_sha256"]
+    # And the pre-image is identical: the exact same path-sorted entries list.
+    assert sig.entries == result.manifest["entries"]
+    # The bundle sha the archive EMBEDS matches too (read back from the zip).
+    with zipfile.ZipFile(result.archive_path) as zf:
+        embedded = json.loads(zf.read("manifest.json"))
+    assert embedded["bundle_sha256"] == sig.bundle_sha256
+
+
+def test_dry_signature_with_lineage_matches_export(journal_home: Path, experiment: Path) -> None:
+    """include_lineage widens the seam identically to export — same run set, same
+    signature."""
+    root = "20260101-000001-rrrrrrr"
+    child = "20260101-000002-cccccc"
+    _seed_full_run(experiment, root, scopes=["embargo"])
+    _seed_full_run(experiment, child, scopes=["holdout"], supersedes=root)
+
+    sig = compute_dossier_signature(experiment, child, include_lineage=True)
+    result = export_dossier(
+        experiment_dir=experiment,
+        spec=ExportDossierSpec(run_id=child, include_lineage=True),
+    )
+
+    assert sig.run_ids == [child, root] == result.run_ids
+    assert sig.bundle_sha256 == result.bundle_sha256
+    assert sig.entries == result.manifest["entries"]
+
+
+def test_dry_call_writes_nothing(journal_home: Path, experiment: Path) -> None:
+    """The seam has NO side effects: no ``.zip``, no ``manifest.json``, no
+    ``_dossier/`` dir — only the bytes it read to compute the signature."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+    before = {p for p in experiment.rglob("*") if p.is_file()}
+
+    sig = compute_dossier_signature(experiment, _RID)
+
+    after = {p for p in experiment.rglob("*") if p.is_file()}
+    assert after == before  # not one new file on disk
+    assert not (experiment / "_dossier").exists()  # the default archive dir never appears
+    # The bytes still made it into the in-memory write_map (the zip writer's
+    # input), keyed by archive path — nothing was written, everything gathered.
+    assert sig.write_map
+    assert set(sig.write_map) == {e["path"] for e in sig.entries}
+    assert sig.bundle_sha256
+
+
+def test_store_edit_between_dry_calls_changes_the_signature(
+    journal_home: Path, experiment: Path
+) -> None:
+    """A store edited between two dry gathers changes ``bundle_sha256`` — the
+    recompute-lock property R2 relies on: a moved sealed store is caught."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    first = compute_dossier_signature(experiment, _RID)
+    # Move a sealed store out from under the (already-exported) evidence.
+    (experiment / "_aggregated" / f"{_RID}.json").write_bytes(b'{"reduced": false, "moved": 1}')
+    second = compute_dossier_signature(experiment, _RID)
+
+    assert first.bundle_sha256 != second.bundle_sha256
+    # Idempotent when nothing moves: a third identical gather re-fingerprints
+    # exactly the second.
+    third = compute_dossier_signature(experiment, _RID)
+    assert third.bundle_sha256 == second.bundle_sha256
+
+
+def test_dry_signature_missing_run_raises(journal_home: Path, experiment: Path) -> None:
+    """The seam carries the same missing-run guard as export — no sidecar and no
+    journal record is a SpecInvalid, not an empty signature."""
+    with pytest.raises(errors.SpecInvalid):
+        compute_dossier_signature(experiment, "20260101-999999-nope000")

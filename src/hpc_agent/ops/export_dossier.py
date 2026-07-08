@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,7 +56,13 @@ from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
 
-__all__ = ["DOSSIER_SCHEMA_VERSION", "DOSSIER_SOURCES", "export_dossier"]
+__all__ = [
+    "DOSSIER_SCHEMA_VERSION",
+    "DOSSIER_SOURCES",
+    "DossierSignature",
+    "compute_dossier_signature",
+    "export_dossier",
+]
 
 # Bump when the emitted manifest shape changes in a way a consumer (the
 # repo-side renderer, an integrity checker) would need to branch on. Mirrored
@@ -491,6 +498,129 @@ def _gather_scope(
     )
 
 
+@dataclass(frozen=True)
+class DossierSignature:
+    """The dry-gathered dossier fingerprint — the ONE signature seam (no zip).
+
+    :func:`compute_dossier_signature` builds this by running the full gather
+    pipeline (every per-run + per-scope store read as raw bytes, sha'd,
+    path-sorted, :func:`~hpc_agent.ops.provenance_manifest.manifest_signature`
+    applied) WITHOUT writing an archive, a ``manifest.json``, or anything else.
+    :func:`export_dossier` routes through it — the ``bundle_sha256`` it seals
+    into the archive IS this object's, never a parallel computation — and the
+    registration recompute lock (``docs/design/registration-kernel.md`` R2)
+    re-gathers from the LIVE stores through the same seam, so a store that moved
+    since export is caught by a differing signature.
+
+    Fields:
+
+    * ``bundle_sha256`` — ``manifest_signature`` over ``entries`` ONLY
+      (``generated_at`` / ``tool_version`` excluded from the pre-image), so two
+      dry gathers of unchanged stores fingerprint identically.
+    * ``entries`` — the path-sorted ``{source, path, sha256, bytes}`` records
+      (the exact pre-image of the signature); the per-store breakdown a drift
+      check (R8's ``drifted_stores``) diffs entry-by-entry.
+    * ``run_projections`` — the identity-allowlist projection per resolved run.
+    * ``gaps`` — the absent-store report (a store expected but not on disk).
+    * ``run_ids`` — the resolved run set (the single run, or its whole
+      supersession lineage newest→root when ``include_lineage`` was set).
+    * ``write_map`` — archive-path → raw bytes, the zip writer's input. A pure
+      signature consumer (the registration recompute) ignores it: the bytes are
+      already sha'd into ``entries``. It carries no zip concern of its own — it
+      is just the sealed bytes, keyed by where they would land.
+    """
+
+    bundle_sha256: str
+    entries: list[dict[str, Any]]
+    run_projections: list[dict[str, Any]]
+    gaps: list[dict[str, Any]]
+    run_ids: list[str]
+    write_map: dict[str, bytes]
+
+
+def compute_dossier_signature(
+    experiment_dir: Path,
+    run_id: str,
+    include_lineage: bool = False,
+) -> DossierSignature:
+    """Dry-gather a run's (optionally its lineage's) sealed stores → the signature.
+
+    Runs the FULL gather pipeline with NO side effects — no ``.zip``, no
+    ``manifest.json``, no write of any kind: resolves the run set, seals every
+    per-run + per-scope store into an in-memory ``write_map`` and its
+    ``{source, path, sha256, bytes}`` entry, path-sorts the entries, and applies
+    :func:`~hpc_agent.ops.provenance_manifest.manifest_signature` over the
+    entries list ONLY (``generated_at`` / ``tool_version`` never enter the
+    pre-image). This is the ONE place the dossier signature is defined (the
+    "dossier sha via the ONE signature seam" enforcement row); both
+    :func:`export_dossier` and the registration recompute lock route through it,
+    so there is never a second signature definition to drift.
+
+    Raises :class:`errors.SpecInvalid` when the run has NEITHER a sidecar NOR a
+    journal record (nothing to bundle) — the same missing-run guard export
+    applies. Absent individual stores are reported as ``gaps``, never fatal.
+    """
+    experiment_dir = Path(experiment_dir)
+
+    # Missing-run guard (the ops/trace.py precedent): no sidecar AND no journal
+    # record → there is nothing to bundle. Lives in the seam so the export path
+    # AND the registration recompute share one guard.
+    has_sidecar = run_sidecar_path(experiment_dir, run_id).is_file()
+    if not has_sidecar and load_run(experiment_dir, run_id) is None:
+        raise errors.SpecInvalid(
+            f"no run sidecar or journal record found for run_id {run_id!r} — nothing to bundle"
+        )
+
+    # Resolve the run set: the single run, or its whole supersession lineage
+    # (newest→root) when include_lineage is set.
+    run_ids = _scopes.lineage_chain(experiment_dir, run_id) if include_lineage else [run_id]
+
+    write_map: dict[str, bytes] = {}
+    entries: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = []
+    run_projections: list[dict[str, Any]] = []
+    # Union of scope tags across the run set, remembering the first run that
+    # declared each so a scope gap can name its origin. Insertion-ordered.
+    tag_origin: dict[str, str] = {}
+
+    for rid in run_ids:
+        projection, tags = _gather_run(
+            experiment_dir, rid, write_map=write_map, entries=entries, gaps=gaps
+        )
+        run_projections.append(projection)
+        for tag in tags:
+            tag_origin.setdefault(tag, rid)
+
+    for tag, declared_by in tag_origin.items():
+        _gather_scope(
+            experiment_dir,
+            tag,
+            declared_by,
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
+
+    # Path-sort the entries (and the write order) so a store hashes identically
+    # regardless of gather order.
+    entries.sort(key=lambda e: e["path"])
+    # bundle_sha256 canonicalizes the path-sorted entries list ONLY — reusing
+    # provenance_manifest.manifest_signature verbatim (its json.dumps(...,
+    # sort_keys=True) canonicalizes any JSON value, list included), so there is
+    # never a second canonicalization here. generated_at / tool_version are
+    # excluded from the pre-image for hash stability across identical stores.
+    bundle_sha256 = manifest_signature(cast("Any", entries))
+
+    return DossierSignature(
+        bundle_sha256=bundle_sha256,
+        entries=entries,
+        run_projections=run_projections,
+        gaps=gaps,
+        run_ids=list(run_ids),
+        write_map=write_map,
+    )
+
+
 @primitive(
     name="export-dossier",
     verb="mutate",
@@ -535,62 +665,21 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
     experiment_dir = Path(experiment_dir)
     run_id = spec.run_id
 
-    # Missing-run guard (the ops/trace.py precedent): no sidecar AND no journal
-    # record → there is nothing to bundle.
-    has_sidecar = run_sidecar_path(experiment_dir, run_id).is_file()
-    if not has_sidecar and load_run(experiment_dir, run_id) is None:
-        raise errors.SpecInvalid(
-            f"no run sidecar or journal record found for run_id {run_id!r} — nothing to bundle"
-        )
-
-    # Resolve the run set: the single run, or its whole supersession lineage
-    # (newest→root) when include_lineage is set.
-    run_ids = _scopes.lineage_chain(experiment_dir, run_id) if spec.include_lineage else [run_id]
-
-    write_map: dict[str, bytes] = {}
-    entries: list[dict[str, Any]] = []
-    gaps: list[dict[str, Any]] = []
-    run_projections: list[dict[str, Any]] = []
-    # Union of scope tags across the run set, remembering the first run that
-    # declared each so a scope gap can name its origin. Insertion-ordered.
-    tag_origin: dict[str, str] = {}
-
-    for rid in run_ids:
-        projection, tags = _gather_run(
-            experiment_dir, rid, write_map=write_map, entries=entries, gaps=gaps
-        )
-        run_projections.append(projection)
-        for tag in tags:
-            tag_origin.setdefault(tag, rid)
-
-    for tag, declared_by in tag_origin.items():
-        _gather_scope(
-            experiment_dir,
-            tag,
-            declared_by,
-            write_map=write_map,
-            entries=entries,
-            gaps=gaps,
-        )
-
-    # Path-sort the entries (and the write order) so a store hashes identically
-    # regardless of gather order.
-    entries.sort(key=lambda e: e["path"])
-    # bundle_sha256 canonicalizes the path-sorted entries list ONLY — reusing
-    # provenance_manifest.manifest_signature verbatim (its json.dumps(...,
-    # sort_keys=True) canonicalizes any JSON value, list included), so there is
-    # never a second canonicalization here. generated_at / tool_version are
-    # excluded from the pre-image for hash stability across identical stores.
-    bundle_sha256 = manifest_signature(cast("Any", entries))
+    # The gather + signature is defined ONCE, in the dry seam (the "dossier sha
+    # via the ONE signature seam" enforcement row). Export adds only the manifest
+    # envelope and the zip write on top of it; the bundle_sha256 sealed here IS
+    # the seam's output, never a parallel computation. The missing-run guard and
+    # the lineage resolution live in the seam.
+    sig = compute_dossier_signature(experiment_dir, run_id, include_lineage=spec.include_lineage)
 
     manifest: dict[str, Any] = {
         "dossier_schema_version": DOSSIER_SCHEMA_VERSION,
         "generated_at": utcnow_iso(),
         "tool_version": full_version(),
-        "runs": run_projections,
-        "entries": entries,
-        "gaps": gaps,
-        "bundle_sha256": bundle_sha256,
+        "runs": sig.run_projections,
+        "entries": sig.entries,
+        "gaps": sig.gaps,
+        "bundle_sha256": sig.bundle_sha256,
     }
 
     # Resolve the output path (caller's or the derived default) and overwrite any
@@ -602,8 +691,8 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(write_map):
-            zf.writestr(path, write_map[path])
+        for path in sorted(sig.write_map):
+            zf.writestr(path, sig.write_map[path])
         # manifest.json is the seal over the entries — NOT itself an entry.
         # json.dumps SERIALIZES provenance (allowed); the boundary ban is on
         # json.load/loads reading opaque content back into structure.
@@ -611,9 +700,9 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
 
     return ExportDossierResult(
         archive_path=str(archive_path),
-        run_ids=list(run_ids),
-        bundle_sha256=bundle_sha256,
-        entry_count=len(entries),
-        gaps=gaps,
+        run_ids=list(sig.run_ids),
+        bundle_sha256=sig.bundle_sha256,
+        entry_count=len(sig.entries),
+        gaps=sig.gaps,
         manifest=manifest,
     )
