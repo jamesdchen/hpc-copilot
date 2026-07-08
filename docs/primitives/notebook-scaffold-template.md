@@ -17,9 +17,10 @@ backed_by:
 
 Scaffold a **content-free notebook-audit template**: given an ordered list of
 section slugs and an output path, write a jupytext percent-format `.py` with a
-short format-only module docstring plus one `# %%` cell per slug — each cell's
-first non-blank line is its `# hpc-audit-section: <slug>` marker, followed by a
-one-line placeholder comment. Cell **bodies are caller-owned**; the verb emits
+short format-only module docstring, a path-bootstrap preamble cell, plus one
+`# %%` cell per slug — each cell's first non-blank line is its
+`# hpc-audit-section: <slug>` marker, followed by a one-line placeholder
+comment. Cell **bodies are caller-owned**; the verb emits
 format machinery only, never content (the audit-template analog of
 `build-template`'s shape-level scaffolding). The marker line and cell delimiter
 come from the ONE percent-format grammar (`state/audit_source.py`) — the writer
@@ -75,6 +76,15 @@ is refused (`already exists`). To re-scaffold, delete the output file first.
 - The scaffold parses with the docstring as PREAMBLE (belongs to no section,
   covered by `module_sha`), so an untouched scaffold's per-section hashes come
   entirely from the marker cells.
+- **Path-bootstrap preamble cell.** Interactive kernels (VS Code / Jupyter)
+  default the kernel cwd to the FILE's directory, so experiment-relative
+  imports and path literals break under them. The scaffold emits one
+  marker-less `# %%` cell between the docstring and the first marker — outside
+  every audit section, so it never pollutes a section diff — that walks up
+  from the file (or cwd when `__file__` is absent) to the directory containing
+  `.hpc/` (core's own experiment-root marker, never a caller layout convention
+  like `src/`) and normalizes `sys.path` + cwd to it. If no `.hpc` ancestor
+  exists the environment is left untouched. Emitted bytes are deterministic.
 - Typical flow: scaffold the template, hand the file to the drafting LLM /
   human to fill each cell body, then run `notebook-lint` against it as the
   `template` input.

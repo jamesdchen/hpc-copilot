@@ -4,11 +4,22 @@ The audit-template analog of ``build-template``'s shape-level scaffolding
 (notebook-audit substrate, ``docs/design/notebook-audit.md``). A ``mutate``
 verb: given an ordered list of section slugs and an output path, it writes a
 jupytext percent-format ``.py`` containing a short format-only module
-docstring plus one ``# %%`` cell per slug — each cell's first non-blank line
-is its ``# hpc-audit-section: <slug>`` marker, followed by a one-line
-placeholder comment. Cell BODIES are caller-owned; the verb emits format
-machinery only, never content (slugs stay opaque — the Q1
-substrate-not-semantics boundary).
+docstring, a path-bootstrap PREAMBLE cell, plus one ``# %%`` cell per slug —
+each cell's first non-blank line is its ``# hpc-audit-section: <slug>``
+marker, followed by a one-line placeholder comment. Cell BODIES are
+caller-owned; the verb emits format machinery only, never content (slugs stay
+opaque — the Q1 substrate-not-semantics boundary).
+
+**The path-bootstrap preamble.** Interactive kernels (VS Code / Jupyter)
+default the kernel cwd to the FILE's directory, so experiment-relative imports
+and path literals break under them. The scaffold therefore emits one
+marker-less ``# %%`` cell between the docstring and the first marker — outside
+every audit section, so it never pollutes a section diff — that walks up from
+the file (or cwd when ``__file__`` is absent) to the directory containing
+``.hpc/`` (core's own experiment-root marker) and normalizes ``sys.path`` +
+cwd to it. If no ``.hpc`` ancestor exists the environment is left untouched —
+a scaffold used outside an experiment repo must never chdir to the filesystem
+root. The emitted bytes are deterministic (no timestamps).
 
 **One definition (the load-bearing constraint).** The marker line and the cell
 delimiter come from :mod:`hpc_agent.state.audit_source` — the ONE reader of the
@@ -72,6 +83,34 @@ marker as the first non-blank line of its cell.
 """\
 '''
 
+#: The path-bootstrap preamble cell: a marker-less ``# %%`` cell emitted
+#: between the module docstring and the first section marker — preamble to the
+#: parser (outside every audit section; covered by ``module_sha`` only), so it
+#: never pollutes a section diff. Keyed on ``.hpc/`` (core's own
+#: experiment-root marker — never a caller layout convention like ``src/``).
+#: Deterministic bytes; content-free of domain vocabulary.
+_PREAMBLE_CELL = f"""\
+{CELL_DELIMITER}
+# Path bootstrap (preamble - outside every audit section). Interactive
+# kernels default cwd to this file's directory; experiment-relative imports
+# and path literals need the experiment root (the directory containing
+# .hpc/). Walks up from the file (or cwd when __file__ is absent, e.g. an
+# interactive cell); sys.path + cwd are normalized ONLY when a .hpc ancestor
+# is actually found - otherwise the environment is left untouched.
+import os
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+while not (_ROOT / ".hpc").is_dir() and _ROOT != _ROOT.parent:
+    _ROOT = _ROOT.parent
+if (_ROOT / ".hpc").is_dir():
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    os.chdir(_ROOT)  # relative path literals resolve from the experiment
+    # root and stay bare literals for the executes-live lint's surface.\
+"""
+
 
 def _resolve_output_path(experiment_dir: Path, output_path: str) -> Path:
     """Resolve the caller's output path (relative → under the experiment dir)."""
@@ -84,12 +123,13 @@ def _resolve_output_path(experiment_dir: Path, output_path: str) -> Path:
 def _render_scaffold(slugs: list[str]) -> str:
     """Render the percent-format scaffold text for *slugs*.
 
-    One ``# %%`` cell per slug: the marker line (via the ONE grammar's
+    The docstring, then the path-bootstrap preamble cell (marker-less — the
+    parser reads both as preamble, covered by ``module_sha``), then one
+    ``# %%`` cell per slug: the marker line (via the ONE grammar's
     :func:`format_section_marker`, which raises SpecInvalid naming a malformed
-    slug) then the placeholder comment. The docstring is the implicit leading
-    cell — preamble to the parser, covered by ``module_sha``.
+    slug) then the placeholder comment.
     """
-    blocks = [_MODULE_DOCSTRING]
+    blocks = [_MODULE_DOCSTRING, _PREAMBLE_CELL]
     for slug in slugs:
         marker = format_section_marker(slug)  # SpecInvalid names a bad slug
         blocks.append(f"{CELL_DELIMITER}\n{marker}\n{_PLACEHOLDER_COMMENT}")
@@ -117,7 +157,10 @@ def _render_scaffold(slugs: list[str]) -> str:
             "each opening with its hpc-audit-section marker (the ONE marker "
             "grammar from state/audit_source.py) plus a one-line placeholder "
             "comment. Cell bodies are caller-owned; the verb emits format "
-            "machinery only. Round-trip verified: the written file is re-parsed "
+            "machinery only, plus a marker-less path-bootstrap preamble cell "
+            "(before the first marker, outside every audit section) that "
+            "normalizes sys.path + cwd to the .hpc-marked experiment root "
+            "under interactive kernels. Round-trip verified: the written file is re-parsed "
             "and must yield exactly the requested slugs, else it is deleted and "
             "the call refused. Refuses empty/duplicate/malformed slugs and an "
             "existing output file (no force flag - delete it first). Pure local "
@@ -135,8 +178,10 @@ def notebook_scaffold_template(
 ) -> NotebookScaffoldTemplateResult:
     """Write a content-free percent-format audit-template scaffold.
 
-    Renders one marker cell per ``spec.slugs`` entry (marker syntax from the
-    ONE grammar in :mod:`hpc_agent.state.audit_source`), writes it to
+    Renders the docstring, the path-bootstrap preamble cell (marker-less,
+    before the first marker — outside every audit section), and one marker
+    cell per ``spec.slugs`` entry (marker syntax from the ONE grammar in
+    :mod:`hpc_agent.state.audit_source`), writes it to
     ``spec.output_path``, then round-trips the written file through
     :func:`parse_percent_source` — the parsed slugs must equal the requested
     slugs, else the partial file is deleted and the call refused.

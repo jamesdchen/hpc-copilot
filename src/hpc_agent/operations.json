@@ -184,7 +184,7 @@
     "side_effects": [
       "file_write"
     ],
-    "summary": "Scaffold a content-free notebook-audit template: write a jupytext percent-format .py with one # %% cell per requested section slug, each opening with its hpc-audit-section marker (the ONE marker grammar from state/audit_source.py) plus a one-line placeholder comment. Cell bodies are caller-owned; the verb emits format machinery only. Round-trip verified: the written file is re-parsed and must yield exactly the requested slugs, else it is deleted and the call refused. Refuses empty/duplicate/malformed slugs and an existing output file (no force flag - delete it first). Pure local write, no SSH.",
+    "summary": "Scaffold a content-free notebook-audit template: write a jupytext percent-format .py with one # %% cell per requested section slug, each opening with its hpc-audit-section marker (the ONE marker grammar from state/audit_source.py) plus a one-line placeholder comment. Cell bodies are caller-owned; the verb emits format machinery only, plus a marker-less path-bootstrap preamble cell (before the first marker, outside every audit section) that normalizes sys.path + cwd to the .hpc-marked experiment root under interactive kernels. Round-trip verified: the written file is re-parsed and must yield exactly the requested slugs, else it is deleted and the call refused. Refuses empty/duplicate/malformed slugs and an existing output file (no force flag - delete it first). Pure local write, no SSH.",
     "verb": "mutate"
   },
   {

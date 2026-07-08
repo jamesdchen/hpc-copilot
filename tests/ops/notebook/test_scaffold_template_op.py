@@ -8,10 +8,18 @@ The happy path asserts the written scaffold round-trips through the ONE
 grammar (:func:`parse_percent_source`) with exactly the requested slugs, that
 the markers come from :func:`format_section_marker` (one definition, both
 directions), and that the result's ``module_sha`` matches a recompute.
+
+The path-bootstrap preamble cell gets three tests: it sits before the first
+marker and parses as PREAMBLE (unchanged slugs); exec'd under a simulated
+interactive kernel (no ``__file__``, cwd = a subdirectory of a ``.hpc``-marked
+experiment root) it normalizes cwd + ``sys.path`` to the experiment root; and
+with no ``.hpc`` ancestor it leaves the environment untouched (never a chdir
+to the filesystem root).
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,6 +68,86 @@ def test_happy_path_writes_and_round_trips(tmp_path: Path) -> None:
     # Each section carries the one-line placeholder (caller-owned body).
     for section in parsed.sections:
         assert "caller-owned section body" in section.source
+
+
+# ── the path-bootstrap preamble cell ─────────────────────────────────────────
+
+
+def _generated_preamble(tmp_path: Path) -> str:
+    """Scaffold a template and return its parsed PREAMBLE text."""
+    _run(tmp_path, _SLUGS)
+    text = (tmp_path / "template.py").read_text(encoding="utf-8")
+    return parse_percent_source(text).preamble
+
+
+def test_preamble_cell_sits_before_first_marker_with_unchanged_slugs(
+    tmp_path: Path,
+) -> None:
+    _run(tmp_path, _SLUGS)
+    text = (tmp_path / "template.py").read_text(encoding="utf-8")
+    parsed = parse_percent_source(text)
+
+    # Slugs are unchanged by the extra marker-less cell.
+    assert list(parsed.slugs) == _SLUGS
+
+    # The bootstrap cell is emitted, and it lands in the PREAMBLE (outside
+    # every audit section) — before the first marker line in the raw text.
+    assert "Path bootstrap" in parsed.preamble
+    assert 'while not (_ROOT / ".hpc").is_dir()' in parsed.preamble
+    assert text.index("Path bootstrap") < text.index(format_section_marker(_SLUGS[0]))
+    # It never leaks into a section body.
+    for section in parsed.sections:
+        assert "Path bootstrap" not in section.source
+
+    # Deterministic bytes: a second scaffold emits identical content.
+    result2 = _run(tmp_path, _SLUGS, output_path="template2.py")
+    assert (tmp_path / "template2.py").read_text(encoding="utf-8") == text
+    assert result2.module_sha == parse_percent_source(text).module_sha
+
+
+def test_preamble_exec_normalizes_cwd_and_sys_path_to_hpc_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exec'd without __file__ from <root>/sub, the preamble walks up to the
+    ``.hpc``-marked experiment root and normalizes cwd + sys.path to it."""
+    preamble = _generated_preamble(tmp_path)
+
+    exp = tmp_path / "exp"
+    (exp / ".hpc").mkdir(parents=True)
+    sub = exp / "sub"
+    sub.mkdir()
+
+    monkeypatch.setattr(sys, "path", list(sys.path))  # snapshot; auto-restored
+    monkeypatch.chdir(sub)  # simulated interactive-kernel cwd; auto-restored
+
+    globs: dict[str, object] = {}  # no __file__ — the interactive-cell case
+    exec(compile(preamble, "<preamble>", "exec"), globs)  # noqa: S102
+
+    assert Path.cwd().resolve() == exp.resolve()
+    assert Path(sys.path[0]).resolve() == exp.resolve()
+
+
+def test_preamble_exec_without_hpc_ancestor_leaves_environment_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``.hpc`` ancestor → neither cwd nor sys.path changes (a scaffold used
+    outside an experiment repo must never chdir toward the filesystem root)."""
+    preamble = _generated_preamble(tmp_path)
+
+    sub = tmp_path / "exp" / "sub"  # no .hpc anywhere up the tree
+    sub.mkdir(parents=True)
+    if any((p / ".hpc").is_dir() for p in [sub, *sub.parents]):
+        pytest.skip("an ancestor of tmp_path carries a real .hpc dir")
+
+    path_snapshot = list(sys.path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.chdir(sub)
+
+    globs: dict[str, object] = {}
+    exec(compile(preamble, "<preamble>", "exec"), globs)  # noqa: S102
+
+    assert Path.cwd().resolve() == sub.resolve()
+    assert sys.path == path_snapshot
 
 
 def test_happy_path_creates_parent_dirs_and_resolves_relative(tmp_path: Path) -> None:
