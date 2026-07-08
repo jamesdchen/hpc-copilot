@@ -4,6 +4,8 @@ verb: query
 side_effects:
 - filesystem: <experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl
     (append-only)
+- filesystem: <experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl (append-only
+    sample)
 idempotent: false
 idempotency_key: none
 error_codes:

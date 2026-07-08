@@ -1078,7 +1078,7 @@
     "side_effects": [
       "filesystem"
     ],
-    "summary": "Compare a reproduction run's reduced metrics against the original it names (sidecar `reproduces` link), under a caller-owned tolerance, and append a durable receipt. A mismatch/incomparable is a FINDING (needs_decision), never an error.",
+    "summary": "Compare a reproduction run's reduced metrics against the original it names (sidecar `reproduces` link), reduce the experiment's determinism envelope, tier the verdict (auto_cleared / needs_verdict / mismatch), append a durable receipt, and append the comparison back as a fingerprint sample. A mismatch/incomparable is a FINDING (needs_decision), never an error.",
     "verb": "query"
   },
   {
