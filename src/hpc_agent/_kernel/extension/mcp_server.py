@@ -169,6 +169,32 @@ _CURATED_EXTRA_VERBS = frozenset(
         # hand-rolled. (``reproduce-run`` itself needs NO entry — its Result
         # declares ``next_block``, so it DERIVES into the catalog.)
         "verify-reproduction",
+        # The notebook-audit loop's agent_facing verbs (notebook-audit design
+        # doc, Amendment 2 — run #10): the loop is HUMAN-sequenced (a
+        # block-drive-style driver was REJECTED there), so none of these declare
+        # ``next_block`` and none derive in — each is unioned explicitly. Run
+        # #10 priced their MCP absence live: hand-authored spec JSONs, two
+        # schema fumbles — the run-#8 unreachable-gets-hand-rolled class.
+        # ``notebook-lint`` — the four structural checks, the loop's first tick.
+        "notebook-lint",
+        # ``notebook-audit-view`` — the audit loop's typed surface (the
+        # verbatim-relay canonical view) — run #10 priced the CLI-spec fallback.
+        "notebook-audit-view",
+        # ``notebook-status`` — the per-section audit-state read the loop exits on.
+        "notebook-status",
+        # ``notebook-auto-clear`` — the CODE-attestor clearance mutate (recorded
+        # roots only; the laundering guard enforces at invocation).
+        "notebook-auto-clear",
+        # ``notebook-record-receipt`` — the emitter's sha-bound render-receipt
+        # journaling; unreachable, an emitter reaches for ``python -c``.
+        "notebook-record-receipt",
+        # ``notebook-scaffold-template`` — the content-free template scaffold
+        # that opens an audit.
+        "notebook-scaffold-template",
+        # ``notebook-record-config`` — the standalone audit's config seat (the
+        # run-#10 rootless-canonical fix); unreachable it would be the next
+        # hand-authored spec JSON.
+        "notebook-record-config",
     }
 )
 

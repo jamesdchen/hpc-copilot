@@ -45,6 +45,15 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "append-decision",
         "scope-lock",
         "verify-reproduction",
+        # The notebook-audit loop's agent_facing verbs (Amendment 2, run #10):
+        # human-sequenced (no next_block), so all unioned explicitly.
+        "notebook-lint",
+        "notebook-audit-view",
+        "notebook-status",
+        "notebook-auto-clear",
+        "notebook-record-receipt",
+        "notebook-scaffold-template",
+        "notebook-record-config",
     }
 
     assert names == expected
@@ -66,7 +75,36 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
     # kill→confirm→revise against a throttled cluster) — a next_block-declaring
     # verb must never silently fall back out of the catalog.
     assert {"retarget-run", "reproduce-run"} <= names
+    # The notebook-audit loop's verbs are curated extras (Amendment 2, run #10:
+    # their MCP absence priced as hand-authored spec JSONs + schema fumbles).
+    # None declare next_block (the loop is human-sequenced — the driver was
+    # rejected), so this is the explicit union, not derivation.
+    assert {
+        "notebook-lint",
+        "notebook-audit-view",
+        "notebook-status",
+        "notebook-auto-clear",
+        "notebook-record-receipt",
+        "notebook-scaffold-template",
+        "notebook-record-config",
+    } <= names
     assert "clusters" not in names
+
+
+def test_curated_covers_every_agent_facing_notebook_verb() -> None:
+    """DERIVED drift guard for the Amendment-2 ruling: every agent_facing
+    ``notebook-*`` verb in the registry must be reachable from the curated
+    catalog (the audit loop's verbs never derive in — no ``next_block`` — so a
+    new one added without a ``_CURATED_EXTRA_VERBS`` entry silently drops to
+    the run-#10 hand-authored-spec fallback; this fails instead)."""
+    names = _curated_names(allow_mutations=True)
+    notebook_verbs = {
+        n
+        for n, meta in get_registry().items()
+        if n.startswith("notebook-") and getattr(meta, "agent_facing", False)
+    }
+    assert notebook_verbs  # the substrate exists — an empty set is a probe bug
+    assert notebook_verbs <= names
 
 
 def test_curated_ignores_allow_mutations() -> None:
