@@ -317,9 +317,9 @@ def pack_status(*, experiment_dir: Path, spec: PackStatusSpec) -> PackStatusResu
     binds_by_pack: dict[str, StatePackBind | None] = {}
     dangling_by_pack: dict[str, PackDanglingReference | None] = {}
     for name, entry in entries.items():
-        # T8 seam: the ``"pack"`` scope kind + ``.hpc/packs/<name>.decisions.jsonl``
-        # path branch land in Wave C (state/decision_journal.py). Read via the ONE
-        # decision-journal reader with that kind (monkeypatched in tests ahead of T8).
+        # T8 (Wave C) landed the ``"pack"`` scope kind + the
+        # ``.hpc/packs/<name>.decisions.jsonl`` path branch on
+        # state/decision_journal.py. Read via the ONE decision-journal reader.
         records_by_pack[name] = decision_journal.read_decisions(
             experiment_dir, PACK_SUBJECT_KIND, name
         )

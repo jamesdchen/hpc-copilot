@@ -41,6 +41,7 @@ from hpc_agent._wire.actions.pack_bind import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import attestation, pack
+from hpc_agent.state.decision_journal import append_decision, read_decisions
 from hpc_agent.state.pack_receipts import PACK_BIND_BLOCK, PACK_SUBJECT_KIND
 
 if TYPE_CHECKING:
@@ -70,17 +71,20 @@ def _resolve_manifest(experiment_dir: Path, relpath: str) -> Path:
     return path
 
 
-# --- T8 seam ----------------------------------------------------------------
+# --- T8 reconciled ----------------------------------------------------------
 #
-# The dedicated ``"pack"`` scope kind + the ``.hpc/packs/<name>.decisions.jsonl``
-# path branch in ``state/decision_journal.py`` do NOT exist yet — they land in
-# Wave C (T8). These two thin functions produce/consume the EXACT
-# ``append_decision`` record shape under that path, so ``pack-bind`` works
-# standalone ahead of T8 and tests can monkeypatch the writer/reader. When T8
-# lands the orchestrator re-points them at
-# ``decision_journal.append_decision(scope_kind="pack", scope_id=<name>)`` and
-# ``decision_journal.read_decisions(experiment_dir, "pack", <name>)`` — same
-# record shape, same journal file, one definition.
+# T8 (Wave C) landed the dedicated ``"pack"`` scope kind + the
+# ``.hpc/packs/<name>.decisions.jsonl`` path branch on
+# ``state/decision_journal.py``. These two thin wrappers now route through the
+# ONE decision-journal writer/reader — no journal I/O is re-implemented here, and
+# the path derives from the single ``decisions_path`` definition. ``pack-bind`` is
+# a mechanical CODE attestation whose ``block="pack-bind"`` / ``response="bound"``
+# clear ``append_decision``'s only validation (non-empty scope/block/response, a
+# filesystem-safe slug id); it carries no gate stack a mechanical record could
+# fail, so the writer routes through ``append_decision`` exactly like the sibling
+# ``pack-record-receipt`` (T5). Record shape is byte-identical to the prior
+# hand-rolled writer. ``_read_pack_records`` stays as the state-layer read name the
+# bind atom tests import.
 
 
 def _append_pack_record(
@@ -91,51 +95,21 @@ def _append_pack_record(
     response: str,
     resolved: dict[str, Any],
 ) -> dict[str, Any]:
-    # T8 seam: mirrors decision_journal.append_decision's record shape exactly.
-    from hpc_agent._kernel.contract.layout import RepoLayout
-    from hpc_agent.infra.io import append_jsonl_line
-    from hpc_agent.infra.time import utcnow_iso
-    from hpc_agent.state.decision_journal import SCHEMA_VERSION
-
-    record: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "ts": utcnow_iso(),
-        "scope_kind": PACK_SUBJECT_KIND,  # "pack" — the T8 scope kind
-        "scope_id": pack_name,
-        "block": block,
-        "evidence_digest": "",
-        "proposal": "",
-        "response": response,
-        "resolved": dict(resolved),
-        "provenance": {},
-    }
-    path = RepoLayout(experiment_dir).hpc / "packs" / f"{pack_name}.decisions.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    append_jsonl_line(path, record)
-    return record
+    # T8: route through the ONE decision-journal writer (scope kind "pack").
+    return append_decision(
+        experiment_dir,
+        scope_kind=PACK_SUBJECT_KIND,  # "pack"
+        scope_id=pack_name,
+        block=block,
+        response=response,
+        resolved=resolved,
+    )
 
 
 def _read_pack_records(experiment_dir: Path, pack_name: str) -> list[dict[str, Any]]:
-    # T8 seam companion: reads the pack journal in append order (newest last),
-    # tolerating a not-yet-created file. Re-points to
-    # decision_journal.read_decisions(experiment_dir, "pack", pack_name) at T8.
-    import json
-
-    from hpc_agent._kernel.contract.layout import RepoLayout
-
-    path = RepoLayout(experiment_dir).hpc / "packs" / f"{pack_name}.decisions.jsonl"
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue  # one bad line never strands the audit trail
-    return records
+    # T8: route through the ONE decision-journal reader (scope kind "pack"),
+    # which tolerates a not-yet-created journal (returns []).
+    return read_decisions(experiment_dir, PACK_SUBJECT_KIND, pack_name)
 
 
 def _bind_resolved(manifest: PackManifest, manifest_sha: str) -> dict[str, Any]:
