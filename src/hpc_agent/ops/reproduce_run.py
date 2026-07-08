@@ -67,6 +67,7 @@ from hpc_agent.ops.revise_resolved import (
     _latest_committed_resolved,
     _reconstruct_resolve_spec,
 )
+from hpc_agent.state.axes import derive_stride_subset
 from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.run_sha import compute_tasks_py_sha
 
@@ -151,6 +152,51 @@ def _repro_remote_path(original_remote: str) -> str:
             "recursive per-task reduce cross-contaminate the original's future mean."
         )
     return derived
+
+
+def _resolve_task_sample(
+    experiment_dir: Path,
+    task_sample: list[int] | str | None,
+    *,
+    task_count: int,
+) -> list[int] | None:
+    """Resolve the reproduction's ``task_sample`` to concrete task indices, or None.
+
+    Design center 5 (derived subsets). Three cases:
+
+    * ``None`` → a FULL reproduction (no execution restriction, no partiality).
+    * an explicit caller list → it WINS over the derived mode; validated to be
+      in range ``[0, task_count)`` (an out-of-range index would name a task the
+      run does not have) and returned sorted-unique.
+    * ``"derived"`` → the MECHANICAL subset from the axes
+      (:func:`state.axes.derive_stride_subset`): canary task 0 + one task per
+      distinct axis value at that axis's row-major stride. A PURE function of the
+      axis structure — no representative/importance heuristic (the Q1 boundary
+      flag). Refuses (``SpecInvalid``) if the derivation yields an index outside
+      ``[0, task_count)`` (an axes.yaml that disagrees with the recorded
+      task_count is a framework inconsistency, surfaced not silently truncated).
+
+    The reproduction keeps the SAME ``trial_params`` / ``cmd_sha`` in every case
+    (the identity constraint — a rebuilt smaller task list would move ``cmd_sha``
+    and be refused by the param-drift guard); this only selects which tasks
+    EXECUTE.
+    """
+    if task_sample is None:
+        return None
+    if isinstance(task_sample, str):  # the "derived" sentinel
+        indices = derive_stride_subset(experiment_dir)
+        source = "derived per-axis stride"
+    else:
+        indices = sorted(set(task_sample))
+        source = "caller list"
+    out_of_range = [i for i in indices if not 0 <= i < task_count]
+    if out_of_range:
+        raise errors.SpecInvalid(
+            f"reproduce-run: task_sample ({source}) names task indices {out_of_range} "
+            f"outside the run's range [0, {task_count}). A partial reproduction keeps "
+            "the original's task shape; it can only select tasks the run has."
+        )
+    return indices
 
 
 def _assert_no_drift(
@@ -389,18 +435,38 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         experiment_dir, run_id=original_run_id, sidecar=sidecar, patch={}
     )
     original_scopes = sidecar.get("scopes")
+
+    # Partial reproduction (design center 5): resolve the subset to concrete task
+    # indices (caller list OR derived per-axis stride; None = full). The subset
+    # restricts EXECUTION only — the SAME trial_params / cmd_sha are kept, so the
+    # param-drift guard is never tripped and the fingerprint ledger key is intact.
+    # Selected indices thread through TWO seams: (a) HPC_TASK_INCLUDE on the job
+    # env (via submit.extra_env) so the dispatcher exits 0 fast on a non-selected
+    # index; (b) extra.task_sample on the reproduction sidecar so
+    # verify-reproduction reads the compared indices honestly (T5's per-task path).
+    task_count = int(sidecar.get("task_count") or base_spec.sidecar.task_count)
+    selected = _resolve_task_sample(experiment_dir, spec.task_sample, task_count=task_count)
+
+    submit_update: dict[str, Any] = {"remote_path": repro_remote_path}
+    sidecar_update: dict[str, Any] = {
+        "remote_path": repro_remote_path,
+        "scopes": original_scopes,
+        "reproduces": original_run_id,
+    }
+    if selected is not None:
+        merged_env = dict(base_spec.submit.extra_env or {})
+        merged_env["HPC_TASK_INCLUDE"] = ",".join(str(i) for i in selected)
+        submit_update["extra_env"] = merged_env
+        merged_extra = dict(base_spec.sidecar.extra or {})
+        merged_extra["task_sample"] = selected
+        sidecar_update["extra"] = merged_extra
+
     resolve_spec = base_spec.model_copy(
         update={
             "run_name": repro_run_name,
             "reproduction_of": original_run_id,
-            "submit": base_spec.submit.model_copy(update={"remote_path": repro_remote_path}),
-            "sidecar": base_spec.sidecar.model_copy(
-                update={
-                    "remote_path": repro_remote_path,
-                    "scopes": original_scopes,
-                    "reproduces": original_run_id,
-                }
-            ),
+            "submit": base_spec.submit.model_copy(update=submit_update),
+            "sidecar": base_spec.sidecar.model_copy(update=sidecar_update),
         }
     )
     rr = resolve_submit_inputs(experiment_dir, spec=resolve_spec)
@@ -453,6 +519,18 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         if est.footprint_unknown
         else f"{est.est_core_hours:g} core-hours"
     )
+    # Partiality disclosure LOUDLY on the brief (no-silent-caps): a partial
+    # reproduction states the exact indices it will run and what it omits, so the
+    # human's re-y is on a subset they can see (not a full-run-shaped brief).
+    partial = selected is not None
+    partial_phrase = ""
+    uncompared_task_count = 0
+    if selected is not None:
+        uncompared_task_count = task_count - len(selected)
+        partial_phrase = (
+            f" PARTIAL: {len(selected)}/{task_count} tasks "
+            f"({'derived per-axis stride' if isinstance(spec.task_sample, str) else 'caller list'})"
+        )
     brief: dict[str, Any] = {
         "run_id": rr.run_id,
         "reproduces": original_run_id,
@@ -463,6 +541,12 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         # Unknown-footprint honesty (run #6): the kernel's defensive 0.0 must never
         # render as a literal "0 core-hours" — the relay reads off the brief dict.
         "footprint_unknown": est.footprint_unknown,
+        # Partiality (design center 5): the exact selected indices + counts, so
+        # the human sees the subset and verify-reproduction's per-task compare is
+        # not surprised by a full-run-shaped reproduction.
+        "partial": partial,
+        "task_sample": selected,
+        "uncompared_task_count": uncompared_task_count,
         "resolve": {
             "run_id": rr.run_id,
             "cmd_sha": rr.cmd_sha,
@@ -475,8 +559,8 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         needs_decision=True,
         reason=(
             f"reproduction of {original_run_id!r} resolved (est. {est_phrase}) under a "
-            f"disjoint remote_path; canary PENDING — greenlight submit-s2 to stage & "
-            "canary the reproduction (its detached worker owns the poll)."
+            f"disjoint remote_path;{partial_phrase} canary PENDING — greenlight submit-s2 "
+            "to stage & canary the reproduction (its detached worker owns the poll)."
         ),
         run_id=rr.run_id,
         reproduces=original_run_id,
