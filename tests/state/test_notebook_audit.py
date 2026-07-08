@@ -457,3 +457,59 @@ def test_read_render_receipts_absent_section_is_not_fresh(tmp_path: Path) -> Non
     # A section absent from current_shas cannot be fresh (nothing to compare).
     got = nb.read_render_receipts(tmp_path, _AUDIT, current_shas={})
     assert got["fit-model"]["fresh"] is False
+
+
+# --- audit config record (run-#10 standalone-audit seat) ---------------------
+
+
+def test_record_audit_config_roundtrip(tmp_path: Path) -> None:
+    nb.record_audit_config(
+        tmp_path,
+        audit_id=_AUDIT,
+        input_roots=["data"],
+        source_roots=["src"],
+        attention_order=["fit-model", "load-data"],
+        output_roots=["results"],
+    )
+    got = nb.read_audit_config(tmp_path, _AUDIT)
+    assert got is not None
+    assert got["input_roots"] == ["data"]
+    assert got["source_roots"] == ["src"]
+    assert got["attention_order"] == ["fit-model", "load-data"]
+    assert got["output_roots"] == ["results"]
+
+
+def test_read_audit_config_absent_is_none(tmp_path: Path) -> None:
+    assert nb.read_audit_config(tmp_path, _AUDIT) is None
+
+
+def test_read_audit_config_first_record_wins(tmp_path: Path) -> None:
+    # The immutability posture: the verb refuses a second record, and the reader
+    # mirrors it — a hand-appended later line never supersedes the first.
+    nb.record_audit_config(tmp_path, audit_id=_AUDIT, input_roots=["first"], source_roots=[])
+    nb.record_audit_config(tmp_path, audit_id=_AUDIT, input_roots=["second"], source_roots=[])
+    got = nb.read_audit_config(tmp_path, _AUDIT)
+    assert got is not None
+    assert got["input_roots"] == ["first"]
+
+
+def test_config_record_never_enters_section_reduction(tmp_path: Path) -> None:
+    # A config record rides the SAME journal but is NOT an attestation: a signed
+    # section's status is unchanged by it, and a config-only journal reads
+    # unsigned.
+    nb.record_audit_config(tmp_path, audit_id=_AUDIT, input_roots=["data"], source_roots=[])
+    sec = _section(_SOURCE, "load-data")
+    assert nb.audit_section(_records(tmp_path), "load-data", sec.section_sha).status == nb.UNSIGNED
+
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=_AUDIT,
+        block=nb.SIGN_OFF_BLOCK,
+        response="y",
+        resolved={"audit_id": _AUDIT, "section": "load-data", "section_sha": sec.section_sha},
+    )
+    audit = nb.audit_section(_records(tmp_path), "load-data", sec.section_sha)
+    assert audit.status == nb.SIGNED_CURRENT
+    # ...and the config record is invisible to the receipt reader too.
+    assert nb.read_render_receipts(tmp_path, _AUDIT, current_shas={}) == {}

@@ -40,7 +40,12 @@ from hpc_agent.ops.notebook.lint import notebook_lint
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import parse_percent_source
 
-__all__ = ["AuditConfig", "read_recorded_config", "build_canonical_view"]
+__all__ = [
+    "AuditConfig",
+    "read_interview_audited_source",
+    "read_recorded_config",
+    "build_canonical_view",
+]
 
 
 @dataclass(frozen=True)
@@ -70,14 +75,16 @@ class AuditConfig:
     output_roots: list[str] = field(default_factory=list)
 
 
-def _read_audited_source_block(experiment_dir: Path, audit_id: str | None) -> dict | None:
+def read_interview_audited_source(experiment_dir: Path, audit_id: str | None) -> dict | None:
     """The interview.json ``audited_source`` block matching *audit_id*, or ``None``.
 
     Mirrors the gate's / graduation gate's posture: the canonical location is the
     campaign-dir root, ``.hpc/interview.json`` accepted defensively; a corrupt /
     non-object file reads as absent. Matched by ``audit_id`` when one is given so a
     stray block never supplies another audit's config; ``audit_id=None`` takes the
-    first block found (the graduation-gate convention).
+    first block found (the graduation-gate convention). Public so the
+    ``notebook-record-config`` verb can refuse when the opt-in path already owns
+    the config (one source of truth — never a second reader of the file format).
     """
     for rel in ("interview.json", ".hpc/interview.json"):
         path = experiment_dir / rel
@@ -103,18 +110,32 @@ def _coerce_roots(value: object) -> list[str]:
 
 
 def read_recorded_config(experiment_dir: Path, audit_id: str | None) -> AuditConfig:
-    """The audit configuration recorded on interview.json's ``audited_source`` block.
+    """The RECORDED audit configuration, from either seat that can hold one.
 
-    Reads ``input_roots`` / ``source_roots`` / ``attention_order`` from the block
-    matching *audit_id*. An ABSENT block, or a block predating the config fields
-    (byte-compatible with every pre-upgrade record), yields the conservative
-    defaults — empty roots, source-order presentation — exactly the posture the
-    gate used before the config was persisted. Pure local read, no SSH.
+    Precedence (the run-#10 standalone-audit fix):
+
+    1. interview.json's ``audited_source`` block matching *audit_id* WINS when
+       present — the opt-in path owns the config (even a block predating the
+       config fields wins, yielding the conservative defaults: byte-compatible
+       with every pre-upgrade record).
+    2. Else the JOURNALED ``notebook-audit-config`` record the standalone
+       ``notebook-record-config`` verb appends
+       (:func:`hpc_agent.state.notebook_audit.read_audit_config`).
+    3. Else the conservative defaults — empty roots, source-order presentation —
+       exactly the posture the gate used before any config was persisted.
+
+    Pure local read, no SSH. ``audit_id=None`` (the graduation-gate convention)
+    reads the interview seat only — a journal record is per-``audit_id`` by
+    construction, so there is nothing to fall back to.
     """
-    block = _read_audited_source_block(experiment_dir, audit_id)
-    if block is None:
-        return AuditConfig()
-    return _config_from_record(block)
+    block = read_interview_audited_source(experiment_dir, audit_id)
+    if block is not None:
+        return _config_from_record(block)
+    if audit_id is not None:
+        journaled = notebook_audit.read_audit_config(experiment_dir, audit_id)
+        if journaled is not None:
+            return _config_from_record(journaled)
+    return AuditConfig()
 
 
 def _config_from_record(block: dict) -> AuditConfig:

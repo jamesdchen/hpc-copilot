@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**142 operations total**: 115 primitive atoms + 27 workflow atoms.
+**143 operations total**: 116 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -106,7 +106,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (21)
+## `mutate` (22)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -123,6 +123,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`kill`](../primitives/kill.md) | ✓ | ssh; writes-journal | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`mark-run-terminal`](../primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `_(none)_` | — | — |
 | [`notebook-auto-clear`](../primitives/notebook-auto-clear.md) | ✓ | file_write | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`notebook-record-config`](../primitives/notebook-record-config.md) | ✗ | file_write | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-record-receipt`](../primitives/notebook-record-receipt.md) | ✗ | file_write | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-scaffold-template`](../primitives/notebook-scaffold-template.md) | ✗ | file_write | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`provenance-manifest`](../primitives/provenance-manifest.md) | ✓ | file_write | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |

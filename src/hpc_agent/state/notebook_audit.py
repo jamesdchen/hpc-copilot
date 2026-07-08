@@ -94,9 +94,11 @@ __all__ = [
     "SIGN_OFF_BLOCK",
     "AUTO_CLEAR_BLOCK",
     "RENDER_RECEIPT_BLOCK",
+    "AUDIT_CONFIG_BLOCK",
     "SUBJECT_KIND",
     "AUTO_CLEAR_RESPONSE",
     "RENDER_RECEIPT_RESPONSE",
+    "AUDIT_CONFIG_RESPONSE",
     "SIGNED_CURRENT",
     "AUTO_CLEARED",
     "SIGNED_STALE",
@@ -110,6 +112,8 @@ __all__ = [
     "record_auto_clear",
     "record_render_receipt",
     "read_render_receipts",
+    "record_audit_config",
+    "read_audit_config",
 ]
 
 #: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
@@ -136,6 +140,23 @@ RENDER_RECEIPT_BLOCK = "notebook-render-receipt"
 #: a clearance token (not ``"auto_cleared"``): a receipt is evidence, not a
 #: sign-off class.
 RENDER_RECEIPT_RESPONSE = "rendered"
+
+#: The audit-CONFIG record block (run-#10 standalone-audit seat). A FOURTH block
+#: class riding the same notebook journal: the audit configuration
+#: (``input_roots`` / ``source_roots`` / ``attention_order`` / ``output_roots``)
+#: recorded for a STANDALONE audit — one with no interview.json
+#: ``audited_source`` opt-in, which previously ran ROOTLESS-canonical (no seat
+#: held the config, so the template-mandated ``source_roots`` binding was
+#: silently inactive). NOT an attestation: it carries no section, no
+#: ``content_sha``, and it is deliberately absent from :data:`_BLOCK_ATTESTOR`
+#: (and from :func:`_project_receipt`), so it can never enter the sign-off
+#: reduction or the receipt read.
+AUDIT_CONFIG_BLOCK = "notebook-audit-config"
+
+#: The honest, mechanical ``response`` a config record carries — a configuration
+#: was recorded, nothing was approved and nothing executed. Never a human-ack
+#: token.
+AUDIT_CONFIG_RESPONSE = "config_recorded"
 
 #: The opaque attestation ``subject_kind`` every notebook section rides. The
 #: kernel never interprets it; it distinguishes this subject class from scope
@@ -540,3 +561,69 @@ def read_render_receipts(
             "fresh": fresh,
         }
     return out
+
+
+# --- audit config record (run-#10 standalone-audit seat) ---------------------
+# A FOURTH block class riding the same journal. It is NOT an attestation (no
+# section, no content_sha) and never enters the sign-off / receipt reductions:
+# :data:`_BLOCK_ATTESTOR` and :func:`_project_receipt` both omit
+# :data:`AUDIT_CONFIG_BLOCK` by construction. The IMMUTABILITY posture (one
+# config per audit_id; superseding = a new audit_id) is enforced by the
+# ``notebook-record-config`` verb's refusal; the reader mirrors it by taking the
+# FIRST valid record — a later hand-appended line can never supersede the one
+# the verb recorded.
+
+
+def record_audit_config(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    input_roots: Sequence[str],
+    source_roots: Sequence[str],
+    attention_order: Sequence[str] | None = None,
+    output_roots: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Journal the audit configuration for a STANDALONE audit.
+
+    Appends the ``notebook-audit-config`` record —
+    ``resolved={audit_id, input_roots, source_roots, attention_order, output_roots}``,
+    ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots are
+    OPAQUE relpath strings (core attaches no meaning). This writer does NOT
+    check for a prior config record or an interview ``audited_source`` block —
+    the ``notebook-record-config`` verb owns those refusals (one source of
+    truth; immutable-per-audit).
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via
+    ``append_decision``) on a bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "input_roots": list(input_roots),
+        "source_roots": list(source_roots),
+        "attention_order": list(attention_order) if attention_order is not None else None,
+        "output_roots": list(output_roots),
+    }
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=AUDIT_CONFIG_BLOCK,
+        response=AUDIT_CONFIG_RESPONSE,
+        resolved=resolved,
+    )
+
+
+def read_audit_config(experiment_dir: Path, audit_id: str) -> dict[str, Any] | None:
+    """The journaled audit-config ``resolved`` mapping for *audit_id*, or ``None``.
+
+    FIRST valid record wins (the immutability posture: the verb refuses a second
+    record, so first == only; a hand-appended later line never supersedes).
+    A record whose ``resolved`` is not a dict is skipped, never fatal.
+    """
+    for record in read_decisions(experiment_dir, "notebook", audit_id):
+        if record.get("block") != AUDIT_CONFIG_BLOCK:
+            continue
+        resolved = record.get("resolved")
+        if isinstance(resolved, dict):
+            return resolved
+    return None

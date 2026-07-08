@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_record_config.input.json",
+  "title": "notebook-record-config input spec",
+  "description": "Inputs to ``notebook-record-config`` — the standalone audit's config seat.\n\nAll roots are OPAQUE relpath strings (core never attaches a meaning to a\nroot). ``audit_id`` names the notebook decision journal the record is\nappended to.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "input_roots",
+    "source_roots"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "description": "The notebook decision-journal scope id (filesystem-safe slug) the config record is appended to (journal at .hpc/notebooks/<audit_id>.decisions.jsonl). Refused when interview.json already carries an audited_source block for this audit_id (the opt-in path owns the config) or when a config record already exists (immutable-per-audit; supersede with a NEW audit_id).",
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "input_roots": {
+      "description": "OPAQUE data-path roots the executes-live lint tests path literals against. Required (may be empty — an honest 'no data roots').",
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "source_roots": {
+      "description": "OPAQUE import roots the linked-sources lint resolves imports under — the template-mandated engine-drift binding run #10 found silently inactive for standalone audits. Required (may be empty).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    },
+    "attention_order": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional section-slug presentation ordering (null = source order). Participates in the module view_sha only.",
+      "title": "Attention Order"
+    },
+    "output_roots": {
+      "description": "OPAQUE WRITE-target roots: a path literal under one is a declared output, exempt from the executes-live not-exists flag (reported in declared_outputs, never flagged).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Roots",
+      "type": "array"
+    }
+  }
+}
