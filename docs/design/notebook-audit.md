@@ -404,3 +404,21 @@ code-rendered timeline of a run's journal trail — the decision journal's
 interface sibling) and the **attention queue** (status-snapshot v2: fleet
 overnight digest ordered by needs-your-verdict-first). Both pure
 ordering/identity projections; natural siblings of T5's renderer posture.
+
+## Amendment (2026-07-07, user-ruled during run #10): hyper-palatable sign-off
+
+1. **The next-actions footer (render-only, no canon bump — view_sha rolls
+   from section shas, the markdown is generated from the view):** the view's
+   markdown ends with the literal copy-ready utterances — per human_required
+   section the sign line, the batch form, the nudge form, each citing the
+   section's view_sha12. Old renders go stale on landing; remedy = re-run
+   view (existing). Until built, the SKILL requires the relaying agent to
+   end every view relay with the same line (mechanical quote of structured
+   fields, not interpretation).
+2. **The y-adoption tier for T8 (design-flagged, not yet built):** extend
+   the greenlight pattern — CODE drafts the sign-off proposal from the
+   current view (sections + view_shas; never LLM-drafted), human types `y`
+   to adopt. GUARDRAIL: T8's tiered bar survives — redundant sign-offs and
+   high-attention tiers KEEP their diff-token/typing cost; y reaches only
+   the bottom of the ladder. Rarity-buys-seriousness is load-bearing;
+   palatability must never reach the effortful tier.
