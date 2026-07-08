@@ -177,6 +177,14 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # the verb does not appear in the schema-file-parametrized remediation tests
         # (_verb_targets), only in this inventory-vs-CLI drift check.
         "notebook-record-receipt",
+        # notebook-scaffold-template: the content-free audit-template scaffold
+        # writer. Spec-taking mutate; failure_features attaches at the shared
+        # dispatch seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES). Its
+        # input schema (notebook_scaffold_template.input.json) is baked in the
+        # same commit, so it also appears in the schema-file-parametrized
+        # remediation probes ({} is invalid — slugs/output_path are required —
+        # so the probe refuses at model validation, before any file write).
+        "notebook-scaffold-template",
         "verify-relay",
         "wait-detached",
         "submit-s1",

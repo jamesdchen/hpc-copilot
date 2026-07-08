@@ -12,6 +12,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.state.audit_source import (
+    format_section_marker,
     normalize_source,
     parse_percent_source,
     sha256_normalized,
@@ -222,3 +223,28 @@ def test_marker_after_blank_lines_is_still_first_nonblank() -> None:
     text = "# %%\n\n\n# hpc-audit-section: ok\nx = 1\n"
     mod = parse_percent_source(text)
     assert list(mod.slugs) == ["ok"]
+
+
+# ── format_section_marker: the write-side inverse of the marker grammar ──────
+
+
+def test_format_section_marker_round_trips_through_the_parser() -> None:
+    # One definition, both directions: a rendered marker line, placed as a
+    # cell's first non-blank body line, parses back as exactly that slug.
+    line = format_section_marker("load-data")
+    text = f"# %%\n{line}\nx = 1\n"
+    assert list(parse_percent_source(text).slugs) == ["load-data"]
+
+
+@pytest.mark.parametrize("slug", ["has space", "bad/slash", "under#hash", ""])
+def test_format_section_marker_refuses_invalid_slug(slug: str) -> None:
+    # The writer refuses exactly what the reader refuses (same validation).
+    with pytest.raises(errors.SpecInvalid):
+        format_section_marker(slug)
+
+
+def test_format_section_marker_refuses_embedded_newline() -> None:
+    # The residual class the regex capture alone can't catch: an embedded
+    # newline reads back as a DIFFERENT slug — the round-trip guard fires.
+    with pytest.raises(errors.SpecInvalid):
+        format_section_marker("ok\nsneaky = 1")
