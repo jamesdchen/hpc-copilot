@@ -1574,6 +1574,7 @@ def test_audited_source_config_persisted_verbatim(tmp_path: Path) -> None:
         "input_roots": ["inputs", "data"],
         "source_roots": ["src"],
         "attention_order": ["load-data", "model-fit"],
+        "output_roots": ["results"],
     }
     intent = _minimal_intent(3, audited_source=audited)
 
@@ -1601,5 +1602,6 @@ def test_audited_source_config_absent_is_byte_identical(tmp_path: Path) -> None:
     assert "input_roots" not in raw
     assert "source_roots" not in raw
     assert "attention_order" not in raw
+    assert "output_roots" not in raw
     persisted = json.loads(raw)
     assert persisted["audited_source"] == audited

@@ -293,6 +293,22 @@
           "default": null,
           "description": "The section-slug presentation order the audit view used (T12). Feeds the module roll-up view_sha (it changes what the human saw). Absent → source order.",
           "title": "Attention Order"
+        },
+        "output_roots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque WRITE-target roots: a path literal under one is a declared output, exempt from the executes-live not-exists flag (reported in declared_outputs, never flagged — the run-#10 output-literal noise fix). Absent → [].",
+          "title": "Output Roots"
         }
       },
       "required": [

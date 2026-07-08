@@ -625,6 +625,15 @@ class _AuditedSource(BaseModel):
             "source order."
         ),
     )
+    output_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque WRITE-target roots: a path literal under one is a declared "
+            "output, exempt from the executes-live not-exists flag (reported in "
+            "declared_outputs, never flagged — the run-#10 output-literal noise "
+            "fix). Absent → []."
+        ),
+    )
 
 
 class InterviewSpec(BaseModel):
