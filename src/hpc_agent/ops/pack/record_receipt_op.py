@@ -72,12 +72,12 @@ __all__ = ["pack_record_receipt"]
 
 _PRIMITIVE = "pack-record-receipt"
 
-#: The pack journal's scope kind. The ``"pack"`` decision-journal scope + its
-#: ``.hpc/packs/<name>.decisions.jsonl`` path branch land in T8 (Wave C); until
-#: then ``state/decision_journal.py::SCOPE_KINDS`` does not carry it, so a live
-#: call raises until regen and the atom tests monkeypatch the scope in.
-# T8 seam: read/append route through the ONE decision-journal writer with this
-# scope kind; do NOT re-implement journal I/O here (parallel bind_op posture).
+#: The pack journal's scope kind. T8 (Wave C) landed the ``"pack"``
+#: decision-journal scope + its ``.hpc/packs/<name>.decisions.jsonl`` path branch
+#: on ``state/decision_journal.py::SCOPE_KINDS``, so a live call now resolves the
+#: real journal path (no monkeypatch needed). Read/append route through the ONE
+#: decision-journal writer with this scope kind; journal I/O is never
+#: re-implemented here (parallel bind_op posture).
 _PACK_SCOPE = "pack"
 
 #: The honest mechanical response — never a human-ack token (the

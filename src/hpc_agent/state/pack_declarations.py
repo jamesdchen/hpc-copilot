@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.pack import (
     SEAM_NAMES,
     load_manifest,
@@ -309,7 +310,7 @@ def _resolve_packs(
                 f"declares {manifest.name!r} — the reference is dangling/mismatched"
             )
 
-        records = _records_for(pack_name, records_by_pack, records_reader)
+        records = _records_for(experiment_dir, pack_name, records_by_pack, records_reader)
         bind = current_bind(records, pack=pack_name)
         if bind is None:
             raise errors.SpecInvalid(
@@ -336,24 +337,28 @@ def _resolve_packs(
 
 
 def _records_for(
+    experiment_dir: Path,
     pack: str,
     records_by_pack: Mapping[str, Sequence[Mapping[str, Any]]] | None,
     records_reader: Callable[[str], Sequence[Mapping[str, Any]]] | None,
 ) -> Sequence[Mapping[str, Any]]:
     """The pack journal records for *pack*.
 
-    # T8 seam: once ``state/decision_journal.py`` gains the ``"pack"`` scope kind
-    # (Wave C), callers pass ``records_reader=lambda name:
-    # read_decisions(experiment_dir, "pack", name)``. Until then the records are
-    # supplied directly via *records_by_pack* (a ``{pack: records}`` mapping),
-    # keeping this resolver importable/testable standalone ahead of T8. A pack
-    # with no supplied records has no current bind → the loud dangling refusal.
+    T8 (Wave C) landed the ``"pack"`` decision-journal scope kind + its
+    ``.hpc/packs/<name>.decisions.jsonl`` path branch, so the DEFAULT (both
+    override args ``None``) now routes through the ONE journal reader —
+    ``read_decisions(experiment_dir, "pack", pack)`` — and this resolver works
+    standalone against the real journal. The override args remain for tests /
+    callers that supply crafted records directly: *records_reader* (a
+    ``name -> records`` callable) wins, then a ``{pack: records}`` mapping. A pack
+    with no journal records (and no override) has no current bind → the loud
+    dangling refusal.
     """
     if records_reader is not None:
         return records_reader(pack)
     if records_by_pack is not None:
         return records_by_pack.get(pack, ())
-    return ()
+    return read_decisions(experiment_dir, "pack", pack)
 
 
 # --- public per-seam accessors + the combined resolve -----------------------
