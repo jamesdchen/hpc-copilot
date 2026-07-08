@@ -362,6 +362,54 @@ def _verify_remote_checkpoint(
     return parsed
 
 
+def _classify_runtime_exit(
+    exit_code: int, *, canary_run_id: str, result_dir: str
+) -> tuple[str, str] | None:
+    """Map a recorded ``_runtime.json`` exit code to ``(failure_kind, details)``.
+
+    ``None`` for exit 0 (no verdict — the canary's exit leg is clean).
+    Dispatcher SCAFFOLD codes get their own vocabulary (run-#10 lesson: a
+    contract violation surfacing under a generic name nearly bought a wrong
+    diagnosis after a burned wait budget). Kept in lock-step with
+    ``dispatch.py``'s ``_EXIT_NO_RUNNER`` (3) / ``_EXIT_NO_OUTPUT`` (4);
+    everything else non-zero stays ``nonzero_exit`` (#351-3).
+    """
+    if exit_code == 0:
+        return None
+    if exit_code == 4:
+        return (
+            "output_contract",
+            (
+                f"canary {canary_run_id!r} recorded exit_code=4 "
+                "(dispatcher no-output gate): the executor exited 0 but wrote "
+                "NOTHING into $HPC_RESULT_DIR — its outputs went to a literal "
+                "path instead of the write-isolation dir, so there was nothing "
+                "to promote. Fix the entry point to write under $HPC_RESULT_DIR "
+                "when the dispatcher exports it; retrying cannot fix this."
+            ),
+        )
+    if exit_code == 3:
+        return (
+            "no_runner",
+            (
+                f"canary {canary_run_id!r} recorded exit_code=3 "
+                "(dispatcher no-runner gate): the sidecar's executor is empty or "
+                "would re-invoke the dispatcher itself. A deterministic scaffold "
+                "error — fix the executor command; retrying cannot fix this."
+            ),
+        )
+    return (
+        "nonzero_exit",
+        (
+            f"canary {canary_run_id!r} recorded exit_code={exit_code} in "
+            f"{result_dir.rstrip('/')}/_runtime.json — it wrote a result file but "
+            "the task FAILED (a non-zero exit whose traceback may fall outside the "
+            "50-line stderr tail). Refusing to pass the canary; inspect the stderr "
+            "tail / classified_error for the cause before submitting the main array."
+        ),
+    )
+
+
 def _read_canary_exit_code(
     *,
     ssh_target: str,
@@ -637,6 +685,10 @@ def verify_canary(
       ``"traceback"`` / ``"oom_killed"`` / ``"segfault"`` /
       ``"nonzero_exit"`` (the canary task-0 ``_runtime.json`` recorded a
       non-zero ``exit_code`` even though it wrote a result file — #351-3) /
+      ``"output_contract"`` (dispatcher exit 4: executor exited 0 but wrote
+      nothing into ``$HPC_RESULT_DIR`` — run-#10 finding; deterministic,
+      never retried) / ``"no_runner"`` (dispatcher exit 3: empty or
+      self-recursive executor) /
       ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
       failed — broken cluster-side reporter; also the fast-escalation verdict
       when K consecutive deterministic broken-env polls (rc 126/127) found NO
@@ -1168,17 +1220,15 @@ def verify_canary(
         )
         if runtime.get("status") == "present":
             canary_exit_code = int(runtime["exit_code"])
-            if canary_exit_code != 0:
+            verdict = _classify_runtime_exit(
+                canary_exit_code, canary_run_id=canary_run_id, result_dir=_result_dir
+            )
+            if verdict is not None:
+                kind, details = verdict
                 return {
                     "ok": False,
-                    "failure_kind": "nonzero_exit",
-                    "details": (
-                        f"canary {canary_run_id!r} recorded exit_code={canary_exit_code} in "
-                        f"{_result_dir.rstrip('/')}/_runtime.json — it wrote a result file but "
-                        "the task FAILED (a non-zero exit whose traceback may fall outside the "
-                        "50-line stderr tail). Refusing to pass the canary; inspect the stderr "
-                        "tail / classified_error for the cause before submitting the main array."
-                    ),
+                    "failure_kind": kind,
+                    "details": details,
                     "stderr_tail": stderr_tail,
                     "metrics_fingerprint": None,
                     "failure_features": _failure_features(stderr_tail, log_path),
