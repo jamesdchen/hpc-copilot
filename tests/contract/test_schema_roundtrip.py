@@ -407,6 +407,10 @@ def test_no_orphan_input_schemas() -> None:
     # silently lost its CLI consumer) fails the test.
     documented_composed_only = {
         "campaign-health",
+        # evidence-demand: the fingerprint's declarative evidence-floor shape
+        # (EvidenceDemandSpec) — consumed by the registration prerequisite
+        # checker's `requires` leg (evidence_meets), never fireable as a verb.
+        "evidence-demand",
         "dry-run-local",
         "stages",
         "status-preflight",

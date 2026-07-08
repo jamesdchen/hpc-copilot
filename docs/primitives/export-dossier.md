@@ -18,11 +18,12 @@ backed_by:
 Bundle a run's **core-owned record trail** into one integrity-sealed archive.
 The verb walks the run's concrete on-disk **source stores** — the sidecar, the
 decision journal, the drafted briefs, the block terminals, the journal record,
-the scope journal, the look ledger, the harvested aggregate, and — when the run
-was submitted from an audited source (notebook-audit T14) — the audited source
-`.py` + template `.py` and the notebook attestation journal — copies each
-store's entries **verbatim as bytes**, and writes them into a single portable
-archive with a manifest and a bundle fingerprint.
+the scope journal, the look ledger, the harvested aggregate, the
+determinism-fingerprint ledger, and — when the run was submitted from an audited
+source (notebook-audit T14) — the audited source `.py` + template `.py` and the
+notebook attestation journal — copies each store's entries **verbatim as
+bytes**, and writes them into a single portable archive with a manifest and a
+bundle fingerprint.
 
 When the run's sidecar echoes an `audited_source` block, the bundle also seals
 the **audit trail** — the "dossier is sealed attestations" formulation: the
@@ -36,6 +37,18 @@ on disk) is a recorded gap; a run submitted without an audit is byte-identical t
 the pre-T14 dossier (no audit stores, no audit gap). The opaque `audit_id` slug enters the
 run's identity projection (which audit sealed it) — the section-level semantics
 inside the audit stay opaque.
+
+The bundle also seals the run's **determinism-fingerprint ledger** (the
+`cmd_sha`-addressed `_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl`, the
+`determinism-fingerprint` store noun) as **raw bytes** — the disclosure-at-
+graduation surface for the experiment's measured run-to-run spread. The bundler
+seals the FILE, never the derived envelope (the envelope lives in the code-
+rendered briefs) and never parses the JSONL. A resolvable identity whose ledger
+was never minted records a gap; a run with no `cmd_sha` seals nothing. Because
+the ledger is append-only, **every new sample moves the sealed bytes** — a
+registration's dossier leg reads stale once fresh evidence accrues, and
+re-export + re-register is the deliberate remedy (registration-kernel R7): a
+measurement that grew is a new dossier, not a silent mutation of the old one.
 
 An entry in the bundle is typed by the **source store it came from, never by
 what it means**. The framework knows "this file is a run sidecar" or "this line

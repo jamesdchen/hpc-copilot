@@ -49,6 +49,7 @@ __all__ = [
     "read_manifest",
     "declared_input_roots",
     "manifest_doc_sha",
+    "data_identity",
     "file_sha256",
     "build_records",
     "mint_manifest",
@@ -175,6 +176,35 @@ def manifest_doc_sha(records: dict[str, Any]) -> str:
     "this is the new known-good data identity" fingerprint.
     """
     return hashlib.sha256(_canonical_json(records).encode("utf-8")).hexdigest()
+
+
+def data_identity(experiment_dir: Path | str, *, output_path: str | None = None) -> str | None:
+    """The single canonical ``data_sha`` for the run sidecar / fingerprint leg, or ``None``.
+
+    The Phase-3 amendment's comparable data-identity leg (``docs/design/data-manifest.md``
+    "The fingerprint amendment", ruled 0b). PINNED shape: **one sha over the
+    manifest's authoritative ``files`` record** — :func:`manifest_doc_sha`,
+    recomputed FRESH from ``manifest["files"]`` rather than trusting the stored
+    ``manifest_doc_sha`` field, so a tampered field can never assert a false
+    identity. That single sha moves iff any declared-input file's ``sha256`` /
+    ``size`` moves (or a file appears/vanishes under a declared root) — exactly
+    the quiet-corruption class the manifest exists to attribute.
+
+    Returns ``None`` (data identity NOT captured — disclosed downstream, never
+    fabricated) when the experiment declares NO input roots (the one-definition
+    declaration is absent), when no manifest has been minted, or when the
+    manifest carries no files. ``None`` is the "unknown" sentinel the fingerprint
+    filter and the reproduce guard both treat as disclose-never-block.
+    """
+    if declared_input_roots(experiment_dir) is None:
+        return None
+    manifest = read_manifest(experiment_dir, output_path=output_path)
+    if manifest is None:
+        return None
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        return None
+    return manifest_doc_sha(files)
 
 
 # ── the (size, mtime) fast-path cache ─────────────────────────────────────────
