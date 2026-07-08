@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_registration.output.json",
+  "title": "verify-registration output",
+  "description": "Result of a ``verify-registration`` read — reduced status + per-leg detail.\n\nA REPORT, never a gate: a non-``current`` status is a successful run (the\nfinding IS the feature). The deployment refusal is wired caller-side against\n``status`` (R8). ``view_sha`` is the canonical-JSON sha of ``brief`` — the\nwitness a subsequent registration sign-off must carry (R6), recomputed by\nthe gate from the same deterministic projection.",
+  "type": "object",
+  "required": [
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "description": "The reduced registration status (R7): current | stale | revoked | superseded | absent.",
+      "enum": [
+        "current",
+        "stale",
+        "revoked",
+        "superseded",
+        "absent"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "registration_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The resolved registration's id (None when status is absent — no record found).",
+      "title": "Registration Id"
+    },
+    "registered_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Timestamp the resolved registration was recorded (None when absent).",
+      "title": "Registered At"
+    },
+    "dossier": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DossierLeg"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The dossier-signature leg (None when no registration was resolved)."
+    },
+    "template": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TemplateLeg"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The template-drift finding (None when no registration was resolved)."
+    },
+    "prerequisites": {
+      "description": "Per-slot currency detail for every chain entry (empty when absent).",
+      "items": {
+        "$ref": "#/$defs/PrerequisiteLeg"
+      },
+      "title": "Prerequisites",
+      "type": "array"
+    },
+    "fields": {
+      "$ref": "#/$defs/FieldsBlock",
+      "description": "Template-field completeness (declared / present / missing slugs)."
+    },
+    "brief": {
+      "default": "",
+      "description": "The code-rendered markdown brief the human reviews; its canonical-JSON sha is view_sha.",
+      "title": "Brief",
+      "type": "string"
+    },
+    "view_sha": {
+      "default": "",
+      "description": "Canonical-JSON sha of the rendered brief — the view witness a sign-off must carry (R6).",
+      "title": "View Sha",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "DossierLeg": {
+      "additionalProperties": false,
+      "description": "The dossier-subject leg: recorded-vs-recomputed signature + drift (R8).\n\nThe registration's subject is the sealed dossier, bound by its\n``bundle_sha256`` (R2). ``recomputed_sha`` is the live dry re-gather at read\ntime; ``recorded_sha`` is what the registration bound. When they differ a\nsealed store moved after export — the registration reads ``stale`` and\n``drifted_stores`` names the stores whose content moved.",
+      "properties": {
+        "recorded_sha": {
+          "description": "The dossier bundle_sha256 the registration bound.",
+          "title": "Recorded Sha",
+          "type": "string"
+        },
+        "recomputed_sha": {
+          "description": "The dossier bundle_sha256 re-gathered live from the stores at read time.",
+          "title": "Recomputed Sha",
+          "type": "string"
+        },
+        "drifted_stores": {
+          "description": "Source-store names whose content moved since the dossier was sealed (empty when current).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Drifted Stores",
+          "type": "array"
+        }
+      },
+      "required": [
+        "recorded_sha",
+        "recomputed_sha"
+      ],
+      "title": "dossier signature leg",
+      "type": "object"
+    },
+    "FieldsBlock": {
+      "additionalProperties": false,
+      "description": "Template-field completeness by COUNTING (R5) — slugs opaque, never read.\n\nEvery declared field slug must have a non-empty value in the registration's\n``fields`` (values opaque, never interpreted). This leg reports the declared\nslugs, which are present, and which are missing.",
+      "properties": {
+        "declared": {
+          "description": "Field slugs the template declared (opaque caller data).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Declared",
+          "type": "array"
+        },
+        "present": {
+          "description": "Declared slugs that carry a non-empty value in the registration.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Present",
+          "type": "array"
+        },
+        "missing": {
+          "description": "Declared slugs with no non-empty value (empty when the registration is complete).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing",
+          "type": "array"
+        }
+      },
+      "title": "template fields completeness",
+      "type": "object"
+    },
+    "PrerequisiteLeg": {
+      "additionalProperties": false,
+      "description": "One prerequisite slot's currency re-evaluated at read time (R8).\n\nPer-slot: the kind's CURRENT condition re-checked. A moved evidence sha is\nreported as the ``recorded_sha`` / ``recomputed_sha`` pair (R3 drift-log).\n``evidence_note`` echoes what filled the slot — for the generic\n``attestation`` kind, the satisfying record's ``{block, attestor}`` verbatim\n(R3 disclosure), so an agent-authored record that fills a slot is visible in\nthe brief, never silent.",
+      "properties": {
+        "slot": {
+          "description": "The chain slot slug (opaque caller data).",
+          "minLength": 1,
+          "title": "Slot",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The mechanism kind this slot was checked through.",
+          "enum": [
+            "notebook-audit",
+            "reproduction",
+            "scope-budget",
+            "pack-receipt",
+            "attestation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "description": "current | stale | absent — the slot's currency at read time.",
+          "enum": [
+            "current",
+            "stale",
+            "absent"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "recorded_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The content_sha the entry recorded (None when the evidence is absent).",
+          "title": "Recorded Sha"
+        },
+        "recomputed_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The sha the kind's checker recomputed at read time (None when absent).",
+          "title": "Recomputed Sha"
+        },
+        "evidence_note": {
+          "default": "",
+          "description": "What filled the slot, echoed verbatim (e.g. the attestation kind's {block, attestor}); or the shortfall cause when absent. Opaque, echoed, never parsed.",
+          "title": "Evidence Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "kind",
+        "status"
+      ],
+      "title": "prerequisite slot leg",
+      "type": "object"
+    },
+    "TemplateLeg": {
+      "additionalProperties": false,
+      "description": "The template-drift finding (R5) — always disclosed, never a silent gate.\n\nTemplate drift does NOT retroactively revoke a registration (the subject is\nthe dossier; the template's raw-bytes sha is recorded on the record). This\nleg REPORTS ``current | stale`` so a consumer can require re-registration\nunder new standards — the drift is disclosed, the consumer decides.",
+      "properties": {
+        "status": {
+          "description": "current = the on-disk template matches the recorded sha; stale = it drifted.",
+          "enum": [
+            "current",
+            "stale"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "recorded_sha": {
+          "description": "The template raw-bytes sha the registration recorded.",
+          "title": "Recorded Sha",
+          "type": "string"
+        },
+        "recomputed_sha": {
+          "description": "The template file's raw-bytes sha on disk at read time.",
+          "title": "Recomputed Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "recorded_sha",
+        "recomputed_sha"
+      ],
+      "title": "template drift leg",
+      "type": "object"
+    }
+  }
+}

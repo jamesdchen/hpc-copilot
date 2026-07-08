@@ -8,7 +8,8 @@ append-only discipline, both scopes, and the greenlight/nudge responses.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -1583,3 +1584,190 @@ def test_signoff_preview_view_sha_refused(tmp_path: Path) -> None:
             audit_id="audit-lint",
             render=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# E2 (docs/design/mcp-elicitation.md D4/E2): the authorship-refusal marker.
+# The authorship/sign-off BAR raise sites attach
+# ``failure_features.authorship_evidence == "missing"`` — a machine-readable
+# discriminator the MCP elicitation hook keys on WITHOUT parsing prose. It must
+# survive the real CLI envelope path (``cli/_helpers._err_from_hpc`` → JSON on
+# stdout, exactly what ``cli/dispatch.main`` runs on an HpcError) AND survive the
+# synthesis trap: ``_err_from_hpc`` synthesizes a DEFAULT ``failure_features`` for
+# EVERY spec_invalid, so a generic refusal has the BLOCK but not the KEY.
+# ---------------------------------------------------------------------------
+
+
+def _err_envelope(call: Callable[[], object]) -> dict[str, Any]:
+    """Route the HpcError a refusing append raises through the CLI output boundary.
+
+    ``cli/dispatch.main`` catches ``errors.HpcError`` and returns
+    ``_err_from_hpc(exc)`` (dispatch.py) — this reproduces that exact seam and
+    returns the emitted ok:false envelope dict, the real path E2's marker rides.
+    """
+    import contextlib
+    import io
+    import json as _json
+
+    from hpc_agent.cli._helpers import _err_from_hpc
+
+    with pytest.raises(errors.HpcError) as ei:
+        call()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _err_from_hpc(ei.value)
+    env: dict[str, Any] = _json.loads(buf.getvalue())
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"
+    return env
+
+
+def test_signoff_bare_ack_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """A notebook sign-off bare-ack refusal surfaces the E2 marker through the
+    envelope's ``failure_features``."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path, section="model-fit", response="y", section_sha=section_sha, view_sha=view_sha
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_signoff_slug_not_named_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The slug-naming floor refusal is an authorship-bar refusal → marked."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="looks good, the regularization term is fine",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_signoff_human_required_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The raised HUMAN_REQUIRED 'engage the change' refusal is authorship → marked."""
+    _write_notebook_fixture(tmp_path)
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit looks great, nice work",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_unlock_bare_ack_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The scope-unlock bare-ack refusal is authorship → marked."""
+    env = _err_envelope(lambda: _unlock(tmp_path, response="y"))
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_unlock_harness_mismatch_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The scope-unlock harness-captured-mismatch refusal is authorship → marked."""
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    env = _err_envelope(
+        lambda: _unlock(tmp_path, response="reopen the embargoed evaluation partition")
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_human_authorship_refusal_carries_authorship_marker(tmp_path: Path) -> None:
+    """The human-authorship gate (proving-run-#4 shape) refusal is marked."""
+    env = _err_envelope(
+        lambda: _append(
+            tmp_path,
+            block="s1",
+            response="y",
+            proposal=_RUN4_PROPOSAL,
+            resolved={"task_generator": _RUN4_TASK_GENERATOR},
+        )
+    )
+    assert env["failure_features"]["authorship_evidence"] == "missing"
+
+
+def test_generic_spec_invalid_has_features_without_authorship_key(tmp_path: Path) -> None:
+    """The synthesis trap: a generic (non-authorship) spec_invalid refusal — here the
+    code-derived-field gate — still carries a synthesized ``failure_features`` BLOCK
+    (error_class/error_class_raw), but WITHOUT the ``authorship_evidence`` KEY. The
+    MCP hook must key on the KEY, never the block's presence."""
+    env = _err_envelope(lambda: _append(tmp_path, resolved={"executor": "monte_carlo_pi"}))
+    features = env["failure_features"]
+    assert features is not None
+    assert "authorship_evidence" not in features
+    # The synthesized default is intact (proves the block is present-but-different).
+    assert features.get("error_class") == "code_bug"
+
+
+def test_structural_signoff_refusal_not_marked_authorship(tmp_path: Path) -> None:
+    """A STRUCTURAL sign-off refusal (a stale/asserted section_sha — the recompute
+    lock, not missing authorship) must NOT carry the marker: re-eliciting a human
+    utterance cannot fix a hash mismatch, so the MCP retry-once must not fire."""
+    _write_notebook_fixture(tmp_path)
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha="deadbeef" * 8,
+        )
+    )
+    features = env["failure_features"]
+    # Either the synthesized default (no authorship key) — never the marker.
+    assert features is None or "authorship_evidence" not in features
+
+
+def test_unresolvable_source_signoff_refusal_not_marked_authorship(tmp_path: Path) -> None:
+    """An unresolvable-source sign-off refusal is a setup error, not missing
+    authorship → not marked."""
+    section_sha, view_sha = _nb_shas("model-fit")
+    env = _err_envelope(
+        lambda: _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit regularization reviewed",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+    )
+    features = env["failure_features"]
+    assert features is None or "authorship_evidence" not in features
+
+
+def test_success_envelope_carries_no_failure_features(tmp_path: Path, capsys: Any) -> None:
+    """The end-to-end success path (in-process ``dispatch.main``): a passing
+    append-decision emits an ok:true envelope with no ``failure_features`` at all —
+    the marker is a refusal-only discriminator."""
+    import json
+
+    from hpc_agent.cli.dispatch import main
+
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(
+        json.dumps(
+            {
+                "scope_kind": "run",
+                "scope_id": "run-e2",
+                "block": "submit.S1",
+                "response": "y",
+                "resolved": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = main(["append-decision", "--experiment-dir", str(tmp_path), "--spec", str(spec_file)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    env = json.loads([line for line in out.splitlines() if line.strip().startswith("{")][-1])
+    assert env["ok"] is True
+    assert "failure_features" not in env

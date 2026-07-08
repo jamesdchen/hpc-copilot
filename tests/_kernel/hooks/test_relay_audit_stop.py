@@ -511,3 +511,65 @@ def test_omission_combines_with_contradiction_findings(tmp_path: Path) -> None:
     assert out is not None and out["decision"] == "block"
     assert "relay audit" in out["reason"]
     assert "unrelayed terminal state" in out["reason"]
+
+
+# ─── G1: the paraphrase pass (relayed diffs must be verbatim render content) ──
+
+
+def _seed_render(exp: Path, audit_id: str, slug: str, sha12: str, body: str) -> None:
+    """Write a content-addressed trusted-display render under .hpc/renders."""
+    rdir = exp / ".hpc" / "renders" / audit_id
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / f"{slug}.{sha12}.md").write_text(body, encoding="utf-8")
+    # A notebook journal so the audit id is discoverable/mentioned.
+    ndir = exp / ".hpc" / "notebooks"
+    ndir.mkdir(parents=True, exist_ok=True)
+    (ndir / f"{audit_id}.decisions.jsonl").write_text("", encoding="utf-8")
+
+
+_RENDER_BODY = """## section: feature-construction  [tier: human_required]
+
+### diff-from-template
+
+```diff
+--- template:feature-construction
++++ source:feature-construction
++kept = [r for r in rows if float(r[1]) > threshold]
++print(f"kept={len(kept)}")
+```
+"""
+
+
+def test_paraphrase_blocks_on_retyped_diff_line(tmp_path: Path) -> None:
+    _seed_render(tmp_path, "run10", "feature-construction", "abc123def456", _RENDER_BODY)
+    # The relay invents a diff line NOT in the render (a paraphrase); it names
+    # the audit id (run10) so the audit is attributable, and "section" so the
+    # diff block reads as audit context.
+    relay = (
+        "run10 feature-construction section diff:\n\n"
+        "```diff\n+kept = [r for r in rows if r[1] > THE_MEAN]  # reworded\n```\n"
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, relay)))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "not found in any current render" in out["reason"]
+
+
+def test_paraphrase_passes_when_diff_is_verbatim(tmp_path: Path) -> None:
+    _seed_render(tmp_path, "run10", "feature-construction", "abc123def456", _RENDER_BODY)
+    relay = (
+        "run10 feature-construction section diff:\n\n"
+        "```diff\n+kept = [r for r in rows if float(r[1]) > threshold]\n"
+        '+print(f"kept={len(kept)}")\n```\n'
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, relay)))
+    assert out is None  # every relayed line is verbatim render content
+
+
+def test_paraphrase_ignores_non_audit_diff_blocks(tmp_path: Path) -> None:
+    _seed_render(tmp_path, "run10", "feature-construction", "abc123def456", _RENDER_BODY)
+    # A git-style diff with NO audit vocabulary near it must not be checked,
+    # even though the relay names the audit id elsewhere.
+    relay = "run10 status: I also edited the config:\n\n```diff\n+alpha = 2.0\n-alpha = 1.0\n```\n"
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, relay)))
+    assert out is None

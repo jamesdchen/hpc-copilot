@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/data_manifest.output.json",
+  "title": "data-manifest result",
+  "description": "Result of a ``data-manifest`` mint — counts + the manifest-doc identity.",
+  "type": "object",
+  "required": [
+    "manifest_path",
+    "roots",
+    "manifest_doc_sha",
+    "file_count",
+    "files"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_path": {
+      "description": "Path the manifest was written to.",
+      "title": "Manifest Path",
+      "type": "string"
+    },
+    "roots": {
+      "description": "The roots the manifest was minted over.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Roots",
+      "type": "array"
+    },
+    "manifest_doc_sha": {
+      "description": "Canonical-JSON sha256 of the file records — the manifest's identity AS A DOCUMENT (the journaled mint's 'new known-good' fingerprint). Distinct from the raw-byte file-content shas inside it.",
+      "title": "Manifest Doc Sha",
+      "type": "string"
+    },
+    "file_count": {
+      "description": "Number of files recorded.",
+      "title": "File Count",
+      "type": "integer"
+    },
+    "files": {
+      "additionalProperties": true,
+      "description": "The {relpath: {sha256, size, built_by?}} records (identities only).",
+      "title": "Files",
+      "type": "object"
+    }
+  }
+}

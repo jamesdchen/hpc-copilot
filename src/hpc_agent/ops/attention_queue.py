@@ -64,6 +64,9 @@ __all__ = [
     "AUDIT_SECTION_STALE",
     "ALERT",
     "SSH_CIRCUIT_OPEN",
+    "DATA_DRIFT",
+    "DATA_NEW",
+    "DATA_UNMANIFESTED",
     "KIND_CLASS",
     "AttentionItem",
     "QueueCollection",
@@ -75,6 +78,7 @@ __all__ = [
     "collect_audits",
     "collect_alerts",
     "collect_ssh_circuits",
+    "collect_data_manifest",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -103,6 +107,13 @@ AUDIT_SECTION_UNSIGNED = "audit-section-unsigned"
 AUDIT_SECTION_STALE = "audit-section-stale"
 ALERT = "alert"
 SSH_CIRCUIT_OPEN = "ssh-circuit-open"
+#: data-manifest drift (docs/design/data-manifest.md "The attention contract"):
+#: a TRACKED file's sha changing / vanishing = needs-attention (the
+#: quiet-corruption class); a NEW untracked file under a declared root = low tier;
+#: NO manifest (roots declared, never minted) = one standing disclosure.
+DATA_DRIFT = "data-drift"
+DATA_NEW = "data-new"
+DATA_UNMANIFESTED = "data-unmanifested"
 
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
@@ -117,6 +128,11 @@ KIND_CLASS: dict[str, str] = {
     AUDIT_SECTION_STALE: INFORMATIONAL,
     ALERT: INFORMATIONAL,
     SSH_CIRCUIT_OPEN: INFORMATIONAL,
+    # Tier map: a changed/vanished TRACKED file is the quiet-corruption class
+    # (verdict — a human must judge the change); new + unmanifested are awareness.
+    DATA_DRIFT: VERDICT,
+    DATA_NEW: INFORMATIONAL,
+    DATA_UNMANIFESTED: INFORMATIONAL,
 }
 
 
@@ -475,6 +491,97 @@ def collect_ssh_circuits(experiment_dir: Path, *, now: str) -> list[AttentionIte
     return items
 
 
+# ── data-manifest collector (docs/design/data-manifest.md attention contract) ─
+
+
+def collect_data_manifest(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Data-drift items via the ONE drift definition
+    (``state/data_manifest.py::compute_drift``).
+
+    The verdict — which files matched / drifted / are new / are missing — routes
+    through ``compute_drift`` (read-only; this collector re-derives nothing and
+    writes nothing, honoring D6). The tier map (the design's attention contract):
+
+    * a DRIFTED or MISSING tracked file → ``data-drift`` (verdict, the
+      quiet-corruption class) — one item per file so each competes under the
+      leverage sort; ``since`` is the file's change mtime so it ages while
+      unresolved. A RE-MINT makes the file match again → the item simply
+      disappears from this stateless read (silence-by-record, never suppression).
+    * NEW untracked files under a declared root → one ``data-new`` line
+      (informational, low tier).
+    * NO manifest but inputs ARE declared → one standing ``data-unmanifested``
+      disclosure (never a per-run repeat; an experiment with no declaration
+      contributes nothing — ``compute_drift`` + the declaration read are both
+      fail-open).
+    """
+    from hpc_agent.state.data_manifest import compute_drift, declared_input_roots
+
+    exp = _exp(experiment_dir)
+    report = compute_drift(experiment_dir)
+    if report.unmanifested:
+        if declared_input_roots(experiment_dir) is None:
+            return []
+        return [
+            AttentionItem(
+                kind=DATA_UNMANIFESTED,
+                item_class=KIND_CLASS[DATA_UNMANIFESTED],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id="data-manifest",
+                action="mint with `hpc-agent data-manifest`",
+                evidence={"reason": "no data manifest — runs invisible to drift attribution"},
+            )
+        ]
+
+    items: list[AttentionItem] = []
+    for rel in report.drifted:
+        items.append(
+            AttentionItem(
+                kind=DATA_DRIFT,
+                item_class=KIND_CLASS[DATA_DRIFT],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id=rel,
+                since=_file_mtime_iso(Path(experiment_dir) / rel),
+                evidence={"relpath": rel, "change": "drifted"},
+            )
+        )
+    for rel in report.missing:
+        items.append(
+            AttentionItem(
+                kind=DATA_DRIFT,
+                item_class=KIND_CLASS[DATA_DRIFT],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id=rel,
+                evidence={"relpath": rel, "change": "missing"},
+            )
+        )
+    if report.new:
+        items.append(
+            AttentionItem(
+                kind=DATA_NEW,
+                item_class=KIND_CLASS[DATA_NEW],
+                experiment_dir=exp,
+                scope_kind="data",
+                scope_id="data-manifest",
+                evidence={"new": list(report.new), "count": len(report.new)},
+            )
+        )
+    return items
+
+
+def _file_mtime_iso(path: Path) -> str | None:
+    """The file's mtime as a UTC ISO-8601 string, or ``None`` (fail-open)."""
+    from datetime import datetime, timezone
+
+    try:
+        ts = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
@@ -495,6 +602,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *audits.items,
         *collect_alerts(experiment_dir, now=now),
         *collect_ssh_circuits(experiment_dir, now=now),
+        *collect_data_manifest(experiment_dir, now=now),
     ]
     return QueueCollection(items=_apply_fanout(items, experiment_dir), skipped=audits.skipped)
 

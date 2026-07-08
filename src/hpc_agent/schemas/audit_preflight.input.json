@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/audit_preflight.input.json",
+  "title": "audit-preflight input spec",
+  "description": "Input spec for the ``audit-preflight`` verb.",
+  "type": "object",
+  "required": [
+    "template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "template": {
+      "description": "Path (experiment-relative, or absolute) to the audit TEMPLATE .py — the percent-format module whose section slugs are the required inventory. Checked for: present, parses via parse_percent_source, and git-committed-clean at that path (an uncommitted/dirty template is an 'unsigned template' NO-GO — the commit IS the signature).",
+      "title": "Template",
+      "type": "string"
+    },
+    "source_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque import roots (the linked-sources lint's roots). When omitted AND audit_id names an existing audit, defaults from that audit's recorded configuration (the one-declaration rule); otherwise [].",
+      "title": "Source Roots"
+    },
+    "input_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque data-path roots (the executes-live lint's roots). When omitted AND audit_id names an existing audit, defaults from that audit's recorded configuration; otherwise [].",
+      "title": "Input Roots"
+    },
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The caller-authored audit slug. When it names an existing audit its recorded roots default the roots above, and its journal decides resuming-vs-fresh. Omit for a fresh standalone preflight.",
+      "title": "Audit Id"
+    }
+  }
+}

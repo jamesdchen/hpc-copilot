@@ -51,13 +51,13 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.notebook_lint import (
     DeclaredOutput,
-    LinkedSource,
     NotebookLintFinding,
     NotebookLintInput,
     NotebookLintResult,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
+from hpc_agent.ops.notebook.linked_sources import resolve_linked_sources
+from hpc_agent.state.audit_source import parse_percent_source
 
 _PRIMITIVE = "notebook-lint"
 
@@ -323,76 +323,13 @@ def _check_executes_live(
 
 
 # ── rule 3: linked_sources ───────────────────────────────────────────────────
-
-
-def _resolve_module_file(module: str, root_dirs: list[Path]) -> Path | None:
-    """Resolve a dotted *module* name to a file under one of *root_dirs*.
-
-    ``foo.bar`` → ``foo/bar.py`` or ``foo/bar/__init__.py`` under each root; the
-    first hit (roots in declared order) wins. ``None`` when nothing resolves —
-    an unresolvable import is stdlib / site-packages, never a link.
-    """
-    rel = Path(*module.split("."))
-    for root in root_dirs:
-        for candidate in (root / rel.with_suffix(".py"), root / rel / "__init__.py"):
-            if candidate.is_file():
-                return candidate
-    return None
-
-
-def _imported_modules(tree: ast.Module) -> list[str]:
-    """Dotted module names an ``import`` / ``from`` statement brings in.
-
-    For ``from pkg import name`` both ``pkg`` and ``pkg.name`` are candidates
-    (``name`` may be a submodule file); the resolver keeps whichever exists.
-    Relative imports (``level > 0``) are skipped — a relative origin is inside
-    the same package, not a cross-``source_root`` link this rule reports.
-    """
-    modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level and node.level > 0 or not node.module:
-                continue
-            modules.append(node.module)
-            modules.extend(f"{node.module}.{alias.name}" for alias in node.names)
-    return modules
-
-
-def _check_linked_sources(
-    tree: ast.Module,
-    experiment_dir: Path,
-    root_dirs: list[Path],
-) -> list[LinkedSource]:
-    """Report imports resolving to a file under a declared ``source_root``.
-
-    Deduped by resolved file (two import forms can name one origin). ``module_sha``
-    is the shared hashing primitive over the file text — the exact value T9
-    recomputes to drift-check the link.
-    """
-    seen_files: set[Path] = set()
-    linked: list[LinkedSource] = []
-    for module in _imported_modules(tree):
-        resolved = _resolve_module_file(module, root_dirs)
-        if resolved is None:
-            continue
-        resolved = resolved.resolve()
-        if resolved in seen_files:
-            continue
-        seen_files.add(resolved)
-        try:
-            rel = str(resolved.relative_to(experiment_dir.resolve()))
-        except ValueError:
-            rel = str(resolved)
-        linked.append(
-            LinkedSource(
-                module=module,
-                file=rel,
-                module_sha=sha256_normalized(resolved.read_text(encoding="utf-8")),
-            )
-        )
-    return linked
+#
+# The resolution machinery (``resolve_module_file`` / ``imported_modules`` /
+# ``resolve_linked_sources``) lives in ``ops.notebook.linked_sources`` — the ONE
+# definition ``notebook-draft-context`` also resolves engines through (the
+# draft-context plan's "one resolution definition" requirement). This rule calls
+# ``resolve_linked_sources`` unchanged; its behavior is byte-identical to the
+# in-file version it replaced.
 
 
 # ── rule 4: template_import_shadowed ─────────────────────────────────────────
@@ -651,7 +588,7 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
             [(s.slug, s.source) for s in template_module.sections],
         )
     )
-    linked = _check_linked_sources(tree, experiment_dir, source_root_dirs)
+    linked = resolve_linked_sources(tree, experiment_dir, source_root_dirs)
 
     return NotebookLintResult(
         findings=findings,
