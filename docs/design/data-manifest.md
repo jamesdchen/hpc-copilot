@@ -131,7 +131,14 @@ strictness is then caller-declared per registration, never a core mood).
 
 Format-aware validation ("top-level parquets must be bar-keyed") is PACK
 content forever: caller-executed, receipt-producing, binding to the
-manifest's identity substrate.
+manifest's identity substrate. **The first named rule is on the books
+(2026-07-07, from the live failure): QUANT-PACK D-V1 — "every parquet at
+the top level of the bar-panel data root must carry the bar merge key
+(`endbartime` for this program); non-bar-keyed exports live in
+subdirectories or are skipped loudly." Today it exists as caller code
+(harxhar-clean `src/data/loading.py`'s skip-with-warning) + this note;
+when packs land it becomes a declared validation producing a receipt the
+manifest's shas bind. Pack extraction must collect it from here.**
 
 ## Sequencing
 
