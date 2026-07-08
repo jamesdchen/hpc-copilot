@@ -296,40 +296,76 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
     return [c for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
 
 
-def test_rsync_push_fallback_delete_true_runs_remote_preclean(tmp_path: Path) -> None:
-    """delete=True on the tar fallback emulates rsync --delete: a remote
-    pre-clean (find ... | xargs rm -rf) runs as its OWN ssh call BEFORE the tar
-    extract, so stale remote files cannot survive a re-push AND the clean can't
-    eat the transfer budget (#173)."""
+def test_rsync_push_fallback_delete_true_stages_then_swaps(tmp_path: Path) -> None:
+    """delete=True on the tar fallback is STAGE-THEN-SWAP (run-#10 F-G): the
+    extract lands in a sibling staging dir first; the live tree is touched
+    only after a COMPLETE transfer — bounded clean, then a same-filesystem
+    move. Four bounded ssh legs, in order: stage drop, extract-into-stage,
+    pre-clean of the live tree, move+rmdir."""
     calls = _tar_fallback_run_calls(tmp_path, exclude=[], delete=True)
-    # Two ssh invocations now: the pre-clean (first), then the extract (last).
-    assert len(calls) == 2
-    preclean_cmd = str(calls[0][0][0][-1])
-    extract_cmd = str(calls[-1][0][0][-1])
-    assert "mkdir -p /r" in preclean_cmd
-    assert "find /r -mindepth 1" in preclean_cmd
-    assert "xargs -0 -r rm -rf --" in preclean_cmd
-    assert "tar x" not in preclean_cmd  # pre-clean does not extract
-    assert "tar x -C /r" in extract_cmd
-    assert "rm -rf" not in extract_cmd  # extract does not delete
-    # The pre-clean got its OWN bounded timeout, strictly shorter than the
-    # transfer's, so a pathological clean fails fast instead of wedging.
+    assert len(calls) == 4
+    drop_cmd = str(calls[0][0][0][-1])
+    extract_cmd = str(calls[1][0][0][-1])
+    clean_cmd = str(calls[2][0][0][-1])
+    move_cmd = str(calls[3][0][0][-1])
+    assert "rm -rf /r.hpc_stage" in drop_cmd
+    assert "tar x -C /r.hpc_stage" in extract_cmd  # NEVER extracts into /r
+    assert "rm -rf" not in extract_cmd
+    assert "find /r -mindepth 1" in clean_cmd
+    assert "xargs -0 -r rm -rf --" in clean_cmd
+    assert "tar x" not in clean_cmd
+    assert "mv -f -t /r" in move_cmd
+    assert "rmdir /r.hpc_stage" in move_cmd
+    # The destructive legs carry their OWN bounded timeouts, strictly shorter
+    # than the transfer's — and they run AFTER the transfer, so a transfer
+    # timeout can no longer leave a gutted live tree.
     assert calls[0][1]["timeout_sec"] == transport.PRECLEAN_TIMEOUT_SEC
-    assert calls[0][1]["timeout_sec"] < calls[-1][1]["timeout_sec"]
+    assert calls[2][1]["timeout_sec"] == transport.PRECLEAN_TIMEOUT_SEC
+    assert calls[2][1]["timeout_sec"] < calls[1][1]["timeout_sec"]
+
+
+def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) -> None:
+    """F-G fires-test: a transfer that dies mid-flight (the run-#10 30-min
+    timeout) must issue ZERO destructive commands against the live tree —
+    only the stage drop and the failed extract ever ran."""
+    (tmp_path / "f.txt").write_text("hi")
+    ok = _ok()
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch(
+            "hpc_agent.infra.transport.run_capture_bounded",
+            side_effect=[ok, subprocess.TimeoutExpired(cmd="ssh", timeout=300)],
+        ) as run_mock,
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stderr = MagicMock()
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        with pytest.raises(TimeoutError):
+            transport.rsync_push(
+                ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+            )
+    cmds = [str(c[0][0][-1]) for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
+    # No pre-clean of /r, no move — the live tree was never touched.
+    assert not any("find /r -mindepth 1" in c for c in cmds)
+    assert not any("mv -f -t /r" in c for c in cmds)
 
 
 def test_tar_fallback_preclean_prunes_output_dirs_even_if_caller_omits_them(
     tmp_path: Path,
 ) -> None:
     """#173 core regression: even when the caller's exclude omits results/, the
-    tar pre-clean prunes the protected output dirs, so `find` never descends
-    into the quarter-million-inode crash-loop debris under results/."""
+    post-extract clean prunes the protected output dirs, so `find` never
+    descends into the quarter-million-inode crash-loop debris under results/."""
     calls = _tar_fallback_run_calls(tmp_path, exclude=["custom/"], delete=True)
-    preclean_cmd = str(calls[0][0][0][-1])
+    clean_cmd = str(calls[2][0][0][-1])
     # results/ and _combiner/ are bare names -> pruned at any depth.
-    assert "-name results" in preclean_cmd
-    assert "-name _combiner" in preclean_cmd
-    assert "-prune -o" in preclean_cmd
+    assert "-name results" in clean_cmd
+    assert "-name _combiner" in clean_cmd
+    assert "-prune -o" in clean_cmd
 
 
 def test_rsync_path_delete_protects_output_dirs(tmp_path: Path) -> None:
@@ -350,9 +386,9 @@ def test_rsync_path_delete_protects_output_dirs(tmp_path: Path) -> None:
 
 
 def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
-    """#173: a pre-clean that times out fails loud with an actionable message
-    (mentions results/ debris + the delete=False escape hatch), not a silent
-    wedge that consumes the whole transfer timeout."""
+    """A pre-transfer leg that times out fails loud with the leg NAMED
+    (stage-dir drop, under F-G's ordering), not a silent wedge that consumes
+    the whole transfer timeout — and the transfer never starts."""
     (tmp_path / "f.txt").write_text("hi")
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
@@ -369,7 +405,7 @@ def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
-        with pytest.raises(TimeoutError, match="pre-clean"):
+        with pytest.raises(TimeoutError, match="stage-dir drop"):
             transport.rsync_push(
                 ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
             )

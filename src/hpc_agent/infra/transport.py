@@ -260,6 +260,84 @@ def _remote_preclean(
     return run_with_named_pipe_retry(_attempt)
 
 
+#: Payload size above which the pre-push disclosure escalates to a WARN line —
+#: run-#10 finding F-E: a 3.8G artifact tree rode a deploy silently into a
+#: 30-minute timeout. Disclosure only (never blocking): the no-silent-caps rule.
+_PAYLOAD_WARN_BYTES = 200 * 1024 * 1024
+#: Walk bound so disclosure itself stays cheap on pathological trees.
+_PAYLOAD_WALK_CAP = 50_000
+
+
+def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
+    """One stderr line naming what this push is about to ship (F-E).
+
+    Approximates the transfer's own filtering: a path is skipped when ANY
+    path part (or its relpath) fnmatch-es an exclude pattern — the same
+    bare-name-at-any-depth semantics tar/rsync apply (the semantics whose
+    misreading cost the run-#10 src/data drop; the disclosure makes them
+    VISIBLE before the bytes move). Best-effort and fail-open: a disclosure
+    error never blocks a push.
+    """
+    import fnmatch
+    import sys
+
+    try:
+        pats = [p.rstrip("/") for p in exclude]
+        total = 0
+        count = 0
+        capped = False
+        root = Path(local_path)
+        for p in root.rglob("*"):
+            if count >= _PAYLOAD_WALK_CAP:
+                capped = True
+                break
+            try:
+                rel = p.relative_to(root)
+            except ValueError:
+                continue
+            parts = rel.parts
+            if any(fnmatch.fnmatch(part, pat) for part in parts for pat in pats):
+                continue
+            if p.is_file():
+                count += 1
+                with contextlib.suppress(OSError):
+                    total += p.stat().st_size
+        mb = total / (1024 * 1024)
+        prefix = "WARN deploy payload" if total > _PAYLOAD_WARN_BYTES else "deploy payload"
+        suffix = " (walk capped; true size is larger)" if capped else ""
+        print(
+            f"[transport] {prefix}: {count} files, {mb:.1f} MB{suffix}; "
+            f"excludes: {', '.join(sorted(pats)) or '(none)'}",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        pass
+
+
+def _ssh_bounded(
+    ssh_target: str,
+    remote_cmd: str,
+    *,
+    timeout: float | None,
+    what: str,
+) -> subprocess.CompletedProcess[str]:
+    """One bounded remote command, named-pipe-retry wrapped (the #173 shape).
+
+    The small helper for the stage-then-swap legs (stage drop, post-extract
+    move): each runs as its OWN short ssh call so it can never eat the
+    transfer budget, and a timeout surfaces loud with *what* named.
+    """
+
+    def _attempt() -> subprocess.CompletedProcess[str]:
+        ssh_cmd = [*ssh_argv("ssh"), ssh_target, remote_cmd]
+        try:
+            return run_capture_bounded(ssh_cmd, timeout_sec=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(f"{what} on {ssh_target} timed out after {timeout}s") from exc
+
+    return run_with_named_pipe_retry(_attempt)
+
+
 def _tar_ssh_push(
     *,
     ssh_target: str,
@@ -297,27 +375,32 @@ def _tar_ssh_push(
     tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
     quoted_remote = shlex.quote(remote_path)
 
-    # delete=True: run the remote pre-clean FIRST, in its own ssh call with a
-    # timeout distinct from (and shorter than) the transfer's, so a pathological
-    # clean fails loud fast instead of wedging the push (#173). A None timeout
-    # (caller disabled enforcement) propagates as unbounded; otherwise cap at
-    # PRECLEAN_TIMEOUT_SEC but never exceed the transfer timeout the caller set.
+    # delete=True: STAGE-THEN-SWAP (run-#10 finding F-G rewrote #173's order).
+    # The old sequence pre-cleaned the live tree and THEN transferred — so a
+    # transfer that timed out mid-flight left the remote gutted (data/ emptied,
+    # src/ partial). New sequence: extract into a sibling STAGING dir (a failed
+    # or timed-out transfer leaves the live tree untouched), and only after a
+    # fully successful extract run the bounded clean + a same-filesystem move
+    # (seconds, not transfer-length — the destructive window collapses).
+    # delete=False keeps the direct overwrite extract (never destructive).
+    stage_path = remote_path.rstrip("/") + ".hpc_stage"
+    quoted_stage = shlex.quote(stage_path)
+    small_timeout = None if timeout is None else min(PRECLEAN_TIMEOUT_SEC, timeout)
     if delete:
-        preclean_timeout = None if timeout is None else min(PRECLEAN_TIMEOUT_SEC, timeout)
-        preclean = _remote_preclean(
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            exclude=exclude,
-            timeout=preclean_timeout,
+        # Drop any stale staging dir from a previously interrupted push.
+        pre = _ssh_bounded(
+            ssh_target,
+            f"rm -rf {quoted_stage}",
+            timeout=small_timeout,
+            what=f"stage-dir drop ({stage_path})",
         )
-        if preclean.returncode != 0:
-            # Pre-clean failed (a timeout already raised). Surface it as the push
-            # failure rather than extracting onto a half-cleaned tree.
-            return preclean
-
-    # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout over
-    # the pipe into ssh's stdin.
-    ssh_remote_cmd = f"mkdir -p {quoted_remote} && tar x -C {quoted_remote}"
+        if pre.returncode != 0:
+            return pre
+        ssh_remote_cmd = f"mkdir -p {quoted_stage} && tar x -C {quoted_stage}"
+    else:
+        # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout
+        # over the pipe into ssh's stdin.
+        ssh_remote_cmd = f"mkdir -p {quoted_remote} && tar x -C {quoted_remote}"
 
     def _attempt() -> subprocess.CompletedProcess[str]:
         # Rebuild ssh_cmd each attempt: a named-pipe-failure retry needs to
@@ -375,7 +458,37 @@ def _tar_ssh_push(
     # run_with_named_pipe_retry can detect the getsockname marker. The
     # retry restarts the WHOLE tar | ssh pipeline (tar can be re-spawned
     # cheaply; its inputs are filesystem paths, not stream state).
-    return run_with_named_pipe_retry(_attempt)
+    transfer = run_with_named_pipe_retry(_attempt)
+    if not delete or transfer.returncode != 0:
+        return transfer
+
+    # Stage-then-swap tail (F-G): the transfer landed COMPLETE in the staging
+    # dir; only now touch the live tree. Clean (bounded, excludes protected)
+    # then a same-filesystem move — seconds of exposure instead of the whole
+    # transfer. Any failure here returns loud with the staging dir intact on
+    # the remote (the next push drops it), never a half-cleaned live tree.
+    clean = _remote_preclean(
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        exclude=exclude,
+        timeout=small_timeout,
+    )
+    if clean.returncode != 0:
+        return clean
+    move_cmd = (
+        f"cd {quoted_stage} && "
+        f"find . -mindepth 1 -maxdepth 1 -exec mv -f -t {quoted_remote} {{}} + && "
+        f"cd / && rmdir {quoted_stage}"
+    )
+    move = _ssh_bounded(
+        ssh_target,
+        move_cmd,
+        timeout=small_timeout,
+        what=f"stage swap into {remote_path}",
+    )
+    if move.returncode != 0:
+        return move
+    return transfer
 
 
 def _scp_pull(
@@ -484,6 +597,7 @@ def rsync_push(
     # No-op unless HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
     throttle_connection(ssh_target)
     exclude = _effective_excludes(exclude)
+    _disclose_payload(local_path, exclude)
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
     # Validate the remote path up front so push and pull share one
