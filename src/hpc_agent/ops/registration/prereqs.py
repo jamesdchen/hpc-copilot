@@ -290,9 +290,12 @@ def _newest_receipt(experiment_dir: Path, repro_run_id: str) -> dict[str, Any] |
     ``_aggregated/<repro_run_id>/reproduction_receipts.jsonl``); append order →
     the last valid line is the newest. Malformed lines are skipped (tolerant read).
     """
-    from hpc_agent.ops.verify_reproduction import _receipt_path
+    # Facade form (``from hpc_agent.ops import <module>``): the direct
+    # ``from hpc_agent.ops.verify_reproduction import ...`` spelling trips the
+    # subject-import lint from inside the ``registration`` subject.
+    from hpc_agent.ops import verify_reproduction
 
-    path = _receipt_path(experiment_dir, repro_run_id)
+    path = verify_reproduction._receipt_path(experiment_dir, repro_run_id)
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

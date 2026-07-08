@@ -78,7 +78,14 @@ from hpc_agent._wire.actions.verify_registration import (
     VerifyRegistrationSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.export_dossier import compute_dossier_signature  # type: ignore[attr-defined]
+
+# Reach the top-level ``ops/export_dossier.py`` module through the ``from
+# hpc_agent.ops import <module>`` FACADE FORM — the direct
+# ``from hpc_agent.ops.export_dossier import ...`` spelling trips the
+# subject-import lint from inside the ``registration`` subject
+# (``scripts/lint_subject_imports.py``). The module-level alias keeps
+# ``verify_op.compute_dossier_signature`` a patchable attribute for tests.
+from hpc_agent.ops import export_dossier
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.registration import (
     ABSENT,
@@ -91,13 +98,15 @@ from hpc_agent.state.registration import (
     reduce_registration,
 )
 
+compute_dossier_signature = export_dossier.compute_dossier_signature  # type: ignore[attr-defined]
+
 if TYPE_CHECKING:
-    from hpc_agent.ops.export_dossier import (  # type: ignore[attr-defined]
-        DossierSignature,
-    )
+    # ``DossierSignature`` is referenced as ``export_dossier.DossierSignature`` in
+    # annotations (string-typed under ``from __future__ import annotations``) so no
+    # direct ``ops.export_dossier`` import is needed here — the facade rule again.
     from hpc_agent.state.registration import ChainEntry
 
-__all__ = ["verify_registration"]
+__all__ = ["verify_registration", "build_view"]
 
 _JOURNAL_SUFFIX = ".decisions.jsonl"
 
@@ -147,13 +156,16 @@ def _read_records(experiment_dir: Path, registration_id: str) -> list[dict[str, 
 def _all_registration_ids(experiment_dir: Path) -> list[str]:
     """Every registration id with a journal on disk — the run_id-lookup scan.
 
-    # T6 seam: the registration journals live at
-    # ``.hpc/registrations/<registration_id>.decisions.jsonl``; the orchestrator
-    # reconciles this path constant against ``decisions_path`` when T6 lands.
+    The registration journals live at
+    ``.hpc/registrations/<registration_id>.decisions.jsonl`` — the directory is
+    DERIVED from the ONE path definition (``decisions_path``, T6) rather than
+    re-spelled here, so there is never a second path constant to drift.
     """
-    from hpc_agent._kernel.contract.layout import RepoLayout
+    from hpc_agent.state.decision_journal import decisions_path
 
-    reg_dir = RepoLayout(experiment_dir).hpc / "registrations"
+    # decisions_path builds ``<dir>/<id>.decisions.jsonl``; ``.parent`` is the
+    # registrations directory. The placeholder id is a throwaway valid slug.
+    reg_dir = decisions_path(experiment_dir, "registration", "_").parent
     if not reg_dir.is_dir():
         return []
     ids: list[str] = []
@@ -197,7 +209,7 @@ def _resolve_registration_id(experiment_dir: Path, spec: VerifyRegistrationSpec)
 
 def _recompute_dossier(
     experiment_dir: Path, winner: Mapping[str, Any]
-) -> tuple[str | None, DossierSignature | None]:
+) -> tuple[str | None, export_dossier.DossierSignature | None]:
     """Re-gather the winner's dossier signature LIVE, or ``(None, None)`` on any gap.
 
     The run_id names the run; ``include_lineage`` mirrors what the registration
@@ -215,7 +227,9 @@ def _recompute_dossier(
     return sig.bundle_sha256, sig
 
 
-def _drifted_stores(winner: Mapping[str, Any], sig: DossierSignature | None) -> list[str]:
+def _drifted_stores(
+    winner: Mapping[str, Any], sig: export_dossier.DossierSignature | None
+) -> list[str]:
     """Source-store names whose bytes moved since the dossier was sealed (R8).
 
     Derives from a per-store entry diff ONLY when the record carries the recorded
@@ -251,7 +265,7 @@ def _drifted_stores(winner: Mapping[str, Any], sig: DossierSignature | None) -> 
 
 
 def _dossier_leg(
-    winner: Mapping[str, Any], live_sha: str | None, sig: DossierSignature | None
+    winner: Mapping[str, Any], live_sha: str | None, sig: export_dossier.DossierSignature | None
 ) -> DossierLeg:
     """The dossier signature leg: recorded vs live-recomputed + per-store drift."""
     recorded = winner.get("dossier_sha")
@@ -482,6 +496,40 @@ def _render_brief(projection: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_view(
+    *,
+    status: str,
+    registration_id: str | None,
+    registered_at: str | None,
+    dossier: DossierLeg | None,
+    template: TemplateLeg | None,
+    prerequisites: list[PrerequisiteLeg],
+    fields: FieldsReport,
+) -> tuple[str, str]:
+    """Render ``(brief, view_sha)`` from the reduced status + legs — a PURE function.
+
+    The ONE deterministic projection→brief→view_sha definition (R6's fourth
+    recompute leg). Both :func:`_finalize` (the verify-registration reporter) and
+    the T7 append gate (``ops/decision/journal.py::_assert_registration_authorship``,
+    reached through the ``ops/registration_view.py`` facade) call THIS, so a
+    witness the gate recomputes over its own append-time legs is byte-identical to
+    the one the reporter renders over the same inputs — a witness you can
+    regenerate is regenerated, never trusted.
+    """
+    projection: dict[str, Any] = {
+        "status": status,
+        "registration_id": registration_id,
+        "registered_at": registered_at,
+        "dossier": dossier.model_dump() if dossier is not None else None,
+        "template": template.model_dump() if template is not None else None,
+        "prerequisites": [p.model_dump() for p in prerequisites],
+        "fields": fields.model_dump(),
+    }
+    brief = _render_brief(projection)
+    view_sha = _sha_json({**projection, "brief": brief})
+    return brief, view_sha
+
+
 def _finalize(
     *,
     status: str,
@@ -496,20 +544,18 @@ def _finalize(
 
     ``view_sha`` is the canonical-JSON sha of the projection INCLUDING the rendered
     brief — the witness a sign-off must carry (R6). Because the brief is a pure
-    function of the structured projection, the T7 gate recomputes both from the
-    same reduced status + legs and binds the identical sha.
+    function of the structured projection (:func:`build_view`), the T7 gate
+    recomputes both from the same reduced status + legs and binds the identical sha.
     """
-    projection: dict[str, Any] = {
-        "status": status,
-        "registration_id": registration_id,
-        "registered_at": registered_at,
-        "dossier": dossier.model_dump() if dossier is not None else None,
-        "template": template.model_dump() if template is not None else None,
-        "prerequisites": [p.model_dump() for p in prerequisites],
-        "fields": fields.model_dump(),
-    }
-    brief = _render_brief(projection)
-    view_sha = _sha_json({**projection, "brief": brief})
+    brief, view_sha = build_view(
+        status=status,
+        registration_id=registration_id,
+        registered_at=registered_at,
+        dossier=dossier,
+        template=template,
+        prerequisites=prerequisites,
+        fields=fields,
+    )
     return VerifyRegistrationResult(
         status=status,  # type: ignore[arg-type]
         registration_id=registration_id,
