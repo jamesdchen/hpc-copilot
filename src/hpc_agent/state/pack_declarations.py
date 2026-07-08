@@ -197,9 +197,11 @@ class _ResolvedPack:
 def _read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]]:
     """The interview.json ``packs`` opt-in list, or ``[]`` when not opted in.
 
-    # T8a seam: the ``packs`` field lands on ``InterviewSpec`` in Wave C; until
-    # then this reads it as a raw dict by its documented shape
-    # (``[{pack, manifest, receipt_bindings}]``). Mirrors
+    # T8a seam (LANDED): the ``packs`` field is now typed on
+    # ``InterviewSpec`` as ``list[PackOptIn]`` where
+    # ``PackOptIn = {pack, manifest, receipt_bindings: [ReceiptBinding{slot, pack}]}``.
+    # This raw read agrees with that shape exactly (same keys, same nesting) and
+    # stays shape-tolerant because it is the D7 gate probe, not the writer. Mirrors
     # ``ops/notebook_gate._read_audited_source``: a missing/corrupt/non-object
     # interview.json, or an absent ``packs`` key, reads as "not opted in" → the D7
     # silent empty. This is the ONLY filesystem probe on the not-opted-in path.
