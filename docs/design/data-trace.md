@@ -290,3 +290,22 @@ localize under it (the R3 suite's failure is a mechanical split
 instruction), and every version journals its certificate. The system can
 only get better at localizing, only in response to demonstrated failures,
 never coarser, never adaptive, never rewriting history.
+
+## Amendment 5 (2026-07-08, user-directed): storage DERIVED from consumption
+
+Amendment 4's layout stands, but justified properly — by the consumer
+table, not the house pattern: render/diff/audit-join/fingerprint/dossier
+are all POINT LOOKUPS or single-key enumerations by (scope_kind, scope_id)
+→ `traces/<scope_kind>/<scope_id>/` with zero indirection; every consumer
+runs LOCALLY against the experiment (projections in-repo, verify local,
+dossiers pack local) → the store is per-experiment `.hpc/`, never remote,
+never homedir; the fingerprint joins via the SIDECAR's cmd_sha (no
+trace-side index); ingestion-at-harvest exists BECAUSE the diff and
+fingerprint consumers need both sides local and uniformly keyed (a diff
+reaching over SSH re-imports what journal-first removed). The one
+scan-shaped consumer (stage-drift-over-time) gets a DERIVED, disposable,
+content-keyed INDEX when it becomes real (describe-cache / evidence-memory
+ruling #4) — never a scan-optimized primary store for a consumer that does
+not yet exist (the second-consumer discipline, in storage form). Retention:
+arithmetic, not policy — ~1-2KB/stage ⇒ ~6MB per 200-task sweep; keep
+everything forever.
