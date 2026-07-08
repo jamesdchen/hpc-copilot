@@ -62,6 +62,27 @@ nothing fails — only an identity record sees it.
 
 No separate check verb — the brief surfaces are the check consumers.
 
+## The attention contract (user-ruled 2026-07-07: prevent decision fatigue)
+
+Disclosure without tiering is fatigue. The manifest's alarms obey the
+D-attention pattern and four locks:
+
+- **Tier map** (shipping requirement, not a nicety): a TRACKED file's
+  sha changing = needs-attention (the quiet-corruption class); NEW
+  untracked files = low tier, one line; NO manifest = one STANDING
+  disclosure, never a per-run repeat.
+- **One queue**: drift items route into the attention-queue and compete
+  under the leverage sort (a drift blocking a reproduction verdict
+  outranks one on an idle experiment). No dedicated alarm surface.
+- **Fire on state change, age while unresolved**: first occurrence loud;
+  thereafter one aging line ("first seen Nd, unacknowledged"). Never
+  re-fire at full volume.
+- **Acknowledgment = re-mint**: re-minting the manifest IS the journaled
+  "this is the new known-good" act — re-tiers the alarm to
+  cleared-with-reference and re-arms it. Silence-by-record, never
+  suppression; and re-tiering an alarm CLASS's default is a human ruling,
+  never adaptive (the system must not learn to quiet itself).
+
 ## The fingerprint amendment (ruled 0b; lands with Phase 3)
 
 The fingerprint's staleness model currently knows one reason prior samples
