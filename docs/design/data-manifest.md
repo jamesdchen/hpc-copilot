@@ -188,3 +188,50 @@ commons, the catalog to the quant pack, bindings to program specs.**
 ## Drift log
 
 - 2026-07-07: written (Fable, pre-deadline), rulings 0a/0b folded.
+- 2026-07-08: **the fingerprint amendment LANDED (Phase-3, the three legs).**
+  - **`data_sha` shape PINNED — one canonical sha over the manifest's `files`
+    record** (`state/data_manifest.py::data_identity` → `manifest_doc_sha(files)`,
+    recomputed FRESH from the authoritative files map, never the stored
+    `manifest_doc_sha` field). Rejected the per-root file-sha MAP as the sidecar
+    leg: the fingerprint needs ONE comparable identity string, and the doc-sha
+    moves iff any declared-input file's `sha256`/`size` moves (or a file
+    appears/vanishes under a root) — the quiet-corruption class exactly. `None`
+    when no roots declared / no manifest minted / empty files (disclosed-unknown,
+    never fabricated).
+  - **Sidecar field COLLISION resolved: a NEW `data_manifest_sha` field**, NOT
+    the existing `data_sha`. The sidecar already carried `data_sha` = the
+    `input_datasets`/DVC identity (`compute_data_sha`, #222) — a DIFFERENT
+    mechanism. Overloading it would conflate two data-identity disciplines under
+    one key (which wins when both present?). `data_manifest_sha` is additive +
+    only-write-non-None, so a run with no manifest writes a byte-identical
+    sidecar. The fingerprint's data leg (T1's `DATA_IDENTITY_FIELD = "data_sha"`
+    on the SAMPLE identity) is fed FROM `data_manifest_sha` at the seams
+    (submit's double-canary mint, verify-reproduction) — the sample's generic
+    `data_sha` leg, sidecar's manifest-specific field.
+  - **Leg 1** — `submit_flow._spec_provenance` now returns a third value
+    (`data_manifest_sha = data_identity(experiment_dir)`), threaded through both
+    the backfill (`backfill_run_sidecar_provenance` gained the kwarg) and the
+    synthesize-missing `write_run_sidecar` path. No manifest → field absent →
+    byte-identical sidecar (`only-write-non-None`).
+  - **Leg 2** — the wire `SampleIdentity` gained optional `data_sha` (additive,
+    `None` default; v1 records parse). `verify_reproduction` lifts the repro's
+    `data_manifest_sha`, stamps it on the appended sample's identity, and passes
+    `data_identity=` to `reduce_envelope` (no longer `None` when known) so a
+    cross-data prior is EXCLUDED + disclosed (`excluded_data_drift`); an absent
+    leg is `data_identity_unknown`. Both surface on the v2 receipt's
+    `data_identity` block + the reason. The double-canary mint stamps the leg
+    too. **Pinned wiring choice:** the store-layer read (`load_evidence` /
+    `partition_current_identity`) is fed the CODE-only identity so the kernel's
+    `reduce_envelope` data leg is the AUTHORITATIVE exclusion+disclosure (feeding
+    a data-carrying identity to the store would pre-strip cross-data samples as
+    plain stale, losing the `excluded_data_drift` count).
+  - **Leg 3** — `reproduce_run`'s guard grows to three dimensions, but data is a
+    NAMED DISCLOSURE, not a refusal (the pinned honest reading: reproducing under
+    a rebuilt input is a legitimate reproduction; verify names data as the moved
+    dimension). `_data_drift_disclosure` compares recorded vs current data
+    identity → `{status: match|drifted|unknown, recorded, current}` on the brief
+    + a reason phrase. Param/code drift still REFUSE (unchanged).
+  - **Schema debt (no regen run this branch):** the wire `SampleIdentity`
+    gained `data_sha` and the run sidecar gained `data_manifest_sha` —
+    `bake_operations_json.py --write` + schema regen owe an update. Additive +
+    optional, so existing baked schemas + v1 records still parse.
