@@ -109,6 +109,44 @@ def _materialized_executor_cmd(experiment_dir: Path) -> str | None:
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
+def _probe_result_dir_contract(executor: str, exp_dir: Path) -> str | None:
+    """Static probe: does the executor's own script ever read $HPC_RESULT_DIR?
+
+    Run-#10 finding F-C: an entry point that writes to a literal output path
+    is silently discarded by the dispatcher's write-isolation gate — surfacing
+    first as a burned canary (30 minutes late). This probe moves the
+    disclosure to S1: find the first ``.py`` token in the executor command
+    that exists under *exp_dir*, read it, and WARN when the text never
+    mentions ``HPC_RESULT_DIR``/``RESULT_DIR``. Purely a disclosure (a wrapper
+    may handle the contract for it — the framework's own ``run-registered``/
+    ``run-module`` dispatchers do); NEVER a refusal, and any surprise degrades
+    to "no warning".
+    """
+    try:
+        script: Path | None = None
+        for tok in executor.split():
+            if tok.endswith(".py"):
+                cand = (exp_dir / tok).resolve()
+                if cand.is_file():
+                    script = cand
+                    break
+        if script is None:
+            return None
+        text = script.read_text(encoding="utf-8", errors="replace")
+        if "RESULT_DIR" in text:
+            return None
+        return (
+            "WARNING (output contract): the executor script "
+            f"{script.name!r} never references $HPC_RESULT_DIR — under the "
+            "dispatcher, outputs written to literal paths are DISCARDED by "
+            "write-isolation (the canary then fails with "
+            "failure_kind=output_contract). Redirect outputs into "
+            "$HPC_RESULT_DIR when the dispatcher exports it."
+        )
+    except Exception:  # noqa: BLE001 — disclosure-only seam, never load-bearing
+        return None
+
+
 def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
     """A LIVE canary-only prior attempt for *run_id*, or None — read in CODE.
 
@@ -428,6 +466,10 @@ def resolve_submit_inputs(
                 f"derive the executor mechanically, or supply a real per-task "
                 f"command. — {reason}"
             )
+
+    contract = _probe_result_dir_contract(str(sidecar_spec.executor or ""), experiment_dir)
+    if contract:
+        reason = f"{contract} — {reason}"
 
     return ResolveSubmitInputsResult(
         stage_reached="resolved",
