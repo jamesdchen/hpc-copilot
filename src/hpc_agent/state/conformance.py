@@ -36,20 +36,16 @@ The honest comparison semantics (plan C-compare), verbatim:
   evidence routes to the human in BOTH directions; a σ / fitted parameter is
   never fabricated. No control RULES over the verdict stream.
 
-.. note:: **T1a seam (recorded deviation).** ``docs/design/live-conformance.md``
-   plans the per-key order-statistics envelope as a SHARED helper factored out
-   of ``state/determinism.py`` (fingerprint T1 / the plan's T1a) so both the
-   fingerprint reduction and :func:`judge_window` route through ONE definition.
-   In this worktree the determinism fingerprint has NOT landed
-   (``state/determinism.py`` does not exist yet), so per the plan's explicit
-   fallback ("if the reuse is awkward, keep ONE local thin adapter with a
-   ``# T1a seam:`` note — never a second min/max/spread implementation") this
-   module owns the SINGLE order-statistics helper
-   :func:`_order_statistics_envelope`. Both the baseline and the live-window
-   envelopes route through it; :func:`judge_window` never re-inlines min/max.
-   When the fingerprint lands, re-point this helper at the shared symbol and
-   delete the local body — the route-through pin in the tests protects the
-   invariant meanwhile.
+.. note:: **T1a re-point (one envelope definition).** The per-key order-statistics
+   envelope is the SHARED helper ``state/determinism.py::order_statistics_envelope``
+   (fingerprint T1 / the plan's T1a) so both the fingerprint reduction and
+   :func:`judge_window` route through ONE definition — never a second
+   min/max/spread implementation (enforcement row). Now that the determinism
+   fingerprint has landed, :func:`_order_statistics_envelope` is a thin alias
+   that wraps that shared ``(lo, hi, rel_spread)`` leg with this module's
+   :class:`Envelope` evidence count ``n``. Both the baseline and the live-window
+   envelopes route through it; :func:`judge_window` never re-inlines min/max. The
+   route-through pin in the tests holds the invariant.
 
 Pure, no I/O: this module reads no file, holds no SSH / ``_wire`` / scheduler
 import, and — the plan's first-class agency boundary — reaches no broker,
@@ -69,7 +65,7 @@ from datetime import datetime
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent.state import attestation, registration
+from hpc_agent.state import attestation, determinism, registration
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -567,26 +563,19 @@ class Envelope:
 
 
 def _order_statistics_envelope(values: Sequence[float]) -> Envelope:
-    """The ONE per-key order-statistics reduction (baseline AND live window).
+    """The per-key order-statistics envelope (baseline AND live window).
 
-    # T1a seam: the plan factors this helper out of ``state/determinism.py``
-    # (fingerprint T1 / T1a) so the fingerprint reduction and :func:`judge_window`
-    # share ONE envelope definition. That module is NOT landed in this worktree,
-    # so this is the single local adapter the plan's fallback authorizes — never
-    # a second min/max/spread implementation. Re-point at the shared symbol when
-    # the fingerprint lands; the route-through pin in the tests guards the seam.
-
-    Order statistics only: ``lo = min``, ``hi = max``, and a relative spread
-    normalized by the observed magnitude scale (``0.0`` when the range is
-    degenerate) — no fitted parameter, no invented tolerance. ``values`` must be
-    non-empty and pre-filtered to comparable finite numbers (the caller handles
-    incomparability upstream).
+    Routes through the ONE shared order-statistics leg,
+    :func:`state.determinism.order_statistics_envelope` (fingerprint T1 / the
+    plan's T1a): the fingerprint reduction and :func:`judge_window` share ONE
+    envelope definition (enforcement row) — never a second min/max/spread
+    implementation. This thin alias only wraps the shared ``(lo, hi, rel_spread)``
+    leg with the conformance :class:`Envelope`'s evidence count ``n``. ``values``
+    must be non-empty and pre-filtered to comparable finite numbers (the caller
+    handles incomparability upstream).
     """
-    lo = min(values)
-    hi = max(values)
-    scale = max(abs(lo), abs(hi))
-    rel_spread = (hi - lo) / scale if scale else 0.0
-    return Envelope(lo=float(lo), hi=float(hi), rel_spread=rel_spread, n=len(values))
+    lo, hi, rel_spread = determinism.order_statistics_envelope(values)
+    return Envelope(lo=lo, hi=hi, rel_spread=rel_spread, n=len(values))
 
 
 # --- window selection arithmetic (C-compare) --------------------------------

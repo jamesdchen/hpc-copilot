@@ -16,6 +16,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.state import conformance as cf
+from hpc_agent.state import determinism
 
 # --- toy instrument-QC fixtures ---------------------------------------------
 
@@ -242,15 +243,20 @@ def test_sealed_baseline_no_admission_recording_changes_no_envelope():
 
 def test_judge_window_routes_through_the_one_envelope_helper():
     # judge_window / _judge_key never re-inline min/max/spread — they delegate to
-    # the single order-statistics helper (the T1a seam). Guards the one-envelope
-    # invariant until state/determinism.py lands and the helper is re-pointed.
+    # this module's thin alias, which itself routes through the ONE shared
+    # order-statistics leg (state/determinism.py::order_statistics_envelope). The
+    # one-envelope invariant (enforcement row): the fingerprint reduction and
+    # judge_window share ONE definition — never a second min/max/spread.
     for fn in (cf.judge_window, cf._judge_key):
         src = inspect.getsource(fn)
         assert "min(" not in src and "max(" not in src, f"{fn.__name__} re-inlines order stats"
     helper_src = inspect.getsource(cf._order_statistics_envelope)
-    assert "min(" in helper_src and "max(" in helper_src
-    # the seam is visible so the deviation is auditable
-    assert "T1a seam" in helper_src
+    # the alias owns no min/max/spread math of its own — it delegates
+    assert "min(" not in helper_src and "max(" not in helper_src
+    assert "determinism.order_statistics_envelope" in helper_src
+    # the shared leg is the ONE place min/max/spread lives
+    shared_src = inspect.getsource(determinism.order_statistics_envelope)
+    assert "min(" in shared_src and "max(" in shared_src
 
 
 def test_observation_routes_through_the_attestation_kernel():
