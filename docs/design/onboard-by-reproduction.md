@@ -1,9 +1,13 @@
 # Onboard-by-reproduction — rung 6 of the onboarding map (Phase 6.5)
 
-**Status: PLANNED, USER-RULED (2026-07-07, rulings 6a/6b/6c).** Companion
-to `docs/design/onboarding-map.md` (rung 6). Sequenced as a THIN PHASE 6.5
-— after Phase 3 (the fingerprint exists to receive samples) and Phase 6
-(evidence memory exists for the optional conclusion composition).
+**Status: BUILT (2026-07-08), USER-RULED (2026-07-07, rulings 6a/6b/6c).**
+Companion to `docs/design/onboarding-map.md` (rung 6). Sequenced as a THIN
+PHASE 6.5 — after Phase 3 (the fingerprint exists to receive samples) and
+Phase 6 (evidence memory exists for the optional conclusion composition). The
+four contents shipped: `verify-reproduction`'s external-baseline mode
+(`external_baseline` on the spec — NO new verb, the mode rides the spec), the
+`claim-check` receipt kind + its anti-laundering enforcement row, the
+`hpc-claim-check` orchestrating skill, and this + the map's rung-6 status flip.
 
 ## The arrival
 
@@ -100,3 +104,24 @@ row, the orchestrating skill, and the onboarding-map rung-6 status flip.
 - 2026-07-07: written (Fable, pre-deadline); rulings 6a (lean claim-in-
   spec shape, conclusion optional), 6b (claim-check naming lock), 6c
   (Phase 6.5) folded.
+- 2026-07-08: BUILT (Opus). `verify-reproduction` gained an
+  `external_baseline` block (`ExternalBaseline`: `claimed_values` +
+  `tolerance` + optional `claimed_data_sha`) mutually exclusive with the
+  recorded-original mode (`original_run_id` + top-level `tolerance` now
+  forbidden alongside it; `original_run_id` made optional, guarded by a
+  model validator). The honest discriminator is a `receipt_kind` field
+  (`"claim-check"` vs `"reproduction"`) — chosen over overloading
+  `schema_version` (which tracks shape evolution, not kind); claim-check
+  receipts land in a distinct `claim_check_receipts.jsonl`, so the naming
+  lock holds at the storage layer too. Both write paths route through
+  `_assert_receipt_kind_matches_baseline` (the fires-and-passes seam). The
+  consistency sentence is the module constant `CLAIM_CONSISTENT_SENTENCE`,
+  rendered by code into the receipt's `consistency` field and the result
+  `reason`. NO fingerprint sample is appended in claim-check mode. The
+  `hpc-claim-check` skill orchestrates onboard → run-fresh-twice →
+  claim-check → relay-verbatim. **Schema debt (KNOWN, un-regenerated per
+  the build instruction):** the `external_baseline` + optional
+  `original_run_id` change makes `hpc_agent/schemas/verify_reproduction.input.json`
+  stale — `tests/_wire/test_schema_models_roundtrip.py::test_emitted_schema_matches_checked_in[verify_reproduction.input.json]`
+  goes red until `python scripts/build_schemas.py --write` regenerates it
+  (the ONLY expected red; the wire model is the authoring SoT).

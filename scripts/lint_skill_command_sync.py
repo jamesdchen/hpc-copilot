@@ -89,6 +89,11 @@ SKILL_ONLY_OK: set[str] = {
     # paired user-typed slash ships in v1.
     "hpc-notebook-audit",
     "hpc-wrap-entry-point",
+    # Onboard-by-reproduction (Phase 6.5): agent-only orchestrator for the
+    # arrival with repo + script + claimed result — onboard, run fresh twice
+    # under observation, claim-check compare, relay the code render. No paired
+    # user-typed slash in v1.
+    "hpc-claim-check",
     # Human-run release procedure (tracked here since 2026-07-04 so it lives
     # under the repo lints; formerly an untracked ~/.claude/skills copy that
     # drifted). No paired slash — invoked as /release via install-commands.

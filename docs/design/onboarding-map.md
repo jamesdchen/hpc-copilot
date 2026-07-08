@@ -75,7 +75,7 @@ Entering mid-ladder means entering with less attached evidence, disclosed.
 | 3 | `.py` script / repo → scaled experiment | interview, `hpc-wrap-entry-point`, `decorate-entry-point`, `discover` | BUILT (the original product) | onboarded; untagged runs disclosed at greenlight |
 | 4 | Scale → verdict | campaign/aggregate blocks, briefs, look ledger | BUILT | — |
 | 5 | Existing *results* → evidence | import prior findings as dated conclusion attestations (the retro-indexing mechanism) | rides Phase 6 (evidence memory) | prior evidence, dated, cited by file sha; never receipts for runs the copilot didn't observe |
-| 6 | External claim → reproducible claim | **onboard-by-reproduction** — first act on arrival is reproducing the claimed result under observation; the run mints the identity AND the first fingerprint samples | **RULED 2026-07-07 → `onboard-by-reproduction.md`** (Phase 6.5; claim-in-spec, `claim-check` ≠ reproduction) | claim + observed n=2 fingerprint, honestly labeled |
+| 6 | External claim → reproducible claim | **onboard-by-reproduction** — first act on arrival is reproducing the claimed result under observation; the run mints the identity AND the first fingerprint samples | **BUILT 2026-07-08 → `onboard-by-reproduction.md`** (Phase 6.5; `verify-reproduction` external-baseline mode + `claim-check` receipt kind + `hpc-claim-check` skill; claim-in-spec, `claim-check` ≠ reproduction) | claim + observed n=2 fingerprint, honestly labeled |
 | 7 | Claim → registered/defended | registration kernel, dossier export, DSSE | PLANNED (Phases 2, 5) | the top rung |
 | 8 | Solo → team | multi-human (per-actor logs, authorship) | PLANNED (Phase 9) | — |
 
@@ -120,6 +120,11 @@ on-ramp decisions.
 
 ## Drift log
 
+- 2026-07-08: rung 6 flipped PLANNED → BUILT (Opus) — Phase 6.5
+  onboard-by-reproduction shipped: `verify-reproduction`'s external-baseline
+  (`claim-check`) mode, the anti-laundering enforcement row, and the
+  `hpc-claim-check` orchestrating skill. See `onboard-by-reproduction.md`'s
+  drift log for the discriminator shape + the schema debt.
 - 2026-07-07: written (Fable, pre-deadline). Inputs: the four-layer
   hierarchy ruling (core / quant pack / idea→trade / target program /
   attempt), the steering-vs-accepting rot classification from the
