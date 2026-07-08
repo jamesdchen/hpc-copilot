@@ -443,3 +443,32 @@ binding is silently inactive (view_op.py reads interview.json only). Fix:
 a config-recording seat for standalone audits + audit-preflight flagging
 rootless audits; executes-live gains an `output_roots` allowance (output
 literals currently flag as noise).
+## Amendment 3 — relay-due discharge (the omission gate)
+
+**2026-07-07 — relay-due discharge SHIPPED**, the omission-side complement of
+verify-relay: capability-2's second half (a relay boundary has two sides —
+distortion and silence — and until tonight only distortion was enforced; the
+live proving run had `notebook-status` compute `passed` and the agent never
+relayed it, so the human never saw the verdict). `notebook-status` now journals
+a relay-due MARKER on a TERMINAL verdict only — `passed` (the gate predicate
+holds) or `failed` (a sign-off drift-revoked to `signed_stale`); the ordinary
+in-loop `unsigned` mix sets NO marker (D8 applied to gates: marking everything
+relay-due recreates alarm fatigue inside the enforcement). The marker rides
+the same notebook journal as a new block class
+(`notebook-relay-due`, `resolved={record_kind: "notebook-status", audit_id,
+key_tokens: [state word, module sha12], created_at}`, deduplicated on the key
+tokens so the op stays idempotent), excluded from the attestation reduction
+exactly like render receipts. The relay-audit Stop hook's SAME stop runs the
+discharge pass: any key token present in the final assistant text (plain
+substring, case-insensitive) appends a `notebook-relay-discharge` record (the
+marker key + `discharged_at`; the marker itself is never mutated — append-only
+store); all tokens absent blocks the stop ONCE, verbatim-ready ("unrelayed
+terminal state: notebook-status = <state> @ <sha12> — relay it verbatim before
+closing."). Three pinned safety properties, each with a fires-AND-passes test:
+block-once (the sibling guards' `stop_hook_active` seam, reused exactly — and
+a forced continuation still records discharges, so a corrected relay closes
+its own obligation), fail-open (ANY exception in marker load/parse/check lets
+the stop proceed — the Option-3 failure class), narrow set (non-terminal runs
+journal nothing). The skill prose gained the belt to the gate's suspenders
+(the close-the-loop sentence, pinned by
+`tests/contracts/test_notebook_relay_due_guidance.py`).

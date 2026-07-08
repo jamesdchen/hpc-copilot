@@ -816,8 +816,10 @@
     "name": "notebook-status",
     "output_schema": "notebook_status.output.json",
     "python": "hpc_agent.ops.notebook_status.notebook_status",
-    "side_effects": [],
-    "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. Read-only, no SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call.",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. No SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call. A TERMINAL verdict (passed, or failed via a drift-revoked sign-off) journals a relay-due marker the Stop hook discharges only when the verdict is actually relayed (deduplicated; non-terminal runs write nothing).",
     "verb": "query"
   },
   {

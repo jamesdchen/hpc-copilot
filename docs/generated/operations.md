@@ -60,7 +60,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`monitor-summary`](../primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
 | [`net-triage`](../primitives/net-triage.md) | ✓ | _none_ | `hpc-agent net-triage [--spec <path>]` | `_(none)_` | — | — |
 | [`notebook-audit-view`](../primitives/notebook-audit-view.md) | ✓ | file_write | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
-| [`notebook-status`](../primitives/notebook-status.md) | ✓ | _none_ | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`notebook-status`](../primitives/notebook-status.md) | ✓ | file_write | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
