@@ -320,3 +320,27 @@ data does through it), code-composed into ONE artifact the drafting step
 reads — the run-#10 hand-rolled brief, fully mechanized. Lands as a small
 follow-up on the built draft-context (its skill step gains the second
 input) + this pairing note.
+
+## Amendment 8 (2026-07-08, user-caught altitude leak): the corpus is TIERED
+
+Amendment 7's "pack ships pre-seeded defect classes" bundled three
+altitudes. Corrected: **core** seeds the generic classes for free (they are
+violations of core's own invariants: conservation, label-chain break, seq
+gap) + the injection INTERFACE R3 consumes. **The quant pack** ships
+discipline classes AS class + atom-signature pairs (leakage channels, D-V
+violations, vintage look-ahead, units-chain break — "transform-fit leakage
+= a value_sketch of fitted output that changes when only future rows
+change"), adoptable unedited by any quant program, plus EXAMPLE injectors
+against the pack's own toy pipeline (teaching material, never
+certification material). **The program** writes the RUNNABLE injectors —
+each applicable class instantiated against ITS stages — plus its own
+bug-history entries (the overnight 1.0-fill is harxhar's, not the
+pack's). Consequences: (1) R3 certificates are earned ONLY against
+program-side injectors (a pack-toy injection certifies nothing about a
+real partition); (2) the tier-2 onboarding ceremony gains a step — declare
+which discipline classes APPLY (inapplicable = disclosed, never silently
+skipped) and instantiate injectors for the applicable ones. The bootstrap
+story stands: day one = the authoring floor + class obligations from
+above, arriving as classes-to-instantiate, not fixtures-to-run. (Third
+same-night instance of the leak class: every noun in a pack sentence gets
+the altitude test individually.)
