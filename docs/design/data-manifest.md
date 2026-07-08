@@ -131,20 +131,37 @@ strictness is then caller-declared per registration, never a core mood).
 
 Format-aware validation is PACK content forever: caller-executed,
 receipt-producing, binding to the manifest's identity substrate. **The
-first named rule is on the books (2026-07-07, from the live failure),
-stated at pack altitude — QUANT-PACK D-V1, "panel-key conformance": a
-declared panel data root names its alignment key; every file at that
-root's top level must carry the key; non-conforming exports live in
-subdirectories or are skipped loudly. The rule is PARAMETERIZED
-(`{root, key}`) — the pack ships the shape, never a key name. The
-target-program BINDING is separate: RV program, `{root: data/, key:
-endbartime}` (user-corrected 2026-07-07 — the key name is program data,
-not discipline knowledge; a pack whose jurisdiction is small enough to
-name `endbartime` has collapsed two tiers). Today the rule exists as
+first named rule is on the books (2026-07-07, from the live failure) —
+and its altitude was corrected TWICE the same night, which mints the
+three-level rule vocabulary:**
+
+1. **Data shape (discipline-agnostic): D-V1 "keyed-panel conformance"** —
+   a declared keyed-panel root names its alignment key; every top-level
+   file carries it; non-conforming files live in subdirectories or are
+   skipped loudly. Parameterized `{root, key}`. NOT quant knowledge —
+   epidemiology/climate panels obey it identically. Shape rules
+   (keyed-panel, monotonic event stream, point-in-time vintage,
+   snapshot-with-revisions) can eventually be a shared PACK-SIDE commons;
+   never core (core stays bytes-only).
+2. **Discipline catalog (the quant pack's REAL data contribution)** —
+   which families the discipline uses, each bound to a shape, plus the
+   discipline's semantics: bar panels at a declared frequency; option
+   chains (keyed-snapshot shape) with arbitrage-sanity checks;
+   fundamentals joined only by vintage (look-ahead through revisions is
+   the quant sin). Tonight's failure at THIS altitude: two families of
+   different shapes shared one root with no catalog to say so.
+3. **Program binding**: RV program, `{root: data/, key: endbartime,
+   freq: 30min}` — key names and frequencies are program data.
+
+**Corrections logged: naming `endbartime` collapses tiers 3→2; naming
+"panel" as if it were the discipline collapses tiers 2→1 (quants also use
+chains, ticks, vintaged fundamentals — the OptionMetrics files in this
+very repo are the non-panel witness). The altitude test both ways: "would
+a second program adopt it unedited?" (2→3 leak) and "would a second
+DISCIPLINE adopt it unedited?" (1→2 leak). Today the rule exists as
 caller code (harxhar-clean `src/data/loading.py`'s skip-with-warning) +
-this note; when packs land it becomes a declared validation producing a
-receipt the manifest's shas bind. Pack extraction collects the SHAPE
-from here; the binding stays in the target program's specs.**
+this note; when packs land, extraction collects shape rules to the
+commons, the catalog to the quant pack, bindings to program specs.**
 
 ## Sequencing
 
