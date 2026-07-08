@@ -717,6 +717,25 @@ re-register → verify `current` again → revoke with reason → verify
      `check_chain`, so a `reproduction` slot whose receipt names an unrelated run is
      refused — stronger than the T5 reporter, which passes `None`.
 
+- **T8 implementation 2026-07-08 (`ops/attention_queue.py`):**
+  1. *Two registration item kinds.* `registration-blocked` (a registration whose
+     winning chain has a NON-CURRENT prerequisite → BLOCKED class, "blocks capital,
+     not just a run") and `registration-stale` (a registration whose live dossier
+     signature DRIFTED → VERDICT class, a re-registration verdict is owed). A
+     `revoked` / `absent` id contributes nothing. The collector routes both
+     verdicts through the ONE definitions — `reduce_registration` (dossier drift)
+     and `check_chain` (prerequisite currency) — and re-derives nothing (D6).
+     Fail-open per registration (a torn journal, a moved run whose dossier cannot
+     be re-gathered, or an unparseable chain is skipped, never crashing the read).
+  2. *The audit→registration leverage fan-out.* `_fanout_for` for an
+     `audit-section-unsigned` / `audit-section-stale` item now adds
+     `_count_registrations_naming_audit` to the existing runs-echoing count: an
+     unsigned prerequisite blocking a registration blocks CAPITAL, so the audit
+     section that gates it earns that leverage. A non-creating, fail-open read of
+     the registration journals, winner-selected through `reduce_registration`
+     (never a re-inlined newest-first); a revoked/absent registration no longer
+     depends on the audit and is not counted.
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
