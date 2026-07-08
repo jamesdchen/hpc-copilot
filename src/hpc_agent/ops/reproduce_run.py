@@ -262,6 +262,35 @@ def _assert_no_drift(
         )
 
 
+def _data_drift_disclosure(experiment_dir: Path, sidecar: dict[str, Any]) -> dict[str, Any]:
+    """The THIRD drift dimension (Phase-3 amendment, ruled 0b): data identity.
+
+    The drift guard grows from two dimensions (param, code — both REFUSING) to
+    three, but data is a NAMED DISCLOSURE, not a refusal (the pinned honest
+    reading): reproducing under a rebuilt input is a legitimate, interesting
+    reproduction — the fingerprint's data-identity leg names data as the moved
+    dimension at verify time rather than mislabeling it nondeterminism. Here at
+    mint time we only DISCLOSE, so the human's re-``y`` is informed.
+
+    Compares the original's RECORDED data identity (sidecar ``data_manifest_sha``)
+    against the CURRENT on-disk data identity (the same manifest sha a fresh submit
+    would echo). Either side absent → ``status="unknown"`` (no manifest at record
+    or current time) — disclosed, never blocking, never fabricated.
+    """
+    from hpc_agent.state.data_manifest import data_identity
+
+    recorded = sidecar.get("data_manifest_sha")
+    recorded = str(recorded) if recorded else None
+    current = data_identity(experiment_dir)
+    if recorded is None or current is None:
+        status = "unknown"
+    elif recorded == current:
+        status = "match"
+    else:
+        status = "drifted"
+    return {"status": status, "recorded": recorded, "current": current}
+
+
 def _cost_estimate(submit: SubmitFlowSpec) -> CostEstimate:
     """The pre-dispatch cost estimate for the reproduction spec (S2 parity).
 
@@ -531,6 +560,15 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
             f" PARTIAL: {len(selected)}/{task_count} tasks "
             f"({'derived per-axis stride' if isinstance(spec.task_sample, str) else 'caller list'})"
         )
+    # The THIRD drift dimension (amendment leg 3): data identity, DISCLOSED not
+    # refused. A rebuilt input since the original ran is surfaced so the human's
+    # re-y is informed; verify-reproduction then NAMES data as the moved dimension.
+    data_drift = _data_drift_disclosure(experiment_dir, sidecar)
+    data_phrase = ""
+    if data_drift["status"] == "drifted":
+        data_phrase = " DATA DRIFT: the declared input roots differ from the original's"
+    elif data_drift["status"] == "unknown":
+        data_phrase = " data identity unknown (no manifest at record/current time)"
     brief: dict[str, Any] = {
         "run_id": rr.run_id,
         "reproduces": original_run_id,
@@ -547,6 +585,8 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         "partial": partial,
         "task_sample": selected,
         "uncompared_task_count": uncompared_task_count,
+        # The third drift dimension (amendment leg 3): data identity, disclosed.
+        "data_identity": data_drift,
         "resolve": {
             "run_id": rr.run_id,
             "cmd_sha": rr.cmd_sha,
@@ -559,8 +599,8 @@ def reproduce_run(experiment_dir: Path, *, spec: ReproduceRunInput) -> Reproduce
         needs_decision=True,
         reason=(
             f"reproduction of {original_run_id!r} resolved (est. {est_phrase}) under a "
-            f"disjoint remote_path;{partial_phrase} canary PENDING — greenlight submit-s2 "
-            "to stage & canary the reproduction (its detached worker owns the poll)."
+            f"disjoint remote_path;{partial_phrase}{data_phrase} canary PENDING — greenlight "
+            "submit-s2 to stage & canary the reproduction (its detached worker owns the poll)."
         ),
         run_id=rr.run_id,
         reproduces=original_run_id,
