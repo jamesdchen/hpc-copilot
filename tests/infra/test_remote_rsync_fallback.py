@@ -583,3 +583,31 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
         )
     assert result.returncode == 2
     assert "connect refused" in result.stderr
+
+
+def test_payload_disclosure_warns_on_bare_exclude_collision(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """F-H fires-test: a bare exclude matching two distinct subtrees (the
+    run-#10 'data' vs 'src/data' drop) is named before the bytes move."""
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.parquet").write_text("x")
+    (tmp_path / "src" / "data").mkdir(parents=True)
+    (tmp_path / "src" / "data" / "loading.py").write_text("x")
+    transport._disclose_payload(tmp_path, ["data"])
+    err = capsys.readouterr().err
+    assert "bare exclude 'data' matches 2 distinct subtrees" in err
+    assert "src/data" in err
+    assert "anchor it" in err
+
+
+def test_payload_disclosure_no_warning_for_single_subtree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.parquet").write_text("x")
+    (tmp_path / "code.py").write_text("x")
+    transport._disclose_payload(tmp_path, ["data"])
+    err = capsys.readouterr().err
+    assert "deploy payload" in err
+    assert "distinct subtrees" not in err

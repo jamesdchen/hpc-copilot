@@ -65,6 +65,20 @@ nothing fails — only an identity record sees it.
 3. **Audit sections** assert against it caller-side (the template's
    `universe-and-alignment` prints shas today; the manifest is its
    comparison target).
+4. **THE TRANSFER SEAM (added 2026-07-08 from the live run-#10 data-loss
+   chain): deploy auto-protects the declared roots.** `rsync_push`/the
+   tar fallback union the experiment's declared `input_roots` into the
+   protect/exclude set as ANCHORED patterns (`./data`, never bare `data`
+   — the bare form silently also dropped `src/data` from a ship, the F-H
+   footgun). Stage-then-swap (shipped, `84c33730`) removed the
+   died-mid-transfer catastrophe; this closes the remaining aim problem —
+   a *successful* deploy with a wrong caller exclude could still clean a
+   data dir inside the tree. One declaration, consumed by a second seat;
+   an experiment with NO declared roots gets a disclosure line ("input
+   roots undeclared — data dirs unprotected by deploy"), never a guess.
+   Pack-level doctrine rides alongside (onboarding guidance, not core
+   enforcement): reference data OUTSIDE the deploy tree when practical —
+   code trees get deployed, data trees get referenced.
 
 No separate check verb — the brief surfaces are the check consumers.
 

@@ -286,6 +286,11 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
         total = 0
         count = 0
         capped = False
+        # Bare-pattern collision detector (run-#10 F-H): a bare name matches
+        # at ANY depth, so excluding "data" also drops "src/data" from the
+        # ship. Record every DISTINCT subtree each bare pattern hits; >1
+        # subtree = the collision warning below.
+        bare_hits: dict[str, set[str]] = {}
         root = Path(local_path)
         for p in root.rglob("*"):
             if count >= _PAYLOAD_WALK_CAP:
@@ -296,7 +301,14 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
             except ValueError:
                 continue
             parts = rel.parts
-            if any(fnmatch.fnmatch(part, pat) for part in parts for pat in pats):
+            excluded = False
+            for i, part in enumerate(parts):
+                for pat in pats:
+                    if fnmatch.fnmatch(part, pat):
+                        excluded = True
+                        if "/" not in pat and "\\" not in pat:
+                            bare_hits.setdefault(pat, set()).add("/".join(parts[: i + 1]))
+            if excluded:
                 continue
             if p.is_file():
                 count += 1
@@ -310,6 +322,16 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
             f"excludes: {', '.join(sorted(pats)) or '(none)'}",
             file=sys.stderr,
         )
+        for pat, subtrees in sorted(bare_hits.items()):
+            if len(subtrees) > 1:
+                named = ", ".join(sorted(subtrees)[:4])
+                print(
+                    f"[transport] WARN bare exclude {pat!r} matches {len(subtrees)} "
+                    f"distinct subtrees ({named}) — a bare name excludes at ANY "
+                    f"depth; anchor it (e.g. './{pat}') if you meant only the "
+                    "top-level one.",
+                    file=sys.stderr,
+                )
     except Exception:  # noqa: BLE001 — disclosure is never load-bearing
         pass
 
