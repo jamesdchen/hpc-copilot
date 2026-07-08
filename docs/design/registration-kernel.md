@@ -620,6 +620,54 @@ re-register → verify `current` again → revoke with reason → verify
      `is_scope_locked`, the `_assert_signoff_authorship` three-lock sibling,
      `_is_bare_ack`, and the dossier-boundary test pins all exist as cited.
 
+- **T4 implementation 2026-07-08 (`ops/registration/prereqs.py` + tests):**
+  1. *`scope-budget` budget key PINNED to `max_looks`.* R3's table said the
+     currency condition is "look count `<=` the caller-declared budget number in
+     `requires`" but never NAMED the key, so a literal implementer had none. T4
+     pins it: `requires: {"max_looks": <int>}`. A `scope-budget` entry with no
+     integer `max_looks` is a loud `errors.SpecInvalid` (structurally
+     un-checkable input, not a failing-slot verdict) — core compares the look
+     count against the caller's number, it never picks a budget. `max_looks` is
+     the sole allowed `requires` key for the kind (the closed-key rule; any other
+     key is the R4 dangling-reference refusal).
+  2. *`attestation` journal address PINNED to `subject_id =
+     "<scope_kind>:<scope_id>"`.* R3's `attestation` row routes through
+     `state/attestation.py::reduce` over a "named journal `{scope_kind,
+     scope_id}`", but the `ChainEntry` carries a single opaque `subject_id`, and
+     a grep found NO existing `<scope_kind>:<scope_id>` convention in the tree. T4
+     pins the address as a `":"`-partitioned `subject_id` (e.g.
+     `"scope:widget-lock"`); a `subject_id` with no `":"` separator is a loud
+     `errors.SpecInvalid`. The checker projects each journal record to an
+     attestation dict (`resolved.attestor` + `resolved.content_sha`; records
+     lacking them are skipped by the kernel's tolerant read), routes the
+     current/stale verdict through `attestation.reduce`, and echoes the newest
+     valid record's `{block, attestor}` VERBATIM into the slot's `evidence_note`
+     (the R3 disclosure sentence).
+  3. *Recompute/currency legs, per kind (matching R3's per-kind `content_sha`
+     rule).* Every checker's CURRENT verdict requires BOTH the kind's currency
+     condition AND `recomputed_sha == entry.content_sha`; a `"stale"` verdict
+     always carries the recorded-vs-recomputed pair, `"absent"` means the
+     substrate/record does not exist (recomputed sha `None`). `notebook-audit`
+     recomputes the module sha (`sha256_normalized` over the interview-echoed
+     source `.py`) and routes the section verdict through `audit_module` + the
+     gate's `_linked_source_drift`/`_winning_record`; `reproduction` recomputes
+     the canonical-JSON sha of the newest receipt and checks code drift via
+     `code_drift.detect_code_drift` (the receipt identity carries no `executor`,
+     so only the `tasks_py_sha` dimension is live) plus the dossier cross-link;
+     `scope-budget` recomputes the canonical-JSON sha of `{prior_looks,
+     distinct_lineages, locked}`.
+  4. *`reproduction` + `requires` is a loud not-yet-available refusal.* The
+     determinism-fingerprint substrate (`state/determinism.py::evidence_meets`)
+     does not exist in this worktree, so ANY `requires` floor on a `reproduction`
+     entry raises `errors.SpecInvalid` naming `docs/design/determinism-fingerprint.md`
+     (reserved-seam posture; never a silent pass). `pack-receipt` is likewise a
+     loud not-yet-available refusal until domain-packs lands.
+  5. *Canonical-JSON sha helper.* No `infra`/`state` helper of the harness-contract
+     form exists to reuse (the `ops/notebook/audit_view` / `ops/story_render`
+     copies are private view-sha helpers), so T4 ships ONE local
+     `_canonical_sha` (`json.dumps(sort_keys=True, separators=(",", ":"),
+     ensure_ascii=False)` → sha256).
+
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
