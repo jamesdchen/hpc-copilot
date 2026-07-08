@@ -61,6 +61,22 @@
       "description": "Opaque import roots for the canonical lint recompute. Default (null) uses the recorded roots; an explicit value is a PREVIEW override.",
       "title": "Source Roots"
     },
+    "output_roots": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opaque WRITE-target roots for the canonical lint recompute: a path literal under one is a declared output, exempt from the executes-live not-exists flag. Default (null) uses the recorded roots; an explicit value is a PREVIEW override.",
+      "title": "Output Roots"
+    },
     "lint_findings": {
       "description": "OPAQUE lint findings for a PREVIEW build. When NON-EMPTY the view is a PREVIEW (`canonical: false`) built from these caller-supplied findings instead of the server-recomputed lint — its view_shas the T8 gate may refuse. Leave EMPTY (the default) to get the CANONICAL view whose lint is recomputed server-side from the recorded roots. Each finding names its section via a `slug` / `section` / `section_slug` key.",
       "items": {

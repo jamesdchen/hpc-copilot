@@ -204,6 +204,7 @@ def notebook_audit_view(
         attention_order=(
             spec.attention_order if spec.attention_order is not None else recorded.attention_order
         ),
+        output_roots=spec.output_roots if spec.output_roots is not None else recorded.output_roots,
     )
     preview_forced = spec.receipt is not None or bool(spec.lint_findings)
     if preview_forced:

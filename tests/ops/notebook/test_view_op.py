@@ -165,6 +165,14 @@ def compute_stat(y):
     assert not any(f.get("rule") == "template_import_shadowed" for f in by_slug["setup"].lint_flags)
 
 
+def test_explicit_output_roots_override_is_a_preview(tmp_path: Path) -> None:
+    # No recorded config → explicit output_roots differ from the recorded
+    # (empty) ones, so the view is a PREVIEW the T8 gate may refuse.
+    _write(tmp_path)
+    assert _view(tmp_path).canonical is True
+    assert _view(tmp_path, output_roots=["results"]).canonical is False
+
+
 def test_receipt_passthrough_greens_asserted_section(tmp_path: Path) -> None:
     _write(tmp_path)
     # Without a receipt `model` reads human_required (its assert is unproven).

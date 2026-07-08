@@ -11,7 +11,11 @@ caller-declared, opaque path/import roots:
 * **executes-live** — path-shaped string literals are checked to exist under the
   caller-declared ``input_roots``; a COMPUTED path expression (an f-string / a
   ``+``-concatenation with a separator) cannot be verified and is recorded in
-  ``unverifiable_paths`` (an honest gap, never silently skipped);
+  ``unverifiable_paths`` (an honest gap, never silently skipped). A literal
+  under a declared ``output_root`` is a DECLARED OUTPUT — it is where the source
+  WRITES, so "does not exist yet" is expected, not a finding; it is reported in
+  ``declared_outputs`` (path + section — reported, never flagged, the run-#10
+  output-literal noise fix);
 * **linked_sources** — imports resolving to a file under ``source_roots`` are
   reported as ``{module, file, module_sha}`` (import ORIGIN IDENTITY only —
   never import content/semantics);
@@ -86,9 +90,10 @@ class NotebookLintInput(BaseModel):
     """Spec for ``notebook-lint`` — all paths are caller-declared.
 
     ``source`` / ``template`` are ``.py`` relpaths under the experiment dir
-    (or absolute). ``input_roots`` / ``source_roots`` are OPAQUE caller-declared
-    root lists — core never attaches a meaning to a root, it only joins + tests
-    existence (data roots) or resolves import origins (import roots).
+    (or absolute). ``input_roots`` / ``source_roots`` / ``output_roots`` are
+    OPAQUE caller-declared root lists — core never attaches a meaning to a root,
+    it only joins + tests existence (data roots), resolves import origins
+    (import roots), or exempts write-target literals (output roots).
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-lint input spec")
@@ -99,6 +104,24 @@ class NotebookLintInput(BaseModel):
     input_roots: list[str] = Field(default_factory=list)
     # Opaque import roots the linked-sources rule resolves imports under.
     source_roots: list[str] = Field(default_factory=list)
+    # Opaque WRITE-target roots: a path literal under one is a declared output —
+    # exempt from the executes-live not-exists flag, reported in
+    # `declared_outputs` instead (an output does not exist before the run).
+    output_roots: list[str] = Field(default_factory=list)
+
+
+class DeclaredOutput(BaseModel):
+    """One path literal recognised as a WRITE target under a declared ``output_root``.
+
+    Reported, never flagged: an output does not exist before the run, so the
+    executes-live not-exists check is exempt for it. ``section`` is the source
+    section slug the literal sits in (``None`` for the module preamble).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="notebook-lint declared output")
+
+    path: str
+    section: str | None = None
 
 
 class NotebookLintResult(BaseModel):
@@ -108,6 +131,9 @@ class NotebookLintResult(BaseModel):
     * ``unverifiable_paths`` — computed path expressions that could not be
       checked (the honest executes-live gap).
     * ``linked_sources`` — imports resolved under ``source_roots``, with hashes.
+    * ``declared_outputs`` — path literals under a declared ``output_root``
+      (write targets, exempt from the executes-live flag — reported, never
+      flagged).
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-lint output data")
@@ -115,3 +141,4 @@ class NotebookLintResult(BaseModel):
     findings: list[NotebookLintFinding] = Field(default_factory=list)
     unverifiable_paths: list[str] = Field(default_factory=list)
     linked_sources: list[LinkedSource] = Field(default_factory=list)
+    declared_outputs: list[DeclaredOutput] = Field(default_factory=list)

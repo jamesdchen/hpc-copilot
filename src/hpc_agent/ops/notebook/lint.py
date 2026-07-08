@@ -15,7 +15,11 @@ template and caller-declared, OPAQUE path/import roots. Four rules:
    caller-declared ``input_roots``; a missing one is a finding. A COMPUTED path
    expression (an f-string / a ``+``-concatenation carrying a separator) cannot
    be verified and is recorded in ``unverifiable_paths`` — an honest gap, never
-   silently skipped.
+   silently skipped. A literal sitting UNDER a declared ``output_root`` is a
+   DECLARED OUTPUT (where the source WRITES — it does not exist before the run):
+   exempt from the not-exists flag and reported in ``declared_outputs`` instead
+   (path + section — reported, never flagged; the run-#10 output-literal noise
+   fix). A literal under NO root keeps the flagging behavior.
 3. **linked_sources** — ``ast.Import`` / ``ast.ImportFrom`` that resolve to a
    file under a caller ``source_root`` are reported as
    ``{module, file, module_sha}`` (``module_sha`` via
@@ -46,6 +50,7 @@ from pathlib import Path
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.notebook_lint import (
+    DeclaredOutput,
     LinkedSource,
     NotebookLintFinding,
     NotebookLintInput,
@@ -229,21 +234,41 @@ def _binop_has_separator_constant(node: ast.BinOp) -> bool:
     return False
 
 
+def _under_output_root(experiment_dir: Path, output_root_dirs: list[Path], literal: str) -> bool:
+    """True iff *literal* denotes a path LEXICALLY under a declared output root.
+
+    Purely lexical containment (``is_relative_to`` over resolved paths) — an
+    output is where the source WRITES, so it need not (and usually does not)
+    exist yet; existence never enters this test. An absolute literal is tested
+    as itself; a relative one is tested experiment-relative (the literal already
+    carries its root, e.g. ``results/run.json`` under ``output_root=results``).
+    """
+    p = Path(literal)
+    candidate = p if p.is_absolute() else experiment_dir / literal
+    resolved = candidate.resolve()
+    return any(resolved.is_relative_to(root.resolve()) for root in output_root_dirs)
+
+
 def _check_executes_live(
     tree: ast.Module,
     experiment_dir: Path,
     root_dirs: list[Path],
+    output_root_dirs: list[Path],
     sections: list[tuple[int, int, str]],
-) -> tuple[list[NotebookLintFinding], list[str]]:
+) -> tuple[list[NotebookLintFinding], list[str], list[DeclaredOutput]]:
     """Check path-shaped literals exist; record computed paths as unverifiable.
 
-    Returns ``(findings, unverifiable_paths)``. A literal path that does not
-    resolve under any declared root is a finding attributed to its section; a
-    computed path expression (f-string / ``+`` with a separator) is appended to
-    ``unverifiable_paths`` (the honest gap).
+    Returns ``(findings, unverifiable_paths, declared_outputs)``. A literal path
+    that does not resolve under any declared root is a finding attributed to its
+    section; a computed path expression (f-string / ``+`` with a separator) is
+    appended to ``unverifiable_paths`` (the honest gap). A literal UNDER a
+    declared output root is a DECLARED OUTPUT — exempt from the not-exists flag
+    (an output does not exist before the run) and reported in
+    ``declared_outputs`` instead: reported, never flagged.
     """
     findings: list[NotebookLintFinding] = []
     unverifiable: list[str] = []
+    declared: list[DeclaredOutput] = []
     # First pass: flag computed path expressions and mark their constant chunks
     # as consumed, so a separator-bearing string INSIDE an f-string / concat
     # (e.g. the ``"inputs/"`` in ``f"inputs/{x}"``) is not re-counted as a
@@ -266,6 +291,17 @@ def _check_executes_live(
             literal = node.value
             if not _is_path_shaped(experiment_dir, root_dirs, literal):
                 continue
+            if _under_output_root(experiment_dir, output_root_dirs, literal):
+                # A declared OUTPUT: where the source writes. It does not exist
+                # before the run, so the not-exists check is exempt — reported
+                # in declared_outputs, never flagged.
+                declared.append(
+                    DeclaredOutput(
+                        path=literal,
+                        section=_section_slug_for_line(sections, getattr(node, "lineno", 0)),
+                    )
+                )
+                continue
             candidates = _resolve_candidates(experiment_dir, root_dirs, literal)
             if any(c.exists() for c in candidates):
                 continue
@@ -283,7 +319,7 @@ def _check_executes_live(
                     },
                 )
             )
-    return findings, unverifiable
+    return findings, unverifiable, declared
 
 
 # ── rule 3: linked_sources ───────────────────────────────────────────────────
@@ -552,7 +588,9 @@ def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
             "caller-declared, opaque path/import roots. Four read-only checks: "
             "structural completeness (template marker slugs as an order-preserving "
             "subsequence of the source), executes-live (path-shaped string "
-            "literals exist under input_roots; computed paths recorded as "
+            "literals exist under input_roots; a literal under a declared "
+            "output_root is a WRITE target — reported in declared_outputs, "
+            "never flagged; computed paths recorded as "
             "unverifiable), linked_sources (imports resolving under "
             "source_roots reported with their module_sha), and "
             "template_import_shadowed (a source section defining or rebinding a "
@@ -572,8 +610,10 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
 
     Findings are reported (never raised) in :class:`NotebookLintResult`;
     ``unverifiable_paths`` holds computed path expressions the executes-live rule
-    could not check, and ``linked_sources`` holds imports resolved under the
-    caller ``source_roots`` with their ``module_sha``. A section with zero
+    could not check, ``linked_sources`` holds imports resolved under the
+    caller ``source_roots`` with their ``module_sha``, and ``declared_outputs``
+    holds path literals under a declared ``output_root`` (write targets — exempt
+    from the not-exists flag, reported never flagged). A section with zero
     findings is one auto-clear precondition for T5's tier computation.
 
     Raises
@@ -596,11 +636,12 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
     section_spans = _build_section_spans(source_text)
     input_root_dirs = _root_dirs(experiment_dir, spec.input_roots)
     source_root_dirs = _root_dirs(experiment_dir, spec.source_roots)
+    output_root_dirs = _root_dirs(experiment_dir, spec.output_roots)
 
     findings: list[NotebookLintFinding] = []
     findings.extend(_check_structural_completeness(template_module.slugs, source_module.slugs))
-    live_findings, unverifiable = _check_executes_live(
-        tree, experiment_dir, input_root_dirs, section_spans
+    live_findings, unverifiable, declared_outputs = _check_executes_live(
+        tree, experiment_dir, input_root_dirs, output_root_dirs, section_spans
     )
     findings.extend(live_findings)
     findings.extend(
@@ -616,4 +657,5 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
         findings=findings,
         unverifiable_paths=unverifiable,
         linked_sources=linked,
+        declared_outputs=declared_outputs,
     )

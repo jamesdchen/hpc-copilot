@@ -188,6 +188,7 @@ def notebook_auto_clear(
         input_roots=recorded.input_roots,
         source_roots=recorded.source_roots,
         attention_order=recorded.attention_order,
+        output_roots=recorded.output_roots,
     )
     view = build_canonical_view(
         experiment_dir,

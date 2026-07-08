@@ -52,6 +52,9 @@ class AuditConfig:
       path literals against.
     * ``source_roots`` — the opaque import roots the linked-sources lint resolves
       imports under.
+    * ``output_roots`` — the opaque WRITE-target roots: a path literal under one
+      is a declared output, exempt from the executes-live not-exists flag (the
+      run-#10 output-literal noise fix).
     * ``attention_order`` — the presented section ordering (``None`` = source
       order). It feeds the MODULE roll-up view_sha only; per-section view shas are
       unaffected.
@@ -64,6 +67,7 @@ class AuditConfig:
     input_roots: list[str] = field(default_factory=list)
     source_roots: list[str] = field(default_factory=list)
     attention_order: list[str] | None = None
+    output_roots: list[str] = field(default_factory=list)
 
 
 def _read_audited_source_block(experiment_dir: Path, audit_id: str | None) -> dict | None:
@@ -110,11 +114,18 @@ def read_recorded_config(experiment_dir: Path, audit_id: str | None) -> AuditCon
     block = _read_audited_source_block(experiment_dir, audit_id)
     if block is None:
         return AuditConfig()
+    return _config_from_record(block)
+
+
+def _config_from_record(block: dict) -> AuditConfig:
+    """Coerce a persisted config mapping (interview block / journal record) to
+    an :class:`AuditConfig` — absent / malformed fields → conservative defaults."""
     order = block.get("attention_order")
     return AuditConfig(
         input_roots=_coerce_roots(block.get("input_roots")),
         source_roots=_coerce_roots(block.get("source_roots")),
         attention_order=[str(s) for s in order] if isinstance(order, list) else None,
+        output_roots=_coerce_roots(block.get("output_roots")),
     )
 
 
@@ -175,6 +186,7 @@ def build_canonical_view(
             template=template_relpath,
             input_roots=cfg.input_roots,
             source_roots=cfg.source_roots,
+            output_roots=cfg.output_roots,
         ),
     )
     findings = [f.model_dump() for f in lint_result.findings]

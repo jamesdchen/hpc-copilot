@@ -44,6 +44,7 @@ def _run(
     *,
     input_roots: list[str] | None = None,
     source_roots: list[str] | None = None,
+    output_roots: list[str] | None = None,
 ) -> NotebookLintResult:
     (experiment_dir / "source.py").write_text(source, encoding="utf-8")
     (experiment_dir / "template.py").write_text(template, encoding="utf-8")
@@ -52,6 +53,7 @@ def _run(
         template="template.py",
         input_roots=input_roots or [],
         source_roots=source_roots or [],
+        output_roots=output_roots or [],
     )
     return notebook_lint(experiment_dir=experiment_dir, spec=spec)
 
@@ -202,6 +204,68 @@ DATA = "inputs/" + name
     result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
     assert _rules(result, "executes_live") == []
     assert any("inputs/" in p for p in result.unverifiable_paths)
+
+
+def test_executes_live_output_literal_is_declared_not_flagged(tmp_path: Path) -> None:
+    # A missing path literal UNDER a declared output_root is a WRITE target —
+    # exempt from the not-exists flag, reported in declared_outputs instead.
+    source = """\
+# %%
+# hpc-audit-section: report
+OUT = "outputs/summary/table.json"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert [(d.path, d.section) for d in result.declared_outputs] == [
+        ("outputs/summary/table.json", "report")
+    ]
+
+
+def test_executes_live_missing_literal_outside_output_roots_still_flags(tmp_path: Path) -> None:
+    # A literal under NO root keeps today's behavior: declared output_roots do
+    # not exempt a missing literal that sits outside them.
+    source = """\
+# %%
+# hpc-audit-section: load-data
+DATA = "inputs/missing.csv"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    findings = _rules(result, "executes_live")
+    assert len(findings) == 1
+    assert findings[0].evidence["path"] == "inputs/missing.csv"
+    assert result.declared_outputs == []
+
+
+def test_executes_live_existing_input_literal_not_a_declared_output(tmp_path: Path) -> None:
+    # An existing input literal passes as before and never lands in
+    # declared_outputs (it is under the input root, not an output root).
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs" / "data.csv").write_text("x", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: load-data
+DATA = "inputs/data.csv"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"], output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert result.declared_outputs == []
+
+
+def test_executes_live_existing_literal_under_output_root_is_declared(tmp_path: Path) -> None:
+    # Existence does not change the classification: a literal under an
+    # output_root is a declared output whether or not the file exists yet.
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "table.json").write_text("{}", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: report
+OUT = "outputs/table.json"
+"""
+    result = _run(tmp_path, source, _TEMPLATE, output_roots=["outputs"])
+    assert _rules(result, "executes_live") == []
+    assert [(d.path, d.section) for d in result.declared_outputs] == [
+        ("outputs/table.json", "report")
+    ]
 
 
 # ── rule 3: linked_sources ───────────────────────────────────────────────────

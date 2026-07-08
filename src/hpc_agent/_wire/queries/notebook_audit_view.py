@@ -86,6 +86,15 @@ class NotebookAuditViewSpec(BaseModel):
             "uses the recorded roots; an explicit value is a PREVIEW override."
         ),
     )
+    output_roots: list[str] | None = Field(
+        default=None,
+        description=(
+            "Opaque WRITE-target roots for the canonical lint recompute: a path "
+            "literal under one is a declared output, exempt from the "
+            "executes-live not-exists flag. Default (null) uses the recorded "
+            "roots; an explicit value is a PREVIEW override."
+        ),
+    )
     lint_findings: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
