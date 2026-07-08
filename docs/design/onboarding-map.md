@@ -43,13 +43,13 @@ Entering mid-ladder means entering with less attached evidence, disclosed.
 
 | # | Stage transition | On-ramp | Status | Trust posture on entry |
 |---|---|---|---|---|
-| 0 | Raw data → trusted inputs | content-sha data manifest + provenance record | **GAP — rides Phase 4** (bind-as-data makes it explicit) | provenance absent = disclosed, never blocking |
+| 0 | Raw data → trusted inputs | content-sha data manifest + provenance record | **RULED 2026-07-07 → `data-manifest.md`** (verb = Phase 1a; fingerprint amendment inside Phase 3) | provenance absent = disclosed, never blocking |
 | 1 | Idea → audited script | the notebook-audit prelude (drafting + tiered sign-off) | BUILT (v1–v1.6) | highest — born inside the audit loop |
 | 2 | Scribbles / messy `.ipynb` → draft | acceptors: `experiment_kit/notebook.py::export_notebook`, jupytext→percent, the interview's ipynb candidates | BUILT | executable; unaudited, disclosed |
 | 3 | `.py` script / repo → scaled experiment | interview, `hpc-wrap-entry-point`, `decorate-entry-point`, `discover` | BUILT (the original product) | onboarded; untagged runs disclosed at greenlight |
 | 4 | Scale → verdict | campaign/aggregate blocks, briefs, look ledger | BUILT | — |
 | 5 | Existing *results* → evidence | import prior findings as dated conclusion attestations (the retro-indexing mechanism) | rides Phase 6 (evidence memory) | prior evidence, dated, cited by file sha; never receipts for runs the copilot didn't observe |
-| 6 | External claim → reproducible claim | **onboard-by-reproduction** — first act on arrival is reproducing the claimed result under observation; the run mints the identity AND the first fingerprint sample | **NEEDS RULING** (below) | claim + n=1 fingerprint, honestly labeled |
+| 6 | External claim → reproducible claim | **onboard-by-reproduction** — first act on arrival is reproducing the claimed result under observation; the run mints the identity AND the first fingerprint samples | **RULED 2026-07-07 → `onboard-by-reproduction.md`** (Phase 6.5; claim-in-spec, `claim-check` ≠ reproduction) | claim + observed n=2 fingerprint, honestly labeled |
 | 7 | Claim → registered/defended | registration kernel, dossier export, DSSE | PLANNED (Phases 2, 5) | the top rung |
 | 8 | Solo → team | multi-human (per-actor logs, authorship) | PLANNED (Phase 9) | — |
 

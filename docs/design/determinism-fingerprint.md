@@ -764,3 +764,17 @@ edit — that friction is the pin working.
 (Populate further per deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
+
+## Amendment (2026-07-07, user-ruled 0b): the data-identity dimension
+
+The staleness/admission model above is code-identity only (`tasks_py_sha`
+family) — a rebuilt input file would read as nondeterminism, poisoning the
+envelope with a false mismatch. Ruled amendment (full design:
+`docs/design/data-manifest.md`; lands INSIDE Phase 3 per hot-file
+serialization): (1) submit echoes the data-manifest shas of files under
+the declared input roots into the sidecar; (2) samples are comparable
+ONLY within the same data identity — a different-data sample is disclosed
+as data drift, never admitted as nondeterminism evidence; (3)
+`reproduce-run`'s drift guard grows to three dimensions (code, env,
+data), and verify verdicts name the moved dimension, or "data identity
+unknown (no manifest at record time)" — disclosed, never fabricated.

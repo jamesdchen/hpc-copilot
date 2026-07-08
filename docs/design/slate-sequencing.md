@@ -83,6 +83,14 @@ All four are PLANNED docs verified tonight; they serialize on
 kinds across them — pack and registration land in the slate phases; the
 rest here, ordinals nominal throughout):
 
+**Phase 1a — the data manifest verb** (`docs/design/data-manifest.md`,
+user-ruled 2026-07-07). The `data-manifest` verb + greenlight-brief
+disclosure only — self-contained, registry +1. Its OTHER two seams land
+elsewhere by hot-file serialization: the sidecar data-identity echo +
+the fingerprint's third drift dimension land INSIDE Phase 3 (they touch
+`submit_flow` / the sample-admission model); the `manifest-current`
+prerequisite kind is one Phase-2 vocabulary row.
+
 **Phase 6 — evidence memory** (`docs/design/evidence-memory.md`). First
 among the four: challenge-attestation reuses its `CITATION_KINDS`
 resolver table and its T-NB never-blocking form; its `"conclusion"` scope
@@ -99,6 +107,13 @@ helper reuse. No new scope kind.
 After evidence memory (resolvers) and after fingerprint T12 (the
 `reproduction-verdict` authorship gate its promotion seam leans on); the
 `"challenge"` scope kind lands here.
+
+**Phase 6.5 — onboard-by-reproduction** (`docs/design/onboard-by-reproduction.md`,
+user-ruled 2026-07-07). After Phase 3 (fingerprint receives samples) AND
+Phase 6 (optional conclusion composition). Thin: verify-reproduction's
+external-baseline mode, the `claim-check` receipt kind + its
+anti-laundering enforcement row, the orchestrating skill. No new verb
+expected; a verb would be a registry-arithmetic drift note in its doc.
 
 **Phase 9 — multi-human** (`docs/design/multi-human.md`). Deliberately
 LAST of the four: it edits the authorship gates in
@@ -131,8 +146,19 @@ in multi-human MH7).
   `ops/notebook_gate.py::_read_audited_source` — the one interview-block
   reader shape.
 - **Canonical-JSON sha**: pending punch-list P-S1's helper — every NEW sha
-  site (conclusion content_sha, conformance payloads, challenge targets)
-  uses it from day one; only legacy sites carry shims.
+  site (conclusion content_sha, conformance payloads, challenge targets,
+  the data-manifest DOC sha) uses it from day one; only legacy sites carry
+  shims. (Manifest FILE-CONTENT shas are raw-byte hashes — a different
+  discipline, allowlisted separately.)
+- **The never-blocking contract-test shape**: whichever lands FIRST of
+  evidence-memory's surfacing pin (Phase 6) and the data-manifest
+  disclosure pin (Phase 1a) writes the shared test helper (assert a code
+  path contains no raise/gate branch); the second REUSES it — one
+  assertion idiom, not two hand-rolled AST walks.
+- **Registry arithmetic (updated 2026-07-07 late)**: baseline is now
+  **142** @ `326a9124` (`notebook-scaffold-template` landed same night);
+  the slate's +5 stands; Phase 1a adds +1 (`data-manifest`) → expected
+  post-slate sum **148**. Phase 6.5 adds none.
 - **Outsource presumptions recorded**: federation rides GIT (append-only
   content-addressed journals are git's native case — no sync daemon, no
   CRDT libs); DSSE envelope CONSTRUCTION rides securesystemslib/in-toto
