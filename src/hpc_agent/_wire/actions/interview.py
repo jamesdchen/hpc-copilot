@@ -719,6 +719,92 @@ class PackOptIn(BaseModel):
     )
 
 
+class ActorsBlock(BaseModel):
+    """The multi-human ``actors`` opt-in on the InterviewSpec (MH1).
+
+    Sibling to ``packs`` / ``audited_source``: a caller-declared block,
+    persisted verbatim in interview.json, absent → byte-identical (the D7
+    fail-safe, ``exclude_none``). Makes today's IMPLICIT single-actor identity
+    EXPLICIT — an opaque slug the harness stamps and gates COMPARE, without core
+    ever verifying who anyone is (the honest tier is *harness-asserted*, never
+    verified).
+
+    ``ids`` — the declared actor slugs. Each uses the shared filesystem-safe
+    tag class (``RunIdStrict`` — the same ``^[A-Za-z0-9._\\-]+$`` class
+    ``state/scopes.py::validate_tag`` pins), because a slug becomes a PATH
+    SEGMENT in the per-actor utterance-log locator (MH2): the shape is
+    load-bearing, not stylistic. Opaque to core — NEVER a role vocabulary: core
+    has no idea what a "PI", "postdoc", or "reviewer" is and no field may ever
+    carry those words (the caller-vocabulary rule).
+
+    **Default-single-actor semantics (the D7 posture, exactly):** an absent
+    block, or ``ids`` with fewer than two entries, means every identity
+    comparison and policy consultation in every gate returns silently,
+    byte-identical to today. Zero declared actors is not an error, not a
+    warning — it is today's system; so ``ids`` may be empty.
+
+    ``policy`` — optional delegation mapping (MH8): ``{<gated block name>:
+    [<actor slug>, ...]}``. Keys are existing gated block names core already
+    owns (``"notebook-sign-off"``, ``"campaign-greenlight"``, ``"scope-unlock"``,
+    ``"registration"`` when the sibling kernel lands) — opaque strings core
+    membership-tests, never a closed vocabulary pinned here. Values are subsets
+    of ``ids``. Absent → no policy gating. A policy entry naming an actor NOT in
+    ``ids`` is a LOUD refusal at validation time (the dangling-reference
+    posture: an opted-in reference core cannot resolve must never silently
+    pass) — deliberately NOT D7 silence, which belongs to the un-opted-in world.
+
+    **How a session knows its actor is harness configuration** (``HPC_ACTOR``),
+    NOT a spec field: an agent-suppliable actor would let the model choose its
+    identity. The actor arrives from outside the model's tool surface, exactly
+    like the utterance text itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[RunIdStrict] = Field(
+        default_factory=list,
+        description=(
+            "Declared actor slugs (the shared filesystem-safe tag class — each "
+            "becomes a path segment in the per-actor utterance-log locator). "
+            "Opaque to core; never a role vocabulary. Fewer than two entries → "
+            "single-actor semantics (comparisons stay off), byte-identical to "
+            "today. May be empty (zero declared actors is not an error)."
+        ),
+    )
+    policy: dict[str, list[RunIdStrict]] | None = Field(
+        default=None,
+        description=(
+            "Optional delegation mapping {<gated block name>: [<actor slug>, "
+            "...]} (MH8). Keys are existing gated block names core "
+            "membership-tests (opaque strings, never a closed vocabulary); "
+            "values are subsets of ``ids``. Absent → no policy gating. A value "
+            "slug not in ``ids`` is refused at validation (the dangling-reference "
+            "posture). Pure lists+mappings core COMPARES, never evaluates — never "
+            "a predicate, a role vocabulary, or a quorum scheme."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_policy_slugs_declared(self) -> ActorsBlock:
+        # The dangling-reference refusal (MH1): a policy value naming an actor
+        # not in ``ids`` is an opted-in reference core cannot resolve — LOUD at
+        # validation, never a silent pass. Core compares identity only; it never
+        # interprets WHY the lab granted a block to an actor.
+        if self.policy is None:
+            return self
+        declared = set(self.ids)
+        for block, allowed in self.policy.items():
+            dangling = [slug for slug in allowed if slug not in declared]
+            if dangling:
+                raise ValueError(
+                    f"actors.policy[{block!r}] names actor(s) {sorted(dangling)!r} "
+                    f"not in actors.ids ({sorted(declared)!r}); a policy entry may "
+                    f"only reference declared actors (add them to ids or drop them "
+                    f"from the policy)."
+                )
+        return self
+
+
 class InterviewSpec(BaseModel):
     """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
@@ -840,6 +926,21 @@ class InterviewSpec(BaseModel):
             "that never opted in (the D7 fail-safe). Core copies the opaque "
             "``{pack, version, sha}`` echo verbatim and never reads a declared "
             "pack value for meaning."
+        ),
+    )
+    actors: ActorsBlock | None = Field(
+        default=None,
+        description=(
+            "Opt-in multi-human actor declaration (MH1). Sibling to ``packs`` / "
+            "``audited_source``: when present, ``ids`` names the shared repo's "
+            "actor slugs and optional ``policy`` delegates gated blocks to actor "
+            "subsets; when ABSENT (or with fewer than two ids) every identity "
+            "comparison and policy consultation returns silently and "
+            "interview.json is byte-identical to today's single-actor system "
+            "(the D7 fail-safe). Slugs are opaque to core — never a role "
+            "vocabulary; the attribution tier is harness-asserted, never "
+            "verified. A session's own actor arrives via the HPC_ACTOR harness "
+            "config, never this spec (the model must not choose its identity)."
         ),
     )
 
