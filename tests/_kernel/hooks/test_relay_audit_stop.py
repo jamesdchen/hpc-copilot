@@ -349,3 +349,165 @@ def test_notebook_unverifiable_source_not_surfaced(tmp_path: Path) -> None:
     )
     transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: load-data is auto_cleared.")
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+# ─── the relay-due discharge pass (the omission gate) ────────────────────────
+#
+# notebook-status journals a relay-due marker on a TERMINAL verdict; the SAME
+# stop that audits contradictions also enforces the omission side: an
+# undischarged marker whose key tokens (state word / module sha12) are absent
+# from the final text blocks the stop once, verbatim-ready. Each of the three
+# safety properties gets a fires-AND-passes pair below: block-once
+# (stop_hook_active — the sibling guards' seam), fail-open (corrupt marker /
+# raising loader → the stop proceeds), narrow set (pinned in
+# tests/ops/test_notebook_status.py::test_non_terminal_status_sets_no_marker).
+
+_SHA12 = "abcdef012345"
+
+
+def _seed_relay_due(exp: Path, *, state: str = "passed") -> dict:
+    """Journal one relay-due marker (the notebook-status terminal write)."""
+    from hpc_agent.state import notebook_audit as nb
+
+    record = nb.record_relay_due(exp, audit_id=_NB_AUDIT, state=state, module_sha=_SHA12 + "0" * 52)
+    assert record is not None
+    resolved = record["resolved"]
+    assert isinstance(resolved, dict)
+    return resolved
+
+
+def _discharges(exp: Path) -> list[dict]:
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import read_decisions
+
+    return [
+        r
+        for r in read_decisions(exp, "notebook", _NB_AUDIT)
+        if r.get("block") == nb.RELAY_DISCHARGE_BLOCK
+    ]
+
+
+def test_blocks_on_undischarged_terminal_state(tmp_path: Path) -> None:
+    """The omission fires: a terminal `passed` the final text never carried
+    blocks the stop with the verbatim-ready reason (tonight's proving-run
+    shape: notebook-status computed `passed`, the human never saw it)."""
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, "All wrapped up here; ending the turn.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert (
+        f"unrelayed terminal state: notebook-status = passed @ {_SHA12} — "
+        "relay it verbatim before closing." in out["reason"]
+    )
+    assert _discharges(tmp_path) == []  # a block never discharges anything
+
+
+def test_relayed_state_word_discharges_and_passes(tmp_path: Path) -> None:
+    """The state word in the final text (case-insensitive substring) discharges
+    the marker — an appended record echoing the marker key, the marker itself
+    untouched — and the stop proceeds. A later token-absent stop stays silent:
+    the obligation is closed."""
+    marker = _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: the module PASSED.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+    discharges = _discharges(tmp_path)
+    assert len(discharges) == 1
+    resolved = discharges[0]["resolved"]
+    assert resolved["record_kind"] == marker["record_kind"]
+    assert resolved["audit_id"] == marker["audit_id"]
+    assert resolved["key_tokens"] == marker["key_tokens"]
+    assert resolved["created_at"] == marker["created_at"]
+    assert resolved["discharged_at"]
+
+    # Discharged → a later stop with no tokens in the text passes silently.
+    later = _transcript(tmp_path, "Nothing new to report.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, later)) is None
+    assert len(_discharges(tmp_path)) == 1  # and nothing is double-discharged
+
+
+def test_sha12_token_alone_discharges(tmp_path: Path) -> None:
+    """ANY key token discharges — the module sha12 identifies the verdict as
+    well as the state word does."""
+    _seed_relay_due(tmp_path, state="failed")
+    transcript = _transcript(tmp_path, f"Verdict for module @ {_SHA12} relayed.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+    assert len(_discharges(tmp_path)) == 1
+
+
+def test_relay_due_block_once_via_stop_hook_active(tmp_path: Path) -> None:
+    """Block-once (the sibling Stop guards' seam, reused exactly): the second
+    stop — the hook-forced continuation — passes even when the token is STILL
+    absent. The same marker never blocks twice in a row."""
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, "Still not relaying anything relevant.")
+    # First stop fires...
+    first = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert first is not None and first["decision"] == "block"
+    # ...the forced continuation passes, token absent or not.
+    second = relay_audit_stop.build_hook_output(
+        _payload(tmp_path, transcript, stop_hook_active=True)
+    )
+    assert second is None
+
+
+def test_forced_stop_still_discharges_a_corrected_relay(tmp_path: Path) -> None:
+    """The stop_hook_active continuation NEVER blocks, but a corrected relay at
+    that very stop still closes its own obligation (the discharge pass runs
+    before the forced-pass return)."""
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, f"notebook-status = passed @ {_SHA12}.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript, stop_hook_active=True))
+    assert out is None
+    assert len(_discharges(tmp_path)) == 1
+
+
+def test_fail_open_on_corrupt_marker_lines(tmp_path: Path) -> None:
+    """A corrupt marker line (garbage resolved shape) and a non-JSON line must
+    never block or crash the stop — the Option-3 failure class: a hook that can
+    wedge a session on one bad record."""
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import append_decision, decisions_path
+
+    # A relay-due record whose resolved shape is garbage (key_tokens not a list).
+    append_decision(
+        tmp_path,
+        scope_kind="notebook",
+        scope_id=_NB_AUDIT,
+        block=nb.RELAY_DUE_BLOCK,
+        response=nb.RELAY_DUE_RESPONSE,
+        resolved={"record_kind": "notebook-status", "key_tokens": 42},
+    )
+    # Plus a raw non-JSON line appended straight into the journal file.
+    path = decisions_path(tmp_path, "notebook", _NB_AUDIT)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{this is not json\n")
+
+    transcript = _transcript(tmp_path, "Ending the turn; nothing relayed.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_fail_open_when_marker_load_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ANY exception in marker load/parse/check → the hook allows the stop,
+    even with a genuinely undischarged marker pending."""
+    _seed_relay_due(tmp_path, state="passed")
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("journal store exploded")
+
+    monkeypatch.setattr("hpc_agent.state.notebook_audit.read_undischarged_relay_markers", _boom)
+    transcript = _transcript(tmp_path, "Ending the turn; nothing relayed.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_omission_combines_with_contradiction_findings(tmp_path: Path) -> None:
+    """A stop can owe BOTH corrections: a contradicted run state and an
+    unrelayed terminal — one block carries both reasons."""
+    _seed_run(tmp_path, status="failed")
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and out["decision"] == "block"
+    assert "relay audit" in out["reason"]
+    assert "unrelayed terminal state" in out["reason"]

@@ -110,6 +110,14 @@ __all__ = [
     "record_auto_clear",
     "record_render_receipt",
     "read_render_receipts",
+    "RELAY_DUE_BLOCK",
+    "RELAY_DUE_RESPONSE",
+    "RELAY_DUE_RECORD_KIND",
+    "RELAY_DISCHARGE_BLOCK",
+    "RELAY_DISCHARGE_RESPONSE",
+    "record_relay_due",
+    "record_relay_discharge",
+    "read_undischarged_relay_markers",
 ]
 
 #: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
@@ -540,3 +548,186 @@ def read_render_receipts(
             "fresh": fresh,
         }
     return out
+
+
+# --- relay-due markers (the omission gate) -----------------------------------
+# A FOURTH and FIFTH block class riding the same journal: a relay-due MARKER
+# (journaled by ``notebook-status`` when it computes a TERMINAL audit state) and
+# its DISCHARGE (journaled by the relay-audit Stop hook when the final assistant
+# text actually carried one of the marker's key tokens). ``verify-relay`` and
+# the Stop hook's contradiction pass audit what WAS said; this pair enforces
+# what MUST be said — the omission side of the relay boundary. Like the render
+# receipt, both blocks are deliberately ABSENT from :data:`_BLOCK_ATTESTOR` and
+# from :func:`_project_receipt`, so a marker/discharge can never enter the
+# attestation reduction or the receipt reader. Append-only discipline: a
+# discharge NEVER mutates its marker — it is a second record whose key names
+# the first.
+
+#: The relay-due marker block — "this terminal verdict has not reached the
+#: human yet". Written by the ``notebook-status`` op on a terminal state.
+RELAY_DUE_BLOCK = "notebook-relay-due"
+
+#: The honest, mechanical ``response`` a relay-due marker carries — an
+#: obligation was recorded, nothing was approved or relayed.
+RELAY_DUE_RESPONSE = "relay_due"
+
+#: The one v1 ``record_kind`` — ONLY ``notebook-status`` terminals set markers
+#: (the narrow set is deliberate: marking everything relay-due recreates alarm
+#: fatigue inside the enforcement itself).
+RELAY_DUE_RECORD_KIND = "notebook-status"
+
+#: The discharge block — "the final assistant text carried a key token of the
+#: named marker". Written by the relay-audit Stop hook, never by hand.
+RELAY_DISCHARGE_BLOCK = "notebook-relay-discharge"
+
+#: The honest, mechanical ``response`` a discharge carries.
+RELAY_DISCHARGE_RESPONSE = "relay_discharged"
+
+
+def _marker_key(resolved: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    """The identity of one relay-due marker, or ``None`` for a malformed record.
+
+    ``(record_kind, audit_id, key_tokens..., created_at)`` — the fields a
+    discharge record echoes back. Malformed shapes (non-string fields, a
+    non-list ``key_tokens``) yield ``None`` and are skipped by every reader:
+    one bad line never strands the rest of the audit trail, and never raises.
+    """
+    record_kind = resolved.get("record_kind")
+    audit_id = resolved.get("audit_id")
+    key_tokens = resolved.get("key_tokens")
+    created_at = resolved.get("created_at")
+    if not (isinstance(record_kind, str) and record_kind):
+        return None
+    if not (isinstance(audit_id, str) and audit_id):
+        return None
+    if not (isinstance(created_at, str) and created_at):
+        return None
+    if not isinstance(key_tokens, list) or not key_tokens:
+        return None
+    if not all(isinstance(t, str) and t for t in key_tokens):
+        return None
+    return (record_kind, audit_id, tuple(key_tokens), created_at)
+
+
+def record_relay_due(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    state: str,
+    module_sha: str,
+) -> dict[str, Any] | None:
+    """Journal a relay-due marker for a TERMINAL ``notebook-status`` verdict.
+
+    The marker's ``resolved`` is the design shape: ``{record_kind:
+    "notebook-status", audit_id, key_tokens: [<state word>, <module sha12>],
+    created_at}``. Any one key token appearing (case-insensitive substring) in
+    the final assistant text discharges the obligation — the state word or the
+    sha12 both identify the verdict.
+
+    Deduplicated on ``(record_kind, key_tokens)``: the same terminal fact
+    (same state at the same module sha) is ONE relay obligation, however many
+    times ``notebook-status`` recomputes it — this is what keeps the op's
+    ``idempotent=True`` honest and keeps the audit loop from stacking
+    obligations (alarm fatigue inside the enforcement). Returns the appended
+    record, or ``None`` when an identical marker already exists (discharged or
+    not: an already-relayed fact does not re-arm).
+    """
+    key_tokens = [state, module_sha[:12]]
+    for record in read_decisions(experiment_dir, "notebook", audit_id):
+        if record.get("block") != RELAY_DUE_BLOCK:
+            continue
+        resolved = record.get("resolved")
+        key = _marker_key(resolved) if isinstance(resolved, dict) else None
+        if key is not None and key[0] == RELAY_DUE_RECORD_KIND and key[2] == tuple(key_tokens):
+            return None
+    resolved_out: dict[str, Any] = {
+        "record_kind": RELAY_DUE_RECORD_KIND,
+        "audit_id": audit_id,
+        "key_tokens": key_tokens,
+        "created_at": _utcnow_iso(),
+    }
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=RELAY_DUE_BLOCK,
+        response=RELAY_DUE_RESPONSE,
+        resolved=resolved_out,
+    )
+
+
+def read_undischarged_relay_markers(
+    experiment_dir: Path,
+    audit_id: str,
+) -> list[dict[str, Any]]:
+    """Every relay-due marker ``resolved`` dict with no matching discharge.
+
+    A marker is discharged when a :data:`RELAY_DISCHARGE_BLOCK` record whose
+    identity fields (``record_kind``, ``audit_id``, ``key_tokens``,
+    ``created_at``) echo the marker's exists anywhere in the journal — the
+    original marker is never mutated (append-only store). Malformed marker or
+    discharge lines are skipped, never raised (the fail-open posture the Stop
+    hook depends on).
+    """
+    markers: list[dict[str, Any]] = []
+    discharged: set[tuple[Any, ...]] = set()
+    for record in read_decisions(experiment_dir, "notebook", audit_id):
+        block = record.get("block")
+        resolved = record.get("resolved")
+        if not isinstance(resolved, dict):
+            continue
+        key = _marker_key(resolved)
+        if key is None:
+            continue
+        if block == RELAY_DUE_BLOCK:
+            markers.append(resolved)
+        elif block == RELAY_DISCHARGE_BLOCK:
+            discharged.add(key)
+    return [m for m in markers if _marker_key(m) not in discharged]
+
+
+def record_relay_discharge(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    marker: Mapping[str, Any],
+    discharged_at: str | None = None,
+) -> dict[str, Any]:
+    """Journal the discharge of one relay-due *marker* (append-only, no mutate).
+
+    ``resolved`` echoes the marker's identity fields verbatim (``record_kind``,
+    ``audit_id``, ``key_tokens``, ``created_at``) plus ``discharged_at`` — the
+    marker key + the discharge stamp, exactly. Raises
+    :class:`~hpc_agent.errors.SpecInvalid` on a malformed *marker* (a discharge
+    must name a real marker identity, never a hand-rolled shape).
+    """
+    from hpc_agent import errors
+
+    key = _marker_key(marker)
+    if key is None:
+        raise errors.SpecInvalid(
+            "record_relay_discharge: marker must carry record_kind, audit_id, "
+            f"key_tokens, created_at; got {dict(marker)!r}"
+        )
+    resolved: dict[str, Any] = {
+        "record_kind": marker["record_kind"],
+        "audit_id": marker["audit_id"],
+        "key_tokens": list(marker["key_tokens"]),
+        "created_at": marker["created_at"],
+        "discharged_at": discharged_at or _utcnow_iso(),
+    }
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=RELAY_DISCHARGE_BLOCK,
+        response=RELAY_DISCHARGE_RESPONSE,
+        resolved=resolved,
+    )
+
+
+def _utcnow_iso() -> str:
+    """The journal's timestamp convention (one definition, ``infra.time``)."""
+    from hpc_agent.infra.time import utcnow_iso
+
+    return utcnow_iso()

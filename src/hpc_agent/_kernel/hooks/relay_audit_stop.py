@@ -60,6 +60,33 @@ Loop safety & defensiveness
   transcript, no run mentions, a per-run audit error, or any unexpected
   exception → silent pass, exit ``0``. A broken audit hook must degrade to
   the verb-only posture, never wedge the harness.
+
+The relay-due DISCHARGE pass (the omission gate)
+------------------------------------------------
+Steps 3–5 audit what WAS said (distortion); nothing above enforces what MUST
+be said (tonight's proving run: ``notebook-status`` computed ``passed`` and
+the agent never relayed it). So the same stop also runs the discharge pass —
+the omission-side complement:
+
+* ``notebook-status`` journals a relay-due MARKER on a TERMINAL verdict
+  (:mod:`hpc_agent.state.notebook_audit` — v1's deliberately narrow set);
+* at stop, the hook loads the UNDISCHARGED markers of every audit journal in
+  the SAME ``.hpc/notebooks`` dir the mention scan uses (the identical
+  experiment-dir resolution — payload ``cwd`` → no-scaffold raw path). Unlike
+  the mention-keyed passes above, this pass cannot be keyed on what the text
+  names — an omission names nothing — so it scans the journals directly
+  (capped);
+* a marker whose key tokens (the state word / the module sha12) appear in the
+  final text — plain substring, case-insensitive — is DISCHARGED (an appended
+  record; the marker itself is never mutated). This runs even on a
+  ``stop_hook_active`` forced continuation, so the corrected relay closes its
+  own obligation at the very stop that carries it;
+* a marker whose tokens are all absent blocks the stop ONCE — the same
+  ``stop_hook_active`` block-once seam as the contradiction pass — with a
+  verbatim-ready reason naming the undischarged verdict;
+* the whole pass is fail-open: ANY exception in marker load/parse/check/
+  discharge degrades to no-omission-findings (a hook that can wedge a session
+  on one bad record is the failure class this posture exists to prevent).
 """
 
 from __future__ import annotations
@@ -81,6 +108,12 @@ __all__ = [
 # Cap how many mentioned runs / audits one stop audits — the hook must stay cheap.
 _MAX_RUNS_AUDITED = 5
 _MAX_AUDITS_AUDITED = 5
+
+# Caps for the relay-due discharge pass (which scans journals rather than
+# keying on mentions — an omission names nothing): audits scanned per stop and
+# undischarged markers surfaced per stop. Same stay-cheap posture as above.
+_MAX_RELAY_DUE_AUDITS = 10
+_MAX_RELAY_DUE_FINDINGS = 5
 
 # Mismatch kinds that contradict the durable record (surfaced); the
 # ``unverifiable`` kind is deliberately excluded (see module docstring). The
@@ -196,17 +229,81 @@ def mentioned_audit_ids(relay_text: str, notebooks_dir: Path) -> list[str]:
     return [aid for aid in ids if aid and aid in relay_text]
 
 
+def _relay_due_discharge_pass(
+    experiment_dir: Path, notebooks_dir: Path, relay_text: str
+) -> list[str]:
+    """Discharge relayed markers; return the verbatim-ready omission findings.
+
+    For every audit journal in *notebooks_dir* (the same no-scaffold dir the
+    mention scan globs — capped at :data:`_MAX_RELAY_DUE_AUDITS`), load the
+    UNDISCHARGED relay-due markers and check the final text for ANY of each
+    marker's ``key_tokens`` (plain substring, case-insensitive):
+
+    * found → append a discharge record (append-only; the marker is never
+      mutated) and surface nothing;
+    * absent → an omission finding, phrased verbatim-ready so the block reason
+      hands the agent exactly the tokens whose relay will discharge it.
+
+    Fail-open at every grain: a filesystem error, an unreadable journal, a
+    malformed marker, or a failed discharge append is skipped, never raised —
+    the callers additionally wrap the whole pass (Option-3 failure class: a
+    hook that can wedge a session on one bad record).
+    """
+    try:
+        audit_ids = sorted(
+            p.name[: -len(".decisions.jsonl")] for p in notebooks_dir.glob("*.decisions.jsonl")
+        )
+    except OSError:
+        return []
+
+    from hpc_agent.state.notebook_audit import (
+        read_undischarged_relay_markers,
+        record_relay_discharge,
+    )
+
+    lowered = relay_text.lower()
+    omissions: list[str] = []
+    for audit_id in audit_ids[:_MAX_RELAY_DUE_AUDITS]:
+        if not audit_id:
+            continue
+        try:
+            markers = read_undischarged_relay_markers(experiment_dir, audit_id)
+        except Exception:
+            continue  # a journal we cannot read is a silent pass for that audit
+        for marker in markers:
+            try:
+                tokens = [t for t in marker.get("key_tokens", []) if isinstance(t, str) and t]
+                if not tokens:
+                    continue  # malformed marker — never blocks, never raises
+                if any(token.lower() in lowered for token in tokens):
+                    record_relay_discharge(experiment_dir, audit_id=audit_id, marker=marker)
+                elif len(omissions) < _MAX_RELAY_DUE_FINDINGS:
+                    state = tokens[0]
+                    sha12 = tokens[1] if len(tokens) > 1 else "?"
+                    omissions.append(
+                        f"unrelayed terminal state: notebook-status = {state} @ "
+                        f"{sha12} — relay it verbatim before closing."
+                    )
+            except Exception:
+                continue  # a marker we cannot check/discharge is a silent pass
+    return omissions
+
+
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
     """Pure core: map a Stop *payload* to a block decision, or ``None``.
 
     Returns ``None`` (→ caller prints nothing, the stop proceeds) when:
 
     * *payload* is not a mapping, or ``stop_hook_active`` is truthy (this
-      stop is already a hook-forced continuation; blocking again would loop);
+      stop is already a hook-forced continuation; blocking again would loop —
+      the relay-due discharge pass still records discharges first, so a
+      corrected relay closes its marker, but a forced stop is NEVER blocked);
     * the cwd repo has no journal namespace (not an hpc repo — no-scaffold);
     * the transcript yields no final assistant text, or that text names no
-      journaled run id (nothing attributable to audit);
-    * every audited claim is clean (or merely unverifiable).
+      journaled run id AND no undischarged relay-due marker exists (nothing
+      attributable to audit, nothing owed);
+    * every audited claim is clean (or merely unverifiable) and every
+      relay-due marker is discharged.
 
     Otherwise returns the Claude Code Stop hook-output shape with the
     itemized contradiction summary::
@@ -215,8 +312,7 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     """
     if not isinstance(payload, dict):
         return None
-    if payload.get("stop_hook_active"):
-        return None
+    forced = bool(payload.get("stop_hook_active"))
 
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
@@ -236,9 +332,26 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     if not relay_text:
         return None
 
+    # The relay-due discharge pass (the omission gate) runs on EVERY stop with
+    # final text — including a stop_hook_active forced continuation, so the
+    # corrected relay discharges its own marker at the stop that carries it —
+    # and is fail-open in full: any exception degrades to no omission findings.
+    omissions: list[str] = []
+    if notebooks_dir.is_dir():
+        try:
+            omissions = _relay_due_discharge_pass(cwd_dir, notebooks_dir, relay_text)
+        except Exception:
+            omissions = []
+
+    if forced:
+        # Block-once (the sibling Stop guards' seam, reused exactly): this stop
+        # is already a hook-forced continuation — never block again, even when
+        # a marker's tokens are still absent. Discharges above still landed.
+        return None
+
     run_ids = mentioned_run_ids(relay_text, runs_dir) if runs_dir.is_dir() else []
     audit_ids = mentioned_audit_ids(relay_text, notebooks_dir) if notebooks_dir.is_dir() else []
-    if not run_ids and not audit_ids:
+    if not run_ids and not audit_ids and not omissions:
         return None  # nothing attributable to audit — the run path stays untouched
 
     findings: list[str] = []
@@ -275,18 +388,25 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
                 nearest = f" (journal: {m.nearest_source_value})" if m.nearest_source_value else ""
                 findings.append(f"[{audit_id}] {m.claim!r}: {m.detail}{nearest}")
 
-    if not findings:
+    if not findings and not omissions:
         return None
 
-    reason = (
-        "hpc-agent relay audit (conduct rule 10): the final message contradicts "
-        f"the durable records — {len(findings)} mismatch(es): "
-        + "; ".join(findings)
-        + ". Correct the relay to match the journal (verify with "
-        "`hpc-agent verify-relay`) before ending the turn — never relay "
-        "numbers or state the journal does not support."
-    )
-    return {"decision": "block", "reason": reason}
+    segments: list[str] = []
+    if findings:
+        segments.append(
+            "hpc-agent relay audit (conduct rule 10): the final message contradicts "
+            f"the durable records — {len(findings)} mismatch(es): "
+            + "; ".join(findings)
+            + ". Correct the relay to match the journal (verify with "
+            "`hpc-agent verify-relay`) before ending the turn — never relay "
+            "numbers or state the journal does not support."
+        )
+    if omissions:
+        # The omission side of the same boundary: a computed terminal verdict
+        # the human never saw. Each finding is verbatim-ready — relaying the
+        # named state/sha12 tokens is exactly what discharges the marker.
+        segments.append("hpc-agent relay-due discharge (the omission gate): " + " ".join(omissions))
+    return {"decision": "block", "reason": " ".join(segments)}
 
 
 def main(argv: list[str] | None = None) -> int:
