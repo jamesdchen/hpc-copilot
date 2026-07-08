@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -52,6 +52,41 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state.decision_journal import append_decision as _append_decision
 from hpc_agent.state.decision_journal import decisions_path as _decisions_path
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
+
+# ── E2: the authorship-refusal marker (docs/design/mcp-elicitation.md D4/E2) ──
+
+# The machine-readable discriminator the MCP elicitation hook keys on to detect
+# an authorship/sign-off refusal WITHOUT parsing prose. It rides the additive,
+# contractually-open ``failure_features`` block: ``cli/_helpers.py::_err_from_hpc``
+# lifts ``getattr(exc, "failure_features", None)`` verbatim into the ok:false
+# envelope and the MCP ``structuredContent`` preserves it. Precedence is the seam
+# that makes this safe: a NON-None ``exc.failure_features`` WINS over the
+# synthesized ``_spec_invalid_failure_features`` default (that default fires only
+# when the attribute is ABSENT), so the marker is never clobbered — and, because
+# that default synthesizes a ``failure_features`` block for EVERY spec_invalid,
+# consumers must key on the distinct ``authorship_evidence`` KEY, never on the
+# block's mere presence. The gate stays 100% harness-agnostic: it names a refusal
+# CAUSE ("the human's authorship evidence is missing"), never a transport — the
+# retry-after-elicit seam lives in the MCP layer (D4), not here.
+_AUTHORSHIP_EVIDENCE_MISSING = {"authorship_evidence": "missing"}
+
+
+def _refuse_missing_authorship(message: str) -> NoReturn:
+    """Raise a ``spec_invalid`` refusal carrying the E2 authorship-missing marker.
+
+    Used ONLY for the authorship-BAR raise sites — the refusals a freshly typed
+    human sign-off / rationale would resolve (a bare ack, an un-named section
+    slug, an unengaged human-required section, a required-caller value with no
+    human-attributed utterance). Structural / setup refusals in the same gates (a
+    stale hash, an unresolvable source / template, a missing or stale render, a
+    moved view ingredient, a malformed ``resolved``, a block-convention
+    violation) are deliberately NOT marked: re-eliciting an utterance cannot fix
+    them, so an MCP retry-once keyed on the marker would be a guaranteed-failing
+    round-trip (D4's retry re-checks the gate against the now-present utterance).
+    """
+    exc = errors.SpecInvalid(message)
+    exc.failure_features = dict(_AUTHORSHIP_EVIDENCE_MISSING)  # type: ignore[attr-defined]
+    raise exc
 
 
 @primitive(
@@ -764,7 +799,7 @@ def _assert_human_authorship(
         )
 
     if problems:
-        raise errors.SpecInvalid("human-authorship gate (conduct rule 9): " + "; ".join(problems))
+        _refuse_missing_authorship("human-authorship gate (conduct rule 9): " + "; ".join(problems))
 
 
 # ── scope-unlock authorship gate ──────────────────────────────────────────────
@@ -841,7 +876,7 @@ def _assert_unlock_authorship(
 
     response = str(spec.response or "")
     if _is_bare_ack(response):
-        raise errors.SpecInvalid(
+        _refuse_missing_authorship(
             "scope-unlock authorship gate: unlocking a scope re-opens it for "
             f"another look and is a HUMAN act — a bare {spec.response!r} (a 'y' / "
             "click) cannot unlock it. The human must type the rationale for "
@@ -855,7 +890,7 @@ def _assert_unlock_authorship(
             human_words |= _ha_word_tokens(text)
         rationale_words = _ha_word_tokens(response)
         if rationale_words and not (rationale_words & human_words):
-            raise errors.SpecInvalid(
+            _refuse_missing_authorship(
                 "scope-unlock authorship gate: with the harness utterance log "
                 "installed, the unlock rationale must derive from a logged human "
                 "utterance (harness-captured), not the agent-relayed response "
@@ -1233,13 +1268,13 @@ def _assert_signoff_authorship(
     # Base authorship floor (applies to every tier).
     response = str(spec.response or "")
     if _is_bare_ack(response):
-        raise errors.SpecInvalid(
+        _refuse_missing_authorship(
             "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
             f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
             f"({section!r}) and state what you reviewed."
         )
     if not _names_slug(response, section):
-        raise errors.SpecInvalid(
+        _refuse_missing_authorship(
             "notebook sign-off gate: the sign-off response must NAME the section "
             f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
             "cannot attest a specific section. Restate, naming the section."
@@ -1347,7 +1382,7 @@ def _assert_signoff_authorship(
     specifics = raw_specifics - slug_tokens
     engaged = (_signoff_token_names(response) - slug_tokens) & specifics
     if specifics and not engaged:
-        raise errors.SpecInvalid(
+        _refuse_missing_authorship(
             f"notebook sign-off gate: section {section!r} is HUMAN-REQUIRED "
             "(nonempty diff-from-template / lint flags / ungreen assertions), so the "
             "sign-off must ENGAGE the change — name at least one identifier from the "

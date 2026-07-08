@@ -159,17 +159,20 @@ def test_doc_pins_capability_negotiation() -> None:
     )
 
 
-def test_doc_pins_mcp_elicitation_specified_not_implemented() -> None:
-    """MCP elicitation is a SECOND capability-1 channel, specified but not
-    implemented: the response filters through the same write API, the clicked-
-    option hazard applies (only free-text lands), the prompt MUST be code-rendered
-    (never LLM-authored), the honest flag records it, and it degrades to the hook
-    path. Client support is stated UNKNOWN, not asserted."""
+def test_doc_pins_mcp_elicitation_implemented() -> None:
+    """MCP elicitation is a SECOND capability-1 channel, IMPLEMENTED by reference
+    (2026-07-08): the doc cites the real pump/handler symbols, the clicked-option
+    hazard applies (only free-text lands), the prompt MUST be code-rendered
+    (never LLM-authored), the honest server flag records it, client support is
+    per-session negotiation, and absent capability degrades to the hook path."""
     text = _doc_text()
     lower = text.lower()
     assert "elicitation" in lower, "the elicitation channel must be named"
-    assert "specified, not implemented" in lower or "specified but not implemented" in lower, (
-        "elicitation must be recorded as specified-not-implemented"
+    assert "specified, not implemented" not in lower, (
+        "the specified-not-implemented posture retired when the pump landed"
+    )
+    assert "specified but not implemented" not in lower, (
+        "the specified-not-implemented posture retired when the pump landed"
     )
     assert "clicked-option hazard" in lower or "clicked option" in lower, (
         "the clicked-option hazard (only free-text qualifies) must be pinned"
@@ -177,7 +180,15 @@ def test_doc_pins_mcp_elicitation_specified_not_implemented() -> None:
     assert "code-rendered" in lower, (
         "the code-rendered (never LLM-authored) prompt provenance rule must be pinned"
     )
-    assert "ELICITATION_SUPPORTED" in text, "the honest server capability flag must be named"
+    assert "ELICITATION_SERVER_IMPLEMENTED" in text, (
+        "the honest server capability flag must be named"
+    )
+    assert "_request_from_client" in text, (
+        "the implemented-by-reference citation of the wait primitive must be present"
+    )
+    assert "_render_elicitation_prompt" in text, "the code-rendered prompt symbol must be cited"
+    assert "_elicit_then_retry" in text, "the retry-once firing symbol must be cited"
+    assert "per-session" in lower, "the per-session client-negotiation posture must be pinned"
     assert "degrades to the hook path" in lower, "the degrade-to-hook-path fallback must be pinned"
 
 
@@ -198,18 +209,28 @@ def test_doc_pins_capability_2_inspect_act_split() -> None:
     )
 
 
-def test_mcp_server_elicitation_flag_is_false() -> None:
-    """The elicitation channel is not implemented: the server capability flag the
-    harness-capabilities verb reads is False (hand-rolled synchronous JSON-RPC, no
-    server-initiated request path). Flipping it True must be a deliberate act that
-    also lands the bidirectional path — this pins the honest default."""
+def test_mcp_server_elicitation_flag_is_true_and_backed() -> None:
+    """The elicitation channel is implemented: the server capability flag the
+    harness-capabilities verb reads is True, and — the honesty condition for the
+    flip — the bidirectional machinery it asserts actually exists on the server
+    class (the wait primitive, the code-rendered prompt, the retry-once firing
+    site). The flag may never outrun the code."""
     from hpc_agent._kernel.extension import mcp_server
 
-    assert mcp_server.ELICITATION_SUPPORTED is False, (
-        "ELICITATION_SUPPORTED must be False until the bidirectional server-request "
-        "path AND the code-rendered elicitation prompt both land"
+    assert mcp_server.ELICITATION_SERVER_IMPLEMENTED is True, (
+        "ELICITATION_SERVER_IMPLEMENTED flipped True with the bidirectional pump; "
+        "it must stay honest — False again only if the pump is removed"
     )
-    assert "ELICITATION_SUPPORTED" in mcp_server.__all__
+    assert "ELICITATION_SERVER_IMPLEMENTED" in mcp_server.__all__
+    assert hasattr(mcp_server.McpServer, "_request_from_client"), (
+        "the flag asserts a wait primitive that must exist"
+    )
+    assert hasattr(mcp_server.McpServer, "_elicit_then_retry"), (
+        "the flag asserts a firing site that must exist"
+    )
+    assert callable(mcp_server._render_elicitation_prompt), (
+        "the flag asserts a code-rendered prompt builder that must exist"
+    )
 
 
 def test_no_utterance_writing_verb_in_registry() -> None:

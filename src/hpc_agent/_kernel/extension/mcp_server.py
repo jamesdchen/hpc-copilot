@@ -72,9 +72,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -98,30 +100,32 @@ _PROTOCOL_VERSION = "2025-06-18"
 # The 2025-06-18 MCP revision adds server-initiated ELICITATION: the server sends
 # an ``elicitation/create`` REQUEST to the client, the client renders a form, the
 # human types a response, and the client returns it. For the harness contract this
-# would be a SECOND conforming utterance channel — the typed response travels
-# client->server with the model never touching it (out-of-band satisfied), and a
-# server-side handler could filter it (free-text only, per the clicked-option
-# hazard) and ``append_utterance`` it.
+# is a SECOND conforming utterance channel — the typed response travels
+# client->server with the model never touching it (out-of-band satisfied), the
+# server-side handler filters it (free-text only, per the clicked-option hazard)
+# and ``append_utterance``s it.
 #
-# It is NOT implemented, and the flag records that HONESTLY. Two structural
-# reasons, both load-bearing:
+# The bidirectional pump this needs is now BUILT (``docs/design/mcp-elicitation.md``
+# D1): a server-originated request id namespace (:meth:`McpServer._next_outbound_id`
+# — the collision-proof ``hpc-srv-<n>`` space), a single daemon stdin-reader thread
+# feeding a :class:`queue.Queue` so a ``get(timeout=…)`` deadline can actually fire
+# on Windows (the ``select()``-on-console-stdin gap that made the earlier "no
+# threads" plan unimplementable), and :meth:`McpServer._request_from_client` — the
+# blocking-with-timeout wait a tool handler uses, servicing interleaved client
+# requests inline (elicitation suppressed for nested dispatch) so a waiting
+# elicitation never head-of-line-blocks the session (conduct rule 11).
 #
-#   1. This server is a hand-rolled JSON-RPC loop (:meth:`McpServer.serve`), NOT
-#      an SDK. There is no MCP SDK dependency in ``pyproject.toml``. ``serve`` is a
-#      strict client-request -> server-response pump: it has no outbound-request
-#      path, no id-correlation for a server-initiated request, and no way to block
-#      a tool call awaiting a client reply. Elicitation needs full bidirectional
-#      JSON-RPC — a substantial protocol change, not a small addition.
-#   2. Adding the MCP SDK (or building the bidirectional layer) is out of scope
-#      for this wave: no new dependency may be introduced here.
-#
-# So the elicitation channel DEGRADES to the hook path (capability 1's
-# ``UserPromptSubmit`` utterance-capture) exactly as the contract specifies for an
-# absent capability. ``harness-capabilities`` reads this flag; the harness-contract
-# doc's "MCP elicitation" section carries the specified-not-implemented binding.
-# Flip to ``True`` only when the bidirectional server-request path AND the
-# code-rendered (never LLM-authored) elicitation prompt both land.
-ELICITATION_SUPPORTED: bool = False
+# What THIS flag reports is the honest thing a *separate-process probe* can verify:
+# the SERVER code path exists. It says nothing about the client — client support is
+# negotiated per session at ``initialize`` (:attr:`McpServer._client_elicitation`,
+# from ``params["capabilities"]["elicitation"]``) and is "unknown from this probe"
+# to ``harness-capabilities`` by design (D2). When a session's client does NOT
+# declare elicitation, the channel DEGRADES to the hook path (capability 1's
+# ``UserPromptSubmit`` utterance-capture), silently and honestly, exactly as the
+# contract specifies for an absent capability. The elicitation HANDLER + firing
+# site (the ``append-decision`` retry-once wrap) land in E4; this flag being True
+# means the pump underneath them is real.
+ELICITATION_SERVER_IMPLEMENTED: bool = True
 
 # The read/act boundary, mirrored from the @primitive ``verb`` taxonomy
 # (docs/architecture.md → "The decide / act boundary"). Only these are exposed
@@ -224,6 +228,171 @@ _PROMPT_NAMES = tuple(WORKFLOW_ENTRIES_BY_PROMPT)
 # A runner takes an hpc-agent argv (without the leading binary) and returns
 # ``(exit_code, stdout, stderr)``. Injected for testability.
 CliRunner = Callable[["list[str]"], "tuple[int, str, str]"]
+
+
+# ─── the bidirectional pump's queue sentinels (D1 item 6) ────────────────────
+#
+# The SOLE stdin reader is a daemon thread (:meth:`McpServer._reader_loop`) that
+# only parses lines and enqueues them onto a :class:`queue.Queue`; it never
+# dispatches. ``serve`` and :meth:`McpServer._request_from_client` both consume
+# that queue, and ``Queue.get(timeout=…)`` is what makes the elicitation deadline
+# real on Windows (a blocking ``readline`` has no deadline, and ``select()`` does
+# not work on console/pipe stdin there). Two non-message signals ride the queue as
+# module-singleton sentinels so a consumer can distinguish them from any dict:
+_EOF = object()  # stdin closed — decline-equivalent during a wait, then shutdown
+_PARSE_ERROR = object()  # a non-JSON line — the consumer emits a -32700 response
+
+# Elicitation timeout (D3): a human may walk away mid-elicitation and the tool
+# call must not wedge. 300 s is generous for an at-the-keyboard typed sentence
+# while staying far under the runner ceiling (``_SUBPROCESS_RUNNER_TIMEOUT_SEC``).
+_ELICITATION_TIMEOUT_SEC: float = 300.0
+
+# ─── the elicitation firing site (E4, docs/design/mcp-elicitation.md D4/D5) ──
+#
+# The ONE v1 firing site is the sign-off path over MCP: ``append-decision`` is
+# the only tool whose ok:false refusal can open an ``elicitation/create`` (D6 —
+# no second firing site; ``scope-unlock`` and the plain greenlight stay
+# hook-tier). The trigger is E2's machine-readable marker, the distinct
+# ``authorship_evidence`` KEY inside the envelope's ``failure_features`` block —
+# never the block's mere presence (``_spec_invalid_failure_features`` synthesizes
+# a default block for EVERY spec_invalid) and never prose.
+_ELICITATION_FIRING_TOOL = "append-decision"
+_AUTHORSHIP_EVIDENCE_KEY = "authorship_evidence"
+
+# The spec-conformant ``requestedSchema`` (D3): STRING fields ONLY — no ``enum``,
+# no option list — so the clicked-option hazard (``answer_capture._is_clicked``)
+# is closed BY CONSTRUCTION on the send side; there is nothing to click, only
+# free text to type. Defense-in-depth on the receive side filters each returned
+# string through ``state.utterances.is_harness_injected`` + non-empty anyway.
+_ELICITATION_REQUESTED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "utterance": {
+            "type": "string",
+            "description": "Type the sign-off in your own words.",
+        }
+    },
+    "required": ["utterance"],
+}
+
+
+def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
+    """Build the elicitation prompt from CODE-SELECTED identifiers ONLY (D5).
+
+    A PURE function: the prompt is assembled from fixed instructional text plus
+    the journal-derived identifiers the gate itself token-matches — the block
+    name, the scope kind/id, and (for a notebook sign-off) the section slug. It
+    NEVER embeds any model-authored free text from the tool arguments: not the
+    ``proposal``, not the ``response``, not the ``evidence_digest``. If the model
+    could author the prompt it would bait the human's reply into the trust
+    anchor — the laundering channel the authorship gate exists to close.
+
+    The refusal envelope's own ``message`` is deliberately NOT interpolated
+    either: some authorship-gate messages quote the model's ``response`` (the
+    bare-ack refusal names it), so echoing the message would reopen the same
+    laundering channel. The identifiers below are the only variable content.
+    """
+    spec = arguments.get("spec")
+    spec = spec if isinstance(spec, dict) else {}
+    block = str(spec.get("block") or "").strip()
+    scope_kind = str(spec.get("scope_kind") or "").strip()
+    scope_id = str(spec.get("scope_id") or "").strip()
+    resolved = spec.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    section = ""
+    if scope_kind == "notebook":
+        raw_section = resolved.get("section")
+        section = str(raw_section).strip() if isinstance(raw_section, str) else ""
+
+    lines = ["Your sign-off must be typed by you, in your own words."]
+    if scope_kind and scope_id:
+        lines.append(f"Decision scope: {scope_kind} {scope_id}.")
+    if block:
+        lines.append(f"Block awaiting sign-off: {block}.")
+    if section:
+        lines.append(f"Notebook section to name in your sign-off: {section}.")
+    lines.append(
+        "Type what you reviewed and your decision, in your own words. A bare "
+        "'y' or a clicked option cannot stand in for it."
+    )
+    return "\n".join(lines)
+
+
+def _accepted_utterance(response: dict[str, Any] | None) -> str | None:
+    """The filtered, human-typed text from an elicitation response, or ``None``.
+
+    ``None`` is the decline-equivalent for EVERY non-capture outcome (D3): a
+    ``None`` response (no transport / timeout / EOF), an error response, a
+    decline/cancel action, a malformed shape, or a body whose every string field
+    is empty or harness-injected. Each returned string field is filtered through
+    the ONE reference provenance filter
+    (:func:`hpc_agent.state.utterances.is_harness_injected`) and a non-empty
+    check — mirroring ``answer_capture._typed_texts`` — so a nonconforming client
+    that returns canned/injected text still degrades to decline.
+    """
+    if not isinstance(response, dict):
+        return None
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None  # an ``error`` response, or a malformed one
+    if result.get("action") != "accept":
+        return None  # decline / cancel
+    content = result.get("content")
+    if not isinstance(content, dict):
+        return None
+    from hpc_agent.state.utterances import is_harness_injected
+
+    texts: list[str] = []
+    for value in content.values():
+        if not isinstance(value, str):
+            continue
+        if not value.strip():
+            continue
+        if is_harness_injected(value):
+            continue
+        texts.append(value.strip())
+    if not texts:
+        return None
+    return "\n".join(texts)
+
+
+def _with_capture_markers(result: dict[str, Any], sha256: str) -> dict[str, Any]:
+    """Return *result* with the elicitation capture markers merged in (D5).
+
+    The retried tool result — whatever verdict the gate returned — gains
+    ``{elicitation: "captured", sha256: <digest>}``: the FINGERPRINT of the
+    recorded utterance, never the human's words. The model learns the gate's
+    verdict from the retried envelope and the sha, so the response text never
+    passes through the model. A result with no ``structuredContent`` (a shape
+    the runner never produces here) is returned untouched.
+    """
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        return result
+    merged = dict(structured)
+    merged["elicitation"] = "captured"
+    merged["sha256"] = sha256
+    return {
+        "content": [{"type": "text", "text": json.dumps(merged, sort_keys=True)}],
+        "structuredContent": merged,
+        "isError": result.get("isError", merged.get("ok") is not True),
+    }
+
+
+def _is_response(item: Any) -> bool:
+    """True when *item* is a JSON-RPC RESPONSE to a server-originated request.
+
+    A response carries an ``id`` and a ``result`` or ``error``, and — unlike a
+    request/notification — no ``method`` (D1 item 3). Anything else the classifier
+    routes elsewhere (a ``method`` dict to :meth:`McpServer.handle`, a malformed
+    dict to a -32600).
+    """
+    return (
+        isinstance(item, dict)
+        and "method" not in item
+        and "id" in item
+        and ("result" in item or "error" in item)
+    )
 
 
 # Server-level cap on one isolated-runner tool call. Generous: the blocking
@@ -660,6 +829,33 @@ class McpServer:
         # isolation fallback + the parity oracle the in-process runner is checked
         # against (tests/test_mcp_curated.py).
         self._runner = runner or _in_process_cli_runner
+        # ── bidirectional pump state (D1) ──────────────────────────────────
+        # The outbound write stream + the reader thread's message queue are
+        # threaded on by ``serve`` before its loop and are ``None`` otherwise —
+        # so any embedding that never calls ``serve`` (every direct-``handle``
+        # unit test) has NO transport, and elicitation is structurally
+        # unavailable there (:meth:`_request_from_client` returns the
+        # decline-equivalent ``None`` immediately). D1 item 5.
+        self._transport: IO[str] | None = None
+        self._msg_queue: queue.Queue[Any] | None = None
+        # Monotonic counter behind the ``hpc-srv-<n>`` outbound id namespace
+        # (D1 item 1) — a distinct string space that can never collide with a
+        # client-chosen id.
+        self._outbound_counter: int = 0
+        # The pending-response slot (D1 item 2): the id of the ONE
+        # server-originated request currently in flight, or ``None``. Size ≤ 1
+        # (D3) — an invariant asserted in :meth:`_request_from_client`, never a
+        # queue, because dispatch is single-threaded (the reader thread only
+        # enqueues).
+        self._pending_id: str | None = None
+        # True while a client request is being dispatched INSIDE an elicitation
+        # wait: a nested tool call that would itself elicit takes the degrade
+        # path instead (D3 re-entrancy). E4 reads this at the firing site.
+        self._elicitation_suppressed: bool = False
+        # Per-session client capability, negotiated at ``initialize`` (D2) — set
+        # from ``params["capabilities"]["elicitation"]``; elicitation fires only
+        # when this is true (the gate check lands in E4).
+        self._client_elicitation: bool = False
 
     # -- projection ---------------------------------------------------------
 
@@ -792,6 +988,27 @@ class McpServer:
         shape = meta.cli
         assert isinstance(shape, CliShape)
 
+        result = self._invoke_cli(name, shape, arguments)
+        # E4 firing site (D4): the ``append-decision`` sign-off retry-once wrap.
+        # Fires ONLY on an authorship-evidence refusal, with a client that
+        # negotiated elicitation, a live transport, and no elicitation already in
+        # flight (nested/suppressed dispatch never reaches here). Every other tool
+        # and every other refusal returns unchanged.
+        if self._elicitation_applies(name, result):
+            return self._elicit_then_retry(name, shape, arguments, result)
+        return result
+
+    def _invoke_cli(
+        self, name: str, shape: CliShape, arguments: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Drive one CLI invocation for *name* and map it to an MCP tool result.
+
+        The transport-free core of :meth:`call_tool`: writes the spec temp file,
+        renders the argv, runs the injected runner (with per-call telemetry), and
+        maps ``(exit_code, stdout, stderr)`` through :func:`_tool_result`. The E4
+        retry re-runs THIS (never :meth:`call_tool`), so a retry can never itself
+        re-enter the elicitation firing site — the retry-once bound is structural.
+        """
         spec_path: str | None = None
         spec = arguments.get("spec")
         try:
@@ -813,6 +1030,83 @@ class McpServer:
                 with contextlib.suppress(OSError):
                     os.unlink(spec_path)
         return _tool_result(exit_code, stdout, stderr)
+
+    # -- elicitation firing site (E4) ---------------------------------------
+
+    def _elicitation_applies(self, name: str, result: Mapping[str, Any]) -> bool:
+        """Whether *result* is an authorship refusal this session may re-elicit.
+
+        Every leg is required (D4 step 2): the tool is ``append-decision`` (D6 —
+        the sole firing site), the client negotiated elicitation at initialize
+        (:attr:`_client_elicitation`, D2), a live transport exists, no elicitation
+        is already in flight and none is suppressed (nested dispatch takes the
+        degrade path), and the envelope is ``ok:false`` carrying E2's distinct
+        ``authorship_evidence`` KEY in ``failure_features`` — never the block's
+        mere presence (the synthesized spec_invalid default), never prose.
+        """
+        if name != _ELICITATION_FIRING_TOOL:
+            return False
+        if not self._client_elicitation:
+            return False
+        if self._transport is None or self._msg_queue is None:
+            return False
+        if self._elicitation_suppressed or self._pending_id is not None:
+            return False
+        structured = result.get("structuredContent")
+        if not isinstance(structured, dict) or structured.get("ok") is not False:
+            return False
+        features = structured.get("failure_features")
+        return isinstance(features, dict) and _AUTHORSHIP_EVIDENCE_KEY in features
+
+    def _elicit_then_retry(
+        self,
+        name: str,
+        shape: CliShape,
+        arguments: Mapping[str, Any],
+        refusal: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Elicit a typed sign-off, append it, and re-run the invocation once (D4).
+
+        Sends ``elicitation/create`` with the code-rendered prompt (D5) and the
+        free-text-only schema (D3), filters the response
+        (:func:`_accepted_utterance`), and on captured text calls
+        :func:`state.utterances.append_utterance` — the server process is
+        harness-side code, the contract's specified handler. Then re-runs the
+        IDENTICAL CLI invocation EXACTLY once; the gate re-checks against the
+        now-present utterance and a second refusal stands (never a loop). Any
+        non-capture outcome (decline/cancel/timeout/EOF/injected/empty, or a
+        no-op append) returns the ORIGINAL *refusal* unchanged — no utterance
+        appended, never a JSON-RPC error.
+        """
+        response = self._request_from_client(
+            "elicitation/create",
+            {
+                "message": _render_elicitation_prompt(arguments),
+                "requestedSchema": _ELICITATION_REQUESTED_SCHEMA,
+            },
+            _ELICITATION_TIMEOUT_SEC,
+        )
+        text = _accepted_utterance(response)
+        if text is None:
+            return refusal  # decline / cancel / timeout / EOF / injected / empty
+
+        from pathlib import Path
+
+        from hpc_agent.state.utterances import append_utterance
+
+        exp = arguments.get("experiment_dir")
+        experiment_dir = Path(exp) if isinstance(exp, str) and exp else Path.cwd()
+        record = append_utterance(experiment_dir, text)
+        if record is None:
+            # Fail-open (no namespace / unwritable log): nothing was recorded, so
+            # a retry would re-refuse identically — return the original refusal.
+            return refusal
+
+        retried = self._invoke_cli(name, shape, arguments)
+        # On capture the RESULT carries the fingerprint, NEVER the text (D5): the
+        # model learns the gate's verdict from the retried envelope, and the
+        # sha256 of the recorded utterance — not the human's words.
+        return _with_capture_markers(retried, record["sha256"])
 
     # -- resources ----------------------------------------------------------
 
@@ -880,6 +1174,14 @@ class McpServer:
 
     def _initialize(self, params: Mapping[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
+        # Per-session elicitation negotiation (D2): the 2025-06-18 revision
+        # declares client elicitation support as a ``capabilities.elicitation``
+        # object (``{}`` when supported). Presence of the KEY is the signal —
+        # not truthiness, since the declared value is an empty object. Absent →
+        # the channel degrades to the hook path, silently and honestly. These
+        # params were previously discarded; this is a store, not new plumbing.
+        client_caps = params.get("capabilities")
+        self._client_elicitation = isinstance(client_caps, dict) and "elicitation" in client_caps
         if self._catalog == "tiered":
             catalog_note = (
                 "Tiered catalog: use the `find` and `describe` tools to discover "
@@ -981,20 +1283,176 @@ class McpServer:
             return self._error(req_id, -32603, f"internal error: {exc}")
         return None if is_notification else {"jsonrpc": "2.0", "id": req_id, "result": result}
 
+    def _reader_loop(self, stdin: IO[str], q: queue.Queue[Any]) -> None:
+        """The SOLE stdin reader (D1 item 6): parse lines, enqueue, never dispatch.
+
+        Runs on one daemon thread. It reads newline-delimited lines, parses each
+        as JSON, and pushes the result onto *q* — a parsed message dict, or
+        :data:`_PARSE_ERROR` for a non-JSON line. On stdin close it pushes
+        :data:`_EOF` exactly once (the ``finally`` guarantees it even if the
+        iterator raises). It touches NO handler and NO registry, so dispatch
+        stays single-threaded and the state-leak / re-entrancy analyses hold.
+        """
+        try:
+            for raw in stdin:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    q.put(json.loads(line))
+                except json.JSONDecodeError:
+                    q.put(_PARSE_ERROR)
+        finally:
+            q.put(_EOF)
+
     def serve(self, stdin: IO[str], stdout: IO[str]) -> None:
-        """Run the newline-delimited JSON-RPC loop until stdin closes."""
-        for raw in stdin:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                self._write(stdout, self._error(None, -32700, "parse error"))
-                continue
-            response = self.handle(request)
+        """Run the JSON-RPC loop as a consumer of the reader thread's queue.
+
+        The blocking ``readline`` loop is gone: one daemon thread
+        (:meth:`_reader_loop`) is the sole stdin reader, and this loop consumes
+        the queue it feeds. That indirection is what lets an in-flight
+        elicitation impose a real deadline (:meth:`_request_from_client` calls
+        ``Queue.get(timeout=…)`` on the SAME queue). The transport (``stdout``)
+        and the queue are threaded onto the instance for the wait primitive's
+        duration, and cleared on exit so a later direct-``handle`` embedding sees
+        no stale transport (D1 item 5).
+        """
+        q: queue.Queue[Any] = queue.Queue()
+        self._transport = stdout
+        self._msg_queue = q
+        reader = threading.Thread(
+            target=self._reader_loop, args=(stdin, q), name="mcp-stdin-reader", daemon=True
+        )
+        reader.start()
+        try:
+            while True:
+                item = q.get()
+                if item is _EOF:
+                    break
+                self._consume_message(item, stdout)
+        finally:
+            self._transport = None
+            self._msg_queue = None
+
+    def _consume_message(self, item: Any, stdout: IO[str]) -> None:
+        """Classify one dequeued message and act (top-level, no elicitation in flight).
+
+        Message-kind dispatch (D1 item 3): a :data:`_PARSE_ERROR` sentinel emits
+        a parse-error response; a dict with ``"method"`` is a request/
+        notification handled by :meth:`handle`; a dict that is a RESPONSE
+        (``"id"`` + ``"result"``/``"error"``, no ``"method"``) can only be a late
+        or unknown server-request response at the top level (no wait is in
+        flight here — the wait primitive drains the queue itself while blocked),
+        so it is dropped silently with a ``[mcp]`` telemetry line.
+        """
+        if item is _PARSE_ERROR:
+            self._write(stdout, self._error(None, -32700, "parse error"))
+            return
+        if isinstance(item, dict) and "method" in item:
+            response = self.handle(item)
             if response is not None:
                 self._write(stdout, response)
+            return
+        if _is_response(item):
+            sys.stderr.write(f"[mcp] dropped unexpected response id={item.get('id')!r}\n")
+            return
+        # Neither a request/notification nor a recognizable response.
+        self._write(stdout, self._error(None, -32600, "invalid request"))
+
+    def _next_outbound_id(self) -> str:
+        """The next collision-proof server-originated request id (D1 item 1)."""
+        self._outbound_counter += 1
+        return f"hpc-srv-{self._outbound_counter}"
+
+    def _request_from_client(
+        self, method: str, params: Mapping[str, Any], timeout_s: float = _ELICITATION_TIMEOUT_SEC
+    ) -> dict[str, Any] | None:
+        """Send a server-originated request and block for its response (D1 item 4).
+
+        Writes the outbound request under a fresh ``hpc-srv-<n>`` id, then
+        consumes the reader thread's queue with a real ``Queue.get(timeout=…)``
+        deadline until the matching response arrives. Returns the raw JSON-RPC
+        response dict on a match, or ``None`` for every decline-equivalent
+        outcome (no transport, timeout, or EOF) — the caller (E4) maps ``None``
+        to the gate's ordinary refusal.
+
+        While blocked it services interleaved client REQUESTS inline, with
+        elicitation SUPPRESSED for that nested dispatch (D3) — so a waiting
+        elicitation never head-of-line-blocks the session, and a nested tool
+        call that would itself elicit takes the degrade path. A response for any
+        other id (a late one for a timed-out request) is dropped silently.
+        """
+        # Absent transport ⇒ elicitation is structurally unavailable (D1 item 5):
+        # every direct-``handle`` test and any non-``serve`` embedding lands here.
+        transport = self._transport
+        q = self._msg_queue
+        if transport is None or q is None:
+            return None
+        # Depth cap (D3): at most one elicitation in flight. An invariant, not a
+        # queue — dispatch is single-threaded, so a second concurrent request
+        # cannot arise; this asserts that structural fact.
+        assert self._pending_id is None, "elicitation depth cap violated (one in flight)"
+
+        out_id = self._next_outbound_id()
+        self._pending_id = out_id
+        deadline = time.monotonic() + timeout_s
+        try:
+            self._write(
+                transport,
+                {"jsonrpc": "2.0", "id": out_id, "method": method, "params": dict(params)},
+            )
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    sys.stderr.write(
+                        f"[mcp] elicitation {out_id} timed out after {timeout_s:.0f}s — decline\n"
+                    )
+                    return None
+                try:
+                    item = q.get(timeout=remaining)
+                except queue.Empty:
+                    sys.stderr.write(
+                        f"[mcp] elicitation {out_id} timed out after {timeout_s:.0f}s — decline\n"
+                    )
+                    return None
+                if item is _EOF:
+                    # stdin closed mid-wait: decline-equivalent, then let the
+                    # serve loop shut down by re-enqueuing the sentinel.
+                    q.put(_EOF)
+                    sys.stderr.write(
+                        f"[mcp] EOF during elicitation {out_id} — decline + shutdown\n"
+                    )
+                    return None
+                if item is _PARSE_ERROR:
+                    self._write(transport, self._error(None, -32700, "parse error"))
+                    continue
+                if isinstance(item, dict) and "method" in item:
+                    self._dispatch_interleaved(item, transport)
+                    continue
+                if _is_response(item):
+                    if item.get("id") == out_id:
+                        return dict(item)
+                    sys.stderr.write(f"[mcp] dropped unexpected response id={item.get('id')!r}\n")
+                    continue
+                self._write(transport, self._error(None, -32600, "invalid request"))
+        finally:
+            self._pending_id = None
+
+    def _dispatch_interleaved(self, item: dict[str, Any], transport: IO[str]) -> None:
+        """Dispatch a client request that arrived DURING an elicitation wait (D3).
+
+        Elicitation is suppressed for the nested handle so a re-entrant tool call
+        that would elicit takes the degrade path instead of trying to open a
+        second server-originated request under the (capped) pending slot.
+        """
+        prev = self._elicitation_suppressed
+        self._elicitation_suppressed = True
+        try:
+            response = self.handle(item)
+        finally:
+            self._elicitation_suppressed = prev
+        if response is not None:
+            self._write(transport, response)
 
     @staticmethod
     def _write(stdout: IO[str], message: dict[str, Any]) -> None:
@@ -1022,7 +1480,7 @@ def build_server(
 
 
 __all__ = [
-    "ELICITATION_SUPPORTED",
+    "ELICITATION_SERVER_IMPLEMENTED",
     "CliRunner",
     "McpServer",
     "allowed_primitives",

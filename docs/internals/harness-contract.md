@@ -294,7 +294,8 @@ named seam:
   (`_UTTERANCE_CAPTURE_NEEDLE`, `_ANSWER_CAPTURE_NEEDLE`) through the ONE canonical
   entry-matcher `agent_assets._find_hook_entry_index` — never a re-derived scan —
   plus the repo's utterance-log presence (`state/utterances.py::utterances_path`,
-  non-creating) and the MCP elicitation flag (below).
+  non-creating) and the MCP elicitation server flag (below; the client-side bit
+  is negotiated per session at `initialize`, never probe-asserted).
 - **Capability 2 (relay enforcement)** — detected from the relay-audit Stop hook's
   needle (`_RELAY_AUDIT_NEEDLE`).
 - **Capability 3 (backgrounding)** — always present (the detached-worker machinery
@@ -316,7 +317,7 @@ the three stay aligned: **declared == detected == behaved** — the reported
 capability set matches what the seams observe, and what the seams observe matches
 how the gates actually behave. A drift between any two is the bug the kit catches.
 
-## MCP elicitation as a second capability-1 channel (specified, not implemented)
+## MCP elicitation as a second capability-1 channel (implemented 2026-07-08)
 
 The 2025-06-18 MCP revision adds server-initiated **elicitation**: the server sends
 an `elicitation/create` request, the client renders a form, the human types a
@@ -343,24 +344,43 @@ it, byte-for-byte with §2):
   exists to close. A conforming elicitation prompt is built by code, from the
   journal, like every other trusted projection.
 
-**Why it is not implemented here.** The `hpc-agent` MCP server
-(`_kernel/extension/mcp_server.py`) is a hand-rolled JSON-RPC loop, NOT an SDK —
-there is no MCP SDK dependency. Its `serve` loop is a strict client-request ->
-server-response pump: no outbound-request path, no id-correlation for a server-
-initiated request, no way for a tool call to block awaiting a client reply.
-Elicitation needs full bidirectional JSON-RPC, a substantial protocol change, and
-adding a dependency for it is out of scope. The capability is therefore recorded by
-a single honest flag — `mcp_server.ELICITATION_SUPPORTED = False` — read by
-`harness-capabilities`.
+**How it is implemented here** (`docs/design/mcp-elicitation.md` is the plan of
+record; the pump stays hand-rolled — no MCP SDK dependency). The
+`_kernel/extension/mcp_server.py` pump is bidirectional: one daemon stdin-reader
+thread feeds a message queue (the portable Windows-safe deadline shape), and
+`McpServer._request_from_client` is the blocking-with-timeout wait a tool handler
+uses — servicing interleaved client requests inline so a waiting elicitation
+never head-of-line-blocks the session. The one firing site wraps
+`append-decision`: on an authorship refusal carrying the machine-readable
+`failure_features.authorship_evidence` marker
+(`ops/decision/journal.py::_refuse_missing_authorship`), the server sends
+`elicitation/create` with a CODE-RENDERED prompt
+(`mcp_server._render_elicitation_prompt` — built from code-selected identifiers
+only, never the model's free text and never the refusal message), filters the
+response (`mcp_server._accepted_utterance`: free-text-only,
+`is_harness_injected` refused), `append_utterance`s harness-side, and re-runs
+the identical invocation exactly once (`McpServer._elicit_then_retry`). The
+model receives `{elicitation: "captured", sha256}` — the fingerprint, never the
+text. The send-side `requestedSchema` is string-fields-only by construction, so
+the clicked-option hazard is closed before the receive-side filter ever runs.
+The server capability is recorded by the honest flag
+`mcp_server.ELICITATION_SERVER_IMPLEMENTED = True` — what a separate-process
+probe can verify — read by `harness-capabilities` as `elicitation_server`.
 
-**Client support reality-check.** Which MCP clients support elicitation today is
-UNKNOWN from this codebase — Claude Code's support status is not asserted here (say
-unknown, not yes). Because both the server and the client sides are unconfirmed,
-the elicitation channel **degrades to the hook path**: capability 1's
-`UserPromptSubmit` utterance-capture remains the working channel, and the gate
-behaves identically whether or not elicitation ever lands. No sign-off VERB is
-introduced (lock 1): appending an utterance stays the harness's exclusive out-of-
-band act, whichever channel captured it.
+**Client support reality-check — per-session negotiation.** Client support is
+never assumed: it is DETECTED at `initialize` from the client's declared
+`capabilities.elicitation` (stored per-session as
+`McpServer._client_elicitation`). `harness-capabilities` reports
+`elicitation_client: "per-session"` — unknown from a separate-process probe, by
+design (say unknown, not yes). When a session's client does not declare the
+capability, the elicitation channel **degrades to the hook path** silently and
+honestly: capability 1's `UserPromptSubmit` utterance-capture remains the
+working channel, and the gate behaves identically. Decline, cancel, timeout
+(300 s), and malformed responses all take the same degrade path — the original
+refusal envelope returns unchanged. No sign-off VERB is introduced (lock 1):
+appending an utterance stays the harness's exclusive out-of-band act, whichever
+channel captured it; the authorship BAR is unchanged — elicitation is a
+channel, never a waiver.
 
 ## Capability 2, split: INSPECT vs ACT
 

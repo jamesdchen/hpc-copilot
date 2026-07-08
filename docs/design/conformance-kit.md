@@ -455,6 +455,25 @@ Wave B (after A, parallel):
 - **K7** — `conformance/test_attestation_export.py` (stock in-toto
   round-trip, `importorskip`-guarded; needs K3).
 
+**E7 reservation note (2026-07-08, mcp-elicitation Phase 1 landed):** the
+per-session elicitation capability K6's `test_negotiation.py` asserts
+against is now REAL — `McpServer._initialize` stores
+`self._client_elicitation` from the client's declared
+`capabilities.elicitation` at `initialize`
+(`docs/design/mcp-elicitation.md` D2), and the server-side bit is
+`mcp_server.ELICITATION_SERVER_IMPLEMENTED` (now `True`). The
+elicitation-channel assertion shape is declared == detected == behaved:
+*declared* = the fake client's `initialize` capabilities, *detected* = the
+per-session store, *behaved* = elicitation fires only when the bit is true
+(degrade-to-hook otherwise, silently). The detection leg is the
+fake-client `initialize` seam — NOT the CLI `harness-capabilities` probe,
+which is a separate process that honestly reports client support as
+`"per-session"`/unknown (D2's honesty posture) and can never witness a
+live negotiation. The duplex rig the kit's reference adapter consumes
+already exists: `tests/_mcp_harness.py` (`FakeMcpClient`, built by
+elicitation E1 — the cross-slate reuse-ledger item; one rig, two plans).
+No kit code here; the kit remains its own plan.
+
 Wave C (sequential — hot/shared files):
 
 - **K8** — reference adapters `conformance/adapters/claude_code.py` +

@@ -2,8 +2,8 @@
 
 Covers the detection paths (settings.json with / without each hook entry; the
 utterance-log namespace present / absent), fail-open on an unreadable settings
-file, the ``"unknown"`` trusted-display non-answer, the elicitation flag wiring,
-and the empty-spec / bogus-key wire contract.
+file, the ``"unknown"`` trusted-display non-answer, the elicitation server/client
+evidence split, and the empty-spec / bogus-key wire contract.
 """
 
 from __future__ import annotations
@@ -136,15 +136,16 @@ def test_utterance_log_namespace_present(
 
 
 def test_elicitation_flag_reported(claude_dir: Path, tmp_path: Path) -> None:
-    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SUPPORTED
+    # The server bit is identity with the imported flag (which flips as the pump
+    # lands — assert identity, never a literal). The client bit is "per-session":
+    # a separate-process probe cannot witness a live session's negotiation.
+    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SERVER_IMPLEMENTED
 
     _write_settings(claude_dir, {})
     result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
-    assert (
-        result.capabilities["utterance_log"].evidence["elicitation_channel"]
-        is ELICITATION_SUPPORTED
-    )
-    assert ELICITATION_SUPPORTED is False
+    evidence = result.capabilities["utterance_log"].evidence
+    assert evidence["elicitation_server"] is ELICITATION_SERVER_IMPLEMENTED
+    assert evidence["elicitation_client"] == "per-session"
 
 
 def test_tier_consequences_present_for_every_capability(claude_dir: Path, tmp_path: Path) -> None:
