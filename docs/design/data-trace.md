@@ -438,3 +438,31 @@ runs (task-0 — confirm no collision with audit-prelude executions).
 renders all four views → a planted divergence localizes via trace-diff →
 the journaled trace_sha matches a recompute → a rootless/knob-less run
 digests exactly per its sidecar context. One end-to-end contract test.
+
+## Amendment 9 (2026-07-08, user-directed): the authoring-loop integration
+
+**The drafting AGENT is the trace's first Class-A consumer.** The audit
+prelude's inner step becomes draft → EXECUTE → read your own receipts →
+fix yourself → then face the audit: the agent runs its draft locally
+(Class A, fresh transport), reads the code-rendered trace (rows/flags/
+labels/sketch), and corrects against FACTS instead of beliefs — the
+pointing doctrine turned inward; bad drafts die at the agent's desk before
+the human's sign-off. Mechanics: audit-context emissions carry `section`
+(the Q3 mapping) via the emitter API; audit-scope traces land under
+`traces/audit/<audit_id>/`.
+
+**At sign-off, the view shows the diff AND the receipts** (the already-
+deferred canon-change section join): each human_required section renders
+its latest execution summary (rows/drops/labels/flags + the trace sha,
+cited in the trusted render). The human signs "does the code look right
+AND did it demonstrably do what it claims". v1 = DISPLAYED EVIDENCE, never
+a gate (never-blocking: a flagged section routes to the human, nothing
+auto-refuses).
+
+**The convergence path — trace-as-receipt (later canon-change, not v1):**
+the receipt machinery is the slot this grows into. Today's receipt is a
+thin output sha; the section's trace is the receipt grown up (sha-bound,
+section-tagged, flag-carrying). End-state: assertion-bearing sections
+auto-clear only when the diff is clean AND the latest trace shows no
+flags — the D-attention tier finally sees runtime evidence, and the
+pack's runtime invariants join what routes human attention.

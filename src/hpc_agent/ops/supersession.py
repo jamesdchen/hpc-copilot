@@ -348,10 +348,28 @@ def _supersede_missing_main(
     """
     from hpc_agent.ops.monitor.reconcile import _sibling_run_ids, canary_parent_of
 
-    # The paired ``<id>-canary`` entry via the one #258 suffix definition.
-    (canary_id,) = _sibling_run_ids(supersedes)
-    canary = load_run(experiment_dir, canary_id)
-    lease = _live_lease(supersedes) or _live_lease(canary_id)
+    # The paired canary FAMILY entries via the one #258 suffix definition (the
+    # double canary adds ``<id>-canary2``). Pick a live attempt as the target;
+    # else any existing family record; else the first id (a live lease only).
+    canary_ids = _sibling_run_ids(supersedes)
+    canaries = [(cid, load_run(experiment_dir, cid)) for cid in canary_ids]
+    lease = _live_lease(supersedes)
+    if lease is None:
+        for cid in canary_ids:
+            lease = _live_lease(cid)
+            if lease is not None:
+                break
+    live_pair = next(
+        ((cid, c) for cid, c in canaries if c is not None and c.status not in TERMINAL_STATUSES),
+        None,
+    )
+    existing_pair = next(((cid, c) for cid, c in canaries if c is not None), None)
+    if live_pair is not None:
+        canary_id, canary = live_pair
+    elif existing_pair is not None:
+        canary_id, canary = existing_pair
+    else:
+        canary_id, canary = canary_ids[0], None
 
     if canary is None and lease is None:
         raise errors.SpecInvalid(

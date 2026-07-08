@@ -653,9 +653,7 @@ def collect_registrations(experiment_dir: Path, *, now: str) -> list[AttentionIt
             )
 
         live_sha = _recompute_registration_dossier(experiment_dir, winner)
-        reduced = reduce_registration(
-            records, registration_id=reg_id, live_dossier_sha=live_sha
-        )
+        reduced = reduce_registration(records, registration_id=reg_id, live_dossier_sha=live_sha)
         if reduced.status == REG_STALE:
             items.append(
                 AttentionItem(

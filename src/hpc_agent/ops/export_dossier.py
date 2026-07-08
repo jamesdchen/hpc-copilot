@@ -5,10 +5,10 @@ A ``mutate`` primitive with a single local write and NO SSH. Given a
 concrete on-disk store the run left behind — the sidecar, the run decision
 journal, the emitted briefs, the detached-block terminals, the journal
 record, the scope journals + look ledgers for each scope tag the run carries,
-and the harvested aggregate artifacts — and copies each store's bytes verbatim
-into one ``.zip`` with an integrity manifest, so a repo-side renderer can build
-an evidence package FROM the bundle without the control plane ever knowing what
-any entry MEANS.
+the harvested aggregate artifacts, and the determinism-fingerprint ledger —
+and copies each store's bytes verbatim into one ``.zip`` with an integrity
+manifest, so a repo-side renderer can build an evidence package FROM the bundle
+without the control plane ever knowing what any entry MEANS.
 
 Boundary posture (see ``docs/internals/engineering-principles.md`` Q1,
 "substrate, not semantics"): an entry is typed by the SOURCE STORE it came from
@@ -21,6 +21,19 @@ round-trip byte-identical), so it can never grow an interpretation of the
 numbers it seals. The structured fields it DOES read (the identity projection,
 the scope tags) come back through :func:`state.runs.read_run_sidecar` /
 :func:`state.journal.load_run` — the parse lives in those modules, never here.
+
+Disclosure-at-graduation, deliberately stale-on-append (the determinism-
+fingerprint T8 leg, ``docs/design/determinism-fingerprint.md`` design center 4
+"anti-gaming by disclosure" + drift-log item 5): the run's ``cmd_sha``-addressed
+fingerprint LEDGER (``state/fingerprint_store.py::fingerprint_path``) is sealed
+as RAW BYTES — the measured determinism envelope is DERIVED from that ledger and
+lives in the code-rendered briefs, so this module seals the FILE, never a
+rendered envelope, and never ``json``-parses the JSONL (the no-parse boundary
+holds unchanged). A disclosed consequence follows from the ledger being append-
+only: every appended sample moves the sealed bytes, so a registration's dossier
+leg reads STALE after new evidence accrues — re-export + re-register is the
+remedy (the registration-kernel R7 posture, deliberate — a measurement that
+grew is a new dossier, not a silent mutation of the old one).
 
 This file lives at the ``ops/`` *role root* (sibling to the subjects, like
 ``provenance_manifest.py`` and ``trace.py``) because it reads across subjects —
@@ -50,6 +63,7 @@ from hpc_agent.ops.provenance_manifest import manifest_signature
 from hpc_agent.state import scopes as _scopes
 from hpc_agent.state.decision_briefs import briefs_path
 from hpc_agent.state.decision_journal import decisions_path
+from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
 
@@ -88,6 +102,9 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "audited-source",  # the audited source .py + its template .py (notebook-audit T14)
         "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
         "renders",  # <exp>/.hpc/renders/<audit_id>/** — the trusted-display render files
+        "determinism-fingerprint",  # <exp>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl
+        "pack-manifest",  # the bound domain-pack manifest file (raw bytes; T10)
+        "pack-journal",  # <exp>/.hpc/packs/<pack>.decisions.jsonl (bind/receipt journal; T10)
     }
 )
 
@@ -294,6 +311,15 @@ def _gather_run(
     _gather_audited_source(
         experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps
     )
+    # determinism-fingerprint — the cmd_sha-addressed ledger, sealed as RAW BYTES
+    # (disclosure at graduation; never the derived envelope, never parsed).
+    _gather_fingerprint(
+        experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps
+    )
+    # pack-manifest + pack-journal — sealed only when the sidecar echoed a `packs`
+    # block (domain-packs T10). The bound domain standards (manifest + journal),
+    # copied as RAW BYTES, never parsed.
+    _gather_packs(experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps)
     record = load_run(experiment_dir, run_id)
     projection = _project_run_identity(run_id, sidecar, record)
     tags = [str(t) for t in (sidecar.get("scopes") or []) if t]
@@ -407,6 +433,110 @@ def _gather_renders(
                 "run_id": run_id,
                 "note": f"no trusted-display renders on disk for audit_id {audit_id!r}",
             }
+        )
+
+
+def _gather_fingerprint(
+    experiment_dir: Path,
+    run_id: str,
+    sidecar: dict[str, Any],
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal the run's determinism-fingerprint LEDGER as RAW BYTES (fingerprint T8).
+
+    The ledger is the ``cmd_sha``-addressed append-only sample file at
+    ``<exp>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl``
+    (:func:`state.fingerprint_store.fingerprint_path`), resolved from the
+    ``cmd_sha`` the sidecar already carries — the disclosure-at-graduation surface
+    for the measured determinism envelope (``docs/design/determinism-fingerprint.md``
+    design center 4, "anti-gaming by disclosure"). It is sealed as OPAQUE BYTES
+    like every other store: this module NEVER ``json``-parses the JSONL (the
+    derived envelope is rendered in the code-rendered briefs, never here — the
+    no-parse boundary), so a deliberately-torn ledger round-trips byte-identical.
+
+    A run whose sidecar carries no ``cmd_sha`` (no experiment identity to resolve a
+    ledger from) seals nothing and records no gap; a resolvable identity whose
+    ledger is not yet on disk (no fingerprint sample ever minted) records a gap
+    (present-or-gap accounting, never a crash). Keyed by the identity path, the
+    ledger is sealed at most ONCE across a lineage whose runs share a ``cmd_sha``
+    (one file, one entry — never a duplicate).
+    """
+    cmd_sha = sidecar.get("cmd_sha")
+    if not isinstance(cmd_sha, str) or not cmd_sha:
+        return
+    archive_path = f"fingerprints/{cmd_sha[:16]}.jsonl"
+    if archive_path in write_map:
+        return  # already sealed for this identity (a lineage sharing a cmd_sha)
+    _gather_optional(
+        "determinism-fingerprint",
+        fingerprint_path(experiment_dir, cmd_sha),
+        archive_path,
+        run_id,
+        f"no determinism-fingerprint ledger on disk for cmd_sha {cmd_sha[:16]!r}",
+        write_map=write_map,
+        entries=entries,
+        gaps=gaps,
+    )
+
+
+def _gather_packs(
+    experiment_dir: Path,
+    run_id: str,
+    sidecar: dict[str, Any],
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal each opted-in pack's manifest file + decision journal as RAW BYTES (T10).
+
+    The sidecar's opaque ``packs`` echo (a list of ``{pack, version, sha,
+    manifest}``) points at two per-pack stores, both sealed as OPAQUE BYTES and
+    NEVER parsed (the no-parse boundary): the bound manifest file at the echoed
+    ``manifest`` relpath (the ``pack-manifest`` store noun) and the pack decision
+    journal at ``.hpc/packs/<pack>.decisions.jsonl`` (the ``pack-journal`` noun —
+    the bind + receipt attestation trail). Both prove WHICH domain standards, at
+    WHICH hashes, gated the run.
+
+    A run with no ``packs`` echo seals nothing and records no gap (a pack-free run
+    legitimately has none); an echo whose store is missing records a gap
+    (present-or-gap accounting, never a crash). The manifest relpath comes from the
+    already-parsed sidecar echo, so this module still never parses interview.json.
+    """
+    echoes = sidecar.get("packs")
+    if not isinstance(echoes, list):
+        return
+    hpc = RepoLayout(experiment_dir).hpc
+    for echo in echoes:
+        if not isinstance(echo, dict):
+            continue
+        pack_name = echo.get("pack")
+        if not isinstance(pack_name, str) or not pack_name:
+            continue
+        manifest_rel = echo.get("manifest")
+        if isinstance(manifest_rel, str) and manifest_rel:
+            _gather_optional(
+                "pack-manifest",
+                Path(experiment_dir) / manifest_rel,
+                f"runs/{run_id}/packs/{pack_name}/manifest.json",
+                run_id,
+                f"bound pack manifest {manifest_rel!r} not on disk for pack {pack_name!r}",
+                write_map=write_map,
+                entries=entries,
+                gaps=gaps,
+            )
+        _gather_optional(
+            "pack-journal",
+            hpc / "packs" / f"{pack_name}.decisions.jsonl",
+            f"runs/{run_id}/packs/{pack_name}.decisions.jsonl",
+            run_id,
+            f"no pack decision journal on disk for pack {pack_name!r}",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
         )
 
 

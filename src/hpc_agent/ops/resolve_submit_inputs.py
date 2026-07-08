@@ -61,6 +61,7 @@ from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
 from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
+from hpc_agent.ops.pack_gate import assert_pack_receipts_current
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -168,19 +169,40 @@ def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
     from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
     from hpc_agent.ops.supersession import _live_lease
     from hpc_agent.state.journal import load_run
-    from hpc_agent.state.run_record import TERMINAL_STATUSES
+    from hpc_agent.state.run_record import TERMINAL_STATUSES, RunRecord
 
-    # The paired ``<run_id>-canary`` entry via the one #258 suffix definition —
+    # The paired canary FAMILY entries via the one #258 suffix definition —
     # never a second hardcoded ``-canary`` (the `_sibling_run_ids` docstring owns
-    # the pairing convention; supersession's `_supersede_missing_main` uses it too).
-    (canary_id,) = _sibling_run_ids(run_id)
-    canary = load_run(experiment_dir, canary_id)
-    lease = _live_lease(run_id) or _live_lease(canary_id)
-    canary_live = (
-        canary is not None and canary.status not in TERMINAL_STATUSES
-    ) or lease is not None
+    # the pairing convention; supersession's `_supersede_missing_main` uses it
+    # too). The double canary adds ``<run_id>-canary2``, so surface a live attempt
+    # if ANY family member — or a live detached lease for the main or a member —
+    # is non-terminal.
+    canary_ids = _sibling_run_ids(run_id)
+    records = [(cid, load_run(experiment_dir, cid)) for cid in canary_ids]
+    lease = _live_lease(run_id)
+    if lease is None:
+        for cid in canary_ids:
+            lease = _live_lease(cid)
+            if lease is not None:
+                break
+    live = next(
+        ((cid, c) for cid, c in records if c is not None and c.status not in TERMINAL_STATUSES),
+        None,
+    )
+    canary_live = live is not None or lease is not None
     if not canary_live:
         return None
+    # Choose the record to report: a live family member wins; else any existing
+    # family record (an in-flight lease before its record landed); else the first
+    # canary id with no record yet.
+    canary_id: str
+    canary: RunRecord | None
+    if live is not None:
+        canary_id, canary = live
+    else:
+        canary_id, canary = next(
+            ((cid, c) for cid, c in records if c is not None), (canary_ids[0], None)
+        )
     return {
         "prior_run_id": canary_id,
         "status": canary.status if canary is not None else "in_flight",
@@ -399,6 +421,18 @@ def resolve_submit_inputs(
     #     byte-identical no-op (the scope-gate posture). Pre-sidecar and
     #     pre-SSH — resolve does no cluster work, so this is purely a local read.
     assert_source_audited(experiment_dir)
+
+    # 4c. Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    #     ops/pack_gate — TWO synchronous seats, beside the notebook gate): this is
+    #     the S1 human-boundary seat. Before the per-run sidecar is committed,
+    #     refuse a submit whose opted-in `packs` block (interview.json, D7) carries
+    #     a required receipt_bindings slot not CURRENT + passed (missing / stale /
+    #     failed — drift = unsigned by construction), so the refusal lands at the
+    #     y/nudge, not buried later in a detached submit-flow worker's log. A broken
+    #     setup (dangling manifest, unbound pack) is a loud SpecInvalid; an
+    #     uncleared receipt is PackReceiptsMissing. Fail-safe: NO packs block →
+    #     byte-identical no-op. Pre-sidecar and pre-SSH — a purely local read.
+    assert_pack_receipts_current(experiment_dir)
 
     # 5. write-run-sidecar: write the per-run sidecar so the #171 write-first
     #    precondition is satisfied BEFORE submit-pipeline runs — the `resolved`

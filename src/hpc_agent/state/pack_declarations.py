@@ -81,6 +81,7 @@ __all__ = [
     "resolve_registration_fields",
     "resolve_declarations",
     "resolve_template_pack_echo",
+    "resolve_pack_echoes",
 ]
 
 # The seams that carry a shape-loadable declaration file. ``audit_template`` is a
@@ -601,3 +602,70 @@ def resolve_template_pack_echo(
         except errors.SpecInvalid:
             continue  # fail-open: a broken/dangling pack never crashes the sidecar echo
     return None
+
+
+def resolve_pack_echoes(
+    experiment_dir: Path,
+    *,
+    records_by_pack: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    records_reader: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
+) -> list[dict[str, str | None]]:
+    """T10: the ``{pack, version, sha, manifest}`` echo of every opted-in, CURRENT-
+    bound pack — for the run sidecar (→ the dossier), fail-open.
+
+    One entry per opted-in pack that resolves to a current bind whose on-disk
+    manifest still matches: the opaque ``{pack, version, sha}`` identity echo
+    (``PackEcho``) PLUS ``manifest`` — the opt-in relpath — so ``export-dossier``
+    can seal the manifest file's raw bytes without ever parsing ``interview.json``
+    (the dossier's no-parse boundary; the ``audited_source`` echo carries its
+    ``source``/``template`` relpaths for exactly the same reason). ``sha`` is the
+    bind's ``manifest_sha``.
+
+    **FAIL-OPEN, like :func:`resolve_template_pack_echo`** (this feeds a sidecar
+    echo, not a gate — the loud dangling refusal lives on the enforcement path,
+    :func:`hpc_agent.ops.pack_gate.assert_pack_receipts_current`): no ``packs``
+    opt-in, a pack with no current bind, an on-disk manifest DRIFTED from its bind,
+    or even a malformed ``packs`` block all contribute NOTHING rather than raise.
+    Cheap: with no opt-in it touches only ``interview.json`` (zero manifest/journal
+    probes). Insertion order follows the opt-in list.
+    """
+    try:
+        optin = _read_packs_optin(experiment_dir)
+    except errors.SpecInvalid:
+        return []  # a broken packs block is loud on the gate, silent on the echo
+    if not optin:
+        return []
+
+    out: list[dict[str, str | None]] = []
+    for entry in optin:
+        pack_name = entry.get("pack")
+        manifest_rel = entry.get("manifest")
+        if not isinstance(pack_name, str) or not pack_name:
+            continue
+        if not isinstance(manifest_rel, str) or not manifest_rel:
+            continue
+        try:
+            manifest_path = experiment_dir / manifest_rel
+            manifest = load_manifest(manifest_path)
+            if manifest.name != pack_name:
+                continue
+            if records_by_pack is not None:
+                records: Sequence[Mapping[str, Any]] = records_by_pack.get(pack_name, ())
+            elif records_reader is not None:
+                records = records_reader(pack_name)
+            else:
+                records = _read_pack_journal(experiment_dir, pack_name)
+            bind = current_bind(records, pack=pack_name)
+            if bind is None:
+                continue
+            # Honesty: only echo when the on-disk manifest still matches the bind.
+            if sha256_file(manifest_path) != bind.manifest_sha:
+                continue
+            echo: dict[str, str | None] = PackEcho(
+                pack=pack_name, version=bind.version, sha=bind.manifest_sha
+            ).as_dict()
+            echo["manifest"] = manifest_rel
+            out.append(echo)
+        except errors.SpecInvalid:
+            continue  # fail-open: a broken/dangling pack never crashes the sidecar echo
+    return out

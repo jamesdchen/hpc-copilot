@@ -505,6 +505,42 @@ def _latest_checkpoint(checkpoint_dir):
     return best
 
 
+def _task_is_included(task_id, env):
+    """True when *task_id* is in the ``HPC_TASK_INCLUDE`` partial-reproduction set.
+
+    The execution-restriction seam for a partial reproduction (determinism-
+    fingerprint design center 5): ``reproduce-run`` keeps the FULL task shape
+    (same trial_params / cmd_sha — a rebuilt smaller task list would move cmd_sha
+    and orphan the fingerprint ledger) and instead threads the selected task
+    indices through the job env as ``HPC_TASK_INCLUDE`` (a comma-separated
+    include-list). A non-selected index exits 0 immediately (the idempotency
+    skip's sibling seam), so its scheduler slot costs milliseconds.
+
+    Absent / blank ``HPC_TASK_INCLUDE`` means NO restriction — every task runs
+    (an ordinary full run). A malformed value that parses to an EMPTY set is
+    treated as no-restriction too (never silently skip the whole array on a bad
+    env var — the canary would surface the mis-parse, not a mass no-op).
+    """
+    raw = env.get("HPC_TASK_INCLUDE")
+    if raw is None or not raw.strip():
+        return True
+    included = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            included.add(int(part))
+        except ValueError:
+            print(
+                f"[dispatch] WARN: ignoring non-integer HPC_TASK_INCLUDE entry {part!r}",
+                file=sys.stderr,
+            )
+    if not included:
+        return True
+    return task_id in included
+
+
 def _format_result_dir(template, *, task_id, run_id, kwargs):
     """Render *template* using ``str.format`` with task/run identity + kwargs.
 
@@ -593,6 +629,20 @@ def main() -> None:
     except ValueError:
         print(f"[dispatch] ERROR: HPC_TASK_ID is not an integer: {task_id_str!r}", file=sys.stderr)
         sys.exit(1)
+
+    # --- Partial-reproduction execution restriction (HPC_TASK_INCLUDE) ---
+    # A partial reproduction keeps the FULL task shape (same trial_params /
+    # cmd_sha) and restricts EXECUTION to a selected subset threaded through the
+    # job env. A non-selected index exits 0 IMMEDIATELY — before resolving
+    # kwargs, formatting result_dir, or spawning anything — so its scheduler slot
+    # costs milliseconds (the idempotency skip's sibling seam). No output is
+    # written, so the reduce never sees a spurious row for a skipped task.
+    if not _task_is_included(task_id, os.environ):
+        print(
+            f"[hpc-agent] task {task_id} not in HPC_TASK_INCLUDE (partial reproduction); skipping",
+            file=sys.stderr,
+        )
+        sys.exit(0)
 
     # --- Resolve task kwargs ---
     # Fast path: trial_params is serialized at submit time by compute-run-id,

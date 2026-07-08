@@ -125,6 +125,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
     "audited_source",  # dict — opaque caller-owned audit-trail identity; core never interprets it
+    "packs",  # list[dict] — opaque domain-pack echoes; core never interprets them (T10)
 )
 
 # Keys recognised inside the optional ``results`` sidecar block. Declaring
@@ -170,6 +171,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "scopes": None,
     "reproduces": None,
     "audited_source": None,
+    "packs": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -244,6 +246,7 @@ def write_run_sidecar(
     scopes: list[str] | None = None,
     reproduces: str | None = None,
     audited_source: dict[str, Any] | None = None,
+    packs: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -384,6 +387,12 @@ def write_run_sidecar(
         # (same only-write-non-None pattern, so a non-audited run's sidecar is
         # byte-identical). export-dossier reads it back to seal the audit trail.
         "audited_source": audited_source,
+        # Opaque domain-pack echoes — one {pack, version, sha, manifest} per bound
+        # pack the experiment opted into (T10). Recorded verbatim, never interpreted
+        # by core (same only-write-non-None pattern, so a pack-less run's sidecar is
+        # byte-identical). export-dossier reads it back to seal each pack's manifest
+        # bytes + decision journal.
+        "packs": [dict(p) for p in packs] if packs else None,
     }
     for k, v in v2_values.items():
         if v is not None:
