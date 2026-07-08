@@ -278,3 +278,15 @@ The Q5 section above conflated emission location with storage. Superseded:
 Same three-part shape as receipts (render file / renders dir / journaled
 receipt) and dossiers (contents / store / sealed manifest) — the house
 pattern, applied, which is what "a more unified way" meant.
+
+## Coda: three lifetimes (2026-07-08 clarification)
+
+TRACES are immutable — per-run evidence, sha-bound, valid forever as
+records of their era. THE DEFECT CORPUS is the living object — append-only;
+every surfaced bug distills into an injection fixture (the pipeline-v2
+ruling "mechanical failures become CHECKS", given its concrete home). THE
+PARTITION is versioned — it refines ONLY when a new corpus entry fails to
+localize under it (the R3 suite's failure is a mechanical split
+instruction), and every version journals its certificate. The system can
+only get better at localizing, only in response to demonstrated failures,
+never coarser, never adaptive, never rewriting history.
