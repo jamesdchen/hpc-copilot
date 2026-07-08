@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/audit_preflight.output.json",
+  "title": "audit-preflight output data",
+  "description": "Shape of the ``data`` field on an ``audit-preflight`` envelope.",
+  "type": "object",
+  "required": [
+    "verdict",
+    "template",
+    "template_state",
+    "resuming",
+    "brief"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "description": "GO iff there are zero blockers; NO-GO otherwise.",
+      "enum": [
+        "GO",
+        "NO-GO"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    },
+    "audit_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The audit slug the preflight ran against, or null (standalone).",
+      "title": "Audit Id"
+    },
+    "template": {
+      "description": "The template path the preflight checked.",
+      "title": "Template",
+      "type": "string"
+    },
+    "template_state": {
+      "description": "The template's resolved state: 'clean' (committed, no changes), 'dirty' (tracked with uncommitted changes), 'untracked' (present but not committed), 'missing', 'unparseable', 'unreadable', or 'no_git' (no git repo to verify the commit-signature).",
+      "title": "Template State",
+      "type": "string"
+    },
+    "resuming": {
+      "description": "True when audit_id already has a journal (resuming); False = fresh.",
+      "title": "Resuming",
+      "type": "boolean"
+    },
+    "journal_records": {
+      "default": 0,
+      "description": "Number of prior journal records for audit_id (0 when fresh).",
+      "title": "Journal Records",
+      "type": "integer"
+    },
+    "source_roots": {
+      "description": "The resolved source_roots (spec, else recorded config).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Roots",
+      "type": "array"
+    },
+    "input_roots": {
+      "description": "The resolved input_roots (spec, else recorded config).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Roots",
+      "type": "array"
+    },
+    "blockers": {
+      "description": "One entry per NO-GO blocker, each with its pre-drafted remedy. Empty on GO.",
+      "items": {
+        "$ref": "#/$defs/PreflightBlocker"
+      },
+      "title": "Blockers",
+      "type": "array"
+    },
+    "disclosures": {
+      "description": "Non-blocking disclosures rendered alongside the verdict — the data-manifest drift line (Phase-1a seam) and the resuming note. NEVER flip the verdict (the attention contract).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Disclosures",
+      "type": "array"
+    },
+    "brief": {
+      "description": "The D8 decision-ready brief, code-rendered — GO, or NO-GO with each blocker named and its remedy pre-drafted. Relayed to the human VERBATIM; the verb never blocks anything itself.",
+      "title": "Brief",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "PreflightBlocker": {
+      "additionalProperties": false,
+      "description": "One NO-GO blocker: the failing check, what is wrong, and its remedy.\n\nEvery blocker carries a PRE-DRAFTED remedy so the brief is decision-ready —\nthe human reads the fix, never has to derive it.",
+      "properties": {
+        "check": {
+          "description": "Which substrate check produced this blocker.",
+          "enum": [
+            "template",
+            "version_skew",
+            "roots"
+          ],
+          "title": "Check",
+          "type": "string"
+        },
+        "blocker": {
+          "description": "What is wrong (the NO-GO reason), stated plainly.",
+          "title": "Blocker",
+          "type": "string"
+        },
+        "remedy": {
+          "description": "The pre-drafted fix that clears this blocker.",
+          "title": "Remedy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "check",
+        "blocker",
+        "remedy"
+      ],
+      "title": "audit-preflight blocker",
+      "type": "object"
+    }
+  }
+}

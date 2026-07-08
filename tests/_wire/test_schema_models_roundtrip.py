@@ -331,6 +331,7 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # fields the per-field synthesizer would otherwise skip. Keyed by model
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    "VerifyRegistrationSpec": {"registration_id": "x"},
     "UpdateRunConstraintsSpec": {"add_features": ["a"]},
     # _Provenance enforces ``session_sha`` when ``kind=='agent'``. The
     # generic synthesizer picks kind='agent' (first Literal value) but

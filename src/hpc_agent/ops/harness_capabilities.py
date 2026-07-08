@@ -9,8 +9,10 @@ never a self-asserted manifest:
    this repo (non-creating read via :mod:`hpc_agent.state.utterances`), plus which
    input channels are installed in ``~/.claude/settings.json`` (the utterance- and
    answer-capture hooks, matched by their :mod:`hpc_agent.agent_assets` module-path
-   needles), plus whether the MCP elicitation channel is available (the
-   :data:`~hpc_agent._kernel.extension.mcp_server.ELICITATION_SUPPORTED` flag).
+   needles), plus whether the MCP elicitation SERVER code is implemented (the
+   :data:`~hpc_agent._kernel.extension.mcp_server.ELICITATION_SERVER_IMPLEMENTED`
+   flag — the honest thing a separate-process probe can report; client support is
+   negotiated per session at ``initialize`` and is unknown from this probe).
 2. **Relay/verbatim enforcement.** Whether the relay-audit ``Stop`` hook is
    installed (its needle).
 3. **Backgrounding / wake.** Always present — the detached-worker machinery is
@@ -149,7 +151,7 @@ def harness_capabilities(
     ``"unknown"`` because it has no detection seam. The ``spec`` is empty
     (``extra="forbid"`` still rejects a bogus key), so it is optional here.
     """
-    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SUPPORTED
+    from hpc_agent._kernel.extension.mcp_server import ELICITATION_SERVER_IMPLEMENTED
     from hpc_agent.agent_assets import (
         _ALERT_COUNT_NEEDLE,
         _ANSWER_CAPTURE_NEEDLE,
@@ -180,7 +182,12 @@ def harness_capabilities(
         evidence={
             "utterance_capture_hook": utterance_capture,
             "answer_capture_hook": answer_capture,
-            "elicitation_channel": ELICITATION_SUPPORTED,
+            # Elicitation splits into what code can verify vs. what it cannot: the
+            # SERVER code capability is a real, separate-process-observable bit; the
+            # CLIENT support is negotiated per session at MCP `initialize` and is
+            # unknown from this probe (say unknown, not yes — the honesty posture).
+            "elicitation_server": ELICITATION_SERVER_IMPLEMENTED,
+            "elicitation_client": "per-session",
             "log_present_for_repo": log_present,
         },
     )

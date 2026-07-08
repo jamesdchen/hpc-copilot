@@ -59,10 +59,10 @@ The four capabilities, and the exact seam each `present` bit is detected from:
   utterance-capture hook is installed (the write channel that earns the
   full-strength authorship tier), matched by its module-path needle in
   `settings.json`. `evidence` also carries `answer_capture_hook` (the
-  `AskUserQuestion` typed-answer channel), `elicitation_channel` (the MCP
-  `ELICITATION_SUPPORTED` flag — see below), and `log_present_for_repo` (whether
-  the utterance-log namespace already exists for this `--experiment-dir`,
-  non-creating read via `state.utterances`).
+  `AskUserQuestion` typed-answer channel), the elicitation `elicitation_server` /
+  `elicitation_client` split (the MCP channel — see below), and
+  `log_present_for_repo` (whether the utterance-log namespace already exists for
+  this `--experiment-dir`, non-creating read via `state.utterances`).
 - **`relay_enforcement`** (capability 2) — `present` is whether the relay-audit
   `Stop` hook is installed (its needle).
 - **`backgrounding`** (capability 3) — always `true`: the detached-worker machinery
@@ -78,12 +78,24 @@ back to the journal-response friction tier at
 
 ### The elicitation channel
 
-`evidence.elicitation_channel` reflects
-`hpc_agent._kernel.extension.mcp_server.ELICITATION_SUPPORTED`, which is `False`:
-the MCP server is a hand-rolled synchronous JSON-RPC loop with no server-initiated
-request path, so the 2025-06-18 elicitation channel is **specified but not
-implemented** (see the harness-contract doc). When absent it degrades to the hook
-path (capability 1's `UserPromptSubmit` capture).
+Elicitation is reported as **two evidence keys, split by what this probe can
+honestly verify**:
+
+- `evidence.elicitation_server` reflects
+  `hpc_agent._kernel.extension.mcp_server::ELICITATION_SERVER_IMPLEMENTED` — the
+  server **code** capability, which a separate-process probe CAN verify: whether
+  the MCP server implements the server-initiated `elicitation/create` request
+  path (the 2025-06-18 revision channel).
+- `evidence.elicitation_client` is the literal `"per-session"`. Client
+  elicitation support is **negotiated at MCP `initialize`** from the client's
+  declared `capabilities.elicitation`; a CLI verb is a separate-process probe
+  that cannot observe a live session's negotiation, so it says **unknown, not
+  yes** — the client-support reality-check the harness contract demands.
+
+Every `present`/evidence bit here stays honest: the server bit is what code
+verified, the client bit is explicitly unknown-from-this-probe. When elicitation
+is unavailable (server not implemented, or the client declined it per session) the
+flow degrades to the hook path (capability 1's `UserPromptSubmit` capture).
 
 ## Errors
 

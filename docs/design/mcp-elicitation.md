@@ -1,6 +1,6 @@
 # MCP elicitation — the bidirectional protocol upgrade (design + implementation plan)
 
-**Status: PLANNED (2026-07-07), not yet implemented.** This plan settles how
+**Status: IMPLEMENTED (2026-07-08; E1–E7 landed, drift log at foot).** This plan settles how
 `src/hpc_agent/_kernel/extension/mcp_server.py` gains the server-initiated
 `elicitation/create` exchange that `docs/internals/harness-contract.md`
 ("MCP elicitation as a second capability-1 channel") already specifies
@@ -467,3 +467,32 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
      store, not a plumbing change); the gate raise sites are
      `errors.SpecInvalid` routed through `_dispatch.py::_err_from_hpc`;
      `_tool_result` copies the full envelope into `structuredContent`.
+
+- **Implementation (2026-07-08, E1–E7 landed; deviations recorded):**
+  1. *E1 defensive branch* — `McpServer._consume_message` handles a malformed
+     non-response dict (no `method`, not response-shaped) with a `-32600`
+     error; the plan enumerated only the three conforming kinds. No behavior
+     change for conforming clients.
+  2. *E2 scoping* — only genuine authorship-BAR refusals carry the
+     `authorship_evidence` marker (via `journal.py::_refuse_missing_authorship`);
+     structural refusals (view_sha mismatch, section-not-found, unresolvable
+     source, bind recompute) are deliberately UNMARKED — a re-elicited
+     utterance cannot cure them, so marking them would make the D4 retry a
+     guaranteed-failing round-trip. The attached block WINS over
+     `_err_from_hpc`'s synthesized default (layering-clean; the misleading
+     `error_class: "code_bug"` drops from human-policy refusals).
+  3. *E2 heads-up* — `_wire/fixtures/failure_features.py::FailureFeatures` is
+     `extra="forbid"`, but the ERROR envelope path never validates against it
+     (only the `_ok` path runs `validate_output`), so the additive key rides.
+     If error envelopes ever gain schema validation, the model must admit the
+     key first.
+  4. *E4 renderer* — `_render_elicitation_prompt` deliberately excludes the
+     refusal envelope's `message` too (not just tool-argument free text): the
+     gate's message can QUOTE the model's response, which would smuggle
+     model-authored words into the trusted prompt.
+  5. *Test rig* — the duplex harness lives at `tests/_mcp_harness.py`
+     (`FakeMcpClient`, `RecordingElicitServer` with its harness-only
+     `elicit-test` tool seam); the conformance kit consumes this rig per the
+     cross-slate reuse ledger.
+  6. *E6* — regen byte-stability verified (all six scripts, zero drift): the
+     phase adds no primitive and no wire model, exactly as planned.

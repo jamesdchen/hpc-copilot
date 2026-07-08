@@ -14,6 +14,27 @@ terminate at human decision points with code-digested **briefs**. No decision
 point is resolved by the LLM; the LLM only drafts proposals over code-digested
 evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
 
+### Added — MCP elicitation (the second capability-1 channel, 2026-07-08)
+
+- The MCP server's hand-rolled JSON-RPC pump is now **bidirectional**
+  (`docs/design/mcp-elicitation.md` D1): one daemon stdin-reader thread + a
+  message queue give tool handlers a real blocking-with-timeout
+  `_request_from_client` wait that services interleaved client requests
+  inline (never head-of-line-blocking). No SDK, no new dependency.
+- **Server-initiated `elicitation/create`** fires at ONE site: an
+  `append-decision` authorship refusal (machine-readable
+  `failure_features.authorship_evidence` marker) with a per-session client
+  capability detected at `initialize`. The prompt is CODE-RENDERED (never
+  model-authored), the response is filtered (free-text only,
+  `is_harness_injected` refused) and appended harness-side, the identical
+  invocation retries exactly once, and the model sees only
+  `{elicitation: "captured", sha256}` — never the human's text.
+  Decline/cancel/timeout degrade silently to the hook path; the authorship
+  bar is unchanged (a channel, never a waiver).
+- `harness-capabilities` evidence reshaped: `elicitation_server` (verified
+  code capability, now `True`) + `elicitation_client: "per-session"` — the
+  honest split a separate-process probe can report.
+
 ### Added — block verbs (thin orchestrators over the existing rings)
 
 - **`submit-s1..s4`** — resolve (the ambiguity envelope surfaced as a brief;

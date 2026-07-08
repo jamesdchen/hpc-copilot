@@ -61,6 +61,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "data_manifest.input.json",
+    "name": "data-manifest",
+    "output_schema": "data_manifest.output.json",
+    "python": "hpc_agent.ops.data_manifest.data_manifest",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Mint an identity record (sha256 + size + opaque built_by per file) for the experiment's DECLARED input data into .hpc/data_manifest.json, journal the mint, and refresh the (size, mtime) fast-path cache. Converts silent data changes from invisible to attributed — the quiet-corruption class (same filename, rebuilt bytes) that no robustness layer catches because nothing throws. Roots default to interview.json's audited_source.input_roots (the ONE input declaration); no roots + no declaration REFUSES (core never guesses a data/ dir). Re-minting is the journaled 'new known-good' act. Pure local read + hash + write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent decorate-entry-point --path <path> --function-name <function_name>",
     "idempotent": true,
     "input_schema": null,
@@ -338,6 +352,18 @@
     "python": "hpc_agent.ops.attention_op.attention_queue",
     "side_effects": [],
     "summary": "The attention queue: the fleet-wide digest ordered by needs-your-verdict-first. Collects every place a human action is the blocking edge (pending greenlights, committed-but-unadvanced decisions, anomaly briefs, campaign completion briefs, unsigned/stale audit sections, dead workers, alerts, open ssh circuits) across one experiment or the whole fleet (fleet=True), orders by leverage (unblock fan-out) then class then oldest, and renders a deterministic markdown digest relayed verbatim. Read-only, no SSH, watermark-neutral (moves no state); recomputed on every read (no cache).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent audit-preflight --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "audit_preflight.input.json",
+    "name": "audit-preflight",
+    "output_schema": "audit_preflight.output.json",
+    "python": "hpc_agent.ops.audit_preflight.audit_preflight",
+    "side_effects": [],
+    "summary": "GO/NO-GO preflight for the notebook-audit loop. Composes existing substrate checks — template present + parses + git-committed-clean (uncommitted = unsigned), version skew (reused from doctor), declared roots exist and are non-empty, and prior audit state (resuming vs fresh) — into one decision-ready brief. Read-only, no SSH; detects nothing new and blocks nothing itself (the gates it predicts remain the enforcement). The kickoff collapses to 'run audit-preflight; if GO, begin'.",
     "verb": "query"
   },
   {
@@ -810,6 +836,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_draft_context.input.json",
+    "name": "notebook-draft-context",
+    "output_schema": "notebook_draft_context.output.json",
+    "python": "hpc_agent.ops.notebook.draft_context_op.notebook_draft_context",
+    "side_effects": [],
+    "summary": "Render the deterministic DRAFTING context for a notebook-audit template: the template's slugs + cell prose verbatim; each engine the template imports resolved to its defining file under source_roots (path:lineno, signature, first docstring line, module_sha - the same resolution notebook-lint uses, never executing an import); name-match Call sites across source_roots (path:lineno, count, capped with the cap disclosed); and an inventory of files + sha12 + size under input_roots and each inventory_roots entry (a file recorded in .hpc/data_manifest.json is cited, not re-hashed). Roots default from the audit's recorded config when audit_id is given. The projection LISTS, never nominates - no baseline config, no section ranking. Read-only: the only write is the disposable content-keyed cache in the standard cache home. The result includes markdown - the code-rendered projection the drafting agent reads and the skill relays VERBATIM.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "notebook_status.input.json",
@@ -1003,6 +1041,18 @@
     "python": "hpc_agent.ops.aggregate.invariants.verify_aggregation_complete",
     "side_effects": [],
     "summary": "Walk the run sidecar's wave_map + the locally-pulled _combiner/ dir; report all_waves_combined / all_tasks_present / provenance_present invariants. Returns ok plus the missing / unexpected lists.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "verify_registration.input.json",
+    "name": "verify-registration",
+    "output_schema": "verify_registration.output.json",
+    "python": "hpc_agent.ops.registration.verify_op.verify_registration",
+    "side_effects": [],
+    "summary": "Verify a registration and REPORT its status (current | stale | revoked | superseded | absent) with per-leg detail — the live dossier signature re-gathered vs the sha it bound, the template raw-bytes drift, every prerequisite re-checked through its kind's one checker, and field completeness by counting. Takes exactly one of registration_id / run_id. A REPORTER: it never blocks and never raises on a stale/revoked/missing subject — the deploy refusal is wired caller-side against status. The brief's canonical-JSON sha is the view_sha a sign-off must carry. Read-only, no SSH.",
     "verb": "query"
   },
   {
