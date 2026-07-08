@@ -45,6 +45,7 @@ from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.block_gate import assert_greenlit_target
+from hpc_agent.ops.data_manifest import render_manifest_disclosure
 from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 from hpc_agent.ops.monitor_flow import monitor_flow
 from hpc_agent.ops.relay_render import render_relay
@@ -443,6 +444,14 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     # 3. Surface each safe_default as a pre-filled recommendation — NOT applied
     #    into resolved (apply-safe-defaults is the silent actor this kills, §6).
     brief["ambiguities"] = _recommendations_from_ambiguities(walk.ambiguities)
+
+    # Consumer #2 (data-manifest): the VERDICT-FREE, code-rendered data-drift
+    # disclosure rides the greenlight brief. Never gates, never raises (the
+    # accept-with-disclosure rule); None → nothing declared/minted → the brief
+    # stays byte-identical for a repo not using the manifest.
+    disclosure = render_manifest_disclosure(experiment_dir)
+    if disclosure is not None:
+        brief["data_manifest"] = disclosure
 
     if walk.ambiguities:
         return SubmitBlockResult(
