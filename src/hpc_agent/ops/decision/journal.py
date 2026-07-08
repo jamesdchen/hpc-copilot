@@ -32,10 +32,11 @@ of a human quote.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -52,6 +53,11 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state.decision_journal import append_decision as _append_decision
 from hpc_agent.state.decision_journal import decisions_path as _decisions_path
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
+from hpc_agent.state.registration import (
+    REGISTRATION_BLOCK_FAMILY,
+    REVOKE_BLOCK,
+    SUBJECT_KIND,
+)
 
 # ── E2: the authorship-refusal marker (docs/design/mcp-elicitation.md D4/E2) ──
 
@@ -143,6 +149,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_human_authorship(experiment_dir, spec, resolved)
     _assert_unlock_authorship(experiment_dir, spec, resolved)
     _assert_signoff_authorship(experiment_dir, spec, resolved)
+    _assert_registration_authorship(experiment_dir, spec, resolved)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -1390,6 +1397,382 @@ def _assert_signoff_authorship(
             "utterance, never a bare ack; the boundary-drift flag). Identifiers in "
             f"the change include: {sorted(specifics)[:8]}."
         )
+
+
+# ── registration authorship gate (R6 three locks + the revoke floor, T7) ──────
+
+# The seven ``resolved`` keys a registration record must carry as non-empty
+# values (R6 lock 2). ``view_sha`` is required too (checked separately — it is
+# the fourth recompute leg, R6). A registration is the maximal human ceremony:
+# every leg is recomputed server-side and no waiver / auto-clear / redundant tier
+# exists at this gate (the attestor is ALWAYS human, R6 lock 3).
+_REGISTRATION_REQUIRED_KEYS: tuple[str, ...] = (
+    "registration_id",
+    "run_id",
+    "dossier_sha",
+    "template",
+    "template_sha",
+    "fields",
+    "prerequisites",
+)
+
+# Identifier-shaped hex runs of length >= 8 — the sha-prefix pool for R6 lock 3.
+# An 8-hex prefix exists NOWHERE in a human's prior vocabulary and can only derive
+# from the presented evidence (the rendered verify-registration brief), so it is
+# the diff-token pattern elevated to its strongest form.
+_HEX_RUN_RE = re.compile(r"[0-9a-fA-F]{8,}")
+
+
+def _field_present(value: Any) -> bool:
+    """True when a template field value counts as PRESENT — non-None, non-empty.
+
+    Mirrors ``ops/registration/verify_op.py::_nonempty`` (completeness is COUNTING
+    over opaque values, R5 — a value is never read for meaning, only for presence).
+    """
+    if value is None:
+        return False
+    return not (isinstance(value, (str, list, tuple, dict, set)) and len(value) == 0)
+
+
+def _registration_authored_text(experiment_dir: Path, response: str) -> str:
+    """The human-authored text the R6 lock-3 tokens must derive from.
+
+    Tiered exactly like the notebook / unlock gates: with the harness utterance
+    log present (:func:`_harness_human_texts` — the shared lock tier) the tokens
+    (the ``registration_id`` and the prerequisite sha-prefix) must derive from a
+    logged human utterance, text the harness recorded out-of-band. Absent the log,
+    the agent-relayed ``response`` is the human's typed sign-off (the friction
+    tier, honestly weaker). There is NO auto-clear / redundant tier here — the
+    registration attestor is ALWAYS human (R6).
+    """
+    harness_texts = _harness_human_texts(experiment_dir)
+    if harness_texts is not None:
+        return "\n".join(harness_texts)
+    return response
+
+
+def _names_sha_prefix(text: str, chain_entries: list[Any]) -> str | None:
+    """The first chain entry ``content_sha`` a hex run in *text* prefixes, or None.
+
+    R6 lock 3: the sign-off must NAME at least one prerequisite by an 8+ hex-char
+    prefix of one chain entry's ``content_sha``, matched against the gate-verified
+    chain. Case-insensitive prefix match.
+    """
+    for run in (m.group(0).lower() for m in _HEX_RUN_RE.finditer(text or "")):
+        for entry in chain_entries:
+            if str(entry.content_sha).lower().startswith(run):
+                return str(entry.content_sha)
+    return None
+
+
+def _assert_revoke_floor(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """The R7 revoke floor for a ``registration-revoke`` record.
+
+    A human overturn: non-bare, NAMES the ``registration_id``, and its free-text
+    ``reason`` is MANDATORY ("validate or overturn WITH reason", the consumer-seat
+    prior). It binds no new sha (it withdraws), so there is NO recompute leg — but
+    it is journaled, attributed, and permanent like everything else. The bare-ack
+    and id-naming refusals carry the E2 authorship marker (a freshly typed human
+    rationale resolves them); the missing-reason refusal is structural (the agent
+    must add ``resolved['reason']``), left UNMARKED.
+    """
+    registration_id = resolved.get("registration_id")
+    if not isinstance(registration_id, str) or not registration_id:
+        raise errors.SpecInvalid(
+            "registration-revoke gate: resolved must name a non-empty registration_id "
+            "(the id being overturned)."
+        )
+    reason = resolved.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise errors.SpecInvalid(
+            "registration-revoke gate: a revoke MUST carry a free-text resolved['reason'] "
+            "(validate or overturn WITH reason — the consumer-seat prior, R7). It binds no new "
+            "sha, but it is journaled, attributed, and permanent."
+        )
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "registration-revoke gate: overturning a registration is a HUMAN act — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot revoke it. State why you are revoking "
+            f"the registration ({registration_id!r})."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, registration_id):
+        _refuse_missing_authorship(
+            "registration-revoke gate: the revoke must NAME the registration_id "
+            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the "
+            "registration being overturned."
+        )
+
+
+def _assert_registration_full(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any]
+) -> None:
+    """R6's three locks for a ``registration`` record — every bar at its ceiling.
+
+    Lock 1 (no affordance) is organizational: append-decision under this block is
+    the ONLY write path (there is no registration verb / chain / next_block /
+    skill; pinned by the contract test). Lock 2 recomputes ALL FOUR legs
+    server-side and binds through :func:`state.attestation.bind`:
+
+    * (a) ``dossier_sha`` vs a dry ``compute_dossier_signature`` re-gather from the
+      LIVE stores (R2 — you may not register what has drifted since it was
+      validated); bound through the ONE attestation kernel.
+    * (b) ``template_sha`` vs the template file's raw bytes on disk (R5), plus
+      template completeness by COUNTING (every declared field slug non-empty in
+      ``resolved['fields']``; every declared prerequisite slot present in the
+      chain).
+    * (c) every chain entry's ``content_sha`` via ``check_chain`` — ALL slots must
+      verdict CURRENT (partial registration REFUSED, naming every failing slot).
+    * (d) ``view_sha`` RECOMPUTED via the deterministic verify-registration brief
+      projection (:func:`build_view` over the append-time legs — a witness you can
+      regenerate is regenerated).
+
+    Lock 3 (authorship, the raised bar): bare acks refused; the response must NAME
+    the ``registration_id`` token-exact AND name at least one prerequisite by an 8+
+    hex prefix of one chain entry's ``content_sha`` (matched against the verified
+    chain). Tiered on the harness utterance log (:func:`_registration_authored_text`).
+    NO auto-clear tier, NO redundant-mark path — the attestor is ALWAYS human.
+
+    The authorship-bar refusals (bare ack, missing id, missing sha-prefix) carry
+    the E2 marker via :func:`_refuse_missing_authorship`; the Lock-2 sha /
+    structural refusals raise plain :class:`errors.SpecInvalid` UNMARKED (a re-elicit
+    cannot fix a moved hash — the E2 scoping).
+    """
+    from hpc_agent._wire.actions.verify_registration import (
+        DossierLeg,
+        FieldsReport,
+        LegStatus,
+        PrerequisiteKind,
+        PrerequisiteLeg,
+        TemplateLeg,
+    )
+    from hpc_agent.ops import export_dossier, registration_view
+    from hpc_agent.state import attestation
+    from hpc_agent.state.registration import CURRENT as REG_CURRENT
+    from hpc_agent.state.registration import parse_chain_entry, parse_template
+
+    # ── Lock 2 shape: the seven required non-empty keys + view_sha ──
+    missing = [k for k in _REGISTRATION_REQUIRED_KEYS if not resolved.get(k)]
+    if missing:
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): resolved must carry non-empty "
+            f"{list(_REGISTRATION_REQUIRED_KEYS)}; missing/empty: {missing}."
+        )
+    registration_id = resolved["registration_id"]
+    run_id = resolved["run_id"]
+    dossier_sha = resolved["dossier_sha"]
+    template_rel = resolved["template"]
+    template_sha = resolved["template_sha"]
+    fields = resolved["fields"]
+    prerequisites = resolved["prerequisites"]
+    view_sha = resolved.get("view_sha")
+    if not isinstance(view_sha, str) or not view_sha:
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): resolved must carry a non-empty view_sha — the "
+            "code-rendered verify-registration brief the human saw (R6's fourth recompute leg)."
+        )
+    if not (
+        isinstance(registration_id, str)
+        and isinstance(run_id, str)
+        and isinstance(dossier_sha, str)
+        and isinstance(template_rel, str)
+        and isinstance(template_sha, str)
+    ):
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): registration_id / run_id / dossier_sha / template / "
+            "template_sha must all be strings."
+        )
+    if not isinstance(fields, dict):
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): resolved['fields'] must be a mapping."
+        )
+    if not isinstance(prerequisites, list):
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): resolved['prerequisites'] must be a list (the chain)."
+        )
+
+    # ── Base authorship floor (Lock 3, part 1): non-bare + names the id ──
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "registration gate: registering a strategy is the maximal HUMAN ceremony — a bare "
+            f"{spec.response!r} (a 'y' / click) cannot register. Name the registration "
+            f"({registration_id!r}) and a prerequisite sha prefix you reviewed."
+        )
+    authored = _registration_authored_text(experiment_dir, response)
+    if not _names_slug(authored, registration_id):
+        _refuse_missing_authorship(
+            "registration gate: the sign-off must NAME the registration_id "
+            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the registration."
+        )
+
+    # ── Lock 2a: dossier — dry re-gather + bind through the ONE kernel ──
+    include_lineage = bool(resolved.get("include_lineage", False))
+    sig = export_dossier.compute_dossier_signature(
+        experiment_dir, run_id, include_lineage=include_lineage
+    )
+    attestation.bind(
+        {
+            "attestor": "human",
+            "subject_kind": SUBJECT_KIND,
+            "subject_id": registration_id,
+            "content_sha": dossier_sha,
+            "view_sha": view_sha,
+        },
+        recompute=sig.bundle_sha256,
+    )
+
+    # ── Lock 2b: template raw-bytes sha on disk + completeness by counting ──
+    try:
+        tmpl_bytes = (Path(experiment_dir) / template_rel).read_bytes()
+    except OSError as exc:
+        raise errors.SpecInvalid(
+            f"registration gate (lock 2): template file {template_rel!r} is unreadable ({exc}). "
+            "A registration recomputes the template raw-bytes sha from disk; an unresolvable "
+            "template is refused, never skipped."
+        ) from exc
+    recomputed_template_sha = hashlib.sha256(tmpl_bytes).hexdigest()
+    if recomputed_template_sha != template_sha:
+        raise errors.SpecInvalid(
+            f"registration gate (lock 2): template sha mismatch — recorded {template_sha!r} vs "
+            f"the on-disk {recomputed_template_sha!r}. A hash cannot be asserted into existence."
+        )
+    try:
+        template = parse_template(
+            json.loads(tmpl_bytes.decode("utf-8")), template_sha=recomputed_template_sha
+        )
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise errors.SpecInvalid(
+            f"registration gate (lock 2): template {template_rel!r} is not valid UTF-8 JSON "
+            f"({exc})."
+        ) from exc
+    missing_fields = [s for s in template.fields if not _field_present(fields.get(s))]
+    if missing_fields:
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): template fields incomplete — every declared field slug "
+            f"must carry a non-empty value in resolved['fields']; missing: {missing_fields}."
+        )
+
+    # ── Lock 2c: the prerequisite chain — every declared slot filled + all CURRENT ──
+    entries = [parse_chain_entry(e) for e in prerequisites]
+    declared_slots = {p.slot for p in template.prerequisites}
+    chain_slots = {e.slot for e in entries}
+    missing_slots = sorted(declared_slots - chain_slots)
+    if missing_slots:
+        raise errors.SpecInvalid(
+            f"registration gate (lock 2): declared prerequisite slot(s) {missing_slots} are not "
+            "present in the chain — every declared prerequisite must be filled (counting)."
+        )
+    verdicts = registration_view.check_chain(
+        experiment_dir, entries, dossier_run_ids=set(sig.run_ids)
+    )
+    failing = [(v.slot, v.status) for v in verdicts if v.status != REG_CURRENT]
+    if failing:
+        names = ", ".join(f"{slot}={status}" for slot, status in failing)
+        raise errors.SpecInvalid(
+            "registration gate (lock 2): partial registration REFUSED — prerequisite slot(s) not "
+            f"CURRENT: {names}. Every prerequisite must read current at append (R4); the remedy "
+            "for partial readiness is not registering."
+        )
+
+    # ── Lock 2d: view_sha recomputed via the deterministic brief projection ──
+    dossier_leg = DossierLeg(
+        recorded_sha=dossier_sha, recomputed_sha=sig.bundle_sha256, drifted_stores=[]
+    )
+    template_leg = TemplateLeg(
+        status="current", recorded_sha=template_sha, recomputed_sha=recomputed_template_sha
+    )
+    prereq_legs = [
+        PrerequisiteLeg(
+            slot=v.slot,
+            kind=cast("PrerequisiteKind", v.kind),
+            status=cast("LegStatus", v.status),
+            recorded_sha=v.recorded_sha,
+            recomputed_sha=v.recomputed_sha,
+            evidence_note=v.evidence_note,
+        )
+        for v in verdicts
+    ]
+    declared = list(template.fields)
+    fields_report = FieldsReport(
+        declared=declared,
+        present=[s for s in declared if _field_present(fields.get(s))],
+        missing=[],
+    )
+    _, recomputed_view_sha = registration_view.build_view(
+        status=REG_CURRENT,
+        registration_id=registration_id,
+        registered_at=None,
+        dossier=dossier_leg,
+        template=template_leg,
+        prerequisites=prereq_legs,
+        fields=fields_report,
+    )
+    if recomputed_view_sha != view_sha:
+        raise errors.SpecInvalid(
+            "registration gate (lock 2, fourth leg): the recomputed verify-registration view_sha "
+            f"({recomputed_view_sha}) does not equal the signed view_sha ({view_sha}). The brief "
+            "the human bound must be the deterministic projection over the CURRENT legs — re-run "
+            "verify-registration and sign THAT view_sha."
+        )
+
+    # ── Lock 3, part 2: the raised bar — name a prerequisite by an 8+ hex sha prefix ──
+    if _names_sha_prefix(authored, entries) is None:
+        _refuse_missing_authorship(
+            "registration gate (lock 3): the sign-off must NAME at least one prerequisite by an "
+            "8+ hex-character prefix of one chain entry's content_sha (the diff-token pattern at "
+            "its strongest — an 8-hex prefix exists nowhere in a human's prior vocabulary and can "
+            "only derive from the presented evidence). Quote a prerequisite sha prefix from the "
+            "verify-registration brief."
+        )
+
+
+def _assert_registration_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """The R6 registration sign-off gate — the deployment-boundary attestation.
+
+    Block convention, enforced BOTH directions (mirrors ``scope-unlock`` /
+    ``notebook-sign-off``): a registration-family block
+    (:data:`REGISTRATION_BLOCK_FAMILY`) is refused for any ``scope_kind`` other
+    than ``"registration"``; and the ``"registration"`` scope accepts ONLY the
+    block family (``registration`` / ``registration-revoke``). Every other record
+    passes untouched. Dispatches a ``registration-revoke`` to the revoke floor (R7)
+    and a ``registration`` to the full three locks (R6).
+
+    Raises :class:`errors.SpecInvalid` on any refusal (authorship-bar refusals
+    carry the E2 marker so the single append firing site covers registration
+    sign-offs over MCP too; sha / structural refusals stay unmarked).
+    """
+    block = spec.block
+    in_family = block in REGISTRATION_BLOCK_FAMILY
+    # A registration-family block is registration-scope-only.
+    if in_family and spec.scope_kind != "registration":
+        raise errors.SpecInvalid(
+            f"block {block!r} is a registration-family block, only valid for "
+            f"scope_kind='registration'; got scope_kind={spec.scope_kind!r}."
+        )
+    if spec.scope_kind != "registration":
+        return  # not a registration record — nothing to gate
+    # The registration scope accepts ONLY its block family.
+    if not in_family:
+        raise errors.SpecInvalid(
+            f"scope_kind='registration' accepts only its block family "
+            f"{sorted(REGISTRATION_BLOCK_FAMILY)}; got block={block!r} — a registration scope "
+            "records ONLY registration / registration-revoke (R6)."
+        )
+    if not isinstance(resolved, dict):
+        raise errors.SpecInvalid(
+            "registration gate: resolved must be a mapping carrying the registration fields."
+        )
+    if block == REVOKE_BLOCK:
+        _assert_revoke_floor(experiment_dir, spec, resolved)
+        return
+    # block == REGISTRATION_BLOCK — the maximal human ceremony (R6 three locks).
+    _assert_registration_full(experiment_dir, spec, resolved)
 
 
 def _chain_successor(block: str) -> str | None:
