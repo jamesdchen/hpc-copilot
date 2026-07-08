@@ -836,6 +836,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "notebook_draft_context.input.json",
+    "name": "notebook-draft-context",
+    "output_schema": "notebook_draft_context.output.json",
+    "python": "hpc_agent.ops.notebook.draft_context_op.notebook_draft_context",
+    "side_effects": [],
+    "summary": "Render the deterministic DRAFTING context for a notebook-audit template: the template's slugs + cell prose verbatim; each engine the template imports resolved to its defining file under source_roots (path:lineno, signature, first docstring line, module_sha - the same resolution notebook-lint uses, never executing an import); name-match Call sites across source_roots (path:lineno, count, capped with the cap disclosed); and an inventory of files + sha12 + size under input_roots and each inventory_roots entry (a file recorded in .hpc/data_manifest.json is cited, not re-hashed). Roots default from the audit's recorded config when audit_id is given. The projection LISTS, never nominates - no baseline config, no section ranking. Read-only: the only write is the disposable content-keyed cache in the standard cache home. The result includes markdown - the code-rendered projection the drafting agent reads and the skill relays VERBATIM.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "notebook_status.input.json",
