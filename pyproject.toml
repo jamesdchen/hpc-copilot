@@ -140,6 +140,9 @@ hpc_agent = [
     # (Phase 2 / Option C). Only the shared preambles ship statically.
     "execution/mapreduce/templates/runtime/common/*.sh",
     "_kernel/extension/worker_prompts/*.md",
+    # Conformance-kit vectors ship as package data so `pytest --pyargs
+    # hpc_agent.conformance` runs against a stranger's harness from the wheel.
+    "conformance/fixtures/**/*.json",
     "py.typed",
 ]
 slash_commands = [
