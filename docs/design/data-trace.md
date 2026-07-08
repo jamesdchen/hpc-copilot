@@ -466,3 +466,35 @@ section-tagged, flag-carrying). End-state: assertion-bearing sections
 auto-clear only when the diff is clean AND the latest trace shows no
 flags — the D-attention tier finally sees runtime evidence, and the
 pack's runtime invariants join what routes human attention.
+
+## Amendment 10 (2026-07-08, user-directed): THE OBSERVER IS THE RUNNER —
+## emit ownership resolved
+
+No code inside the run is trust-bearing. The sanctioned execution lane
+(the notebook-render plugin / its lighter local runner) executes the draft
+CELL BY CELL (percent format = free boundaries) and MEASURES between
+cells itself: it looks up the DECLARED OBSERVABLES (the interface
+contract's names — already part of what the human signs, so the signature
+covers the observation plan) and takes the atoms via the pack's
+measurement implementations. Ungameable by construction: the observer is
+the process, not the code — a draft cannot skip a boundary, and hiding
+data in undeclared names yields visibly-absent observables (a disclosure,
+never a silence).
+
+THE TRUST HIERARCHY OF EMISSION SOURCES (each honest about what it is):
+1. **Runner-observed** (cell boundaries × declared names) — total coverage
+   by construction; THE ONLY receipt-grade source; what sign-off surfaces
+   and trace-as-receipt ever count.
+2. **Engine-emitted** (the pack wraps its own engines once) — ungameable
+   per-call detail, sub-cell stages; a REFINEMENT layer. Its holes stop
+   being trust gaps (the runner floor covers them) and become the
+   shadow-lint's runtime twin: "zero engine coverage in an executed
+   section" = the section avoided the pinned engines, disclosed.
+3. **Draft-emitted** (`trace.emit` in the draft) — untrusted annotation;
+   Class-A self-checking convenience only; never enters receipts.
+
+Atomicity composition: cell boundaries are the GUARANTEED observation
+floor; R1–R4 partition refinement operates within it via engine emits.
+Same shape as the whole system: the run does not narrate itself — trusted
+code observes from outside at signed boundaries (the pointing doctrine
+applied to instrumentation; the reducer/render/Stop-hook precedent).
