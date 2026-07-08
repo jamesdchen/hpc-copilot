@@ -157,8 +157,11 @@ in multi-human MH7).
   assertion idiom, not two hand-rolled AST walks.
 - **Registry arithmetic (updated 2026-07-07 late)**: baseline is now
   **142** @ `326a9124` (`notebook-scaffold-template` landed same night);
-  the slate's +5 stands; Phase 1a adds +1 (`data-manifest`) → expected
-  post-slate sum **148**. Phase 6.5 adds none.
+  the slate's +5 stands; Phase 1a adds +1 (`data-manifest`), and
+  `docs/design/draft-context.md` adds +1 (`notebook-draft-context`,
+  freestanding post-run-#10) → expected post-slate sum **149**. Phase 6.5
+  adds none. Draft-context's V-LINK view embed serializes with the next
+  view-touching phase (canon bump).
 - **Outsource presumptions recorded**: federation rides GIT (append-only
   content-addressed journals are git's native case — no sync daemon, no
   CRDT libs); DSSE envelope CONSTRUCTION rides securesystemslib/in-toto
