@@ -61,6 +61,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "data_manifest.input.json",
+    "name": "data-manifest",
+    "output_schema": "data_manifest.output.json",
+    "python": "hpc_agent.ops.data_manifest.data_manifest",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Mint an identity record (sha256 + size + opaque built_by per file) for the experiment's DECLARED input data into .hpc/data_manifest.json, journal the mint, and refresh the (size, mtime) fast-path cache. Converts silent data changes from invisible to attributed — the quiet-corruption class (same filename, rebuilt bytes) that no robustness layer catches because nothing throws. Roots default to interview.json's audited_source.input_roots (the ONE input declaration); no roots + no declaration REFUSES (core never guesses a data/ dir). Re-minting is the journaled 'new known-good' act. Pure local read + hash + write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent decorate-entry-point --path <path> --function-name <function_name>",
     "idempotent": true,
     "input_schema": null,

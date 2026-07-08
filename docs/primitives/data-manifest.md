@@ -1,3 +1,18 @@
+---
+name: data-manifest
+verb: mutate
+side_effects:
+- file_write: <experiment>/.hpc/data_manifest.json
+idempotent: false
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]
+  python: hpc_agent.ops.data_manifest.data_manifest
+---
 # data-manifest
 
 Mint an identity record — a `sha256` + `size` (+ opaque `built_by`) per file —

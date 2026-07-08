@@ -42,6 +42,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'cluster-reduce': ('cluster-reduce', 'hpc_agent.ops.aggregate.cluster_reduce'),
     'compute-run-id': ('compute-run-id', 'hpc_agent.incorporation.build.compute_run_id'),
     'dag-frontier': ('dag-frontier', 'hpc_agent.ops.dag_frontier'),
+    'data-manifest': ('data-manifest', 'hpc_agent.ops.data_manifest'),
     'decide-concurrency': ('decide-concurrency', 'hpc_agent.meta.campaign.atoms.decide_concurrency'),
     'decide-monitor-arm': ('decide-monitor-arm', 'hpc_agent.ops.monitor.arm'),
     'decide-partial-handling': ('decide-partial-handling', 'hpc_agent.ops.aggregate.decide_partial_handling'),

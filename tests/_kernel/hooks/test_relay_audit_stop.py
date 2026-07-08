@@ -570,9 +570,6 @@ def test_paraphrase_ignores_non_audit_diff_blocks(tmp_path: Path) -> None:
     _seed_render(tmp_path, "run10", "feature-construction", "abc123def456", _RENDER_BODY)
     # A git-style diff with NO audit vocabulary near it must not be checked,
     # even though the relay names the audit id elsewhere.
-    relay = (
-        "run10 status: I also edited the config:\n\n"
-        "```diff\n+alpha = 2.0\n-alpha = 1.0\n```\n"
-    )
+    relay = "run10 status: I also edited the config:\n\n```diff\n+alpha = 2.0\n-alpha = 1.0\n```\n"
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, relay)))
     assert out is None
