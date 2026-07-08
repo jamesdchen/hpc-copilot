@@ -38,6 +38,7 @@ from hpc_agent.state import run_record
 from hpc_agent.state.block_terminal import record_terminal
 from hpc_agent.state.decision_briefs import append_brief
 from hpc_agent.state.decision_journal import append_decision
+from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
@@ -97,6 +98,12 @@ def _record(run_id: str, **overrides: Any) -> RunRecord:
     return RunRecord(**base)
 
 
+_FINGERPRINT_LEDGER_BYTES = (
+    b'{"ts":"2026-01-01T00:00:00Z","schema_version":1,"subject_kind":'
+    b'"determinism-fingerprint","source":"double-canary","verdict":"auto_cleared"}\n'
+)
+
+
 def _seed_full_run(
     experiment_dir: Path,
     run_id: str,
@@ -105,6 +112,8 @@ def _seed_full_run(
     with_aggregated: bool = True,
     aggregated_bytes: bytes | None = None,
     supersedes: str = "",
+    with_fingerprint: bool = True,
+    fingerprint_bytes: bytes | None = None,
 ) -> None:
     """Write every per-run + per-scope store for *run_id* through the real writers."""
     tags = scopes or []
@@ -136,6 +145,15 @@ def _seed_full_run(
         (experiment_dir / "_aggregated" / f"{run_id}.json").write_bytes(
             aggregated_bytes if aggregated_bytes is not None else b'{"reduced": true}'
         )
+    if with_fingerprint:
+        # The cmd_sha-addressed determinism-fingerprint ledger, written as RAW
+        # BYTES (the bundler seals it verbatim, never parses it). cmd_sha matches
+        # the sidecar default so the identity-addressed path resolves.
+        ledger = fingerprint_path(experiment_dir, "0" * 64)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_bytes(
+            fingerprint_bytes if fingerprint_bytes is not None else _FINGERPRINT_LEDGER_BYTES
+        )
 
 
 def _sources_of(manifest: dict[str, Any]) -> list[str]:
@@ -164,6 +182,7 @@ def test_every_seeded_store_becomes_exactly_one_entry(journal_home: Path, experi
     assert counts["scope-journal"] == 1
     assert counts["look-ledger"] == 1
     assert counts["aggregated"] == 2  # dir file + file variant
+    assert counts["determinism-fingerprint"] == 1  # the cmd_sha-addressed ledger
     # No entry escapes the closed store vocabulary.
     assert set(sources) <= DOSSIER_SOURCES
     assert not result.gaps
@@ -187,6 +206,7 @@ def test_archive_layout_and_manifest_are_written(journal_home: Path, experiment:
     assert "scopes/holdout.looks.jsonl" in names
     assert f"aggregated/{_RID}/metrics_aggregate.json" in names
     assert f"aggregated/{_RID}.json" in names
+    assert "fingerprints/0000000000000000.jsonl" in names  # cmd_sha[:16]-addressed ledger
     assert "manifest.json" in names
     # manifest.json is the seal, never itself a source entry.
     assert "manifest.json" not in {e["path"] for e in result.manifest["entries"]}
@@ -420,6 +440,105 @@ def test_non_audited_run_seals_no_audit_stores(journal_home: Path, experiment: P
     assert not [g for g in result.gaps if g["source"] in {"audited-source", "notebook-journal"}]
     (proj,) = result.manifest["runs"]
     assert "audit_id" not in proj
+
+
+# --- determinism-fingerprint ledger (T8) -------------------------------------
+
+
+def test_fingerprint_ledger_is_sealed_byte_for_byte(journal_home: Path, experiment: Path) -> None:
+    """A run whose identity has a fingerprint ledger seals it under the
+    ``determinism-fingerprint`` noun as RAW BYTES — byte-identical round-trip out
+    of the zip and a matching sha256 (never parsed, never re-serialized)."""
+    import hashlib
+
+    # A deliberately-torn ledger (a truncated JSON line) must still round-trip:
+    # the bundler seals bytes, it never parses the JSONL.
+    ledger_bytes = b'{"schema_version":1,"source":"double-canary","verdict":"auto_cle'
+    _seed_full_run(experiment, _RID, fingerprint_bytes=ledger_bytes)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    entry = by_path["fingerprints/0000000000000000.jsonl"]
+    assert entry["source"] == "determinism-fingerprint"
+    assert set(entry) == {"source", "path", "sha256", "bytes"}  # no meaning field
+    assert entry["sha256"] == hashlib.sha256(ledger_bytes).hexdigest()
+    assert entry["bytes"] == len(ledger_bytes)
+    with zipfile.ZipFile(result.archive_path) as zf:
+        got = zf.read("fingerprints/0000000000000000.jsonl")
+    assert got == ledger_bytes  # opaque bytes — never parsed, never mutated
+    # The on-disk ledger equals what was sealed.
+    assert fingerprint_path(experiment, "0" * 64).read_bytes() == ledger_bytes
+    assert not [g for g in result.gaps if g["source"] == "determinism-fingerprint"]
+
+
+def test_missing_fingerprint_ledger_records_a_gap_and_still_succeeds(
+    journal_home: Path, experiment: Path
+) -> None:
+    """A resolvable identity whose ledger is not on disk (no sample ever minted)
+    records a ``determinism-fingerprint`` gap naming the run and still exports."""
+    _seed_full_run(experiment, _RID, with_fingerprint=False)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    fp_gaps = [g for g in result.gaps if g["source"] == "determinism-fingerprint"]
+    assert len(fp_gaps) == 1
+    assert fp_gaps[0]["run_id"] == _RID
+    assert "0000000000000000" in fp_gaps[0]["note"]
+    assert "determinism-fingerprint" not in _sources_of(result.manifest)
+    assert zipfile.is_zipfile(result.archive_path)
+
+
+def test_dry_signature_reflects_the_fingerprint_ledger_identically(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The one-seam property extends to the new noun: the dry signature and the
+    exported archive seal the SAME ledger bytes and fingerprint identically."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+
+    sig = compute_dossier_signature(experiment, _RID)
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    assert sig.bundle_sha256 == result.bundle_sha256
+    assert sig.entries == result.manifest["entries"]
+    # The ledger bytes made it into the seam's write_map exactly as the archive.
+    key = "fingerprints/0000000000000000.jsonl"
+    assert sig.write_map[key] == _FINGERPRINT_LEDGER_BYTES
+    with zipfile.ZipFile(result.archive_path) as zf:
+        assert zf.read(key) == sig.write_map[key]
+
+
+def test_appending_a_sample_between_exports_changes_the_bundle_sha(
+    journal_home: Path, experiment: Path
+) -> None:
+    """The DISCLOSED staleness consequence (design center 4 / drift-log item 5):
+    every appended fingerprint sample moves the sealed bytes, so a re-export
+    fingerprints differently — a registration's dossier leg reads stale until
+    re-exported."""
+    _seed_full_run(experiment, _RID)
+
+    first = export_dossier(
+        experiment_dir=experiment,
+        spec=ExportDossierSpec(run_id=_RID, output_path=str(experiment / "a.zip")),
+    )
+    # Append one more sample line to the append-only ledger (the accrual the
+    # design says moves the disclosure surface).
+    ledger = fingerprint_path(experiment, "0" * 64)
+    with ledger.open("ab") as fh:
+        fh.write(b'{"schema_version":1,"source":"verify-reproduction","verdict":"auto_cleared"}\n')
+    second = export_dossier(
+        experiment_dir=experiment,
+        spec=ExportDossierSpec(run_id=_RID, output_path=str(experiment / "b.zip")),
+    )
+
+    assert first.bundle_sha256 != second.bundle_sha256  # the sealed bytes moved
+    # Idempotent again once the ledger is stable: a third export re-fingerprints
+    # exactly the second.
+    third = export_dossier(
+        experiment_dir=experiment,
+        spec=ExportDossierSpec(run_id=_RID, output_path=str(experiment / "c.zip")),
+    )
+    assert third.bundle_sha256 == second.bundle_sha256
 
 
 # --- missing run -------------------------------------------------------------
