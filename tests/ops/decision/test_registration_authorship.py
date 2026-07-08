@@ -418,10 +418,35 @@ def test_registration_block_refused_on_non_registration_scope(tmp_path: Path) ->
 
 
 def test_registration_scope_refuses_foreign_block(tmp_path: Path) -> None:
-    # ``registration-review`` is a PLANNED-but-not-yet-added family member — the
+    # ``conformance-verdict`` is a PLANNED-but-not-yet-added family member — the
     # family exists to gate exactly this: an unreviewed block on the scope.
+    # (``registration-review`` is now an ADMITTED member — live-conformance T6 —
+    # so it is no longer the foreign example; see the review test below.)
     with pytest.raises(errors.SpecInvalid, match="accepts only its block family"):
         append_decision(
             experiment_dir=tmp_path,
-            spec=_spec(block="registration-review", response="whatever", resolved={}),
+            spec=_spec(block="conformance-verdict", response="whatever", resolved={}),
         )
+
+
+def test_registration_review_admitted_by_family_but_floor_is_t7(tmp_path: Path) -> None:
+    # live-conformance T6: ``registration-review`` joined REGISTRATION_BLOCK_FAMILY,
+    # so the scope's block convention ADMITS it (it is no longer refused as foreign).
+    # Its dedicated authorship floor — recompute the live dossier signature so a
+    # DRIFTED registration cannot be re-affirmed — is T7. Until then a review's thin
+    # ``resolved`` falls to the registration-full lock and is refused for lacking the
+    # registration fields (fail-safe: no unfloored re-affirmation is recorded).
+    with pytest.raises(errors.SpecInvalid) as exc:
+        append_decision(
+            experiment_dir=tmp_path,
+            spec=_spec(
+                block="registration-review",
+                response="re-affirming widget-batch-42",
+                resolved={
+                    "registration_id": _REG_ID,
+                    "dossier_sha": "d" * 64,
+                    "review_horizon": "2027-01-01T00:00:00Z",
+                },
+            ),
+        )
+    assert "accepts only its block family" not in str(exc.value)

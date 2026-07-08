@@ -109,13 +109,15 @@ def test_status_vocabulary_is_the_closed_r7_set() -> None:
     assert frozenset(reg.STATUSES) == expected
 
 
-def test_block_family_starts_with_exactly_the_two_shipped_blocks() -> None:
-    """R6: the family starts with registration + registration-revoke ONLY.
+def test_block_family_is_the_reviewed_set() -> None:
+    """R6: the family is registration + registration-revoke + registration-review.
 
-    ``registration-review`` / ``conformance-verdict`` are PLANNED members not
-    shipped in T1 — this pin fails loudly if one is added without review.
+    ``registration-review`` is the reviewed addition C-horizon anticipated (T6);
+    ``conformance-verdict`` stays a PLANNED member added by its own task — this
+    pin fails loudly if another block is added without review (equality, not
+    subset). Membership + intent are exercised by ``test_family_set_admits_the_review_block``.
     """
-    expected = frozenset({"registration", "registration-revoke"})
+    expected = frozenset({"registration", "registration-revoke", "registration-review"})
     assert frozenset(reg.REGISTRATION_BLOCK_FAMILY) == expected
     assert reg.SUBJECT_KIND == "dossier"
 
@@ -385,6 +387,190 @@ def test_reduction_verdict_matches_the_kernel_directly() -> None:
         records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA
     )
     assert status.status == reg.CURRENT
+
+
+# --- T6: the conformance declaration + the horizon consult -------------------
+# (docs/design/live-conformance.md C-declare / C-horizon)
+
+_NOW = "2026-07-10T00:00:00Z"
+
+
+def _reg_record_with_horizon(
+    horizon: str,
+    *,
+    ts: str = "2026-07-08T00:00:00Z",
+    dossier_sha: str = _DOSSIER_SHA,
+) -> dict[str, Any]:
+    """A registration record carrying an opt-in ``conformance`` declaration."""
+    rec = _reg_record(ts=ts, dossier_sha=dossier_sha)
+    rec["resolved"]["conformance"] = {
+        "baseline": {"path": "baseline.jsonl", "sha256": "b" * 64},
+        "min_window_n": 20,
+        "review_horizon": horizon,
+    }
+    return rec
+
+
+def _review_record(
+    horizon: str,
+    *,
+    ts: str,
+    dossier_sha: str = _DOSSIER_SHA,
+    registration_id: str = _REG_ID,
+) -> dict[str, Any]:
+    """A registration-review re-affirmation record (C-horizon shape)."""
+    return {
+        "schema_version": 1,
+        "ts": ts,
+        "scope_kind": "registration",
+        "scope_id": registration_id,
+        "block": reg.REGISTRATION_REVIEW_BLOCK,
+        "response": f"re-affirming {registration_id}, dossier {dossier_sha[:8]}",
+        "resolved": {
+            "registration_id": registration_id,
+            "dossier_sha": dossier_sha,
+            "review_horizon": horizon,
+        },
+    }
+
+
+def test_family_set_admits_the_review_block() -> None:
+    """R6: the maintained family gained ``registration-review`` (reviewed addition)."""
+    assert reg.REGISTRATION_REVIEW_BLOCK == "registration-review"
+    assert set(reg.REGISTRATION_BLOCK_FAMILY) == {
+        "registration",
+        "registration-revoke",
+        "registration-review",
+    }
+
+
+def test_declaration_absent_is_none() -> None:
+    """Opt-in (D7): no conformance block → None, no machinery, byte-identical."""
+    assert reg.parse_conformance_declaration({}) is None
+    assert reg.parse_conformance_declaration({"conformance": None}) is None
+
+
+def test_declaration_roundtrips_through_the_one_validator() -> None:
+    decl = reg.parse_conformance_declaration(
+        {
+            "conformance": {
+                "baseline": {"path": "b.jsonl", "sha256": "s"},
+                "keys": ["reading"],
+                "min_window_n": 20,
+                "review_horizon": "2026-12-01T00:00:00Z",
+            }
+        }
+    )
+    assert decl is not None
+    assert decl.baseline.path == "b.jsonl"
+    assert decl.keys == ("reading",)
+    assert decl.min_window_n == 20
+    assert decl.review_horizon == "2026-12-01T00:00:00Z"
+
+
+def test_declaration_unknown_key_refused_loud() -> None:
+    """R4: an opted-in requirement core cannot check must never silently pass."""
+    with pytest.raises(errors.SpecInvalid, match="unknown key"):
+        reg.parse_conformance_declaration(
+            {
+                "conformance": {
+                    "baseline": {"path": "b", "sha256": "s"},
+                    "min_window_n": 20,
+                    "cadence": "weekly",
+                }
+            }
+        )
+
+
+def test_declaration_routes_through_conformance_validator() -> None:
+    """Never a second validator — the routing calls the ONE declaration validator."""
+    src = inspect.getsource(reg.parse_conformance_declaration)
+    assert "conformance.validate_declaration(" in src
+
+
+def test_horizon_lapsed_reduces_stale_with_cause() -> None:
+    records = [_reg_record_with_horizon("2026-07-01T00:00:00Z")]  # before _NOW
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=_NOW
+    )
+    assert status.status == reg.STALE
+    assert status.stale_cause == reg.HORIZON_LAPSED
+
+
+def test_horizon_not_yet_lapsed_stays_current() -> None:
+    records = [_reg_record_with_horizon("2026-12-01T00:00:00Z")]  # after _NOW
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=_NOW
+    )
+    assert status.status == reg.CURRENT
+    assert status.stale_cause is None
+
+
+def test_now_none_never_evaluates_horizon_byte_identical() -> None:
+    # A lapsed horizon is INVISIBLE without now — the existing-caller path is exact.
+    records = [_reg_record_with_horizon("2026-07-01T00:00:00Z")]
+    without = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA
+    )
+    explicit_none = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=None
+    )
+    assert without == explicit_none
+    assert without.status == reg.CURRENT
+    assert without.stale_cause is None
+
+
+def test_review_record_extends_the_horizon() -> None:
+    records = [
+        _reg_record_with_horizon("2026-07-01T00:00:00Z", ts="2026-06-01T00:00:00Z"),
+        _review_record("2026-12-01T00:00:00Z", ts="2026-06-15T00:00:00Z"),
+    ]
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=_NOW
+    )
+    assert status.status == reg.CURRENT
+    assert status.stale_cause is None
+    # a review is NEVER a winner nor a supersession — winner is still the registration.
+    assert status.winner is not None
+    assert status.winner["dossier_sha"] == _DOSSIER_SHA
+    assert status.superseded == ()
+
+
+def test_review_before_winning_registration_is_ignored() -> None:
+    # Re-registration resets the clock; a review predating it referred to the OLD
+    # registration and must not extend the new one's horizon.
+    records = [
+        _review_record("2026-12-01T00:00:00Z", ts="2026-05-01T00:00:00Z"),
+        _reg_record_with_horizon("2026-07-01T00:00:00Z", ts="2026-06-01T00:00:00Z"),
+    ]
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=_NOW
+    )
+    assert status.status == reg.STALE
+    assert status.stale_cause == reg.HORIZON_LAPSED
+
+
+def test_drift_stale_takes_precedence_over_horizon() -> None:
+    # A moved dossier is drift-stale (cause None); the horizon only lapses an
+    # otherwise-CURRENT registration.
+    records = [_reg_record_with_horizon("2026-07-01T00:00:00Z")]
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha="MOVED", now=_NOW
+    )
+    assert status.status == reg.STALE
+    assert status.stale_cause is None
+
+
+def test_revoke_ignores_horizon() -> None:
+    records = [
+        _reg_record_with_horizon("2026-07-01T00:00:00Z"),
+        _revoke_record(ts="2026-07-08T05:00:00Z"),
+    ]
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA, now=_NOW
+    )
+    assert status.status == reg.REVOKED
+    assert status.stale_cause is None
 
 
 if __name__ == "__main__":  # pragma: no cover
