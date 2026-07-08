@@ -371,3 +371,39 @@ def test_render_markdown_shows_assertions_and_flags() -> None:
     assert "train() == 42" in md
     assert "### lint flags" in md
     assert "executes-live" in md
+
+
+# ── the next-actions footer (run-#10 hyper-palatable sign-off amendment) ─────
+
+
+def test_footer_lists_pending_sections_with_copy_ready_utterance() -> None:
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    md = render_markdown(view)
+    pending = [s.slug for s in view.sections if s.tier == "human_required"]
+    assert pending, "fixture must carry at least one human_required section"
+    assert "## next actions" in md
+    footer = md.split("## next actions", 1)[1]
+    for slug in pending:
+        assert slug in footer
+    assert f'"sign {" ".join(pending)}"' in footer
+    assert "token-exactly" in footer  # the gate's ACTUAL bar, code-stated
+
+
+def test_footer_all_auto_cleared_states_no_pending() -> None:
+    src, tmpl = _mods(SOURCE_INHERITED)
+    view = build_audit_view(src, tmpl, [])
+    md = render_markdown(view)
+    assert "## next actions" in md
+    assert "no sections await sign-off" in md
+
+
+def test_footer_never_enters_view_sha_payload() -> None:
+    # The footer is pure presentation: nothing footer-shaped may enter the
+    # hashed payload, so adding/changing it can never move a view_sha.
+    src, tmpl = _mods(SOURCE_MIXED)
+    view = build_audit_view(src, tmpl, [])
+    payload_json = json.dumps(view.payload, sort_keys=True)
+    assert "next actions" not in payload_json
+    for s in view.sections:
+        assert "next actions" not in json.dumps(s.payload, sort_keys=True)

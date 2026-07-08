@@ -481,4 +481,45 @@ def render_markdown(view: AuditView) -> str:
     for sv in view.sections:
         lines.extend(_render_section(sv))
 
+    lines.extend(_render_next_actions(view))
+
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_next_actions(view: AuditView) -> list[str]:
+    """The copy-ready next-actions footer (run-#10 amendment: hyper-palatable
+    sign-off — the human's next keystroke is visible in the artifact itself).
+
+    Derived ONLY from the view's own tiers, so it changes nothing the
+    ``view_sha`` covers (the sha rolls from per-section shas; this is pure
+    presentation) and nothing the per-section trusted renders contain. The
+    stated bar is the GATE'S actual bar (token-exact slug naming) — rendered
+    by code precisely because a relaying model overstated it live in run #10.
+    """
+    pending = [sv.slug for sv in view.sections if sv.tier == HUMAN_REQUIRED]
+    lines: list[str] = ["## next actions", ""]
+    if not pending:
+        lines.append(
+            "(no sections await sign-off — every section is auto_cleared; "
+            "notebook-status reports the audit verdict)"
+        )
+        lines.append("")
+        return lines
+    lines.append("Sections awaiting a typed human sign-off:")
+    for sv in view.sections:
+        if sv.tier == HUMAN_REQUIRED:
+            lines.append(f"- {sv.slug}  (view_sha {sv.view_sha[:12]})")
+    lines.append("")
+    batch = " ".join(pending)
+    lines.append(f'- To sign: type an utterance naming each slug, e.g. "sign {batch}"')
+    lines.append(
+        "- To contest one: name it with what is wrong, e.g. "
+        f'"{pending[0]}: <what is wrong>" — a nudge re-enters the loop at lint'
+    )
+    lines.append(
+        "- The gate's bar: the utterance must NAME each signed slug token-exactly; "
+        "a bare ack is refused. (Redundant sign-offs on auto_cleared sections "
+        "carry a higher bar.)"
+    )
+    lines.append("")
+    return lines
