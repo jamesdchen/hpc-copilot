@@ -5,6 +5,32 @@ model deadline; the judgment here is the deliverable — every build item
 either rides an existing phase of `slate-sequencing.md` or is explicitly
 parked as NEEDS RULING. Nothing in this doc adds core scope by itself.
 
+## The product, in one sentence (user-endorsed 2026-07-07)
+
+> **"What changed since last-known-good" — answered mechanically instead
+> of by archaeology.**
+
+Debugging-by-archaeology is a *narrative* activity (reconstruct what
+probably happened from memory and vibes), and narratives are where both
+humans and LLMs confabulate. Diffs against a recorded known-good are
+mechanical. Every layer of the stack is the same move on a different axis:
+
+| Axis | Last-known-good record |
+|---|---|
+| code | git (the one axis science got for free) |
+| data | the manifest (rung 0) |
+| behavior | the determinism fingerprint's envelope |
+| beliefs | registrations with review horizons |
+| decisions | the journal itself |
+
+Git proved the pattern earns its keep on one axis; the other four are the
+product. And it composes with the pointing doctrine: the diff is computed
+by trusted code, *shown* by the LLM, *concluded on* by the human —
+archaeology was the one place all three roles collapsed into whoever was
+debugging at 2am. Use this formulation in user-facing material (README,
+the eventual "arrive with X" guide, talks); it is the elevator answer to
+"what does this tool do".
+
 ## The organizing principle
 
 The copilot takes responsibility for the **transitions into the trust
