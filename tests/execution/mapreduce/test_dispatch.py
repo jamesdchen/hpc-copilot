@@ -865,3 +865,88 @@ class TestFrozenManifest:
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert "trial_params" in err and "re-submit" in err
+
+
+class TestPartialReproductionInclude:
+    """HPC_TASK_INCLUDE — the partial-reproduction execution restriction (T6).
+
+    A partial reproduction keeps the FULL task array (same trial_params /
+    cmd_sha) and threads the selected task indices through the job env as an
+    include-list. A non-selected index exits 0 IMMEDIATELY — before resolving
+    kwargs, formatting result_dir, or spawning — so its slot costs milliseconds
+    and it writes NO output (the reduce never sees a spurious row).
+    """
+
+    def test_included_helper_parsing(self) -> None:
+        """The include predicate: absent/blank/malformed → no restriction; else membership."""
+        assert dispatch._task_is_included(0, {}) is True
+        assert dispatch._task_is_included(0, {"HPC_TASK_INCLUDE": ""}) is True
+        assert dispatch._task_is_included(0, {"HPC_TASK_INCLUDE": "   "}) is True
+        assert dispatch._task_is_included(1, {"HPC_TASK_INCLUDE": "0,2,4"}) is False
+        assert dispatch._task_is_included(4, {"HPC_TASK_INCLUDE": "0,2,4"}) is True
+        assert dispatch._task_is_included(5, {"HPC_TASK_INCLUDE": " 5 , 7 "}) is True
+        # Non-integer garbage parses to an empty set → treated as no restriction
+        # (never silently skip the whole array on a bad env var).
+        assert dispatch._task_is_included(3, {"HPC_TASK_INCLUDE": "nope"}) is True
+
+    def test_excluded_index_exits_0_without_running(self, tmp_path, monkeypatch):
+        """A task_id absent from HPC_TASK_INCLUDE exits 0 fast — no result dir, no output."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo NEVER_RUN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_TASK_INCLUDE", "0,2")  # task 1 excluded
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Exited before result_dir was even created → no dir, no marker.
+        assert not (result_root / "1").exists()
+
+    @_posix_shell_executor
+    def test_included_index_runs(self, tmp_path, monkeypatch):
+        """A task_id present in HPC_TASK_INCLUDE runs the executor normally."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "2")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_TASK_INCLUDE", "0,2")  # task 2 included
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "2" / "metrics.json").read_text().strip() == "RAN"
+
+    @_posix_shell_executor
+    def test_no_include_runs_full(self, tmp_path, monkeypatch):
+        """Absent HPC_TASK_INCLUDE runs every task (an ordinary full run)."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "1" / "metrics.json").read_text().strip() == "RAN"
