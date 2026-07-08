@@ -315,6 +315,31 @@ def test_ssh_fallback_excludes_canary_sibling_results(journal_home, experiment, 
     assert agg["n_samples"] == len(_PI_VALUES)
 
 
+def test_ssh_fallback_excludes_canary2_sibling_results(journal_home, experiment, monkeypatch):
+    """The determinism fingerprint's SECOND canary (``<run_id>-canary2``)
+    contaminates the results subtree the SAME way ``-canary`` does. The
+    suffix-FAMILY exclusion (``_sibling_run_ids``, widened in the double-canary
+    commit) must drop it too, or the second canary's row lands in the main run's
+    mean (the run-#6 11-row-mean class, re-opened). Planted-row fire test."""
+    _seed_run(experiment)
+    _seed_sidecar_no_reducer(experiment)
+
+    metrics = [{"pi_estimate": v, "n_samples": 1} for v in _PI_VALUES]
+    # BOTH canaries land under the same results/ subtree; an extreme duplicate
+    # value would visibly skew the mean if either contaminated the reduce.
+    canaries = {
+        f"{_RUN_ID}-canary/task-0": {"pi_estimate": 999.0, "n_samples": 1},
+        f"{_RUN_ID}-canary2/task-0": {"pi_estimate": 999.0, "n_samples": 1},
+    }
+    monkeypatch.setattr(af_module, "rsync_pull", _rsync_with_extra_dirs(metrics, canaries))
+
+    result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
+
+    agg = result.aggregated_metrics[_RUN_ID]
+    assert agg["pi_estimate"] == pytest.approx(_EXPECTED_MEAN)  # neither canary averaged
+    assert agg["n_samples"] == len(_PI_VALUES)
+
+
 def test_ssh_fallback_refuses_foreign_row_overcount(journal_home, experiment, monkeypatch):
     """More contributing rows than the run's task count (after canary
     exclusion) is PROVABLE foreign contamination -- refuse loudly, never

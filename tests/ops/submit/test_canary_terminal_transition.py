@@ -30,6 +30,14 @@ _MAIN = "rX"
 _CANARY = "rX-canary"
 
 
+@pytest.fixture(autouse=True)
+def _single_canary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests assert the canary RunRecord terminal transition, not the
+    determinism-fingerprint DOUBLE canary. Without the opt-out the verified-canary
+    test would fire a real second canary; pin single-canary so it stays focused."""
+    monkeypatch.setenv("HPC_NO_DOUBLE_CANARY", "1")
+
+
 @pytest.fixture
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", tmp_path / "home_hpc")

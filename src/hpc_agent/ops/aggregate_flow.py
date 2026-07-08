@@ -335,13 +335,14 @@ def _per_task_metrics_reduce(
     # result_dir_template renders with the canary's run_id, whose name has the
     # MAIN id as a prefix), so the recursive scan sweeps it in and the mean
     # double-counts the canary's task (empirical: an 11-row average for a
-    # 10-task run — the seed-mean 45/11 tell). Exclude any dir under a path
-    # segment equal to the sibling id — the one #258 suffix definition
-    # (``_sibling_run_ids``), never a second hardcoded "-canary".
+    # 10-task run — the seed-mean 45/11 tell). The determinism fingerprint's
+    # SECOND canary (``<run_id>-canary2``) contaminates the SAME way, so the
+    # exclusion covers the whole ``-canary`` FAMILY — the one #258 suffix
+    # definition (``_sibling_run_ids``), never a second hardcoded "-canary".
     from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
 
-    (canary_id,) = _sibling_run_ids(run_id)
-    result_dirs = [d for d in result_dirs if canary_id not in Path(d).parts]
+    canary_ids = set(_sibling_run_ids(run_id))
+    result_dirs = [d for d in result_dirs if canary_ids.isdisjoint(Path(d).parts)]
     # Cardinality gate (finding-21 family): MORE contributing rows than the
     # run's task count is PROVABLE foreign contamination (another run sharing
     # the results/ subtree) — averaging them silently corrupts the aggregate,
