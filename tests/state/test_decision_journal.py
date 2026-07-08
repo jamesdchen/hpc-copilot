@@ -149,6 +149,34 @@ def test_notebook_kind_lands_under_hpc_notebooks(tmp_path: Path) -> None:
     assert records[0]["resolved"]["section"] == "construction"
 
 
+def test_registration_kind_lands_under_hpc_registrations(tmp_path: Path) -> None:
+    """A ``registration`` decision journals under
+    ``.hpc/registrations/<registration_id>.decisions.jsonl``.
+
+    Design ``docs/design/registration-kernel.md`` R9: the deployment-boundary
+    attestation rides ``append-decision`` under a caller-authored
+    ``registration_id`` (a SIXTH scope kind, its own path branch).
+    """
+    append_decision(
+        tmp_path,
+        scope_kind="registration",
+        scope_id="reg-widgets",
+        block="registration",
+        response="register reg-widgets at dossier abc123",
+        resolved={
+            "registration_id": "reg-widgets",
+            "run_id": "widget-run-1",
+            "dossier_sha": "abc123",
+        },
+    )
+    path = decisions_path(tmp_path, "registration", "reg-widgets")
+    assert path == tmp_path / ".hpc" / "registrations" / "reg-widgets.decisions.jsonl"
+    records = read_decisions(tmp_path, "registration", "reg-widgets")
+    assert len(records) == 1
+    assert records[0]["scope_kind"] == "registration"
+    assert records[0]["resolved"]["registration_id"] == "reg-widgets"
+
+
 def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) -> None:
     """Existing run/campaign locality is unchanged by the new scope kind."""
     append_decision(tmp_path, scope_kind="run", scope_id="id", block="submit.S1", response="y")
@@ -159,6 +187,9 @@ def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) ->
     append_decision(
         tmp_path, scope_kind="notebook", scope_id="id", block="notebook-sign-off", response="y"
     )
+    append_decision(
+        tmp_path, scope_kind="registration", scope_id="id", block="registration", response="y"
+    )
     assert (
         decisions_path(tmp_path, "run", "id") == tmp_path / ".hpc" / "runs" / "id.decisions.jsonl"
     )
@@ -166,10 +197,15 @@ def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) ->
         decisions_path(tmp_path, "campaign", "id")
         == tmp_path / ".hpc" / "campaigns" / "id" / "decisions.jsonl"
     )
+    assert (
+        decisions_path(tmp_path, "registration", "id")
+        == tmp_path / ".hpc" / "registrations" / "id.decisions.jsonl"
+    )
     assert len(read_decisions(tmp_path, "run", "id")) == 1
     assert len(read_decisions(tmp_path, "campaign", "id")) == 1
     assert len(read_decisions(tmp_path, "scope", "id")) == 1
     assert len(read_decisions(tmp_path, "notebook", "id")) == 1
+    assert len(read_decisions(tmp_path, "registration", "id")) == 1
 
 
 def test_run_and_campaign_scopes_are_separate_stores(tmp_path: Path) -> None:

@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from hpc_agent._wire._shared import RunIdStrict
 
@@ -83,6 +83,48 @@ class ReproduceRunInput(BaseModel):
             "prior_repro_exists branch)."
         ),
     )
+    task_sample: list[int] | Literal["derived"] | None = Field(
+        default=None,
+        description=(
+            "PARTIAL reproduction subset (design center 5). Null reproduces the "
+            "FULL task list. Either an explicit caller list of task indices (wins "
+            'over the derived mode), OR the sentinel "derived" — the machinery '
+            "then derives the subset MECHANICALLY from the axes: the canary task "
+            "(task 0) plus one task per distinct axis value at that axis's "
+            "row-major stride (a PURE function of axis structure, no "
+            "representative/importance heuristic). The reproduction keeps the SAME "
+            "task shape / trial_params / cmd_sha (a rebuilt smaller trial_params "
+            "would move cmd_sha and be refused by the param-drift guard); the "
+            "subset only restricts EXECUTION via HPC_TASK_INCLUDE (non-selected "
+            "indices exit 0 immediately). The selected indices are recorded on the "
+            "reproduction sidecar (extra.task_sample) so verify-reproduction "
+            "compares per-task honestly."
+        ),
+    )
+
+    @field_validator("task_sample")
+    @classmethod
+    def _task_sample_indices_are_clean(
+        cls, value: list[int] | str | None
+    ) -> list[int] | str | None:
+        """A caller list must be non-empty non-negative ints (no bools, no dups).
+
+        The derived sentinel and null pass through. A malformed caller list is
+        refused at the wire so a bad subset never reaches the execution-restriction
+        seam (where a silent all-skip would strand the reproduction).
+        """
+        if not isinstance(value, list):
+            return value
+        if not value:
+            raise ValueError("task_sample list must be non-empty (or null for a full reproduction)")
+        for idx in value:
+            if isinstance(idx, bool) or not isinstance(idx, int):
+                raise ValueError(f"task_sample indices must be ints, got {idx!r}")
+            if idx < 0:
+                raise ValueError(f"task_sample indices must be >= 0, got {idx}")
+        if len(set(value)) != len(value):
+            raise ValueError(f"task_sample indices must be unique, got {value}")
+        return value
 
 
 class ReproduceRunResult(BaseModel):

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/evidence_demand.input.json",
+  "title": "determinism evidence demand",
+  "description": "A caller-authored demand on the fingerprint's accumulated evidence.\n\nThe registration kernel (``docs/design/registration-kernel.md``) DEMANDS\nevidence tiers — e.g. \"fingerprint at main-scale, n>=3\" — and the fingerprint\nexposes ONE pure predicate (``state/determinism.py::evidence_meets``) that\nconsumes exactly this shape, counting ADMITTED CURRENT-identity samples only.\nCore matches by identity and counts, never interprets.",
+  "type": "object",
+  "required": [
+    "min_n"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "min_n": {
+      "description": "Minimum admitted samples (n_full + n_partial both count) the evidence must carry.",
+      "minimum": 1,
+      "title": "Min N",
+      "type": "integer"
+    },
+    "min_n_full": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional separate demand on scale-quality — full (non-partial) admitted samples only, over the n_full leg the evidence block isolates.",
+      "title": "Min N Full"
+    },
+    "scales": {
+      "description": "Scale labels the evidence must cover (empty = no scale constraint). Plural.",
+      "items": {
+        "enum": [
+          "canary",
+          "main"
+        ],
+        "type": "string"
+      },
+      "title": "Scales",
+      "type": "array"
+    },
+    "clusters": {
+      "description": "Measuring clusters the evidence must cover (empty = no cluster constraint). Plural.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Clusters",
+      "type": "array"
+    }
+  }
+}

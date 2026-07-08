@@ -250,39 +250,61 @@ def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]
     }
 
 
-# The canary-pairing suffix (#258): every canary-gated ``submit-flow`` writes
-# TWO journal entries, ``<run_id>`` and ``<run_id>-canary``. This module owns
-# the pairing definition; other call sites (``ops/status_blocks``) import the
-# helpers below rather than re-inlining the suffix (engineering-principles.md:
-# one definition per identity decision).
-_CANARY_SUFFIX = "-canary"
+# The canary-pairing suffix FAMILY (#258 + the double canary): a canary-gated
+# ``submit-flow`` writes ``<run_id>`` and ``<run_id>-canary``; when the
+# determinism fingerprint mints its n=2 prior (``submit-and-verify``), a SECOND
+# canary ``<run_id>-canary2`` also lands. This module owns the ONE suffix
+# definition; other call sites (``ops/status_blocks``, ``ops/aggregate_flow``,
+# ``ops/supersession``, ``ops/resolve_submit_inputs``) import the helpers below
+# rather than re-inlining any ``-canary`` literal (engineering-principles.md:
+# one definition per identity decision). Ordered PRIMARY-canary FIRST so the
+# call sites that report a single "the canary" for a lease-only attempt name
+# ``-canary`` (not ``-canary2``); ``canary_parent_of`` strips longest-suffix
+# first (below) so ``-canary2`` still maps to the main run, never ``…-canary``.
+_CANARY_SUFFIXES: tuple[str, ...] = ("-canary", "-canary2")
 
 
 def canary_parent_of(run_id: str) -> str | None:
-    """The parent run's id when *run_id* is a ``-canary`` sibling, else None.
+    """The parent run's id when *run_id* is a ``-canary`` FAMILY sibling, else None.
 
-    The single is-this-a-canary predicate (#258 pairing): a non-None return
-    means *run_id* names the 1-task canary journal entry and the returned id
-    names the main run it was submitted alongside.
+    The single is-this-a-canary predicate (#258 pairing, widened for the double
+    canary): a non-None return means *run_id* names one of the 1-task canary
+    journal entries (``-canary`` or ``-canary2``) and the returned id names the
+    main run it was submitted alongside. Suffixes are tried LONGEST-first so a
+    ``-canary2`` id strips to the main run, never to ``…-canary`` -> ``…2``.
     """
-    if run_id.endswith(_CANARY_SUFFIX):
-        return run_id[: -len(_CANARY_SUFFIX)]
+    for suffix in sorted(_CANARY_SUFFIXES, key=len, reverse=True):
+        if run_id.endswith(suffix):
+            return run_id[: -len(suffix)]
     return None
 
 
-def _sibling_run_ids(run_id: str) -> list[str]:
-    """Paired journal entries that share this submit's ``cmd_sha`` (#258).
+def canary_family(parent_run_id: str) -> list[str]:
+    """Every ``-canary`` FAMILY id for a MAIN *parent_run_id* (``-canary``, ``-canary2``).
 
-    Every ``submit-flow`` writes TWO entries — the main run and its
-    ``<run_id>-canary`` sibling — submitted together with one outcome. Reconcile
-    must settle both in one call, or the next ``/submit-hpc`` is blocked by the
-    untouched canary entry. The pairing is the ``-canary`` suffix; given either
-    half, return the other.
+    The ONE place the suffix family expands, so the double-canary exclusion,
+    the reconcile sibling-settle, and the supersession/resolve call sites all
+    agree on exactly which sub-records a main run owns.
+    """
+    return [f"{parent_run_id}{suffix}" for suffix in _CANARY_SUFFIXES]
+
+
+def _sibling_run_ids(run_id: str) -> list[str]:
+    """Paired journal entries that share this submit's ``cmd_sha`` (#258 + double canary).
+
+    A canary-gated ``submit-flow`` writes the main run and its ``<run_id>-canary``
+    sibling; ``submit-and-verify``'s fingerprint prior adds ``<run_id>-canary2``.
+    Reconcile must settle EVERY paired entry in one call, or the next
+    ``/submit-hpc`` is blocked by an untouched canary entry (the run-#7
+    unsettled-sibling stall class, re-opened by the second canary). Given the
+    MAIN id, return the whole canary family; given ANY canary-family id, return
+    the main plus the OTHER family members. Callers that single-unpacked the old
+    one-element return were widened in the same commit.
     """
     parent = canary_parent_of(run_id)
     if parent is not None:
-        return [parent]
-    return [f"{run_id}{_CANARY_SUFFIX}"]
+        return [parent, *[c for c in canary_family(parent) if c != run_id]]
+    return canary_family(run_id)
 
 
 @primitive(

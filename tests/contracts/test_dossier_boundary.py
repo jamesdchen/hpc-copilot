@@ -66,6 +66,7 @@ _EXPECTED_SOURCES = frozenset(
         "audited-source",
         "notebook-journal",
         "renders",
+        "determinism-fingerprint",
     }
 )
 
