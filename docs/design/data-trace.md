@@ -284,3 +284,39 @@ condition ever gates a run).
   table (point-lookup layout, local placement, index-not-store); A6 the
   comprehension consumer (reference traces as the drafting brief's dynamic
   half; self-describing renders). Coda: three lifetimes.
+
+## Amendment 7 (2026-07-08, user-directed): the bootstrap, the consumer
+## classes, and the drafting brief
+
+**Bootstrap (the chicken-and-egg dissolved):** the partition is NOT born
+from bugs. (a) The corpus is pre-seeded by the PACK (leakage channels, D-V
+violations, discipline failure modes) — program bug history refines it,
+never creates it. (b) The day-one consumer is THE AUTHOR: the initial
+granularity comes from THE AUTHORING FLOOR — emit a stage wherever you
+write a transform you'd explain as one step; emission is part of the
+authoring act (write the call, write its emit, run, watch the waterfall
+row appear — live feedback while building). Authoring granularity
+naturally satisfies R1; R3 refinement under the growing corpus splits
+where real bugs smear. Collection therefore starts at THE FIRST
+EXPLORATORY EXECUTION, not after bugs exist.
+
+**Consumer CLASSES (the organizing principle — each class fixes a
+freshness/lookup/render contract):**
+- **A. AUTHORING** (comprehension-own): the builder mid-creation; lookup =
+  "my draft's latest execution"; freshness = per cell-run, PRE-ingestion —
+  the ONE consumer allowed to read transport copies directly; render =
+  live terse waterfall.
+- **B. REFERENCE** (comprehension-others): the drafting brief, onboarding;
+  lookup = meaning-adjacent (latest-by-profile via sidecar keys);
+  freshness = lagging OK; render = self-describing, teaching-shaped.
+- **C. VERIFICATION/IDENTITY**: diff, fingerprint, audit-join, dossier,
+  R3 certificates; exact keys, POST-ingestion only, sha-bound comparison
+  renders. (Why ingestion + journaled shas exist.)
+A future consumer is CLASSIFIED FIRST; its class dictates its contract.
+
+**The drafting brief (planned composition):** draft-context render
+(static: what the code offers) + reference trace render (dynamic: what the
+data does through it), code-composed into ONE artifact the drafting step
+reads — the run-#10 hand-rolled brief, fully mechanized. Lands as a small
+follow-up on the built draft-context (its skill step gains the second
+input) + this pairing note.
