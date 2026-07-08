@@ -210,16 +210,25 @@ def _check_roots(
 def _manifest_drift_disclosure(experiment_dir: Path, input_roots: list[str]) -> str:
     """The data-manifest drift DISCLOSURE line (never a blocker).
 
-    Phase-1a seam: the ``data-manifest`` verb (Phase 1a) is being built in a
-    PARALLEL worktree and does not exist in this tree yet, so there is no manifest
-    to read — this returns the standing "no manifest" disclosure. The orchestrator
-    wires the real drift counts through this function after both phases merge. The
-    line is DISCLOSURE only and NEVER flips the verdict (the attention contract),
-    so the seam is safe to leave standing either way.
+    Wired to the Phase-1a substrate (:func:`hpc_agent.state.data_manifest.compute_drift`
+    — the verdict-FREE projection: counts + identities, humans conclude). No
+    manifest = the standing disclosure per the attention contract. The line is
+    DISCLOSURE only and NEVER flips the verdict; ``compute_drift`` is read-only
+    (never re-mints, never refreshes the cache), so the preflight stays a pure
+    query.
     """
+    from hpc_agent.state.data_manifest import compute_drift
+
+    report = compute_drift(experiment_dir)
+    if report.unmanifested:
+        return (
+            "data-manifest drift: no manifest recorded "
+            "(runs invisible to data-drift attribution) — disclosure only, never a blocker"
+        )
+    c = report.counts
     return (
-        "data-manifest drift: no manifest recorded "
-        "(Phase-1a data-manifest verb not yet wired) — disclosure only, never a blocker"
+        f"data-manifest drift: {c['matched']} match, {c['drifted']} drifted, "
+        f"{c['new']} new, {c['missing']} missing — disclosure only, never a blocker"
     )
 
 
