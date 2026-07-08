@@ -958,6 +958,8 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         )
         cap_wave_map = {str(w): ids for w, ids in build_wave_map(plan).items()}
 
+    from hpc_agent.state.pack_declarations import resolve_pack_echoes
+
     write_run_sidecar(
         experiment_dir,
         run_id=spec.run_id,
@@ -996,6 +998,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         # covers the bare submit-flow path where no resolve leg ran). Lets a
         # later reproduction of the same original skip this derived run too.
         reproduces=spec.reproduction_of,
+        # Domain-pack echoes (T10): one opaque {pack, version, sha, manifest} per
+        # bound pack the experiment opted into, so export-dossier can seal each
+        # pack's manifest + decision journal. FAIL-OPEN + additive — resolve_pack_
+        # echoes returns [] when not opted in (or on any dangling/drift), so the
+        # `or None` omits the field entirely and a pack-less run's sidecar stays
+        # byte-identical. The gate at the pre-staging seat above already verified
+        # every opted-in pack is current before this point.
+        packs=resolve_pack_echoes(experiment_dir) or None,
     )
 
 
