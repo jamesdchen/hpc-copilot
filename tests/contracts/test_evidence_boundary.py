@@ -189,3 +189,147 @@ def test_corrupted_journal_still_greenlights(tmp_path: Path) -> None:
     assert _greenlight_surface(corrupt) == _greenlight_surface(empty)
     ev = _brief_evidence(corrupt)
     assert isinstance(ev, dict)  # completed, never raised
+
+
+# ── T11: the remaining enforcement rows ───────────────────────────────────────
+
+
+def test_citation_kinds_closed_and_equals_wire_literal() -> None:
+    """``CITATION_KINDS`` is a CLOSED, mechanism-only set == the wire ``CitationKind``.
+
+    A domain word (a metric, a strategy) becoming a kind is index poisoning — those
+    ride ``ref`` as opaque identity, never a new kind. The state frozenset and the
+    wire literal are two spellings of ONE closed vocabulary.
+    """
+    from typing import get_args
+
+    from hpc_agent._wire.queries.evidence import CitationKind
+    from hpc_agent.state.evidence import CITATION_KINDS
+
+    assert frozenset({"dossier", "run", "fingerprint", "attestation"}) == CITATION_KINDS
+    assert set(get_args(CitationKind)) == set(CITATION_KINDS)
+
+
+def test_one_collector_route_through_every_surface() -> None:
+    """Both verbs, the embed seat, and the queue collector route through the ONE
+    ``collect_evidence`` — no surface re-walks or re-reduces (the one-collector row).
+    """
+    from hpc_agent.ops import attention_queue as aq
+    from hpc_agent.ops.evidence_brief_op import evidence_brief
+    from hpc_agent.ops.evidence_embed import build_evidence_embed
+    from hpc_agent.ops.evidence_period_op import evidence_period
+
+    surfaces = (
+        evidence_brief,
+        evidence_period,
+        build_evidence_embed,
+        aq.collect_campaign_unconcluded,
+    )
+    for func in surfaces:
+        src = inspect.getsource(func)
+        assert "collect_evidence(" in src, (
+            f"{func.__qualname__} must route through collect_evidence"
+        )
+
+
+def test_kernel_and_citation_route_through() -> None:
+    """Conclusion attestations route through the ONE kernel (bind/reduce) and every
+    citation verifies at APPEND via ``resolve_citation`` — never a re-inlined compare.
+    """
+    from hpc_agent.ops.decision.journal import _assert_conclusion_full
+    from hpc_agent.state.evidence import reduce_conclusion
+
+    reduce_src = inspect.getsource(reduce_conclusion)
+    assert "attestation.reduce(" in reduce_src  # winner-selection via the ONE kernel
+
+    gate_src = inspect.getsource(_assert_conclusion_full)
+    assert "attestation.bind(" in gate_src  # content_sha hash-locked via the kernel
+    assert "resolve_citation(" in gate_src  # every citation verified server-side at append
+
+
+def test_no_conclusion_affordance_in_registry() -> None:
+    """No mutate/workflow verb is named conclude/conclusion — append-decision under
+    the gated block is the ONLY write path (Lock 1, the no-unlock-verb doctrine).
+    """
+    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+    register_primitives()
+    for name in get_registry():
+        low = name.lower()
+        assert "conclude" not in low and "conclusion" not in low, (
+            f"a verb-shaped conclusion affordance appeared in the registry: {name!r}"
+        )
+
+
+def test_no_code_path_mechanically_writes_the_conclusion_block() -> None:
+    """No core writer hand-commits ``block=\"conclusion\"`` — the block only rides a
+    human ``append-decision`` through the gate (no agent-authored conclusions).
+    """
+    import pathlib
+
+    src_root = pathlib.Path(inspect.getfile(build_evidence_embed)).parents[1]  # hpc_agent/
+    offenders: list[str] = []
+    for py in src_root.rglob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        if 'block="conclusion"' in text or "block='conclusion'" in text:
+            offenders.append(str(py))
+    assert not offenders, f"a code path mechanically writes block=conclusion: {offenders}"
+
+
+def test_render_has_no_interpretation_vocabulary() -> None:
+    """The digest render composes counts/dates/shas only — no urgency / recommendation
+    vocabulary in its source literals (the D6 no-fabricated-urgency rule).
+    """
+    from hpc_agent.ops import evidence_render
+
+    banned = ("urgent", "recommend", "should", "promising", "stale", "must ", "don't")
+    tree = ast.parse(inspect.getsource(evidence_render))
+    # Exclude docstrings / bare-expression strings (prose ABOUT the rule, not render
+    # output) — only string constants that actually flow into the digest count.
+    docstrings = {
+        stmt.value
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        for stmt in node.body
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+    }
+    literals = [
+        node.value.lower()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
+    ]
+    for text in literals:
+        for word in banned:
+            assert word not in text, (
+                f"interpretation vocabulary {word!r} in a render literal: {text!r}"
+            )
+
+
+def test_index_is_disposable_render_and_embed_write_nothing(tmp_path: Path) -> None:
+    """The projection is DISPOSABLE: rendering / embedding persists no file under the
+    namespace — no digest file, no watermark (a persisted projection would be a
+    second source of truth).
+    """
+    from hpc_agent.ops.evidence_embed import build_evidence_embed as _embed
+
+    def _snapshot(root: Path) -> set[str]:
+        return {str(p.relative_to(root)) for p in root.rglob("*")}
+
+    write_manifest(tmp_path, campaign_id=_CID, goal="widget throughput")
+    _seed_conclusions(tmp_path, 3)
+    before = _snapshot(tmp_path)
+    _embed(tmp_path, tags=["edge-x"])
+    _embed(tmp_path, tags=[])
+    assert _snapshot(tmp_path) == before  # the embed created nothing
+
+
+def test_conclusions_required_nowhere_zero_is_a_normal_advisory(tmp_path: Path) -> None:
+    """Conclusions are required NOWHERE at creation: an empty namespace yields a
+    NORMAL advisory embed (counts of zero), never a refusal / unavailable / gate.
+    """
+    from hpc_agent.ops.evidence_embed import build_evidence_embed as _embed
+
+    ev = _embed(tmp_path, tags=["edge-x"])
+    assert ev.get("unavailable") is not True
+    assert ev.get("conclusion_count") == 0
+    assert ev.get("unconcluded_count") == 0
