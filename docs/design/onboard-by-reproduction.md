@@ -57,6 +57,13 @@ F1 class, at the front door). The honest sentence the machinery may emit:
 > "the claim is consistent with a fresh observed run (within caller
 > tolerance)"
 
+**And that sentence is emitted by CODE, never composed by the LLM
+(user-pinned 2026-07-07): the consistency determination is the
+comparator's (trusted code, caller tolerance as data); the receipt and
+its brief rendering are deterministic projections; the LLM points the
+human at the render, relay-verbatim, and never characterizes
+match/mismatch in its own words.**
+
 The fingerprint history starts from the observed runs ONLY. An
 enforcement row pins the vocabulary: no code path writes a
 reproduction-kind receipt with an external baseline (fires-and-passes

@@ -55,7 +55,13 @@ nothing fails — only an identity record sees it.
    M drifted, K new, J missing, or: no manifest (runs invisible to
    data-drift attribution)". VERDICT-FREE: core never says
    "updated/appended/corrupted"; drift meaning is human judgment at the
-   brief.
+   brief. **AND LLM-FREE (user-pinned 2026-07-07): the interpretation
+   "these bytes differ ⇒ drifted" is itself MECHANIZED — the drift report
+   is a deterministic code-rendered projection (sha-able, the
+   trusted-display class), and the LLM's only role is POINTING the human
+   at it, relay-verbatim. The LLM never re-derives, re-summarizes, or
+   characterizes drift; a relayed drift section that doesn't match the
+   code render is the existing relay-audit violation.**
 3. **Audit sections** assert against it caller-side (the template's
    `universe-and-alignment` prints shas today; the manifest is its
    comparison target).
