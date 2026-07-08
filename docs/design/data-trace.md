@@ -344,3 +344,97 @@ story stands: day one = the authoring floor + class obligations from
 above, arriving as classes-to-instantiate, not fixtures-to-run. (Third
 same-night instance of the leak class: every noun in a pack sentence gets
 the altitude test individually.)
+
+## Implementation plan (Opus task waves — supersedes the Sequencing sketch)
+
+Every task lands with tests that FIRE on a synthetic violation and PASS on
+the happy path (docs/internals/adding-a-primitive.md). Toy fixtures only —
+text/CSV frames, never a parquet, never quant vocabulary. Registry
+arithmetic is RELATIVE (+2 core verbs from whatever baseline holds at
+dispatch time — the slate session is concurrently adding verbs; regen
+commits are STRICTLY SERIAL with theirs: run these waves between slate
+phases, or on worktrees with rebake-at-merge, the proven procedure).
+
+**Wave 0 — the gate (blocks everything):**
+- **T0 outsourcing due-diligence.** Evaluate OpenLineage (+ Great
+  Expectations / DVC / Hamilton adjacents) against the hard constraints
+  (append-only JSONL, no daemon, stdlib-only core, sha-bindable,
+  journal-native). Deliverable: an amendment to THIS DOC — a criteria
+  table + adopt/refuse verdict per candidate, shapes adopted if any fit.
+  Needs WebSearch/WebFetch; no repo writes beyond the doc.
+
+**Wave 1 — the substrate (file-disjoint, dispatchable in parallel):**
+- **T1 `state/data_trace.py`** — the record model (`{stage, section?,
+  seq, atoms{}, flags[], trace_schema_version:1, created_at}`), the ATOM
+  SCHEMA REGISTRY with per-atom comparison semantics (ONE definition —
+  render, diff, and the later fingerprint interlock all consume it;
+  enforcement row pins one-registry), canonical serialization (the P-S1
+  helper if landed, else local + cite), the generic invariants
+  (conservation / chain continuity / seq monotonicity) as pure functions,
+  the store read/write (`.hpc/traces/<scope_kind>/<scope_id>/task-<n>.jsonl`,
+  one file per task), and `ingest_trace(experiment_dir, scope_kind,
+  scope_id, task, transport_path)` — moves the file into the store and
+  journals ONE record (`block="data-trace"`, `resolved={scope, id, task,
+  trace_sha, stage_count}`) via append_decision on the run/audit scope
+  (the relay-due block-class precedent: absent from _BLOCK_ATTESTOR and
+  receipt reductions, pinned by test). Stdlib-only (enforcement: the
+  library-boundary import guard).
+- **T2 the emission contract** — a constants module shared with the
+  dispatcher (lock-step, like the _EXIT codes): the transport filename
+  (`_trace.jsonl`), the digest env var name, the local-emission fallback
+  rule (Class A reads transport directly; local runs ingest immediately).
+  Plus the Class-A read helper (freshest transport copy for a draft).
+
+**Wave 2 — the classifier + transport (serialize with anything touching
+dispatch.py / the pull seam):**
+- **T3 digest classifier** — a pure function over the sidecar (canary
+  flag | `reproduces` set | local context | task_count ≤ threshold →
+  digests on) + the dispatcher exporting the env var + the submit-spec
+  override field (`trace_digests: force_on|force_off|None` — wire change:
+  schema regen; exercised override recorded on the sidecar, disclosed).
+  Fires-tests per context row + the degradation path (verify wanting
+  digests, finding none → disclosed, never fabricated).
+- **T4 ingestion-at-harvest** — the existing pull seam additionally pulls
+  `_trace.jsonl` per task and calls T1's ingest. BOUNDARY FLAG: locate the
+  seam at implementation (aggregate/pull path); serialize with slate
+  phases touching aggregate_flow.
+
+**Wave 3 — the projections (new files; registry +2; serial regen):**
+- **T5 `trace-render`** (query verb): the four views (row waterfall w/
+  conservation flags; label-chain line; feature lineage; sketch table),
+  SELF-DESCRIBING header (run/config identity), deterministic markdown.
+  Spec: `{scope_kind, scope_id, task?}` OR the reference lookup
+  `{profile}` / `{cmd_sha}` (latest-by via sidecar join — Class B).
+  Enforcement: the never-judgment grep pin (no verdict vocabulary in the
+  render); trusted-display posture documented.
+- **T6 `trace-diff`** (query verb): two keys → per-atom comparison via
+  T1's semantics registry, FIRST-DIVERGENCE highlighted, markdown render.
+  Fires-test: two synthetic traces diverging at a known stage localize
+  exactly there.
+- Predictable pins for both: _SPEC_VERBS, prose count, hand-filled
+  docs/primitives bodies, six regen scripts.
+
+**Deferred by design (NOT in these waves):** the fingerprint interlock
+(Phase-3 amendment); the audit-view section join (canon-class view change
+— lands with a canon bump between campaigns); the temporal-scan index
+(waits for its consumer).
+
+**Pack/program work (harxhar-clean, NOT core dispatch):**
+- **P1** the pandas emitter draft (pack-staging): measures atoms per the
+  T2 contract, stage-class vocabulary, invariant checks → flags. Can land
+  BEFORE any core wave (caller-side JSONL; readable with pandas).
+- **P2** instrument the executor/ridge path (the authoring-floor pass).
+- **P3** discipline classes declared applicable + program injectors + the
+  first R3 certificate (after P2 stabilizes a partition).
+
+**Recorded-answer questions for the implementer** (each needs a drift-log
+line, not a redesign): the journal scope for audit-context traces
+(notebook scope id = audit_id — confirm against notebook journal
+conventions); whether `value_sketch` quantiles are fixed (q05/q95) or
+declared (recommend fixed v1); the task-file naming for single-task local
+runs (task-0 — confirm no collision with audit-prelude executions).
+
+**Acceptance for the whole feature:** a toy pipeline emits → ingests →
+renders all four views → a planted divergence localizes via trace-diff →
+the journaled trace_sha matches a recompute → a rootless/knob-less run
+digests exactly per its sidecar context. One end-to-end contract test.
