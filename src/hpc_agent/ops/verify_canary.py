@@ -961,19 +961,34 @@ def verify_canary(
         failed = int(last_summary.get("failed") or 0)
         running = int(last_summary.get("running") or 0)
         pending = int(last_summary.get("pending") or 0)
-        unknown = int(last_summary.get("unknown") or 0)
         # Terminal: complete == total OR (failed > 0 and no running/pending).
         if complete >= int(record.total_tasks) and record.total_tasks > 0:
             break
         if failed > 0 and running == 0 and pending == 0:
             break
-        # Job absent from the scheduler's live view: nothing complete, nothing
-        # failed, nothing queued/running, nothing in the unknown bucket. Count
-        # consecutive such polls; once it persists, the canary finished (or
-        # died) and left the queue — break fast as ``completed_unknown`` rather
-        # than time out. The stderr scan below still runs, so a real failure
-        # marker (OOM, traceback) is preferred over the bland unknown verdict.
-        if complete == 0 and failed == 0 and running == 0 and pending == 0 and unknown == 0:
+        # Job absent from the scheduler's live view: no task is complete, failed,
+        # running, or pending — every remaining task sits in the reporter's
+        # ``unknown`` bucket. Count consecutive such polls; once they persist
+        # past the registration grace, the canary finished (or died) and left the
+        # queue — break fast as ``completed_unknown`` rather than time out. The
+        # stderr scan below still runs, so a real failure marker (OOM, traceback)
+        # is preferred over the bland unknown verdict.
+        #
+        # F-L (run #10): this guard previously ALSO required ``unknown == 0``,
+        # but a gone 1-task canary is bucketed ``unknown == 1`` by the status
+        # reporter (a task that is neither complete, in a scheduler-FAILED
+        # accounting state, nor live in qstat lands in ``unknown`` —
+        # reduce/status.py). The five buckets sum to ``total_tasks``, so with the
+        # four active/terminal buckets at zero the remainder is ``unknown >= 1``
+        # for any ``total_tasks >= 1`` — making the all-zero condition
+        # unsatisfiable and the fast arm dead. A job dead on the scheduler in
+        # ~20s therefore rode the full 1800s budget to ``timeout`` (qacct
+        # evidence: job 13956468, exit_status 1). Dropping the ``unknown == 0``
+        # clause makes "all quiet ⇒ every task unknown" the signal; the
+        # registration grace still distinguishes the pre-qstat startup window
+        # (which reads unknown too, but resets the moment a task shows
+        # running/pending) from a job that truly left the queue.
+        if complete == 0 and failed == 0 and running == 0 and pending == 0:
             vanished_polls += 1
             if first_vanished_at is None:
                 first_vanished_at = time.monotonic()
