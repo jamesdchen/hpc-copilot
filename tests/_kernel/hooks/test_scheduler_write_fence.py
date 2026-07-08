@@ -85,3 +85,33 @@ def test_hook_never_wedges_on_malformed_payload() -> None:
         timeout=30,
     )
     assert proc.returncode == 0
+
+
+# ── run-#10 quote-aware regression (F-D) ─────────────────────────────────────
+# The live false positive: a read-only grep whose QUOTED pattern carried a
+# fenced verb and a `|` was regex-split mid-quote, failed shlex, and hit the
+# fail-closed fallback. The primary path is now a punctuation_chars lexer, so
+# quoted operators stay inside their token.
+
+
+def test_quoted_alternation_pattern_is_not_fenced() -> None:
+    # The exact run-#10 shape: alternation inside a quoted grep pattern.
+    assert _fenced_in_command('grep "qsub|sbatch" worker.log') is None
+
+
+def test_quoted_fenced_word_with_semicolon_is_not_fenced() -> None:
+    assert _fenced_in_command("python -c \"print(1); x = 'qsub'\"") is None
+
+
+def test_embedded_operator_still_blocks() -> None:
+    # Unquoted `qsub&&rm` executes qsub — the lexer emits && as its own token.
+    assert _fenced_in_command("qsub&&rm x") == "qsub"
+
+
+def test_multiline_second_line_blocks() -> None:
+    assert _fenced_in_command("grep 'qsub' a\nqsub b.sh") == "qsub"
+
+
+def test_unparseable_line_keeps_fail_closed_fallback() -> None:
+    # A genuinely unbalanced quote with a fenced word still fails closed.
+    assert _fenced_in_command('ssh host "qdel 123') == "qdel"

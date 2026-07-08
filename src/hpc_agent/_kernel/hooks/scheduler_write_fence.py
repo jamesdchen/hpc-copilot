@@ -71,40 +71,89 @@ def _first_real_token(tokens: list[str]) -> tuple[str | None, int]:
     return None, len(tokens)
 
 
+#: Shell operator tokens that end one command segment (as emitted by a
+#: ``punctuation_chars`` lexer — quoted operators never appear as these).
+_OPERATOR_TOKENS = frozenset({";", "|", "&", "&&", "||", ";;", "|&"})
+
+
+def _analyze_tokens(tokens: list[str]) -> str | None:
+    """The fenced verb one token-segment would execute, or None."""
+    head, idx = _first_real_token(tokens)
+    if head is None:
+        return None
+    if head in FENCED:
+        return head
+    # Transport/nested-shell case: the remote/inner command may execute a
+    # fenced verb even though the local head is ssh/bash. Recurse into
+    # every subsequent token (ssh flags are fenced-free; string args that
+    # ARE shell commands get re-analyzed; bare fenced tokens block).
+    if head in ("ssh", "bash", "sh", "zsh"):
+        for tok in tokens[idx + 1 :]:
+            base = tok.rsplit("/", 1)[-1].lower()
+            if base in FENCED:
+                return base
+            if _WORD_FENCED.search(tok):
+                inner = _fenced_in_command(tok)
+                if inner:
+                    return inner
+    return None
+
+
 def _fenced_in_command(command: str) -> str | None:
-    """The fenced verb *command* would execute, or None when it is clean."""
-    for segment in _SEGMENT_SPLIT.split(command):
+    """The fenced verb *command* would execute, or None when it is clean.
+
+    QUOTE-AWARE FIRST (run-#10 false positive: a read-only ``grep`` whose
+    quoted pattern contained a fenced verb and a ``|`` was regex-split MID-
+    QUOTE, failed ``shlex``, and hit the fail-closed fallback). The primary
+    path tokenizes each line with a ``punctuation_chars`` lexer — operators
+    inside quotes stay inside their token, real operators come out as
+    standalone boundary tokens — so ``grep "qsub|sbatch" log`` is one clean
+    segment headed by ``grep``. The legacy regex-split path (with its
+    fail-closed word-scan) remains ONLY for lines the lexer cannot parse.
+    """
+    for line in command.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lex.whitespace_split = True
+            tokens = list(lex)
+        except ValueError:
+            verb = _fenced_in_line_legacy(line)
+            if verb:
+                return verb
+            continue
+        segment: list[str] = []
+        for tok in [*tokens, ";"]:
+            if tok in _OPERATOR_TOKENS:
+                verb = _analyze_tokens(segment)
+                if verb:
+                    return verb
+                segment = []
+            else:
+                segment.append(tok)
+    return None
+
+
+def _fenced_in_line_legacy(line: str) -> str | None:
+    """The pre-quote-aware analysis, kept for unparseable lines only."""
+    for segment in _SEGMENT_SPLIT.split(line):
         segment = segment.strip()
         if not segment:
             continue
         try:
             tokens = shlex.split(segment)
         except ValueError:
-            # Unbalanced quotes (often a segment-split artifact of a larger
-            # quoted string). Fail CLOSED on the transport case: any
-            # word-boundary fenced verb in the raw text blocks.
+            # Unbalanced quotes in an already-unparseable line. Fail CLOSED
+            # on the transport case: any word-boundary fenced verb blocks.
             hit = _WORD_FENCED.search(segment)
             if hit:
                 return hit.group(1)
             continue
-        head, idx = _first_real_token(tokens)
-        if head is None:
-            continue
-        if head in FENCED:
-            return head
-        # Transport/nested-shell case: the remote/inner command may execute a
-        # fenced verb even though the local head is ssh/bash. Recurse into
-        # every subsequent token (ssh flags are fenced-free; string args that
-        # ARE shell commands get re-analyzed; bare fenced tokens block).
-        if head in ("ssh", "bash", "sh", "zsh"):
-            for tok in tokens[idx + 1 :]:
-                base = tok.rsplit("/", 1)[-1].lower()
-                if base in FENCED:
-                    return base
-                if _WORD_FENCED.search(tok):
-                    inner = _fenced_in_command(tok)
-                    if inner:
-                        return inner
+        verb = _analyze_tokens(tokens)
+        if verb:
+            return verb
     return None
 
 
