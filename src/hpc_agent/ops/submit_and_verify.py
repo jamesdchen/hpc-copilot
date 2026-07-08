@@ -159,6 +159,14 @@ def _mint_double_canary_sample(
             "tasks_py_sha": str(main_sidecar.get("tasks_py_sha") or ""),
             "executor": str(main_sidecar.get("executor") or ""),
         }
+        # Data-identity leg (Phase-3 amendment, ruled 0b): stamp the run's data
+        # identity onto the sample so a LATER comparison under rebuilt input files
+        # reads this prior as DATA DRIFT, not nondeterminism. Only when KNOWN — an
+        # absent data_manifest_sha leaves the leg off (disclosed-unknown, the
+        # exclude-none spirit; the wire SampleIdentity.data_sha defaults null).
+        data_sha = main_sidecar.get("data_manifest_sha")
+        if data_sha:
+            identity["data_sha"] = str(data_sha)
         path_a = _pull_canary_task0_metrics(experiment_dir, first_canary_run_id)
         path_b = _pull_canary_task0_metrics(experiment_dir, second_canary_run_id)
         payload_a = json.loads(path_a.read_text(encoding="utf-8"))
