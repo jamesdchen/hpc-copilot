@@ -149,3 +149,42 @@ doctrine (renders relayed verbatim).
   context-automatic / Q3 stage-finer-than-section with optional mapping /
   Q4 adopt-if-better with a due-diligence gate / Q5 trace-rides-the-
   output-contract folded.
+
+## Amendment 1 (2026-07-08, user-ruled): the ATOM CATALOG restructure
+
+The original record/layer sections above leaked program vocabulary into the
+pack tier (a units ledger of raw-var/sqrt is RV's chain; "shift drops
+exactly h" is a program invariant). Ruled restructure — the D-V1
+three-level vocabulary applied to measurement itself:
+
+**Core owns ATOMS**: named, typed, meaning-free measurements, EACH WITH ITS
+COMPARISON SEMANTICS (what makes the diff engine discipline-generic):
+`row_count` (exact + the generic conservation invariant), `col_set`
+(set-delta), `null_count[col]` (exact per key), `value_sketch[col]`
+(tolerance), `span[col]` (endpoints), `order_integrity[col]`
+(monotonic/dups/gaps-vs-declared-grid), `label_chain` (equality along the
+chain — the units ledger GENERALIZED: core knows "a tracked label", never
+"units"), `digest` (exact), `duration_ms`/`peak_mb` (tolerance). Record
+container: {stage, section?, seq, atoms{}, flags[]}. Core invariants are
+GENERIC ONLY (row conservation, chain continuity, seq monotonicity) — NO
+invariant DSL: core never evaluates pack-authored expressions; pack/program
+invariants are checked IN THE EMITTER and recorded as opaque `flags` core
+renders but never interprets. Render/diff operate on atom kinds, so any
+discipline's composition renders/diffs unmodified.
+
+**The measurement protocol**: core defines each atom's input contract
+(shape-validated floats/ints/sets); the pack's pandas-aware emitter is the
+implementation that measures frames and emits — core validates shapes,
+never touches frames (the receipts seam: caller executes, core binds).
+
+**Quant pack composes**: stage-CLASS vocabulary (load/transform/feature/
+split/fit/score — quant-general, never RV's stage names), which atoms per
+class, the `units_space` label_chain instance + claimed-units doctrine,
+class-altitude invariants parameterized (never h=1).
+
+**Program binds**: concrete stages to classes, actual labels, parameters,
+program invariants as emitter checks → flags.
+
+Altitude test both ways applies to every future atom/composition: "would a
+second program adopt it unedited?" and "would a second DISCIPLINE adopt it
+unedited?" — an atom failing the second test belongs in a pack, not core.
