@@ -73,6 +73,8 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -118,20 +120,50 @@ def is_harness_injected(text: str) -> bool:
 
 _UTTERANCES_NAME = "utterances.jsonl"
 
+# The suffixed per-actor locator glob (MH2): ``utterances.<actor>.jsonl`` — the
+# `.<actor>.` segment is what excludes the unsuffixed ``utterances.jsonl`` from
+# this pattern (one dot vs two), so a union read never double-counts the
+# anonymous log. Non-creating everywhere it is used.
+_ACTOR_UTTERANCES_GLOB = "utterances.*.jsonl"
+
 _log = logging.getLogger(__name__)
 
 
-def utterances_path(experiment_dir: Path) -> Path:
-    """``<journal home>/<repo_hash>/utterances.jsonl`` — WITHOUT creating.
+def _actor_utterances_name(actor: str) -> str:
+    """``utterances.<actor>.jsonl`` — the actor slug validated as a path segment.
+
+    The slug rides into a filename, so it is validated by the ONE shared
+    filesystem-safe tag class (``state.scopes.validate_tag`` == the
+    ``RunIdStrict``/tag pattern), never a re-derived one. Raises
+    :class:`errors.SpecInvalid` on an empty or non-slug actor.
+    """
+    from hpc_agent.state.scopes import validate_tag
+
+    validate_tag(actor)
+    return f"utterances.{actor}.jsonl"
+
+
+def utterances_path(experiment_dir: Path, actor: str | None = None) -> Path:
+    """``<journal home>/<repo_hash>/utterances[.<actor>].jsonl`` — WITHOUT creating.
+
+    ``actor=None`` returns the unsuffixed default path, byte-identical to the
+    pre-multi-human locator. An actor slug (validated by the shared tag class —
+    it becomes a PATH SEGMENT, MH2) returns the per-actor suffixed path; an
+    invalid slug raises :class:`errors.SpecInvalid` (callers that must never
+    wedge — :func:`append_utterance`, :func:`read_utterances` — catch it and
+    fail open to the unsuffixed log).
 
     Deliberately not :func:`~hpc_agent.state.run_record.journal_dir` (which
     mkdirs the namespace + writes ``repo.json``): both the capture hook and
     the authorship-gate reader run in arbitrary cwds and must never scaffold
-    a journal namespace there (the ``notify._alerts_paths`` precedent).
+    a journal namespace there (the ``notify._alerts_paths`` precedent). The
+    no-scaffold rule covers the suffixed files identically: files may be
+    created, the NAMESPACE DIRECTORY never is.
     """
     from hpc_agent.state.run_record import _current_homedir, repo_hash
 
-    return _current_homedir() / repo_hash(experiment_dir) / _UTTERANCES_NAME
+    name = _UTTERANCES_NAME if actor is None else _actor_utterances_name(actor)
+    return _current_homedir() / repo_hash(experiment_dir) / name
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -142,8 +174,18 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return raw[:max_bytes].decode("utf-8", errors="ignore")
 
 
-def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
+def append_utterance(
+    experiment_dir: Path, text: str, actor: str | None = None
+) -> dict[str, Any] | None:
     """Append one human prompt to the repo's utterance log; return the record.
+
+    ``actor=None`` appends to the unsuffixed log exactly as before. When the
+    harness knows whose session it is (MH2) it passes the session ``actor``
+    slug and the record lands in ``utterances.<actor>.jsonl`` beside the
+    default — the SAME frozen 3-field record, so a per-actor file is a
+    conforming utterance log byte-for-byte. An INVALID actor slug FAILS OPEN to
+    the unsuffixed log: a broken config degrades to today's tier, never wedges
+    capture.
 
     Returns ``None`` (a clean no-op) when:
 
@@ -160,7 +202,11 @@ def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
     if not text:
         return None
     try:
-        path = utterances_path(experiment_dir)
+        try:
+            path = utterances_path(experiment_dir, actor)
+        except errors.SpecInvalid:
+            # Invalid actor slug → fail open to the unsuffixed log (MH2).
+            path = utterances_path(experiment_dir)
         if not path.parent.is_dir():
             return None
         from hpc_agent.infra.time import utcnow_iso
@@ -177,15 +223,14 @@ def append_utterance(experiment_dir: Path, text: str) -> dict[str, Any] | None:
         return None
 
 
-def read_utterances(experiment_dir: Path) -> list[dict[str, Any]]:
-    """Every logged utterance for *experiment_dir*, oldest first — non-creating.
+def _read_one(path: Path) -> list[dict[str, Any]]:
+    """Every record in a single utterance log file, append-order — non-creating.
 
-    Returns ``[]`` when the log (or the namespace) does not exist. Blank and
+    Returns ``[]`` when the file (or its namespace) does not exist. Blank and
     individually-corrupt lines are skipped — one bad line never strands the
     rest of the trail (the decision-journal read discipline).
     """
     try:
-        path = utterances_path(experiment_dir)
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
@@ -203,4 +248,50 @@ def read_utterances(experiment_dir: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(obj, dict):
             records.append(obj)
+    return records
+
+
+def read_utterances(
+    experiment_dir: Path, actor: str | None = None, *, union: bool = True
+) -> list[dict[str, Any]]:
+    """Logged utterances for *experiment_dir*, oldest first — non-creating.
+
+    Three read modes (MH2):
+
+    * ``actor=<slug>`` — that actor's ``utterances.<actor>.jsonl`` ONLY. The
+      unsuffixed log is deliberately EXCLUDED from an actor-scoped read:
+      anonymous text must never satisfy an actor-specific evidence check, or
+      cross-actor laundering re-opens. An invalid actor slug fails open to the
+      unsuffixed log (the append-side fail-open, mirrored).
+    * ``actor=None, union=True`` (the default) — the UNION of the unsuffixed
+      log and every ``utterances.<actor>.jsonl``, merged oldest-first by ``ts``
+      so every existing identity-less consumer sees all human text, as today.
+      In a single-actor world (no suffixed file exists) this is byte-identical
+      to reading the unsuffixed log alone.
+    * ``actor=None, union=False`` — the unsuffixed log ONLY (the pre-multi-human
+      read, exactly).
+
+    Returns ``[]`` when the log (or the namespace) does not exist. Blank and
+    individually-corrupt lines are skipped.
+    """
+    if actor is not None:
+        try:
+            scoped = utterances_path(experiment_dir, actor)
+        except errors.SpecInvalid:
+            # Invalid actor slug → fail open to the unsuffixed log (MH2).
+            return _read_one(utterances_path(experiment_dir))
+        return _read_one(scoped)
+
+    unsuffixed = utterances_path(experiment_dir)
+    if not union:
+        return _read_one(unsuffixed)
+
+    records: list[dict[str, Any]] = list(_read_one(unsuffixed))
+    parent = unsuffixed.parent
+    if parent.is_dir():
+        for suffixed in sorted(parent.glob(_ACTOR_UTTERANCES_GLOB)):
+            records.extend(_read_one(suffixed))
+    # ts-merge oldest-first; a stable sort preserves append order for equal or
+    # missing ``ts`` (seconds-resolution stamps can collide within a burst).
+    records.sort(key=lambda r: str(r.get("ts", "")))
     return records
