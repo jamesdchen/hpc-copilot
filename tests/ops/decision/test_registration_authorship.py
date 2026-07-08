@@ -27,7 +27,7 @@ from hpc_agent import errors
 from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 from hpc_agent._wire.actions.verify_registration import (
     DossierLeg,
-    FieldsReport,
+    FieldsBlock,
     PrerequisiteLeg,
     TemplateLeg,
 )
@@ -116,7 +116,7 @@ def _expected_view_sha(*, template_sha: str, verdicts: list[_FakeVerdict]) -> st
         )
         for v in verdicts
     ]
-    fields_report = FieldsReport(
+    fields_report = FieldsBlock(
         declared=["widget-owner", "jam-threshold"],
         present=["widget-owner", "jam-threshold"],
         missing=[],
