@@ -68,6 +68,7 @@ from hpc_agent.ops.recover.features_glue import (
 from hpc_agent.ops.recover.resolve import resolve as _resolve
 from hpc_agent.ops.recover_flow import resubmit_flow as _resubmit_flow
 from hpc_agent.state.journal import load_run, mark_pending_verdict, update_run_status
+from hpc_agent.state.pack_declarations import resolve_failure_patterns
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -360,6 +361,20 @@ def maybe_resolve_and_recover(
     sidecar = _read_sidecar(experiment_dir, run_id) if clusters else None
     resources = sidecar.get("resources") if isinstance(sidecar, dict) else None
 
+    # S2 domain-pack seam: resolve every opted-in pack's failure_patterns ONCE (the
+    # ops-root caller is the pack-declaration boundary; the features glue stays
+    # pack-ignorant, receiving the typed opaque declarations). A repo that never
+    # opted in returns [] with zero probes beyond interview.json (the D7 silence),
+    # so an un-opted-in run's evidence vectors are byte-identical to the pre-packs
+    # shape. The declarations ride into build_failure_features, which COUNTS hits
+    # as evidence and NEVER maps a hit to a category/action/retry.
+    #
+    # T8 seam: the "pack" decision-journal scope kind + its records reader land
+    # separately; until then resolve_failure_patterns reads the opt-in shape-only
+    # (an opted-in repo with no current bind is loud by design, never a silent
+    # pass), and this call gains records_reader=... when that scope kind exists.
+    failure_patterns = resolve_failure_patterns(experiment_dir) if clusters else []
+
     outcomes: list[ClusterOutcome] = []
     count = int(record.auto_recover_count)
     cap = int(record.max_auto_recovers)
@@ -384,7 +399,9 @@ def maybe_resolve_and_recover(
             )
             continue
 
-        features = build_failure_features(cluster, record=record, sidecar=sidecar)
+        features = build_failure_features(
+            cluster, record=record, sidecar=sidecar, failure_patterns=failure_patterns
+        )
         esc_cluster = build_escalation_cluster(cluster, run_id=run_id)
         resolution = _resolve(features, cluster=esc_cluster, max_code_attempts=max_code_attempts)
 
