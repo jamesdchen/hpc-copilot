@@ -216,6 +216,77 @@ class TestGiveUp:
 
 
 # ---------------------------------------------------------------------------
+# F-N: a blocked waiter discloses who holds the slots (never silent)
+# ---------------------------------------------------------------------------
+
+
+class TestWaitDisclosure:
+    def test_wait_past_first_interval_discloses_holders(self, capsys):
+        """FIRES: a wait that passes SLOT_DISCLOSE_FIRST_SEC emits a periodic
+        disclosure naming the host, the elapsed wait, and each holder's pid +
+        claim age + time-to-TTL — so a long block is legible, not silent."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)  # slots held by pids 100, 101
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=500, pid_alive=_ALIVE)
+
+        err = capsys.readouterr().err
+        assert "still waiting" in err
+        assert HOST in err
+        # Both holders named with pid + age + ttl (deterministic wording).
+        assert "slot0=pid:100" in err
+        assert "slot1=pid:101" in err
+        assert "age:" in err and "ttl:" in err
+
+    def test_immediate_claim_emits_no_disclosure(self, capsys):
+        """PASSES: a free slot is claimed with no wait, so no disclosure line is
+        emitted (the heartbeat is a wait-only diagnostic)."""
+        clock = FakeClock()
+        tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=100, pid_alive=_ALIVE)
+        assert tok is not None
+        assert "still waiting" not in capsys.readouterr().err
+
+    def test_disclosure_is_periodic_after_the_first(self, capsys):
+        """A wait long enough for several disclosure intervals emits more than
+        one heartbeat line — the operator gets a steady signal, not a one-shot."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=501, pid_alive=_ALIVE)
+
+        lines = [ln for ln in capsys.readouterr().err.splitlines() if "still waiting" in ln]
+        # SLOT_WAIT_MAX_SEC (120s) / SLOT_DISCLOSE_INTERVAL_SEC (30s) ⇒ several.
+        assert len(lines) >= 2
+
+    def test_disclosure_failure_never_breaks_the_wait(self, monkeypatch, capsys):
+        """Fail-open: a disclosure that raises must NOT perturb the wait — the
+        waiter still bounds out with SshSlotWaitTimeout, disclosure swallowed."""
+        clock = FakeClock()
+        _claim_n(2, clock, first_pid=100)
+
+        import hpc_agent.infra.ssh_slots as slots
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("disclosure blew up")
+
+        monkeypatch.setattr(slots, "_slot_hold_disclosure", _boom)
+
+        def sleeper(seconds: float) -> None:
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=502, pid_alive=_ALIVE)
+
+
+# ---------------------------------------------------------------------------
 # Breaker interplay: open circuit ⇒ fail fast, never queue
 # ---------------------------------------------------------------------------
 
