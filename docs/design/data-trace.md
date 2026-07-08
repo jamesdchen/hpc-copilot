@@ -208,3 +208,41 @@ classifier's mapping is human-owned frozen code — changing the CLASS is a
 reviewed edit; instances never ask; nothing adapts. (Third instance of the
 pattern tonight: auto-clear tiers, tiered verdicts, digest policy — the
 run's recorded identity determines its observation level.)
+
+## Amendment 3 (2026-07-08, user-directed): atomicity DEFINED, not conventioned
+
+Q3's "atomic is a guidance" is superseded — atomicity is definable and
+TESTABLE, as a two-argument property: relative to (a) the atom catalog and
+(b) a DECLARED DEFECT SET (the bug classes the trace must localize):
+
+> A partition is LOCALIZATION-COMPLETE when every declared defect, if
+> present, first alters the atoms of exactly one stage's record; MINIMAL
+> when no boundary can be removed without merging two defects into one
+> stage. An ATOMIC STAGE is an element of a minimal localization-complete
+> partition.
+
+Failure directions: boundary MISSING = two defects produce identical
+adjacent records (ambiguity); boundary REDUNDANT = a stage's atoms are
+determined by its neighbors' (noise). Operational rules, each checkable:
+**R1 one-axis** — each record has a dominant atom-delta signature (rows |
+col-set | values-of-named-cols | order); the emitter classifies signatures
+mechanically and FLAGS multi-axis stages as split candidates. **R2
+invariant ownership** — every declared invariant is checkable at ONE
+boundary from that record + its predecessor; an invariant spanning 2+
+stages proves a boundary missing (the signed invariant list DERIVES the
+minimum partition). **R3 the fault-injection certificate** — the pack
+ships a DEFECT CORPUS (leakage channels, D-V violations, program bug
+history) + an injection convention; the partition test injects each defect
+into a toy run and asserts trace-diff localizes to exactly the expected
+stage (the null-must-die pattern applied to granularity: the partition is
+atomic BY DEMONSTRATION, with a re-runnable certificate that also
+regression-protects it across refactors). **R4 nondeterminism isolation** —
+any rng/parallelism consumer gets its own boundary so digest divergence
+pins the source.
+
+Decision procedure: start at one boundary per audit section → split until
+R2 holds → run the R3 suite, split where defects co-localize → merge
+neighbor-determined stages → journal the passing suite as the partition's
+certificate. Layer split: core = nothing new (diff already localizes);
+pack = defect corpus + injection convention + R1–R4; program = its
+partition + its certificate.
