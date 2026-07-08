@@ -82,6 +82,8 @@ __all__ = [
     "collect_registrations",
     "REGISTRATION_STALE",
     "REGISTRATION_BLOCKED",
+    "REPRODUCTION_NEEDS_VERDICT",
+    "collect_reproduction_verdicts",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -125,6 +127,17 @@ DATA_UNMANIFESTED = "data-unmanifested"
 #: (reduce_registration + check_chain), never a re-inlined drift compare.
 REGISTRATION_BLOCKED = "registration-blocked"
 REGISTRATION_STALE = "registration-stale"
+#: determinism-fingerprint verdicts (docs/design/determinism-fingerprint.md T7 +
+#: Amendment 2): a ledger sample whose recorded classifier verdict is
+#: ``needs_verdict`` and whose ``content_sha`` is NOT yet named by a committed
+#: ``reproduction-verdict`` decision on its reproduction run. Amendment 2 —
+#: verdict-on-demand: this parks as a LEVERAGE-ZERO standing item (fan-out 0, no
+#: urgency), pull-only, aging by the sample's ``ts``; it becomes a decision-ready
+#: brief only when a consumer (registration / graduation / an explicit verify)
+#: blocks on the verdict. Routes the "answered" test through the run journal's
+#: ``reproduction-verdict`` records, never re-implementing the envelope math (the
+#: recorded sample verdict IS T1's classifier output).
+REPRODUCTION_NEEDS_VERDICT = "reproduction-needs-verdict"
 
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
@@ -148,6 +161,10 @@ KIND_CLASS: dict[str, str] = {
     # drifted clearance a human must re-judge → VERDICT.
     REGISTRATION_BLOCKED: BLOCKED,
     REGISTRATION_STALE: VERDICT,
+    # A recorded needs_verdict fingerprint sample is a human judgment the machinery
+    # cannot mechanize → VERDICT. Fan-out stays 0 (Amendment 2: leverage-zero,
+    # pull-only) until a consumer blocks on the verdict — no encoded edge yet.
+    REPRODUCTION_NEEDS_VERDICT: VERDICT,
 }
 
 
@@ -726,6 +743,134 @@ def _pending_prereqs(experiment_dir: Path, winner: Mapping[str, Any]) -> list[tu
     return [(v.slot, v.status) for v in verdicts if v.status != "current"]
 
 
+# ── fingerprint verdict collector (docs/design/determinism-fingerprint.md T7) ─
+
+
+def collect_reproduction_verdicts(experiment_dir: Path, *, now: str) -> QueueCollection:
+    """Standing determinism-fingerprint ``needs_verdict`` items (T7 + Amendment 2).
+
+    Routes through the ONE reduction WITHOUT re-implementing envelope math: T1's
+    tiered classifier already ran at append time and stamped each sample's
+    ``verdict`` field on the ledger (``state/determinism.py::classify`` →
+    ``state/fingerprint_store.py``), so the collector READS ``verdict ==
+    "needs_verdict"`` rather than re-reducing an envelope. It then joins each such
+    sample against its reproduction run's decision journal
+    (``read_decisions(exp, "run", <repro_run_id>)``): a sample whose
+    ``content_sha`` is named by a committed ``reproduction-verdict`` record —
+    accept OR reject — is ANSWERED and yields NO item (:func:`_needs_verdict_answered`).
+
+    Amendment 2 (verdict-on-demand): the item PARKS as a leverage-ZERO standing
+    item — ``unblocks`` stays 0 (no encoded edge in :func:`_fanout_for`) and it
+    carries no urgency; ``since`` is the sample's own ``ts`` so it ages honestly.
+    It surfaces as a decision-ready brief only when a consumer blocks on the
+    verdict (that routing lives in the consumer, not here). ``evidence`` is the
+    calibrated brief fields lifted VERBATIM from the sample record (deviation vs
+    envelope at n/scale — record fields only, no prose, no re-derivation).
+
+    Ledgers live at ``<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl``;
+    discovery is a NON-CREATING glob and the tolerant read routes through
+    ``state/fingerprint_store.py::read_samples``. Fail-open: an unreadable ledger
+    or journal never crashes the read — a ledger's malformed-line count is
+    disclosed in ``skipped`` (no-silent-caps), and an unreadable repro journal
+    surfaces the item rather than silently marking it answered.
+    """
+    from hpc_agent.state.fingerprint_store import fingerprints_dir, read_samples
+
+    exp = _exp(experiment_dir)
+    base = fingerprints_dir(Path(experiment_dir))
+    items: list[AttentionItem] = []
+    skipped: list[dict[str, str]] = []
+    if not base.is_dir():
+        return QueueCollection(items=items, skipped=skipped)
+    for ledger in sorted(base.glob("*.jsonl")):
+        try:
+            samples, malformed = read_samples(Path(experiment_dir), ledger.stem)
+        except Exception:  # noqa: BLE001 — fail-open: one bad ledger never strands the read
+            skipped.append({"ref": ledger.name, "reason": "unreadable fingerprint ledger"})
+            continue
+        if malformed:
+            skipped.append(
+                {"ref": ledger.name, "reason": f"{malformed} malformed ledger line(s)"}
+            )
+        for sample in samples:
+            if sample.get("verdict") != "needs_verdict":
+                continue  # auto_cleared / mismatch are not this kind
+            content_sha = sample.get("content_sha")
+            if not content_sha:
+                continue
+            repro_run_id = _repro_run_id(sample)
+            if repro_run_id is None:
+                continue
+            if _needs_verdict_answered(experiment_dir, repro_run_id, content_sha):
+                continue  # a committed reproduction-verdict record already named it
+            items.append(
+                AttentionItem(
+                    kind=REPRODUCTION_NEEDS_VERDICT,
+                    item_class=KIND_CLASS[REPRODUCTION_NEEDS_VERDICT],
+                    experiment_dir=exp,
+                    scope_kind="run",
+                    scope_id=repro_run_id,
+                    block=_REPRODUCTION_VERDICT_BLOCK,
+                    cluster=sample.get("cluster"),
+                    since=sample.get("ts"),
+                    evidence={
+                        "content_sha": content_sha,
+                        "source": sample.get("source"),
+                        "scale": sample.get("scale"),
+                        "cluster": sample.get("cluster"),
+                        "same_submission": sample.get("same_submission"),
+                        "partial": sample.get("partial"),
+                        "task_indices": sample.get("task_indices"),
+                        "run_ids": sample.get("run_ids"),
+                        "per_key": sample.get("per_key"),
+                    },
+                )
+            )
+    return QueueCollection(items=items, skipped=skipped)
+
+
+#: The decision-journal block a needs_verdict resolution rides — the EXISTING run
+#: scope, no new verdict verb (the no-unlock-verb doctrine). Bound once to the
+#: store's constant so the "answered" join and the append site cannot disagree.
+_REPRODUCTION_VERDICT_BLOCK = "reproduction-verdict"
+
+
+def _repro_run_id(sample: Mapping[str, Any]) -> str | None:
+    """The reproduction run id — the SECOND ``run_ids`` member (the run whose
+    journal holds the verdict), or ``None`` for a malformed pair (fail-open)."""
+    run_ids = sample.get("run_ids")
+    if not isinstance(run_ids, (list, tuple)) or len(run_ids) < 2:
+        return None
+    repro = run_ids[1]
+    return repro if isinstance(repro, str) and repro else None
+
+
+def _needs_verdict_answered(experiment_dir: Path, repro_run_id: str, content_sha: str) -> bool:
+    """True iff a committed ``reproduction-verdict`` record names *content_sha*.
+
+    The "answered" join (T7): the human's resolution lands as an ordinary
+    ``append-decision`` record on the reproduction RUN scope (block
+    ``reproduction-verdict``); a record whose ``resolved.content_sha`` equals the
+    sample's bind-locked ``content_sha`` TOKEN-EXACT answers it — accept OR reject
+    (either verdict closes the standing item; admission into the envelope is a
+    SEPARATE, accept-only question the store owns). Fail-open: an unreadable /
+    torn journal reads NOT-answered, so the item surfaces rather than vanishing.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    try:
+        records = read_decisions(experiment_dir, "run", repro_run_id)
+    except Exception:  # noqa: BLE001 — fail-open: an unreadable journal surfaces the item
+        return False
+    for rec in records:
+        if rec.get("block") != _REPRODUCTION_VERDICT_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("content_sha") == content_sha:
+            return True
+    return False
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
@@ -737,6 +882,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
     (Wave C), composing this function per discovered experiment.
     """
     audits = collect_audits(experiment_dir, now=now)
+    verdicts = collect_reproduction_verdicts(experiment_dir, now=now)
     items: list[AttentionItem] = [
         *collect_greenlight_and_parked(experiment_dir, now=now),
         *collect_stalled(experiment_dir, now=now),
@@ -748,8 +894,12 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *collect_ssh_circuits(experiment_dir, now=now),
         *collect_data_manifest(experiment_dir, now=now),
         *collect_registrations(experiment_dir, now=now),
+        *verdicts.items,
     ]
-    return QueueCollection(items=_apply_fanout(items, experiment_dir), skipped=audits.skipped)
+    return QueueCollection(
+        items=_apply_fanout(items, experiment_dir),
+        skipped=[*audits.skipped, *verdicts.skipped],
+    )
 
 
 def _resolve_class_order(class_order: Sequence[str] | None) -> tuple[str, ...]:
