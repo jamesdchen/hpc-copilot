@@ -27,9 +27,13 @@ from hpc_agent._wire._shared import RunIdStrict
 # ``scope`` journals the lock/unlock touchpoints of a caller-tagged
 # experiment scope (``hpc_agent.state.scopes``); ``notebook`` journals the
 # sign-off touchpoints of an audited source module under a caller-authored
-# ``audit_id`` (``docs/design/notebook-audit.md`` D3). Kept in lockstep with
-# ``state.decision_journal.SCOPE_KINDS`` (schema regen is the integrator's job).
-ScopeKind = Literal["run", "campaign", "scope", "notebook"]
+# ``audit_id`` (``docs/design/notebook-audit.md`` D3); ``registration`` journals
+# the deployment-boundary attestation touchpoints of a caller-authored
+# ``registration_id`` (``docs/design/registration-kernel.md`` R9 — the
+# ``registration`` / ``registration-revoke`` records gated by R6). Kept in lockstep
+# with ``state.decision_journal.SCOPE_KINDS`` (schema regen is the integrator's job;
+# the ScopeKind literal change regenerates schemas).
+ScopeKind = Literal["run", "campaign", "scope", "notebook", "registration"]
 
 # The evidence the proposal was drafted over — an opaque free-text digest
 # OR a structured dict. The journal never interprets it; it round-trips it
