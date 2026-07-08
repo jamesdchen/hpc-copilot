@@ -304,6 +304,13 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
             excluded = False
             for i, part in enumerate(parts):
                 for pat in pats:
+                    # Anchored spellings (./x or ^x, the F-I dialects) match
+                    # the TOP-LEVEL component only in the disclosure too.
+                    if pat.startswith("./") or pat.startswith("^"):
+                        anchored = pat[2:] if pat.startswith("./") else pat[1:]
+                        if i == 0 and fnmatch.fnmatch(part, anchored):
+                            excluded = True
+                        continue
                     if fnmatch.fnmatch(part, pat):
                         excluded = True
                         if "/" not in pat and "\\" not in pat:
@@ -389,10 +396,21 @@ def _tar_ssh_push(
     """
     src_dir = str(local_path).rstrip("/\\")
 
-    # tar excludes mirror rsync's pattern shape (relative paths under src).
+    # tar excludes mirror rsync's pattern shape (relative paths under src) —
+    # with the F-I dialect translation (run-#10, live): an ANCHORED caller
+    # pattern (leading ``./``) means "top level only", but GNU tar and bsdtar
+    # (the native-Windows tar) anchor differently: GNU honors ``./name``,
+    # bsdtar treats it as match-any-component and needs the undocumented
+    # ``^name`` form. Emit BOTH — each dialect ignores the other's spelling
+    # (it matches no component literally), so the union is exact on both.
+    # Bare patterns keep their match-any-depth meaning unchanged.
     tar_excludes: list[str] = []
     for pattern in exclude:
-        tar_excludes += [f"--exclude={pattern.rstrip('/')}"]
+        pat = pattern.rstrip("/")
+        if pat.startswith("./"):
+            tar_excludes += [f"--exclude={pat}", f"--exclude=^{pat[2:]}"]
+        else:
+            tar_excludes += [f"--exclude={pat}"]
 
     tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
     quoted_remote = shlex.quote(remote_path)

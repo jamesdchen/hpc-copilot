@@ -611,3 +611,34 @@ def test_payload_disclosure_no_warning_for_single_subtree(
     err = capsys.readouterr().err
     assert "deploy payload" in err
     assert "distinct subtrees" not in err
+
+
+def test_anchored_exclude_emits_both_tar_dialects(tmp_path: Path) -> None:
+    """F-I fires-test: an anchored ./name exclude ships BOTH the GNU (./name)
+    and bsdtar (^name) spellings — each dialect ignores the other's form, so
+    top-level-only exclusion is exact on both (the run-#10 src/data drop)."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=["./data", "logs/"],
+            delete=False,
+        )
+    tar_cmd = popen_mock.call_args[0][0]
+    assert "--exclude=./data" in tar_cmd
+    assert "--exclude=^data" in tar_cmd  # the bsdtar anchor (native Windows)
+    assert "--exclude=logs" in tar_cmd  # bare stays match-any-depth, one form
+    assert "--exclude=^logs" not in tar_cmd
