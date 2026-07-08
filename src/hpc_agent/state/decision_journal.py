@@ -21,6 +21,7 @@ sidecars and campaign scratch already live under)::
     <experiment_dir>/.hpc/campaigns/<campaign_id>/decisions.jsonl  # scope_kind="campaign"
     <experiment_dir>/.hpc/scopes/<tag>.decisions.jsonl         # scope_kind="scope"
     <experiment_dir>/.hpc/notebooks/<audit_id>.decisions.jsonl # scope_kind="notebook"
+    <experiment_dir>/.hpc/registrations/<registration_id>.decisions.jsonl  # "registration"
 
 One JSONL record per exchange, newest last, **append-only**: a write
 never rewrites or truncates a prior record. Appends are serialized under
@@ -71,8 +72,14 @@ SCHEMA_VERSION = 1
 # journals the audit touchpoints of an audited source module
 # (``docs/design/notebook-audit.md`` D3) — sign-offs are ordinary
 # append-decision records under a caller-authored ``audit_id``; the
-# journal stores the shape, never any section vocabulary.
-SCOPE_KINDS = frozenset({"run", "campaign", "scope", "notebook"})
+# journal stores the shape, never any section vocabulary. A "registration"
+# decision journals the deployment-boundary attestation touchpoints of a
+# caller-authored ``registration_id`` (``docs/design/registration-kernel.md``
+# R9) — the ``registration`` / ``registration-revoke`` records that ride
+# ``append-decision`` under the R6 gate; the journal stores the shape, never any
+# field/prerequisite vocabulary. It is a SIXTH kind (never coupled to a run's
+# journal — a registration outlives any single run and spans dossier re-exports).
+SCOPE_KINDS = frozenset({"run", "campaign", "scope", "notebook", "registration"})
 
 _log = logging.getLogger(__name__)
 
@@ -121,6 +128,10 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         return RepoLayout(experiment_dir).hpc / "notebooks" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "registration":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "registrations" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign" (validated above)
     from hpc_agent.meta.campaign.dirs import campaign_dir
 
