@@ -268,6 +268,35 @@ an agent-facing knob for reshaping ages. Result model
 skipped: [...], render: <markdown>}` — `render` rides the result the way
 `relay` rides `StatusBlockResult`, so the agent relays it verbatim.
 
+### D8 — demand-driven routing + the decision-ready bar (user-ruled 2026-07-07)
+
+Tiering alone relocates fatigue; the channel dies the week the human
+learns that opening an item costs more than ignoring it. Two restrictions,
+binding on EVERY alarm/verdict source that feeds the queue (fingerprint
+`needs_verdict`, manifest drift, claim-check findings, conformance
+verdicts — and all future sources):
+
+1. **Route only what blocks.** An item may INTERRUPT (surface in a brief)
+   only when its unblocks fan-out > 0 or a consumer is demanding it (a
+   gate or verdict something is actually waiting on). Leverage-zero items
+   PARK — pull-only, aging in the standing queue, never pushed. The
+   fingerprint's `needs_verdict` specifically: a thin-envelope sample does
+   NOT route at creation; it routes when registration/graduation/verify
+   blocks on the verdict — **verdict-on-demand** (fingerprint doc,
+   Amendment 2).
+2. **The decision-ready bar.** A routed item must carry ALL FOUR or it
+   may not route: (a) what it blocks, named; (b) ONE code-rendered
+   evidence block sized for the brief (trusted-display class — the LLM
+   points, never composes); (c) a PRE-DRAFTED resolution the human can
+   accept with `y` or redirect with a nudge (the decision-brief shape,
+   generalized to alarms); (d) delivery at an existing decision moment
+   (greenlight, harvest, the morning batch) — never its own session.
+
+Repeats fold (first occurrence per (subject, class) may route; recurrence
+updates the aging standing item — the manifest attention contract's rule,
+promoted to queue-wide). Ignore-rate/ack-latency data is INPUT TO A HUMAN
+RE-RULING of a class's tier, never adaptive self-quieting.
+
 ## Task waves (file-disjoint for parallel Opus dispatch)
 
 Every task lands with tests that both FIRE on a synthetic violation and PASS
