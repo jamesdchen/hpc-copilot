@@ -129,16 +129,22 @@ strictness is then caller-declared per registration, never a core mood).
 6. **Never-blocking pin** — a contract test asserts the disclosure path
    contains no raise/gate branch (the evidence-memory pattern verbatim).
 
-Format-aware validation ("top-level parquets must be bar-keyed") is PACK
-content forever: caller-executed, receipt-producing, binding to the
-manifest's identity substrate. **The first named rule is on the books
-(2026-07-07, from the live failure): QUANT-PACK D-V1 — "every parquet at
-the top level of the bar-panel data root must carry the bar merge key
-(`endbartime` for this program); non-bar-keyed exports live in
-subdirectories or are skipped loudly." Today it exists as caller code
-(harxhar-clean `src/data/loading.py`'s skip-with-warning) + this note;
-when packs land it becomes a declared validation producing a receipt the
-manifest's shas bind. Pack extraction must collect it from here.**
+Format-aware validation is PACK content forever: caller-executed,
+receipt-producing, binding to the manifest's identity substrate. **The
+first named rule is on the books (2026-07-07, from the live failure),
+stated at pack altitude — QUANT-PACK D-V1, "panel-key conformance": a
+declared panel data root names its alignment key; every file at that
+root's top level must carry the key; non-conforming exports live in
+subdirectories or are skipped loudly. The rule is PARAMETERIZED
+(`{root, key}`) — the pack ships the shape, never a key name. The
+target-program BINDING is separate: RV program, `{root: data/, key:
+endbartime}` (user-corrected 2026-07-07 — the key name is program data,
+not discipline knowledge; a pack whose jurisdiction is small enough to
+name `endbartime` has collapsed two tiers). Today the rule exists as
+caller code (harxhar-clean `src/data/loading.py`'s skip-with-warning) +
+this note; when packs land it becomes a declared validation producing a
+receipt the manifest's shas bind. Pack extraction collects the SHAPE
+from here; the binding stays in the target program's specs.**
 
 ## Sequencing
 
