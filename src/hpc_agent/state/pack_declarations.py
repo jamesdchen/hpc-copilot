@@ -79,6 +79,7 @@ __all__ = [
     "resolve_tolerances",
     "resolve_registration_fields",
     "resolve_declarations",
+    "resolve_template_pack_echo",
 ]
 
 # The seams that carry a shape-loadable declaration file. ``audit_template`` is a
@@ -356,6 +357,40 @@ def _records_for(
     return ()
 
 
+def _abs(path: Path) -> Path:
+    """Best-effort absolute-resolve for identity comparison; unresolvable → as-is."""
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _read_pack_journal(experiment_dir: Path, pack_name: str) -> list[dict[str, Any]]:
+    """T8-seam direct reader of ``.hpc/packs/<name>.decisions.jsonl`` (append order).
+
+    Mirrors ``ops/pack/bind_op._read_pack_records`` exactly — the SAME journal file
+    and record shape — so the fail-open template-echo lookup works standalone ahead
+    of T8's ``"pack"`` decision-journal scope kind (a not-yet-created file → ``[]``;
+    one corrupt line never strands the rest). Re-points to
+    :func:`decision_journal.read_decisions` (``"pack"`` kind) when T8 lands.
+    """
+    from hpc_agent._kernel.contract.layout import RepoLayout
+
+    path = RepoLayout(experiment_dir).hpc / "packs" / f"{pack_name}.decisions.jsonl"
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
 # --- public per-seam accessors + the combined resolve -----------------------
 
 
@@ -487,3 +522,75 @@ def resolve_declarations(
             if "registration_fields" in rp.declarations
         ),
     )
+
+
+def resolve_template_pack_echo(
+    experiment_dir: Path,
+    template_relpath: str,
+    *,
+    records_by_pack: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    records_reader: Callable[[str], Sequence[Mapping[str, Any]]] | None = None,
+) -> dict[str, str | None] | None:
+    """S4 (T9d): the ``{pack, version, sha}`` echo of the CURRENT-bound pack whose
+    manifest ``files`` include *template_relpath*, or ``None``.
+
+    The S4 audit-template seam is "nothing new mechanically" EXCEPT this: an audit
+    template that happens to live in a bound pack lets the run sidecar / dossier
+    prove WHICH pack's template gated the audit
+    (:func:`hpc_agent.ops.notebook_gate.audited_source_echo`). Comparison is file
+    IDENTITY — the template path resolved under *experiment_dir* against each pack
+    file resolved under its manifest's dir — never a name/content-meaning check.
+
+    **FAIL-OPEN, unlike every seam resolver above.** This feeds a sidecar echo, not
+    a gate, and the ``audited_source`` block does NOT itself name a pack context
+    (its fields are ``{source, template, audit_id}``). So the loud dangling refusal
+    stays on the ENFORCEMENT path (:func:`resolve_declarations` / the pack gate);
+    here every not-pack-bound outcome is silent-absent → ``None`` → a byte-identical
+    echo (the D7 silence carried onto the echo): no ``packs`` opt-in, a template in
+    no bound pack, a pack with no current bind, an on-disk manifest DRIFTED from its
+    current bind (no honest echo), or even a malformed ``packs`` block all return
+    ``None`` rather than raise. Cheap: with no opt-in it touches only interview.json
+    (zero manifest/journal probes).
+    """
+    try:
+        optin = _read_packs_optin(experiment_dir)
+    except errors.SpecInvalid:
+        return None  # a broken packs block is loud on the enforcement path, silent here
+    if not optin:
+        return None
+
+    target_abs = _abs(experiment_dir / template_relpath)
+    for entry in optin:
+        pack_name = entry.get("pack")
+        manifest_rel = entry.get("manifest")
+        if not isinstance(pack_name, str) or not pack_name:
+            continue
+        if not isinstance(manifest_rel, str) or not manifest_rel:
+            continue
+        try:
+            manifest_path = experiment_dir / manifest_rel
+            manifest = load_manifest(manifest_path)
+            if manifest.name != pack_name:
+                continue
+            if records_by_pack is not None:
+                records: Sequence[Mapping[str, Any]] = records_by_pack.get(pack_name, ())
+            elif records_reader is not None:
+                records = records_reader(pack_name)
+            else:
+                records = _read_pack_journal(experiment_dir, pack_name)
+            bind = current_bind(records, pack=pack_name)
+            if bind is None:
+                continue
+            # Honesty: only echo when the on-disk manifest still matches the bind's
+            # recorded sha — a drifted manifest's file list is not the bound one.
+            if sha256_file(manifest_path) != bind.manifest_sha:
+                continue
+            parent = manifest_path.parent
+            for pack_file in manifest.files:
+                if _abs(parent / pack_file.path) == target_abs:
+                    return PackEcho(
+                        pack=pack_name, version=bind.version, sha=bind.manifest_sha
+                    ).as_dict()
+        except errors.SpecInvalid:
+            continue  # fail-open: a broken/dangling pack never crashes the sidecar echo
+    return None

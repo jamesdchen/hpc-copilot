@@ -299,5 +299,58 @@ def test_module_never_imports_or_executes_pack_content() -> None:
             assert node.id not in forbidden_names, f"no {node.id} in the resolver"
 
 
+# ── S4 template-pack echo (T9d): FAIL-OPEN file-identity lookup ──────────────
+
+
+def _bind_sha(records: dict[str, Any]) -> str:
+    """The manifest sha the crafted bind record recorded (for echo assertions)."""
+    return str(records[_PACK][0]["resolved"]["manifest_sha"])
+
+
+def test_template_echo_when_template_is_a_bound_pack_file(tmp_path: Path) -> None:
+    # A file listed in the CURRENT bind's manifest → the {pack, version, sha} echo.
+    # Match is file-path IDENTITY (any manifest file), not a name/extension check.
+    records = _opted_in(tmp_path)
+    echo = pd.resolve_template_pack_echo(tmp_path, "packs/toy/hints.json", records_by_pack=records)
+    assert echo == {"pack": _PACK, "version": "1.2.0", "sha": _bind_sha(records)}
+
+
+def test_template_echo_none_when_template_not_in_files(tmp_path: Path) -> None:
+    records = _opted_in(tmp_path)
+    assert (
+        pd.resolve_template_pack_echo(
+            tmp_path, "packs/toy/not_a_pack_file.py", records_by_pack=records
+        )
+        is None
+    )
+
+
+def test_template_echo_none_when_not_opted_in(tmp_path: Path) -> None:
+    # No interview.json → silent-absent, zero probes (the D7 silence on the echo).
+    assert pd.resolve_template_pack_echo(tmp_path, "packs/toy/hints.json") is None
+
+
+def test_template_echo_fail_open_on_dangling_bind(tmp_path: Path) -> None:
+    # Opted in but NO current bind (empty records) → fail-open None, never the loud
+    # dangling refusal (that stays on the enforcement resolvers).
+    _opted_in(tmp_path)
+    assert (
+        pd.resolve_template_pack_echo(tmp_path, "packs/toy/hints.json", records_by_pack={}) is None
+    )
+
+
+def test_template_echo_fail_open_on_manifest_drift(tmp_path: Path) -> None:
+    # Re-generate the manifest on disk AFTER the bind → its sha no longer matches
+    # the current bind → no honest echo (fail-open None), the drift-revocation the
+    # design earns, expressed silently on the echo.
+    records = _opted_in(tmp_path)
+    manifest_path = tmp_path / _MANIFEST_REL
+    manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+    assert (
+        pd.resolve_template_pack_echo(tmp_path, "packs/toy/hints.json", records_by_pack=records)
+        is None
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
