@@ -290,7 +290,9 @@ def _newest_receipt(experiment_dir: Path, repro_run_id: str) -> dict[str, Any] |
     ``_aggregated/<repro_run_id>/reproduction_receipts.jsonl``); append order →
     the last valid line is the newest. Malformed lines are skipped (tolerant read).
     """
-    from hpc_agent.ops.verify_reproduction import _receipt_path
+    from hpc_agent.ops import verify_reproduction as _vr
+
+    _receipt_path = _vr._receipt_path
 
     path = _receipt_path(experiment_dir, repro_run_id)
     try:

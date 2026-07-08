@@ -192,6 +192,10 @@ _CURATED_EXTRA_VERBS = frozenset(
         # ``notebook-record-receipt`` — the emitter's sha-bound render-receipt
         # journaling; unreachable, an emitter reaches for ``python -c``.
         "notebook-record-receipt",
+        # ``notebook-draft-context`` — the deterministic drafting projection
+        # (draft-context design): template slugs, resolved engines, call sites,
+        # root inventories — the mechanized run-#10 drafting brief.
+        "notebook-draft-context",
         # ``notebook-scaffold-template`` — the content-free template scaffold
         # that opens an audit.
         "notebook-scaffold-template",

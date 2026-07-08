@@ -28,6 +28,7 @@ def _git(args: list[str], cwd: Path) -> None:
     subprocess.run(
         ["git", *args],
         cwd=str(cwd),
+        timeout=60,
         check=True,
         capture_output=True,
         text=True,

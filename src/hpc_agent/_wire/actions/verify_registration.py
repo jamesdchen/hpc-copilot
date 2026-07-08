@@ -282,7 +282,7 @@ class PrerequisiteLeg(BaseModel):
     )
 
 
-class FieldsReport(BaseModel):
+class FieldsBlock(BaseModel):
     """Template-field completeness by COUNTING (R5) — slugs opaque, never read.
 
     Every declared field slug must have a non-empty value in the registration's
@@ -341,8 +341,8 @@ class VerifyRegistrationResult(BaseModel):
         default_factory=list,
         description="Per-slot currency detail for every chain entry (empty when absent).",
     )
-    fields: FieldsReport = Field(
-        default_factory=FieldsReport,
+    fields: FieldsBlock = Field(
+        default_factory=FieldsBlock,
         description="Template-field completeness (declared / present / missing slugs).",
     )
     brief: str = Field(

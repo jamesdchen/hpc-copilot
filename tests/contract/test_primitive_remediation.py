@@ -87,6 +87,10 @@ def _verb_from_schema_path(path: Path) -> str:
 # updates the inventory.
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
+        "audit-preflight",
+        "data-manifest",
+        "notebook-draft-context",
+        "verify-registration",
         # Human-amplification block verbs + kill/doctor/decision verbs that
         # gained a ``--spec`` surface (2026-07). Added to track the live CLI.
         "aggregate-check",

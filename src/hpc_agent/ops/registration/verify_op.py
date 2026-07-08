@@ -69,7 +69,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.verify_registration import (
     DossierLeg,
-    FieldsReport,
+    FieldsBlock,
     PrerequisiteKind,
     PrerequisiteLeg,
     TemplateLeg,
@@ -78,7 +78,7 @@ from hpc_agent._wire.actions.verify_registration import (
     VerifyRegistrationSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.export_dossier import compute_dossier_signature  # type: ignore[attr-defined]
+from hpc_agent.ops import export_dossier as _export_dossier
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.registration import (
     ABSENT,
@@ -91,10 +91,12 @@ from hpc_agent.state.registration import (
     reduce_registration,
 )
 
+compute_dossier_signature = _export_dossier.compute_dossier_signature
+
 if TYPE_CHECKING:
-    from hpc_agent.ops.export_dossier import (  # type: ignore[attr-defined]
-        DossierSignature,
-    )
+    from hpc_agent.ops import export_dossier as _ed
+
+    DossierSignature = _ed.DossierSignature
     from hpc_agent.state.registration import ChainEntry
 
 __all__ = ["verify_registration"]
@@ -366,13 +368,13 @@ def _nonempty(value: Any) -> bool:
     return not (isinstance(value, (str, list, tuple, dict, set)) and len(value) == 0)
 
 
-def _fields_report(declared: list[str], winner: Mapping[str, Any]) -> FieldsReport:
+def _fields_report(declared: list[str], winner: Mapping[str, Any]) -> FieldsBlock:
     """Template-field completeness by COUNTING (R5) — slugs opaque, never read."""
     resolved = winner.get("fields")
     resolved = resolved if isinstance(resolved, Mapping) else {}
     present = [s for s in declared if _nonempty(resolved.get(s))]
     missing = [s for s in declared if not _nonempty(resolved.get(s))]
-    return FieldsReport(declared=list(declared), present=present, missing=missing)
+    return FieldsBlock(declared=list(declared), present=present, missing=missing)
 
 
 # ── the brief (pure render) ────────────────────────────────────────────────────
@@ -490,7 +492,7 @@ def _finalize(
     dossier: DossierLeg | None,
     template: TemplateLeg | None,
     prerequisites: list[PrerequisiteLeg],
-    fields: FieldsReport,
+    fields: FieldsBlock,
 ) -> VerifyRegistrationResult:
     """Assemble the result, rendering the brief + ``view_sha`` from ONE projection.
 
@@ -574,7 +576,7 @@ def verify_registration(
             dossier=None,
             template=None,
             prerequisites=[],
-            fields=FieldsReport(),
+            fields=FieldsBlock(),
         )
 
     records = _read_records(experiment_dir, registration_id)
@@ -589,7 +591,7 @@ def verify_registration(
             dossier=None,
             template=None,
             prerequisites=[],
-            fields=FieldsReport(),
+            fields=FieldsBlock(),
         )
 
     winner = peek.winner or {}
@@ -604,7 +606,7 @@ def verify_registration(
             dossier=None,
             template=None,
             prerequisites=[],
-            fields=FieldsReport(),
+            fields=FieldsBlock(),
         )
 
     # The winner is a registration (SUPERSEDED never surfaces as the id's overall

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from hpc_agent._wire.actions.verify_registration import (
     ChainEntry,
     DossierLeg,
-    FieldsReport,
+    FieldsBlock,
     PrerequisiteLeg,
     PrerequisiteRequires,
     TemplateLeg,
@@ -94,7 +94,7 @@ def test_result_round_trips_full_shape() -> None:
                 evidence_note="block=reproduction attestor=human",
             )
         ],
-        fields=FieldsReport(
+        fields=FieldsBlock(
             declared=["widget-owner", "jam-threshold"],
             present=["widget-owner", "jam-threshold"],
             missing=[],
@@ -155,7 +155,7 @@ def test_spec_refuses_neither_address() -> None:
         DossierLeg,
         TemplateLeg,
         PrerequisiteLeg,
-        FieldsReport,
+        FieldsBlock,
     ],
 )
 def test_wire_models_expose_no_domain_vocabulary(model: type[BaseModel]) -> None:
