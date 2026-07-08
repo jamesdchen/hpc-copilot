@@ -520,3 +520,38 @@ suspends the certificate — and the bar — until the partition refines.
 INVARIANT REGARDLESS: only the KEYSTROKE cost lightens, never the ROUTING
 — no trace answers a judgment section's actual question; traces may
 cheapen how the human says yes, never decide they need not look.
+
+## Amendment 12 (2026-07-08): implementation-readiness sync (waves ↔ A10/A11)
+
+The T-waves predate Amendments 10-11; corrections making the plan
+implementable as one coherent whole:
+
+- **NEW TASK T-R (the runner, wave 2.5 — the trust-bearing half of
+  emission):** the sanctioned execution lane (notebook-render plugin +
+  the lighter local runner) gains the BETWEEN-CELL observation loop: after
+  each cell, look up the DECLARED OBSERVABLES in the namespace and take
+  the atoms via the pack measurement impls; emit runner-observed records
+  (source: "runner"). Records carry their SOURCE TIER (runner | engine |
+  draft) — receipts/sign-off surfaces consume runner-tier only.
+- **P1 REVISED:** the pack emitter is (a) the measurement implementations
+  THE RUNNER INVOKES, (b) the optional engine-wrapper refinement layer,
+  (c) the Class-A convenience API. It is NO LONGER the trust-bearing
+  instrumentation (A10).
+- **NEEDS RULING (G-a): the observation plan's machine-readable home.**
+  Candidates: (1) RECOMMENDED — the audit configuration gains
+  `observables: [names]` (rides the audited_source /
+  notebook-record-config seam; lands inside the signed surface
+  automatically; versioned with the roots); (2) a template marker
+  convention (`# hpc-trace-observe: <names>` — visible in-file, signed via
+  template bytes, but a second parsing convention). Implementation blocks
+  on this ruling ONLY for T-R; T0-T6 proceed regardless.
+- **Recorded answers (G-c):** a `flag` is `{rule, detail, evidence{}}`
+  (the notebook-lint finding shape reused — one flag vocabulary
+  system-wide); ad-hoc local runs with neither run_id nor audit_id trace
+  under scope ("local", <cmd_sha12>) — mechanical, collision-free; the
+  REDUCE stage's trace is CORE-EMITTED counts-only (core measures its own
+  pooling with stdlib; canary-exclusion counts included; no pack
+  involvement, no sketch atoms there).
+- **Certificate-gating (A11) adds no v1 task** — it consumes R3
+  certificates and the existing tier machinery when both exist; noted so
+  no implementer builds it early.
