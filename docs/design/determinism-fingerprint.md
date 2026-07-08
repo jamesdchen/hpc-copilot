@@ -778,3 +778,12 @@ as data drift, never admitted as nondeterminism evidence; (3)
 `reproduce-run`'s drift guard grows to three dimensions (code, env,
 data), and verify verdicts name the moved dimension, or "data identity
 unknown (no manifest at record time)" — disclosed, never fabricated.
+
+**Amendment 2 (2026-07-07, user-ruled): `needs_verdict` routes on demand,
+not on creation.** A thin-envelope/near-boundary sample parks as a
+leverage-zero standing item; it surfaces as a verdict brief only when a
+consumer blocks on it (registration demand, graduation, an explicit
+verify) — and then decision-ready per attention-queue D8 (named blocker,
+one code-rendered evidence block, pre-drafted y/nudge resolution, at an
+existing decision moment). Restriction rationale: unrestricted routing of
+low-tier verdicts teaches the human to ignore the channel wholesale.
