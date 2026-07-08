@@ -39,6 +39,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.pack import load_manifest, sha256_file, verify_manifest_integrity
 from hpc_agent.state.pack_receipts import current_bind, slot_status
 
@@ -88,33 +89,18 @@ def _read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]]:
 
 
 def _read_pack_journal(experiment_dir: Path, pack_name: str) -> list[dict[str, Any]]:
-    """Read ``.hpc/packs/<name>.decisions.jsonl`` in append order (newest last).
+    """Read the pack's decision journal in append order (newest last).
 
-    # T8 seam: the dedicated ``"pack"`` decision-journal scope kind + its path
-    # branch land in Wave C (state/decision_journal.py) via a PARALLEL agent; until
-    # then ``read_decisions(experiment_dir, "pack", name)`` would refuse the unknown
-    # scope kind. This direct-path reader mirrors
-    # ``ops/pack/bind_op._read_pack_records`` and
-    # ``state/pack_declarations._read_pack_journal`` EXACTLY — same journal file,
-    # same record shape — so the gate works standalone ahead of T8. Re-points to
-    # ``decision_journal.read_decisions(experiment_dir, "pack", name)`` when it
-    # lands (one bad line never strands the trail; a not-yet-created file → ``[]``).
+    T8 (Wave C) landed the dedicated ``"pack"`` decision-journal scope kind + its
+    ``.hpc/packs/<name>.decisions.jsonl`` path branch, so this routes through the
+    ONE journal reader — ``read_decisions(experiment_dir, "pack", name)`` — rather
+    than re-deriving the path (mirrors ``ops/pack/bind_op._read_pack_records`` and
+    ``state/pack_declarations._read_pack_journal``, both reconciled the same way).
+    A not-yet-created journal → ``[]``; one corrupt line never strands the trail.
+    ``pack_name`` is a validated slug here (``manifest.name``), so the reader's
+    scope validation never raises.
     """
-    from hpc_agent._kernel.contract.layout import RepoLayout
-
-    path = RepoLayout(experiment_dir).hpc / "packs" / f"{pack_name}.decisions.jsonl"
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
+    return read_decisions(experiment_dir, "pack", pack_name)
 
 
 def _receipt_bindings(entry: dict[str, Any]) -> list[dict[str, Any]]:
