@@ -188,3 +188,23 @@ program invariants as emitter checks → flags.
 Altitude test both ways applies to every future atom/composition: "would a
 second program adopt it unedited?" and "would a second DISCIPLINE adopt it
 unedited?" — an atom failing the second test belongs in a pack, not core.
+
+## Amendment 2 (2026-07-08): the digest classifier, mechanically
+
+Q2 expanded. Digests have exactly ONE consumer — identity questions
+(reproduction verification, canary-vs-local, fingerprint admission) — and
+whether a run IS one is already recorded before it starts. The classifier
+is a pure function of the run's own sidecar: canary flag / `reproduces`
+field / local-gauntlet context / task_count. Implementation: the DISPATCHER
+reads the sidecar and exports HPC_TRACE_DIGESTS into the task env — code
+sets the flag, the human never sees a decision point. FAILURE POSTURE
+(what makes knob-removal safe, not just convenient): on-when-unneeded =
+bounded seconds wasted; off-when-needed = verification DEGRADES to
+whole-run comparison and DISCLOSES "stage digests unrecorded" — the status
+quo plus honesty, never a block, never a fabricated match. A spec-level
+override exists (force_on/force_off) but is an OVERRIDE, never a prompt,
+and its exercise is disclosed (the caller-tolerance posture reused). The
+classifier's mapping is human-owned frozen code — changing the CLASS is a
+reviewed edit; instances never ask; nothing adapts. (Third instance of the
+pattern tonight: auto-clear tiers, tiered verdicts, digest policy — the
+run's recorded identity determines its observation level.)
