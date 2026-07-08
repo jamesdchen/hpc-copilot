@@ -91,6 +91,14 @@ the fingerprint's third drift dimension land INSIDE Phase 3 (they touch
 `submit_flow` / the sample-admission model); the `manifest-current`
 prerequisite kind is one Phase-2 vocabulary row.
 
+**Phase 1b — audit-preflight** (`docs/design/audit-preflight.md`,
+user-ruled 2026-07-07). The GO/NO-GO composition verb (submit-preflight
+precedent): template parse+adoption-by-git, doctor skew, roots validity,
+prior-audit state — D8 decision-ready brief, registry +1. Beside Phase 1a;
+its manifest-drift disclosure line depends on 1a. Skill edit: the
+hpc-notebook-audit prelude opens with it; kickoff prose collapses to
+"run audit-preflight; if GO, begin".
+
 **Phase 6 — evidence memory** (`docs/design/evidence-memory.md`). First
 among the four: challenge-attestation reuses its `CITATION_KINDS`
 resolver table and its T-NB never-blocking form; its `"conclusion"` scope
@@ -159,9 +167,10 @@ in multi-human MH7).
   **142** @ `326a9124` (`notebook-scaffold-template` landed same night);
   the slate's +5 stands; Phase 1a adds +1 (`data-manifest`), and
   `docs/design/draft-context.md` adds +1 (`notebook-draft-context`,
-  freestanding post-run-#10) → expected post-slate sum **149**. Phase 6.5
-  adds none. Draft-context's V-LINK view embed serializes with the next
-  view-touching phase (canon bump).
+  freestanding post-run-#10), Phase 1b adds +1 (`audit-preflight`) →
+  expected post-slate sum **150**. Phase 6.5 adds none. Draft-context's
+  V-LINK view embed serializes with the next view-touching phase (canon
+  bump).
 - **Outsource presumptions recorded**: federation rides GIT (append-only
   content-addressed journals are git's native case — no sync daemon, no
   CRDT libs); DSSE envelope CONSTRUCTION rides securesystemslib/in-toto
