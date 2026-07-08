@@ -1045,6 +1045,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "verify_registration.input.json",
+    "name": "verify-registration",
+    "output_schema": "verify_registration.output.json",
+    "python": "hpc_agent.ops.registration.verify_op.verify_registration",
+    "side_effects": [],
+    "summary": "Verify a registration and REPORT its status (current | stale | revoked | superseded | absent) with per-leg detail — the live dossier signature re-gathered vs the sha it bound, the template raw-bytes drift, every prerequisite re-checked through its kind's one checker, and field completeness by counting. Takes exactly one of registration_id / run_id. A REPORTER: it never blocks and never raises on a stale/revoked/missing subject — the deploy refusal is wired caller-side against status. The brief's canonical-JSON sha is the view_sha a sign-off must carry. Read-only, no SSH.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "verify_relay.input.json",

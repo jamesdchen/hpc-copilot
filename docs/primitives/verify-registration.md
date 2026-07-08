@@ -1,3 +1,17 @@
+---
+name: verify-registration
+verb: query
+side_effects: []
+idempotent: true
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.registration.verify_op.verify_registration
+---
 ## Purpose
 
 Read-only consumer seat of the **registration kernel** — the last-mile

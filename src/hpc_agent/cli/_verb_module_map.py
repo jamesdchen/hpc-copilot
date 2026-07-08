@@ -116,6 +116,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'validate-campaign': ('validate-campaign', 'hpc_agent.meta.validate_campaign'),
     'verify-aggregation-complete': ('verify-aggregation-complete', 'hpc_agent.ops.aggregate.invariants'),
     'verify-canary': ('verify-canary', 'hpc_agent.ops.verify_canary'),
+    'verify-registration': ('verify-registration', 'hpc_agent.ops.registration.verify_op'),
     'verify-relay': ('verify-relay', 'hpc_agent.ops.decision.verify_relay'),
     'verify-reproduction': ('verify-reproduction', 'hpc_agent.ops.verify_reproduction'),
     'verify-submitted': ('verify-submitted', 'hpc_agent.ops.verify_submitted'),

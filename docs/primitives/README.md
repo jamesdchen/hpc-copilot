@@ -143,6 +143,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [trace](trace.md) | yes | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |
+| [verify-registration](verify-registration.md) | yes | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` |
 | [verify-relay](verify-relay.md) | yes | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` |
 | [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
 | [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |

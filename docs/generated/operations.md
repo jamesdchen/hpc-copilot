@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**146 operations total**: 119 primitive atoms + 27 workflow atoms.
+**147 operations total**: 120 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (63)
+## `query` (64)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -78,6 +78,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`summarize-submit-plan`](../primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `_(none)_` | — | — |
 | [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |
 | [`verify-aggregation-complete`](../primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` | `_(none)_` | — | — |
+| [`verify-registration`](../primitives/verify-registration.md) | ✓ | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-relay`](../primitives/verify-relay.md) | ✓ | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-reproduction`](../primitives/verify-reproduction.md) | ✗ | filesystem | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`verify-submitted`](../primitives/verify-submitted.md) | ✓ | ssh | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` | `_(none)_` | — | — |
