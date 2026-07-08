@@ -80,6 +80,10 @@ _V2_CONFIG = frozenset(
         "parent_run_ids",
         "node_sha",
         "data_sha",
+        # data_manifest_sha (data-manifest amendment 0b): the manifest-doc
+        # identity of the declared input roots at submit — the fingerprint's
+        # data-identity dimension reads it.
+        "data_manifest_sha",
         "env_hash",
         # scopes (rigor primitives): the caller-attached opaque evidence-scope
         # tags the reduction gate + look ledger key on.
