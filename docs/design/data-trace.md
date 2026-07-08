@@ -246,3 +246,35 @@ neighbor-determined stages → journal the passing suite as the partition's
 certificate. Layer split: core = nothing new (diff already localizes);
 pack = defect corpus + injection convention + R1–R4; program = its
 partition + its certificate.
+
+## Amendment 4 (2026-07-08, user-directed): storage ACTUALLY unified —
+## emission is transport, storage is one store, identity is journaled
+
+The Q5 section above conflated emission location with storage. Superseded:
+
+1. **Emission = transport.** The running process writes `_trace.jsonl`
+   wherever its output contract points ($HPC_RESULT_DIR / local output
+   dir). A packet in flight, never a home.
+2. **THE trace store (one, canonical, local, append-only):**
+   `.hpc/traces/<scope_kind>/<scope_id>/...`, keyed uniformly
+   {scope (run|audit), id, task, seq}. Everything INGESTS into it —
+   cluster traces at harvest (one extra move on an existing pull), local
+   traces at emission (zero-length hop). Transport copies are disposable
+   after ingestion. There is NO fallback location: the former "fallback"
+   IS the store. One reader API, one retention policy, the only place
+   projections look — trace-diff needs zero knowledge of where runs
+   executed.
+3. **Identity = journaled sha (the receipts/dossier house pattern).**
+   Trace BULK never enters the decision journal (volume would drown the
+   human-boundary record; the journal's sparseness is load-bearing). At
+   ingestion, ONE journaled record per trace: {scope, id, trace_sha
+   (canonical hash of the ingested file), stage_count, ingested_at}. The
+   journal holds the trace's fingerprint; the store holds the trace —
+   tamper/regeneration breaks the sha, so traces join the trust chain
+   (citable by conclusions, fingerprint-admissible, dossier-exportable)
+   without journal bloat. R3 atomicity certificates are journaled records
+   citing trace shas.
+
+Same three-part shape as receipts (render file / renders dir / journaled
+receipt) and dossiers (contents / store / sealed manifest) — the house
+pattern, applied, which is what "a more unified way" meant.
