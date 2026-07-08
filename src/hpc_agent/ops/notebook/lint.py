@@ -1,9 +1,9 @@
-"""``notebook-lint`` primitive — three structural checks over an audit source.
+"""``notebook-lint`` primitive — four structural checks over an audit source.
 
 Notebook-audit substrate, Wave B / T4 (see ``docs/design/notebook-audit.md``).
 A read-only ``validate`` verb over a jupytext percent-format ``.py`` (parsed by
 :mod:`hpc_agent.state.audit_source`, the ONE reader of that grammar) plus its
-template and caller-declared, OPAQUE path/import roots. Three rules:
+template and caller-declared, OPAQUE path/import roots. Four rules:
 
 1. **structural completeness** — the template's marker slugs must appear in the
    source's slugs as an ORDER-PRESERVING SUBSEQUENCE. Missing and reordered
@@ -22,6 +22,15 @@ template and caller-declared, OPAQUE path/import roots. Three rules:
    :func:`hpc_agent.state.audit_source.sha256_normalized`). Judges import ORIGIN
    IDENTITY only — never import content/semantics (Q1 flag). Unresolvable
    imports (stdlib / site-packages) are simply not linked, never findings.
+4. **template_import_shadowed** — a SOURCE section that defines (``def`` /
+   ``async def`` / ``class``) or rebinds (a top-level assignment, or an import
+   with a DIFFERENT origin) a name the TEMPLATE imports is reported. The shadow
+   list is derived ONLY from the template's own import statements (an AST walk)
+   — no hardcoded name lists, no configuration knob, no domain vocabulary: the
+   template's imports ARE the caller's declared engines, and the rule
+   mechanizes "call the engine, never re-derive" as POINTING (a shadowing
+   section is already modified/added → human-required; this finding NAMES the
+   hazard at sign-off instead of hiding it in a diff).
 
 Findings are REPORTED, never raised — the graduation gate refuses, the lint
 reports. Only a malformed spec or unparseable source raises
@@ -350,6 +359,177 @@ def _check_linked_sources(
     return linked
 
 
+# ── rule 4: template_import_shadowed ─────────────────────────────────────────
+
+#: The pseudo-slug attributed to a template import that sits OUTSIDE any section
+#: (in the module preamble before the first ``# hpc-audit-section:`` marker).
+_MODULE_PREAMBLE = "module-preamble"
+
+#: An import binding's ORIGIN — what the bound name actually points at, so an
+#: IDENTICAL re-import (the normal verbatim copy of a template section) compares
+#: equal and only a DIFFERENT binding of the same name reads as a shadow.
+#: ``("import", module)`` for ``import``; ``("from", level, module, orig_name)``
+#: for ``from … import``.
+_ImportOrigin = tuple[str, ...] | tuple[str, int, str, str]
+
+
+def _parse_tolerant(text: str) -> ast.Module | None:
+    """``ast.parse`` tolerant of a mid-draft :class:`SyntaxError` (→ ``None``).
+
+    Mirrors ``audit_view._assertions``: a section that does not parse contributes
+    NOTHING to this rule — the lint's structural refusal (:func:`_parse_ast` over
+    the whole source) owns unparseable input; a per-section walk never raises.
+    """
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        return None
+
+
+def _import_bindings(node: ast.AST) -> dict[str, _ImportOrigin]:
+    """Bound name → origin for every import statement under *node* (first wins).
+
+    ``import X`` → ``"X"``; ``import X.Y`` → ``"X"`` (the top-level package is
+    what's bound, and its origin is that same package — ``import X.Y`` and
+    ``import X.Z`` bind the SAME object); ``import X as Y`` → ``"Y"`` with
+    origin ``X``; ``from M import a, b as c`` → ``"a"``, ``"c"`` with origins
+    ``(M, a)`` / ``(M, b)``. ``from M import *`` binds no statically-known name
+    and is skipped.
+    """
+    bindings: dict[str, _ImportOrigin] = {}
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Import):
+            for alias in sub.names:
+                if alias.asname:
+                    bindings.setdefault(alias.asname, ("import", alias.name))
+                else:
+                    top = alias.name.split(".")[0]
+                    bindings.setdefault(top, ("import", top))
+        elif isinstance(sub, ast.ImportFrom):
+            for alias in sub.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                bindings.setdefault(bound, ("from", sub.level or 0, sub.module or "", alias.name))
+    return bindings
+
+
+def _template_import_map(
+    template_preamble: str,
+    template_sections: list[tuple[str, str]],
+) -> dict[str, tuple[_ImportOrigin, str]]:
+    """Bound name → ``(origin, template_slug)`` for every template import.
+
+    The shadow list is derived ONLY from the template's import statements — the
+    AGNOSTIC boundary (no hardcoded names, no config knob, no domain vocabulary).
+    Imports in the preamble are attributed to :data:`_MODULE_PREAMBLE`; a name
+    imported in several places keeps its FIRST occurrence (document order —
+    deterministic). A segment that does not parse contributes nothing.
+    """
+    out: dict[str, tuple[_ImportOrigin, str]] = {}
+    segments = [(_MODULE_PREAMBLE, template_preamble), *template_sections]
+    for slug, text in segments:
+        tree = _parse_tolerant(text)
+        if tree is None:
+            continue
+        for name, origin in _import_bindings(tree).items():
+            out.setdefault(name, (origin, slug))
+    return out
+
+
+def _section_rebindings(tree: ast.Module) -> list[tuple[str, str, _ImportOrigin | None]]:
+    """``(name, kind, import_origin)`` for every TOP-LEVEL binding in a section.
+
+    Walks the section body's top-level statements ONLY — a name defined inside a
+    function body shadows nothing at module scope, and an attribute / subscript
+    assignment (``obj.x = …``) binds no module name. Kinds: ``def`` / ``class``
+    (definitions), ``assignment`` (a ``Name`` target of an assignment), and
+    ``import`` (carries its origin so an identical re-import compares clean).
+    """
+    events: list[tuple[str, str, _ImportOrigin | None]] = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
+            events.append((stmt.name, "def", None))
+        elif isinstance(stmt, ast.ClassDef):
+            events.append((stmt.name, "class", None))
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                elts = target.elts if isinstance(target, ast.Tuple | ast.List) else [target]
+                events.extend(
+                    (elt.id, "assignment", None) for elt in elts if isinstance(elt, ast.Name)
+                )
+        elif isinstance(stmt, ast.AnnAssign):
+            # ``x: int`` alone annotates without binding; only a valued one rebinds.
+            if stmt.value is not None and isinstance(stmt.target, ast.Name):
+                events.append((stmt.target.id, "assignment", None))
+        elif isinstance(stmt, ast.AugAssign):
+            if isinstance(stmt.target, ast.Name):
+                events.append((stmt.target.id, "assignment", None))
+        elif isinstance(stmt, ast.Import | ast.ImportFrom):
+            events.extend(
+                (name, "import", origin) for name, origin in _import_bindings(stmt).items()
+            )
+    return events
+
+
+def _check_template_import_shadowed(
+    source_sections: list[tuple[str, str]],
+    template_preamble: str,
+    template_sections: list[tuple[str, str]],
+) -> list[NotebookLintFinding]:
+    """Report SOURCE sections that shadow a name the TEMPLATE imports.
+
+    The template's imports ARE the caller's declared engines; this rule
+    mechanizes "call the engine, never re-derive" as POINTING — a shadowing
+    section is already modified/added (→ human-required), so the finding's job
+    is to NAME the hazard at sign-off instead of leaving it buried in a diff.
+    The shadow list is derived ONLY from the template's own import statements
+    (agnostic: no name lists, no knob, no domain vocabulary).
+
+    A shadow is: a ``def`` / ``async def`` / ``class`` defining the name, a
+    top-level assignment rebinding it, or an import binding it to a DIFFERENT
+    origin (an IDENTICAL import statement is the normal verbatim copy — clean).
+    Per section a shadowed name is reported once (its first shadowing event);
+    findings are sorted by ``(slug, name)`` so the view_sha downstream stays
+    stable. Sections that do not parse contribute nothing (the structural rules
+    own refusal).
+    """
+    imports = _template_import_map(template_preamble, template_sections)
+    if not imports:
+        return []
+    findings: list[NotebookLintFinding] = []
+    for slug, text in source_sections:
+        tree = _parse_tolerant(text)
+        if tree is None:
+            continue
+        reported: set[str] = set()
+        for name, kind, origin in _section_rebindings(tree):
+            if name not in imports or name in reported:
+                continue
+            template_origin, template_slug = imports[name]
+            if kind == "import" and origin == template_origin:
+                continue  # verbatim copy of the template's own import — clean.
+            reported.add(name)
+            findings.append(
+                NotebookLintFinding(
+                    rule="template_import_shadowed",
+                    section=slug,
+                    detail=(
+                        f"section {slug!r} shadows {name!r}, which the template "
+                        f"imports in {template_slug!r} — the template's imports "
+                        "are the declared engines; call the engine, never re-derive"
+                    ),
+                    evidence={
+                        "name": name,
+                        "template_slug": template_slug,
+                        "kind": kind,
+                    },
+                )
+            )
+    findings.sort(key=lambda f: (f.section or "", f.evidence["name"]))
+    return findings
+
+
 def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
     """Resolve caller-declared roots to directories (relative → experiment_dir)."""
     out: list[Path] = []
@@ -369,12 +549,15 @@ def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
     cli=CliShape(
         help=(
             "Lint a notebook-audit source .py against its template and "
-            "caller-declared, opaque path/import roots. Three read-only checks: "
+            "caller-declared, opaque path/import roots. Four read-only checks: "
             "structural completeness (template marker slugs as an order-preserving "
             "subsequence of the source), executes-live (path-shaped string "
             "literals exist under input_roots; computed paths recorded as "
-            "unverifiable), and linked_sources (imports resolving under "
-            "source_roots reported with their module_sha). Findings are REPORTED, "
+            "unverifiable), linked_sources (imports resolving under "
+            "source_roots reported with their module_sha), and "
+            "template_import_shadowed (a source section defining or rebinding a "
+            "name the template imports — the template's imports are the declared "
+            "engines; a verbatim re-import is clean). Findings are REPORTED, "
             "never raised — the graduation gate refuses, the lint reports."
         ),
         spec_arg=True,
@@ -385,7 +568,7 @@ def _root_dirs(experiment_dir: Path, roots: list[str]) -> list[Path]:
     agent_facing=True,
 )
 def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookLintResult:
-    """Run the three notebook-audit lint rules; return a report of findings.
+    """Run the four notebook-audit lint rules; return a report of findings.
 
     Findings are reported (never raised) in :class:`NotebookLintResult`;
     ``unverifiable_paths`` holds computed path expressions the executes-live rule
@@ -420,6 +603,13 @@ def notebook_lint(*, experiment_dir: Path, spec: NotebookLintInput) -> NotebookL
         tree, experiment_dir, input_root_dirs, section_spans
     )
     findings.extend(live_findings)
+    findings.extend(
+        _check_template_import_shadowed(
+            [(s.slug, s.source) for s in source_module.sections],
+            template_module.preamble,
+            [(s.slug, s.source) for s in template_module.sections],
+        )
+    )
     linked = _check_linked_sources(tree, experiment_dir, source_root_dirs)
 
     return NotebookLintResult(

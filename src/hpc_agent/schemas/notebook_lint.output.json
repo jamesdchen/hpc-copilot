@@ -62,7 +62,8 @@
           "enum": [
             "structural_completeness",
             "executes_live",
-            "linked_sources"
+            "linked_sources",
+            "template_import_shadowed"
           ],
           "title": "Rule",
           "type": "string"

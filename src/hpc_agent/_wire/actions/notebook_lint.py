@@ -1,7 +1,7 @@
 """Pydantic models for the ``notebook-lint`` primitive (notebook-audit / T4).
 
 Wire surface over :mod:`hpc_agent.ops.notebook.lint` — a read-only ``validate``
-verb that runs three structural checks over a jupytext percent-format source
+verb that runs four structural checks over a jupytext percent-format source
 ``.py`` (parsed by :mod:`hpc_agent.state.audit_source`) against a template and
 caller-declared, opaque path/import roots:
 
@@ -14,7 +14,12 @@ caller-declared, opaque path/import roots:
   ``unverifiable_paths`` (an honest gap, never silently skipped);
 * **linked_sources** — imports resolving to a file under ``source_roots`` are
   reported as ``{module, file, module_sha}`` (import ORIGIN IDENTITY only —
-  never import content/semantics).
+  never import content/semantics);
+* **template_import_shadowed** — a source section that defines or rebinds a
+  name the TEMPLATE imports is reported (the template's imports are the
+  caller's declared engines; an identical verbatim re-import is clean). The
+  shadow list is derived only from the template's own import statements —
+  agnostic, no name lists or knobs.
 
 Findings are REPORTED, never raised: the graduation gate refuses, the lint
 reports. Only a malformed spec or unparseable source raises ``SpecInvalid``.
@@ -30,9 +35,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-#: The three lint rules a finding can come from. Kept as a Literal so a caller /
+#: The four lint rules a finding can come from. Kept as a Literal so a caller /
 #: T5 can switch on ``rule`` without a magic-string typo going unnoticed.
-LintRule = Literal["structural_completeness", "executes_live", "linked_sources"]
+LintRule = Literal[
+    "structural_completeness",
+    "executes_live",
+    "linked_sources",
+    "template_import_shadowed",
+]
 
 
 class NotebookLintFinding(BaseModel):

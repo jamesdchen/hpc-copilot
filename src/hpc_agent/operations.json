@@ -1346,7 +1346,7 @@
     "output_schema": "notebook_lint.output.json",
     "python": "hpc_agent.ops.notebook.lint.notebook_lint",
     "side_effects": [],
-    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Three read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; computed paths recorded as unverifiable), and linked_sources (imports resolving under source_roots reported with their module_sha). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
+    "summary": "Lint a notebook-audit source .py against its template and caller-declared, opaque path/import roots. Four read-only checks: structural completeness (template marker slugs as an order-preserving subsequence of the source), executes-live (path-shaped string literals exist under input_roots; computed paths recorded as unverifiable), linked_sources (imports resolving under source_roots reported with their module_sha), and template_import_shadowed (a source section defining or rebinding a name the template imports — the template's imports are the declared engines; a verbatim re-import is clean). Findings are REPORTED, never raised — the graduation gate refuses, the lint reports.",
     "verb": "validate"
   },
   {

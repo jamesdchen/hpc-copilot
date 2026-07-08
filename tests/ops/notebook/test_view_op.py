@@ -124,6 +124,47 @@ def test_missing_source_is_spec_invalid(tmp_path: Path) -> None:
         _view(tmp_path)
 
 
+def test_template_import_shadow_flows_into_view_flags_and_tier(tmp_path: Path) -> None:
+    # The canonical view recomputes the lint server-side, so a source section
+    # that shadows a template import surfaces as a lint flag attributed to that
+    # section, and the section reads human_required.
+    template = """\
+# %%
+# hpc-audit-section: setup
+from toy.engine import compute_stat
+x = 1
+
+# %%
+# hpc-audit-section: model
+def train():
+    return 42
+"""
+    source = """\
+# %%
+# hpc-audit-section: setup
+from toy.engine import compute_stat
+x = 1
+
+# %%
+# hpc-audit-section: model
+def compute_stat(y):
+    return y + 1
+"""
+    (tmp_path / "source.py").write_text(source, encoding="utf-8")
+    (tmp_path / "template.py").write_text(template, encoding="utf-8")
+    result = _view(tmp_path)
+
+    by_slug = {s.slug: s for s in result.sections}
+    flags = [f for f in by_slug["model"].lint_flags if f.get("rule") == "template_import_shadowed"]
+    assert len(flags) == 1
+    assert flags[0]["section"] == "model"
+    assert flags[0]["evidence"]["name"] == "compute_stat"
+    assert flags[0]["evidence"]["template_slug"] == "setup"
+    assert by_slug["model"].tier == HUMAN_REQUIRED
+    # The clean sibling carries no shadow flag.
+    assert not any(f.get("rule") == "template_import_shadowed" for f in by_slug["setup"].lint_flags)
+
+
 def test_receipt_passthrough_greens_asserted_section(tmp_path: Path) -> None:
     _write(tmp_path)
     # Without a receipt `model` reads human_required (its assert is unproven).
