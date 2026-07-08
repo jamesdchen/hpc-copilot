@@ -498,3 +498,25 @@ floor; R1–R4 partition refinement operates within it via engine emits.
 Same shape as the whole system: the run does not narrate itself — trusted
 code observes from outside at signed boundaries (the pointing doctrine
 applied to instrumentation; the reducer/render/Stop-hook precedent).
+
+## Amendment 11 (2026-07-08, user-directed): bar-lightening is
+## CERTIFICATE-GATED, not v1-default, not indefinitely deferred
+
+Even with runner-observed (ungameable) evidence, trace flags do not
+lighten the sign-off bar at v1: (1) an untested instrument gets no gate
+authority (the receipts precedent — evidence sources earn gate power
+through field use); (2) "flag-free" is only as meaningful as the flag net
+is dense — a clean trace under a thin invariant set means "passed a thin
+check", and lightening vigilance against a thin net is the fingerprint's
+n=2 lesson inverted. THE TRIGGER: the R3 certificate IS the density
+measure, so **bar-lightening is a per-program entitlement gated on a
+passing R3 certificate over the declared defect corpus** — no certificate,
+traces are information beside the diff, full bar; certificate held,
+runner-observed flag-free sections may take the lighter keystroke tier
+(y-adoption of a code-drafted sign-off). Palatability becomes the REWARD
+for evidence density (write your injectors, earn cheaper sign-offs), and
+the entitlement stays honest: a new corpus entry that fails to localize
+suspends the certificate — and the bar — until the partition refines.
+INVARIANT REGARDLESS: only the KEYSTROKE cost lightens, never the ROUTING
+— no trace answers a judgment section's actual question; traces may
+cheapen how the human says yes, never decide they need not look.
