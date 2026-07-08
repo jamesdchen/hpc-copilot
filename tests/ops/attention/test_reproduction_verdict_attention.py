@@ -180,9 +180,7 @@ def test_unreadable_repro_journal_surfaces_the_item(tmp_path: Path, monkeypatch)
     def _boom(*_a, **_k):  # the repro-journal read blows up
         raise OSError("torn journal")
 
-    monkeypatch.setattr(
-        "hpc_agent.state.decision_journal.read_decisions", _boom, raising=True
-    )
+    monkeypatch.setattr("hpc_agent.state.decision_journal.read_decisions", _boom, raising=True)
     # Fail-open: an unreadable journal reads NOT-answered → the item still surfaces.
     assert len(aq.collect_reproduction_verdicts(tmp_path, now=_NOW).items) == 1
 

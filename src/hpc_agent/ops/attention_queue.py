@@ -787,9 +787,7 @@ def collect_reproduction_verdicts(experiment_dir: Path, *, now: str) -> QueueCol
             skipped.append({"ref": ledger.name, "reason": "unreadable fingerprint ledger"})
             continue
         if malformed:
-            skipped.append(
-                {"ref": ledger.name, "reason": f"{malformed} malformed ledger line(s)"}
-            )
+            skipped.append({"ref": ledger.name, "reason": f"{malformed} malformed ledger line(s)"})
         for sample in samples:
             if sample.get("verdict") != "needs_verdict":
                 continue  # auto_cleared / mismatch are not this kind

@@ -113,9 +113,7 @@ def _string_constants(path: Path) -> list[str]:
     """Every string-literal constant in *path*'s AST (docstrings included)."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     return [
-        n.value
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
     ]
 
 

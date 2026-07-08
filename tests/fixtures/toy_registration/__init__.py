@@ -249,9 +249,7 @@ def register(experiment_dir: Path, *, response: str | None = None) -> Any:
         f"{[(v.slot, v.status) for v in verdicts]}"
     )
 
-    template_sha = hashlib.sha256(
-        (experiment_dir / TEMPLATE_REL).read_bytes()
-    ).hexdigest()
+    template_sha = hashlib.sha256((experiment_dir / TEMPLATE_REL).read_bytes()).hexdigest()
 
     # Build the pre-append view exactly as the gate does (all legs CURRENT).
     dossier_leg = DossierLeg(
