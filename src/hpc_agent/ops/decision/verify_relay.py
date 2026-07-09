@@ -57,6 +57,16 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   is a line-start ``N.`` list marker, and any number whose nearest preceding
   non-space char is ``~`` (``check back in ~2 minutes``).
 
+  Spelled-out number WORDS are audited too (F-R): a rejected numeric claim
+  restated in words is the same distortion, and the digit-only ``_NUM_RE``
+  never saw it (``nineteen`` relayed for a journal that records only ``10`` — a
+  demonstrated live evasion). Only cardinals whose VALUE is >= 13 (``thirteen``
+  and up, tens, hyphenated compounds, and ``hundred``/``thousand``/``million``)
+  become claims; ``one``..``twelve`` are overwhelmingly ordinary prose and
+  auditing them would flood false positives (see
+  :func:`_extract_number_word_claims`). Each qualifying word converts to its
+  value and runs the SAME :func:`_match_number` path as a digit claim.
+
 * **State words.** ``running / in_flight / complete / failed / pending /
   timeout / abandoned`` (+ synonyms) plus the verification phrases ``canary
   green`` and ``verified``. Each is mapped to a canonical family and compared to
@@ -78,12 +88,36 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   is failed → flagged; no state either → ``unverifiable``).
 
 ``sources_consulted`` names only the durable records actually found and read
-(decision journal, run sidecar, RunRecord, per-run briefs), so a run with no
+(decision journal, run sidecar, RunRecord, per-run briefs, and — F-Q — the
+code-written ``reduce_artifacts`` and ``campaign_briefs``), so a run with no
 records honestly reports the empty/short list rather than a fabricated one.
 
 The per-run briefs log (``<experiment>/.hpc/runs/<run_id>.briefs.jsonl``) is
 read TOLERANTLY — another agent owns its creation; this verb never creates or
 writes it, and a missing/partial file is simply skipped.
+
+Code-written reduce artifacts & campaign briefs (F-Q)
+-----------------------------------------------------
+A code-drafted completion brief relays reducer-computed metrics (``qlike_sum``,
+``n_samples``, ...) and, for a campaign, the campaign-complete numbers — none of
+which live in the per-run journal/sidecar/record. Relaying such a brief VERBATIM
+was structurally un-passable (the exact opposite of the relay-verbatim
+doctrine): every reducer number matched nothing and the integer part of each
+decimal even tripped the job-id check. These artifacts are code-written and
+journal-adjacent — inside the trust boundary — so this verb loads them too
+(tolerantly, fail-open, non-creating, mirroring ``_load_briefs``) and feeds them
+into the NUMBER pool, WIDENING the source corpus without lowering the bar:
+
+* ``reduce_artifacts`` — ``_aggregated/<run_id>/metrics_aggregate.json`` (the
+  reducer's persisted aggregate, ``ops/aggregate_flow._persist_local_aggregate``)
+  and the combiner's ``_aggregated/<run_id>/_combiner/wave_<N>.json`` grid
+  partials;
+* ``campaign_briefs`` — the campaign decision journal
+  (``.hpc/campaigns/<campaign_id>/decisions.jsonl``) when the run's sidecar
+  carries a ``campaign_id``.
+
+These contribute NUMBERS ONLY: a campaign's own lifecycle words are never fed to
+the run-state check (a campaign's ``complete`` is not the run's recorded status).
 
 Notebook-audit relay (v1.5, T11)
 --------------------------------
@@ -209,6 +243,100 @@ def _match_number(raw: str, source_strings: set[str], source_floats: list[float]
     return False
 
 
+# ── spelled-out number words (F-R) ─────────────────────────────────────────────
+
+# Cardinal words → value. A rejected numeric claim restated in words is the same
+# distortion the digit pass catches; ``_NUM_RE`` is blind to words, so an agent
+# under pressure launders ``10`` as ``nineteen`` and passes (a demonstrated live
+# evasion). The lexicon covers single-token cardinals + tens; hyphenated
+# compounds (``twenty-one``..``ninety-nine``) are composed at parse time.
+_WORD_UNITS: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}  # fmt: skip
+_WORD_TENS: dict[str, int] = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}  # fmt: skip
+_WORD_SCALES: dict[str, int] = {"hundred": 100, "thousand": 1000, "million": 1_000_000}
+
+# The minimum spelled-cardinal VALUE audited as a claim. ``one``..``twelve`` are
+# overwhelmingly ordinary prose ("one of the", "two ways", "a dozen") — auditing
+# them would flood false positives on the word "one" and kill the hook's
+# credibility (F-R's explicit warning). ``thirteen`` and up spelled out is rare
+# in prose and almost always a deliberate restatement of a count — exactly the
+# laundering channel this closes. The threshold is on the VALUE (so a compound
+# like ``twenty-one`` and the scale words all qualify), not the surface token.
+_NUMBER_WORD_MIN_VALUE = 13
+
+# One number-word token: a tens word with an optional hyphenated unit
+# (``ninety-nine``), a bare unit/teen (``nineteen``), a bare tens (``forty``), or
+# a scale word (``thousand``). Alpha boundaries on both sides so ``oneiric`` /
+# ``someone`` never match. Tens-with-unit is first so the compound wins over the
+# bare tens; within the unit alternation, regex backtracking lets ``seventeen``
+# win over a ``seven`` prefix (its trailing-boundary lookahead fails on "teen").
+_NUMBER_WORD_RE = re.compile(
+    r"(?<![A-Za-z])(?:"
+    r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    r"(?:-(?:one|two|three|four|five|six|seven|eight|nine))?"
+    r"|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen"
+    r"|hundred|thousand|million"
+    r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
+def _number_word_value(token: str) -> int | None:
+    """The integer value of a spelled cardinal *token*, or None if unrecognized."""
+    t = token.lower()
+    if "-" in t:
+        tens, _, unit = t.partition("-")
+        if tens in _WORD_TENS and unit in _WORD_UNITS:
+            return _WORD_TENS[tens] + _WORD_UNITS[unit]
+        return None
+    if t in _WORD_UNITS:
+        return _WORD_UNITS[t]
+    if t in _WORD_TENS:
+        return _WORD_TENS[t]
+    return _WORD_SCALES.get(t)
+
+
+def _word_is_conversational(text: str, start: int) -> bool:
+    """Port of :func:`_is_conversational_number`'s intent for a word claim.
+
+    A number word whose nearest preceding non-space char is ``~`` is chatter
+    (``~thirteen minutes``), not a fact — the same tilde-duration heuristic the
+    digit pass applies. (The line-marker heuristic is digit-only — a list marker
+    is ``13.`` not ``thirteen.`` — so it does not apply to words.)
+    """
+    j = start - 1
+    while j >= 0 and text[j] == " ":
+        j -= 1
+    return j >= 0 and text[j] == "~"
+
+
+def _extract_number_word_claims(text: str) -> list[tuple[int, int, str, int]]:
+    """Spelled-cardinal claims in *text*: ``(start, end, surface, value)`` tuples.
+
+    Only cardinals whose value is >= :data:`_NUMBER_WORD_MIN_VALUE` are returned
+    (see that constant for the false-positive rationale), and a ``~``-prefixed
+    conversational word is skipped. Each returned value flows through the SAME
+    :func:`_match_number` path as a digit claim in the caller.
+    """
+    out: list[tuple[int, int, str, int]] = []
+    for m in _NUMBER_WORD_RE.finditer(text):
+        value = _number_word_value(m.group(0))
+        if value is None or value < _NUMBER_WORD_MIN_VALUE:
+            continue
+        if _word_is_conversational(text, m.start()):
+            continue
+        out.append((m.start(), m.end(), m.group(0), value))
+    return out
+
+
 def _nearest_number(raw: str, source_floats: list[float]) -> str | None:
     """The source number closest to *raw*, as a string, or None if no numbers."""
     if not source_floats:
@@ -278,6 +406,19 @@ def _is_fraction_digits(text: str, start: int) -> bool:
     positive) — the whole decimal is audited by the number pass instead.
     """
     return start >= 2 and text[start - 1] == "." and text[start - 2].isdigit()
+
+
+def _is_integer_part_of_decimal(text: str, end: int) -> bool:
+    """True when the digit run ending at *end* is the INTEGER part of a decimal.
+
+    The mirror of :func:`_is_fraction_digits`: ``29133.060892393198`` splits on
+    the ``.`` under a bare ``\\d{5,}`` scan into ``29133`` (integer part) and
+    ``060892393198`` (fractional). The integer part is NOT a job-id claim (a
+    reducer-computed ``qlike_sum`` — F-Q false positive: its integer part was
+    flagged as a job-id-shaped token); leaving the span unconsumed lets the
+    number pass audit the WHOLE decimal against the source numbers.
+    """
+    return end + 1 < len(text) and text[end] == "." and text[end + 1].isdigit()
 
 
 # ── state extraction ───────────────────────────────────────────────────────────
@@ -403,6 +544,29 @@ def _classify_state(
     return ("state", run_status_raw)
 
 
+# How many chars before a state word we scan for the word "canary".
+_CANARY_WINDOW = 40
+
+
+def _is_canary_adjacent(text: str, start: int) -> bool:
+    """True when the state word at *start* is within a few tokens of "canary".
+
+    A relayed ``canary failed`` is a claim about the CANARY sibling's outcome,
+    not the MAIN run's recorded lifecycle state — flagging it against the main
+    run's status (``abandoned``) is a misattribution (F-Q: "canary failed"
+    tripped against a main run recorded ``abandoned``). Clean canary-outcome
+    attribution is not reliably recoverable at this seam (the canary is a
+    separate ``<run_id>-canary`` record this audit does not load), so a
+    canary-adjacent lifecycle word is skipped-with-accounting (counted,
+    span-consumed, never flagged) — the conservative choice the task sanctions:
+    a missed wrong-canary claim beats a false mismatch that would train agents
+    to ignore the hook. Conservative window: the ``_CANARY_WINDOW`` chars before
+    the state word.
+    """
+    lo = max(0, start - _CANARY_WINDOW)
+    return "canary" in text[lo:start].lower()
+
+
 # ── source loading ─────────────────────────────────────────────────────────────
 
 
@@ -430,6 +594,79 @@ def _load_briefs(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
         if isinstance(obj, dict):
             out.append(obj)
     return out
+
+
+def _read_json_tolerant(path: Path) -> Any:
+    """Parse a JSON file, or None on any absence/read/parse error (never raises)."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+
+
+# A combiner partial's file name (``wave_<N>.json``) — anchored so a sibling
+# ``wave_<N>.runtime.json`` (runtime samples, not grid points) does not slip in.
+# Mirrors ``ops/aggregate_flow._WAVE_PARTIAL_NAME_RE``.
+_WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_\d+\.json$")
+
+
+def _load_reduce_artifacts(experiment_dir: Path, run_id: str) -> list[Any]:
+    """Read the code-written reduce artifacts for *run_id* tolerantly (F-Q).
+
+    Two locations under the experiment's aggregated area, both written by the
+    DETERMINISTIC reducer/combiner (inside the trust boundary, journal-adjacent):
+
+    * ``_aggregated/<run_id>/metrics_aggregate.json`` — the reducer's persisted
+      aggregate (``ops/aggregate_flow._persist_local_aggregate``);
+    * ``_aggregated/<run_id>/_combiner/wave_<N>.json`` — the combiner's per-wave
+      grid partials (``wave_<N>.runtime.json`` siblings excluded).
+
+    Never creates or writes anything (mirrors :func:`_load_briefs`): a missing
+    dir/file or unreadable/corrupt bytes yields no records for that artifact. The
+    caller feeds the result into the NUMBER pool only.
+    """
+    out: list[Any] = []
+    agg_dir = experiment_dir / "_aggregated" / run_id
+    aggregate = _read_json_tolerant(agg_dir / "metrics_aggregate.json")
+    if aggregate is not None:
+        out.append(aggregate)
+    combiner = agg_dir / "_combiner"
+    try:
+        wave_files = sorted(
+            p for p in combiner.glob("wave_*.json") if _WAVE_PARTIAL_NAME_RE.match(p.name)
+        )
+    except OSError:
+        wave_files = []
+    for wf in wave_files:
+        wave = _read_json_tolerant(wf)
+        if wave is not None:
+            out.append(wave)
+    return out
+
+
+def _load_campaign_briefs(experiment_dir: Path, sidecar: Any) -> list[dict[str, Any]]:
+    """Read the campaign decision journal when the run's sidecar names one (F-Q).
+
+    A campaign-complete brief is code-drafted from reducer output; the run
+    sidecar carries ``campaign_id`` (``state/runs`` field set), and when present
+    the campaign's decision journal
+    (``.hpc/campaigns/<campaign_id>/decisions.jsonl``) is read via
+    ``read_decisions``. Tolerant / non-creating: no ``campaign_id`` (or a
+    non-dict sidecar, or an unreadable journal) yields no records. The caller
+    feeds the result into the NUMBER pool only — a campaign's own lifecycle words
+    must NOT be checked against the run's recorded status.
+    """
+    if not isinstance(sidecar, dict):
+        return []
+    cid = sidecar.get("campaign_id")
+    if not isinstance(cid, str) or not cid:
+        return []
+    from hpc_agent.state.decision_journal import read_decisions
+
+    try:
+        return read_decisions(experiment_dir, "campaign", cid)
+    except Exception:
+        return []
 
 
 def _dedupe_mismatches(items: Iterable[RelayMismatch]) -> list[RelayMismatch]:
@@ -518,10 +755,27 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         sources_consulted.append("briefs")
         source_objs.extend(briefs)
 
+    # ── number-only sources (F-Q) ──────────────────────────────────────────────
+    # Code-written, journal-adjacent artifacts whose numbers a verbatim
+    # completion relay legitimately carries. Fed to the NUMBER pool but NOT
+    # ``source_text`` / keyed counts / the run-state check — a campaign's own
+    # lifecycle words are not the run's recorded status.
+    number_only_objs: list[Any] = []
+    reduce_artifacts = _load_reduce_artifacts(experiment_dir, run_id)
+    if reduce_artifacts:
+        sources_consulted.append("reduce_artifacts")
+        number_only_objs.extend(reduce_artifacts)
+    campaign_briefs = _load_campaign_briefs(experiment_dir, sidecar)
+    if campaign_briefs:
+        sources_consulted.append("campaign_briefs")
+        number_only_objs.extend(campaign_briefs)
+
     # ── build the compare pools ────────────────────────────────────────────────
     source_num_strings: set[str] = set()
     source_num_floats: list[float] = []
     for obj in source_objs:
+        _collect_source_numbers(obj, source_num_strings, source_num_floats)
+    for obj in number_only_objs:
         _collect_source_numbers(obj, source_num_strings, source_num_floats)
     has_source_numbers = bool(source_num_strings)
 
@@ -542,6 +796,12 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         rid = src.get("run_id")
         if isinstance(rid, str) and rid:
             auth_ids.add(rid)
+        # The run's own campaign id is an authoritative identifier: a verbatim
+        # campaign-complete brief names it (F-Q), and it is run-id-shaped
+        # (``run10-proving``) so it would otherwise flag as an unknown run-id.
+        cid = src.get("campaign_id")
+        if isinstance(cid, str) and cid:
+            auth_ids.add(cid)
         for key in ("job_ids", "parent_run_ids"):
             vals = src.get(key)
             if isinstance(vals, list):
@@ -591,6 +851,12 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                 # Fractional digits of a decimal ("pi_estimate 3.1413..."),
                 # not a job-id claim. Leave the span unconsumed so the number
                 # pass audits the WHOLE decimal against the source numbers.
+                continue
+            if _is_integer_part_of_decimal(relay, m.end()):
+                # Integer part of a decimal ("qlike_sum 29133.0608..." — F-Q):
+                # not a job-id claim. Leave the span unconsumed so the number
+                # pass audits the WHOLE decimal (the integer part alone would
+                # match no source number and be flagged spuriously).
                 continue
             token = m.group(0)
             if token not in job_ids and _match_number(token, source_num_strings, source_num_floats):
@@ -644,6 +910,41 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                         f"numeric claim {raw!r} matches no source number (nor a truncation of one)"
                     ),
                     nearest_source_value=_nearest_number(raw, source_num_floats),
+                )
+            )
+
+    # ── (2b) spelled-out number words (F-R) ────────────────────────────────────
+    # A rejected numeric claim restated in words is the same distortion; the
+    # value runs the SAME source-number checks as a digit claim. Only cardinals
+    # >= _NUMBER_WORD_MIN_VALUE qualify (see _extract_number_word_claims).
+    for start, end, surface, value in _extract_number_word_claims(relay):
+        if _overlaps(start, end, consumed_spans):
+            continue
+        norm = str(value)
+        claims_checked += 1
+        if not has_source_numbers:
+            mismatches.append(
+                RelayMismatch(
+                    claim=surface,
+                    kind="unverifiable",
+                    detail=(
+                        f"spelled-out numeric claim {surface!r} (= {value}) has no "
+                        "comparable value in any durable record for the run"
+                    ),
+                    nearest_source_value=None,
+                )
+            )
+            continue
+        if not _match_number(norm, source_num_strings, source_num_floats):
+            mismatches.append(
+                RelayMismatch(
+                    claim=surface,
+                    kind="number",
+                    detail=(
+                        f"spelled-out numeric claim {surface!r} (= {value}) matches "
+                        "no source number"
+                    ),
+                    nearest_source_value=_nearest_number(norm, source_num_floats),
                 )
             )
 
@@ -724,6 +1025,14 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                         nearest_source_value=None,
                     )
                 )
+            continue
+        if family in _LIFECYCLE_FAMILIES and _is_canary_adjacent(relay, m.start()):
+            # Canary-adjacent lifecycle word ("canary failed"): a claim about
+            # the CANARY sibling, not the main run — skip-with-accounting rather
+            # than misattribute it to the main run's status (F-Q). Counted, not
+            # flagged; NOT added to seen_state so a later non-canary use of the
+            # same word is still checked.
+            claims_checked += 1
             continue
         if phrase in seen_state:
             continue
