@@ -148,6 +148,9 @@ hpc_agent = [
     # shipping in the wheel) does not apply here; nothing under
     # ``conformance/fixtures/`` is machine-specific.
     "conformance/fixtures/**/*",
+    # Conformance-kit vectors ship as package data so `pytest --pyargs
+    # hpc_agent.conformance` runs against a stranger's harness from the wheel.
+    "conformance/fixtures/**/*.json",
     "py.typed",
 ]
 slash_commands = [
