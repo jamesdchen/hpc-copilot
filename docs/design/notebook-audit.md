@@ -554,3 +554,23 @@ rsync using the data-trace content-hash atoms: remote hashes its tree, local
 tars only mismatched files into the F-G stage dir. Windows rsync installs
 (MSYS/cwRsync) stay out of scope — the agent-blind-ssh / path-translation
 class killed ControlMaster here already.
+
+Addendum 4 (morning after): **7. Pre-deploy local smoke of task 0** (submit).
+Run #11: a units bug (executor train_window in DAYS; 500 days = 24,000 bars >
+every 2,425-bar chunk) survived the audit (human-signed — semantics are the
+human's), the interview, and S1 validation, and was first caught by the REMOTE
+canary — after an hours-long 8.4 GB staging. It would have crashed a LOCAL
+task-0 dry-run in seconds. Wire the existing `ops/validate/dry_run_local.py`
+seam into the submit flow as a bounded pre-deploy smoke (S1/S2 seat,
+disclosure-or-refusal before transport ever runs). Core never interprets the
+failure — it relays the executor's own crash.
+
+**8. Overnight mode** (submit/campaign; user-requested). A journaled standing
+consent for named boundaries while the human sleeps. Four pins from the live
+night: (a) the consent is the human's own typed utterance accepting fallout,
+journaled as its own record; (b) it binds to SPEC IDENTITY — run #11's gate
+correctly refused to carry a pre-y across a cmd_sha change (regenerated grid),
+and overnight mode must keep exactly that: consent dies on spec change;
+(c) hard caps ride the record (budget / walltime / expires-at-morning);
+(d) everything consumed under it is disclosed in a morning brief. This
+formalizes the ad-hoc pre-y pattern instead of leaving it to per-night prose.
