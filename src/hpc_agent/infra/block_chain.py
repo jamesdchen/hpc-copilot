@@ -219,6 +219,7 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # aggregate-run — end of the aggregate chain.
     ("aggregate-run", "harvested"): None,
     ("aggregate-run", "harvest_partial"): None,
+    ("aggregate-run", "detached"): None,  # brief arrives via the journal.
     # ── campaign family ───────────────────────────────────────────────────────
     # campaign-greenlight
     ("campaign-greenlight", "greenlit"): "campaign-watch",  # stamped → observe.

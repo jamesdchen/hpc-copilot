@@ -97,6 +97,24 @@ class AggregateFlowSpec(BaseModel):
         ),
     )
 
+    detach: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the "
+            "aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a "
+            "COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's "
+            "finally), submit-s4, aggregate-run, and campaign-run all call it "
+            "SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach "
+            "would fork every one of those instead of harvesting. Detach is therefore "
+            "OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The "
+            "MCP seam still refuses a blocking aggregate-flow (it reads the raw spec "
+            "dict, not this default), so an agent calling it directly must pass "
+            "detach=true; when True aggregate-flow spawns a durable detached worker "
+            "(combine SSH + rsync pull) and returns a {started, watch: journal, "
+            "detached_pid} handle, the reduced metrics read from the journal on "
+            "completion."
+        ),
+    )
     reconcile_terminal: bool = Field(
         default=False,
         description=(
@@ -209,5 +227,29 @@ class AggregateFlowResult(BaseModel):
             "per tag — the framework counts looks, it never interprets what "
             "they found. Null (key omitted in spirit) for a scope-less run, so "
             "existing consumers are untouched."
+        ),
+    )
+    started: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract handle (design §3; run-#10 F-K): True when a DIRECT "
+            "aggregate-flow invocation with detach=true spawned a durable detached "
+            "worker to own the combine + rsync harvest and returned immediately. The "
+            "reduced metrics are read from the journal on completion; the data fields "
+            "above are empty on the handle. False on every synchronous / composed path."
+        ),
+    )
+    watch: str | None = Field(
+        default=None,
+        description=(
+            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
+            "``started`` is True. None on the synchronous path."
+        ),
+    )
+    detached_pid: int | None = Field(
+        default=None,
+        description=(
+            "The detached worker's OS process id (informational — do NOT wait on it; "
+            "read the journal). None on the synchronous path."
         ),
     )

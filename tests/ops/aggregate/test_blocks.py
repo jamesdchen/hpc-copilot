@@ -231,7 +231,7 @@ def _agg_result(*, escalation_reason: str | None = None, failed_waves=None, scop
 
 
 def test_run_returns_results_table_with_empty_interpretation_slot(experiment) -> None:
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()) as m_agg:
@@ -255,7 +255,7 @@ def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
     """A reduction over a scoped run copies the aggregate-flow result's
     ``scope_looks`` onto the brief VERBATIM — two plain integers per tag, the
     block interprets nothing (rigor-primitives T3)."""
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
     looks = {"held_out": {"prior_looks": 2, "distinct_lineages": 1}}
 
@@ -268,7 +268,7 @@ def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
 def test_run_brief_omits_scope_looks_key_for_scope_less_run(experiment) -> None:
     """A scope-less reduction (``scope_looks is None``) leaves the key ABSENT —
     not ``None`` — so a scope-less brief is byte-identical to a pre-T3 one."""
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(scope_looks=None)):
@@ -278,7 +278,7 @@ def test_run_brief_omits_scope_looks_key_for_scope_less_run(experiment) -> None:
 
 
 def test_run_partial_harvest_when_waves_escalate(experiment) -> None:
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(
@@ -294,7 +294,7 @@ def test_run_partial_harvest_when_waves_escalate(experiment) -> None:
 
 
 def test_run_partial_harvest_when_failed_waves(experiment) -> None:
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(failed_waves=[3])):
@@ -312,7 +312,7 @@ def test_run_surfaces_harvest_ledger_tail(journal_home, experiment) -> None:
     ledger = harvest_marker_path(experiment, _RUN_ID)
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text('{"terminal_cause": "complete", "harvest_ok": true}\n', encoding="utf-8")
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
@@ -342,7 +342,7 @@ def test_harvest_ledger_tail_falls_back_over_torn_final_line(journal_home, exper
         '{"terminal_cause": "timeout", "harvest_ok": fal',
         encoding="utf-8",
     )
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
@@ -361,13 +361,124 @@ def test_harvest_ledger_tail_none_only_when_entirely_unparseable(journal_home, e
     ledger = harvest_marker_path(experiment, _RUN_ID)
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text("not json\n{also bad\n", encoding="utf-8")
-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
     _greenlight(experiment, "aggregate-run")
 
     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
         result = blocks.aggregate_run(experiment, spec=spec)
 
     assert result.brief["harvest_ledger"] is None
+
+
+# ── aggregate-run detach-by-contract (design §3; run-#10 F-K) ──────────────────
+
+_LAUNCH_PATH = "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"
+
+
+class _FakeLaunch:
+    run_id = _RUN_ID
+    pid = 4242
+    log_path = "/x/detached.log"
+
+
+def test_run_detaches_by_default_after_gate(experiment) -> None:
+    """detach ON (default): the harvest never runs in-process — a durable worker
+    is spawned and the handle envelope returned. The child spec carries detach OFF."""
+    _greenlight(experiment, "aggregate-run")
+    with (
+        mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
+        mock.patch.object(blocks, "aggregate_flow") as m_agg,
+    ):
+        result = blocks.aggregate_run(
+            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )
+
+    m_agg.assert_not_called()
+    m_launch.assert_called_once()
+    assert m_launch.call_args.kwargs["verb"] == "aggregate-run"
+    assert m_launch.call_args.kwargs["spec"]["detach"] is False
+    assert result.stage_reached == "detached"
+    assert result.started is True
+    assert result.watch == "journal"
+    assert result.detached_pid == 4242
+    assert result.needs_decision is False
+    assert result.next_block is None
+
+
+def test_run_gate_fires_before_detach(experiment) -> None:
+    """Ordering proof: no greenlight → the gate raises SYNCHRONOUSLY and the
+    detached launcher is NEVER reached (a gate failure can never hide in a child)."""
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        pytest.raises(errors.SpecInvalid, match="no journaled greenlight"),
+    ):
+        blocks.aggregate_run(
+            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )
+    m_launch.assert_not_called()
+
+
+def test_run_locked_scope_refuses_before_detach(experiment) -> None:
+    """Ordering proof (rigor-primitives T3): a LOCKED evidence-scope refuses
+    SYNCHRONOUSLY in the parent — the detached launcher is NEVER reached."""
+    from hpc_agent.state.runs import write_run_sidecar
+    from hpc_agent.state.scopes import record_lock
+
+    _greenlight(experiment, "aggregate-run")
+    write_run_sidecar(
+        experiment,
+        run_id=_RUN_ID,
+        cmd_sha="deadbeef",
+        hpc_agent_version="0.0.0-test",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=4,
+        tasks_py_sha="",
+        scopes=["holdout"],
+    )
+    record_lock(experiment, "holdout", reason="reserve this look")
+
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        pytest.raises(errors.ScopeLocked, match="holdout"),
+    ):
+        blocks.aggregate_run(
+            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )
+    m_launch.assert_not_called()
+
+
+def test_run_replays_recorded_terminal_without_respawn(experiment) -> None:
+    """Run #7 idempotent re-invoke: after the detached worker (a synchronous run)
+    records its terminal for the current tree, a re-invoke with detach ON REPLAYS
+    that brief — no second spawn, no re-combine."""
+    from tests.ops._block_fixtures import sidecar
+
+    _greenlight(experiment, "aggregate-run")
+    sidecar(experiment, cmd_sha="deadbeef", run_id=_RUN_ID)
+
+    # 1. The detached CHILD runs synchronously and records its terminal.
+    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+        sync = blocks.aggregate_run(
+            experiment,
+            spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False),
+        )
+    assert sync.stage_reached == "harvested"
+
+    # 2. The parent's re-invoke (detach ON) replays it — launcher never called.
+    with (
+        mock.patch(_LAUNCH_PATH) as m_launch,
+        mock.patch.object(blocks, "aggregate_flow") as m_agg,
+    ):
+        replay = blocks.aggregate_run(
+            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
+        )
+
+    m_launch.assert_not_called()
+    m_agg.assert_not_called()
+    assert replay.stage_reached == "harvested"
+    assert replay.brief["results_table"] == sync.brief["results_table"]
 
 
 # ── registry metadata ─────────────────────────────────────────────────────────
