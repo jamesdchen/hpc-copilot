@@ -1,6 +1,9 @@
 # The challenge attestation — structured dissent as a first-class record
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-09).** Waves A–C landed (T1–T10); the drift log
+at the foot records every deviation. Two C-disclose seats named in T6 are
+DEFERRED with recorded reasons (run-story timeline events; the evidence
+period-digest timeline) — see the drift log. The durable hand-off
 (the `docs/design/notebook-audit.md` pattern): settled decisions with
 recorded rationale, file-disjoint task waves for parallel Opus dispatch,
 enforcement rows, and boundary-drift flags. Cite `path::symbol`, never line
@@ -710,6 +713,89 @@ and record the executed order in the drift logs).
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
-implementation lands. The `docs/design/notebook-audit.md` drift log is the
-form to follow.)
+Each deviation with its recorded reason (the `docs/design/notebook-audit.md`
+form). Executed hot-file order (the task-wave section asked for it): Wave A/B
+(T1 `state/challenges.py`, T2 `_wire/queries/challenge_status.py`, T3
+`ops/challenge_status_op.py`) landed on their own branches and merged into
+`br-ch-c`; Wave C then landed strictly serially on `br-ch-c` — **T4 → T5 → T6 →
+T7 → T8 → T9 → T10** — with no other editor concurrently on `state/decision_journal.py`
+/ `ops/decision/journal.py` / `ops/attention_queue.py` during the run (the
+concurrent siblings `live-conformance` / `multi-human` had not landed on this
+branch, so their hot-file coordination was moot here — recorded for the eventual
+merge).
+
+**Wave A (T1/T2) — recorded deviations:**
+
+- **Injected-superseded reduction.** `reduce_challenge` is PURE over the record
+  list and takes `superseded` as an INJECTED bool; the collector
+  (`standing_challenges`) computes it via `resolve_target_current` and passes it
+  in. Reason: `state` never imports `ops`, so the dossier resolver must be
+  injected at the ops caller — the reduction cannot itself re-resolve the target,
+  so the supersession input is computed one layer out and injected (the
+  evidence-memory dispatch-placement rule, mirrored). The headline still reads
+  `superseded` regardless of verdicts (C-reduce preserved).
+- **Two-function target-resolver split.** The plan named one target resolution;
+  the implementation split it into `resolve_target_existence` (the FILING check —
+  the `attestation` kind SCANS the named journal for the asserted sha so a
+  NON-newest record is findable, C2) and `resolve_target_current` (the newest-wins
+  re-resolution the reduction uses to compute `superseded`). Reason: the two ask
+  different questions (C-shape pins the existence scan cannot route through the
+  newest-wins `reduce`); one function conflating them would have made a
+  superseded-target challenge unfileable.
+- **In-module render + `computed_at`.** The `challenge-status` brief is rendered
+  in-module (T3 op) rather than via a shared `ops/relay_render.py` helper, and the
+  result carries a `computed_at` timestamp field. Reason: no existing shared
+  render seam matched the challenge brief shape (the `notebook-status` /
+  `verify-registration` briefs are likewise op-local); `computed_at` dates the
+  whole projection (the evidence-digest precedent) so a carried `view_sha` is
+  recomputable against a known instant.
+
+**Wave C (T4–T10) — recorded deviations:**
+
+- **T5 gate is THREE functions, not one.** C-gate allowed "may be one function
+  with the filing gate". The implementation has `_assert_challenge_filing_full`,
+  `_assert_challenge_verdict_authorship`, and `_assert_challenge_authorship`
+  (the dispatch) — SEPARATE records for filing vs verdict/withdrawal (as C-gate
+  requires so the resolver≠challenger constraint stays expressible later without a
+  record-shape change). No merge occurred; recorded for completeness.
+- **T6 — evidence conclusion-line seam uses a LAZY import.** `state/evidence.py`
+  imports `standing_challenges` INSIDE `_conclusion_contested` (function-local),
+  not at module top. Reason: `state/challenges.py` imports `state/evidence.py`
+  (the `CITATION_KINDS` resolver table), so a module-level back-import would be a
+  cycle. The route-through pin (`inspect.getsource`) still holds.
+- **T6 — two named C-disclose seats DEFERRED (with reasons).** The verify-registration
+  seat (the capital boundary) and the evidence-memory CONCLUSION-LINE flag landed.
+  Two others in the C-disclose table are deferred:
+  - **The run-story timeline events** — deferred because `ops/run_story.py`'s
+    stream vocabulary is a CLOSED set pinned EQUAL to the dossier's source stores
+    (`tests/contracts/test_run_story_boundary.py::_EXPECTED_STREAMS`). Adding a
+    `challenges` stream is a reviewed dossier-source vocabulary change touching the
+    dossier definition, NOT the additive "readers tolerate a new field" seam
+    C-disclose intends. Left as a scoped follow-up rather than silently expanding a
+    cross-cutting vocabulary during a salvage.
+  - **The evidence PERIOD-digest timeline entries** — deferred because surfacing
+    challenge filings/verdicts as period-timeline one-liners needs a NEW field on
+    the central `EvidenceCollection` + `render_period` threading, materially
+    expanding the hot collector's contract. The conclusion-line flag already
+    delivers `contested` disclosure in the primary evidence digest; the period
+    timeline is a follow-up.
+- **T6 — a real-fixture case was ADDED** to the dead agent's stub-only
+  verify-registration test (`test_real_challenge_journal_surfaces_contested`) so
+  the seat is exercised end-to-end through the LIVE collector, per the plan's
+  "monkeypatch/stub + a real-fixture case".
+- **T7 — the contested `content_sha` rides `evidence`.** `AttentionItem` has no
+  `content_sha` field; the `challenge-open` fan-out edge reads the sha from
+  `item.evidence["content_sha"]` (set by the collector) rather than a new item
+  field — additive, no wire-shape change.
+- **T8 — `_apply_uncontested_demand` downgrades to `stale`.** An unmet
+  `uncontested` demand reads the existing `stale` verdict (naming the challenge
+  ids), not a new status — keeping `contested` orthogonal (C-status) while the
+  caller-declared gate blocks through the ordinary currency vocabulary.
+- **Schema regen debt (inherited, NOT challenge scope).** The Wave-A/B branch
+  merges left sibling schema files uncommitted (`evidence_brief`,
+  `evidence_period`, `pack_*`, and a `resolve_submit_inputs.output.json` evidence
+  drift); `challenge_status.{input,output}.json` were committed here (mine). The
+  broad `test_schema_models_roundtrip[evidence_brief.input.json]` fails on that
+  inherited evidence-memory schema (a missing `_CROSS_FIELD_OVERRIDES` entry the
+  evidence author owns) — surfaced by regen, not caused by challenge work, and not
+  in this plan's targeted suites. Left for the evidence-memory/pack merges' regen.
