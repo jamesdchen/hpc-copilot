@@ -444,6 +444,141 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
     assert first == second
 
 
+# ─── chunked_series: bucket x chunk series tiling (run #11) ──────────────────
+
+# (series_length, chunks, halo, start) — a grid mixing exact division and
+# remainder (last-chunk absorb), halo=0 and halo>0, start=0 and start>0. Run
+# #11's failure class was an off-by-one in halo / last-chunk-end that only the
+# COUNT cross-checked; these assert the BOUNDS contract on every case.
+_CHUNKED_GRID = [
+    (100, 4, 0, 0),  # exact: 25/25/25/25
+    (100, 3, 0, 0),  # remainder: 33/33/34 (last absorbs)
+    (100, 7, 5, 0),  # halo shifts emit-lo to 5; 95 span over 7 (last absorbs)
+    (100, 4, 10, 20),  # start>0 and halo>0: emit-lo=30, span=70
+    (50, 1, 3, 0),  # single chunk == whole scoring space
+    (13, 5, 1, 0),  # tight: span 12 over 5 → 2/2/2/2/4
+    (1000, 9, 48, 0),  # bounded-halo shape (train_window*48-ish)
+]
+
+
+@pytest.mark.parametrize(
+    "series_length,chunks,halo,start",
+    _CHUNKED_GRID,
+    ids=[f"L{a}-c{b}-h{c}-s{d}" for a, b, c, d in _CHUNKED_GRID],
+)
+def test_chunked_series_bounds_contract(
+    series_length: int, chunks: int, halo: int, start: int
+) -> None:
+    """The union of [chunk_start, chunk_end) over all chunks == [start+halo,
+    series_length) with no gaps/overlaps; last end == series_length; every
+    chunk_start-halo >= start (halo never underflows). The property that a
+    hand-scripted enumerated list had no seat for."""
+    from hpc_agent.ops.memory.interview import _chunked_series_tasks
+
+    tasks = _chunked_series_tasks(
+        {"series_length": series_length, "chunks": chunks, "halo": halo, "start": start}
+    )
+    assert len(tasks) == chunks
+    emit_lo = start + halo
+    # Contiguity + coverage.
+    assert tasks[0]["chunk_start"] == emit_lo
+    assert tasks[-1]["chunk_end"] == series_length  # last end EXACTLY series_length
+    for i, t in enumerate(tasks):
+        assert t["halo"] == halo
+        assert t["chunk_end"] > t["chunk_start"]  # width >= 1
+        assert t["chunk_start"] - halo >= start  # halo never underflows
+        if i + 1 < len(tasks):
+            assert t["chunk_end"] == tasks[i + 1]["chunk_start"]  # no gap/overlap
+
+
+def test_chunked_series_extra_axes_multiply_grid(tmp_path: Path) -> None:
+    """Each extra_axes value multiplies the chunk grid (bucket x chunk), and
+    _expected_count equals chunks x product(axis lens). Round-trips through the
+    materialized tasks.py resolve()."""
+    from hpc_agent import load_tasks_module
+    from hpc_agent.ops.memory.interview import _chunked_series_tasks, _expected_count
+
+    params = {
+        "series_length": 100,
+        "chunks": 3,
+        "halo": 4,
+        "start": 0,
+        "extra_axes": {"symbol": ["AAPL", "MSFT"], "seed": [0, 1]},
+    }
+    generator = {"kind": "chunked_series", "params": params}
+    # 3 chunks x 2 symbols x 2 seeds = 12, by the independent formula.
+    assert _expected_count(generator) == 12
+    expected_tasks = _chunked_series_tasks(params)
+    assert len(expected_tasks) == 12
+    # Bucket outer, chunk inner: first 3 share the first bucket.
+    assert expected_tasks[0]["symbol"] == "AAPL" and expected_tasks[0]["seed"] == 0
+    assert expected_tasks[3]["symbol"] == "AAPL" and expected_tasks[3]["seed"] == 1
+
+    intent = _minimal_intent(12, task_generator=generator)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 12
+    # Materialized tasks.py round-trips to the same ordered task dicts.
+    tasks_mod = load_tasks_module(tmp_path / ".hpc" / "tasks.py")
+    assert tasks_mod.total() == 12
+    assert [tasks_mod.resolve(i) for i in range(12)] == expected_tasks
+
+
+def test_chunked_series_round_trip_through_interview(tmp_path: Path) -> None:
+    """No-extra-axes case materializes + previews the chunk bounds."""
+    intent = _minimal_intent(
+        4,
+        task_generator={
+            "kind": "chunked_series",
+            "params": {"series_length": 100, "chunks": 4, "halo": 5, "start": 0},
+        },
+    )
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["total_tasks"] == 4
+    assert data["preview"]["first"] == {"chunk_start": 5, "chunk_end": 28, "halo": 5}
+    assert data["preview"]["last"]["chunk_end"] == 100
+
+
+@pytest.mark.parametrize(
+    "params,match",
+    [
+        ({"series_length": 100, "chunks": 0, "halo": 0}, "chunks >= 1"),
+        ({"series_length": 100, "chunks": 4, "halo": -1}, "halo >= 0"),
+        (
+            {"series_length": 10, "chunks": 2, "halo": 5, "start": 5},
+            "start \\+ halo < series_length",
+        ),
+        ({"series_length": 10, "chunks": 20, "halo": 0}, "chunk width < 1"),
+        (
+            {"series_length": 100, "chunks": 2, "halo": 0, "extra_axes": {"s": []}},
+            "extra_axes must each have",
+        ),
+    ],
+    ids=["chunks<1", "halo<0", "start+halo>=len", "width<1", "empty-axis"],
+)
+def test_chunked_series_validation_fires(params: dict, match: str) -> None:
+    """Each SpecInvalid condition raises from the core validation (called on a
+    raw dict, before the pydantic boundary re-checks it)."""
+    from hpc_agent.ops.memory.interview import _validate_chunked_series
+
+    with pytest.raises(errors.SpecInvalid, match=match):
+        _validate_chunked_series(params)
+
+
+def test_chunked_series_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
+    """Generator mode stays idempotent for the chunked_series kind."""
+    intent = _minimal_intent(
+        3,
+        task_generator={
+            "kind": "chunked_series",
+            "params": {"series_length": 90, "chunks": 3, "halo": 2, "start": 0},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    first = (tmp_path / ".hpc" / "tasks.py").read_bytes()
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert first == (tmp_path / ".hpc" / "tasks.py").read_bytes()
+
+
 # ─── entry_point: shell_command wrapper materialization ──────────────────
 
 

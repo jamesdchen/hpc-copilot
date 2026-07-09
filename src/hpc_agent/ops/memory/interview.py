@@ -31,6 +31,7 @@ overwrites interview.json with byte-equivalent content modulo the
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -754,7 +755,102 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
         return len(params["items"]) * len(params["seeds"])
     if kind in ("numeric_logspace", "numeric_linspace"):
         return int(params["n"])
+    if kind == "chunked_series":
+        # Independent count formula (chunks x product(extra-axis lens)) so it
+        # cross-checks the length of the list ``_chunked_series_tasks`` emits.
+        _validate_chunked_series(params)
+        n = int(params["chunks"])
+        for axis_values in (params.get("extra_axes") or {}).values():
+            n *= len(axis_values)
+        return n
     raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
+
+
+def _validate_chunked_series(params: Mapping[str, Any]) -> None:
+    """Spec-time validation for a ``chunked_series`` recipe.
+
+    Raises :class:`errors.SpecInvalid` on any condition that would make the
+    chunk arithmetic degenerate — the off-by-one class run #11 hit with a
+    hand-scripted ``enumerated`` list that only the COUNT cross-checked.
+    """
+    series_length = int(params["series_length"])
+    chunks = int(params["chunks"])
+    halo = int(params["halo"])
+    start = int(params.get("start", 0))
+    if chunks < 1:
+        raise errors.SpecInvalid(f"chunked_series requires chunks >= 1; got {chunks}")
+    if halo < 0:
+        raise errors.SpecInvalid(f"chunked_series requires halo >= 0; got {halo}")
+    if start + halo >= series_length:
+        raise errors.SpecInvalid(
+            f"chunked_series requires start + halo < series_length (a non-empty "
+            f"scoring space); got start={start}, halo={halo}, "
+            f"series_length={series_length}"
+        )
+    span = series_length - start - halo
+    if span // chunks < 1:
+        raise errors.SpecInvalid(
+            f"chunked_series chunk width < 1: the scoring span [{start + halo}, "
+            f"{series_length}) has width {span}, but chunks={chunks} would leave "
+            f"an empty chunk; reduce chunks or widen the span"
+        )
+    empties = [name for name, vals in (params.get("extra_axes") or {}).items() if not vals]
+    if empties:
+        raise errors.SpecInvalid(
+            f"chunked_series extra_axes must each have >=1 value; empty: {empties}"
+        )
+
+
+def _chunked_series_tasks(params: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Emit the ordered per-task kwargs for a ``chunked_series`` recipe.
+
+    The scoring space ``[start + halo, series_length)`` is tiled into
+    ``chunks`` contiguous chunks; the last chunk absorbs the remainder so the
+    final ``chunk_end`` equals ``series_length`` EXACTLY. Every task carries
+    its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds — a run-#11-style
+    executor replays ``halo`` bars before ``chunk_start`` (reading from
+    ``chunk_start - halo``, which the validation guarantees is >= ``start``,
+    so the halo never underflows the series). Each ``extra_axes`` value
+    multiplies the grid: the emitted order is every extra-axes combination
+    (outer, in declared-key order) crossed with every chunk (inner) — the
+    bucket x chunk fan-out.
+
+    This is the ONE home of the chunk arithmetic. ``_expected_count`` derives
+    the count by an independent formula and the interview cross-checks it, and
+    the materializer emits the list this returns verbatim — so the bounds math
+    has a single, test-seated definition.
+    """
+    _validate_chunked_series(params)
+    series_length = int(params["series_length"])
+    chunks = int(params["chunks"])
+    halo = int(params["halo"])
+    start = int(params.get("start", 0))
+    extra_axes: Mapping[str, Any] = params.get("extra_axes") or {}
+
+    emit_lo = start + halo
+    width = (series_length - emit_lo) // chunks
+    bounds: list[tuple[int, int]] = []
+    for i in range(chunks):
+        chunk_start = emit_lo + i * width
+        # The last chunk absorbs the remainder so the union covers the space
+        # exactly and the final end lands on series_length.
+        chunk_end = series_length if i == chunks - 1 else emit_lo + (i + 1) * width
+        bounds.append((chunk_start, chunk_end))
+
+    keys = list(extra_axes.keys())
+    axis_values = [list(extra_axes[k]) for k in keys]
+    tasks: list[dict[str, Any]] = []
+    # ``itertools.product()`` with no axes yields a single empty tuple, so the
+    # no-extra-axes case is just the chunk sequence.
+    for combo in itertools.product(*axis_values):
+        bucket = dict(zip(keys, combo, strict=True))
+        for chunk_start, chunk_end in bounds:
+            # Chunk bounds go LAST so they win if an extra axis is (mis)named
+            # like a bound key — the bounds are the point of the recipe.
+            tasks.append(
+                {**bucket, "chunk_start": chunk_start, "chunk_end": chunk_end, "halo": halo}
+            )
+    return tasks
 
 
 def _materialize_tasks_py(
@@ -846,6 +942,18 @@ def _materialize_tasks_py(
             f"    {{{params['param']!r}: _LOW + (_HIGH - _LOW) * i / (_N - 1)}}\n"
             f"    for i in range(_N)\n"
             f"]\n\n"
+            f"def total() -> int: return len(_TASKS)\n"
+            f"{merge_resolve}"
+        )
+    elif kind == "chunked_series":
+        # Bounds are computed here (the ONE arithmetic home) and emitted as a
+        # verbatim literal list — same round-trip guarantee as ``enumerated``,
+        # and the count was already cross-checked by ``_expected_count`` via an
+        # independent formula.
+        tasks = _chunked_series_tasks(params)
+        body = (
+            f"{inject_prefix}"
+            f"_TASKS = {tasks!r}\n\n"
             f"def total() -> int: return len(_TASKS)\n"
             f"{merge_resolve}"
         )
