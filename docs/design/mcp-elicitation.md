@@ -499,3 +499,31 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
      cross-slate reuse ledger.
   6. *E6* — regen byte-stability verified (all six scripts, zero drift): the
      phase adds no primitive and no wire model, exactly as planned.
+
+## Future work — E-render: the popup carries the render (NOTED 2026-07-09, user-endorsed, NOT scheduled)
+
+Run #11 exposed the read/sign channel split: the v1 sign-off popup shows
+identifiers only, so the human must have READ the section render in some
+model-adjacent channel (chat relay, file link, an expanded Read pane) before
+typing into the model-untouched box. E-render closes the loop: when the
+refusal is a notebook sign-off, the SERVER reads the section's
+content-addressed render (`.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`)
+off disk and embeds it in the elicitation `message` — code-read bytes in,
+typed utterance out, one channel, model suspended throughout.
+
+Compatibility with the D5 identifiers-only rule: the rule's PURPOSE is to bar
+MODEL-authored text from baiting the reply; a disk render is code-authored
+(the trusted-display artifact the T8 gate already binds), so embedding it
+honors the purpose while widening the letter — which is exactly why this is a
+recorded design change, not a patch.
+
+Two sub-decisions to rule when scheduled:
+1. **Full render vs. digest.** A ~6KB render makes the terminal dialog
+   scroll; the alternative embeds a code-computed digest (diff stats, assert
+   table, lint flags) + the `view_sha12`, keeping the full render in the Read
+   pane. Trust is identical either way (both server-composed); the question
+   is reading ergonomics.
+2. **Firing site.** D6 pins ONE firing site (the `append-decision`
+   authorship refusal), so v1 popups appear on the RETRY. Making the popup
+   the PRIMARY read surface means eliciting BEFORE first submission — a
+   second firing site, i.e. a D6 amendment, not a tweak.
