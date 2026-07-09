@@ -520,3 +520,13 @@ above and E-render in mcp-elicitation.md):
 Stays prose, correctly: "the pipeline is the plan — no plan-mode freestyle"
 (conduct with no code seat; observe/judge/route jurisdiction — a guard the
 LLM itself satisfies is not a guard).
+
+Addendum (same day): **4. `chunked_series` task-generator kind** (core;
+submit-side). Run #11's bucket×chunk fan-out had no code seat for
+series-chunking bounds: `data_axis_hint: bounded_halo` is a CLASSIFICATION
+hint, not a materializer, so the agent (correctly) hand-scripted 800
+`enumerated` items — and the interview cross-checks only the COUNT, not the
+bounds arithmetic. An off-by-one in halo/last-chunk-end sails through. Add a
+generator kind (`{series_length, chunks, halo}` → code-emitted per-task
+bounds, property-tested) so the enumeration script disappears and the math
+gets a test seat.
