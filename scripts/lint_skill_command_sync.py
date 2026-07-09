@@ -72,7 +72,7 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     # skill-only surface has no human on-ramp — nothing routes a user
     # who says "audit my analysis" into the loop, so the agent
     # freestyles instead. Same interview/relay split as the others.
-    ("hpc-notebook-audit", "notebook-audit-hpc"),
+    ("hpc-notebook-audit", "new-experiment-hpc"),
 ]
 
 # Workflow-trigger slashes that route directly to the spawn pipeline

@@ -108,7 +108,7 @@ Slash command (interview /  │ /submit-hpc          │ —                    
    relay; human consumer)   │ /monitor-hpc         │   ← slashes relay     │   ← the user types the
                             │ /aggregate-hpc       │     briefs; they do    │     y / nudge
                             │ /campaign-hpc        │     not execute        │
-                            │ /notebook-audit-hpc  │                       │
+                            │ /new-experiment-hpc  │                       │
 ────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
 Workflow skill (block-loop  │ hpc-submit           │ (starts the block     │ —
    relay; paired w/ slash)  │ hpc-status           │  verbs; does not      │   ← the skill never
