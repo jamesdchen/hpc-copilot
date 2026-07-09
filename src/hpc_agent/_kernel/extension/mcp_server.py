@@ -531,18 +531,35 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
 # detach-by-contract too — its monitor poll runs in a durable detached worker, so
 # a blocking (detach=false) invocation over this synchronous server would wedge it
 # exactly like an S2/S3/S4 watch.
-_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4", "status-watch"})
+# ``aggregate-run`` / ``aggregate-flow`` / ``campaign-run`` joined 2026-07-08
+# (run-#10 F-K): a live ``aggregate-run`` call held the synchronous server for
+# 20+ minutes with zero observability (no log, no lease). Each is now
+# detach-by-contract — the combine SSH + rsync pull (or a whole campaign
+# iteration) runs in a durable detached worker.
+_DETACH_REQUIRED_VERBS = frozenset(
+    {
+        "submit-s2",
+        "submit-s3",
+        "submit-s4",
+        "status-watch",
+        "aggregate-run",
+        "aggregate-flow",
+        "campaign-run",
+    }
+)
 
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
 
-    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch`` must carry
-    ``spec.detach == true`` (the detached worker + ``wait-detached`` is the
-    sanctioned wait; the S4 harvest's combine + rsync pull + breaker
-    wait-and-retry — and the status-watch monitor poll — can hold the line for
-    many minutes on a throttled host). The detached path returns a pid handle
-    immediately; ``wait-detached`` (via backgrounded Bash) wakes the caller once.
+    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch``/``aggregate-run``/
+    ``aggregate-flow``/``campaign-run`` must carry ``spec.detach == true`` (the
+    detached worker + ``wait-detached`` is the sanctioned wait; the S4 /
+    aggregate harvest's combine + rsync pull + breaker wait-and-retry — the
+    status-watch monitor poll — and a full ``campaign-run`` submit→monitor→
+    aggregate iteration can hold the line for many minutes on a throttled host).
+    The detached path returns a pid handle immediately; ``wait-detached`` (via
+    backgrounded Bash) wakes the caller once.
     """
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}
@@ -780,7 +797,9 @@ def _read_command_md(name: str) -> str | None:
     try:
         from importlib.resources import files
 
-        body = (files("slash_commands") / "commands" / f"{name}.md").read_text(encoding="utf-8")
+        body = (files("hpc_agent.slash_commands") / "commands" / f"{name}.md").read_text(
+            encoding="utf-8"
+        )
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     return body

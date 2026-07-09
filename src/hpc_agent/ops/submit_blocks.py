@@ -120,7 +120,7 @@ def _replay_recorded_terminal(
 def _persist_brief(experiment_dir: Path, result: SubmitBlockResult) -> SubmitBlockResult:
     """Durably persist a decision-point brief so the provenance gate can diff it.
 
-    Conduct rule 9 (docs/design/proving-run-2-hardening.md §6): ``append-decision``
+    Conduct rule 9 (docs/design/history/proving-run-2-hardening.md §6): ``append-decision``
     refuses a greenlight whose ``resolved`` diverts a field the brief never
     recommended — but only if the brief the block emitted is on disk. CODE
     persists it here, at the moment a block returns a decision-point Result, in

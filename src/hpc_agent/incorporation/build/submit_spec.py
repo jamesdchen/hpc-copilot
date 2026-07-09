@@ -537,6 +537,33 @@ def build_submit_spec(
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
 
+    # data-trace T3: the digest classifier decides — NO KNOB. Export
+    # ``HPC_TRACE_DIGESTS`` AFTER the extra_env merge so the sidecar-derived
+    # classification is authoritative (a caller cannot smuggle the flag in via
+    # extra_env; the ONLY lever is the typed ``trace_digests`` override). The
+    # dispatcher stays dumb — it reads this env var and pays for the ``digest``
+    # atom or not; the POLICY lives here, in the submit path (the HPC_TASK_INCLUDE
+    # threading precedent). ``is_local=False``: build-submit-spec assembles a
+    # CLUSTER submit; the local-runner path classifies its own context.
+    from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_DIGEST_ENV_VAR
+    from hpc_agent.state.data_trace_classifier import DigestContext, classify_digests
+
+    # ``is_canary=False``: build-submit-spec assembles the MAIN array's job_env.
+    # ``spec.canary`` is "gate the main array with a 1-task canary first", NOT
+    # "this run IS a canary". The canary reuses this job_env with HPC_TASK_COUNT=1
+    # and forces digests ON at its own seam (submit_flow._submit_fresh_canary), so
+    # the canary flag is applied where the canary env is built, not here.
+    _digest_decision = classify_digests(
+        DigestContext(
+            is_canary=False,
+            reproduces=spec.reproduces is not None,
+            is_local=False,
+            task_count=int(total_tasks),
+            override=spec.trace_digests,
+        )
+    )
+    job_env[TRACE_DIGEST_ENV_VAR] = "1" if _digest_decision.digests_on else "0"
+
     # S5 / incident 6: REPO_DIR ↔ deploy-target invariant. ``REPO_DIR`` was set
     # from ``deploy_target_for(remote_path)`` — the SAME derivation rsync_push /
     # deploy_runtime / the backend's ``remote_repo`` use — so it equals the rsync

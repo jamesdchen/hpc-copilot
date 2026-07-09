@@ -498,6 +498,10 @@ def _tier2_runtime_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
             if not isinstance(samples, list):
                 continue
             for sample in samples:
+                if not isinstance(sample, dict):
+                    # Tolerant read (module contract): one poisoned entry
+                    # is skipped, never fatal to the whole rollup.
+                    continue
                 any_samples = True
                 total += 1
                 try:
@@ -506,7 +510,11 @@ def _tier2_runtime_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
                     sec = 0
                 if sec > 0:
                     elapsed.append(sec)
-                if int(sample.get("exit_code", 0) or 0) != 0:
+                try:
+                    exit_code = int(sample.get("exit_code", 0) or 0)
+                except (TypeError, ValueError):
+                    exit_code = 0
+                if exit_code != 0:
                     failed += 1
         if not any_samples:
             no_runtime += 1

@@ -35,7 +35,7 @@ I/O contracts:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -47,11 +47,119 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.status_pipeline import status_pipeline
 from hpc_agent.ops.submit_pipeline import submit_pipeline
+from hpc_agent.state.block_terminal import terminal_block_key
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["campaign_run"]
+
+
+# The block-terminal store, the detached lease, and the doctor dead-worker scan
+# all key a detached campaign-run under its VERB ("campaign-run") — the SAME
+# string ``_spawn_detached`` stamps into the lease AND the SAME run_id
+# ``_block_spec_run_id`` digs out of the spec (``spec.aggregate.run_id``, since a
+# campaign spec carries no ``submit.submit.run_id``). Sourced from the ONE key
+# derivation so this recorder can never drift from the replay reader / doctor scan.
+_CAMPAIGN_BLOCK_KEY = terminal_block_key("campaign-run")
+
+
+def _campaign_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on. Pre-submit (the parent's first
+    detach) there is no sidecar → ``""`` → the replay refuses and the parent
+    spawns; post-completion the submitted run's sidecar carries the sha so a
+    re-invoke replays. A moved sha (a nudge) also refuses.
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _detached_campaign_spec_dict(spec: CampaignRunSpec) -> dict[str, Any]:
+    """Serialize *spec* with ``detach`` forced OFF for the detached child.
+
+    The child runs the SAME campaign-run body synchronously (the whole iteration
+    spine IS the point), so its spec must carry ``detach=False`` — a truthy detach
+    would fork forever.
+    """
+    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
+
+
+def _replay_campaign_terminal(experiment_dir: Path, run_id: str) -> CampaignRunResult | None:
+    """Return a finished campaign-run worker's recorded terminal for the CURRENT
+    tree, else ``None`` (run #7 idempotent re-invoke).
+
+    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
+    the terminal — proof the iteration outcome still applies (a re-invoke must not
+    re-submit a fresh array). A moved/absent ``cmd_sha``, an absent record, or a
+    corrupt record all return ``None`` so the caller spawns a fresh iteration.
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, _CAMPAIGN_BLOCK_KEY)
+    if record is None:
+        return None
+    current_sha = _campaign_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    try:
+        return CampaignRunResult.model_validate(record["result"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _record_campaign_terminal(
+    experiment_dir: Path, *, key_run_id: str, result: CampaignRunResult
+) -> None:
+    """Record a genuine campaign-run terminal so a re-invoke replays it.
+
+    Keyed on *key_run_id* — ``spec.aggregate.run_id``, the SAME value
+    ``_block_spec_run_id`` uses for the lease/poll — NOT ``result.run_id`` (which
+    is threaded from the submit sub-stage and may differ), so the parent's replay
+    (which only has the spec) reads the same key. The detached HANDLE
+    (``stage_reached="detached"``) is never recorded — the child records its real
+    terminal, and only that.
+    """
+    if not key_run_id or result.stage_reached == "detached":
+        return
+    from hpc_agent.state.block_terminal import record_terminal
+
+    record_terminal(
+        experiment_dir,
+        run_id=key_run_id,
+        block=_CAMPAIGN_BLOCK_KEY,
+        cmd_sha=_campaign_cmd_sha(experiment_dir, key_run_id),
+        result_dump=result.model_dump(mode="json"),
+    )
+
+
+def _detached_campaign_result(*, run_id: str, pid: int, log_path: str | None) -> CampaignRunResult:
+    """The immediate-return handle for a detached campaign-run (design §3).
+
+    ``needs_decision`` is False (nothing to decide yet — the iteration outcome, and
+    its relay-due marker, arrive on completion, read from the journal).
+    ``block_drive._chain`` / ``wait-detached`` exit on this via the
+    ``started`` / ``watch`` / ``detached_pid`` handle.
+    """
+    return CampaignRunResult(
+        stage_reached="detached",
+        needs_decision=False,
+        reason=(
+            "campaign-run detached — the whole submit→monitor→aggregate iteration "
+            "runs in a durable background worker; its outcome (and relay-due marker) "
+            "arrives on completion (read the journal)."
+        ),
+        run_id=run_id,
+        started=True,
+        watch="journal",
+        detached_pid=pid,
+    )
 
 
 @primitive(
@@ -105,7 +213,35 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
     relaying it gets stopped once by the relay-audit hook (the exact conduct
     strike of run #10: two exit-1 iterations were never surfaced). Marking is
     fail-open — a marker write error never fails the iteration.
+
+    DETACH-BY-CONTRACT (design §3; run-#10 F-K): the detach seat wraps OUTSIDE
+    ``_campaign_run_impl`` AND the relay-due seam below, so with ``detach`` ON
+    (default) the PARENT returns a handle immediately (no relay-due yet — nothing
+    terminal), and the detached CHILD re-enters this SAME body with
+    ``detach=False``, runs the impl, arms the relay-due marker on its terminal,
+    and records that terminal for the parent's idempotent replay. So a detached
+    iteration still arms relay-due exactly once, on its real outcome.
     """
+    if spec.detach:
+        # The journal-poll key is spec.aggregate.run_id (what _block_spec_run_id
+        # digs out — a campaign spec has no submit.submit.run_id), so the lease,
+        # the handle, and the terminal record all agree on one run_id.
+        key_run_id = spec.aggregate.run_id
+        replay = _replay_campaign_terminal(experiment_dir, key_run_id)
+        if replay is not None:
+            return replay
+
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+
+        launch = launch_submit_block_detached(
+            verb="campaign-run",
+            experiment_dir=str(experiment_dir),
+            spec=_detached_campaign_spec_dict(spec),
+        )
+        return _detached_campaign_result(
+            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
+        )
+
     result = _campaign_run_impl(experiment_dir, spec=spec)
     try:
         if result.stage_reached in _RELAY_DUE_STAGES:
@@ -120,6 +256,11 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
             )
     except Exception:  # noqa: BLE001 — the gate must never fail the work it guards
         pass
+    # Record the genuine terminal (keyed by spec.aggregate.run_id, the lease key)
+    # so a re-invoke after the detached worker exits REPLAYS this outcome instead
+    # of re-submitting a fresh array. Runs on the synchronous path — which is what
+    # the detached child executes.
+    _record_campaign_terminal(experiment_dir, key_run_id=spec.aggregate.run_id, result=result)
     return result
 
 

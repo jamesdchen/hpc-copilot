@@ -28,12 +28,12 @@ The triangle:
             ┌─────────────────┴─────────────────┐
             │                                   │
             ▼                                   ▼
-  ┌──────────────────────┐         ┌────────────────────────┐
-  │  docs/workflows/     │ ◄─────► │  src/slash_commands/   │
-  │  (this directory)    │  pair   │  skills/<name>/SKILL.md│
-  │  "what to expect     │  with   │  "what to do, step by  │
-  │   running it"        │         │   step"                │
-  └──────────────────────┘         └────────────────────────┘
+  ┌──────────────────────┐         ┌────────────────────────────────┐
+  │  docs/workflows/     │ ◄─────► │  src/hpc_agent/slash_commands/ │
+  │  (this directory)    │  pair   │  skills/<name>/SKILL.md        │
+  │  "what to expect     │  with   │  "what to do, step by          │
+  │   running it"        │         │   step"                        │
+  └──────────────────────┘         └────────────────────────────────┘
 ```
 
 - **`docs/architecture.md`** is the layering map — atoms, flows,
@@ -41,12 +41,12 @@ The triangle:
 - **`docs/workflows/*.md`** (this directory) is the operator's mental
   model — what one campaign / one interview-recall loop *does* over
   time, what artifacts persist, what state the next iteration sees.
-- **`src/slash_commands/skills/<name>/SKILL.md`** is the step-by-step
+- **`src/hpc_agent/slash_commands/skills/<name>/SKILL.md`** is the step-by-step
   procedure an agent follows — autonomous decision logic callable by
   the user's chat (via the `Skill` tool) or by any other agent harness
   (MARs, notebooks, cron drivers). The skill is the *recipe*; the
   workflow doc is the *story*. Human elicitation, when needed, lives
-  in the paired slash command (`src/slash_commands/commands/<stem>.md`),
+  in the paired slash command (`src/hpc_agent/slash_commands/commands/<stem>.md`),
   not in the skill — see `docs/internals/skill-policy.md`.
 - **`docs/internals/`** is the maintainer's view — design rationale,
   rejected alternatives, when to change the surface.

@@ -64,6 +64,7 @@ EXPECTED_ERRORS: frozenset[str] = frozenset(
         "ExecutorNotFound",
         "HpcError",
         "JournalCorrupt",
+        "PackReceiptsMissing",
         "ModelEndpointError",
         "OutputsMissing",
         "PreconditionFailed",

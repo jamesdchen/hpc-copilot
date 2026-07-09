@@ -168,3 +168,71 @@ def test_raising_cap_preserves_other_manifest_sections(_journal_home: Path, tmp_
     # Untouched budget cap preserved; raised cap applied.
     assert manifest["budget"]["max_jobs"] == 50
     assert manifest["budget"]["max_walltime_sec"] == 10_000
+
+
+def test_raising_cap_preserves_async_greenlight_and_anomaly_sections(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """The cap raise rewrites the manifest in place — every section it does
+    not touch survives byte-for-byte, including async_refill / max_in_flight,
+    the greenlit / greenlit_at provenance marker, and anomaly_policy (these
+    were silently dropped by the earlier goal/budget/stop_criteria/strategy
+    whitelist rewrite)."""
+    _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
+    write_manifest(
+        tmp_path,
+        campaign_id="camp_a",
+        goal="tune ridge",
+        budget={"max_walltime_sec": 400},
+        strategy={"name": "pbt", "params": {"population": 8}},
+        anomaly_policy={"on_anomaly": "park", "resubmit_cap": 3},
+        async_refill=True,
+        max_in_flight=4,
+        greenlit=True,
+        greenlit_at="2026-07-01T00:00:00+00:00",
+    )
+    campaign_acknowledge_budget(
+        experiment_dir=tmp_path, campaign_id="camp_a", max_walltime_sec=10_000
+    )
+
+    manifest = read_manifest(tmp_path, "camp_a")
+    assert manifest is not None
+    assert manifest["budget"]["max_walltime_sec"] == 10_000
+    assert manifest["async_refill"] is True
+    assert manifest["max_in_flight"] == 4
+    assert manifest["greenlit"] is True
+    assert manifest["greenlit_at"] == "2026-07-01T00:00:00+00:00"
+    assert manifest["anomaly_policy"] == {"on_anomaly": "park", "resubmit_cap": 3}
+    assert manifest["strategy"] == {"name": "pbt", "params": {"population": 8}}
+
+
+def test_raising_cap_degrades_schema_invalid_manifest_to_fresh_caps(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """A schema-invalid manifest must not block clearing a budget halt: the
+    ack degrades to a minimal fresh manifest carrying the raised caps."""
+    import json
+
+    from hpc_agent.meta.campaign.manifest import manifest_path
+
+    _seed_spend(tmp_path, run_id="run_0000", elapsed_sec=500)
+    path = manifest_path(tmp_path, "camp_a")
+    path.write_text(
+        json.dumps(
+            {
+                "manifest_schema_version": 1,
+                "campaign_id": "camp_a",
+                "not_a_manifest_field": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    campaign_acknowledge_budget(
+        experiment_dir=tmp_path, campaign_id="camp_a", max_walltime_sec=10_000
+    )
+
+    manifest = read_manifest(tmp_path, "camp_a")
+    assert manifest is not None
+    assert manifest["budget"]["max_walltime_sec"] == 10_000
+    assert "not_a_manifest_field" not in manifest

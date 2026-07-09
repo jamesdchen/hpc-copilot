@@ -55,7 +55,7 @@ that before classifying — for both keep and remove decisions.
 
 The repo applies the same standard to its own enforcement: every lint rule
 must demonstrate its fire path in a test (see
-`tests/contract/test_lint_skills.py::test_lint_rule_fires_on_synthetic_input`
+`tests/contracts/test_lint_skills.py::test_lint_rule_fires_on_synthetic_input`
 and `tests/scripts/test_lint_library_knowledge.py` — each rule is exercised
 against a synthetic violation).
 
@@ -163,9 +163,9 @@ inline branch.
 | Q2: declared assembly points only | `scripts/lint_library_knowledge.py` (CI + pre-commit) | any import binding a knowledge package — absolute, relative, lazy, or alias-form — outside the package or its declared list; also when a declared entry goes stale |
 | Growth trigger: registry collapse at member #2 | same lint, "growth trigger" rule | a knowledge package reaches ≥ 2 member modules while a non-registry assembly point still binds a member module by name |
 | Backend seam: orchestrator imports the interface, not a concrete backend (#337) | `scripts/lint_backend_boundary.py` (CI + pre-commit) | an orchestrator file (`ops`/`meta`/`recovery`/`incorporation`/`integration`) imports a concrete backend module (`infra.backends.{sge,slurm,sge_remote,slurm_remote,_engine,_remote_base,_scripts,query}`) — absolute, relative, lazy, or alias-form — instead of the seam re-exported from `infra.backends` (+ `remote_factory` / `profile`) |
-| Q3: control-plane startup budget | `tests/contract/test_no_heavy_toplevel_imports.py` | a CLI-reachable module imports a heavy/solver library at module level |
+| Q3: control-plane startup budget | `tests/contracts/test_no_heavy_toplevel_imports.py` | a CLI-reachable module imports a heavy/solver library at module level |
 | Q3: standalone files don't import the package | `tests/contracts/test_boundary_contract.py` (templates-don't-import-core) | a shipped template/standalone file references the core package. Adjacent but distinct: `scripts/lint_schema_versions.py` only syncs the cluster-side schema-version constants, and `_guard.py` is a runtime shadowed-import detector — neither statically enforces this row |
-| Q4: core deps exclude the libraries themselves | `tests/contract/test_no_heavy_toplevel_imports.py::test_core_dependencies_exclude_heavy_libraries` | a banned library appears in `pyproject.toml` dependencies or any extra |
+| Q4: core deps exclude the libraries themselves | `tests/contracts/test_no_heavy_toplevel_imports.py::test_core_dependencies_exclude_heavy_libraries` | a banned library appears in `pyproject.toml` dependencies or any extra |
 | Q1: substrate, not semantics | **judgment — review only** | a PR makes core interpret experiment parameters or search-space meaning; nothing mechanical catches this, which is why it leads the list |
 
 ### Drift log (why prose alone failed)

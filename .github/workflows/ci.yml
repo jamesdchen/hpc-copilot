@@ -42,8 +42,9 @@ jobs:
         with:
           # Same PR-head reasoning as docs.yml — the auto-commit
           # push target must be the PR branch itself, not the ephemeral
-          # merge ref.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # merge ref, and it must be the head *branch* (a SHA checkout
+          # is detached HEAD, where git-auto-commit's push fails).
+          ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
@@ -66,9 +67,12 @@ jobs:
           python scripts/bake_operations_json.py --write
       - name: Commit regen drift to PR branch
         # No-op when no diff; only fires when the regen actually
-        # changed something. The commit triggers a fresh workflow run;
-        # the workflow-level ``concurrency`` block cancels this one so
-        # the post-regen run is the canonical status.
+        # changed something. NOTE: pushes made with the workflow's
+        # GITHUB_TOKEN do not trigger a fresh workflow run (GitHub
+        # drops actor-token events to prevent loops), so this run's
+        # other jobs still see the pre-regen SHA — the auto-commit
+        # lands the fix, and the next contributor push (or a manual
+        # re-run) turns the checks green.
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore(generated): auto-regenerate after upstream drift"

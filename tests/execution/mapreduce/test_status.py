@@ -155,6 +155,86 @@ class TestReportStatusResourceUsage:
         assert ru["gpu_hours"] == 1.0
         assert ru["tasks_counted"] == 2
 
+    def test_completed_by_result_file_keeps_accounting(self, tmp_path):
+        """A task classified complete by its result FILE must keep the
+        scheduler's cpu_s/gpu_s/elapsed_s — dropping the job_info record made
+        a fully complete run report cpu_hours 0 / tasks_counted 0 exactly
+        when it consumed the most compute."""
+        for tid in range(2):
+            task_dir = tmp_path / f"task_{tid}"
+            task_dir.mkdir()
+            (task_dir / "out.csv").write_text("col\n1\n")
+        fake_query = {
+            "tasks": {
+                0: {"state": "COMPLETED", "elapsed_s": 3600, "cpu_s": 4 * 3600, "gpu_s": 3600},
+                1: {"state": "COMPLETED", "elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
+            },
+            "errors": [],
+        }
+        with (
+            patch(
+                "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status(
+                result_dir=tmp_path,
+                job_ids=["12345"],
+                total_tasks=2,
+                scheduler="slurm",
+            )
+        # Both tasks classified complete on the result-file evidence…
+        assert result["summary"]["complete"] == 2
+        task0 = result["tasks"]["0"]
+        assert task0["status"] == "complete"
+        # …with the accounting fields carried over, and ONLY those — the
+        # scheduler's state/exit_code never overrides result-file evidence.
+        assert task0["cpu_s"] == 4 * 3600
+        assert task0["elapsed_s"] == 3600
+        assert "state" not in task0
+        ru = result["resource_usage"]
+        assert ru["cpu_hours"] == round((4 * 3600 + 4 * 1800) / 3600.0, 4)
+        assert ru["gpu_hours"] == 1.0
+        assert ru["tasks_counted"] == 2
+
+    def test_completed_by_result_file_from_tasks_keeps_accounting(self, tmp_path):
+        """Same accounting merge on the per-task-dict variant
+        (report_status_from_tasks)."""
+        from hpc_agent.execution.mapreduce.reduce.status import report_status_from_tasks
+
+        rdirs = {}
+        for tid in range(2):
+            rdir = tmp_path / f"r{tid}"
+            rdir.mkdir()
+            (rdir / "metrics.json").write_text('{"value": 1}')
+            rdirs[str(tid)] = str(rdir)
+        tasks_data = {
+            "total_tasks": 2,
+            "tasks": {tid: {"result_dir": rd, "params": {}} for tid, rd in rdirs.items()},
+        }
+        fake_query = {
+            "tasks": {
+                0: {"state": "COMPLETED", "elapsed_s": 100, "cpu_s": 400, "gpu_s": 0},
+                1: {"state": "COMPLETED", "elapsed_s": 300, "cpu_s": 1200, "gpu_s": 0},
+            },
+            "errors": [],
+        }
+        with (
+            patch(
+                "hpc_agent.execution.mapreduce.reduce.status.detect_scheduler", return_value="slurm"
+            ),
+            patch("hpc_agent.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status_from_tasks(
+                tasks_data, job_ids=["12345"], scheduler="slurm", file_glob="*"
+            )
+        assert result["summary"]["complete"] == 2
+        assert result["tasks"]["0"]["cpu_s"] == 400
+        assert "state" not in result["tasks"]["0"]
+        ru = result["resource_usage"]
+        assert ru["cpu_hours"] == round((400 + 1200) / 3600.0, 4)
+        assert ru["tasks_counted"] == 2
+
 
 class TestHeaderOnlyCsv:
     """Header-only CSVs should count as complete by default (P1.4 bug fix).

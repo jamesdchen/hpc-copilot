@@ -649,3 +649,152 @@ def test_351_layer1_default_warns_and_dedups_complete_run_on_tasks_py_change(
     assert deduped is True
     assert record.run_id == run_id
     assert record.job_ids == ["12345"]
+
+
+# ─── A5 post-qsub misfires: the crash-safety pre-stamp broke the orphan guard ─
+#
+# submit-flow's 2026-06-11 crash-safety pre-stamp writes the just-parsed
+# job_ids onto the run's OWN sidecar BEFORE submit_and_record runs, so the A5
+# scan's "the run's own sidecar is still jobless" assumption no longer holds:
+# the own sidecar now passes the orphan filter and became a dedup target for
+# ITSELF (variant a), and in a campaign — where the campaign lever skips the
+# own sidecar — the scan could reconstruct a DIFFERENT journaled prior run
+# post-qsub (variant b). Both fall through to normal recording now; these pin
+# the fixed behaviour, including the initial watchdog stamp that variant (a)
+# silently skipped.
+
+
+def test_prestamped_own_sidecar_proceeds_to_normal_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Variant (a): every ``invalidate_on_code_change=True`` submit matched the
+    run's OWN just-pre-stamped sidecar and returned deduped=True — skipping the
+    journal-record niceties, most damagingly the initial watchdog stamp
+    (``next_tick_due``), so a driver dying pre-first-tick was invisible to
+    ``find_stalled_runs`` / doctor. Matching self must record normally."""
+    from hpc_agent.state.journal import load_run
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    run_id = "20260102-000000-fresh01"
+    cmd_sha = "f" * 64
+    # submit-flow order: Step 6d sidecar write → qsub → crash-safety pre-stamp
+    # (job_ids land on the OWN sidecar) → submit_and_record.
+    _write_sidecar(
+        tmp_path,
+        run_id,
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor="python3 src/run.py",
+        job_ids=["99999"],  # the pre-stamp: same ids the spec carries
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec(run_id),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        current_executor="python3 src/run.py",
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is False  # recording this submission, not replaying it
+    assert record.run_id == run_id
+    reloaded = load_run(tmp_path, run_id)
+    assert reloaded is not None
+    assert reloaded.job_ids == ["99999"]
+    # The initial watchdog stamp — the observable variant (a) dropped.
+    assert reloaded.next_tick_due, "own-sidecar match must not skip the initial watchdog stamp"
+    assert reloaded.last_tick_at
+
+
+def test_campaign_submit_never_reconstructs_a_journaled_prior_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Variant (b): a campaign submit whose params match an older COMPLETE
+    non-campaign run — the campaign lever skips the own sidecar, the scan hits
+    the OLD run's sidecar, and pre-fix the "journal-wipe" reconstruction ran
+    against a run the journal still tracks: the OLD record was overwritten
+    in_flight with its stale job_ids and the just-qsub'd NEW run got no journal
+    record at all. A journaled prior is never an A5 target."""
+    from hpc_agent.state.journal import load_run
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    cmd_sha = "f" * 64
+    old_id = "20260101-000000-old0001"
+    new_id = "20260102-000000-new0001"
+    executor = "python3 src/run.py"
+
+    # The older COMPLETE non-campaign run: journal record + finalized sidecar.
+    _seed_complete_journal_record(tmp_path, old_id, executor=executor, job_ids=["111"])
+    _write_sidecar(
+        tmp_path,
+        old_id,
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor=executor,
+        job_ids=["111"],
+        campaign_id="",
+    )
+    # The campaign iteration's OWN pre-stamped sidecar (post-qsub).
+    _write_sidecar(
+        tmp_path,
+        new_id,
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        executor=executor,
+        job_ids=["222"],
+        campaign_id="tune",
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec(new_id, job_ids=["222"], campaign_id="tune"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        current_executor=executor,
+        invalidate_on_code_change=True,
+    )
+
+    assert deduped is False
+    assert record.run_id == new_id
+    assert record.job_ids == ["222"]
+    # The just-qsub'd run got its journal record + initial watchdog stamp...
+    new_rec = load_run(tmp_path, new_id)
+    assert new_rec is not None
+    assert new_rec.job_ids == ["222"]
+    assert new_rec.next_tick_due
+    # ...and the prior run's journal was NOT clobbered in_flight with stale ids.
+    old_rec = load_run(tmp_path, old_id)
+    assert old_rec is not None
+    assert old_rec.status == "complete"
+    assert old_rec.job_ids == ["111"]
+
+
+def test_journal_wipe_reconstruction_still_fires_for_unjournaled_prior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard can still fire: with the OWN sidecar pre-stamped AND present,
+    a genuinely journal-wiped prior (sidecar with job_ids, NO journal record,
+    different run_id) — the case A5 exists for — is untouched by the two new
+    disqualifiers when it is the scan's match. Kept alongside the variant
+    tests so the fix demonstrably narrowed A5 rather than disabling it."""
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    cmd_sha = "f" * 64
+    _write_sidecar(
+        tmp_path,
+        "20260101-000000-wiped01",
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+        job_ids=["12345"],
+    )
+
+    record, deduped = submit_and_record(
+        tmp_path,
+        spec=_spec("20260102-000000-newone1"),
+        cmd_sha=cmd_sha,
+        tasks_py_sha="1" * 64,
+    )
+
+    assert deduped is True
+    assert record.run_id == "20260101-000000-wiped01"
+    assert record.job_ids == ["12345"]

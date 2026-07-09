@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
@@ -83,6 +85,18 @@ class BuildSubmitSpecInput(BaseModel):
     # threads each entry into every task's env as ``HPC_SERVICE_<KEY>``. The
     # framework does not stand the service up — it only consumes the address.
     service_env: dict[str, str] | None = None
+    # data-trace T3: the reproduction-receipt link, threaded onto the submit
+    # SNAPSHOT so the digest classifier sees "reproduces is set" (an identity
+    # question → digests ON). Distinct from resolve-submit-inputs'
+    # ``reproduction_of`` lever (which pierces the same-params dedup): this is
+    # the classifier input only, injected in code by resolve, never hand-authored.
+    reproduces: RunIdStrict | None = None
+    # data-trace T3: the spec-level digest OVERRIDE (``docs/design/data-trace.md``
+    # §"Digest policy"). ``force_on``/``force_off`` WINS over the classifier's
+    # sidecar-derived decision; ``None`` = the classifier decides ("NO KNOB").
+    # An OVERRIDE, never a prompt — its exercise is disclosed on the sidecar as
+    # ``trace_digests_override``.
+    trace_digests: Literal["force_on", "force_off"] | None = None
 
     @model_validator(mode="after")
     def _mpi_is_single_unit_of_work(self) -> BuildSubmitSpecInput:

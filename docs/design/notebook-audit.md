@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # The notebook-audit substrate — design + implementation plan
 
 **Status: v1 + v1.5 + v1.6 IMPLEMENTED (2026-07-08).** v1.6 = the FULL-VIEW

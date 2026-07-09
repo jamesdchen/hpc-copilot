@@ -5,8 +5,8 @@ The CLI surface is ``hpc-agent install-commands`` and lives in
 install (no repo checkout) can still wire the agent assets into Claude
 Code's user-global config directory.
 
-The core asset trees ship as package data inside the ``slash_commands``
-package — ``slash_commands/commands/*.md``,
+The core asset trees ship as package data inside the
+``hpc_agent.slash_commands`` subpackage — ``slash_commands/commands/*.md``,
 ``slash_commands/skills/<name>/SKILL.md``, and
 ``slash_commands/agents/<name>.md`` (named subagent definitions; core
 ships none since the §6 worker removal — the tree remains for plugins).
@@ -821,7 +821,7 @@ def install_agent_assets(
     cleared: list[str] = []
 
     core_commands, core_skills, core_agents, core_cleared = _install_tree(
-        files("slash_commands"), target, dry_run=dry_run
+        files("hpc_agent.slash_commands"), target, dry_run=dry_run
     )
     commands.update(core_commands)
     skills.update(core_skills)

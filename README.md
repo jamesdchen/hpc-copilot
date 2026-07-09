@@ -94,7 +94,7 @@ status`/`aggregate`/`reconcile` fail fast with `error_code:
 `hpc-agent setup --cluster <name>` once on each machine to verify the
 spawn env and populate the 24h cache marker that `/submit-hpc`'s
 Step 6b gate reads. hpc-agent does not kill cluster jobs by design
-(`settings.json` denies `scancel`/`qdel`); if the integrator decides
+(the repo's `.claude/settings.json` denies `scancel`/`qdel`); if the integrator decides
 a run is bad, stop polling and let it expire.
 
 ### MCP server (optional)

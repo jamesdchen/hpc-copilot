@@ -1622,6 +1622,37 @@ def _main_submission_plan(*, total_tasks: int, cluster: str, backend_name: str) 
     return compute_submission_plan(constraints, WorkloadSpec(total_tasks=int(total_tasks)))
 
 
+def _job_task_spans_from_submissions(
+    backend: HPCBackend, submissions: list[tuple[int, str, str]]
+) -> dict[str, tuple[int, int]] | None:
+    """Per-job 0-based inclusive global task windows from ``submit_plan`` output.
+
+    *submissions* is :meth:`HPCBackend.submit_plan`'s return — ``(wave,
+    task_range, job_id)`` in submission order, where ``task_range`` is always
+    the batch's GLOBAL 1-based window ``"<task_start>-<task_end>"``
+    (``JobBatch.task_range``; the LOCAL ``1-<size>`` rewrite happens inside
+    ``submit_plan`` and never reaches this tuple). Parsed to the 0-based
+    inclusive ``(first, last)`` spans ``fetch_task_logs`` consumes.
+
+    Returns ``None`` for a global-index backend
+    (:attr:`HPCBackend.uses_global_array_index` True — its scheduler names
+    logs with the GLOBAL index, so the span map's local-index arithmetic
+    would misroute every wave≥1 probe) and for empty/unparseable input.
+    """
+    if getattr(type(backend), "uses_global_array_index", False):
+        return None
+    spans: dict[str, tuple[int, int]] = {}
+    for _wave, task_range, job_id in submissions:
+        first_s, sep, last_s = str(task_range).partition("-")
+        if not sep:
+            continue
+        try:
+            spans[str(job_id)] = (int(first_s) - 1, int(last_s) - 1)
+        except ValueError:
+            continue
+    return spans or None
+
+
 def _submit_main_array(
     backend: HPCBackend,
     *,
@@ -1634,8 +1665,15 @@ def _submit_main_array(
     backend_name: str,
     cluster: str | None,
     setup_log_dir: bool = True,
-) -> list[str]:
-    """Submit the main array, single-wave (≤cap) or N-wave (>cap). Returns ids.
+) -> tuple[list[str], dict[str, tuple[int, int]] | None]:
+    """Submit the main array, single-wave (≤cap) or N-wave (>cap).
+
+    Returns ``(job_ids, job_task_spans)``. ``job_task_spans`` is the per-job
+    0-based inclusive GLOBAL task window map the caller stamps onto the run
+    sidecar (:func:`_job_task_spans_from_submissions`) so log fetches probe
+    each waved job with the job-LOCAL index; it is ``None`` for the ≤cap
+    single array (local == global, today's probe already correct) and for a
+    global-index backend (its logs are named with the global index).
 
     #339 increment 3 — the initial-submit path now goes through the SAME backend
     wave submitter for both shapes:
@@ -1671,15 +1709,18 @@ def _submit_main_array(
             if gate_job_ids
             else []
         )
-        return _make_single_array_submission(
-            backend,
-            job_name=job_name,
-            total_tasks=total_tasks,
-            job_env=job_env,
-            cwd=cwd,
-            resources=resources,
-            extra_flags=afterok_flags,
-            setup_log_dir=setup_log_dir,
+        return (
+            _make_single_array_submission(
+                backend,
+                job_name=job_name,
+                total_tasks=total_tasks,
+                job_env=job_env,
+                cwd=cwd,
+                resources=resources,
+                extra_flags=afterok_flags,
+                setup_log_dir=setup_log_dir,
+            ),
+            None,
         )
 
     # Over-cap: split into concurrency-bounded waves. Resource flags apply to
@@ -1707,8 +1748,17 @@ def _submit_main_array(
         wrapped = errors.RemoteCommandFailed(str(exc))
         if landed:
             wrapped.partial_submit_job_ids = [jid for _w, _r, jid in landed]  # type: ignore[attr-defined]
+            # The spans for the waves that DID land, so the crash-safety
+            # pre-stamp records windows alongside the ids (same recovery
+            # paths, same probe-correctness need as the success path).
+            wrapped.partial_submit_job_task_spans = _job_task_spans_from_submissions(  # type: ignore[attr-defined]
+                backend, list(landed)
+            )
         raise wrapped from exc
-    return [job_id for _wave, _range, job_id in submissions]
+    return (
+        [job_id for _wave, _range, job_id in submissions],
+        _job_task_spans_from_submissions(backend, submissions),
+    )
 
 
 @primitive(
@@ -1894,6 +1944,15 @@ def _fire_canary(
     canary_env = dict(job_env_full)
     canary_env["HPC_RUN_ID"] = canary_run_id
     canary_env["HPC_TASK_COUNT"] = "1"
+    # data-trace T3: the canary IS an identity run by construction —
+    # canary-vs-local trace-diff catches deploy/data divergence in one glance,
+    # which needs the digest atom. The canary inherits main's job_env (which the
+    # classifier may have set to "0" for a large main array), so force digests ON
+    # here at the canary seam — the "canary flag" classifier input applied where
+    # the canary env is actually built (the main-array classification stays off).
+    from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_DIGEST_ENV_VAR
+
+    canary_env[TRACE_DIGEST_ENV_VAR] = "1"
     # #294 PR4: a run that opted into auto_resume_on_kill must prove its
     # checkpoint format round-trips BEFORE the long main array launches —
     # otherwise it discovers an unreloadable checkpoint only at resume, hours in.
@@ -2114,7 +2173,7 @@ def _submit_one_spec(
     )
 
     try:
-        job_ids = _submit_main_array(
+        job_ids, job_task_spans = _submit_main_array(
             backend_obj,
             job_name=spec.job_name,
             total_tasks=spec.total_tasks,
@@ -2148,7 +2207,15 @@ def _submit_one_spec(
             from hpc_agent.state.runs import update_run_sidecar_job_ids
 
             with contextlib.suppress(Exception):
-                update_run_sidecar_job_ids(experiment_dir, spec.run_id, list(landed_ids))
+                update_run_sidecar_job_ids(
+                    experiment_dir,
+                    spec.run_id,
+                    list(landed_ids),
+                    # The landed waves' per-job global task windows (None on a
+                    # global-index backend) — recorded with the ids so the
+                    # sidecar-reading recovery paths probe logs correctly.
+                    job_task_spans=getattr(exc, "partial_submit_job_task_spans", None),
+                )
         raise
     # Crash-safety pre-stamp — same rationale as the canary stamp above: the
     # 2026-06-11 demo lost main-array job id 13610902 to a process kill in
@@ -2160,7 +2227,16 @@ def _submit_one_spec(
     from hpc_agent.state.runs import update_run_sidecar_job_ids
 
     with contextlib.suppress(Exception):
-        update_run_sidecar_job_ids(experiment_dir, spec.run_id, job_ids)
+        # job_task_spans rides the same stamp for a waved main array on an
+        # index-bounded backend (job_id → global (first, last) task window,
+        # 0-based inclusive) so fetch_task_logs probes each wave's job with
+        # the job-LOCAL log index. None (≤cap single array / global-index
+        # backend) leaves the field unwritten — the global probe is correct
+        # there, and resubmit-recorded job_ids never gain spans (their arrays
+        # replay GLOBAL ids; see recover_flow's out-of-range guard).
+        update_run_sidecar_job_ids(
+            experiment_dir, spec.run_id, job_ids, job_task_spans=job_task_spans
+        )
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
     # #207 opt-in code-iteration lever. Default (flag off): pass NO cmd_sha

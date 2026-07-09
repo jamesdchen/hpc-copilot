@@ -47,7 +47,7 @@ for example).
 
 ## Step 1: Slash body executes (interview layer)
 
-The slash command body (`src/slash_commands/commands/submit-hpc.md`)
+The slash command body (`src/hpc_agent/slash_commands/commands/submit-hpc.md`)
 is loaded into the chat agent's context. It does:
 
 1. **Parse `$ARGUMENTS`** into an initial spec dict. The user said
@@ -80,7 +80,7 @@ is loaded into the chat agent's context. It does:
 ## Step 2: Workflow skill executes (decision layer)
 
 The `hpc-submit` skill body
-(`src/slash_commands/skills/hpc-submit/SKILL.md`) walks every
+(`src/hpc_agent/slash_commands/skills/hpc-submit/SKILL.md`) walks every
 resolution step.
 
 ### Step 2.1: Load context

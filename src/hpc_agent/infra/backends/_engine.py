@@ -711,9 +711,11 @@ class ProfileBackend(HPCBackend):
     def stderr_log_path(cls, remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 
-        *task_id* is the 0-based ``HpcTaskId``. Both families' array scripts
-        derive it as ``<scheduler array index> - 1``, so the on-disk filename
-        carries the 1-based ``ArrayIndex`` — recovered here through
+        *task_id* is the 0-based id within *job_id*'s OWN array (equal to the
+        global ``HpcTaskId`` for a single-array run; a waved batch's caller
+        subtracts its ``TASK_OFFSET`` first — the scheduler names the file by
+        its local index, ``%a`` / ``$SGE_TASK_ID``). The on-disk filename
+        carries the 1-based local ``ArrayIndex`` — recovered here through
         :func:`~hpc_agent._kernel.contract.task_id.to_array_index`, the single
         validated ``±1``.
         """

@@ -189,6 +189,35 @@ def test_campaign_without_cursor_omits_cursor_fields(journal_home, experiment):
     assert "cursor_iteration" not in camp
 
 
+@pytest.mark.parametrize(
+    "cursor_doc",
+    [
+        # Newer schema than this framework reads.
+        {"cursor_schema_version": 999, "iteration": 3},
+        # Non-int schema version (manual JSON edit / corruption).
+        {"cursor_schema_version": "one", "iteration": 3},
+    ],
+    ids=["newer-schema", "non-int-schema"],
+)
+def test_corrupt_cursor_downgrades_to_warning(journal_home, experiment, cursor_doc):
+    """``read_cursor`` raises ``errors.JournalCorrupt`` for a bad
+    ``cursor_schema_version``; one corrupt cursor.json must surface as the
+    documented per-campaign warning, not crash load-context for the repo."""
+    import json
+
+    _write_sidecar(experiment, "20260521-120000-aaa", campaign_id="optuna-1")
+    camp_dir = experiment / ".hpc" / "campaigns" / "optuna-1"
+    camp_dir.mkdir(parents=True, exist_ok=True)
+    (camp_dir / "cursor.json").write_text(json.dumps(cursor_doc), encoding="utf-8")
+
+    ctx = load_context(experiment_dir=experiment)
+
+    camp = ctx["campaigns"][0]
+    assert camp["campaign_id"] == "optuna-1"
+    assert "cursor_iteration" not in camp
+    assert any("cursor unreadable" in w and "optuna-1" in w for w in ctx["warnings"])
+
+
 def test_delegate_submit_is_agent_kind(journal_home, experiment):
     _onboard(experiment)
     delegate = load_context(experiment_dir=experiment)["delegate"]

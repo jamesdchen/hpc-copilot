@@ -222,6 +222,6 @@ them is at risk, the new shape is probably re-running an old mistake.
 - `src/hpc_agent/_kernel/extension/worker_prompts/campaign.md` — the
   deterministic worker prompt the driver's `kind: agent` steps inline
   into `cacheable_prefix`.
-- `src/slash_commands/commands/campaign-hpc.md` — the user-typed
+- `src/hpc_agent/slash_commands/commands/campaign-hpc.md` — the user-typed
   slash command that routes through `hpc-agent run campaign` to the
   worker prompt above.

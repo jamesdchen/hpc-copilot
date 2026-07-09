@@ -135,6 +135,8 @@ def fetch_failures(
             f"to guess 'slurm' and risk misrouting the SGE log fetch"
         )
 
+    from hpc_agent.state.runs import read_job_task_spans
+
     logs = fetch_task_logs(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
@@ -143,6 +145,11 @@ def fetch_failures(
         scheduler=scheduler,
         task_ids=failed_ids,
         lines=int(lines),
+        # Waved runs: the sidecar's per-job global task windows route each
+        # probe to the covering job with the job-LOCAL log index. None (old
+        # sidecar / single array / resubmit job) keeps the global probe —
+        # read_job_task_spans never raises.
+        job_task_spans=read_job_task_spans(experiment_dir, run_id),
     )
     clusters = cluster_failures_by_fingerprint(logs)
 

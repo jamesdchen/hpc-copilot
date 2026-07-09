@@ -56,10 +56,12 @@ jobs:
           # the ephemeral ``refs/pull/<n>/merge`` ref (a merge of PR
           # head onto main). For the auto-commit step's push target to
           # be the PR branch itself — not the merge ref — we check out
-          # the PR head SHA explicitly. On ``push`` events the head
-          # ref expression is empty and ``github.sha`` (the pushed
-          # commit) is used.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # the PR head *branch* (a SHA would leave the workspace in
+          # detached HEAD, where git-auto-commit's bare ``git push
+          # origin`` fails with "not currently on a branch"). On
+          # ``push`` events the head ref expression is empty and
+          # ``github.sha`` (the pushed commit) is used.
+          ref: ${{ github.event.pull_request.head.ref || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:

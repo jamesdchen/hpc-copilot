@@ -1,6 +1,6 @@
 """``retarget-run`` — the cluster-retarget recovery arm, sequenced in code.
 
-Proving-run #5 wave 5.2 (``docs/design/proving-run-5-hardening.md`` §3 wave 5.2,
+Proving-run #5 wave 5.2 (``docs/design/history/proving-run-5-hardening.md`` §3 wave 5.2,
 §4.1). The block-drive anomaly terminators name recovery ACTIONS, but
 cluster-retarget was the one action with no verb — so the agent freelanced ~5
 steps (close out → re-resolve → re-mint → supersede → re-canary) and fumbled

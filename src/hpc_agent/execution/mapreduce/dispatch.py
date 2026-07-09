@@ -78,6 +78,16 @@ _EXIT_NO_RUNNER = 3
 # for N. Kept in lock-step with HPC_DISPATCH_EXIT_NO_OUTPUT in hpc_preamble.sh.
 _EXIT_NO_OUTPUT = 4
 
+# The data-trace emission contract (T2). Kept in LOCK-STEP with
+# ``hpc_agent.execution.mapreduce.data_trace_contract`` — this standalone
+# dispatcher is scp'd to the compute node without ``hpc_agent`` on the path,
+# so (like ``_EXIT_NO_OUTPUT`` ↔ ``HPC_DISPATCH_EXIT_NO_OUTPUT`` above) it
+# hardcodes a copy of the two constants the emitter and the (T3) digest
+# export need. ``test_data_trace_contract`` pins these equal to the canonical
+# module. The env-var EXPORT itself is wired by T3, not here.
+_TRACE_TRANSPORT_FILENAME = "_trace.jsonl"
+_TRACE_DIGEST_ENV_VAR = "HPC_TRACE_DIGESTS"
+
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
@@ -505,6 +515,35 @@ def _latest_checkpoint(checkpoint_dir):
     return best
 
 
+# Prefix every injected service var gets, so an address can never silently
+# clobber an executor's $HOME/$PATH (the bare-uppercase footgun the HPC_KW_*
+# namespacing already guards against on the kwargs side). Stdlib-only twin of
+# ``hpc_agent.ops.recover.service.SERVICE_ENV_NAMESPACE`` — this file ships
+# standalone (deploy_runtime never ships the package), so the contract is
+# duplicated here by design; behavior parity is pinned by
+# tests/execution/mapreduce/test_dispatch.py::TestServiceEnvPassthrough.
+_SERVICE_ENV_NAMESPACE = "HPC_SERVICE_"
+
+
+def _inject_service_env(env, service_env):
+    """Thread an externally-provisioned service address into a task env.
+
+    Each ``service_env`` entry ships as ``HPC_SERVICE_<KEY>`` (namespaced,
+    collision-free), mirroring the ``HPC_KW_*`` kwarg contract. Returns *env*
+    (mutated in place). A ``None``/empty *service_env* is a clean no-op.
+
+    Stdlib-only twin of ``hpc_agent.ops.recover.service.inject_service_env``,
+    inlined because the dispatcher cannot import the package cluster-side
+    (#231 Tier 1 passthrough; the ``from hpc_agent.ops...`` form died with
+    ModuleNotFoundError on every array task of a service_env run).
+    """
+    if not service_env:
+        return env
+    for key, value in service_env.items():
+        env[f"{_SERVICE_ENV_NAMESPACE}{key.upper()}"] = str(value)
+    return env
+
+
 def _task_is_included(task_id, env):
     """True when *task_id* is in the ``HPC_TASK_INCLUDE`` partial-reproduction set.
 
@@ -592,6 +631,18 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # Per-task summary filename the run declared (F-J) — the per-task completion
+    # marker this dispatcher keys its idempotency skip on AND promotes LAST for
+    # crash-safety. Absent → the historical metrics.json literal, so an existing
+    # run is byte-identical. Resolved inline (deployed cluster-side standalone,
+    # no hpc_agent import) but in lock-step with state.runs.resolved_summary_artifact.
+    _declared_summary = sidecar.get("summary_artifact")
+    summary_name = (
+        _declared_summary.strip()
+        if isinstance(_declared_summary, str) and _declared_summary.strip()
+        else "metrics.json"
+    )
 
     # --- Fail loud on a self-referential per-task runner ---
     # The per-task command must NOT be the dispatcher itself. When a submit
@@ -775,7 +826,7 @@ def main() -> None:
         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
             cmd_sha_changed = True
 
-    metrics_path = Path(result_dir) / "metrics.json"
+    metrics_path = Path(result_dir) / summary_name
     already_complete = False
     if metrics_path.is_file():
         try:
@@ -785,7 +836,7 @@ def main() -> None:
             already_complete = False
     if already_complete and not force_rerun and not cmd_sha_changed:
         print(
-            f"[hpc-agent] task {task_id} already complete (metrics.json found); skipping",
+            f"[hpc-agent] task {task_id} already complete ({summary_name} found); skipping",
             file=sys.stderr,
         )
         sys.exit(0)
@@ -795,6 +846,27 @@ def main() -> None:
             f"(prior={prior_cmd_sha[:8]}, current={current_cmd_sha[:8]}); re-running",
             file=sys.stderr,
         )
+        # Quarantine the PREVIOUS experiment's metrics.json before re-running.
+        # metrics.json is the per-task completion marker: left in place, a
+        # failed (or still-running) new attempt lets status/combiner count the
+        # stale file as THIS run's completed result. Rename — never delete —
+        # so the evidence survives for forensics, under the ``_wip_*`` naming
+        # family every result scanner (check_results*, the combiner's
+        # exact-name lookup) already skips, with the same ``time_ns()``
+        # disambiguation the preserved-failed-WIP rename uses. Best-effort:
+        # on a rename failure the stale file stays exactly as before this
+        # guard existed, so warn rather than abort the re-run.
+        stale_target = os.path.join(
+            result_dir, f"_wip_{task_id}_stale_metrics_{time.time_ns()}.json"
+        )
+        try:
+            os.replace(metrics_path, stale_target)
+            print(f"[dispatch] quarantined stale metrics.json at {stale_target}")
+        except OSError as exc:
+            print(
+                f"[dispatch] WARN: could not quarantine stale metrics.json {metrics_path}: {exc}",
+                file=sys.stderr,
+            )
     elif already_complete and force_rerun:
         print(
             f"[hpc-agent] task {task_id} metrics.json exists but HPC_FORCE_RERUN=1; re-running",
@@ -921,15 +993,13 @@ def main() -> None:
     # var → clean no-op for sweeps with no service dependency.
     raw_service_env = os.environ.get("HPC_SERVICE_ENV", "").strip()
     if raw_service_env:
-        from hpc_agent.ops.recover.service import inject_service_env
-
         try:
             service_env = json.loads(raw_service_env)
         except json.JSONDecodeError as exc:
             print(f"[dispatch] WARN: ignoring malformed HPC_SERVICE_ENV: {exc}", file=sys.stderr)
         else:
             if isinstance(service_env, dict):
-                inject_service_env(env, service_env)
+                _inject_service_env(env, service_env)
 
     # #293: a multi-rank job prefixes the per-task command with the launcher
     # (srun/mpirun/aprun) so this single dispatcher spawns N coordinated ranks
@@ -1018,9 +1088,9 @@ def main() -> None:
                 src = os.path.join(root, fname)
                 rel = os.path.relpath(src, wip_dir)
                 promote_pairs.append((src, rel))
-        # Sort: metrics.json at the top level last (it's the
-        # idempotency marker); everything else alphabetically.
-        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
+        # Sort: the declared per-task summary file at the top level last (it's
+        # the idempotency marker); everything else alphabetically.
+        promote_pairs.sort(key=lambda pair: (pair[1] == summary_name, pair[1]))
         if not promote_pairs:
             # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
             # the executor produced NO files. Under WIP/atomic-promote

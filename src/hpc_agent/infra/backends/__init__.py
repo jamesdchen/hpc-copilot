@@ -333,6 +333,13 @@ class HPCBackend(abc.ABC):
         Used by /failures and the auto-retry resolver to fetch
         per-task stderr without re-deriving the path from the
         scheduler-specific %x_%A_%a / job-array format string.
+
+        *task_id* is the 0-based id WITHIN *job_id*'s own array — the
+        scheduler names log files by its local array index, so a waved
+        batch (LOCAL ``1-<size>`` array + ``TASK_OFFSET``) must subtract
+        its offset before calling this (see
+        :func:`hpc_agent.infra.cluster_logs.fetch_task_logs`). For a
+        single-array run the local id equals the global ``HpcTaskId``.
         """
         raise NotImplementedError("backend does not implement stderr_log_path")
 

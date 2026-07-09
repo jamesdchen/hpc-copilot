@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SKILL = _REPO_ROOT / "src/slash_commands/skills/hpc-notebook-audit/SKILL.md"
+_SKILL = _REPO_ROOT / "src/hpc_agent/slash_commands/skills/hpc-notebook-audit/SKILL.md"
 
 
 def _text() -> str:

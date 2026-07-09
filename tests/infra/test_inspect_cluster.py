@@ -162,6 +162,31 @@ class TestNodelistExpansion:
             "d11-08",
         ]
 
+    def test_unpadded_range_expands_without_padding(self):
+        # SLURM pads only when the site writes the range zero-padded:
+        # cn[8-12] means cn8..cn12, NOT cn08..cn12.
+        assert ins._expand_slurm_nodelist("cn[8-12]") == [
+            "cn8",
+            "cn9",
+            "cn10",
+            "cn11",
+            "cn12",
+        ]
+
+    def test_zero_padded_range_keeps_site_padding(self):
+        assert ins._expand_slurm_nodelist("cn[08-12]") == [
+            "cn08",
+            "cn09",
+            "cn10",
+            "cn11",
+            "cn12",
+        ]
+
+    def test_padded_range_crossing_width_boundary(self):
+        # Pad width comes from the range's own written width (len of the
+        # zero-padded lower bound); indices wider than the pad print natural.
+        assert ins._expand_slurm_nodelist("cn[095-105]") == [f"cn{i:03d}" for i in range(95, 106)]
+
     def test_empty_returns_empty(self):
         assert ins._expand_slurm_nodelist("") == []
 

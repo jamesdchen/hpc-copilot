@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The harness-conformance kit — publishing the harness contract
 
 **Status: PLANNED (2026-07-07), not yet implemented.** This is the hand-off
@@ -506,7 +509,7 @@ catalog updated if exposed; `pyproject.toml` package-data for
 | The attestation export never parses record contents | `tests/contracts/test_attestation_export_boundary.py` (AST, the dossier no-parse pin shape) | `json.load`/`json.loads` appears in `ops/export_attestations.py` |
 | predicateType vocabulary is closed and derived from `DOSSIER_SOURCES` | same boundary test, equality pin | the URI map and `DOSSIER_SOURCES` diverge in either direction |
 | One gather definition — the export delegates to `export_dossier` | same boundary test | `ops/export_attestations.py` re-walks any store path instead of consuming the dossier result |
-| in-toto never enters core deps | existing `tests/contract/test_no_heavy_toplevel_imports.py` posture + a named dep-list assert | `in-toto`/`in-toto-attestation` appears in `pyproject.toml` dependencies or a non-kit extra |
+| in-toto never enters core deps | existing `tests/contracts/test_no_heavy_toplevel_imports.py` posture + a named dep-list assert | `in-toto`/`in-toto-attestation` appears in `pyproject.toml` dependencies or a non-kit extra |
 | Doc stamp == reported contract version | `tests/contracts/test_harness_contract.py` (K10 addition) | `harness-contract.md`'s version line and `HARNESS_CONTRACT_VERSION` disagree |
 | Kit fixtures derive injection tags from the exported filter | kit-internal test in `tests/conformance_kit/` | provenance fixtures hard-code a tag list instead of deriving from `HARNESS_INJECTION_RE` |
 | Both reference adapters stay conforming (self-conformance) | the `conformance` CI job | any push makes the Claude Code hooks or the notebook plugin fail the kit — i.e. the contract drifted from the code |
@@ -569,3 +572,27 @@ catalog updated if exposed; `pyproject.toml` package-data for
   5. *K10 note added* — `HarnessCapabilitiesResult` is `extra="forbid"`;
      the contract-version result field is a wire-model + schema-regen
      change, owned by K10's regen tail.
+- **K3 landed (2026-07-09, Wave A):** `ops/export_attestations.py` +
+  `_wire/actions/export_attestations.py` +
+  `tests/contracts/test_attestation_export_boundary.py` +
+  `docs/primitives/export-attestations.md`, per D-K4. Implementation drift
+  from the plan text:
+  1. *The illustrative table rotted further, as predicted* — the live
+     `DOSSIER_SOURCES` at implementation time carries FOURTEEN nouns (the
+     plan's table showed eleven): `determinism-fingerprint`,
+     `pack-manifest`, and `pack-journal` landed between plan and build. The
+     equality pin derives from the CODE's set, so the map has fourteen rows.
+  2. *Live-conformance pair-edit armed* — the live-conformance noun lands in
+     a parallel branch; when its `DOSSIER_SOURCES` entry merges, the
+     boundary test's equality pins fire until the deliberate one-line
+     pair-edit is made in BOTH `PREDICATE_TYPES`
+     (`ops/export_attestations.py`, comment beside the map) and
+     `_EXPECTED_PREDICATE_TYPES` (the boundary test).
+  3. *No-parse pin strengthened beyond the dossier shape* — the boundary
+     test also bans `hashlib` (digests are copied verbatim, never
+     recomputed) and `read_bytes` (a second gather), which the dossier's
+     own pin does not need.
+  4. *Default output path* under `<experiment>/_dossier/` (beside the
+     dossier zip), one DSSE envelope per JSONL line, `signatures: []`
+     (unsigned v1) — exactly as D-K4 specified; the K7 stock-verifier
+     acceptance check remains open.

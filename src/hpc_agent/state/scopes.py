@@ -16,9 +16,11 @@ Two stores, both under ``<experiment_dir>/.hpc/scopes/``:
   ordinary decision records carrying ``resolved.scope_action``; the
   newest lock/unlock record decides the current state (append-only —
   unlock never erases the lock history).
-* ``<tag>.looks.jsonl`` — the look ledger. One append-only line per
-  (scope, run_id) pair, deduped: a second look at the same run is a
-  no-op. Each line stores IDENTITY (run_id, cmd_sha, lineage_root,
+* ``<tag>.looks.jsonl`` — the look ledger. Append-only, one line per
+  (scope, run_id) pair: a second look at the same run is a write-time
+  no-op, and :func:`count_prior_looks` dedups by (scope, run_id) at read
+  so a duplicate line raced past that check can never inflate a count.
+  Each line stores IDENTITY (run_id, cmd_sha, lineage_root,
   reducer_block) — NEVER a metric value. A metric in the ledger would
   tempt interpretation; identity is all a caller needs to count.
 
@@ -203,8 +205,12 @@ def record_look(
     framework counts looks, it never reads what they found).
 
     Read-before-append dedup: a second look at the SAME (scope, run_id) is a
-    no-op and returns ``None``; the first write returns the record. So
-    counting the same run twice can never inflate a look count.
+    no-op and returns ``None``; the first write returns the record. The check
+    and the append are NOT one atomic step (the flock is taken by the append
+    alone), so two concurrent writers can both pass the check and both append
+    — the dedup here is best-effort ledger hygiene. The guarantee that
+    counting the same run twice can never inflate a look count is held by
+    :func:`count_prior_looks`, which dedups by ``(scope, run_id)`` at read.
 
     Raises :class:`errors.SpecInvalid` on a non-slug tag or empty run_id.
     """
@@ -312,16 +318,23 @@ def _load_run(experiment_dir: Path, run_id: str) -> Any:
 def count_prior_looks(experiment_dir: Path, tag: str) -> dict[str, int]:
     """Count the looks recorded against *tag*.
 
-    Returns ``{"prior_looks": <total look records>, "distinct_lineages":
-    <distinct lineage_root values>}`` — plain integers, no metric ever
-    consulted. ``distinct_lineages`` collapses several supersession-chained
-    reruns of the SAME experiment to one lineage, so a caller can tell "N
-    looks across M genuinely-distinct experiments" apart.
+    Returns ``{"prior_looks": <distinct (scope, run_id) pairs>,
+    "distinct_lineages": <distinct lineage_root values>}`` — plain integers,
+    no metric ever consulted. ``distinct_lineages`` collapses several
+    supersession-chained reruns of the SAME experiment to one lineage, so a
+    caller can tell "N looks across M genuinely-distinct experiments" apart.
+
+    ``prior_looks`` dedups by ``(scope, run_id)``: :func:`record_look`'s
+    read-before-append check is best-effort (two concurrent writers can both
+    pass it and both append), so THIS read-side dedup is what holds the
+    guarantee that counting the same run twice can never inflate a look
+    count — including for ledgers that already carry a raced duplicate line.
 
     Raises :class:`errors.SpecInvalid` on a non-slug tag.
     """
     validate_tag(tag)
     looks = _read_looks(experiment_dir, tag)
+    pairs = {(str(r.get("scope") or ""), str(r.get("run_id") or "")) for r in looks}
     lineages = {str(r.get("lineage_root") or "") for r in looks}
     lineages.discard("")
-    return {"prior_looks": len(looks), "distinct_lineages": len(lineages)}
+    return {"prior_looks": len(pairs), "distinct_lineages": len(lineages)}
