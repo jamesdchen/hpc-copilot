@@ -574,3 +574,16 @@ and overnight mode must keep exactly that: consent dies on spec change;
 (c) hard caps ride the record (budget / walltime / expires-at-morning);
 (d) everything consumed under it is disclosed in a morning brief. This
 formalizes the ad-hoc pre-y pattern instead of leaving it to per-night prose.
+
+Amendment to item 8 (same morning): the live night exposed the missing half —
+the canary FAILED overnight and sat undetected until the human woke and asked.
+Two additions: (a) **the watch rule**: the agent armed a local-log Monitor on
+a CLUSTER job — structurally blind (wrong machine); the submit/campaign skills
+must name `status-watch` as the ONLY sanctioned watch for cluster state, and
+a hand-rolled log tail is the improvisation class. (b) **the notification
+leg**: relay-due honesty fires at the NEXT TURN, but overnight there is no
+next turn — standing consent (item 8) must pair with push-on-terminal/anomaly
+(the harness push capability, negotiated via harness-capabilities), else
+"overnight mode" is just "morning surprise mode". Disclosure latency is part
+of the fallout the consent record claims to accept — record it in the morning
+brief (failed_at vs surfaced_at).
