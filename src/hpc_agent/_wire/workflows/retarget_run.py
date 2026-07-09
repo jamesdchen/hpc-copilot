@@ -1,7 +1,7 @@
 """Pydantic models for the ``retarget-run`` workflow primitive.
 
 ``retarget-run`` is proving-run #5 wave 5.2 (the retarget RECOVERY ARM,
-``docs/design/proving-run-5-hardening.md`` §3 wave 5.2, §4.1). The block-drive
+``docs/design/history/proving-run-5-hardening.md`` §3 wave 5.2, §4.1). The block-drive
 anomaly terminators (``submit-s2``/``canary_failed``,
 ``submit-s3``/``watching_anomaly``) name recovery ACTIONS, but cluster-retarget
 was the one action with no verb — so the agent freelanced ~5 steps (close out →

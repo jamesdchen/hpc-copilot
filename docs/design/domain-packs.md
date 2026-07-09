@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Domain packs — bind-as-data design + implementation plan
 
 **Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off

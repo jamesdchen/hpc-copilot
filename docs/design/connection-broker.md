@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: per-host SSH connection broker
 
 Status: **PHASE 2 SHIPPED as the asyncssh engine** (2026-07-06,

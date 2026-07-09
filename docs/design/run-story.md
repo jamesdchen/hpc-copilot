@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # The run story — design + implementation plan
 
 **Status: IMPLEMENTED (2026-07-07).** Waves A/B/C landed

@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: parallel canvassing during worker startup
 
 > **Status:** implemented. Tracks

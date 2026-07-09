@@ -328,7 +328,7 @@ def _assert_brief_provenance(
     Proving run #3: the agent hand-injected ``result_dir_template`` into a retry
     spec with no brief recommending it and no human nudge naming it — a silent
     LLM default. This gate mechanizes "never fabricate or divert a ``resolved``
-    field the brief didn't recommend" (docs/design/proving-run-2-hardening.md §6).
+    field the brief didn't recommend" (docs/design/history/proving-run-2-hardening.md §6).
 
     On a run-scoped greenlight (``response=="y"``), loads the LATEST brief the
     block persisted (``state.decision_briefs``, short-block-name tolerant). For

@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The harness-conformance kit — publishing the harness contract
 
 **Status: PLANNED (2026-07-07), not yet implemented.** This is the hand-off

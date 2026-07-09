@@ -1,7 +1,7 @@
 """``verify-relay`` — deterministic audit of the agent's relay vs. the journal.
 
 The machine counterpart to conduct rule 10 — "never relay numbers/state that
-don't match the journal" (``docs/design/proving-run-2-hardening.md`` §6). The
+don't match the journal" (``docs/design/history/proving-run-2-hardening.md`` §6). The
 doctrine already holds the LLM to relaying only code-digested briefs, but the
 *relay itself* is unguarded: a rounded number, a swapped run-id, or a stale
 state claim ("running" when the journal recorded "failed" — proving run #3)

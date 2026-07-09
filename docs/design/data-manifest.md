@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The data manifest — rung 0 of the onboarding map
 
 **Status: PLANNED, USER-RULED (2026-07-07, ruling 0a/0b).** Companion to

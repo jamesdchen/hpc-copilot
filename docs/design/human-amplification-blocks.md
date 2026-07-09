@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Human amplification — the block architecture
 
 **Status:** DRAFT — living design; the guiding principle of the hpc-copilot fork.

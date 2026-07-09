@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # The attention queue — status-snapshot v2, design + implementation plan
 
 **Status: IMPLEMENTED (2026-07-07).** Landed across Wave A (promotions), Wave B
@@ -244,7 +247,7 @@ digest read at noon is *visibly* a 6am projection, and the remedy is stated
 in the header: re-run the verb (cheap, journal-first, no SSH). There is
 deliberately **no digest file, no cache, no served page**: a persisted
 digest is a second source of truth that drifts from the journal
-(reconcile-is-truth, `docs/design/proving-run-2-hardening.md` Move 4). The
+(reconcile-is-truth, `docs/design/history/proving-run-2-hardening.md` Move 4). The
 queue is recomputed on every read.
 
 Watermark neutrality, decided: the queue moves **no state** — not

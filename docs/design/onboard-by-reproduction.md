@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Onboard-by-reproduction — rung 6 of the onboarding map (Phase 6.5)
 
 **Status: PLANNED, USER-RULED (2026-07-07, rulings 6a/6b/6c).** Companion

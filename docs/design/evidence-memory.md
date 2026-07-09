@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Evidence memory — the lab notebook that writes itself, with provenance
 
 **Status: PLANNED (2026-07-07), not yet implemented — implementation

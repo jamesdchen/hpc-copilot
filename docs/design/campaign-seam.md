@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: the strategy-agnostic campaign seam
 
 > **Status:** implemented. Tracks

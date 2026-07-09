@@ -1,7 +1,10 @@
+---
+status: plan
+---
 # Campaign Async-Refill + Multi-Cluster — Implementation Plan
 
 **Cold-session handoff.** Self-contained: you can execute this without prior conversation
-context. Implements the RFC at [`campaign-async-refill.md`](campaign-async-refill.md) (#362)
+context. Implements the RFC at [`campaign-async-refill.md`](../campaign-async-refill.md) (#362)
 plus a multi-cluster capability the RFC does not cover. Read the RFC for the deep rationale;
 this plan supersedes its task list where noted (notably §5, already done).
 
