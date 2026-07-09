@@ -586,6 +586,7 @@ def _digest_remote(*, cluster: str, path: str, newest_n: int, marker_scan: bool)
         experiment_dir_arg=True,
         spec_model=DirDigestSpec,
         schema_ref=SchemaRef(input="dir_digest"),
+        requires_ssh=True,
     ),
     agent_facing=True,
 )

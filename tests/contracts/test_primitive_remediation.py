@@ -89,6 +89,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
     {
         "notebook-draft",
         "challenge-status",
+        "dir-digest",
         "conformance-record",
         "conformance-status",
         "evidence-brief",

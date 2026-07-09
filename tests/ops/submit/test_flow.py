@@ -157,6 +157,11 @@ def _spec(run_id: str, **overrides: Any):
         # result_dir_template + a real executor let it synthesize one when
         # Step 6d was skipped (these tests submit without pre-writing a sidecar).
         result_dir_template="results/{run_id}/task_{task_id}",
+        # These tests exercise stamping/batching mechanics with FAKE executors
+        # that were never meant to run; the pre-stage task-0 smoke (queue item
+        # 7) would execute them and refuse on their nonzero exit. Opt out —
+        # the smoke has its own dedicated suite (test_submit_flow_pre_stage_smoke).
+        pre_stage_smoke=False,
     )
     base.update(overrides)
     return SubmitFlowSpec(**base)  # type: ignore[arg-type]

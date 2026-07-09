@@ -198,3 +198,19 @@ def test_opt_out_skips_a_would_be_refusal(tmp_path: Path) -> None:
     _write_sidecar(tmp_path, spec.run_id, executor=ex, template=_TEMPLATE)
     # No raise: the gate never ran the broken executor.
     sf._pre_stage_smoke_gate(tmp_path, [spec], [0])
+
+
+def test_localize_interpreter_substitutes_bare_python() -> None:
+    """Cluster-shaped ``python3 -m ...`` must run under THIS interpreter
+    locally (run #11: PATH's python3 was msys64's, no hpc_agent, every smoke
+    refused); an explicit path is respected verbatim."""
+    import sys
+
+    from hpc_agent.ops.validate.dry_run_local import _localize_interpreter
+
+    assert _localize_interpreter("python3 -m hpc_agent.executor_cli run-registered x.py") == (
+        f'"{sys.executable}" -m hpc_agent.executor_cli run-registered x.py'
+    )
+    assert _localize_interpreter("python x.py").startswith(f'"{sys.executable}" ')
+    assert _localize_interpreter("/usr/bin/python3 x.py") == "/usr/bin/python3 x.py"
+    assert _localize_interpreter("bash run.sh") == "bash run.sh"

@@ -664,6 +664,7 @@ def _git_repo(cwd: Path, *, dirty: bool) -> None:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
 
     _g("init")

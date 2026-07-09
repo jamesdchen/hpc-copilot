@@ -287,6 +287,25 @@ def _dispatch_env(kwargs: dict, *, task_id: int, run_id: str) -> dict[str, str]:
     return env
 
 
+def _localize_interpreter(command: str) -> str:
+    """Substitute this process's interpreter for a bare ``python3``/``python``.
+
+    Executor commands are CLUSTER-shaped (``python3 -m hpc_agent.executor_cli
+    ...``); on the local dev box PATH's ``python3`` may be a foreign
+    interpreter with no ``hpc_agent`` (run #11: msys64 python → every smoke
+    refused). ``sys.executable`` is guaranteed to import ``hpc_agent`` — it is
+    the process running this flow (the ``b30dd76a`` lesson: never trust
+    PATH's interpreter). Only the FIRST token is substituted, and only when it
+    is exactly ``python3`` or ``python`` — an explicit path is respected.
+    """
+    import sys
+
+    first, sep, rest = command.strip().partition(" ")
+    if first in ("python3", "python"):
+        return f'"{sys.executable}"{sep}{rest}'
+    return command
+
+
 def _smoke_exec(
     tasks_module: ModuleType,
     spec: DryRunLocalSpec,
@@ -318,7 +337,7 @@ def _smoke_exec(
     # Refuse the #162 self-recursion footgun: a smoke command that IS the
     # dispatcher would re-enter dispatch forever. The cluster dispatcher
     # rejects this too; catch it before spawning anything locally.
-    command = spec.smoke_command or spec.executor
+    command = _localize_interpreter(spec.smoke_command or spec.executor)
     if _executor_reinvokes_dispatcher(spec.executor, dispatcher_path="_hpc_dispatch.py"):
         return [
             ValidatorFinding(

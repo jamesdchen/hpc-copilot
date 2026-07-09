@@ -18,4 +18,19 @@ backed_by:
 ---
 # reconcile-stale
 
-_Documentation pending._
+Bulk closure for stale in-flight journal records — runs whose jobs left the
+scheduler without a terminal write (run #11: 35 phantom `in_flight` records
+from a revoked cluster account slowed every unscoped surface for weeks).
+
+Gathers the experiment's non-terminal RunRecords, groups by cluster, makes
+ONE `batch-status` scheduler query per login node (never per-run SSH), and
+closes each run whose recorded job_ids are all scheduler-unknown through the
+EXISTING reconcile classification (`abandoned` / `no_on_disk_evidence` —
+never a status invented here). Jobless records close only past a staleness
+threshold (default 24h). Anything ambiguous — scheduler still knows a job,
+young jobless records, un-batchable backends, or an unreachable cluster —
+stays open and is listed. Closure is journal-only (no harvest, no cluster
+action). The result carries a code-rendered summary: examined, queries,
+closed-by-class, left-open with reasons.
+
+Origin: run #11 queue item 11 (`docs/design/notebook-audit.md`, Addendum 6).
