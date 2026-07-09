@@ -68,6 +68,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -113,6 +114,7 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -212,6 +214,7 @@ def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -284,6 +287,7 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -344,6 +348,7 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.returncode = 0
         tar_proc.wait.return_value = 0
@@ -680,6 +685,7 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -737,6 +743,7 @@ def test_anchored_exclude_emits_both_tar_dialects(tmp_path: Path) -> None:
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
         tar_proc.stderr = MagicMock()
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
@@ -753,3 +760,117 @@ def test_anchored_exclude_emits_both_tar_dialects(tmp_path: Path) -> None:
     assert "--exclude=^data" in tar_cmd  # the bsdtar anchor (native Windows)
     assert "--exclude=logs" in tar_cmd  # bare stays match-any-depth, one form
     assert "--exclude=^logs" not in tar_cmd
+
+
+# --- queue item 6a: cause disclosure for the no-rsync tar full-copy fallback ---
+
+
+def test_no_rsync_disclosure_warns_full_reship(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """6a fires-test: when rsync is absent the push names the tar fallback's
+    NO-DELTA cost (the run-#11 8.4 GB silent full re-ship to CARC) at transfer
+    start, in the same ``[transport]`` style as the payload WARN."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""  # EOF: the byte-pump reads to end
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=False
+        )
+    err = capsys.readouterr().err
+    assert "[transport] WARN no rsync on PATH" in err
+    assert "NO DELTA" in err
+    assert "re-ships even if the remote is identical" in err
+
+
+def test_rsync_present_emits_no_fallback_disclosure_or_progress(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The rsync-present path (real delta) emits NEITHER the no-rsync WARN nor a
+    tar-pump progress line — those belong to the fallback only."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+    ):
+        transport.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
+    err = capsys.readouterr().err
+    assert "no rsync on PATH" not in err
+    assert "[transport] progress:" not in err
+
+
+# --- queue item 10: byte-counting progress pump on the tar|ssh pipe -----------
+
+
+def test_pump_forwards_bytes_exactly_through_subprocess(tmp_path: Path) -> None:
+    """The pump is transfer-transparent: a known binary payload fed through
+    :func:`transport._pump_with_progress` into a subprocess cat-equivalent
+    (reads stdin, writes a file) round-trips byte-for-byte, and the returned
+    count matches."""
+    import io
+    import os
+
+    payload = os.urandom(300_000)  # spans many 4 KiB chunks
+    out_file = tmp_path / "out.bin"
+    code = "import sys, pathlib; pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read())"
+    r_fd, w_fd = os.pipe()
+    proc = subprocess.Popen([sys.executable, "-c", code, str(out_file)], stdin=r_fd)
+    os.close(r_fd)  # child holds its own dup; parent drops the read end so EOF fires
+    sent = transport._pump_with_progress(
+        io.BytesIO(payload), w_fd, total_bytes=len(payload), chunk_size=4096
+    )
+    proc.wait(timeout=30)
+    assert proc.returncode == 0
+    assert sent == len(payload)
+    assert out_file.read_bytes() == payload  # binary-exact, no truncation
+
+
+def test_pump_emits_progress_on_forced_short_interval(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With a forced-short interval the pump emits the item-10 heartbeat line for
+    each chunk while still forwarding every byte. A concurrent drain reads the
+    pipe so the pump's blocking writes never stall."""
+    import io
+    import os
+    import threading
+
+    payload = b"x" * (5 * 4096)
+    r_fd, w_fd = os.pipe()
+    collected = bytearray()
+
+    def _drain() -> None:
+        while True:
+            block = os.read(r_fd, 4096)
+            if not block:
+                break
+            collected.extend(block)
+        os.close(r_fd)
+
+    drainer = threading.Thread(target=_drain)
+    drainer.start()
+    sent = transport._pump_with_progress(
+        io.BytesIO(payload),
+        w_fd,
+        total_bytes=len(payload),
+        interval_sec=0.0,  # emit after every chunk
+        chunk_size=4096,
+    )
+    drainer.join(timeout=10)
+    err = capsys.readouterr().err
+    assert sent == len(payload)
+    assert bytes(collected) == payload
+    assert "[transport] progress:" in err
+    assert "MB / ~" in err and "elapsed" in err
+    assert err.count("[transport] progress:") >= 2  # multiple chunks -> multiple beats
