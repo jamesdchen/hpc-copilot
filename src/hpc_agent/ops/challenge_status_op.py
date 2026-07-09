@@ -19,12 +19,12 @@ Two views, one collector:
 
 The read POSTURE is the evidence-memory E-read rule, applied to dissent
 (``docs/design/evidence-memory.md``): the target is **re-resolved and DISCLOSED**
-(``found-current | found-superseded | unresolvable``) — **never refused** (only
-the append gate refuses; evidence and targets legitimately move). Each cited
-evidence sha is likewise re-resolved and disclosed per line
-(``verified`` / not). ``contested`` counts ride beside — a ``current`` target
-reads ``current`` AND contested (C-status: an orthogonal dimension, never a
-fifth status, never blocking).
+(``found-current | found-superseded`` — the collector's ``superseded`` signal) —
+**never refused** (only the append gate refuses; evidence and targets legitimately
+move). Each cited evidence sha is likewise re-resolved and disclosed per line
+(``verified`` / not) through the ONE evidence resolver table. ``contested`` counts
+ride beside — a ``current`` target reads ``current`` AND contested (C-status: an
+orthogonal dimension, never a fifth status, never blocking).
 
 The brief is CODE-rendered from the projection's own fields — dated, sha-cited,
 with **no urgency / recommendation / interpretation vocabulary** (the
@@ -34,22 +34,23 @@ carry: the render is a PURE FUNCTION of the result data (no wall-clock, no fleet
 accounting), so the verdict gate RECOMPUTES a carried ``view_sha`` and it
 matches byte-for-byte (the v1.6 recomputable-render precedent).
 
-Seams (this worktree is isolated; T1/T2 land in parallel — the imports are
-GUARDED so ``register_primitives`` never crashes on their absence, the loud-
-import-failure contract of ``_kernel/registry/primitive.py``):
+Dependencies (both landed; hard imports — the loud-import contract of
+``_kernel/registry/primitive.py``):
 
 * **``_wire/queries/challenge_status.py`` (T2)** — ``ChallengeStatusSpec`` /
-  ``ChallengeStatusResult`` and the inline item models. Imported at module level
-  (needed at decoration). When absent, faithful placeholders mirroring the pinned
-  C-verb contract keep the module importable and the tests meaningful; the real
-  T2 module SHADOWS them at merge (one definition restored — the ``except`` branch
-  becomes dead).
+  ``ChallengeStatusResult`` and the inline item models (``ChallengeEntry`` /
+  ``ChallengeTarget`` / ``ChallengeVerdict`` / ``CitationStatusLine`` /
+  ``ContestedCounts`` / ``SkippedNamespace``). The wire is the source of truth
+  for the result shape.
 * **``state/challenges.py`` (T1)** — ``standing_challenges`` (the ONE collector
   every disclosure seat routes through — C-reduce / the C-disclose enforcement
-  row) and ``contested_projection`` (the C-status counts). ``state`` never imports
-  ``ops``, so the ``dossier`` resolver is composed HERE and injected (the
-  evidence-brief idiom). Referenced by module-level name so a test monkeypatches
-  ``challenge_status_op.standing_challenges`` / ``.contested_projection``.
+  row), returning a ``StandingChallenges`` bundle of reduced ``ChallengeStatus``
+  rows per namespace. ``state`` never imports ``ops``, so the ``dossier`` resolver
+  is composed HERE and injected (the evidence-brief idiom). Referenced by
+  module-level name so a test monkeypatches
+  ``challenge_status_op.standing_challenges``.
+* **``state/evidence.py``** — ``resolve_citation``, the ONE citation resolver the
+  read side re-runs to disclose each cited sha's ``verified`` status (E-read).
 
 This file lives at the ``ops/`` role root (sibling to ``evidence_brief_op.py`` /
 ``export_dossier.py``); the subject-imports lint short-circuits role-root files,
@@ -60,218 +61,38 @@ construction.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent._wire.queries.challenge_status import (
+    ChallengeEntry,
+    ChallengeStatusResult,
+    ChallengeStatusSpec,
+    ChallengeTarget,
+    ChallengeVerdict,
+    CitationStatusLine,
+    ContestedCounts,
+    SkippedNamespace,
+)
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops import export_dossier
 from hpc_agent.ops.attention_queue import discover_fleet_experiments
+from hpc_agent.state.challenges import standing_challenges
 from hpc_agent.state.determinism import canonical_sha
+from hpc_agent.state.evidence import resolve_citation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 __all__ = ["challenge_status"]
 
-# --- the T2 wire seam (guarded) ----------------------------------------------
-# The wire models must exist at DECORATION time (spec_model / the return
-# annotation). Imported top-level; when T2 is absent this worktree falls back to
-# placeholders that mirror the pinned C-verb contract byte-for-byte, so the verb
-# decorates, the module imports (the loud-import contract is honoured), and the
-# tests exercise the real shapes. The real ``_wire`` module shadows these at
-# merge (the ``except`` branch is then dead code).
-try:  # pragma: no cover — the seam flips to "present" once T2 lands
-    from hpc_agent._wire.queries.challenge_status import (
-        ChallengeCitationLine,
-        ChallengeContestedBlock,
-        ChallengeEntryLine,
-        ChallengeSkippedNamespace,
-        ChallengeStatusResult,
-        ChallengeStatusSpec,
-    )
-except ImportError:  # pragma: no cover — isolated-worktree placeholders (T2 pending)
-    from typing import Literal
-
-    from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-    from hpc_agent._wire._shared import RunIdStrict
-
-    _TargetResolution = Literal["found-current", "found-superseded", "unresolvable"]
-    _ChallengeStatus = Literal["open", "upheld", "dismissed", "withdrawn", "superseded"]
-
-    class ChallengeCitationLine(BaseModel):  # type: ignore[no-redef]
-        model_config = ConfigDict(extra="forbid", title="challenge citation line")
-
-        kind: str = Field(description="The citation's CITATION_KINDS mechanism kind.")
-        ref: str = Field(description="The opaque citation ref; echoed, never parsed.")
-        sha: str = Field(description="The full sha the challenge recorded for this citation.")
-        verified: bool = Field(
-            description="True = re-resolved and the sha still matches here; False = unresolvable."
-        )
-
-    class ChallengeEntryLine(BaseModel):  # type: ignore[no-redef]
-        model_config = ConfigDict(extra="forbid", title="challenge entry line")
-
-        challenge_id: str = Field(
-            description="The challenge's caller-authored slug (path segment)."
-        )
-        status: _ChallengeStatus = Field(
-            description="open | upheld | dismissed | withdrawn | superseded — the reduced status."
-        )
-        filed_ts: str = Field(description="The filing record's ts — every line dated.")
-        grounds: str = Field(
-            description="The human's free-text dissent — opaque, verbatim, never parsed."
-        )
-        target_kind: str = Field(
-            description="The target's resolver-dispatch kind (CITATION_KINDS)."
-        )
-        target_subject_kind: str = Field(description="The challenged record's subject_kind.")
-        target_subject_id: str = Field(description="The challenged record's subject_id — opaque.")
-        target_content_sha: str = Field(description="The exact sha being challenged.")
-        target_resolution: _TargetResolution = Field(
-            description="found-current | found-superseded | unresolvable — disclosed, not refused."
-        )
-        verdict: str | None = Field(
-            default=None,
-            description="upheld | dismissed when a verdict record resolved it; else null.",
-        )
-        reasoning: str | None = Field(
-            default=None,
-            description="The verdict's mandatory free-text reasoning; opaque, verbatim.",
-        )
-        citations: list[ChallengeCitationLine] = Field(
-            default_factory=list,
-            description="Each cited evidence sha, re-resolved at read (verified / unresolvable).",
-        )
-
-    class ChallengeContestedBlock(BaseModel):  # type: ignore[no-redef]
-        model_config = ConfigDict(extra="forbid", title="challenge contested block")
-
-        open: int = Field(default=0, description="Count of open (unresolved) challenges.")
-        upheld: int = Field(default=0, description="Count of upheld challenges.")
-        dismissed: int = Field(default=0, description="Count of dismissed challenges.")
-        withdrawn: int = Field(default=0, description="Count of withdrawn challenges.")
-        superseded: int = Field(default=0, description="Count of computed-superseded challenges.")
-        challenge_ids: list[str] = Field(
-            default_factory=list,
-            description="The challenge ids in this block — identities, never a score.",
-        )
-
-    class ChallengeSkippedNamespace(BaseModel):  # type: ignore[no-redef]
-        model_config = ConfigDict(extra="forbid", title="challenge skipped namespace")
-
-        ref: str = Field(description="The namespace id that was skipped.")
-        reason: str = Field(description="Why it was skipped (unreadable, torn, absent).")
-
-    class ChallengeStatusSpec(BaseModel):  # type: ignore[no-redef]
-        """Input spec — EXACTLY ONE addressing: challenge_id | content_sha | subject pair."""
-
-        model_config = ConfigDict(extra="forbid", title="challenge-status input spec")
-
-        challenge_id: RunIdStrict | None = Field(
-            default=None, description="The thread view — one challenge conversation by its slug."
-        )
-        content_sha: str | None = Field(
-            default=None,
-            description="The target view — every challenge whose target names this sha.",
-        )
-        subject_kind: str | None = Field(
-            default=None,
-            description="The target view by subject — the challenged record's subject_kind.",
-        )
-        subject_id: str | None = Field(
-            default=None,
-            description="The target view by subject — the challenged record's subject_id.",
-        )
-        fleet: bool = Field(
-            default=False,
-            description="When True, the per-namespace walk over every journaled experiment.",
-        )
-
-        @model_validator(mode="after")
-        def _exactly_one_address(self) -> ChallengeStatusSpec:
-            by_id = self.challenge_id is not None
-            by_sha = self.content_sha is not None
-            by_subject = self.subject_kind is not None or self.subject_id is not None
-            if by_subject and not (self.subject_kind is not None and self.subject_id is not None):
-                raise ValueError(
-                    "challenge-status subject addressing needs BOTH subject_kind and subject_id "
-                    "(a subject is a full R3 address, never a bare half)."
-                )
-            modes = [by_id, by_sha, self.subject_kind is not None and self.subject_id is not None]
-            if sum(modes) != 1:
-                raise ValueError(
-                    "challenge-status needs EXACTLY ONE addressing: a challenge_id (thread view), "
-                    "a content_sha, or a subject pair (target view). You cannot contest an "
-                    "under-specified address — the R3 full-address rule, read side."
-                )
-            return self
-
-    class ChallengeStatusResult(BaseModel):  # type: ignore[no-redef]
-        """Output data — the reduced statuses, target/citation disclosure, brief + view_sha."""
-
-        model_config = ConfigDict(extra="forbid", title="challenge-status output data")
-
-        view: Literal["thread", "target"] = Field(
-            description="thread (by challenge_id) | target (by address) — which view was asked."
-        )
-        addressed_challenge_id: str | None = Field(
-            default=None, description="The challenge_id addressed (thread view); echoed."
-        )
-        addressed_content_sha: str | None = Field(
-            default=None, description="The content_sha addressed (target view); echoed."
-        )
-        addressed_subject_kind: str | None = Field(
-            default=None, description="The subject_kind addressed (target-by-subject view); echoed."
-        )
-        addressed_subject_id: str | None = Field(
-            default=None, description="The subject_id addressed (target-by-subject view); echoed."
-        )
-        target_resolution: _TargetResolution | None = Field(
-            default=None,
-            description="The addressed target's re-resolution (null when no challenge names it).",
-        )
-        entries: list[ChallengeEntryLine] = Field(
-            default_factory=list, description="The reduced per-challenge statuses in scope."
-        )
-        contested: ChallengeContestedBlock = Field(
-            default_factory=ChallengeContestedBlock,
-            description="The C-status counts + ids over the entries (orthogonal to any status).",
-        )
-        skipped: list[ChallengeSkippedNamespace] = Field(
-            default_factory=list,
-            description="Namespaces skipped during fleet collection (fail-open).",
-        )
-        render: str = Field(
-            description="The deterministic markdown brief — relayed to the human verbatim."
-        )
-        view_sha: str = Field(
-            description="Canonical-JSON sha of the projection; byte-stable, recomputed by the gate."
-        )
-
-
-# --- the T1 collector seam (guarded; module-level for monkeypatch) -----------
-# ``state/challenges.py::standing_challenges`` is the ONE collector every
-# disclosure seat routes through (C-reduce; the C-disclose route-through
-# enforcement row) and ``contested_projection`` computes the C-status counts.
-# Guarded so the module imports before T1 lands; a test monkeypatches these
-# module attributes (the evidence-brief ``_render_brief`` seam idiom).
-try:  # pragma: no cover — the seam flips to "present" once T1 lands
-    from hpc_agent.state.challenges import (
-        contested_projection as _contested_projection_impl,
-    )
-    from hpc_agent.state.challenges import (
-        standing_challenges as _standing_challenges_impl,
-    )
-except ImportError:  # pragma: no cover
-    _standing_challenges_impl = None  # type: ignore[assignment]
-    _contested_projection_impl = None  # type: ignore[assignment]
-
-#: Module-level bindings the primitive calls and tests monkeypatch. Kept as
-#: distinct names (not the ``_impl`` aliases) so a monkeypatch is unambiguous.
-standing_challenges = _standing_challenges_impl
-contested_projection = _contested_projection_impl
+#: The two-way target re-resolution the collector's ``superseded`` signal
+#: expresses (``TargetResolution`` also carries ``unresolvable``, which the
+#: newest-wins collector folds into a non-superseded read — a superset literal).
+_FOUND_CURRENT: Literal["found-current"] = "found-current"
+_FOUND_SUPERSEDED: Literal["found-superseded"] = "found-superseded"
 
 
 # --- the injected dossier resolver (state never imports ops) -----------------
@@ -280,10 +101,10 @@ contested_projection = _contested_projection_impl
 def _dossier_resolver_for(experiment_dir: Path) -> Callable[[str], str | None]:
     """A ``ref -> bundle_sha256 | None`` resolver bound to *experiment_dir*.
 
-    Composed HERE and injected into ``standing_challenges`` — ``state`` never
-    imports ``ops`` (the evidence-brief drift-log item 2 seam). At READ an
-    unresolvable dossier returns ``None`` → the collector DISCLOSES it, never
-    raises (only the append gate refuses).
+    Composed HERE and injected into ``standing_challenges`` / ``resolve_citation``
+    — ``state`` never imports ``ops`` (the evidence-brief drift-log item 2 seam).
+    At READ an unresolvable dossier returns ``None`` → the collector/resolver
+    DISCLOSES it, never raises (only the append gate refuses).
     """
 
     def _resolve(ref: str) -> str | None:
@@ -299,65 +120,100 @@ def _dossier_resolver_for(experiment_dir: Path) -> Callable[[str], str | None]:
 # --- collection → projection (mechanism-nouned, deterministic) ---------------
 
 
-def _entry_line(entry: Any) -> ChallengeEntryLine:
-    """Project one ``standing_challenges`` entry → the wire entry line.
+def _entry(status: Any) -> ChallengeEntry:
+    """Project one collector ``ChallengeStatus`` → the wire ``ChallengeEntry``.
 
-    Reads the pinned T1 entry contract by attribute: ``challenge_id``, ``status``,
-    ``filed_ts``, ``grounds``, ``target`` (``.kind`` / ``.subject_kind`` /
-    ``.subject_id`` / ``.content_sha``), ``target_resolution``, ``verdict`` /
-    ``reasoning`` (both optional), and ``citations`` (each ``.kind`` / ``.ref`` /
-    ``.sha`` / ``.verified``). Identity + counting only — nothing here reads
+    Reads the T1 reduced-status contract by attribute: ``challenge_id``,
+    ``status``, ``filed_at``, ``target`` (the filing's target mapping —
+    ``kind`` / ``subject_kind`` / ``subject_id`` / ``content_sha``), ``superseded``
+    (→ the target's read re-resolution), ``filing`` (the filing ``resolved``
+    mapping — ``grounds``), and ``verdict`` / ``reasoning`` / ``resolved_at`` (the
+    ruling, when present). Identity + counting only — nothing here reads
     ``grounds`` or ``reasoning`` for meaning.
     """
-    tgt = entry.target
-    return ChallengeEntryLine(
-        challenge_id=entry.challenge_id,
-        status=entry.status,
-        filed_ts=entry.filed_ts,
-        grounds=entry.grounds,
-        target_kind=tgt.kind,
-        target_subject_kind=tgt.subject_kind,
-        target_subject_id=tgt.subject_id,
-        target_content_sha=tgt.content_sha,
-        target_resolution=entry.target_resolution,
-        verdict=getattr(entry, "verdict", None),
-        reasoning=getattr(entry, "reasoning", None),
-        citations=[
-            ChallengeCitationLine(kind=c.kind, ref=c.ref, sha=c.sha, verified=bool(c.verified))
-            for c in entry.citations
-        ],
+    target: Any = status.target or {}
+    verdict: ChallengeVerdict | None = None
+    verdict_val = getattr(status, "verdict", None)
+    if verdict_val is not None:
+        verdict = ChallengeVerdict(
+            verdict=verdict_val,
+            reasoning=getattr(status, "reasoning", None) or "",
+            ts=getattr(status, "resolved_at", None) or "",
+        )
+    filing = status.filing or {}
+    grounds = filing.get("grounds")
+    return ChallengeEntry(
+        challenge_id=status.challenge_id,
+        status=status.status,
+        filed_at=status.filed_at or "",
+        target=ChallengeTarget(
+            kind=target.get("kind"),
+            subject_kind=target.get("subject_kind"),
+            subject_id=target.get("subject_id"),
+            content_sha=target.get("content_sha"),
+        ),
+        resolution=_FOUND_SUPERSEDED if status.superseded else _FOUND_CURRENT,
+        grounds=grounds if isinstance(grounds, str) else "",
+        verdict=verdict,
     )
 
 
-def _contested_block(entries: Sequence[Any]) -> ChallengeContestedBlock:
-    """The C-status counts + ids, routed through the T1 ``contested_projection``.
+def _citation_lines(experiment_dir: Path, status: Any) -> list[CitationStatusLine]:
+    """Re-resolve one challenge's cited evidence → the per-citation disclosure.
 
-    Delegates to the ONE projection definition (``state/challenges.py``) so the
-    seat never forks the reduction (the C-disclose route-through pin). A target
-    with all-zero counts still emits the block here — the wire default is the
-    empty block; the RENDER omits an all-zero block (the ``reproduces``
-    emitted-only-when-present precedent).
+    The E-read posture: each cited sha the filing recorded is re-resolved LIVE
+    against *experiment_dir* through the ONE evidence resolver
+    (:func:`state.evidence.resolve_citation`, the ``dossier`` resolver injected) and
+    reported ``verified`` / not — DISCLOSED, never refused (only the append gate
+    refuses). A malformed citation or an unknown kind is skipped, not raised.
     """
-    proj = contested_projection(list(entries))
-    return ChallengeContestedBlock(
-        open=int(proj.get("open", 0)),
-        upheld=int(proj.get("upheld", 0)),
-        dismissed=int(proj.get("dismissed", 0)),
-        withdrawn=int(proj.get("withdrawn", 0)),
-        superseded=int(proj.get("superseded", 0)),
-        challenge_ids=list(proj.get("challenge_ids", [])),
+    resolver = _dossier_resolver_for(experiment_dir)
+    filing = status.filing or {}
+    raw_citations = filing.get("citations")
+    lines: list[CitationStatusLine] = []
+    if not isinstance(raw_citations, list):
+        return lines
+    for raw in raw_citations:
+        if not isinstance(raw, dict):
+            continue
+        item: Any = raw
+        try:
+            res = resolve_citation(experiment_dir, item, dossier_resolver=resolver)
+        except errors.SpecInvalid:
+            continue
+        lines.append(
+            CitationStatusLine(
+                challenge_id=status.challenge_id,
+                kind=item.get("kind"),
+                ref=item.get("ref"),
+                sha=item.get("sha"),
+                verified=res.resolved and res.matches,
+            )
+        )
+    return lines
+
+
+def _contested_counts(statuses: Sequence[Any]) -> ContestedCounts:
+    """The C-status counts + ids over the SELECTED statuses (orthogonal to status).
+
+    Counts the reduced statuses the ONE collector produced (never a re-reduction —
+    the statuses ride in unchanged); the thread view filters to one id post-hoc, so
+    the block is computed over the final selection here rather than read from a
+    namespace-wide bundle. A target with no matching challenge yields an all-zero
+    block (the wire default).
+    """
+    counts = {"open": 0, "upheld": 0, "dismissed": 0, "withdrawn": 0, "superseded": 0}
+    for s in statuses:
+        if s.status in counts:
+            counts[s.status] += 1
+    return ContestedCounts(
+        open=counts["open"],
+        upheld=counts["upheld"],
+        dismissed=counts["dismissed"],
+        withdrawn=counts["withdrawn"],
+        superseded=counts["superseded"],
+        challenge_ids=sorted(s.challenge_id for s in statuses),
     )
-
-
-def _projection(result_core: dict[str, Any]) -> dict[str, Any]:
-    """The deterministic, wall-clock-FREE projection the ``view_sha`` shas over.
-
-    Excludes ``computed_at`` (none here) and fleet ``skipped`` accounting — a
-    verdict is filed against ONE target and the gate recomputes the
-    single-namespace projection, so those would break byte-stability. Pure
-    function of the entries + the addressed target + the contested counts.
-    """
-    return result_core
 
 
 def _sha_prefix(sha: str) -> str:
@@ -368,9 +224,9 @@ def _sha_prefix(sha: str) -> str:
 def _render(
     view: str,
     address: dict[str, Any],
-    target_resolution: str | None,
-    entries: Sequence[ChallengeEntryLine],
-    contested: ChallengeContestedBlock,
+    entries: Sequence[ChallengeEntry],
+    contested: ContestedCounts,
+    citations_by_id: dict[str, list[CitationStatusLine]],
 ) -> str:
     """Render the markdown brief — dated, sha-cited, mechanism-nouned.
 
@@ -388,6 +244,8 @@ def _render(
             lines.append(f"target · content_sha {_sha_prefix(str(address['content_sha']))}")
         else:
             lines.append(f"target · {address.get('subject_kind')} · {address.get('subject_id')}")
+
+    target_resolution = entries[0].resolution if entries else None
     if target_resolution is not None:
         lines.append(f"target re-resolution · {target_resolution}")
 
@@ -411,20 +269,20 @@ def _render(
 
     for e in entries:
         lines.append("")
-        lines.append(f"## {e.challenge_id} · {e.status} · filed {e.filed_ts}")
+        lines.append(f"## {e.challenge_id} · {e.status} · filed {e.filed_at}")
         lines.append(
-            f"target · {e.target_kind} · {e.target_subject_kind} · {e.target_subject_id} · "
-            f"sha {_sha_prefix(e.target_content_sha)} · {e.target_resolution}"
+            f"target · {e.target.kind} · {e.target.subject_kind} · {e.target.subject_id} · "
+            f"sha {_sha_prefix(e.target.content_sha)} · {e.resolution}"
         )
         cited = ", ".join(
             f"{c.kind} {_sha_prefix(c.sha)} ({'verified' if c.verified else 'unresolvable here'})"
-            for c in e.citations
+            for c in citations_by_id.get(e.challenge_id, [])
         )
         lines.append(f"cites · {cited}" if cited else "cites · (none)")
         if e.verdict is not None:
-            lines.append(f"verdict · {e.verdict}")
-            if e.reasoning:
-                lines.append(f"reasoning · {e.reasoning}")
+            lines.append(f"verdict · {e.verdict.verdict}")
+            if e.verdict.reasoning:
+                lines.append(f"reasoning · {e.verdict.reasoning}")
         lines.append(f"grounds · {e.grounds}")
     return "\n".join(lines)
 
@@ -446,11 +304,11 @@ def _render(
             "(a content_sha, or a subject_kind+subject_id pair) — 'what stands "
             "against this record?'. Reduces each challenge to open / upheld / "
             "dismissed / withdrawn / superseded, re-resolves the target "
-            "(found-current / found-superseded / unresolvable) and each cited "
-            "evidence sha (verified / unresolvable) — DISCLOSED, never refused. "
-            "Contested is an orthogonal flag beside the target's status, never "
-            "blocking. Fleet-capable. Read-only; renders a deterministic markdown "
-            "brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind."
+            "(found-current / found-superseded) and each cited evidence sha "
+            "(verified / unresolvable) — DISCLOSED, never refused. Contested is an "
+            "orthogonal flag beside the target's status, never blocking. "
+            "Fleet-capable. Read-only; renders a deterministic markdown brief "
+            "relayed verbatim, whose canonical-JSON view_sha a verdict may bind."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -466,11 +324,12 @@ def challenge_status(*, experiment_dir: Path, spec: ChallengeStatusSpec) -> Chal
     namespace (the non-creating ``discover_fleet_experiments`` walk — a torn
     namespace is skipped and counted). Every surface routes through the ONE
     collector ``state/challenges.py::standing_challenges`` (with the dossier
-    resolver injected); the target and each citation are re-resolved and DISCLOSED
-    (never refused — the E-read posture). ``contested`` rides beside the target's
-    own status (C-status). The brief + ``view_sha`` are a pure function of the
-    projection (no wall-clock, no fleet accounting), so the ``view_sha`` is
-    byte-stable and the verdict gate recomputes it.
+    resolver injected); the target reads through the collector's ``superseded``
+    signal and each citation is re-resolved and DISCLOSED (never refused — the
+    E-read posture). ``contested`` rides beside the target's own status (C-status).
+    The brief + ``view_sha`` are a pure function of the projection (no wall-clock,
+    no fleet accounting), so the ``view_sha`` is byte-stable and the verdict gate
+    recomputes it.
 
     Non-creating: reads only; writes nothing, scaffolds no journal.
     """
@@ -484,32 +343,40 @@ def challenge_status(*, experiment_dir: Path, spec: ChallengeStatusSpec) -> Chal
     else:
         experiments, ns_skipped = [exp], []
 
-    collected: list[Any] = []
+    # Collect (namespace, reduced-status) pairs so citation re-resolution runs
+    # against the namespace each status was collected from (fleet-correct).
+    collected: list[tuple[Path, Any]] = []
+    bundle_skips: list[SkippedNamespace] = []
     for e in experiments:
         resolver = _dossier_resolver_for(e)
         if by_id:
             # Thread view: the collector has no id filter (C-reduce pins address
             # filtering only), so collect the namespace's standing challenges and
             # select the thread — still the ONE collector, never a private re-glob.
-            found = standing_challenges(e, dossier_resolver=resolver)
-            collected.extend(x for x in found if x.challenge_id == spec.challenge_id)
+            bundle = standing_challenges(e, dossier_resolver=resolver)
+            found = [s for s in bundle.statuses if s.challenge_id == spec.challenge_id]
         else:
-            collected.extend(
-                standing_challenges(
-                    e,
-                    content_sha=spec.content_sha,
-                    subject_kind=spec.subject_kind,
-                    subject_id=spec.subject_id,
-                    dossier_resolver=resolver,
-                )
+            bundle = standing_challenges(
+                e,
+                content_sha=spec.content_sha,
+                subject_kind=spec.subject_kind,
+                subject_id=spec.subject_id,
+                dossier_resolver=resolver,
             )
+            found = list(bundle.statuses)
+        collected.extend((e, s) for s in found)
+        bundle_skips.extend(
+            SkippedNamespace(ref=sk.challenge_id, reason=sk.reason) for sk in bundle.skipped
+        )
 
-    entry_lines = [_entry_line(x) for x in collected]
-    contested = _contested_block(collected)
+    collected.sort(key=lambda es: es[1].challenge_id)
+    statuses = [s for _, s in collected]
+    entries = [_entry(s) for _, s in collected]
+    citation_lines: list[CitationStatusLine] = []
+    for e, s in collected:
+        citation_lines.extend(_citation_lines(e, s))
 
-    # The addressed target's re-resolution: the entries agree on it (they all
-    # name the addressed target); null when nothing names the address.
-    target_resolution = entry_lines[0].target_resolution if entry_lines else None
+    contested = _contested_counts(statuses)
 
     address = {
         "challenge_id": spec.challenge_id,
@@ -517,31 +384,30 @@ def challenge_status(*, experiment_dir: Path, spec: ChallengeStatusSpec) -> Chal
         "subject_kind": spec.subject_kind,
         "subject_id": spec.subject_id,
     }
-    render = _render(view, address, target_resolution, entry_lines, contested)
+    citations_by_id: dict[str, list[CitationStatusLine]] = {}
+    for line in citation_lines:
+        citations_by_id.setdefault(line.challenge_id, []).append(line)
+    render = _render(view, address, entries, contested, citations_by_id)
 
     # view_sha over the dateless, fleet-free projection (the verdict gate
-    # recomputes this — it must not depend on wall-clock or fleet state).
-    projection = _projection(
-        {
-            "view": view,
-            "address": address,
-            "target_resolution": target_resolution,
-            "entries": [line.model_dump() for line in entry_lines],
-            "contested": contested.model_dump(),
-        }
-    )
+    # recomputes this — it must not depend on wall-clock or fleet state, so
+    # ``computed_at`` and the fleet ``skipped`` accounting are excluded).
+    projection = {
+        "challenges": [entry.model_dump() for entry in entries],
+        "citations_status": [line.model_dump() for line in citation_lines],
+        "contested": contested.model_dump(),
+    }
     view_sha = canonical_sha(projection)
 
+    skipped = [SkippedNamespace(ref=str(s["ref"]), reason=str(s["reason"])) for s in ns_skipped]
+    skipped.extend(bundle_skips)
+
     return ChallengeStatusResult(
-        view=view,
-        addressed_challenge_id=spec.challenge_id,
-        addressed_content_sha=spec.content_sha,
-        addressed_subject_kind=spec.subject_kind,
-        addressed_subject_id=spec.subject_id,
-        target_resolution=target_resolution,
-        entries=entry_lines,
+        computed_at=utcnow_iso(),
+        challenges=entries,
+        citations_status=citation_lines,
         contested=contested,
-        skipped=[ChallengeSkippedNamespace(ref=s["ref"], reason=s["reason"]) for s in ns_skipped],
+        skipped=skipped,
         render=render,
         view_sha=view_sha,
     )
