@@ -633,3 +633,14 @@ the hook path for subsequent refusals (re-probe next session; the capability
 declaration is a claim, not a proof); (b) the wait itself joins the item-10
 no-black-box contract — "waiting on human elicitation, Ns remaining" must be
 visible somewhere tail-able, never dead air inside a tool call.
+
+Addendum 8: **13. spec_hint completeness contract** (block chain; testable).
+Run #11: the demo hand-authored a submit-s3 spec and bounced on a missing
+required `monitor` property, then burned ~5 describe|grep round-trips (6s CLI
+cold-start each) reverse-engineering MonitorFlowSpec. Two layers: the CONDUCT
+fix is block-drive (the driver composes the successor spec — hand-authoring
+is the corruption class it kills) and MCP tool schemas (already in-session,
+zero describe calls). The CORE contract: for every edge in the block_chain
+successor table, `spec_hint` ∪ the successor schema's defaults MUST validate
+against that schema — one parametrized test over SUCCESSORS; a hint that
+bounces off its own successor's validator is a driver bug, not an agent task.
