@@ -8,9 +8,10 @@
    - the experiment repo (`experiment_dir` — required, absolute path);
    - `audit_id` — a slug the user authors;
    - scope tags — the user's own words for what this tests (empty = recorded as no tags);
-   - the template `.py`, if one exists.
+   - the template `.py`, if one exists;
+   - **the compute shape**, if cluster fan-out is intended — what varies across tasks (the task axes, e.g. bucket × chunk) and roughly how many of each. One question now; it becomes the `task_generator` at handoff.
 3. **Invoke the skill** with the resolved fields. It runs the preflight, drafts, and drives the audit loop; relay each of its code renders VERBATIM and translate the user's `y` / `sign <slug> ...` / nudge. Refusal remedies, auto-clear, and receipts are the skill's business — do not re-derive them here.
-4. **Hand off to compute.** On `passed`: a single run → `/submit-hpc`, a sweep → `/campaign-hpc`. The canonical run's interview declares `audited_source`, gating graduation on the current audit; interim hack-loop runs stay ungated by design.
+4. **Hand off to compute — pass the resolved spec, re-elicit nothing.** On `passed`, this flow already holds everything the submit interview needs: the `goal` (the idea seed), the entry point (the audited source — this flow authored it), the `task_generator` (the compute shape from step 2 — the draft wrote that loop), `audited_source` (the audit_id just marked passed), and `summary_artifact` (the exact file the source writes). Invoke the `hpc-wrap-entry-point` skill with that fully-resolved spec — the interview verb still runs and still materializes `tasks.py` + `interview.json` (the provenance seat; NEVER hand-edit tasks.py to "add" the new tasks), it just has nothing left to ask. Then `/submit-hpc` (single run) or `/campaign-hpc` (sweep); graduation gates on the current audit; interim hack-loop runs stay ungated by design.
 
 ## Invocation
 
