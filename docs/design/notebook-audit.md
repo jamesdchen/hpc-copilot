@@ -602,3 +602,24 @@ instantiates: an agent-visible payload is bounded; large content rides disk
 by reference (path + sha + code digest); enforcement = a contract test
 capping agent_facing result sizes. The run-#11 evidence: transcript bloat
 was the "waiting for api response" latency, and ls-output is its next feeder.
+
+Addendum 6: **10. The no-black-box contract** (user-requested: mechanized ops
+must be observable while running — "heartbeat, tail output"). F-N generalized
+from slot waits to EVERY op that can exceed ~10s: (a) each long op writes
+progress lines to a tail-able well-known file (`.hpc/_progress/<op>-<id>.log`
+or the existing worker log) — transfers report bytes done/total (tonight's
+8.4 GB deploy was silent for its whole duration), reconcile sweeps report
+n/N, snapshot reports its phase; (b) over MCP, ops additionally emit protocol
+progress notifications (progressToken) where the client supports them — a
+typed tool call must not be a black box until it returns; (c) silence >60s
+from a running op is a REGRESSION by contract (the F-N standard), testable.
+
+**11. Stale in-flight closure** (state hygiene; same evidence). 35 ebm_resid
+runs died with the CARC account revocation and still read `in_flight` weeks
+later — every unscoped surface walks the phantoms, and any per-run cluster
+touch pays 35 × SSH × safe-interval ("status-snapshot is taking forever").
+Remedy shape: a bulk reconcile seat — ONE batch-status qstat, then
+scheduler-unknown non-terminal records close per the existing reconcile
+classification (abandoned/completed_unknown), never one-by-one SSH. Candidate
+home: doctor (it already owns the dead-worker scan) or a snapshot
+`reconcile_all` arm.
