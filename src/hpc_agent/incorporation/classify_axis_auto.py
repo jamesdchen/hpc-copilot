@@ -46,6 +46,8 @@ genuine judgement of the decision tree.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -55,7 +57,10 @@ from hpc_agent._wire.actions.classify_axis_auto import ClassifyAxisAutoInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+
+    from hpc_agent.state.pack_declarations import AxisHintsDecl
 
 __all__ = ["classify_axis_auto"]
 
@@ -74,6 +79,132 @@ _EASY_KIND_TO_AXIS: dict[str, str] = {
     "sequential": "sequential",
     "no_loop_detected": "cartesian",
 }
+
+# --- S3 domain-pack axis hints (docs/design/domain-packs.md, T9c) -----------
+#
+# A pack may DECLARE ``axis_hints: [{pattern, axis}]`` — a name-regex + one of
+# core's EXISTING closed ``DataAxis`` literals (validated at load by
+# ``state/pack.py::load_axis_hints`` against ``AXIS_LITERALS``, never a new
+# vocabulary). The LOAD-BEARING rule (the "locking is the safe direction"
+# posture): a hint ADDS CAUTION, NEVER CLEARANCE. When a matching hint AGREES
+# with core's structural heuristic the classification proceeds unchanged (the
+# hint only confirms); when it DISAGREES the case demotes to needs-decision
+# with BOTH candidates named; a hint can NEVER auto-resolve an axis core's own
+# heuristic would not have resolved. This module stays pack-IGNORANT: it consumes
+# the typed opaque ``AxisHintsDecl`` list the ``state`` resolver hands it and
+# copies the ``{pack, version, sha}`` echo verbatim, never reading it for meaning.
+
+# Map a hint's DataAxis literal (PascalCase class name — core's closed
+# ``AXIS_LITERALS``) to the lowercase axis KIND the matcher/recorder speak.
+# ``cartesian`` (core's "no ordered series" terminal) has no DataAxis-literal
+# twin, so no hint can ever name it — a run core classifies ``cartesian`` that a
+# hint touches therefore always DISAGREES (demotes), never confirms.
+_HINT_AXIS_TO_KIND: dict[str, str] = {
+    "Independent": "independent",
+    "Associative": "associative",
+    "BoundedHalo": "bounded_halo",
+    "Sequential": "sequential",
+}
+
+
+@dataclass(frozen=True)
+class _AxisHintOutcome:
+    """The verdict of applying declared axis hints to a structural classification.
+
+    Pure and pack-ignorant — the whole caution-not-clearance decision, computed
+    off an opaque hint list + core's own verdict. ``verdict``:
+
+    * ``"none"`` — no declared hint's ``pattern`` matched ``run_name`` (or there
+      were no hints); the classification is UNTOUCHED (byte-identical to the
+      no-pack path).
+    * ``"agree"`` — every matching hint names the SAME axis core's heuristic
+      resolved; the classification proceeds unchanged and ``confirmations``
+      echoes the agreeing hints (each carries its pack ``{pack, version, sha}``)
+      as confirmation evidence.
+    * ``"conflict"`` — at least one matching hint names a DIFFERENT axis (or core
+      abstained, ``core_kind is None``, so no hint can clear); the case demotes
+      to needs-decision. ``core_kind`` + ``hint_kinds`` name BOTH candidate
+      sides; ``conflicts`` carries the disagreeing hints + their pack echoes.
+    """
+
+    verdict: str  # "none" | "agree" | "conflict"
+    core_kind: str | None
+    hint_kinds: tuple[str, ...]
+    confirmations: tuple[dict[str, Any], ...]
+    conflicts: tuple[dict[str, Any], ...]
+
+
+def _apply_axis_hints(
+    core_kind: str | None,
+    run_name: str,
+    hint_decls: Sequence[AxisHintsDecl],
+) -> _AxisHintOutcome:
+    """Match declared hints against *run_name* and classify caution vs. clearance.
+
+    *core_kind* is the lowercase axis kind core's structural heuristic resolved
+    (branch D), or ``None`` when the matcher abstained (branch E — a hint can add
+    caution but never resolve). A hint APPLIES iff its ``pattern`` (a name regex)
+    matches *run_name*. An applying hint whose kind equals *core_kind* CONFIRMS;
+    any other applying hint CONFLICTS (and every applying hint conflicts when core
+    abstained). Any conflict → ``verdict="conflict"`` (caution wins — the safe
+    direction); otherwise a match → ``"agree"``; no match → ``"none"``.
+    """
+    confirmations: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    ordered_kinds: list[str] = []
+    for decl in hint_decls:
+        echo = decl.echo.as_dict()
+        for hint in decl.hints:
+            if re.search(hint["pattern"], run_name) is None:
+                continue
+            hint_kind = _HINT_AXIS_TO_KIND[hint["axis"]]
+            ordered_kinds.append(hint_kind)
+            entry = {
+                "pattern": hint["pattern"],
+                "axis": hint["axis"],
+                "kind": hint_kind,
+                "pack": echo,
+            }
+            if core_kind is not None and hint_kind == core_kind:
+                confirmations.append(entry)
+            else:
+                conflicts.append(entry)
+    hint_kinds = tuple(dict.fromkeys(ordered_kinds))  # de-duped, first-seen order
+    if not ordered_kinds:
+        return _AxisHintOutcome("none", core_kind, (), (), ())
+    if conflicts:
+        return _AxisHintOutcome(
+            "conflict", core_kind, hint_kinds, tuple(confirmations), tuple(conflicts)
+        )
+    return _AxisHintOutcome("agree", core_kind, hint_kinds, tuple(confirmations), ())
+
+
+def _hint_packs(entries: Sequence[dict[str, Any]]) -> str:
+    """The comma-joined, sorted pack names named by *entries* (for evidence text)."""
+    return ", ".join(sorted({str(e["pack"]["pack"]) for e in entries}))
+
+
+def _conflict_evidence(run_name: str, outcome: _AxisHintOutcome) -> str:
+    """One-line evidence naming BOTH candidate sides of a demoting hint conflict."""
+    core = outcome.core_kind or "unresolved"
+    hint_kinds = ", ".join(outcome.hint_kinds)
+    return (
+        f"axis-hint conflict on {run_name!r}: core's structural heuristic resolved "
+        f"{core!r}, but declared pack hint(s) name {hint_kinds!r} "
+        f"(pack: {_hint_packs(outcome.conflicts)}). A disagreeing hint adds caution, "
+        "never clearance — demoted to the decision tree (hints never auto-resolve)."
+    )
+
+
+def _abstain_hint_evidence(base: str, run_name: str, outcome: _AxisHintOutcome) -> str:
+    """Augment the matcher's abstain evidence with the un-applied hint (caution only)."""
+    hint_kinds = ", ".join(outcome.hint_kinds)
+    return (
+        f"{base} | declared pack hint(s) name {hint_kinds!r} "
+        f"(pack: {_hint_packs(outcome.conflicts)}) for {run_name!r}, but the "
+        "structural matcher abstained — a hint never auto-resolves, so the "
+        "decision tree still decides."
+    )
 
 
 def _resolve_single_run(
@@ -226,6 +357,7 @@ def classify_axis_auto(
     experiment_dir: Path,
     *,
     spec: ClassifyAxisAutoInput | None = None,
+    axis_hints: Sequence[AxisHintsDecl] | None = None,
 ) -> dict[str, Any]:
     """Run preflight → (branch) → record / hand-off, in one call.
 
@@ -246,6 +378,22 @@ def classify_axis_auto(
 
     if spec is None:
         spec = ClassifyAxisAutoInput()
+
+    # S3 axis hints (T9c). ``axis_hints`` is CALLER-injected per the pack-ignorant
+    # consumer posture; when unset (the CLI/skill path) resolve them off the pack
+    # opt-in via the ``state`` substrate. Absent ``packs`` block → the D7 silence:
+    # an empty list, zero probes beyond interview.json (the resolver short-circuits
+    # on an empty opt-in before touching the pack journal). ``incorporation`` may
+    # import ``state`` freely; the reader mirrors ops/pack/status_op's forward-
+    # compatible T8 wiring (the ``"pack"`` scope kind lands with T8).
+    if axis_hints is None:
+        from hpc_agent.state.decision_journal import read_decisions
+        from hpc_agent.state.pack_declarations import resolve_axis_hints
+
+        axis_hints = resolve_axis_hints(
+            experiment_dir,
+            records_reader=lambda name: read_decisions(experiment_dir, "pack", name),
+        )
 
     data_axis_supplied = spec.data_axis is not None
 
@@ -323,9 +471,26 @@ def classify_axis_auto(
     if kind in _CONFIDENT_KINDS:
         # Branch D: map the confident matcher kind to a data_axis block.
         if kind == "bounded_halo":
+            core_kind = "bounded_halo"
             data_axis = {"kind": "bounded_halo", "halo": {"expr": easy["halo_expr"]}}
         else:
-            data_axis = {"kind": _EASY_KIND_TO_AXIS[kind]}
+            core_kind = _EASY_KIND_TO_AXIS[kind]
+            data_axis = {"kind": core_kind}
+
+        # S3: a DISAGREEING pack hint demotes an otherwise-confident structural
+        # verdict to needs-decision, naming BOTH candidates. An AGREEING (or
+        # absent) hint only confirms — the classification proceeds byte-identically
+        # and records as 'agent' (the hint adds caution, never clearance).
+        hint_outcome = _apply_axis_hints(core_kind, run_name, axis_hints)
+        if hint_outcome.verdict == "conflict":
+            return {
+                "needs_llm_tree": True,
+                "run_name": run_name,
+                "source_path": source_path,
+                "run_signature_sha": run_signature_sha,
+                "evidence": _conflict_evidence(run_name, hint_outcome),
+                "tried": list(easy["tried"]),
+            }
         return _record(
             experiment_dir,
             run_name=run_name,
@@ -335,13 +500,19 @@ def classify_axis_auto(
         )
 
     # Branch E: unclassifiable / function_not_found → NO record. Hand the
-    # source_path + run_name + sha + evidence to the LLM decision tree.
+    # source_path + run_name + sha + evidence to the LLM decision tree. A pack
+    # hint here can NEVER auto-resolve the axis (core's heuristic did not resolve
+    # it) — it only rides along as caution in the evidence.
+    hint_outcome = _apply_axis_hints(None, run_name, axis_hints)
+    evidence = easy["evidence"]
+    if hint_outcome.verdict != "none":
+        evidence = _abstain_hint_evidence(evidence, run_name, hint_outcome)
     return {
         "needs_llm_tree": True,
         "run_name": run_name,
         "source_path": source_path,
         "run_signature_sha": run_signature_sha,
-        "evidence": easy["evidence"],
+        "evidence": evidence,
         "tried": list(easy["tried"]),
     }
 

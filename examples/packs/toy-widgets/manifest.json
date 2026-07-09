@@ -1,0 +1,45 @@
+{
+  "files": [
+    {
+      "path": "axes/hints.json",
+      "sha256": "178f9f8811d190ff11621b29591b798e69ddf0dceca393b9bda87c34702cbc2d"
+    },
+    {
+      "path": "check/check_widgets.py",
+      "sha256": "44f96ad315faae37513901e40b191df8b1acc8b4d63a47093e4d4de754dd1492"
+    },
+    {
+      "path": "patterns/failures.json",
+      "sha256": "1bb671e353a4d3cbb9ad3c6098d108b67c24d6de1fe6b1397e883808d28095cc"
+    },
+    {
+      "path": "registration/fields.json",
+      "sha256": "fe924883c7e1d074df883249b4cdfdeccd13b4748870d5c941790dcdd5ca81ac"
+    },
+    {
+      "path": "templates/widget_audit.py",
+      "sha256": "c7a314aee6c20934be6c899b1c0e70b2ec3d3da1f5347875c8843562c4493bbb"
+    },
+    {
+      "path": "tolerances/tols.json",
+      "sha256": "9e8cba295e5c27f66b8cdc8eddac28ff38433016102249ff29956110bd78d75d"
+    },
+    {
+      "path": "vocab/readers.json",
+      "sha256": "4366a7d321e6b6365d4d6c36f503b55b9edc4216f3af2b9147115dda731a1364"
+    }
+  ],
+  "fills_slots": [
+    "widget-audit"
+  ],
+  "name": "toy-widgets",
+  "seams": {
+    "audit_template": "templates/widget_audit.py",
+    "axis_hints": "axes/hints.json",
+    "failure_patterns": "patterns/failures.json",
+    "reader_calls": "vocab/readers.json",
+    "registration_fields": "registration/fields.json",
+    "tolerances": "tolerances/tols.json"
+  },
+  "version": "1.0.0"
+}
