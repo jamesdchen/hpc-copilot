@@ -22,7 +22,14 @@ BLOCKED = [
     "hpc-agent status --run-id r1 && qdel 99",
     "VAR=1 timeout 30 sbatch job.slurm",
     "nohup qsub job.sh",
+    "nohup qdel 13910281",
     "/u/systems/UGE8.6.4/bin/lx-amd64/qsub job.sh",
+    # Flagged wrappers and a leading subshell paren must not hide the verb
+    # (audit 2026-07-09: all four passed unfenced while `nohup qdel` blocked).
+    "nice -n 10 sbatch job.sh",
+    "stdbuf -oL sbatch job.sh",
+    "timeout -k 5 60 qdel 123",
+    "(qdel 123)",
 ]
 
 ALLOWED = [
@@ -38,6 +45,11 @@ ALLOWED = [
     "git commit -m 'wire qsub path'",
     "cat docs/qsub-notes.md",
     "python -m pytest tests/ -q",
+    # Flagged wrappers / subshells around READ-ONLY commands stay allowed.
+    "nice -n 10 python train.py",
+    "timeout -k 5 60 qstat -u me",
+    "stdbuf -oL squeue --me",
+    "(grep qsub cluster.log)",
 ]
 
 
