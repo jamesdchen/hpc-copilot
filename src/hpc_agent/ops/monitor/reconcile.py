@@ -131,6 +131,31 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
 # ``last_status.verdict_reason``.
 
 
+def _failed_evidence_task_ids(report: dict[str, Any]) -> list[int]:
+    """The 0-based task id(s) whose stderr evidences a FAILED verdict.
+
+    The reporter's per-task statuses (``report["tasks"]``, keyed by 0-based
+    ``HPC_TASK_ID``) name which task(s) actually failed; fetching task 0's log
+    unconditionally attached a possibly-SUCCESSFUL task's stderr as the run's
+    failure evidence — correct only for 1-task canaries. Bounded to the FIRST
+    (lowest-id) failed task: one log tail is the evidence shape
+    ``verify_canary`` attaches, and one fetch keeps the SSH cost flat. Falls
+    back to ``[0]`` when the report carries no per-task ``failed`` entry (the
+    verdict then stands on the summary counts alone).
+    """
+    failed: list[int] = []
+    tasks = report.get("tasks")
+    if isinstance(tasks, dict):
+        for tid_str, info in tasks.items():
+            if not (isinstance(info, dict) and str(info.get("status")) == "failed"):
+                continue
+            try:
+                failed.append(int(tid_str))
+            except (TypeError, ValueError):
+                continue
+    return [min(failed)] if failed else [0]
+
+
 def _gather_failure_features(
     *,
     ssh_target: str,
@@ -138,6 +163,7 @@ def _gather_failure_features(
     job_name: str,
     job_ids: list[str],
     scheduler: str,
+    task_ids: list[int],
 ) -> dict[str, Any]:
     """Fetch the failed run's cluster log tail for the envelope.
 
@@ -152,6 +178,10 @@ def _gather_failure_features(
     ``matched_pattern`` triple. Routes only through ``infra.*`` (allowed
     substrate: ``cluster_logs`` for the fetch, ``failure_signatures`` for the
     classify).
+
+    *task_ids* are the 0-based ids whose stderr to tail — the caller selects
+    the actually-failed task(s) via :func:`_failed_evidence_task_ids` so the
+    evidence never quotes a successful task's log.
 
     Best-effort: an SSH blip fetching the log degrades to an empty tail and a
     ``None`` classification, and a ``classify`` failure likewise degrades to
@@ -171,7 +201,7 @@ def _gather_failure_features(
             job_name=job_name,
             job_ids=job_ids,
             scheduler=scheduler,
-            task_ids=[0],
+            task_ids=task_ids,
             lines=50,
         )
         if logs and isinstance(logs[0], dict):
@@ -721,6 +751,7 @@ def _reconcile_one(
                 job_name=record.job_name,
                 job_ids=list(record.job_ids),
                 scheduler=scheduler,
+                task_ids=_failed_evidence_task_ids(report),
             )
             update_run_status(
                 experiment_dir, run_id, last_status={**recorded, "failure_features": features}
