@@ -1,5 +1,5 @@
 ---
-status: plan
+status: shipped
 ---
 # Onboard-by-reproduction — rung 6 of the onboarding map (Phase 6.5)
 

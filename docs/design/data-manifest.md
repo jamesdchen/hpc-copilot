@@ -1,9 +1,9 @@
 ---
-status: plan
+status: shipped
 ---
 # The data manifest — rung 0 of the onboarding map
 
-**Status: PLANNED, USER-RULED (2026-07-07, ruling 0a/0b).** Companion to
+**Status: IMPLEMENTED (landed in the slate merge train, 2026-07-09; originally USER-RULED 2026-07-07, ruling 0a/0b).** Companion to
 `docs/design/onboarding-map.md` (rung 0) and an AMENDMENT INPUT to
 `docs/design/determinism-fingerprint.md` (the data-identity dimension).
 Registry: +1 (`data-manifest`), from the 142 @ `326a9124` baseline.
@@ -190,6 +190,8 @@ commons, the catalog to the quant pack, bindings to program specs.**
 - The `manifest-current` prerequisite: Phase 2's vocabulary, one row.
 
 ## Drift log
+- **Status flip lag (2026-07-09):** the implementation landed in the slate merge train but this doc's status stayed PLANNED; caught by the anti-vendor-lockout plan's inventory sweep (same class as the conformance-kit flip lag). Verified against src before flipping.
+
 
 - 2026-07-09: **P-S1 canonical-JSON sha UNIFIED — one definition.** The debt was
   three sibling copies of the harness-contract canonicalization. The definition

@@ -1,5 +1,5 @@
 ---
-status: plan
+status: shipped
 ---
 # The challenge attestation — structured dissent as a first-class record
 

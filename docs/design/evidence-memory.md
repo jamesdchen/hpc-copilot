@@ -1,5 +1,5 @@
 ---
-status: plan
+status: shipped
 ---
 # Evidence memory — the lab notebook that writes itself, with provenance
 

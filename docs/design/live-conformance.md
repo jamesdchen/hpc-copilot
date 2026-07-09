@@ -1,5 +1,5 @@
 ---
-status: plan
+status: shipped
 ---
 # Live conformance — the registration watchdog
 

@@ -1,13 +1,19 @@
 ---
-status: plan
+status: implemented
 ---
 # The harness-conformance kit — publishing the harness contract
 
-**Status: PLANNED (2026-07-07), not yet implemented.** This is the hand-off
-plan (the `notebook-audit.md` pattern): settled decisions + rationale,
-file-disjoint Opus task waves, enforcement rows, boundary-drift flags. Cite
-`path::symbol`, never line numbers. Record implementation drift in a drift
-log at the end of this document when the waves land.
+**Status: IMPLEMENTED (K1-K10 landed 2026-07-09 in the slate; status flipped
+2026-07-09 — the flip itself lagged the landing and was caught by the
+anti-vendor-lockout plan's inventory verification, unit T1).** Live surface:
+`src/hpc_agent/conformance/` (adapter protocol, capability tests,
+`report.py`, `export_attestations.py`, reference adapters `claude_code.py`
+[CONFORMING] and `notebook_render.py` [PARTIAL]), contract v1.0.0 three-way
+pinned, and the `conformance:` CI matrix job self-certifying both adapters
+on every push. Originally the hand-off plan (the `notebook-audit.md`
+pattern): settled decisions + rationale, file-disjoint Opus task waves,
+enforcement rows, boundary-drift flags. Cite `path::symbol`, never line
+numbers. Implementation drift is recorded in the drift log at the end.
 
 ## Product intent
 
@@ -576,6 +582,13 @@ catalog updated if exposed; `pyproject.toml` package-data for
 
 ## Drift log
 
+- **Status flip lag (2026-07-09):** K1-K10 landed in the slate merge train
+  and the CI conformance matrix went live on `b5cb2540`, but this doc's
+  status stayed `plan` — caught two days later by the anti-vendor-lockout
+  plan's verify-at-plan-time inventory (its P0/T1 unit is this flip). The
+  doc-flip step belongs IN the merge-train checklist, not after it; the
+  slate handoff listed "doc status flips still owed" and this one fell
+  through.
 - **Pre-implementation verification (2026-07-07, adversarial plan review;
   no kit code had landed):**
   1. *D-K4 table was already stale* — `DOSSIER_SOURCES` gained `renders`

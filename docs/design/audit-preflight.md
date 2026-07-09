@@ -1,9 +1,9 @@
 ---
-status: plan
+status: shipped
 ---
 # audit-preflight — the GO/NO-GO brief for the audit loop
 
-**Status: PLANNED, USER-RULED into the slate (2026-07-07, during run #10 —
+**Status: IMPLEMENTED (landed in the slate merge train, 2026-07-09; USER-RULED into the slate 2026-07-07, during run #10 —
 Phase 1b).** Registry +1 (`audit-preflight`). Precedent: `submit-preflight`.
 The R2 item from the run-#10 mechanization sweep, promoted.
 
@@ -61,6 +61,8 @@ only after 1a. Skill edit: `hpc-notebook-audit`'s prelude opens with the
 preflight.
 
 ## Drift log
+- **Status flip lag (2026-07-09):** the implementation landed in the slate merge train but this doc's status stayed PLANNED; caught by the anti-vendor-lockout plan's inventory sweep (same class as the conformance-kit flip lag). Verified against src before flipping.
+
 
 - 2026-07-07: written mid-run-#10 (Fable, pre-deadline); promoted from
   memory item R2 by user directive.
