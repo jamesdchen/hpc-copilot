@@ -495,6 +495,31 @@ class SubmitFlowSpec(BaseModel):
             "here at the wire."
         ),
     )
+    pre_stage_smoke: bool = Field(
+        default=True,
+        description=(
+            "Run a bounded LOCAL task-0 dry-run of the per-task executor BEFORE any "
+            "transport/staging (notebook-audit item 7). Default ON. A NONZERO exit "
+            "within the timeout refuses the stage with the executor's own stderr tail "
+            "relayed verbatim — a units/arg/import bug (run #11: a train_window-in-DAYS "
+            "bug) is caught locally in seconds instead of first at the REMOTE canary "
+            "after an expensive (8.4 GB) stage. A TIMEOUT is NOT a failure (long tasks "
+            "are normal) — the gate discloses 'smoke inconclusive' and proceeds. An "
+            "import error may be a local-env artifact (a cluster-only dependency); the "
+            "refusal says so and names this field as the skip. Fail-open on any "
+            "smoke-infrastructure error. Set false to skip the gate entirely."
+        ),
+    )
+    pre_stage_smoke_timeout_sec: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "Hard wall-clock cap on the pre-stage local task-0 smoke (notebook-audit "
+            "item 7). A smoke that outlives this is DISCLOSED as inconclusive (not a "
+            "failure) and the stage proceeds — the gate catches fast crashes, it does "
+            "not run the full task. Ignored when pre_stage_smoke=false."
+        ),
+    )
     reproduction_of: RunIdStrict | None = Field(
         default=None,
         description=(
