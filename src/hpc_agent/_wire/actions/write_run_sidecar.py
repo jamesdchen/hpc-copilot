@@ -127,6 +127,11 @@ class WriteRunSidecarInput(BaseModel):
     auto_retry: dict[str, Any] | None = None
     aggregate_defaults: dict[str, Any] | None = None
     results: dict[str, Any] | None = None
+    # Per-task summary filename the reducer + per-task completion counting read
+    # (F-J). Declared by the caller when the executor emits a non-default name
+    # (e.g. results_reduce.json); absent → readers default to metrics.json via
+    # state.runs.resolved_summary_artifact, so an existing sidecar is unchanged.
+    summary_artifact: str | None = None
     # Opaque per-task reconciliation tokens a closed-loop strategy round-trips
     # (task-ordered; e.g. an Optuna trial number per task). Recorded verbatim
     # and re-surfaced by prior_records(); never interpreted by the framework.

@@ -213,6 +213,7 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
         auto_retry=spec.auto_retry,
         aggregate_defaults=spec.aggregate_defaults,
         results=spec.results,
+        summary_artifact=spec.summary_artifact,
         trial_tokens=spec.trial_tokens,
         trial_params=spec.trial_params,
         parent_run_ids=spec.parent_run_ids,

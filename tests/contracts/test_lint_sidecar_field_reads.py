@@ -75,6 +75,10 @@ _V2_CONFIG = frozenset(
         "auto_retry",
         "aggregate_defaults",
         "results",
+        # summary_artifact (F-J): per-task summary filename the reducer +
+        # completion counting read; absent → metrics.json via
+        # resolved_summary_artifact.
+        "summary_artifact",
         "trial_tokens",
         "trial_params",
         "parent_run_ids",
