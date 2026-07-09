@@ -204,6 +204,32 @@ def _detect_version_skew(experiment_dir: Path) -> VersionSkew | None:
     )
 
 
+def _lease_experiment_dir(lease: dict[str, Any]) -> Path | None:
+    """The experiment dir a detached lease was launched FOR, or ``None``.
+
+    ``launch_submit_block_detached`` — the one lease writer
+    (:mod:`hpc_agent._kernel.lifecycle.detached`) — always stamps the child's
+    ``argv`` with ``--experiment-dir <dir>``; the lease carries no dedicated
+    field, so the flag is read back out of the stamped ``argv``. Returns
+    ``None`` for a lease whose argv carries no such flag (torn / hand-written).
+    """
+    argv = lease.get("argv")
+    if not isinstance(argv, list):
+        return None
+    for flag, value in zip(argv, argv[1:], strict=False):
+        if flag == "--experiment-dir" and isinstance(value, str) and value:
+            return Path(value)
+    return None
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    """Symlink/relative-tolerant path equality (``resolve()`` both sides)."""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
 def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[str, Any]]:
     """Detached-worker liveness scan — the §5 stalled-run scan's blind spot.
 
@@ -217,20 +243,32 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     runs AFTER the run is terminal: a dead harvest worker leaves no metrics and
     nothing else flags it.
 
-    For each lease whose ``pid`` is DEAD (:func:`_pid_alive` false), consult the
-    block terminal-result store (:func:`read_terminal_with_fallback`, keyed by the
-    lease's own ``block`` verb — the canonical key — with a legacy short-key
-    fallback so a pre-2026-07-07 record still counts): a dead pid WITH a
-    recorded terminal is normal completion (the worker finished, wrote its
-    terminal, exited) and is skipped. A dead pid with NO recorded terminal is a
-    worker that died mid-flight — surfaced with a DRAFTED re-invoke proposal (the
+    The ``_detached/`` lease dir is GLOBAL (one journal home serves every
+    experiment) while the terminal store consulted below is PER-EXPERIMENT, so
+    the scan first scopes each lease to *experiment_dir* via the
+    ``--experiment-dir`` flag its stamped ``argv`` carries
+    (:func:`_lease_experiment_dir`). Without that scoping, another experiment's
+    normally-FINISHED worker (its lease is never cleaned up — only reclaimed on
+    re-spawn) read as dead-with-no-terminal in every OTHER project's doctor run,
+    permanently flipping ``needs_attention``. A lease naming no experiment dir
+    is skipped (conservative: never draft a NEEDS-ATTENTION proposal that
+    cannot be scoped to this experiment).
+
+    For each of THIS experiment's leases whose ``pid`` is DEAD
+    (:func:`_pid_alive` false), consult the block terminal-result store
+    (:func:`read_terminal_with_fallback`, keyed by the lease's own ``block``
+    verb — the canonical key — with a legacy short-key fallback so a
+    pre-2026-07-07 record still counts): a dead pid WITH a recorded terminal is
+    normal completion (the worker finished, wrote its terminal, exited) and is
+    skipped. A dead pid with NO recorded terminal is a worker that died
+    mid-flight — surfaced with a DRAFTED re-invoke proposal (the
     recorded-terminal replay makes re-running idempotent). Detection only:
     ``doctor`` NEVER re-invokes anything.
 
     Pure local filesystem read — the global ``_detached/`` lease dir plus the
     per-experiment ``.hpc/runs/`` terminal store. No SSH. Fail-open: an absent
-    dir, an unreadable/pid-less lease, or a lease still naming a LIVE pid yields
-    nothing surfaced.
+    dir, an unreadable/pid-less/foreign-experiment lease, or a lease still
+    naming a LIVE pid yields nothing surfaced.
     """
     detached_dir = _current_homedir() / "_detached"
     if not detached_dir.is_dir():
@@ -247,6 +285,14 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
             # open — a torn lease must never crash the watchdog scan.
             continue
         if not (isinstance(run_id, str) and isinstance(block, str) and run_id and block):
+            continue
+        lease_exp = _lease_experiment_dir(lease)
+        if lease_exp is None or not _same_dir(lease_exp, experiment_dir):
+            # Another experiment's worker (the lease dir is global; its
+            # terminal store lives under ITS experiment dir, not ours), or a
+            # lease naming no experiment dir at all. Either way, no proposal —
+            # a foreign finished worker must never flip THIS experiment's
+            # needs_attention.
             continue
         if pid <= 0:
             # A legit lease is stamped with the launched pid (> 0) only AFTER a

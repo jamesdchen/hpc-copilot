@@ -1,7 +1,7 @@
 """Tests for the decision-briefs state layer (``state/decision_briefs.py``).
 
 The brief-side mirror of the decision journal (conduct rule 9, the
-provenance gate — docs/design/proving-run-2-hardening.md §6). Covers the
+provenance gate — docs/design/history/proving-run-2-hardening.md §6). Covers the
 append→read round-trip (order preserved), append-only discipline, the
 on-disk JSONL locality, latest-per-block lookup with short-block-name
 matching, and the fail-open-on-absence read.

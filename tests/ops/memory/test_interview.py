@@ -281,6 +281,40 @@ def test_fixed_params_baked_into_every_resolve(tmp_path: Path) -> None:
     assert data["preview"]["last"] == {"seed": 2, "samples": 10000}
 
 
+def test_swept_axis_wins_over_fixed_param_of_same_name(tmp_path: Path) -> None:
+    """A swept axis and a fixed_params constant sharing a name: the axis value
+    wins (per-task); the constant is only the fallback — the wire contract
+    (``_FIXED_PARAMS_DESC``: "A swept axis of the same name wins"). Executes
+    the materialized tasks.py rather than string-matching its merge order."""
+    import importlib.util
+
+    intent = _minimal_intent(
+        2,
+        task_generator={
+            "kind": "cartesian_product",
+            "params": {"axes": {"samples": [100, 200]}},
+        },
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "monte_carlo_pi",
+            "argv": ["python3", "mc.py", "--samples", "{samples}"],
+            "signature": {"samples": "int"},
+            "fixed_params": {"samples": 1000},
+        },
+    )
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert data["preview"]["first"] == {"samples": 100}
+    assert data["preview"]["last"] == {"samples": 200}
+
+    spec = importlib.util.spec_from_file_location("_tasks_under_test", tmp_path / ".hpc/tasks.py")
+    assert spec is not None and spec.loader is not None
+    tasks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tasks)
+    assert tasks.total() == 2
+    assert tasks.resolve(0) == {"samples": 100}
+    assert tasks.resolve(1) == {"samples": 200}
+
+
 def test_fixed_params_requires_task_generator(tmp_path: Path) -> None:
     """Like frozen_configs, fixed_params can only be threaded into a
     framework-materialized tasks.py — refuse it on a hand-written one."""

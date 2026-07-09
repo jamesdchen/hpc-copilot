@@ -54,6 +54,7 @@ from hpc_agent.state.journal import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 __all__ = [
@@ -81,6 +82,11 @@ _META_KEYS: frozenset[str] = frozenset({"next_block"})
 # ``block-drive`` tick — the driver returns a clear ``skip`` rather than running a
 # doomed span (see :func:`_fresh_entry_spec` / :func:`run_tick`).
 _FRESH_ENTRY_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot", "aggregate-check"})
+# The subset whose spec accepts an ABSENT run_id: only ``status-snapshot``
+# (``{}`` is its fleet digest). ``aggregate-check`` REQUIRES ``run_id``
+# (``AggregateCheckSpec.run_id`` is a required ``RunIdStrict``), so a bare tick
+# without one gets the clear skip, never a doomed ``SpecInvalid`` span.
+_FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS: frozenset[str] = frozenset({"status-snapshot"})
 
 
 # ── pure planning (no I/O) ─────────────────────────────────────────────────────
@@ -414,15 +420,48 @@ def _fresh_entry_spec(verb: str | None, run_id: str | None) -> dict[str, Any] | 
     """Build the FIRST span's spec for a FRESH chain start, or ``None`` if unbuildable.
 
     ``status-snapshot`` / ``aggregate-check`` accept a top-level ``run_id`` (§3), so
-    the driver materializes ``{"run_id": run_id}`` (or ``{}`` — a fleet digest — when
-    no run_id is supplied to ``status-snapshot``). ``submit-s1`` and
-    ``campaign-greenlight`` need inputs a bare tick can't supply, so the driver
-    returns ``None`` and :func:`run_tick` reports a clear ``skip`` naming the missing
-    inputs rather than running a span the block would reject with ``SpecInvalid``.
+    the driver materializes ``{"run_id": run_id}``. With NO run_id, only
+    ``status-snapshot`` is still buildable (``{}`` — a fleet digest);
+    ``aggregate-check``'s spec REQUIRES ``run_id``, so it is as unbuildable as
+    ``submit-s1`` / ``campaign-greenlight`` (inputs a bare tick can't supply).
+    In every unbuildable case the driver returns ``None`` and :func:`run_tick`
+    reports a clear ``skip`` naming the missing inputs rather than running a
+    span the block would reject with ``SpecInvalid``.
     """
     if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
-        return {"run_id": run_id} if run_id else {}
+        if run_id:
+            return {"run_id": run_id}
+        if verb in _FRESH_ENTRY_OPTIONAL_RUN_ID_BLOCKS:
+            return {}
     return None
+
+
+def _spec_model_field_names(verb: str) -> frozenset[str] | None:
+    """The declared field names of *verb*'s input spec model, or ``None``.
+
+    Resolves the block's spec model through the primitive registry — the same
+    ``CliShape.spec_model`` the CLI validates ``--spec`` against — via the
+    single-verb fast-path map, so the acting-spec filter can never drift from
+    what the block actually accepts. Returns ``None`` when the verb is not in
+    the map or carries no spec model; the caller then falls back to
+    metadata-only stripping.
+    """
+    from hpc_agent._kernel.registry.primitive import get_meta, register_single_module
+    from hpc_agent.cli._verb_module_map import VERB_MODULE_MAP
+
+    entry = VERB_MODULE_MAP.get(verb)
+    if entry is None:
+        return None
+    primitive_name, module_name = entry
+    try:
+        register_single_module(module_name)
+        model = getattr(get_meta(primitive_name).cli, "spec_model", None)
+    except Exception:  # noqa: BLE001 — a stale map entry must not crash the tick
+        return None
+    fields = getattr(model, "model_fields", None)
+    if not isinstance(fields, dict):
+        return None
+    return frozenset(fields)
 
 
 # ── the tick ───────────────────────────────────────────────────────────────────
@@ -503,9 +542,22 @@ def run_tick(
 
     # Executable resume actions consumed the approved ``resolved`` — clear the
     # pending marker before running so a re-entry does not double-consume it.
+    # If the FIRST resumed span then FAILS, the approval was NOT consumed: the
+    # marker is re-parked verbatim (see :func:`_chain`'s ``on_first_failure``)
+    # so the next tick retries the SAME route instead of replaying the resume
+    # as a bare journal-derived advance (dropping a nudge's rerun + the §4
+    # ``input_spec`` diff base).
     resume_action = action in ("advance", "rerun", "advance_carrying")
+    on_first_failure: Callable[[], None] | None = None
     if pending and resume_action and run_id:
         clear_pending_decision(run_id, experiment_dir=experiment_dir)
+        marker = dict(pending)
+        rid = run_id
+
+        def _repark() -> None:
+            _repark_marker(experiment_dir, rid, marker)
+
+        on_first_failure = _repark
 
     verb: str | None = plan["verb"]
     wf = plan.get("workflow") or workflow
@@ -517,29 +569,45 @@ def run_tick(
     #   the LLM committed IS the correctly-shaped acting spec for the routed block
     #   (the gated block's nested-object spec, or the current block's for a rerun).
     #   The downstream edits an ``advance_carrying`` folds are already inside
-    #   ``resolved``; the ``next_block`` routing token is stripped as metadata.
+    #   ``resolved``. Stripped as non-inputs: the ``next_block`` routing token,
+    #   plus any journal-sanctioned identity echo (``cmd_sha`` / ``run_id`` /
+    #   ``total_tasks`` — ops/decision/journal.py) the TARGET block's
+    #   ``extra="forbid"`` spec model does not declare. The filter is the
+    #   model's own declared fields, so a block whose spec genuinely takes
+    #   ``run_id`` (aggregate-check) keeps it.
     # * FRESH: the entry block's minimal spec, or ``None`` when the block is not
-    #   bare-startable (submit-s1 / campaign-greenlight) → a clear skip.
+    #   bare-startable (submit-s1 / campaign-greenlight, or aggregate-check
+    #   without a run_id) → a clear skip.
     if resume_action:
+        accepted = _spec_model_field_names(verb) if verb else None
         first_spec: dict[str, Any] = {
-            k: v for k, v in (committed_resolved or {}).items() if k not in _META_KEYS
+            k: v
+            for k, v in (committed_resolved or {}).items()
+            if k not in _META_KEYS and (accepted is None or k in accepted)
         }
     else:
         built = _fresh_entry_spec(verb, run_id)
         if built is None:
+            if verb in _FRESH_ENTRY_RUN_ID_BLOCKS:
+                reason = (
+                    f"cannot fresh-start {verb} without a run_id — its spec requires "
+                    "one. Re-run with --run-id <id>."
+                )
+            else:
+                reason = (
+                    f"cannot fresh-start {verb} from a bare block-drive tick — it "
+                    "needs inputs beyond (run_id, workflow) "
+                    "(submit-s1: goal/task_generator/walk; campaign-greenlight: "
+                    "campaign_id). Drive its fresh start via the interview skill / "
+                    "campaign reconcile driver."
+                )
             return (
                 BlockDriveResult(
                     action="skip",
                     run_id=run_id,
                     workflow=wf,
                     next_verb=verb,
-                    reason=(
-                        f"cannot fresh-start {verb} from a bare block-drive tick — it "
-                        "needs inputs beyond (run_id, workflow) "
-                        "(submit-s1: goal/task_generator/walk; campaign-greenlight: "
-                        "campaign_id). Drive its fresh start via the interview skill / "
-                        "campaign reconcile driver."
-                    ),
+                    reason=reason,
                 ),
                 0,
             )
@@ -561,6 +629,7 @@ def run_tick(
         first_verb=verb,
         first_spec=first_spec,
         first_label=first_label,
+        on_first_failure=on_first_failure,
     )
 
 
@@ -572,6 +641,7 @@ def _chain(
     first_verb: str | None,
     first_spec: dict[str, Any],
     first_label: str,
+    on_first_failure: Callable[[], None] | None = None,
 ) -> tuple[BlockDriveResult, int]:
     """Run block spans, chaining deterministic successors until a stop (§2).
 
@@ -583,6 +653,11 @@ def _chain(
     in-code chain never journals it), and a terminal exits. The FIRST span's spec
     is materialized by the caller (:func:`run_tick`); chained spans take the
     predecessor's ``spec_hint`` — never a blind top-level ``run_id`` injection (§3).
+
+    ``on_first_failure`` (a niladic callable) fires ONLY when the FIRST span
+    fails: :func:`run_tick` uses it to re-park a pending marker it cleared for
+    a resume that never consumed its approval. Later chained spans do not fire
+    it — by then the first span succeeded, so the approval WAS consumed.
     """
     from hpc_agent._kernel.lifecycle.drive import _stamp_driver_tick
 
@@ -590,12 +665,15 @@ def _chain(
     spec: dict[str, Any] = dict(first_spec)
     last_action = first_label
     last_result: dict[str, Any] = {}
+    first_span = True
 
     while verb is not None:
         result, code = _run_block_verb(verb, spec, experiment_dir)
         if run_id:
             _stamp_driver_tick(experiment_dir, run_id)
         if not result:
+            if first_span and on_first_failure is not None:
+                on_first_failure()
             if code == _TIMEOUT_EXIT_CODE:
                 deadline = block_chain.verb_deadline_seconds(verb, spec)
                 reason = (
@@ -615,6 +693,7 @@ def _chain(
                 code or 1,
             )
 
+        first_span = False
         last_result = result
         stage = result.get("stage_reached")
         successor = _next_verb_of(result)
@@ -778,6 +857,34 @@ def _park(
         cmd_sha=_spec_sha(spec),
         experiment_dir=experiment_dir,
     )
+
+
+def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
+    """Re-write a cleared pending marker verbatim after a FAILED resume span.
+
+    :func:`run_tick` clears the marker BEFORE the resumed span runs (so a
+    re-entry cannot double-consume the approval); when that first span fails
+    the approval was NOT consumed, so the marker — the resume cursor plus the
+    §4 ``input_spec`` diff base — must survive: the next tick then retries the
+    SAME route (a nudge's ``rerun`` stays a rerun) instead of degrading to a
+    journal-derived ``advance``. A missing run record is logged, not raised —
+    the tick is already on its failure path and must still report it.
+    """
+    brief = marker.get("brief")
+    cursor = marker.get("resume_cursor")
+    try:
+        mark_pending_decision(
+            run_id,
+            block=marker.get("block") or "",
+            workflow=marker.get("workflow") or "",
+            brief=brief if isinstance(brief, dict) else {},
+            resume_cursor=cursor if isinstance(cursor, dict) else {},
+            awaiting_since=marker.get("awaiting_since") or "",
+            cmd_sha=marker.get("cmd_sha"),
+            experiment_dir=experiment_dir,
+        )
+    except OSError:
+        _log.warning("failed to re-park the pending marker for %s after a failed span", run_id)
 
 
 def _latest_committed_resolved(

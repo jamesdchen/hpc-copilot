@@ -147,7 +147,7 @@ shape); for **guaranteed** strict decode use vLLM or OpenAI.
 | Variable | Default | Purpose |
 |---|---|---|
 | `HPC_SSH_ENGINE` | (unset → off) | Set to `asyncssh` to enable the persistent asyncssh-backed SSH engine — one held connection per host reused across round-trips, replacing the cold-connection-per-op default (the `MaxStartups`-throttle / ban-risk root fix). `native`/unset leaves the engine off. **Opt-in until live-validated, with a hard fallback to the one-shot path on any engine trouble.** See the module docstring for the full design and ban-safety invariants: `hpc_agent.infra.ssh_engine`. |
-| `HPC_SSH_ENGINE_IDLE_SEC` | `600` | Seconds an idle engine connection is held open before self-closing. Owned by `hpc_agent.infra.ssh_engine` (`IDLE_CLOSE_SEC`). |
+| `HPC_SSH_IDLE_CLOSE_SEC` | `120` | Seconds an idle engine connection is held open before it self-closes and frees its per-host ssh slot. A background reaper thread enforces this even with no further activity, so a long-lived `mcp-serve` that ran one quick verb frees its slot ~2 min after last use instead of holding it until exit. Owned by `hpc_agent.infra.ssh_engine` (`IDLE_CLOSE_SEC`). |
 
 ## Validation thresholds
 

@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Multi-human — the trust substrate for a research group
 
 **Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off

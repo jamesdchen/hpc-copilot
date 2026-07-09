@@ -74,6 +74,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_MAX_CONNECTIONS",
+    "SLOT_DISCLOSE_FIRST_SEC",
+    "SLOT_DISCLOSE_INTERVAL_SEC",
     "SLOT_JITTER_MAX_SEC",
     "SLOT_POLL_BASE_SEC",
     "SLOT_POLL_MAX_SEC",
@@ -111,6 +113,18 @@ SLOT_JITTER_MAX_SEC = 1.0
 #: (``RSYNC_TIMEOUT_SEC`` defaults to 1800s). The pid-liveness check below
 #: reclaims a crashed claimant's slot much sooner on the common same-box case.
 SLOT_TTL_SEC = 2100.0
+
+#: Seconds a blocked waiter waits before its FIRST periodic slot-hold
+#: disclosure to stderr. F-N (run #10): a process blocked ~15 min acquiring a
+#: slot emitted ZERO output and was indistinguishable from a hung/dead process
+#: — it cost two diagnostic rounds. Kept small so the disclosure lands early,
+#: well before an operator starts wondering whether the process is alive.
+SLOT_DISCLOSE_FIRST_SEC = 10.0
+
+#: Interval between subsequent slot-hold disclosures once a waiter has passed
+#: :data:`SLOT_DISCLOSE_FIRST_SEC` — a steady heartbeat naming who holds the
+#: slots for as long as the wait lasts.
+SLOT_DISCLOSE_INTERVAL_SEC = 30.0
 
 #: Env var overriding the per-host slot count (``0`` disables the limiter).
 MAX_CONNECTIONS_ENV = "HPC_SSH_MAX_CONNECTIONS"
@@ -175,6 +189,60 @@ def slot_paths(host: str, limit: int | None = None) -> list[Path]:
 
 def _reclaim_lock_path(host: str) -> Path:
     return _slot_dir() / f"{_safe_name(host)}.slots.lock"
+
+
+def _slot_hold_disclosure(host: str, limit: int, *, now: float, elapsed: float) -> str:
+    """A deterministic one-line description of who is holding *host*'s slots.
+
+    Pure disclosure for the F-N wait-visibility fix: names the host, the
+    elapsed wait, and — per slot — the holder's pid, claim age, and remaining
+    time-to-TTL. Read from the SAME slot files the claim path uses; a slot that
+    is free or has an unreadable/malformed claim doc at read time is named as
+    such (``free`` / ``unreadable``) rather than omitted, so every slot in the
+    pool is accounted for. Never behaviour-changing — it only reports state.
+
+    Wording is fixed (no timestamps beyond integer-second ages) so the line is
+    stable across polls and greppable in a log.
+    """
+    base = _slot_dir()
+    safe = _safe_name(host)
+    parts: list[str] = []
+    for i in range(limit):
+        path = base / f"{safe}.slot{i}"
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            parts.append(f"slot{i}=free")
+            continue
+        try:
+            pid = int(doc.get("pid"))  # type: ignore[arg-type]
+            claimed_at = float(doc.get("claimed_at"))  # type: ignore[arg-type]
+        except (AttributeError, TypeError, ValueError):
+            parts.append(f"slot{i}=unreadable")
+            continue
+        age = max(0, int(now - claimed_at))
+        ttl_left = max(0, int(SLOT_TTL_SEC - (now - claimed_at)))
+        parts.append(f"slot{i}=pid:{pid} age:{age}s ttl:{ttl_left}s")
+    return (
+        f"hpc-agent: still waiting {int(elapsed)}s for an ssh connection slot to "
+        f"{host} (all {limit} held) — holders: {', '.join(parts)}"
+    )
+
+
+def _emit_slot_disclosure(host: str, limit: int, *, now: float, elapsed: float) -> None:
+    """Print the slot-hold disclosure to stderr; swallow ANY error (fail-open).
+
+    A disclosure is diagnostics only — a broken read, a squatting state dir, an
+    encoding hiccup — none of it may perturb the wait it describes. The whole
+    build-and-print is wrapped so a disclosure error never propagates into the
+    acquire loop.
+    """
+    with contextlib.suppress(Exception):
+        print(
+            _slot_hold_disclosure(host, limit, now=now, elapsed=elapsed),
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 # PID liveness is one substrate fact with ONE definition (infra/proc.py, over
@@ -315,6 +383,9 @@ def acquire_slot(
     deadline = start + SLOT_WAIT_MAX_SEC
     interval = SLOT_POLL_BASE_SEC
     announced = False
+    # F-N: a blocked waiter must not be silent. First disclosure lands after
+    # SLOT_DISCLOSE_FIRST_SEC, then every SLOT_DISCLOSE_INTERVAL_SEC.
+    next_disclosure = start + SLOT_DISCLOSE_FIRST_SEC
     while True:
         try:
             token = _try_claim(host, limit, pid=pid, now=clock(), pid_alive=pid_alive)
@@ -344,6 +415,11 @@ def acquire_slot(
                 flush=True,
             )
             announced = True
+        # F-N periodic disclosure: name the holders (pid / age / ttl) so a long
+        # wait is legible instead of looking like a hung process. Fail-open.
+        if now >= next_disclosure:
+            _emit_slot_disclosure(host, limit, now=now, elapsed=now - start)
+            next_disclosure = now + SLOT_DISCLOSE_INTERVAL_SEC
         sleep(min(interval + jitter, max(0.0, deadline - now)))
         interval = min(interval * 2.0, SLOT_POLL_MAX_SEC)
 

@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Design: opt-in continuous-async campaign refill
 
 > **Status:** RFC / proposed. Tracks

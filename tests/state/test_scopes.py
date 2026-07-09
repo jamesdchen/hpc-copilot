@@ -131,6 +131,30 @@ def test_counts_distinguish_looks_from_lineages(tmp_path: Path) -> None:
     assert all(isinstance(v, int) for v in counts.values())
 
 
+def test_raced_duplicate_looks_never_inflate_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TOCTOU: ``record_look``'s read-before-append dedup runs outside the
+    append flock, so two concurrent writers for the SAME (scope, run_id) can
+    both pass the check and both append. The docstring guarantee is held at
+    read time — ``count_prior_looks`` dedups by (scope, run_id) — so the
+    duplicate ledger line can never inflate ``prior_looks``."""
+    look = dict(run_id="r1", cmd_sha="c" * 64, lineage_root="r1", reducer_block="agg")
+    with monkeypatch.context() as m:
+        # Simulate the interleaving: both writers read the ledger BEFORE
+        # either one's append lands.
+        m.setattr(scopes, "_read_looks", lambda *a, **k: [])
+        assert scopes.record_look(tmp_path, "s1", **look) is not None
+        assert scopes.record_look(tmp_path, "s1", **look) is not None  # raced past the check
+    # Both lines landed on disk...
+    assert len(scopes._read_looks(tmp_path, "s1")) == 2
+    # ...but the count cannot be inflated by the duplicate.
+    assert scopes.count_prior_looks(tmp_path, "s1") == {
+        "prior_looks": 1,
+        "distinct_lineages": 1,
+    }
+
+
 def test_count_prior_looks_empty_ledger(tmp_path: Path) -> None:
     assert scopes.count_prior_looks(tmp_path, "never") == {
         "prior_looks": 0,

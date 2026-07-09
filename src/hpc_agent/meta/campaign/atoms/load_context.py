@@ -431,7 +431,9 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
         if camp_root.is_dir():
             try:
                 cursor = read_cursor(experiment_dir, campaign_id)
-            except ValueError as exc:
+            except (ValueError, errors.JournalCorrupt) as exc:
+                # read_cursor raises JournalCorrupt (non-int / newer
+                # cursor_schema_version); ValueError kept for legacy paths.
                 cursor = None
                 warnings.append(f"campaign {campaign_id} cursor unreadable: {exc}")
             if cursor is not None:

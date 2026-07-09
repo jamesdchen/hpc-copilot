@@ -482,3 +482,36 @@ def test_validate_routes_through_attestation_kernel() -> None:
     # attestation.validate, never a re-inlined shape check.
     src = inspect.getsource(d.validate_sample)
     assert "attestation.validate(" in src
+
+
+# --- T1a: the ONE order-statistics leg (shared with conformance) -------------
+
+
+def test_reduce_key_routes_through_shared_order_statistics_leg() -> None:
+    # T1a: _reduce_key delegates min/max/spread to the ONE shared leg — the
+    # fingerprint reduction and registration conformance's judge_window
+    # (state/conformance.py) share ONE envelope definition (enforcement row),
+    # never a second min/max/spread implementation.
+    src = inspect.getsource(d._reduce_key)
+    assert "order_statistics_envelope(" in src
+    assert "min(values)" not in src and "max(values)" not in src
+
+
+def test_order_statistics_envelope_byte_equal_to_reduction() -> None:
+    # PURE-refactor pin: the shared leg reproduces the fingerprint reduction's
+    # (lo, hi, rel_spread) EXACTLY over the same admitted values — byte-identical.
+    samples = [
+        _sample([_pk("widgets.rate", 0.94, 0.97)]),
+        _sample([_pk("widgets.rate", 0.95, 0.96)]),
+    ]
+    env = d.reduce_envelope(samples, [True, True], identity=_IDENT)
+    (key,) = env.per_key
+    key_env = env.per_key[key]
+    lo, hi, rel_spread = d.order_statistics_envelope([0.94, 0.97, 0.95, 0.96])
+    assert (key_env.lo, key_env.hi, key_env.rel_spread) == (lo, hi, rel_spread)
+
+
+def test_order_statistics_envelope_degenerate_scale_is_zero() -> None:
+    # rel_spread is 0.0 when the magnitude scale is 0 (both endpoints 0) — the
+    # no-invented-tolerance leg, not a divide-by-zero.
+    assert d.order_statistics_envelope([0.0, 0.0]) == (0.0, 0.0, 0.0)

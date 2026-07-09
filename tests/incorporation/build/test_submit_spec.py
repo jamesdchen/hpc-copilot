@@ -113,6 +113,39 @@ def test_accepts_modules_alone_as_env_activation() -> None:
     assert spec["job_env"]["MODULES"] == "anaconda3/2024.06"
 
 
+class TestDigestClassifierThreading:
+    """data-trace T3: build-submit-spec computes the digest classification and
+    threads ``HPC_TRACE_DIGESTS`` into the job env (the HPC_TASK_INCLUDE
+    precedent; dispatch stays dumb). End-to-end at the submit-path funnel."""
+
+    def _env(self, **overrides: object) -> dict:
+        spec = build_submit_spec(spec=BuildSubmitSpecInput(**{**_required(), **overrides}))
+        return dict(spec["job_env"])
+
+    def test_big_array_no_signal_digests_off(self) -> None:
+        # total_tasks=42 (the _required() default), no canary/reproduces/override.
+        assert self._env()["HPC_TRACE_DIGESTS"] == "0"
+
+    def test_small_array_digests_on(self) -> None:
+        assert self._env(total_tasks=3)["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_reproduces_set_digests_on(self) -> None:
+        env = self._env(reproduces="train-deadbeef")
+        assert env["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_override_force_on_wins_over_big_array(self) -> None:
+        assert self._env(trace_digests="force_on")["HPC_TRACE_DIGESTS"] == "1"
+
+    def test_override_force_off_wins_over_small_array(self) -> None:
+        assert self._env(total_tasks=2, trace_digests="force_off")["HPC_TRACE_DIGESTS"] == "0"
+
+    def test_flag_is_authoritative_over_extra_env(self) -> None:
+        # A caller cannot smuggle the flag in via extra_env (NO KNOB): the
+        # classifier's value is exported AFTER the extra_env merge.
+        env = self._env(total_tasks=100, extra_env={"HPC_TRACE_DIGESTS": "1"})
+        assert env["HPC_TRACE_DIGESTS"] == "0"
+
+
 def test_conda_env_with_source_is_coherent() -> None:
     """conda_env + conda_source is the coherent activation the preamble needs (#281)."""
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))

@@ -393,7 +393,11 @@ def _expand_slurm_nodelist(spec: str) -> list[str]:
             if "-" in sub:
                 lo, _, hi = sub.partition("-")
                 try:
-                    width = max(len(lo), len(hi))
+                    # SLURM pads expanded indices only when the range is
+                    # WRITTEN zero-padded, to the lower bound's own width:
+                    # cn[08-12] -> cn08..cn12, but cn[8-12] -> cn8..cn12.
+                    # zfill is a no-op for indices wider than the pad.
+                    width = len(lo) if lo.startswith("0") else 0
                     for i in range(int(lo), int(hi) + 1):
                         out.append(f"{prefix}{str(i).zfill(width)}{suffix}")
                 except ValueError:

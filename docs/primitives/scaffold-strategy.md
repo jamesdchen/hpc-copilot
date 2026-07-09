@@ -10,8 +10,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force]
-    [--async-refill]
+  cli: hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>]
+    [--output-dir <output_dir>] [--force] [--async-refill]
   python: hpc_agent.incorporation.scaffold_strategy.scaffold_strategy
 exit_codes:
 - 0: ok
@@ -30,24 +30,43 @@ space** — never the ask/tell plumbing, the `trial_token` round-trip, or the
 Reach for this whenever the sweep is **adaptive** — ask/tell, Bayesian
 optimization (Optuna/Ax), population-based training, walk-forward — i.e. when a
 later iteration's parameters depend on earlier iterations' results. That is the
-[hpc-campaign](../../src/slash_commands/skills/hpc-campaign/SKILL.md) territory;
+[hpc-campaign](../../src/hpc_agent/slash_commands/skills/hpc-campaign/SKILL.md) territory;
 do not hand-roll an `sbatch` controller and do not `Read` the framework's
 strategy source to infer the contract — it is stated, load-bearing, in that
 skill's **Strategy authoring contract** section.
 
 ## Inputs
 
-- `name` (enum, required): `optuna` (scalar-objective ask/tell) or `pbt`
-  (artifact-carrying population-based training).
-- `output_dir` (path): experiment repo root. Defaults to cwd. The strategy
+- `shape` (enum): `strategy` (an ask/tell closed loop, the default) or `grid` (a
+  fixed non-adaptive sweep — one config file per arm).
+- `name` (enum): `optuna` (scalar-objective ask/tell) or `pbt`
+  (artifact-carrying population-based training). Required for `--shape strategy`;
+  ignored for `--shape grid`.
+- `arms` (int, default `2`, `>= 2`): number of grid arms (config stubs) to emit
+  for `--shape grid`. Ignored for `--shape strategy`.
+- `output_dir` (path): experiment repo root. Defaults to cwd. The `tasks.py`
   lands at `<output_dir>/.hpc/tasks.py`.
-- `force` (bool): overwrite an existing `.hpc/tasks.py`. Default `false`.
+- `force` (bool): overwrite existing destination file(s). Default `false`.
 
 ## Outputs
 
-`{path, name, source, output_dir}` — the absolute path written, the strategy
-name, the absolute template path it was copied from, and the resolved repo
-root.
+For `--shape strategy`: `{path, shape, name, async_refill, source, output_dir}`.
+For `--shape grid`: `{path, shape, name (null), arms, config_paths, async_refill
+(false), source, output_dir}` — the tasks.py path, the per-arm config stub paths,
+the arm count, the template it was copied from, and the resolved repo root.
+
+## The `grid` shape (fixed non-adaptive sweep)
+
+Reach for `--shape grid` when the whole sweep is known up front — every arm is a
+config file and no iteration depends on an earlier result (the counterpart to
+the adaptive `strategy` shape). It materializes a **skeleton**: a `tasks.py`
+whose `total()` is the arm count and whose `resolve(task_id)` returns an `arm`
+kwarg (part of `cmd_sha`, and it keys `result_dir_template`'s `{arm}`
+placeholder), plus `arms` per-arm config **stubs** under `<output_dir>/configs/`.
+The varied knob in each stub is a marked `# HOLE:` — the scaffold emits
+**structure with marked holes** and never fills a knob, because guessing which
+key varies is nomination (caller / pack territory: the lists-never-nominates
+rule). Fill the holes before submitting.
 
 ## Errors
 

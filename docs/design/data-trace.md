@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The data trace — stage receipts for the pipeline (the audit's runtime twin)
 
 **Status: PLANNED, USER-RULED (2026-07-08; consolidated from six amendments
@@ -140,7 +143,8 @@ Stage digests are fingerprint-admissible evidence from day one: the
 envelope accrues per-stage, and a reproduction mismatch localizes to a
 NAMED STAGE ("diverges at scaling") instead of "the runs differ". A
 Phase-3 amendment (the sample-admission model gains per-stage keys); the
-projections below are freestanding and do not wait for it.
+projections below are freestanding and do not wait for it. **LANDED —
+Amendment 15 records the implemented shape.**
 
 ## Consumers (both kinds) and projections
 
@@ -680,3 +684,78 @@ Hamilton lineage
 Drift-log line: 2026-07-08 — T0 gate discharged; all candidates refused as
 dependencies, OpenLineage facet field names adopted as a courtesy mapping
 recorded in the atom registry (Waves 1–3 unblocked).
+
+Drift-log line: 2026-07-08 — T5 `trace-render` landed (Wave 3, registry +1;
+regen deferred to a serial rebake). RECORDED ANSWER on the reference lookups
+(the `profile` under-specification the task flagged): `cmd_sha` resolves via
+`find_run_by_cmd_sha` (the T1/runs parameter-identity join, newest-first). The
+`profile` selector is IMPLEMENTED as a mechanical latest-by over the sidecar's
+LITERAL `profile` field (`find_existing_runs` yields sidecars newest-first, so
+the first match is the freshest exemplar) — NOT deferred, because the join is
+well-defined at the core layer: the sidecar carries a `profile` key and
+"latest-by-profile via sidecar keys" (A7 Class B) is exactly that scan. Core
+stays agnostic to WHICH profile string is the exemplar (pack/program naming) —
+the caller names it, core joins. Both reference lookups resolve to the matched
+run's `("run", run_id)` trace scope. Absence (no run matched, or a resolved
+scope with no recorded trace) is an honest `present=false` + `skipped` result,
+never an error. The four views + the self-describing header render as
+deterministic markdown carrying no verdict vocabulary (the never-judgment pin,
+grep-tested over the render output).
+
+## Amendment 14 (2026-07-09): G-a RULED — the observation plan lives in the audit configuration
+
+**User-ruled (2026-07-09): candidate 1.** The audit configuration gains
+`observables: [names]` on the audited_source / notebook-record-config seam —
+inside the signed surface automatically, versioned with the roots, read by
+the ONE recorded-config reader. Candidate 2 (a template marker) was rejected
+on the altitude test: observable names are PROGRAM bindings (the
+`endbartime` class), while templates are the shareable standard — baking
+names into a template would force per-program template forks; and a second
+in-file parsing convention beside `# hpc-audit-section:` is a new lint/canon
+surface. Precedent: `attention_order` faced the same choice and landed in
+the config. Authoring visibility is a RENDER concern (draft-context / the
+audit view display the declared observables), not a storage one. T-R
+unblocks.
+
+## Amendment 15 (2026-07-09): the fingerprint interlock LANDED (the Phase-3 amendment)
+
+Implemented in `ops/verify_reproduction.py`, riding the landed
+determinism-fingerprint substrate. Shape choices, each recorded:
+
+- **Key naming**: when folded, per-stage atoms enter the compared payloads as
+  `stage:<stage>.digest` and `stage:<stage>.row_count` — the `stage:` prefix
+  namespaces honestly (a stage receipt, not a metric), the `.`-join matches
+  the existing flatten convention (`flatten_metrics`), and the atom name is
+  kept verbatim from the atom catalog. Digests are shas (str) and row counts
+  ints, so both are EXACT-CLASS under the existing static classifier — no
+  envelope needed, no tolerance ever applies, and they ride the SAME per-key
+  sample + envelope machinery (identical→exact, differing→the
+  mismatch/verdict flow). **NO new admission rule** — the existing D-consume
+  admission governs the whole sample; the interlock adds keys, never policy.
+- **Fold condition**: keys fold only when BOTH runs carry an ingested
+  `("run", run_id)` trace (`read_trace`). One-side/neither-traced → NOTHING
+  folded and the presence DISCLOSED on the v2 receipt's `stage_interlock`
+  block (`{original_trace_present, repro_trace_present, compared,
+  stage_keys}`) — the digest-policy degradation posture (disclosed, never
+  fabricated, never blocking). A fully untraced pair emits a receipt
+  BYTE-IDENTICAL to a pre-interlock one (pinned by test).
+- **Stage-localized mismatch**: on a routed verdict (mismatch / needs_verdict
+  / incomparable) of a both-traced pair, the FIRST diverging stage by
+  pipeline order (the trace's `seq`; min across sides for shared stages; a
+  one-side-only stage counts as divergence) surfaces as the machine field
+  `diverged_stage` on the receipt AND the result, and is appended to the
+  code-rendered `reason` ("diverges at stage 'scaling'") — never
+  prose-invented. Null on match/auto_cleared.
+- **Recorded scope answers**: v1 reads task-0 of the run scope only
+  (multi-task trace enumeration is a deferred refinement); a PARTIAL
+  reproduction skips the interlock entirely (it already namespaces per task —
+  folding whole-run stage keys under a subset comparison would be dishonest);
+  a stage seen twice keeps its LAST record (append order); a stage missing a
+  digest still folds its row_count (an off-digest-policy run contributes
+  counts); a digest recorded on only ONE side of a shared stage is a degraded
+  observation, NOT a divergence.
+- **Wire debt (regen deferred)**: `ReproductionReceipt` gains
+  `stage_interlock` + `diverged_stage` (optional, default-absent — v1/v2
+  pre-interlock lines parse unchanged); `VerifyReproductionResult` gains
+  `diverged_stage`. Schema regen NOT run here (serial-regen discipline) —
+  rebake at merge.

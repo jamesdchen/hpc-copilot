@@ -867,6 +867,187 @@ class TestFrozenManifest:
         assert "trial_params" in err and "re-submit" in err
 
 
+class TestServiceEnvPassthrough:
+    """HPC_SERVICE_ENV → HPC_SERVICE_* task-env passthrough (#231 Tier 1).
+
+    The dispatcher used to reach for ``hpc_agent.ops.recover.service`` at
+    dispatch time, but deploy ships no ``hpc_agent`` package — every array
+    task of a service_env run died with ModuleNotFoundError before the
+    executor spawned. The logic is now inlined stdlib-only; these tests pin
+    both the inlined behavior and its parity with the control-plane copy.
+    """
+
+    def test_inlined_injection_matches_control_plane_copy(self):
+        """Sync pin: the stdlib twin must behave exactly like
+        ``ops.recover.service.inject_service_env`` (the deliberate
+        cluster-side duplication, same discipline as _CHECKPOINT_RES)."""
+        from hpc_agent.ops.recover import service
+
+        assert dispatch._SERVICE_ENV_NAMESPACE == service.SERVICE_ENV_NAMESPACE
+        cases = [
+            {"compile_url": "http://n01:8080", "Port": 8081, "token": None},
+            {},
+            None,
+        ]
+        for service_env in cases:
+            env_a: dict = {"KEEP": "me"}
+            env_b: dict = {"KEEP": "me"}
+            ret_a = dispatch._inject_service_env(env_a, service_env)
+            ret_b = service.inject_service_env(env_b, service_env)
+            assert env_a == env_b, f"divergence for {service_env!r}"
+            # Both return the mutated env for caller convenience.
+            assert ret_a is env_a
+            assert ret_b is env_b
+
+    def test_inlined_injection_namespaces_and_stringifies(self):
+        env: dict = {}
+        dispatch._inject_service_env(env, {"compile_url": "http://n01:8080", "port": 8081})
+        assert env == {
+            "HPC_SERVICE_COMPILE_URL": "http://n01:8080",
+            "HPC_SERVICE_PORT": "8081",
+        }
+
+    @_posix_shell_executor
+    def test_service_env_reaches_executor(self, tmp_path, monkeypatch):
+        """End-to-end: a JSON HPC_SERVICE_ENV lands as $HPC_SERVICE_* in the
+        executor's env — with no hpc_agent package importable cluster-side."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo "$HPC_SERVICE_COMPILE_URL" > "$RESULT_DIR/service.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_SERVICE_ENV", json.dumps({"compile_url": "http://n01:8080"}))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "0" / "service.txt").read_text().strip() == "http://n01:8080"
+
+    @_posix_shell_executor
+    def test_malformed_service_env_warns_and_still_runs(self, tmp_path, monkeypatch, capsys):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo ok > "$RESULT_DIR/out.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_SERVICE_ENV", "{not json")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert "malformed HPC_SERVICE_ENV" in capsys.readouterr().err
+
+
+class TestStaleMetricsQuarantine:
+    """The cmd_sha-changed re-run path must quarantine the PREVIOUS
+    experiment's metrics.json before re-running: left in place, a failed (or
+    still-running) new attempt lets status/combiner count the stale file as
+    this run's completed result."""
+
+    def _seed_stale(self, result_dir, content='{"value": 1}'):
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "metrics.json").write_text(content)
+        # Sidecar default cmd_sha is "deadbeef"*8; stamp a different one so
+        # the cmd_sha-changed re-run path fires.
+        (result_dir / ".hpc_cmd_sha").write_text("0" * 64)
+
+    @_posix_shell_executor
+    def test_failed_rerun_leaves_no_stale_completion_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="exit 1",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        self._seed_stale(result_dir)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+
+        # The stale marker is GONE from the completion-scan namespace…
+        assert not (result_dir / "metrics.json").exists()
+        # …and preserved as evidence under the _wip_ family every scanner skips.
+        quarantined = list(result_dir.glob("_wip_0_stale_metrics_*.json"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text() == '{"value": 1}'
+        # The reporter must NOT count this task complete anymore (the
+        # quarantined name lives in the _wip_ family every scanner skips).
+        assert check_results(result_dir, total_tasks=1, file_glob="*") == {}
+
+    @_posix_shell_executor
+    def test_successful_rerun_promotes_fresh_metrics(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"value": 2}\' > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        self._seed_stale(result_dir)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Fresh result promoted; stale evidence retained alongside.
+        assert json.loads((result_dir / "metrics.json").read_text()) == {"value": 2}
+        assert len(list(result_dir.glob("_wip_0_stale_metrics_*.json"))) == 1
+        assert (result_dir / ".hpc_cmd_sha").read_text() == "deadbeef" * 8
+
+    @_posix_shell_executor
+    def test_force_rerun_does_not_quarantine(self, tmp_path, monkeypatch):
+        """HPC_FORCE_RERUN re-runs the SAME experiment (matching cmd_sha) —
+        the prior result stays a valid last-known completion, not stale."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="exit 1",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        result_dir.mkdir(parents=True)
+        (result_dir / "metrics.json").write_text('{"value": 1}')
+        (result_dir / ".hpc_cmd_sha").write_text("deadbeef" * 8)  # matches sidecar
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_FORCE_RERUN", "1")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 1
+        assert (result_dir / "metrics.json").read_text() == '{"value": 1}'
+        assert list(result_dir.glob("_wip_0_stale_metrics_*.json")) == []
+
+
 class TestPartialReproductionInclude:
     """HPC_TASK_INCLUDE — the partial-reproduction execution restriction (T6).
 

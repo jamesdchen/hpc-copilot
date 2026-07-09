@@ -200,22 +200,32 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         elapsed_raw = row["ElapsedRaw"]
         req_cpus = row["ReqCPUS"]
         alloc_tres = row["AllocTRES"]
-        if "_" not in job_field:
-            continue
-        # job_field looks like "12345_7" or "12345_7.batch"; strip trailing step.
-        base_job, _, tail = job_field.partition("_")
-        if base_job not in job_id_set:
-            # sacct may return unrelated rows (shouldn't, but be defensive).
-            continue
-        # tail may be "7", "7.batch", "7.extern"; take the leading integer.
-        tail = tail.split(".", 1)[0]
-        # Ingest edge: the JobId_N index is a 1-based ArrayIndex; convert to
-        # 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
-        try:
-            tid = int(to_task_id(ArrayIndex(int(tail))))
-        except (ValueError, _SpecInvalid):
-            errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
-            continue
+        if "_" in job_field:
+            # Array row: "12345_7" or "12345_7.batch"; strip trailing step.
+            base_job, _, tail = job_field.partition("_")
+            if base_job not in job_id_set:
+                # sacct may return unrelated rows (shouldn't, but be defensive).
+                continue
+            # tail may be "7", "7.batch", "7.extern"; take the leading integer.
+            tail = tail.split(".", 1)[0]
+            # Ingest edge: the JobId_N index is a 1-based ArrayIndex; convert to
+            # 0-based HpcTaskId so ``task_info`` is keyed in the domain space.
+            try:
+                tid = int(to_task_id(ArrayIndex(int(tail))))
+            except (ValueError, _SpecInvalid):
+                errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
+                continue
+        else:
+            # Non-array submission (#293, ``array=False`` MPI jobs): sacct
+            # reports a plain "12345" main row plus "12345.batch"/".extern"
+            # step rows. The run's single unit of work is task 0; the step
+            # rows collapse into it via the same-array first-occurrence
+            # dedup below (main record precedes steps in sacct output).
+            base_job = job_field.split(".", 1)[0]
+            if base_job not in job_id_set:
+                # sacct may return unrelated rows (shouldn't, but be defensive).
+                continue
+            tid = 0
         # Dedup rule:
         #   * Within ONE array: first occurrence wins (main record comes
         #     before .batch/.extern steps for the same job_id).
@@ -284,7 +294,12 @@ def _pbs_walltime_to_s(value: str) -> int:
 
 
 def _process_pbs_block(
-    job_id_field: str, block: dict[str, str], task_info: dict[int, dict]
+    job_id_field: str,
+    block: dict[str, str],
+    task_info: dict[int, dict],
+    *,
+    job_pos: int = 0,
+    task_pos: dict[int, int] | None = None,
 ) -> None:
     """Map one ``qstat -f`` subjob stanza to a task entry.
 
@@ -292,6 +307,12 @@ def _process_pbs_block(
     parent (``<seq>[].<server>``) and non-array jobs carry no per-task index
     and are skipped. ``Exit_status`` (present only once finished) drives the
     success/failure split; otherwise the live ``job_state`` letter is mapped.
+
+    *job_pos* / *task_pos* implement the resubmit dedup (mirroring
+    :func:`query_sacct`): run records append resubmit job_ids oldest→newest,
+    so when the same task appears under several jobs the stanza from the job
+    LATER in the input list (higher *job_pos*) wins — that's the most recent
+    attempt. Within one job (equal *job_pos*) the first stanza keeps winning.
     """
     m = re.match(r"^(\d+)\[(\d+)\]", job_id_field)
     if not m:
@@ -303,8 +324,11 @@ def _process_pbs_block(
         tid = int(to_task_id(ArrayIndex(int(m.group(2)))))
     except _SpecInvalid:
         return  # malformed (idx < 1) — skip rather than mis-key
-    if tid in task_info:
-        return  # first stanza wins
+    if task_pos is None:
+        task_pos = {}
+    existing_pos = task_pos.get(tid, job_pos if tid in task_info else None)
+    if existing_pos is not None and existing_pos >= job_pos:
+        return  # same job: first stanza wins; older job's stanza never overwrites
 
     exit_status = block.get("Exit_status")
     if exit_status is not None:
@@ -321,6 +345,7 @@ def _process_pbs_block(
     elapsed_s = _pbs_walltime_to_s(block.get("resources_used.walltime", ""))
     cpus = _to_int(block.get("resources_used.ncpus") or block.get("Resource_List.ncpus") or "")
     gpus = _to_int(block.get("resources_used.ngpus") or block.get("Resource_List.ngpus") or "")
+    task_pos[tid] = job_pos
     task_info[tid] = {
         "state": state,
         "exit_code": exit_code,
@@ -331,15 +356,29 @@ def _process_pbs_block(
     }
 
 
-def _parse_qstat_full_pbs(text: str, task_info: dict[int, dict]) -> None:
-    """Split a ``qstat -f`` buffer into ``Job Id:`` stanzas + feed each one."""
+def _parse_qstat_full_pbs(
+    text: str,
+    task_info: dict[int, dict],
+    *,
+    job_pos: int = 0,
+    task_pos: dict[int, int] | None = None,
+) -> None:
+    """Split a ``qstat -f`` buffer into ``Job Id:`` stanzas + feed each one.
+
+    *job_pos* / *task_pos* thread the resubmit dedup state through to
+    :func:`_process_pbs_block` (see its docstring for the precedence rule).
+    """
+    if task_pos is None:
+        task_pos = {}
     current_id: str | None = None
     current: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.rstrip()
         if line.startswith("Job Id:"):
             if current_id is not None:
-                _process_pbs_block(current_id, current, task_info)
+                _process_pbs_block(
+                    current_id, current, task_info, job_pos=job_pos, task_pos=task_pos
+                )
             current_id = line.split(":", 1)[1].strip()
             current = {}
             continue
@@ -352,7 +391,7 @@ def _parse_qstat_full_pbs(text: str, task_info: dict[int, dict]) -> None:
             key, _, val = stripped.partition("=")
             current[key.strip()] = val.strip()
     if current_id is not None:
-        _process_pbs_block(current_id, current, task_info)
+        _process_pbs_block(current_id, current, task_info, job_pos=job_pos, task_pos=task_pos)
 
 
 def query_pbs(job_ids: list[str], fork: str = "pbspro") -> dict:
@@ -371,9 +410,14 @@ def query_pbs(job_ids: list[str], fork: str = "pbspro") -> dict:
     errors: list[dict] = []
     base_cmd = ["qstat", "-x", "-f", "-t"] if fork == "pbspro" else ["qstat", "-f", "-t"]
 
+    # Resubmit dedup state: *job_ids* is ordered oldest→newest (resubmits
+    # append), so recording which position wrote each task lets a later
+    # (newer) job's stanza overwrite an earlier attempt's — see
+    # :func:`_process_pbs_block`.
+    task_pos: dict[int, int] = {}
     seen: set[str] = set()
     any_ok = False
-    for job_id in job_ids:
+    for job_pos, job_id in enumerate(job_ids):
         key = str(job_id)
         if key in seen:
             continue
@@ -396,7 +440,7 @@ def query_pbs(job_ids: list[str], fork: str = "pbspro") -> dict:
             # Nonzero is common (history disabled, job aged out) — not fatal.
             continue
         any_ok = True
-        _parse_qstat_full_pbs(result.stdout, task_info)
+        _parse_qstat_full_pbs(result.stdout, task_info, job_pos=job_pos, task_pos=task_pos)
 
     if not any_ok and not task_info:
         errors.append({"code": "pbs_unavailable", "detail": "qstat returned no usable data"})
@@ -448,8 +492,24 @@ def _process_qacct_block(
     job_id: str,
     task_info: dict[int, dict],
     errors: list[dict],
+    *,
+    live_tids: frozenset[int] = frozenset(),
+    job_pos: int = 0,
+    task_pos: dict[int, int] | None = None,
 ) -> None:
-    """Extract task status from a single qacct block."""
+    """Extract task status from a single qacct block.
+
+    Precedence (two distinct rules — see :func:`query_sge`'s phases):
+
+    * *live_tids* — tasks phase 1's live ``qstat`` already reported. Live
+      queue data always beats accounting: a task running/pending under a
+      resubmit must not be overwritten by a prior attempt's qacct record.
+    * *job_pos* / *task_pos* — among accounting records, the resubmit dedup
+      (mirroring :func:`query_sacct`): job_ids are ordered oldest→newest, so
+      a job LATER in the input list (higher *job_pos*) overwrites an earlier
+      attempt's record for the same task. Within one job (equal *job_pos*)
+      the first block keeps winning.
+    """
     tid_str = block.get("taskid", "")
     if not tid_str or tid_str == "undefined":
         return
@@ -460,8 +520,13 @@ def _process_qacct_block(
     except (ValueError, _SpecInvalid):
         errors.append({"code": "malformed_row", "detail": f"qacct non-integer taskid: {tid_str!r}"})
         return
-    if tid in task_info:
-        return  # qstat data takes precedence
+    if tid in live_tids:
+        return  # live qstat data takes precedence over accounting
+    if task_pos is None:
+        task_pos = {}
+    existing_pos = task_pos.get(tid, job_pos if tid in task_info else None)
+    if existing_pos is not None and existing_pos >= job_pos:
+        return  # same job: first block wins; older job's block never overwrites
 
     exit_status = block.get("exit_status", "0")
     failed = block.get("failed", "0")
@@ -503,6 +568,7 @@ def _process_qacct_block(
     )
     gpus = parse_gpu_count_from_sge_resources(gpu_text)
 
+    task_pos[tid] = job_pos
     task_info[tid] = {
         "state": state,
         "exit_code": exit_status,
@@ -518,20 +584,46 @@ def _parse_qacct_output(
     job_id: str,
     task_info: dict[int, dict],
     errors: list[dict],
+    *,
+    live_tids: frozenset[int] = frozenset(),
+    job_pos: int = 0,
+    task_pos: dict[int, int] | None = None,
 ) -> None:
-    """Parse a full qacct stdout buffer, feeding each block to the processor."""
+    """Parse a full qacct stdout buffer, feeding each block to the processor.
+
+    The keyword args thread the two-phase precedence state through to
+    :func:`_process_qacct_block` (see its docstring for the rules).
+    """
+    if task_pos is None:
+        task_pos = {}
     current: dict[str, str] = {}
     for raw_line in text.splitlines():
         if raw_line.startswith("====="):
             if current:
-                _process_qacct_block(current, job_id, task_info, errors)
+                _process_qacct_block(
+                    current,
+                    job_id,
+                    task_info,
+                    errors,
+                    live_tids=live_tids,
+                    job_pos=job_pos,
+                    task_pos=task_pos,
+                )
                 current = {}
             continue
         parts = raw_line.split(None, 1)
         if len(parts) == 2:
             current[parts[0]] = parts[1].strip()
     if current:
-        _process_qacct_block(current, job_id, task_info, errors)
+        _process_qacct_block(
+            current,
+            job_id,
+            task_info,
+            errors,
+            live_tids=live_tids,
+            job_pos=job_pos,
+            task_pos=task_pos,
+        )
 
 
 def query_sge(job_ids: list[str], user: str | None = None) -> dict:
@@ -639,10 +731,16 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             }
 
     # Phase 2: qacct for finished tasks - dedupe job_ids to avoid repeat
-    # subprocess calls for the same ID within a single poll.
+    # subprocess calls for the same ID within a single poll. Two precedence
+    # rules apply (threaded into _process_qacct_block):
+    #   * live qstat data (phase 1) beats accounting data, and
+    #   * among accounting records, the job LATER in *job_ids* wins per task
+    #     (resubmits append oldest→newest, so later = the newest attempt).
+    live_tids = frozenset(task_info)
+    task_pos: dict[int, int] = {}
     qacct_any_ok = False
     seen: set[str] = set()
-    for job_id in job_ids:
+    for job_pos, job_id in enumerate(job_ids):
         key = str(job_id)
         if key in seen:
             continue
@@ -668,7 +766,15 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             # if no qacct call ever succeeds.
             continue
         qacct_any_ok = True
-        _parse_qacct_output(result.stdout, key, task_info, errors)
+        _parse_qacct_output(
+            result.stdout,
+            key,
+            task_info,
+            errors,
+            live_tids=live_tids,
+            job_pos=job_pos,
+            task_pos=task_pos,
+        )
 
     # If both qstat failed and no qacct call succeeded, surface as sge_unavailable
     # in addition to the individual tool errors.

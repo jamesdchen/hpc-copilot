@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/trace_diff.input.json",
+  "title": "trace-diff input spec",
+  "description": "Input spec for ``trace-diff``: two store keys + an optional tolerance.\n\n``tolerance`` absent (``None``) — or present with every bound absent — means\nan EXACT comparison of every atom (the no-invented-tolerance rule).",
+  "type": "object",
+  "required": [
+    "a",
+    "b"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "a": {
+      "$ref": "#/$defs/TraceKey",
+      "description": "The A-side trace key (e.g. today / this arm / the canary)."
+    },
+    "b": {
+      "$ref": "#/$defs/TraceKey",
+      "description": "The B-side trace key (e.g. last-known-good / the other arm / the local run)."
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TraceTolerance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller-owned tolerance; None (or all-absent) → exact comparison."
+    }
+  },
+  "$defs": {
+    "KeyTolerance": {
+      "additionalProperties": false,
+      "description": "Per-key tolerance override (mirrors verify-reproduction's ``KeyTolerance``).\n\nBoth bounds optional; an absent bound is simply not applied. When BOTH are\nabsent the key is compared EXACTLY — same as supplying no tolerance at all.",
+      "properties": {
+        "abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance: |a - b| <= abs_tol is not a divergence.",
+          "title": "Abs Tol"
+        },
+        "rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance: |a - b| / max(|a|, |b|) <= rel_tol is not a divergence.",
+          "title": "Rel Tol"
+        }
+      },
+      "title": "per-key trace tolerance",
+      "type": "object"
+    },
+    "TraceKey": {
+      "additionalProperties": false,
+      "description": "A point-lookup key into the local trace store (one task's records).\n\n``task`` defaults to ``0`` — a single-task local run stores under ``task-0``\n(the T1 recorded-answer), and most reference/canary comparisons are of one\ntask, so the caller rarely supplies it.",
+      "properties": {
+        "scope_kind": {
+          "description": "The trace scope kind: `run` | `audit` | `local` (T1 TRACE_SCOPE_KINDS).",
+          "enum": [
+            "run",
+            "audit",
+            "local"
+          ],
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_id": {
+          "description": "The scope id (run_id / audit_id / cmd_sha12 for a local run).",
+          "minLength": 1,
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "task": {
+          "default": 0,
+          "description": "The task index within the scope (single-task local runs use 0).",
+          "minimum": 0,
+          "title": "Task",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope_kind",
+        "scope_id"
+      ],
+      "title": "trace-diff store key",
+      "type": "object"
+    },
+    "TraceTolerance": {
+      "additionalProperties": false,
+      "description": "Caller-owned tolerance for the tolerance-class atom comparisons.\n\nAll fields optional. When every field is absent (and ``per_key`` empty) the\ncomparison is EXACT — the no-invented-tolerance rule (core never picks an\nepsilon; the caller supplies the ReproTolerance posture or gets exact). A\ndefault bound applies to every numeric field lacking a ``per_key`` override;\na ``per_key`` entry fully replaces the default for that key.\n\nKey convention: ``\"duration_ms\"`` / ``\"peak_mb\"`` for the scalar-cost atoms,\n``\"value_sketch:<column>\"`` for a per-column sketch. Only the tolerance-class\natoms consult it — exact / set-delta / exact-per-key / equality-chain /\nexact-endpoints atoms are ALWAYS compared exactly.",
+      "properties": {
+        "default_abs_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute tolerance applied to every numeric field lacking a per_key override.",
+          "title": "Default Abs Tol"
+        },
+        "default_rel_tol": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative tolerance applied to every numeric field lacking a per_key override.",
+          "title": "Default Rel Tol"
+        },
+        "per_key": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KeyTolerance"
+          },
+          "description": "Per-key overrides, keyed by `<atom>` (scalar) or `value_sketch:<column>`.",
+          "title": "Per Key",
+          "type": "object"
+        }
+      },
+      "title": "trace-diff tolerance spec",
+      "type": "object"
+    }
+  }
+}

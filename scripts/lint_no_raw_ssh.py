@@ -44,7 +44,7 @@ Deliberately NOT flagged, to avoid false positives on documentation:
 Scope
 -----
 
-* ``src/slash_commands/skills/**/SKILL.md``
+* ``src/hpc_agent/slash_commands/skills/**/SKILL.md``
 * ``src/hpc_agent/_kernel/extension/worker_prompts/*.md``
 
 A genuine human-debug doc that must show a raw ssh command adds a cited entry
@@ -67,7 +67,7 @@ REPO = Path(__file__).resolve().parent.parent
 SCAN_ROOT = REPO / "src"
 
 # Scan-root-relative globs for the agent-facing prose surfaces.
-_SKILL_GLOB = "slash_commands/skills/*/SKILL.md"
+_SKILL_GLOB = "hpc_agent/slash_commands/skills/*/SKILL.md"
 _WORKER_PROMPT_GLOB = "hpc_agent/_kernel/extension/worker_prompts/*.md"
 
 # Cited exemptions: scan-root-relative paths of genuine human-debug docs that
@@ -80,7 +80,7 @@ ALLOWLIST: frozenset[str] = frozenset(
         # one-off interactive scp/ssh by the human's own session — no
         # autonomous worker executes it, and no throttled verb ships wheels
         # to a conda env. Ported from ~/.claude/skills/release 2026-07-04.
-        "slash_commands/skills/release/SKILL.md",
+        "hpc_agent/slash_commands/skills/release/SKILL.md",
     }
 )
 

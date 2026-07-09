@@ -87,6 +87,7 @@ __all__ = [
     "build_sample_record",
     "validate_sample",
     "filter_current_identity",
+    "order_statistics_envelope",
     "reduce_envelope",
     "classify",
     "evidence_meets",
@@ -699,6 +700,25 @@ class Envelope:
     data_identity_unknown: int
 
 
+def order_statistics_envelope(values: Sequence[float]) -> tuple[float, float, float]:
+    """The ONE order-statistics leg: ``(lo, hi, rel_spread)`` over non-empty values.
+
+    ``lo = min``, ``hi = max``, ``rel_spread = (hi - lo) / max(|lo|, |hi|)`` (0.0
+    when the magnitude scale is 0). Order statistics ONLY — no mean, no stddev, no
+    fitted anything (the D-envelope no-invented-tolerance rule). This is the ONE
+    envelope definition (enforcement row): the fingerprint reduction
+    (:func:`_reduce_key`) and registration conformance's ``judge_window``
+    (``state/conformance.py``, the plan's T1a re-point) both route through this —
+    never a second min/max/spread implementation. ``values`` must be non-empty;
+    the caller filters to comparable finite numbers upstream.
+    """
+    lo = min(values)
+    hi = max(values)
+    denom = max(abs(lo), abs(hi))
+    rel_spread = (hi - lo) / denom if denom else 0.0
+    return float(lo), float(hi), rel_spread
+
+
 def _reduce_key(key: str, samples: Sequence[Sample], admitted: Sequence[bool]) -> KeyEnvelope:
     """Reduce ONE key to its observed range + evidence over ADMITTED samples only.
 
@@ -740,12 +760,10 @@ def _reduce_key(key: str, samples: Sequence[Sample], admitted: Sequence[bool]) -
     hi: float | None
     rel_spread: float | None
     if values:
-        lo_val = min(values)
-        hi_val = max(values)
-        denom = max(abs(lo_val), abs(hi_val))
-        lo, hi = lo_val, hi_val
-        rel_spread = (hi_val - lo_val) / denom if denom else 0.0
-        is_stochastic = saw_float and hi_val > lo_val
+        # Route through the ONE order-statistics leg (T1a) — never a re-inlined
+        # min/max/spread. Byte-identical to the prior inline reduction.
+        lo, hi, rel_spread = order_statistics_envelope(values)
+        is_stochastic = saw_float and hi > lo
     else:
         lo = hi = rel_spread = None
         is_stochastic = False

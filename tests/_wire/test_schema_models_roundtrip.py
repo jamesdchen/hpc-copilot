@@ -331,8 +331,17 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # fields the per-field synthesizer would otherwise skip. Keyed by model
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    "EvidenceBriefSpec": {"tags": ["x"]},
+    "TraceRenderSpec": {"scope_kind": "run", "scope_id": "x"},
+    # ChallengeStatusSpec requires EXACTLY ONE addressing mode; the generic
+    # synthesizer sets none (all fields optional), so supply one valid mode.
+    "ChallengeStatusSpec": {"challenge_id": "x"},
     "VerifyRegistrationSpec": {"registration_id": "x"},
     "UpdateRunConstraintsSpec": {"add_features": ["a"]},
+    # ConformanceStatusSpec's validator requires a window selection (one of
+    # since/last_n); the per-field synthesizer skips the optional fields, so
+    # supply the count selection to satisfy the cross-field rule.
+    "ConformanceStatusSpec": {"last_n": 1},
     # _Provenance enforces ``session_sha`` when ``kind=='agent'``. The
     # generic synthesizer picks kind='agent' (first Literal value) but
     # leaves the conditionally-required session_sha unset; supply it so

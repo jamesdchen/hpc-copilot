@@ -579,6 +579,163 @@ def test_partial_receipt_missing_field_refused() -> None:
     _validate_receipt_partiality({"partial": False})
 
 
+# --------------------------------------------------------------------------- #
+# the data-trace fingerprint interlock (docs/design/data-trace.md)
+# --------------------------------------------------------------------------- #
+from hpc_agent.state.data_trace import make_record, write_trace  # noqa: E402
+
+
+def _toy_trace(
+    exp: Path, run_id: str, digests: dict[str, str], *, rows: dict[str, int] | None = None
+) -> None:
+    """Write an ingested-store toy trace: one record per stage, seq = pipeline order."""
+    rows = rows or {}
+    records = [
+        make_record(
+            stage,
+            seq,
+            {
+                "digest": sha,
+                "row_count": {"rows": rows.get(stage, 100), "dropped": 0},
+            },
+            created_at="2026-01-01T00:00:00Z",
+        )
+        for seq, (stage, sha) in enumerate(digests.items())
+    ]
+    write_trace(exp, "run", run_id, 0, records)
+
+
+def _clustered_pair(exp: Path, orig: dict[str, Any], repro: dict[str, Any]) -> None:
+    """A pair with a known cluster, so the fingerprint sample is minted."""
+    _write_sidecar(exp, ORIG, cluster="hoffman2")
+    _write_sidecar(exp, REPRO, reproduces=ORIG, cluster="hoffman2")
+    _write_aggregate(exp, ORIG, {"gp": orig})
+    _write_aggregate(exp, REPRO, {"gp": repro})
+
+
+def test_traced_pair_stage_keys_present_and_exact(tmp_path: Path) -> None:
+    # Both runs traced, identical stage digests -> the namespaced stage keys ride
+    # the comparison as exact-class entries and everything still matches.
+    _clustered_pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    digests = {"load": "1" * 64, "scaling": "2" * 64, "fit": "3" * 64}
+    _toy_trace(tmp_path, ORIG, digests)
+    _toy_trace(tmp_path, REPRO, digests)
+    res = _run(tmp_path)
+    assert res.stage_reached == "match"
+    assert res.diverged_stage is None
+    keys = {e["key"] for e in res.receipt["per_key"]}
+    assert "stage:scaling.digest" in keys
+    assert "stage:scaling.row_count" in keys
+    by_key = {e["key"]: e for e in res.receipt["per_key"]}
+    assert by_key["stage:scaling.digest"]["verdict"] == "match"
+    # Exact semantics: a sha is a string, no tolerance ever applies.
+    assert by_key["stage:scaling.digest"]["tolerance_applied"] is None
+    # The interlock disclosure rides the (forced-v2) receipt.
+    assert res.receipt["schema_version"] == 2
+    interlock = res.receipt["stage_interlock"]
+    assert interlock["compared"] is True
+    assert interlock["original_trace_present"] is True
+    assert interlock["repro_trace_present"] is True
+    assert "stage:scaling.digest" in interlock["stage_keys"]
+    assert res.receipt["diverged_stage"] is None
+    ReproductionReceipt.model_validate(res.receipt)
+    # Envelope accrual: the stage keys fold into the appended sample's per_key
+    # (the SAME machinery, no new admission rule).
+    assert res.appended_sample is not None
+    sample_keys = {d.key for d in res.appended_sample.per_key}
+    assert "stage:scaling.digest" in sample_keys
+
+
+def test_planted_stage_divergence_localizes_to_named_stage(tmp_path: Path) -> None:
+    # FIRES: a planted digest divergence at 'scaling' (and downstream 'fit')
+    # localizes to 'scaling' — the FIRST diverging stage by pipeline order (seq).
+    _clustered_pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    _toy_trace(tmp_path, ORIG, {"load": "1" * 64, "scaling": "2" * 64, "fit": "3" * 64})
+    _toy_trace(tmp_path, REPRO, {"load": "1" * 64, "scaling": "9" * 64, "fit": "8" * 64})
+    res = _run(tmp_path)
+    assert res.stage_reached == "mismatch"  # a sha is exact-class; it moved
+    assert res.needs_decision is True
+    assert res.diverged_stage == "scaling"
+    assert res.receipt["diverged_stage"] == "scaling"
+    assert "diverges at stage 'scaling'" in res.reason
+    by_key = {e["key"]: e for e in res.receipt["per_key"]}
+    assert by_key["stage:scaling.digest"]["verdict"] == "mismatch"
+    assert by_key["stage:load.digest"]["verdict"] == "match"
+    ReproductionReceipt.model_validate(res.receipt)
+    # The diverging stage key rides the appended sample (fingerprint-admissible).
+    assert res.appended_sample is not None
+    sample_by_key = {d.key: d for d in res.appended_sample.per_key}
+    assert sample_by_key["stage:scaling.digest"].a != sample_by_key["stage:scaling.digest"].b
+
+
+def test_row_count_divergence_localizes(tmp_path: Path) -> None:
+    # A row_count move alone (digests identical) still localizes to its stage.
+    _pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    digests = {"load": "1" * 64, "pool": "2" * 64}
+    _toy_trace(tmp_path, ORIG, digests, rows={"load": 246059, "pool": 218905})
+    _toy_trace(tmp_path, REPRO, digests, rows={"load": 246059, "pool": 218900})
+    res = _run(tmp_path)
+    assert res.stage_reached == "mismatch"
+    assert res.diverged_stage == "pool"
+
+
+def test_one_side_traced_disclosed_not_fabricated(tmp_path: Path) -> None:
+    # Only the original is traced: nothing folded (no stage keys, no divergence),
+    # the presence/absence DISCLOSED on the receipt — never fabricated.
+    _pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    _toy_trace(tmp_path, ORIG, {"load": "1" * 64})
+    res = _run(tmp_path)
+    assert res.stage_reached == "match"
+    assert res.diverged_stage is None
+    keys = {e["key"] for e in res.receipt["per_key"]}
+    assert not any(k.startswith("stage:") for k in keys)
+    assert res.receipt["schema_version"] == 2
+    interlock = res.receipt["stage_interlock"]
+    assert interlock == {
+        "original_trace_present": True,
+        "repro_trace_present": False,
+        "compared": False,
+        "stage_keys": [],
+    }
+    assert res.receipt["diverged_stage"] is None
+    ReproductionReceipt.model_validate(res.receipt)
+
+
+def test_untraced_pair_receipt_byte_identical_to_pre_interlock(tmp_path: Path) -> None:
+    # The no-trace regression pin: no traces on either side -> the receipt carries
+    # NO interlock fields and keeps the v1 posture (byte-identical to today).
+    _pair(tmp_path, {"pi": 3.14159}, {"pi": 3.14159})
+    res = _run(tmp_path)
+    assert res.receipt["schema_version"] == 1
+    assert "stage_interlock" not in res.receipt
+    assert "diverged_stage" not in res.receipt
+    assert res.diverged_stage is None
+    assert set(res.receipt) == {
+        "ts",
+        "schema_version",
+        "original",
+        "repro",
+        "tolerance_spec",
+        "per_key",
+        "overall",
+        "sources",
+    }
+
+
+def test_auto_cleared_verdict_never_names_a_stage(tmp_path: Path) -> None:
+    # diverged_stage surfaces ONLY on a routed verdict; a matching traced pair
+    # (even with an envelope in play) names no stage.
+    _well_evidenced_pi(tmp_path)
+    _pair_pi(tmp_path, 3.14, 3.155)  # auto_cleared inside the envelope
+    digests = {"load": "1" * 64}
+    _toy_trace(tmp_path, ORIG, digests)
+    _toy_trace(tmp_path, REPRO, digests)
+    res = _run(tmp_path)
+    assert res.stage_reached == "auto_cleared"
+    assert res.diverged_stage is None
+    assert res.receipt["diverged_stage"] is None
+
+
 def test_human_acceptance_admits_a_mismatch_sample(tmp_path: Path) -> None:
     # A planted mismatch sample is inadmissible until a reproduction-verdict
     # accept names its content_sha; once accepted it widens the envelope.
@@ -606,3 +763,212 @@ def test_human_acceptance_admits_a_mismatch_sample(tmp_path: Path) -> None:
     # Now the envelope spans [3.10, 3.40]; 3.30 is inside -> auto_cleared.
     _pair_pi(tmp_path, 3.14, 3.30)
     assert _run(tmp_path).stage_reached == "auto_cleared"
+
+
+# --------------------------------------------------------------------------- #
+# external-baseline (claim-check) mode — onboard-by-reproduction (Phase 6.5)
+# --------------------------------------------------------------------------- #
+from pydantic import ValidationError  # noqa: E402
+
+from hpc_agent._wire.queries.verify_reproduction import (  # noqa: E402
+    ClaimCheckReceipt,
+    ExternalBaseline,
+)
+from hpc_agent.ops.verify_reproduction import (  # noqa: E402
+    CLAIM_CONSISTENT_SENTENCE,
+    _assert_receipt_kind_matches_baseline,
+    _run_claim_check,
+)
+
+
+def _fresh_run(exp: Path, gp_metrics: dict[str, Any], **over: Any) -> None:
+    """A fresh OBSERVED run (no `reproduces` link — the claim is the baseline)."""
+    _write_sidecar(exp, REPRO, **over)
+    _write_aggregate(exp, REPRO, {"gp": gp_metrics})
+
+
+def _claim_spec(
+    claimed_values: dict[str, Any],
+    *,
+    tolerance: ReproTolerance | None = None,
+    claimed_data_sha: str | None = None,
+) -> VerifyReproductionSpec:
+    return VerifyReproductionSpec(
+        repro_run_id=REPRO,
+        external_baseline=ExternalBaseline(
+            claimed_values=claimed_values,
+            tolerance=tolerance,
+            claimed_data_sha=claimed_data_sha,
+        ),
+    )
+
+
+def test_claim_check_match_emits_consistency_sentence(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    res = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    assert res.stage_reached == "match"
+    assert res.needs_decision is False
+    # The consistency sentence is CODE-emitted (a fixed module constant), not composed.
+    assert res.reason == CLAIM_CONSISTENT_SENTENCE
+    assert res.receipt["consistency"] == CLAIM_CONSISTENT_SENTENCE
+    assert res.receipt["drift_disclosure"] is None
+
+
+def test_claim_check_match_within_tolerance(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14100})
+    res = verify_reproduction(
+        tmp_path,
+        spec=_claim_spec({"gp.pi": 3.14000}, tolerance=ReproTolerance(default_abs_tol=0.01)),
+    )
+    assert res.stage_reached == "match"
+    assert res.reason == CLAIM_CONSISTENT_SENTENCE
+
+
+def test_claim_check_mismatch_is_a_finding_never_blocking(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.30000})
+    res = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    # A mismatch must NOT raise — exit-0, needs_decision finding.
+    assert res.stage_reached == "mismatch"
+    assert res.needs_decision is True
+    assert res.receipt["consistency"] is None
+    # No manifest at claim time -> the disclosed drift phrasing.
+    assert "cannot distinguish result decay from data drift" in res.receipt["drift_disclosure"]
+    assert "claim-check finding: mismatch" in res.reason
+
+
+def test_claim_check_mismatch_with_manifest_names_data_dimension(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.30000}, data_sha="observed-data-sha-xyz")
+    res = verify_reproduction(
+        tmp_path, spec=_claim_spec({"gp.pi": 3.14159}, claimed_data_sha="claimed-data-sha-abc")
+    )
+    assert res.stage_reached == "mismatch"
+    assert "the data changed since the claim" in res.receipt["drift_disclosure"]
+    assert "claimed-data" in res.receipt["drift_disclosure"]
+
+
+def test_claim_check_mismatch_manifest_unchanged_points_elsewhere(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.30000}, data_sha="same-data-sha")
+    res = verify_reproduction(
+        tmp_path, spec=_claim_spec({"gp.pi": 3.14159}, claimed_data_sha="same-data-sha")
+    )
+    assert res.stage_reached == "mismatch"
+    assert "data is unchanged since the claim" in res.receipt["drift_disclosure"]
+    assert "code/env or result decay" in res.receipt["drift_disclosure"]
+
+
+def test_claim_check_embeds_claim_verbatim(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    tol = ReproTolerance(default_rel_tol=0.01)
+    res = verify_reproduction(
+        tmp_path,
+        spec=_claim_spec({"gp.pi": 0.1203}, tolerance=tol, claimed_data_sha="d-sha"),
+    )
+    claim = res.receipt["claim"]
+    assert claim["claimed_values"] == {"gp.pi": 0.1203}
+    assert claim["tolerance"]["default_rel_tol"] == 0.01
+    assert claim["claimed_data_sha"] == "d-sha"
+
+
+def test_claim_check_receipt_kind_is_claim_check_never_reproduction(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    res = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    assert res.receipt["receipt_kind"] == "claim-check"
+    # Lands in the claim-check ledger, NEVER the reproduction ledger.
+    ledger = Path(res.receipt_path)
+    assert ledger.name == "claim_check_receipts.jsonl"
+    assert not (ledger.parent / "reproduction_receipts.jsonl").exists()
+    # The receipt validates against its authoring wire model.
+    ClaimCheckReceipt.model_validate(res.receipt)
+
+
+def test_claim_check_appends_no_fingerprint_sample(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    res = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    assert res.appended_sample is None
+    # The observed-runs-only lock: the fingerprint ledger is untouched.
+    assert not fingerprint_path(tmp_path, "a" * 64).exists()
+
+
+def test_claim_check_incomparable_missing_fresh_artifact(tmp_path: Path) -> None:
+    _write_sidecar(tmp_path, REPRO)  # sidecar but no metrics_aggregate.json
+    res = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    assert res.stage_reached == "incomparable"
+    assert res.needs_decision is True
+    assert res.receipt["per_key"] == []
+
+
+def test_claim_check_refuses_missing_fresh_sidecar(tmp_path: Path) -> None:
+    with pytest.raises(errors.SpecInvalid):
+        verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+
+
+def test_claim_check_receipt_appends_second_line(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    res2 = verify_reproduction(tmp_path, spec=_claim_spec({"gp.pi": 3.14159}))
+    lines = Path(res2.receipt_path).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # append-only
+
+
+# --- mutual-exclusion (the two baseline-resolution modes) ------------------- #
+def test_spec_recorded_mode_requires_original() -> None:
+    with pytest.raises(ValidationError):
+        VerifyReproductionSpec(repro_run_id=REPRO)  # no original, no external
+
+
+def test_spec_external_and_original_are_mutually_exclusive() -> None:
+    with pytest.raises(ValidationError):
+        VerifyReproductionSpec(
+            original_run_id=ORIG,
+            repro_run_id=REPRO,
+            external_baseline=ExternalBaseline(claimed_values={"gp.pi": 3.14}),
+        )
+
+
+def test_spec_external_forbids_top_level_tolerance() -> None:
+    with pytest.raises(ValidationError):
+        VerifyReproductionSpec(
+            repro_run_id=REPRO,
+            tolerance=ReproTolerance(default_abs_tol=0.1),
+            external_baseline=ExternalBaseline(claimed_values={"gp.pi": 3.14}),
+        )
+
+
+def test_spec_external_mode_valid_without_original() -> None:
+    spec = VerifyReproductionSpec(
+        repro_run_id=REPRO,
+        external_baseline=ExternalBaseline(claimed_values={"gp.pi": 3.14}),
+    )
+    assert spec.original_run_id is None
+    assert spec.external_baseline is not None
+
+
+# --- the anti-laundering enforcement seam ----------------------------------- #
+def test_reproduction_receipt_never_written_with_external_baseline() -> None:
+    # FIRES: a reproduction-kind receipt with an external baseline is refused.
+    with pytest.raises(errors.SpecInvalid):
+        _assert_receipt_kind_matches_baseline(receipt_kind="reproduction", external_baseline=True)
+    # A claim-check without a baseline is equally incoherent.
+    with pytest.raises(errors.SpecInvalid):
+        _assert_receipt_kind_matches_baseline(receipt_kind="claim-check", external_baseline=False)
+    # PASSES: both honest pairings.
+    _assert_receipt_kind_matches_baseline(receipt_kind="reproduction", external_baseline=False)
+    _assert_receipt_kind_matches_baseline(receipt_kind="claim-check", external_baseline=True)
+
+
+def test_recorded_reproduction_receipt_carries_reproduction_kind(tmp_path: Path) -> None:
+    # v1/v2 compatibility: the recorded-original path still writes a reproduction
+    # receipt, now stamped with the explicit kind discriminator.
+    _pair(tmp_path, {"pi": 3.14159}, {"pi": 3.14159})
+    res = _run(tmp_path)
+    assert res.receipt["receipt_kind"] == "reproduction"
+
+
+def test_run_claim_check_helper_direct(tmp_path: Path) -> None:
+    _fresh_run(tmp_path, {"pi": 3.14159})
+    res = _run_claim_check(
+        tmp_path,
+        repro_run_id=REPRO,
+        baseline=ExternalBaseline(claimed_values={"gp.pi": 3.14159}),
+    )
+    assert res.stage_reached == "match"

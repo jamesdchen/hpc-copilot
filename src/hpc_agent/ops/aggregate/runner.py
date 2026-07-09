@@ -77,7 +77,11 @@ def verify_per_task_outputs(
     task_ids = _wave_task_ids(sidecar, wave)
     if not task_ids:
         return []
-    expected = [template.format(task_id=tid) for tid in task_ids]
+    # Bare string replace — mirrors ``_reducer_contract.format_output_rel``:
+    # other literal braces in a user-supplied template (``{horizon}``,
+    # ``{...}``) must not raise from ``str.format``. Only ``{task_id}`` is
+    # recognised.
+    expected = [template.replace("{task_id}", str(tid)) for tid in task_ids]
     paths_inline = " ".join(shlex.quote(p) for p in expected)
     script = (
         f"cd {shlex.quote(remote_path)} && "

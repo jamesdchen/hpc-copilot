@@ -294,7 +294,10 @@ fi
 #   * Honor that marker on entry: a scheduler relaunch of an
 #     already-given-up (run, task) refuses to re-run — the cross-
 #     invocation half of the cap, so even an external resubmit loop is
-#     bounded.
+#     bounded. A DELIBERATE resubmit (resubmit_flow, ops/recover_flow.py)
+#     clears the markers for exactly the task ids it re-submits before
+#     the new array lands, so the adjusted-resources recovery path is
+#     not refused by a marker from the exhausted prior attempt.
 #   * Treat dispatcher exit code 3 (no per-task runner resolved — the
 #     `.hpc/cli.py`-missing self-recursion guard, #162) as TERMINAL: it
 #     is a deterministic scaffold error retrying cannot fix, so fail

@@ -375,6 +375,156 @@ def test_wedged_command_timeout_surfaces_partial_output(
         engine.run("cmd", ssh_target="u@h", timeout=1)
 
 
+class _HangingConn(_StubConn):
+    """A fake connection whose ``run`` never returns within the test — models a
+    remote leg that ignores asyncssh's own per-command ``timeout=`` (the live
+    2026-07-08 15-min hang against a healthy cluster)."""
+
+    async def run(  # type: ignore[override]
+        self, cmd: str, *, check: bool = False, timeout: float | None = None
+    ) -> _StubResult:
+        import asyncio
+
+        await asyncio.sleep(3600)  # never completes; only cancellation ends it
+        raise AssertionError("unreachable")
+
+
+# --- F-M: in-loop deadlines on every engine remote op ------------------------
+
+
+def test_run_deadline_fires_when_command_never_returns(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-M fires-test: a command that never returns (asyncssh's own timeout does
+    NOT trip) is bounded by the engine's in-loop asyncio deadline — it raises
+    EngineUnavailable at ~the caller's timeout, NOT after the +10s thread
+    backstop, and discards the wedged connection."""
+    import time
+
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: None)
+    # Zero the in-loop slack so wait_for fires at exactly the caller timeout.
+    monkeypatch.setattr(ssh_engine, "_LOOP_DEADLINE_MARGIN", 0.0)
+    _install_connect(monkeypatch, lambda _t: _HangingConn())
+    t0 = time.monotonic()
+    with pytest.raises(EngineUnavailable):
+        engine.run("stuck", ssh_target="u@h", timeout=0.3)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, (
+        f"in-loop deadline did not fire (thread backstop took over): {elapsed:.1f}s"
+    )
+    assert "h" not in engine._conns  # the wedged connection was discarded
+
+
+def test_connect_deadline_fires_when_connect_never_returns(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-M fires-test (connect leg): a connect that never returns is bounded by
+    the in-loop deadline over ``_do_connect``, raises EngineUnavailable, and
+    releases the slot it claimed for the doomed open."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
+    released: list[object] = []
+    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
+    monkeypatch.setattr(ssh_engine, "_LOOP_DEADLINE_MARGIN", 0.0)
+    monkeypatch.setattr(ssh_engine, "_connect_timeout", lambda: 0.3)
+
+    async def _hang(_ssh_target: str) -> _StubConn:
+        import asyncio
+
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(ssh_engine, "_connect", _hang)
+    with pytest.raises(EngineUnavailable):
+        engine.run("x", ssh_target="u@h", timeout=15)
+    assert released == ["SLOT"], "the slot claimed for a wedged connect must be freed"
+
+
+def test_run_deadline_does_not_fire_for_a_fast_command(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-M passes-test: a normal fast command under a tight deadline is
+    unaffected — the in-loop bound never trips on healthy traffic."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_engine, "_LOOP_DEADLINE_MARGIN", 0.0)
+    _install_connect(
+        monkeypatch, lambda _t: _StubConn(lambda _c: _StubResult(returncode=0, stdout="quick"))
+    )
+    r = engine.run("echo quick", ssh_target="u@h", timeout=0.5)
+    assert r.returncode == 0
+    assert r.stdout == "quick"
+
+
+# --- F-B residual: idle-close the pool (background sweep + slot release) ------
+
+
+def test_sweep_idle_closes_idle_connection_and_frees_slot(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-B fires-test: a connection idle past the threshold is closed by the
+    sweep — WITHOUT a triggering run() — and its per-host slot is released."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
+    released: list[object] = []
+    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
+    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)  # everything is "idle"
+    _install_connect(monkeypatch, lambda _t: _StubConn())
+    engine.run("echo x", ssh_target="u@h", timeout=15)
+    assert "h" in engine._conns and released == []  # held while (nominally) active
+    engine._sweep_idle()
+    assert "h" not in engine._conns  # reaped by the sweep alone (no second run())
+    assert released == ["SLOT"]  # slot freed on idle-close (the residual's crux)
+
+
+def test_sweep_idle_leaves_an_active_connection(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """F-B passes-test: a freshly-used connection (idle ≤ threshold) is never
+    reaped and keeps its slot."""
+    # A real Path token: the connection survives the test, so the engine
+    # fixture's teardown shutdown_all releases it through the (restored, real)
+    # release_slot — which unlinks a Path (a str token would AttributeError).
+    token = tmp_path / "slot"  # type: ignore[operator]
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: token)
+    released: list[object] = []
+    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
+    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", 3600.0)
+    _install_connect(monkeypatch, lambda _t: _StubConn())
+    engine.run("echo x", ssh_target="u@h", timeout=15)
+    engine._sweep_idle()
+    assert "h" in engine._conns  # not idle → untouched
+    assert released == []
+
+
+def test_background_sweeper_reaps_without_a_triggering_run(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-B fires-test (the real seam): the background reaper thread — started on
+    open — closes an idle connection and frees its slot with NO further run(),
+    which is exactly the immortal mcp-serve case the residual describes."""
+    import time
+
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_slots, "acquire_slot", lambda *a, **k: "SLOT")
+    released: list[object] = []
+    monkeypatch.setattr(ssh_slots, "release_slot", _recorder(released))
+    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)
+    monkeypatch.setattr(ssh_engine, "_SWEEP_INTERVAL_SEC", 0.05)  # sweep fast for the test
+    _install_connect(monkeypatch, lambda _t: _StubConn())
+    engine.run("echo x", ssh_target="u@h", timeout=15)  # opens conn + starts the reaper
+    # Poll for BOTH effects: the conn unregisters early in _discard (under the
+    # guard) while the slot release happens only after the bounded close, so
+    # asserting the release the instant the conn vanishes is a race (the slow
+    # py3.10 CI runner lost it, 2026-07-09).
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and ("h" in engine._conns or not released):
+        time.sleep(0.05)
+    assert "h" not in engine._conns, "the background reaper never closed the idle connection"
+    assert released == ["SLOT"]
+
+
 def test_shutdown_all_closes_the_connection(
     engine: _Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

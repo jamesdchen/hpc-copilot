@@ -60,6 +60,20 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": false,
+    "cli": "hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "conformance_record.input.json",
+    "name": "conformance-record",
+    "output_schema": "conformance_record.output.json",
+    "python": "hpc_agent.ops.conformance.record_op.conformance_record",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal ONE live conformance observation against the registration it tests — the emitter's evidence FOR/AGAINST a sealed hypothesis at production cadence. Recomputes the payload content_sha SERVER-SIDE over {payload, labels, observed_at} and binds it (a caller cannot assert a sha; there is no sha field on the spec), stamps the registration's reduced status_at_record (the live dossier-sha leg — current/stale/revoked), and appends exactly one line to <experiment>/_aggregated/_conformance/<registration_id>.jsonl. An absent registration is refused loudly (no hypothesis to test); a stale/revoked/superseded registration is RECORDED and its status disclosed (fail-open for evidence — production is the experiment that never stops). payload/observed_at values stay caller-attested (the emitter's truthfulness, not core's). Local read + one journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
     "agent_facing": true,
     "cli": "hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]",
     "idempotent": false,
@@ -520,6 +534,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "challenge_status.input.json",
+    "name": "challenge-status",
+    "output_schema": "challenge_status.output.json",
+    "python": "hpc_agent.ops.challenge_status_op.challenge_status",
+    "side_effects": [],
+    "summary": "Read the standing dissent over a committed record. Two views: a challenge_id (the filing/verdict/withdraw thread) or a target address (a content_sha, or a subject_kind+subject_id pair) — 'what stands against this record?'. Reduces each challenge to open / upheld / dismissed / withdrawn / superseded, re-resolves the target (found-current / found-superseded / unresolvable) and each cited evidence sha (verified / unresolvable) — DISCLOSED, never refused. Contested is an orthogonal flag beside the target's status, never blocking. Fleet-capable. Read-only; renders a deterministic markdown brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>",
     "idempotent": true,
     "input_schema": null,
@@ -576,6 +602,18 @@
     "python": "hpc_agent.incorporation.build.compute_run_id.compute_run_id",
     "side_effects": [],
     "summary": "Compute the run_id from .hpc/tasks.py cmd_sha (run_id = <run_name>-<sha[:8]>).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "conformance_status.input.json",
+    "name": "conformance-status",
+    "output_schema": "conformance_status.output.json",
+    "python": "hpc_agent.ops.conformance.status_op.conformance_status",
+    "side_effects": [],
+    "summary": "Report a registration's LIVE conformance: reduce its journal, read its sealed conformance declaration + baseline, select a caller-named window over the ledger ({since,until?} or last_n), and judge it against the REGISTERED evidence via the one comparator. Returns per-key verdicts (within/outside the envelope, or a thin/novel/incomparable route to needs_verdict), the overall tier, both sides' range-phrased evidence, and a deterministic brief. Verdicts are DERIVED on every read — no verdict store, nothing marked seen. A reporter: a nonconforming window is a FINDING that changes no registration status. Read-only, no SSH.",
     "verb": "query"
   },
   {
@@ -708,6 +746,30 @@
     "python": "hpc_agent.ops.recover.doctor.doctor",
     "side_effects": [],
     "summary": "Driver watchdog (dead-man's switch). Scan live runs for a missed driver-tick deadline and surface each as a DRAFTED recovery proposal plus the evidence. Read-only, no SSH, no scheduler. It NEVER restarts or re-arms anything — detection is its whole job; safe recovery is guaranteed by tick idempotency. Run it out-of-session from an OS scheduler (Task Scheduler / cron).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_brief.input.json",
+    "name": "evidence-brief",
+    "output_schema": "evidence_brief.output.json",
+    "python": "hpc_agent.ops.evidence_brief_op.evidence_brief",
+    "side_effects": [],
+    "summary": "The evidence brief: the POINT query over the research program's sealed records. Keyed by scope tags and/or a lineage run_id, it projects the cross-store digest for that scope — dated sha-cited conclusions (newest current first), per-tag prior-work counts, per-lineage determinism envelopes quoted verbatim from the fingerprint ledger, and each conclusion's citations re-resolved at read (verified / unresolvable — disclosed, never refused). Cheap (journal-first, no SSH), content-cached, fleet-capable. Read-only; renders a deterministic markdown digest relayed to the human verbatim.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_period.input.json",
+    "name": "evidence-period",
+    "output_schema": "evidence_period.output.json",
+    "python": "hpc_agent.ops.evidence_period_op.evidence_period",
+    "side_effects": [],
+    "summary": "The evidence PERIOD digest: a time-window projection over the one evidence collector (conclusions, per-tag activity, determinism envelopes) that ENDS with the unconcluded-campaigns list — the standing invitation to close the conclusion loop. since is the inclusive window start; until the inclusive end (default open/now). Read-only, no SSH; recomputed on every read (a content-keyed cache only memoizes — deleting it changes no output). A pure projection: identity, counting, and verbatim record fields — it never interprets what a tag means or what a finding says.",
     "verb": "query"
   },
   {
@@ -895,7 +957,7 @@
     "input_schema": "notebook_status.input.json",
     "name": "notebook-status",
     "output_schema": "notebook_status.output.json",
-    "python": "hpc_agent.ops.notebook_status.notebook_status",
+    "python": "hpc_agent.ops.notebook.status_op.notebook_status",
     "side_effects": [
       "file_write"
     ],
@@ -1086,6 +1148,30 @@
     "verb": "query"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_diff.input.json",
+    "name": "trace-diff",
+    "output_schema": "trace_diff.output.json",
+    "python": "hpc_agent.ops.trace_diff_op.trace_diff",
+    "side_effects": [],
+    "summary": "Overlay TWO traces from the local store and report, per stage and per atom, where their measurements diverge — dispatched through the ONE semantics registry (exact / set-delta / tolerance / exact-per-key / equality-chain / exact-endpoints). Highlights the FIRST diverging (stage, atom). Read-only, no SSH. Differences are FACTS (`row_count rows 100 → 90`), never verdicts; absence is disclosed. Tolerance is caller-owned (absent → exact).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-render --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_render.input.json",
+    "name": "trace-render",
+    "output_schema": "trace_render.output.json",
+    "python": "hpc_agent.ops.trace_render_op.trace_render",
+    "side_effects": [],
+    "summary": "Render one task's data trace as FOUR deterministic markdown views — row waterfall (with conservation flags), label-chain line, feature lineage (col_set deltas + column births), and the sketch table (value_sketch / null_count per column per stage) — under a self-describing run/config header. Read-only, no SSH. Selectors (exactly one): DIRECT {scope_kind, scope_id, task?}, or the REFERENCE lookup {cmd_sha} / {profile} (latest-by via a sidecar join). Absence is honest: 'no trace recorded for this scope' rides present/skipped, never an error. The render carries NO verdict vocabulary — the trace SHOWS, the scientist concludes; relay it verbatim.",
+    "verb": "query"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]",
     "idempotent": true,
@@ -1171,6 +1257,18 @@
     "python": "hpc_agent.ops.walk_submit_ambiguities.walk_submit_ambiguities",
     "side_effects": [],
     "summary": "Walk hpc-submit Steps 2-6 as deterministic branches: resolve cluster / entry_point / data_axis / homogeneous_axes / uncovered_param, reuse resolve-resources for walltime/gpu/partition/mpi_pe, and accumulate Ambiguity entries (safe_default ONLY for auto-resolvable fields; goal/task_generator get none). Returns the needs_resolution envelope {resolved, ambiguities}.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent worker-log-digest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "worker_log_digest.input.json",
+    "name": "worker-log-digest",
+    "output_schema": "worker_log_digest.output.json",
+    "python": "hpc_agent.ops.worker_log_digest.worker_log_digest",
+    "side_effects": [],
+    "summary": "Code-rendered digest of a LOCAL worker log (no SSH). Counts lines carrying each known engine marker ([throttle], [dispatch] FATAL/FAILED/ERROR/WARN), reports the total line count, and echoes the last tail_lines lines verbatim in a fenced block. Fails open on a missing/unreadable file (a clear diagnostic, never a traceback). Mechanizes the premortem's manual raw-log scan (run-#10 G2). The `render` field is relayed verbatim.",
     "verb": "query"
   },
   {
@@ -1355,7 +1453,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent scaffold-strategy --name <name> [--output-dir <output_dir>] [--force] [--async-refill]",
+    "cli": "hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]",
     "idempotent": true,
     "input_schema": null,
     "name": "scaffold-strategy",
@@ -1364,7 +1462,7 @@
     "side_effects": [
       "writes-file"
     ],
-    "summary": "Scaffold a closed-loop campaign strategy (optuna|pbt) into a repo.",
+    "summary": "Scaffold a campaign strategy (optuna|pbt ask/tell) or a fixed grid into a repo.",
     "verb": "scaffold"
   },
   {

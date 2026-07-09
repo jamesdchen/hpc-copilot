@@ -508,6 +508,46 @@ def test_dry_signature_reflects_the_fingerprint_ledger_identically(
         assert zf.read(key) == sig.write_map[key]
 
 
+def _write_conformance_ledger(experiment_dir: Path, reg_id: str, data: bytes) -> Path:
+    """Write a registration-conformance ledger straight to disk (opaque to the bundler)."""
+    base = experiment_dir / "_aggregated" / "_conformance"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{reg_id}.jsonl"
+    path.write_bytes(data)
+    return path
+
+
+def test_conformance_ledger_is_sealed_byte_for_byte(journal_home: Path, experiment: Path) -> None:
+    """A registration-conformance ledger seals under the ``live-conformance`` noun as
+    RAW BYTES (C-dossier: a re-registration carries the live record that motivated
+    it). A deliberately-torn ledger must round-trip byte-identical — never parsed."""
+    import hashlib
+
+    _seed_full_run(experiment, _RID)
+    ledger_bytes = b'{"schema_version":1,"subject_kind":"conformance-observation","payload":{"rea'
+    _write_conformance_ledger(experiment, "reg-sensor-7", ledger_bytes)
+
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+
+    by_path = {e["path"]: e for e in result.manifest["entries"]}
+    entry = by_path["conformance/reg-sensor-7.jsonl"]
+    assert entry["source"] == "live-conformance"
+    assert set(entry) == {"source", "path", "sha256", "bytes"}  # no meaning field
+    assert entry["sha256"] == hashlib.sha256(ledger_bytes).hexdigest()
+    with zipfile.ZipFile(result.archive_path) as zf:
+        assert zf.read("conformance/reg-sensor-7.jsonl") == ledger_bytes  # opaque, never mutated
+
+
+def test_absent_conformance_dir_seals_nothing_and_records_no_gap(
+    journal_home: Path, experiment: Path
+) -> None:
+    """Absent-tolerant (unlike aggregated): no conformance dir → no entry, no gap."""
+    _seed_full_run(experiment, _RID)
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    assert "live-conformance" not in _sources_of(result.manifest)
+    assert not [g for g in result.gaps if g["source"] == "live-conformance"]
+
+
 def test_appending_a_sample_between_exports_changes_the_bundle_sha(
     journal_home: Path, experiment: Path
 ) -> None:

@@ -60,6 +60,7 @@ from hpc_agent.cli.setup_actions import find_prior_run
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
+from hpc_agent.ops.evidence_embed import build_evidence_embed
 from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
 from hpc_agent.ops.pack_gate import assert_pack_receipts_current
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
@@ -374,9 +375,16 @@ def resolve_submit_inputs(
     # EXECUTOR's script path and load .hpc/tasks.py against it, not this
     # worker's CWD — the empirical path where the 0.10.11 register_run guard
     # silently no-op'd because Path(script).is_file() was CWD-relative.
+    # data-trace T3: thread ``reproduction_of`` onto the submit SNAPSHOT as
+    # ``reproduces`` so build-submit-spec's digest classifier sees the identity
+    # signal (a reproduction compares stage digests → digests ON). This is the
+    # classifier input; the ``reproduction_of`` dedup lever is injected onto the
+    # built dict below, separately.
     submit_spec = build_submit_spec(
         experiment_dir,
-        spec=spec.submit.model_copy(update={"run_id": run_id, "cmd_sha": cmd_sha}),
+        spec=spec.submit.model_copy(
+            update={"run_id": run_id, "cmd_sha": cmd_sha, "reproduces": spec.reproduction_of}
+        ),
     )
     # Thread the reproduction-receipt lever onto the built submit-flow spec so
     # the DETACHED submit-flow worker's submit-time layer-2 cmd_sha dedup pierces
@@ -469,6 +477,11 @@ def resolve_submit_inputs(
             "trial_params": cr["trial_params"],
             "reproduces": spec.reproduction_of,
             "audited_source": audited_source_echo(experiment_dir),
+            # data-trace T3: DISCLOSE an exercised digest override on the sidecar
+            # (the doc's "its exercise is disclosed"). None (no override) →
+            # omitted on write (byte-identical sidecar); force_on/force_off →
+            # recorded verbatim so a reader sees the classifier was overridden.
+            "trace_digests_override": spec.submit.trace_digests,
         }
     )
     materialized_executor = _materialized_executor_cmd(experiment_dir)
@@ -505,6 +518,16 @@ def resolve_submit_inputs(
     if contract:
         reason = f"{contract} — {reason}"
 
+    # Evidence-memory embed (E-embed): the ADVISORY point digest for this run's
+    # declared scope tags + its lineage (run_id). ADDITIVE and FAIL-OPEN — the
+    # one helper wraps the whole collect+render in a broad guard, so a collector
+    # bug degrades to a disclosed {unavailable} stub and NEVER becomes a submit
+    # refusal. The decision surface (stage_reached, needs_decision) is byte-
+    # identical whether evidence collected, empty, or failed (the never-blocking
+    # pin; T-NB). Never a private re-collection — the one-collector row.
+    run_tags = [t for t in (sidecar_spec.scopes or []) if isinstance(t, str)]
+    evidence = build_evidence_embed(experiment_dir, tags=run_tags, lineage=run_id)
+
     return ResolveSubmitInputsResult(
         stage_reached="resolved",
         needs_decision=False,
@@ -513,4 +536,5 @@ def resolve_submit_inputs(
         cmd_sha=cmd_sha,
         submit_spec=submit_spec,
         sidecar_path=written.get("path"),
+        evidence=evidence,
     )

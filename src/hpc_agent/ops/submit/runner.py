@@ -452,12 +452,15 @@ def submit_and_record(
         # fall through to a fresh / in-place submit (overwrites the old record +
         # cluster dir); run-id minting is untouched.
 
-    # A5: cmd_sha-based dedup. Covers the case where the journal at
+    # A5: cmd_sha-based dedup. Covers EXACTLY the case where the journal at
     # ~/.claude/hpc/<repo_hash>/runs/ has been wiped (rm -rf, machine
     # swap) but the per-experiment sidecar at <exp>/.hpc/runs/<id>.json
     # still exists. Without this fallback, submit_and_record would
     # generate a fresh RunRecord and the caller would re-submit a job
-    # the cluster already has running.
+    # the cluster already has running. The reconstruction below is gated
+    # to that case: a match on the submitting run's OWN sidecar, or on a
+    # prior run the journal still tracks, falls through to normal
+    # recording instead (see the guards after the scan).
     #
     # cmd_sha is PARAMETER identity, not code identity (#207). When the
     # caller wants an executor-body edit (unchanged swept params) to be
@@ -502,6 +505,26 @@ def submit_and_record(
             # priors still dedup. None (default) → unchanged behaviour.
             reproduction_of=reproduction_of,
         )
+        if sidecar_path is not None and sidecar_path.stem == run_id:
+            # The scan matched the submitting run's OWN sidecar. submit-flow's
+            # crash-safety pre-stamp writes the just-parsed job_ids onto it
+            # BEFORE this function runs, so it passes the jobless-orphan filter
+            # below — but it is THIS submission, not a prior one to replay.
+            # Dedup-reconstructing self would return deduped=True for a run
+            # that has no journal record yet, skipping the initial watchdog
+            # stamp — a driver that dies pre-first-tick would be invisible to
+            # find_stalled_runs / doctor. Proceed to normal recording.
+            sidecar_path = None
+        if sidecar_path is not None and load_run(experiment_dir, sidecar_path.stem) is not None:
+            # The matched PRIOR run still has a live journal record, so the
+            # journal was NOT wiped and the A5 contract does not apply. Layer 1
+            # keys on run_id and never saw that run, so this submit is a
+            # genuinely NEW run whose qsub already happened — "deduping" here
+            # would leave it with no journal record at all AND overwrite the
+            # prior run's journal in_flight with its stale job_ids (reproduced:
+            # a campaign submit matching an older COMPLETE non-campaign run
+            # with identical params). Proceed to normal recording.
+            sidecar_path = None
         if sidecar_path is not None:
             existing_run_id = sidecar_path.stem
             sidecar_data = None

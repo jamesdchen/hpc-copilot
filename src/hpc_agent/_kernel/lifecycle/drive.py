@@ -14,7 +14,7 @@ load-context`` and executes the next step:
   ``decide``). Always planned as ``skip``: a judgement step is a human
   decision boundary, driven via ``block-drive`` — the ``claude -p``
   bare-worker spawn transport this loop used to dispatch was deleted in
-  the §6 worker removal (``docs/design/proving-run-2-hardening.md``).
+  the §6 worker removal (``docs/design/history/proving-run-2-hardening.md``).
 
 One step per invocation: idempotent and cron-friendly. Wrap it in cron
 or ``/loop`` to walk a sequence — each tick advances exactly one step
@@ -265,7 +265,7 @@ def drive_once(
     ``hpc-agent`` verb; ``agent`` (judgement) steps always skip, because a
     judgement step is a human decision boundary driven via ``block-drive``
     (the ``claude -p`` worker spawn transport was deleted in the §6 worker
-    removal — see ``docs/design/proving-run-2-hardening.md`` Move 3).
+    removal — see ``docs/design/history/proving-run-2-hardening.md`` Move 3).
 
     This is the **programmatic** entry an external autonomous loop
     (Optuna / Ax / a custom controller) calls directly, supplying its own

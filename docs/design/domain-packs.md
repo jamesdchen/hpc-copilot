@@ -1,6 +1,11 @@
+---
+status: shipped
+---
 # Domain packs — bind-as-data design + implementation plan
 
-**Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off
+**Status: IMPLEMENTED (2026-07-08/09; Phase 4 — the bind-as-data substrate,
+all six seams, the receipt gate at both submit seats, the toy-widgets first
+consumer — landed on main, drift log at foot).** The durable hand-off
 for the pack substrate: settled decisions with recorded rationale, the
 per-seam declarative schema, the bind/receipt/gate mechanics, and the
 file-disjoint task waves for parallel Opus dispatch. Cite `path::symbol`,
@@ -514,6 +519,47 @@ maintainers mistake for core knowledge).
     (`ops/resolve_submit_inputs.py`, `ops/submit_flow.py`), all six regen
     scripts, and registry 141 (`operations.json` length, matching the
     e1e9ab27 baseline claim) all check out.
+
+- **LANDED on main 2026-07-08/09 — the capstone (Phase 4 complete, registry 150;
+  cf408788 + the landing tails bd896235).** The bind-as-data substrate, all six
+  seams (S1–S6), the receipt gate at both synchronous seats, the sidecar echo +
+  the two dossier nouns, the boundary suite, and the toy-widgets first consumer
+  landed as designed against DP1–DP4. Deviations folded at landing:
+  1. *The sidecar packs echo carries `manifest` (the relpath), a no-parse
+     consequence.* `state/pack_declarations.py` copies the opt-in entry's
+     `manifest` relpath verbatim into the echo (`echo["manifest"] = manifest_rel`)
+     — core never opens or parses the manifest to enrich the echo; the relpath
+     alongside `{pack, version, sha}` is identity enough for the dossier to prove
+     which standards gated the run, and parsing it would cross the no-parse
+     boundary.
+  2. *Every pack write re-points at `append_decision`; no second writer.*
+     `pack-bind` and `pack-record-receipt` route their CODE attestation through
+     `state/decision_journal.py::append_decision` under the `"pack"` scope kind
+     (`ops/pack/bind_op.py::_append_pack_record`,
+     `ops/pack/record_receipt_op.py`), landed with the T8 scope kind (282b7050);
+     currency reads route through the ONE
+     `read_decisions(experiment_dir, "pack", name)` reader.
+  3. *The gate refusal is its own error class, `errors.PackReceiptsMissing`*
+     (`precondition_failed`, `for_slots` naming every failing slot + status) —
+     the `SourceUnaudited`/`ScopeLocked` precedent, added to `errors.py`'s public
+     `__all__` and raised by `ops/pack_gate.py::assert_pack_receipts_current`
+     (the public-api pin was one of the landing tails, bd896235).
+  4. *T9 reconciled every consumer onto `read_decisions`.* The gate, the
+     `pack-status` query, and the seam-declaration resolver all reduce through the
+     ONE `read_decisions` reader + `state/attestation.py::reduce`
+     (`ops/pack_gate.py`, `ops/pack/status_op.py`,
+     `state/pack_declarations.py`), never a direct journal-file read or a
+     re-inlined newest-first (the T8 seam reconciliation, 282b7050 / 048b31d1).
+  5. *S6 stayed RESERVED — exactly one seam name, loaded shape-only.*
+     `registration_fields` / `required_receipts` load structure-only in
+     `state/pack.py`; no pack consumer of S6 landed here. The registration
+     kernel's opt-in `receipt_bindings: [{slot, pack}]` (the object-form sibling,
+     disambiguated in the coherence review from S6's manifest list
+     `required_receipts: [<slot slug>]`) is what names WHICH pack fills a slot —
+     exactly the reservation this plan committed to.
+  Enforcement rows landed under `docs/internals/engineering-principles.md`
+  §"Domain packs: bind-as-data, trust content-addressed", held by
+  `tests/contracts/test_pack_boundary.py` (T11, 048b31d1).
 
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the

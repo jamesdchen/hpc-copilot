@@ -1,4 +1,16 @@
+---
+status: shipped
+---
 # The slate sequencing plan — implementation order for the six planned features
+
+**Status: EXECUTED (2026-07-08/09) — this doc is now the historical ordering
+record.** The slate (phases 1/1a/1b/2/3/4) and the post-slate plans executed;
+see "Post-slate execution record" at the foot for the verified hot-file orders,
+the merge frontier (main vs. unmerged worktree branches), and the doc-header
+drift. The STANDING RULES below survive as the form every FUTURE plan follows:
+regen commits strictly serial, enforcement-map + remediation-test edits
+append-only, and hot-file (`ops/decision/journal.py`, `ops/attention_queue.py`,
+`state/decision_journal.py`) edits serialized across concurrent worktrees.
 
 **Status: ACTIVE (2026-07-07).** The master order for implementing the planning
 slate (`domain-packs`, `registration-kernel`, `determinism-fingerprint`,
@@ -183,3 +195,95 @@ jurisdiction is mapped (the scope doctrine: trust mechanisms, never
 operations; observe/judge/route, never actuate). Post-Phase-9 growth =
 consumers: packs, harnesses, domains, teams — plus the standing punch
 list in the machine-local memory.
+
+## Post-slate execution record (2026-07-08/09)
+
+This is the mutual post-slate order that `docs/design/live-conformance.md`'s
+task-waves section said was "not recorded in slate-sequencing.md yet" and told
+implementers to treat as strictly serial. It is now recorded — VERIFIED against
+`git log` on `main` (HEAD `88cf87be`) and on the still-open worktree branches,
+and CORRECTED where the tree disagreed with the pre-execution summary.
+
+**The merge frontier.** `main` absorbed the slate (phases 1–4), plus
+evidence-memory (Phase 6), the determinism-fingerprint machinery, the
+registration kernel, data-manifest, and the post-slate `data-trace` plan. The
+four late plans that share the three hot files — challenge-attestation (Phase 8),
+live-conformance (Phase 7), multi-human (Phase 9), onboard-by-reproduction
+(Phase 6.5) — and the conformance-kit (Phase 5) executed on unmerged worktree
+branches (`br-ch-*`, `br-lc-*`, `br-mh-*`, `br-kit-*`) as of this writing; their
+hot-file edits are named below as PENDING-MERGE so the serial order is a
+recorded contract even before they land on `main`.
+
+### (a) The executed hot-file orders (verified; corrections noted)
+
+**`ops/decision/journal.py` — the `append_decision` authorship-gate stack.**
+On `main`, in execution order, the post-slate gates are:
+`_assert_registration_authorship` (registration T7, `894c4052`) →
+`_assert_reproduction_verdict_authorship` (fingerprint T12, `71200219`) →
+`_assert_conclusion_authorship` (evidence T8, `cb05701c`, landed with Phase 6
+`88cf87be`). PENDING-MERGE: challenge T5's C-gate (`7e12528e`, `br-ch-c`); then
+multi-human's gate edits LAST (Phase 9, per the whichever-lands-second rule).
+CORRECTION to the pre-execution summary: evidence T8 is the LAST of the three
+gates on `main` (it follows registration and fingerprint, not "first"), and
+**live-conformance adds NO `journal.py` authorship gate** — no live-conformance
+commit touches the file (its T7 is the `review_horizon` amendment elsewhere).
+
+**`state/decision_journal.py::SCOPE_KINDS`.** On `main` the frozenset is 7
+kinds — the base 4 (`run`, `campaign`, `scope`, `notebook`) plus the post-slate
+additions in order: `registration` → `pack` → `conclusion`. PENDING-MERGE:
+`challenge` (`628bf9c7`, `br-ch-c`), whose commit titles it the "9th kind"
+though the branch frozenset lists 8 members — a nominal count, harmless because
+`SCOPE_KINDS` is an unordered frozenset (the doc's ordinal language was always
+nominal). CORRECTION: the summary's "9 kinds incl. challenge" is a branch state;
+`main` carries 7 and challenge is not yet merged.
+
+**`ops/attention_queue.py` — the per-kind collectors.** On `main`, landing
+order: `collect_data_manifest` (data-manifest, `2b0c4194`) →
+`collect_registrations` (registration T8, `58cea88b`) →
+`collect_reproduction_verdicts` (fingerprint T7, `1cf52fa7`/`19af2e3a`) →
+`collect_campaign_unconcluded` (evidence T10, `3f8b52fe`). PENDING-MERGE:
+challenge T7's `challenge-open`/`challenge-upheld-unremedied` C-queue items
+(`432d9979`, `br-ch-c`). CORRECTIONS: `data-manifest` landed FIRST of the
+post-slate collectors (not third); and there is **no conformance collector** on
+any branch — live-conformance contributes no attention kind, so the summary's
+trailing "conformance T8" does not exist.
+
+### (b) Phase completion / doc-header status
+
+`Status: IMPLEMENTED` on `main` (grep of `docs/design/`): `mcp-elicitation.md`
+(Phase 1), `run-story.md`, `attention-queue.md`, `notebook-audit.md`, and
+`evidence-memory.md` (Phase 6). DRIFT worth recording: several plans whose CODE
+landed on `main` still carry `Status: PLANNED` headers — `registration-kernel.md`,
+`determinism-fingerprint.md`, `domain-packs.md` (Phase 4 landed `cf408788`), and
+`data-trace.md` (landed `92321784`). The header-flip commit
+(`fc9a4dd0`, "flip registration/fingerprint/packs to IMPLEMENTED") is staged on
+a branch, not yet merged — so the code-vs-header lag is a merge-ordering artifact,
+not an implementation gap. The genuinely-still-PLANNED set (branch-only or
+unstarted): `live-conformance.md`, `challenge-attestation.md`, `multi-human.md`,
+`onboard-by-reproduction.md`, `conformance-kit.md`, `audit-preflight.md`,
+`draft-context.md`.
+
+### (c) The recorded pattern — worktree-parallel with serial regen at merge
+
+The proven form (which `docs/design/data-trace.md` also cites): decompose a
+plan's waves into file-disjoint tasks, run each in its own git worktree in
+PARALLEL (`worktree-agent-*` / `br-<plan>-t<N>` branches), and SERIALIZE only
+the three hot files and the regen artifacts. Merges land one branch at a time;
+the six regen scripts (`operations.json`, schemas, `_verb_module_map`,
+`docs/generated/*`) are re-run AT THE MERGE, in a dedicated `chore(regen)`
+commit (`a74e52f4`, `8557466e`, "verb module map after origin merge"), never
+concurrently — the 0.8.0 lesson holds. Hot-file conflicts are resolved
+re-read-then-retry (append-only enforcement-map and remediation-test rows make
+this safe). This is the standing form for every future plan.
+
+### (d) Registry trajectory
+
+Baseline 141 @ `e1e9ab27` (142 @ `326a9124` after `notebook-scaffold-template`);
+the pre-execution slate estimate was 150 (`domain-packs` Phase 4 landed exactly
+there, `cf408788`). Actual on `main` @ `88cf87be` = **155** operations
+(`data-trace` carried it to 153, `92321784`; evidence-memory's conclusion +
+unconcluded verbs to 155, `88cf87be`). As always: this number is a snapshot —
+verify against live capabilities (`hpc-agent capabilities` / the length of
+`src/hpc_agent/operations.json`), never a frozen literal. The PENDING-MERGE
+branches (challenge, live-conformance, multi-human, kit, onboard-6.5) will move
+it further; re-derive rather than trust this figure once they land.

@@ -11,7 +11,7 @@ the ONE deterministic, ordered, attributed timeline
 definition), windows it honestly (D6), and renders canonical JSON + ``story_sha``
 + code-authored markdown (:func:`hpc_agent.ops.story_render.render_story`).
 
-It is a PURE projection (the ``ops/notebook_status.py`` posture): no SSH, no
+It is a PURE projection (the ``ops/notebook/status_op.py`` posture): no SSH, no
 scheduler, no write, no store. Derived state recomputed from the on-disk records
 on every call, so it can never drift from a second source of truth. It never
 interprets what any record MEANS — every event is IDENTITY (which
@@ -20,7 +20,7 @@ counts) over opaque records (the boundary posture pinned by
 ``tests/contracts/test_run_story_boundary.py``).
 
 This file lives at the ``ops/`` *role root* (sibling to ``export_dossier.py`` /
-``notebook_status.py``) because it reads across subjects — the ``state`` sidecar,
+``trace.py``) because it reads across subjects — the ``state`` sidecar,
 the decision/brief/terminal journals, the scope substrate + look ledgers, the
 journal records, and the notebook attestation journal. The subject-imports lint
 short-circuits for role-root files, so the cross-subject reads here are allowed

@@ -158,7 +158,16 @@ def test_dead_worker_collector_fires(tmp_path: Path, monkeypatch: pytest.MonkeyP
     detached = _current_homedir() / "_detached"
     detached.mkdir(parents=True, exist_ok=True)
     (detached / "submit-s4-run-crashed.lease.json").write_text(
-        json.dumps({"run_id": "run-crashed", "block": "submit-s4", "pid": 999_999_999}),
+        json.dumps(
+            {
+                "run_id": "run-crashed",
+                "block": "submit-s4",
+                "pid": 999_999_999,
+                # The scan scopes the GLOBAL lease dir by the --experiment-dir
+                # flag the one lease writer always stamps into the child argv.
+                "argv": ["hpc-agent", "submit-s4", "--experiment-dir", str(tmp_path)],
+            }
+        ),
         encoding="utf-8",
     )
     items = collect_dead_workers(tmp_path, now=_NOW)

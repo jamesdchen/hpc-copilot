@@ -224,3 +224,23 @@ def test_declared_input_roots_none_when_empty_list(tmp_path: Path) -> None:
         json.dumps({"audited_source": {"input_roots": []}}), encoding="utf-8"
     )
     assert dm.declared_input_roots(tmp_path) is None
+
+
+# --- P-S1 one-definition pin (the re-point to determinism.canonical_sha) ------
+
+
+def test_manifest_doc_sha_routes_to_canonical_sha_byte_for_byte() -> None:
+    """P-S1: ``manifest_doc_sha`` IS ``determinism.canonical_sha`` over the records.
+
+    Pins the re-point byte-for-byte so the sibling copy can never silently
+    diverge from the ONE harness-contract canonicalization again.
+    """
+    from hpc_agent.state import determinism
+
+    records = {
+        "data/train.csv": {"sha256": "ab" * 32, "size": 10, "built_by": "etl v1"},
+        "data/labels.parquet": {"sha256": "cd" * 32, "size": 99},
+    }
+    assert dm.manifest_doc_sha(records) == determinism.canonical_sha(records)
+    # An empty record map is a legal (0-file) manifest identity.
+    assert dm.manifest_doc_sha({}) == determinism.canonical_sha({})

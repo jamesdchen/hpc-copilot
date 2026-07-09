@@ -3,7 +3,7 @@
 This lifts hpc-status Step 6's resubmit policy out of SKILL.md prose into
 code so the agent calls one verb instead of computing ``failed_fraction``
 and branching on the threshold itself. The policy lived ONLY in
-``src/slash_commands/skills/hpc-status/SKILL.md`` Step 6 — there was no
+``src/hpc_agent/slash_commands/skills/hpc-status/SKILL.md`` Step 6 — there was no
 implementation — which meant every status poll re-derived the same
 arithmetic-plus-branch by hand, the classic prose-discipline failure mode.
 
