@@ -106,6 +106,41 @@ def test_discover_runs_uses_cache(tmp_path, monkeypatch):
     assert calls == [exp]
 
 
+def test_sequential_stores_preserve_both_experiments(tmp_path):
+    """Read-modify-write is locked (no lost update): two stores keyed by
+    DIFFERENT experiment dirs in the shared global file must BOTH persist
+    (the same unlocked-RMW lost-update its siblings ``canary_cache`` /
+    ``preflight_cache`` were fixed for)."""
+    exp_a = _exp(tmp_path)
+    exp_b = tmp_path / "exp_b"
+    exp_b.mkdir()
+    (exp_b / "run.py").write_text("# @register_run\n", encoding="utf-8")
+    discover_cache.store(exp_a, _infos(exp_a))
+    discover_cache.store(exp_b, _infos(exp_b))
+    # The second store read the first's entry under the lock, so neither is lost.
+    assert discover_cache.load(exp_a) is not None
+    assert discover_cache.load(exp_b) is not None
+
+
+def test_store_acquires_lock_around_write(tmp_path, monkeypatch):
+    """``store`` holds the advisory flock across read+write (the state-layer
+    lock idiom). Assert the lock context is entered exactly once per store."""
+    calls: list[str] = []
+    from hpc_agent.infra import io as _io
+
+    orig = _io.advisory_flock
+
+    def _spy(lock_path, **kw):
+        calls.append(str(lock_path))
+        return orig(lock_path, **kw)
+
+    monkeypatch.setattr(_io, "advisory_flock", _spy)
+    exp = _exp(tmp_path)
+    discover_cache.store(exp, _infos(exp))
+    assert len(calls) == 1
+    assert calls[0].endswith(".lock")
+
+
 def test_fingerprint_skip_dirs_subset_of_scan_skip_dirs() -> None:
     """The fingerprint must not prune a directory the actual source scan reads.
 

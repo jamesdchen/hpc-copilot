@@ -63,6 +63,17 @@ SIDECAR_SCHEMA_VERSION: int = 2
 # — anything filesystem-safe that doesn't contain a path separator works.
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
+# Co-tenant exclusion for the sidecar scan: ``state/block_terminal.py`` stores
+# each detached block's terminal record in this SAME ``.hpc/runs/`` directory
+# as ``<run_id>.<block>.terminal.json`` (see ``block_terminal.terminal_path``).
+# Run_ids may legally contain dots, so a name-shape parse cannot tell the two
+# apart — the exclusion keys on the fixed ``.terminal.json`` suffix instead,
+# the same ``endswith`` idiom ``state/index.py._all_run_files`` uses for its
+# ``.last_status.json`` co-tenant. Pinned against ``terminal_path``'s actual
+# output by ``tests/state/test_runs_terminal_cotenants.py`` so the two modules
+# cannot drift apart.
+_TERMINAL_RECORD_SUFFIX = ".terminal.json"
+
 
 def _runs_dir(experiment_dir: Path) -> Path:
     """Deprecated alias for ``RepoLayout(experiment_dir).runs``.
@@ -512,7 +523,15 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
-    """Return every ``.hpc/runs/<id>.json`` file, newest-first by mtime."""
+    """Return every run-sidecar ``.hpc/runs/<id>.json``, newest-first by mtime.
+
+    Only RUN SIDECARS: the ``<run_id>.<block>.terminal.json`` block-terminal
+    records ``state/block_terminal.py`` co-locates in the same directory are
+    excluded (:data:`_TERMINAL_RECORD_SUFFIX`). Sweeping them up made
+    :func:`prune_orphan_sidecars` delete them (they read back jobless), let
+    :func:`find_run_by_cmd_sha` return one as a dedup target, and burned
+    :data:`MAX_RUNS` retention slots on non-sidecars.
+    """
     runs = _runs_dir(experiment_dir)
     if not runs.exists():
         return []
@@ -524,6 +543,8 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     keyed: list[tuple[float, str, Path]] = []
     for p in runs.iterdir():
         if not (p.is_file() and p.suffix == ".json"):
+            continue
+        if p.name.endswith(_TERMINAL_RECORD_SUFFIX):
             continue
         try:
             mtime = p.stat().st_mtime

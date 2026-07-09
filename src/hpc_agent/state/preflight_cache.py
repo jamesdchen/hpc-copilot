@@ -54,6 +54,12 @@ def _cache_path() -> Path:
     return _current_homedir() / "_preflight_cache.json"
 
 
+def _lock_path(target: Path) -> Path:
+    """Sibling ``.lock`` path for *target* — the same convention as
+    :func:`hpc_agent.state.run_record._lock_path` (``<name>.lock``)."""
+    return target.with_suffix(target.suffix + ".lock")
+
+
 def cache_disabled() -> bool:
     """True when ``HPC_NO_PREFLIGHT_CACHE=1`` opts the cache out entirely."""
     return os.environ.get("HPC_NO_PREFLIGHT_CACHE") == "1"
@@ -138,18 +144,26 @@ def record_preflight(key: str, *, checks: list[str] | None = None) -> None:
     """
     if cache_disabled():
         return
-    from hpc_agent.infra.io import atomic_write_json
+    from hpc_agent.infra.io import advisory_flock, atomic_write_json
     from hpc_agent.infra.time import utcnow_iso
 
-    cache = _read_cache()
-    cache[key] = {
-        "validated_at": utcnow_iso(),
-        "ttl_sec": _ttl_sec(),
-        "checks": list(checks or []),
-    }
     path = _cache_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(path, cache)
+        # Hold the advisory flock across BOTH the read and the write so two
+        # concurrent submits recording DIFFERENT keys can't lost-update each
+        # other (read {A} / read {A} → write {A,B} clobbers write {A,C}) — the
+        # same locked-RMW fix its sibling ``canary_cache.record_canary_validated``
+        # carries, same lock idiom every other state read-modify-write uses. A
+        # lock-acquire or write failure degrades gracefully — the cache is an
+        # optimisation, never a correctness gate.
+        with advisory_flock(_lock_path(path)):
+            cache = _read_cache()
+            cache[key] = {
+                "validated_at": utcnow_iso(),
+                "ttl_sec": _ttl_sec(),
+                "checks": list(checks or []),
+            }
+            atomic_write_json(path, cache)
     except OSError:
         pass
