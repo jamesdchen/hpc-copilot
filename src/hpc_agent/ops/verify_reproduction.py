@@ -437,6 +437,36 @@ def _render_tiered_reason(stage: str, per_key: list[dict[str, Any]]) -> str:
     )
 
 
+def _data_dimension_phrase(excluded_data_drift: int, data_identity_unknown: int) -> str:
+    """Code-rendered clause NAMING the data dimension (amendment leg 2), or ``""``.
+
+    The verdict states which dimension moved: prior samples EXCLUDED as data drift
+    (a different data identity — a rebuilt input, not nondeterminism), and priors
+    with NO recorded manifest counted UNKNOWN ("data identity unknown, no manifest
+    at record time") — disclosed, never blocking, never fabricated. Both counts
+    only arise when the CURRENT comparison's data identity is KNOWN (the data leg
+    was applied); empty string when the data leg had nothing to say, so a
+    no-manifest verify stays byte-identical to a pre-amendment one.
+    """
+    parts: list[str] = []
+    if excluded_data_drift:
+        parts.append(
+            f"{excluded_data_drift} prior sample"
+            f"{'s' if excluded_data_drift != 1 else ''} excluded as DATA DRIFT "
+            "(different data identity — a rebuilt input reads as data drift, not "
+            "nondeterminism)"
+        )
+    if data_identity_unknown:
+        parts.append(
+            f"{data_identity_unknown} prior sample"
+            f"{'s' if data_identity_unknown != 1 else ''} with data identity unknown "
+            "(no manifest at record time)"
+        )
+    if not parts:
+        return ""
+    return "; data dimension: " + ", ".join(parts)
+
+
 def _identity(sidecar: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     """Lift a run's identity off its sidecar VERBATIM (never re-derived)."""
     ident: dict[str, Any] = {"run_id": run_id}
@@ -684,6 +714,10 @@ def verify_reproduction(
     compared_indices: list[int] | None = None
     uncompared_keys: int | None = None
     uncompared_tasks: int | None = None
+    # The data-dimension disclosure (amendment leg 3) — populated only on the
+    # tiered path (an envelope exists to have applied the data leg); stays None on
+    # the incomparable / empty-ledger paths.
+    data_identity_disclosure: dict[str, Any] | None = None
 
     if partial:
         assert indices is not None
@@ -730,9 +764,40 @@ def verify_reproduction(
         # (judge-before-append), then tier the verdict via the ONE classifier.
         cmd_sha = str(repro_sidecar.get("cmd_sha") or "")
         cluster = repro_sidecar.get("cluster")
-        identity = {field: repro_sidecar.get(field) for field in _FINGERPRINT_IDENTITY_FIELDS}
-        samples, admitted = _load_ledger_evidence(experiment_dir, cmd_sha, identity)
-        envelope = reduce_envelope(samples, admitted, identity=identity)
+        code_identity = {field: repro_sidecar.get(field) for field in _FINGERPRINT_IDENTITY_FIELDS}
+        # Data-identity leg (Phase-3 amendment, ruled 0b): the repro's data
+        # identity, lifted from its sidecar's data_manifest_sha. Known → the
+        # envelope EXCLUDES cross-data prior samples as data drift (disclosed
+        # excluded_data_drift), never admitting a parquet-rebuild sample as
+        # nondeterminism; None → the data leg is not applied (unknown, disclosed,
+        # never blocking). The SAMPLE this comparison appends carries the leg so a
+        # FUTURE comparison can filter on it — code_identity feeds the store-layer
+        # read (which keys on the three code fields), the data leg rides separately.
+        data_sha_raw = repro_sidecar.get("data_manifest_sha")
+        data_sha = str(data_sha_raw) if data_sha_raw else None
+        identity = dict(code_identity)
+        if data_sha:
+            identity["data_sha"] = data_sha
+        samples, admitted = _load_ledger_evidence(experiment_dir, cmd_sha, code_identity)
+        envelope = reduce_envelope(
+            samples, admitted, identity=code_identity, data_identity=data_sha
+        )
+        # The data-dimension disclosure (amendment leg 2): what the data leg did to
+        # the prior evidence — cross-data samples EXCLUDED as drift, or priors with
+        # no manifest counted UNKNOWN. Surfaced on the v2 receipt + the reason so
+        # the verdict NAMES the data dimension when it moved (never fabricated). The
+        # block rides the receipt only when the CURRENT data identity is KNOWN — a
+        # no-manifest verify stays byte-identical to a pre-amendment one.
+        data_moved = bool(envelope.excluded_data_drift or envelope.data_identity_unknown)
+        data_phrase = _data_dimension_phrase(
+            envelope.excluded_data_drift, envelope.data_identity_unknown
+        )
+        if data_sha is not None:
+            data_identity_disclosure = {
+                "current": data_sha,
+                "excluded_data_drift": envelope.excluded_data_drift,
+                "data_identity_unknown": envelope.data_identity_unknown,
+            }
         diffs = diff_metrics(orig_metrics, repro_metrics)
         classification = classify(
             diffs,
@@ -748,9 +813,14 @@ def verify_reproduction(
         # comparison is byte-identical to before). Partiality forces v2 (the
         # receipt must carry the partiality accounting) but reuses the v1
         # verdicts when there is no envelope to consult.
+        # data_moved forces v2 even on an empty envelope: when ALL priors were
+        # excluded as data drift the envelope is empty (untiered), yet the
+        # exclusion is exactly what must be disclosed (a rebuilt input).
         tiered = bool(envelope.per_key)
         schema_version = (
-            RECEIPT_SCHEMA_VERSION_TIERED if (tiered or partial) else RECEIPT_SCHEMA_VERSION
+            RECEIPT_SCHEMA_VERSION_TIERED
+            if (tiered or partial or data_moved)
+            else RECEIPT_SCHEMA_VERSION
         )
 
         if tiered:
@@ -768,7 +838,7 @@ def verify_reproduction(
                     merged["envelope_applied"] = None
                 per_key.append(merged)
             stage = classification.stage_reached
-            reason = _render_tiered_reason(stage, per_key)
+            reason = _render_tiered_reason(stage, per_key) + data_phrase
         else:
             per_key = []
             for entry in per_key_v1:
@@ -785,7 +855,7 @@ def verify_reproduction(
                 else:
                     per_key.append(entry)
             stage = overall_v1
-            reason = _render_reason(per_key_v1, overall_v1)
+            reason = _render_reason(per_key_v1, overall_v1) + data_phrase
 
         appended_record = _append_fingerprint_sample(
             experiment_dir,
@@ -819,6 +889,10 @@ def verify_reproduction(
         receipt["task_indices"] = compared_indices if partial else None
         receipt["uncompared_keys"] = uncompared_keys
         receipt["uncompared_tasks"] = uncompared_tasks
+        # v2 data-identity disclosure (amendment leg 3): the current data identity
+        # + what the data leg did to the prior evidence. None on an empty-ledger v2
+        # (partial-but-untiered) receipt — no envelope applied the data leg.
+        receipt["data_identity"] = data_identity_disclosure
 
     # No-silent-caps: refuse a partial receipt missing any partiality field.
     _validate_receipt_partiality(receipt)

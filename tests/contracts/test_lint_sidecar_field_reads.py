@@ -80,6 +80,13 @@ _V2_CONFIG = frozenset(
         "parent_run_ids",
         "node_sha",
         "data_sha",
+        # data_manifest_sha (data-manifest amendment 0b): the manifest-doc
+        # identity of the declared input roots at submit — the fingerprint's
+        # data-identity dimension reads it.
+        "data_manifest_sha",
+        # packs (domain-packs T10): opaque {pack, version, sha, manifest} echoes
+        # of the bound packs at submit; export-dossier seals the named files.
+        "packs",
         "env_hash",
         # scopes (rigor primitives): the caller-attached opaque evidence-scope
         # tags the reduction gate + look ledger key on.

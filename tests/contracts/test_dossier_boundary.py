@@ -67,6 +67,8 @@ _EXPECTED_SOURCES = frozenset(
         "notebook-journal",
         "renders",
         "determinism-fingerprint",
+        "pack-manifest",
+        "pack-journal",
     }
 )
 

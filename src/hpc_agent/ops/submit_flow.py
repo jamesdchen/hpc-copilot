@@ -733,8 +733,10 @@ def _run_constant_spec_kwargs(experiment_dir: Path) -> dict[str, Any]:
     return {str(k): v for k, v in fixed_params.items()}
 
 
-def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | None, str]:
-    """The (data_sha, env_hash) pair the spec's provenance capture records (#222/#312).
+def _spec_provenance(
+    experiment_dir: Path, spec: SubmitFlowSpec
+) -> tuple[str | None, str, str | None]:
+    """The (data_sha, env_hash, data_manifest_sha) provenance the spec records.
 
     ``env_hash`` folds the resolved activation the cluster preamble consumes
     ($MODULES / $CONDA_SOURCE / $CONDA_ENV in job_env) plus the runtime
@@ -743,7 +745,16 @@ def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | 
     ("not captured" must stay distinguishable from the real digest of an
     empty declaration), and a declared-but-missing path contributes
     ``compute_data_sha``'s "absent" sentinel inside the hash.
+
+    ``data_manifest_sha`` (Phase-3 amendment, ruled 0b) is the DISTINCT
+    data-identity leg: the canonical sha over the DATA MANIFEST's declared-input
+    files record (``state/data_manifest.py::data_identity``). It is ``None``
+    (disclosed-absent downstream, never fabricated) when the experiment declares
+    no input roots or has minted no manifest — a run with no manifest thus writes
+    a byte-identical sidecar. It rides the fingerprint's data-identity leg so a
+    parquet rebuild reads as data drift, not nondeterminism.
     """
+    from hpc_agent.state.data_manifest import data_identity
     from hpc_agent.state.run_sha import compute_data_sha, compute_env_hash
 
     job_env = spec.job_env or {}
@@ -760,7 +771,8 @@ def _spec_provenance(experiment_dir: Path, spec: SubmitFlowSpec) -> tuple[str | 
         if spec.input_datasets
         else None
     )
-    return data_sha, env_hash
+    data_manifest_sha = data_identity(experiment_dir)
+    return data_sha, env_hash, data_manifest_sha
 
 
 def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
@@ -832,9 +844,13 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
             # backfill_run_sidecar_provenance).
             from hpc_agent.state.runs import backfill_run_sidecar_provenance
 
-            data_sha, env_hash = _spec_provenance(experiment_dir, spec)
+            data_sha, env_hash, data_manifest_sha = _spec_provenance(experiment_dir, spec)
             backfill_run_sidecar_provenance(
-                experiment_dir, spec.run_id, data_sha=data_sha, env_hash=env_hash
+                experiment_dir,
+                spec.run_id,
+                data_sha=data_sha,
+                env_hash=env_hash,
+                data_manifest_sha=data_manifest_sha,
             )
             return
         raise _write_first_error(
@@ -934,7 +950,7 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # $CONDA_ENV) and the $HPC_RUNTIME selector — i.e. exactly what this run
     # executes under. ``$MODULES`` is a space-joined string in job_env; split
     # it back to the ordered list compute_env_hash expects.
-    data_sha, env_hash = _spec_provenance(experiment_dir, spec)
+    data_sha, env_hash, data_manifest_sha = _spec_provenance(experiment_dir, spec)
 
     # #339 provenance precedence rule for the wave_map: when the sweep exceeds
     # the effective array cap (it must be submitted as N concurrency-bounded
@@ -957,6 +973,8 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
             total_tasks=int(spec.total_tasks), cluster=spec.cluster, backend_name=spec.backend
         )
         cap_wave_map = {str(w): ids for w, ids in build_wave_map(plan).items()}
+
+    from hpc_agent.state.pack_declarations import resolve_pack_echoes
 
     write_run_sidecar(
         experiment_dir,
@@ -996,6 +1014,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         # covers the bare submit-flow path where no resolve leg ran). Lets a
         # later reproduction of the same original skip this derived run too.
         reproduces=spec.reproduction_of,
+        # Domain-pack echoes (T10): one opaque {pack, version, sha, manifest} per
+        # bound pack the experiment opted into, so export-dossier can seal each
+        # pack's manifest + decision journal. FAIL-OPEN + additive — resolve_pack_
+        # echoes returns [] when not opted in (or on any dangling/drift), so the
+        # `or None` omits the field entirely and a pack-less run's sidecar stays
+        # byte-identical. The gate at the pre-staging seat above already verified
+        # every opted-in pack is current before this point.
+        packs=resolve_pack_echoes(experiment_dir) or None,
     )
 
 
@@ -2436,6 +2462,20 @@ def _submit_flow_batch_locked(
     from hpc_agent.ops.notebook_gate import assert_source_audited
 
     assert_source_audited(experiment_dir)
+
+    # Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    # ops/pack_gate — TWO synchronous seats, beside the notebook gate): the
+    # PRE-STAGING seat. Before any rsync/SSH, refuse a submit whose opted-in
+    # `packs` block (interview.json, D7) carries a required receipt_bindings slot
+    # not CURRENT + passed (missing / stale / failed). Defense in depth with the
+    # resolve-submit-inputs pre-sidecar (S1) seat: covers the bare submit-flow path
+    # AND a pack file edited (drift) between S1 and here. Per experiment, not per
+    # spec — ONE call before the fresh-spec loops, after the fully-deduped
+    # short-circuit so a no-cluster-traffic batch stays a byte-identical no-op.
+    # Fail-safe: NO packs block → byte-identical no-op. Local reads — no SSH.
+    from hpc_agent.ops.pack_gate import assert_pack_receipts_current
+
+    assert_pack_receipts_current(experiment_dir)
 
     # Supersession conduct (proving run #4, findings e/g/h): a NEW run_id
     # submitted while a SIBLING prior run_id with the SAME code identity

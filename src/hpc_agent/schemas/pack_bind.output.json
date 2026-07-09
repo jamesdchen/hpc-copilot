@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_bind.output.json",
+  "title": "pack-bind output data",
+  "description": "Echo of what a ``pack-bind`` bound — the journaled bind record's shape.\n\nEvery field is a server-recomputed identity: ``pack``/``version`` from the\nmanifest (version echoed, never compared — ORDERING is the sha's job via\nbind order), ``manifest_sha`` the pack identity sha, ``files`` the closed\nintegrity set with per-file shas, ``seams`` the declared seam names.",
+  "type": "object",
+  "required": [
+    "pack",
+    "version",
+    "manifest_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "pack": {
+      "title": "Pack",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "manifest_sha": {
+      "title": "Manifest Sha",
+      "type": "string"
+    },
+    "files": {
+      "description": "Every bound file with its server-recomputed raw-bytes sha.",
+      "items": {
+        "$ref": "#/$defs/PackFileEntry"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "seams": {
+      "description": "Declared seam names (drawn from the closed SEAM_NAMES vocabulary).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Seams",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "PackFileEntry": {
+      "additionalProperties": false,
+      "description": "One bound file: its manifest-declared relpath and server-recomputed sha.\n\n``sha256`` is the raw-bytes SHA-256 the verb recomputed from disk (lowercase\nhex), NEVER a caller-asserted value — the closed integrity set of the bind.",
+      "properties": {
+        "path": {
+          "description": "Manifest-declared file relpath.",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Server-recomputed raw-bytes SHA-256 (lowercase hex) of the file on disk.",
+          "minLength": 1,
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "pack-bind file entry",
+      "type": "object"
+    }
+  }
+}

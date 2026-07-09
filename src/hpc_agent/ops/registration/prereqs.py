@@ -51,6 +51,8 @@ from hpc_agent import errors
 from hpc_agent.state import attestation, code_drift, notebook_audit, scopes
 from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.determinism import evidence_meets, validate_sample
+from hpc_agent.state.fingerprint_store import load_evidence
 from hpc_agent.state.registration import (
     KIND_ATTESTATION,
     KIND_NOTEBOOK_AUDIT,
@@ -60,9 +62,10 @@ from hpc_agent.state.registration import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
+    from collections.abc import Collection, Mapping, Sequence
     from pathlib import Path
 
+    from hpc_agent.state.determinism import Sample
     from hpc_agent.state.registration import ChainEntry
 
 __all__ = ["SlotVerdict", "check_chain"]
@@ -76,10 +79,12 @@ STALE = "stale"
 #: The substrate/record the entry names does not exist (nothing to compare).
 ABSENT = "absent"
 
-#: The determinism-fingerprint substrate (``state/determinism.py::evidence_meets``)
-#: is Phase 3 and does NOT exist in this worktree — a ``reproduction`` entry that
-#: carries a ``requires`` evidence floor is refused LOUDLY, naming the reserved
-#: seam (R4; never a silent pass).
+#: The determinism-fingerprint design — the substrate a ``reproduction``
+#: ``requires`` evidence floor is checked against (R4, now WIRED): the newest
+#: receipt's ``repro.cmd_sha`` addresses the ledger via
+#: ``state/fingerprint_store.py::load_evidence`` (tolerant read + CURRENT-identity
+#: partition + admission JOIN), and ONE ``state/determinism.py::evidence_meets``
+#: call counts the ADMITTED current-identity samples against the caller floor.
 _FINGERPRINT_DOC = "docs/design/determinism-fingerprint.md"
 
 #: The CLOSED set of ``requires`` KEYS each kind may carry (R3/R4). An unknown key
@@ -314,30 +319,71 @@ def _newest_receipt(experiment_dir: Path, repro_run_id: str) -> dict[str, Any] |
     return newest
 
 
+def _reproduction_evidence_floor(
+    experiment_dir: Path,
+    *,
+    repro_ident: Mapping[str, Any],
+    sidecar: Mapping[str, Any],
+    demand: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """The R4 fingerprint evidence floor — does the ledger meet the caller *demand*?
+
+    The address chain the plan reserved (registration-kernel R4), now wired: the
+    newest receipt's ``repro`` identity block supplies the ``cmd_sha`` the ledger
+    keys on (the same key its own reproduction sample was written under); the run's
+    sidecar supplies the ``executor`` the code-identity filter needs (the receipt
+    identity block carries no ``executor`` field). ONE call each:
+    :func:`~hpc_agent.state.fingerprint_store.load_evidence` (tolerant read +
+    CURRENT-identity partition + the admission JOIN — so ``state`` stays pure) then
+    :func:`~hpc_agent.state.determinism.evidence_meets` over the ADMITTED
+    current-identity samples. Core matches identity and counts — it never
+    interprets a metric.
+
+    A MISSING ledger (or an empty ``cmd_sha``) is an ordinary shortfall (n=0)
+    named in the returned dict — never a fabricated pass. Returns ``evidence_meets``'
+    ``(met, shortfall)``.
+    """
+    cmd_sha = str(repro_ident.get("cmd_sha") or "")
+    identity: dict[str, Any] = {
+        "cmd_sha": repro_ident.get("cmd_sha"),
+        "tasks_py_sha": repro_ident.get("tasks_py_sha"),
+        "executor": sidecar.get("executor"),
+    }
+    samples: list[Sample] = []
+    admitted: list[bool] = []
+    if cmd_sha:
+        try:
+            evidence = load_evidence(experiment_dir, cmd_sha=cmd_sha, identity=identity)
+        except errors.SpecInvalid:
+            evidence = None
+        if evidence is not None:
+            for record, flag in zip(evidence.samples, evidence.admitted_flags, strict=False):
+                try:
+                    samples.append(validate_sample(record))
+                except errors.SpecInvalid:
+                    continue  # a malformed ledger line never counts toward the floor
+                admitted.append(bool(flag))
+    return evidence_meets(samples, admitted, demand, identity=identity)
+
+
 def _check_reproduction(
     experiment_dir: Path, entry: ChainEntry, *, dossier_run_ids: Collection[str] | None
 ) -> SlotVerdict:
     """Currency of a reproduction receipt (R3/R4).
 
-    ``requires`` (the fingerprint evidence floor) is NOT-YET-AVAILABLE — the
-    determinism substrate is Phase 3 (see :data:`_FINGERPRINT_DOC`) — so a
-    ``requires``-carrying entry is refused LOUDLY (never a silent pass). Otherwise
-    current iff: a verdict is recorded on the newest receipt, no code drift since
+    Current iff: a verdict is recorded on the newest receipt, no code drift since
     (:func:`~hpc_agent.state.code_drift.detect_code_drift` over the receipt's
     recorded repro identity vs the current sidecar), the receipt links into the
     dossier (its ``original.run_id`` appears in *dossier_run_ids* when supplied),
-    and the recomputed canonical-JSON sha of that newest receipt equals the
-    asserted ``content_sha``.
+    the recomputed canonical-JSON sha of that newest receipt equals the asserted
+    ``content_sha``, AND — when the entry carries a ``requires`` evidence floor —
+    the determinism-fingerprint ledger MEETS that floor (:func:`_reproduction_evidence_floor`,
+    the R4 address chain, now wired: newest receipt → ``cmd_sha`` → ``load_evidence``
+    → one ``evidence_meets`` call). A ledger that falls short (missing, too few
+    samples, wrong scale/cluster) reads :data:`STALE` with the demand NAMED — an
+    ordinary shortfall, never a fabricated pass. Unknown ``requires`` keys are
+    still refused loudly by :func:`_reject_unknown_requires` upstream.
     """
-    if entry.requires:
-        raise errors.SpecInvalid(
-            f"registration chain entry {entry.slot!r} (kind {entry.kind!r}): a 'requires' "
-            f"evidence floor {dict(entry.requires)!r} is NOT YET AVAILABLE — the determinism "
-            f"fingerprint substrate it checks against is a reserved seam (see "
-            f"{_FINGERPRINT_DOC}). This is a loud refusal, never a silent pass; drop the "
-            "floor until the fingerprint substrate lands, or register without it."
-        )
-
     receipt = _newest_receipt(experiment_dir, entry.subject_id)
     if receipt is None or not receipt.get("overall"):
         return _verdict(
@@ -379,16 +425,32 @@ def _check_reproduction(
     )
 
     sha_ok = recomputed == entry.content_sha
-    if not drift.drifted and cross_linked and sha_ok:
-        return _verdict(
-            entry,
-            status=CURRENT,
-            recomputed_sha=recomputed,
-            evidence_note=(
-                f"reproduction verdict {overall!r} for original {original_run_id!r} "
-                f"(repro {entry.subject_id!r}); no code drift since"
-            ),
+
+    # The R4 fingerprint evidence floor (the reserved seam, now WIRED). Absent a
+    # ``requires`` floor the reproduction currency is exactly as before.
+    floor_reason: str | None = None
+    if entry.requires:
+        floor_met, shortfall = _reproduction_evidence_floor(
+            experiment_dir,
+            repro_ident=repro_ident,
+            sidecar=current_sidecar,
+            demand=dict(entry.requires),
         )
+        if not floor_met:
+            floor_reason = (
+                "fingerprint evidence floor unmet: "
+                f"{json.dumps(shortfall, sort_keys=True)} (demand "
+                f"{json.dumps(dict(entry.requires), sort_keys=True)})"
+            )
+
+    if not drift.drifted and cross_linked and sha_ok and floor_reason is None:
+        note = (
+            f"reproduction verdict {overall!r} for original {original_run_id!r} "
+            f"(repro {entry.subject_id!r}); no code drift since"
+        )
+        if entry.requires:
+            note += f"; fingerprint floor {json.dumps(dict(entry.requires), sort_keys=True)} met"
+        return _verdict(entry, status=CURRENT, recomputed_sha=recomputed, evidence_note=note)
     reasons = []
     if drift.drifted:
         reasons.append("code drifted since the receipt (tasks_py_sha moved)")
@@ -399,6 +461,8 @@ def _check_reproduction(
         )
     if not sha_ok:
         reasons.append("newest-receipt sha moved (a later re-verify appended a newer receipt)")
+    if floor_reason is not None:
+        reasons.append(floor_reason)
     return _verdict(
         entry,
         status=STALE,

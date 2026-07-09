@@ -217,6 +217,34 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_bind.input.json",
+    "name": "pack-bind",
+    "output_schema": "pack_bind.output.json",
+    "python": "hpc_agent.ops.pack.bind_op.pack_bind",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Bind a domain pack into an experiment AS DATA: read the caller-referenced manifest ON DISK, recompute every listed file's raw-bytes SHA-256 and the manifest sha server-side (no sha is caller-suppliable), refuse loudly on any drift or a missing/unreadable manifest, then append a CODE attestation (block pack-bind, response 'bound') under the pack's decision journal, bound through the one kernel against the fresh manifest hash. Editing pack content later moves the sha and revokes every clearance signed under the old standards — no drift state machine. Core never imports, executes, or interprets a pack file. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_record_receipt.input.json",
+    "name": "pack-record-receipt",
+    "output_schema": "pack_record_receipt.output.json",
+    "python": "hpc_agent.ops.pack.record_receipt_op.pack_record_receipt",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal a CODE receipt that a domain check reported passed for a caller-authored slot, against a set of checked files, under a pack's current bind. Recomputes every checked file's sha AND the bind's manifest sha ON DISK and builds the composite content_sha server-side (no caller-suppliable sha), then binds it through the one attestation kernel and appends a pack-receipt record. The receipt reads stale the instant any checked file or the bind moves; passed/evidence stay caller-attested (weighed by the gate, never re-derived). No current bind for the named pack is a loud dangling reference. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "provenance_manifest.input.json",
@@ -858,6 +886,18 @@
       "file_write"
     ],
     "summary": "Report the per-section audit state of an audited source .py against its template inventory and audit_id journal. No SSH. Each required (template) section reduces to signed_current / auto_cleared / signed_stale / unsigned (drift-revoked by construction); `passed` is the graduation gate's whole-module predicate (every section current). Section shas are recomputed from the .py on every call. A TERMINAL verdict (passed, or failed via a drift-revoked sign-off) journals a relay-due marker the Stop hook discharges only when the verdict is actually relayed (deduplicated; non-terminal runs write nothing).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent pack-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "pack_status.input.json",
+    "name": "pack-status",
+    "output_schema": "pack_status.output.json",
+    "python": "hpc_agent.ops.pack.status_op.pack_status",
+    "side_effects": [],
+    "summary": "Report an experiment's domain-pack state: per opted-in pack, the current bind (or null), each caller-authored receipt slot's currency (current / failed / stale / missing), an advisory unfillable-requirement report (a slot the bound pack's manifest fills_slots omits), and dangling-reference findings (a missing/sha-drifted manifest, or a slot bound to an unbound pack). Read-only, no SSH; a query REPORTS a dangling reference as data, never raising — the loud refusals live in the mutate verbs and the gate. Not opted in → empty and silent. Recomputed on every call (no cache).",
     "verb": "query"
   },
   {

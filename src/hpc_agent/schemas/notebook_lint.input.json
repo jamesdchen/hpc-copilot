@@ -40,6 +40,26 @@
       },
       "title": "Output Roots",
       "type": "array"
+    },
+    "reader_calls": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reader Calls",
+      "type": "array"
+    },
+    "reader_calls_echo": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reader Calls Echo"
     }
   }
 }

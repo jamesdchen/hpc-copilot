@@ -498,3 +498,185 @@ floor; R1–R4 partition refinement operates within it via engine emits.
 Same shape as the whole system: the run does not narrate itself — trusted
 code observes from outside at signed boundaries (the pointing doctrine
 applied to instrumentation; the reducer/render/Stop-hook precedent).
+
+## Amendment 11 (2026-07-08, user-directed): bar-lightening is
+## CERTIFICATE-GATED, not v1-default, not indefinitely deferred
+
+Even with runner-observed (ungameable) evidence, trace flags do not
+lighten the sign-off bar at v1: (1) an untested instrument gets no gate
+authority (the receipts precedent — evidence sources earn gate power
+through field use); (2) "flag-free" is only as meaningful as the flag net
+is dense — a clean trace under a thin invariant set means "passed a thin
+check", and lightening vigilance against a thin net is the fingerprint's
+n=2 lesson inverted. THE TRIGGER: the R3 certificate IS the density
+measure, so **bar-lightening is a per-program entitlement gated on a
+passing R3 certificate over the declared defect corpus** — no certificate,
+traces are information beside the diff, full bar; certificate held,
+runner-observed flag-free sections may take the lighter keystroke tier
+(y-adoption of a code-drafted sign-off). Palatability becomes the REWARD
+for evidence density (write your injectors, earn cheaper sign-offs), and
+the entitlement stays honest: a new corpus entry that fails to localize
+suspends the certificate — and the bar — until the partition refines.
+INVARIANT REGARDLESS: only the KEYSTROKE cost lightens, never the ROUTING
+— no trace answers a judgment section's actual question; traces may
+cheapen how the human says yes, never decide they need not look.
+
+## Amendment 12 (2026-07-08): implementation-readiness sync (waves ↔ A10/A11)
+
+The T-waves predate Amendments 10-11; corrections making the plan
+implementable as one coherent whole:
+
+- **NEW TASK T-R (the runner, wave 2.5 — the trust-bearing half of
+  emission):** the sanctioned execution lane (notebook-render plugin +
+  the lighter local runner) gains the BETWEEN-CELL observation loop: after
+  each cell, look up the DECLARED OBSERVABLES in the namespace and take
+  the atoms via the pack measurement impls; emit runner-observed records
+  (source: "runner"). Records carry their SOURCE TIER (runner | engine |
+  draft) — receipts/sign-off surfaces consume runner-tier only.
+- **P1 REVISED:** the pack emitter is (a) the measurement implementations
+  THE RUNNER INVOKES, (b) the optional engine-wrapper refinement layer,
+  (c) the Class-A convenience API. It is NO LONGER the trust-bearing
+  instrumentation (A10).
+- **NEEDS RULING (G-a): the observation plan's machine-readable home.**
+  Candidates: (1) RECOMMENDED — the audit configuration gains
+  `observables: [names]` (rides the audited_source /
+  notebook-record-config seam; lands inside the signed surface
+  automatically; versioned with the roots); (2) a template marker
+  convention (`# hpc-trace-observe: <names>` — visible in-file, signed via
+  template bytes, but a second parsing convention). Implementation blocks
+  on this ruling ONLY for T-R; T0-T6 proceed regardless.
+- **Recorded answers (G-c):** a `flag` is `{rule, detail, evidence{}}`
+  (the notebook-lint finding shape reused — one flag vocabulary
+  system-wide); ad-hoc local runs with neither run_id nor audit_id trace
+  under scope ("local", <cmd_sha12>) — mechanical, collision-free; the
+  REDUCE stage's trace is CORE-EMITTED counts-only (core measures its own
+  pooling with stdlib; canary-exclusion counts included; no pack
+  involvement, no sketch atoms there).
+- **Certificate-gating (A11) adds no v1 task** — it consumes R3
+  certificates and the existing tier machinery when both exist; noted so
+  no implementer builds it early.
+
+## Amendment 13 (2026-07-08): T0 outsourcing due-diligence — verdicts
+
+Wave-0 gate discharged. The field was surveyed against the six hard
+constraints; the verdict is **REFUSE every dependency, ADOPT one
+vocabulary** — OpenLineage's per-column facet field NAMES as a courtesy
+mapping for the atom catalog, no code, no wire, no identity model. The
+four-question boundary test (`docs/internals/engineering-principles.md`
+§"Library knowledge in core") is the recorded frame: none of these
+libraries clears Q3/Q4 (stdlib-only, testable without the library) as a
+core dependency, and none clears Q1 the other direction — OpenLineage's
+`runId`-UUID identity is a *semantics* import (a second ID universe core
+would have to name and reconcile), not substrate.
+
+**(a) Criteria table** — candidate × the six constraints:
+
+| Candidate | 1. append-only JSONL, no daemon | 2. stdlib-only core | 3. sha-bindable | 4. journal-native identity | 5. atom diff semantics | 6. per-task inline transport |
+|---|---|---|---|---|---|---|
+| **OpenLineage** (spec) | **partial** — client ships a `FileTransport` that appends JSON, but the STANDARD is HTTP/Kafka-to-backend; the file lane is a fallback, not the model | **fail** — `openlineage-python` pulls deps (attrs, requests); the *shape* is plain JSON (pass), the library is not | **partial** — JSON, but events carry volatile `eventTime`/`_producer`/`_schemaURL`; not canonical without stripping | **fail** — `run.runId` MUST be a UUID; `job.{namespace,name}` composite key — its own ID universe, not our run/audit scope | **fail** — facets TRANSPORT measurements; no per-atom comparison/first-divergence rules (it is a lineage-carrier, not a diff engine) | **fail** — event model is run-lifecycle (START/RUNNING/COMPLETE per *run*); a per-stage-exit record is not the unit |
+| **Marquez** (OL reference impl) | **fail** — server + Postgres + REST API; a daemon by definition | **fail** — not a library, a service | n/a | **fail** | **fail** — storage/visualization, no diff | **fail** — network ingest |
+| **Great Expectations** | **partial** — `ExpectationSuiteValidationResult` serializes to JSON, but emission rides a `DataContext` + stores | **fail** — heavy dep tree, not import-safe in core | **partial** — JSON, but `meta` carries `validation_time`/version | **fail** — `run_id` + `expectation_suite_name` + batch, own universe | **fail** — assertions (`success: true/false`), not diffs; and it BAKES JUDGMENT (violates our "trace shows, scientist concludes") | **fail** — validation run, not stage-exit receipt |
+| **DVC** (`dvc.lock`) | **partial** — a file, but YAML not JSONL, and it is the CLI+cache's artifact, not a hand-writable record | **fail** — meaningful only with the DVC tool + object cache | **pass** — content-`md5`+`size` per dep/out (this is exactly our `digest` atom) | **fail** — keyed by `dvc.yaml` stage NAMES, no run/audit scope | **fail** — file-level "changed?" only; no `null_count`/sketch/`span`/`label_chain`; no diff engine | **fail** — repo-root pipeline lock, not per-task |
+| **Hamilton** | **fail** — lineage is introspected from the in-process function DAG; no emitted record format at all | **fail** — a compute FRAMEWORK you must author inside | **fail** — no per-stage measured record to bind | **fail** — node names in a DAG | **fail** — authoring-time STRUCTURAL lineage, no runtime data measurement | **fail** — no transport; lineage lives in the running process |
+
+**(b) Adopt/refuse verdict per candidate** (four-question form):
+
+- **OpenLineage — REFUSE the dependency, transport, and identity model;
+  ADOPT the facet field vocabulary.** Q1: its `runId`-UUID + `job.namespace/name`
+  identity forces core to name and reconcile a second ID universe — a
+  semantics import, refused (our identity is the journaled sha bound to
+  run/audit scope, A4). Q2/Q3/Q4: the client is not stdlib and not
+  import-safe on the cluster surface; the JSON *shape* is stdlib-trivial
+  and needs no library, so we take the shape, not the code. The event
+  model (run-lifecycle START/COMPLETE) is the wrong unit — a trace is many
+  *stage-exit* records under one run, which OpenLineage can only express as
+  many separate Job runs. And it carries no diff semantics (constraint 5),
+  which is the actual core value here. Verdict: courtesy vocabulary only —
+  see (d).
+- **Marquez — REFUSE.** It is precisely the daemon+DB backend the plan
+  refuses (constraints 1–2). Cited only to confirm that OpenLineage's
+  *shape* is cleanly separable from its *backend*: adopting facet names
+  incurs zero Marquez surface.
+- **Great Expectations — REFUSE, no vocabulary taken.** Beyond the
+  dependency failures (Q3/Q4), it is doctrinally opposed: its records are
+  `success: true/false` assertions — judgment baked into the record — which
+  violates the atom catalog's "Excluded by design: judgment fields (no
+  'looks wrong')". Our `flags` are opaque-and-rendered-never-interpreted;
+  GE's verdicts are the thing we deliberately keep OUT of the trace. The
+  validation half of this system lives in the pack's emitter checks →
+  `flags` and in R3 certificates, not in a borrowed assertion record.
+- **DVC — REFUSE, no NEW vocabulary taken.** Its `dvc.lock` dep/out
+  `{path, md5, size}` shape is exactly our `digest` atom + the
+  data-manifest rung-0 identity — which we already have. It confirms the
+  design; it adds nothing. File-level checksums cannot express the
+  per-column/per-row atoms that are the point, and it is inseparable from
+  the DVC tool + cache (Q3 fail).
+- **Hamilton — REFUSE, doctrinally instructive.** It is not a record
+  format; it is a compute framework whose lineage is the code's DAG
+  structure — i.e. "what the code SAYS it does", static. That is precisely
+  our AUDIT half (`docs/design/notebook-audit.md`), not the trace half.
+  Hamilton reinforces the static/dynamic split this doc opens with; it is
+  not a candidate for the runtime-receipt role at all.
+
+**(c) Everything-refused rationale (the recorded paragraph future
+contributors cite):** No surveyed standard is adopted as a dependency
+because each fails the core constraints at the same seam — they are
+*transport-and-storage* systems (ship measurements to a backend for
+visualization) or *authoring frameworks*, whereas core's value is the
+per-atom COMPARISON SEMANTICS and the JOURNAL-NATIVE sha identity, which
+none of them carry. The record shape we need is a few dozen bytes of
+stdlib JSON per stage; the expensive, opinionated parts of these projects
+(UUID identity universes, daemons, object caches, assertion verdicts, DAG
+runtimes) are exactly what we refuse. "Minimal-ours" wins not because the
+field is immature but because our hard constraints (no daemon, stdlib
+core, sha-bindable, journal-native, per-atom diff, inline per-task
+transport) are a deliberately narrower target than any general lineage
+standard aims at. The conformance-kit export-adapter lane (an
+OpenLineage-event *emitter* over our traces, for teams that run Marquez)
+remains open as a LATER courtesy, never a core dependency.
+
+**(d) Vocabulary adopted without the dependency — the OpenLineage facet
+courtesy mapping (for T1 to implement against).** T1's ATOM SCHEMA
+REGISTRY SHOULD carry, per atom, an optional `openlineage_facet` note
+naming the equivalent facet field, so an export adapter and cross-tool
+readers get a free rosetta. Our field names stay snake_case and
+scope-bound; the mapping is documentation, not a wire format:
+
+| Our atom / field | OpenLineage facet field | Note |
+|---|---|---|
+| `row_count` | `OutputStatisticsOutputDatasetFacet.rowCount`; `DataQualityMetricsInputDatasetFacet.rowCount` | exact analog; OL splits input/output, we key by stage |
+| `col_set` (names) | `SchemaDatasetFacet.fields[].name` (+ `.type`) | OL `fields[]` = `{name, type, description?}`; we track the name set + set-delta diff |
+| `null_count[col]` | `DataQualityMetricsInputDatasetFacet.columnMetrics.<col>.nullCount` | OL's `columnMetrics` container (key = column name) is the shape we mirror for per-column atoms |
+| `value_sketch[col]` | `columnMetrics.<col>.{min,max,sum,count,quantiles}` | OL has `sum`/`count` (mean derivable) + `quantiles` (object keyed by fraction, e.g. `"0.25"`, `"0.5"`); OL lacks `std`. Recommend our `value_sketch` MIRROR OL's `quantiles`-as-object-keyed-by-fraction and fix q05/q50/q95 (the A8 recorded-answer: fixed, not declared) |
+| `digest` | (no per-column OL analog) | DVC `dvc.lock` out-`md5` is the nearest cross-tool spelling; ours |
+| `span[col]`, `order_integrity[col]`, `label_chain`, `duration_ms`, `peak_mb` | (no OL facet) | atoms with no lineage-standard equivalent — core-original; `label_chain` (the units ledger) has no analog in any surveyed tool |
+
+Two structural conventions worth stealing verbatim (courtesy, not
+dependency): (1) OpenLineage's `columnMetrics` shape — an object whose KEY
+is the column name, value is the per-column metric bundle — is the exact
+layout T1 should use for `null_count`/`value_sketch` so a column's atoms
+co-locate; (2) OL's self-describing `_producer` + `_schemaURL` header
+convention (every facet names its producer and schema version) is the same
+instinct as our `trace_schema_version:1` + self-describing render headers
+(A6) — keep the version field, skip the URL. We do NOT adopt the leading-
+underscore base-facet prefixing (a namespace-collision fix for a facet
+registry we do not have).
+
+Sources (plain links): OpenLineage spec
+`https://github.com/OpenLineage/OpenLineage/blob/main/spec/OpenLineage.md`;
+`OpenLineage.json` and the `DataQualityMetricsInputDatasetFacet`,
+`OutputStatisticsOutputDatasetFacet`, `SchemaDatasetFacet`,
+`ColumnLineageDatasetFacet` facet schemas under
+`https://github.com/OpenLineage/OpenLineage/tree/main/spec/facets`;
+facet docs `https://openlineage.io/docs/spec/facets/`; Marquez
+`https://marquezproject.ai`; Great Expectations validation-result
+reference
+`https://docs.greatexpectations.io/docs/0.18/reference/learn/terms/validation_result/`;
+DVC `dvc.lock` format
+`https://dvc.org/doc/user-guide/project-structure/internal-files`;
+Hamilton lineage
+`https://hamilton.dagworks.io/en/latest/how-tos/use-hamilton-for-lineage/`.
+
+Drift-log line: 2026-07-08 — T0 gate discharged; all candidates refused as
+dependencies, OpenLineage facet field names adopted as a courtesy mapping
+recorded in the atom registry (Waves 1–3 unblocked).
