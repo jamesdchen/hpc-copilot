@@ -720,3 +720,21 @@ assembled by the agent from three stale utterances (one of them relay-steer
 prose the human pasted). A greenlight record should carry the human's FRESH
 utterance over the CURRENT proposal; synthesis-from-history is authorship
 laundering's quieter sibling (extends item 2/5).
+
+Addendum 13: **0. block-drive crashes on record-less runs — FIX FIRST**
+(outranks items 1-16: it is the ROOT ENABLER of run #11's off-pipeline
+drift). Verified in code: `state/journal.py::mark_pending_decision` raises
+FileNotFoundError when no RunRecord exists, and the driver's PARK path
+(`block_drive.py` rendezvous) calls it unguarded — a sidecar-only run kills
+the tick. The demo blamed the watchdog stamp (WRONG — `_stamp_driver_tick`
+is broadly guarded and post-block; rule-3 vindication), but the crash is
+real, made block-drive unusable for both run-#11 runs, and every conduct
+failure that followed (per-block CLI drift, hand-authored specs, raw qsub)
+walked through the door it opened. Fix shape: (a) find why these runs had no
+RunRecord at park time (where is the mint? S1-resolve or submit_and_record?
+— run #10 drove fine, so something differs); (b) the park path must survive
+a missing record (park is a DISCLOSURE, not a mutation that may assume
+state); (c) a fires-and-passes test: drive a sidecar-only run to a
+rendezvous. Weight for the digest: a driver that crashes exactly when the
+run is in its most manual state pushes the agent off-pipeline at the worst
+possible moment.
