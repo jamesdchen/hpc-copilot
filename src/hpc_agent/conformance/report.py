@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hpc_agent.conformance.adapter import CAPABILITIES, DEGRADED_TIERS
+from hpc_agent.ops.harness_capabilities import HARNESS_CONTRACT_VERSION
 
 __all__ = [
     "CONTRACT_MAJOR",
@@ -33,12 +34,14 @@ __all__ = [
 # changes are additive-only (D-K6 deprecation posture).
 CONTRACT_MAJOR = "v1"
 
-# SEAM (K10 OWNS the real constant). D-K6: the SemVer ``HARNESS_CONTRACT_VERSION``
-# lands beside the ``harness-capabilities`` verb in ``ops/harness_capabilities.py``
-# and is pinned equal to the ``harness-contract.md`` version line by a contract
-# test. Until K10 lands it, this NAMED PLACEHOLDER is the single seam the report
-# reads; K10 replaces this assignment with an import of the real constant.
-CONTRACT_VERSION = "1.0.0"
+# The full SemVer of the contract the kit certifies against. K10 re-pointed this
+# at the ONE constant beside the verb (``ops/harness_capabilities.py``) — D-K6:
+# the constant's single home is the verb, the doc's version line and this stamp
+# are pinned equal to it by ``tests/contracts/test_harness_contract.py``. The
+# verdict LINE names only the major (``harness contract v1``); this full version
+# is what the kit stamps alongside ``hpc_agent.__version__`` and what the
+# three-way agreement pin holds.
+CONTRACT_VERSION = HARNESS_CONTRACT_VERSION
 
 
 def kit_version() -> str:

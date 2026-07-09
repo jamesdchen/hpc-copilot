@@ -82,3 +82,14 @@ class HarnessCapabilitiesResult(BaseModel):
         default_factory=dict,
         description="Capability name -> the named tier its absence degrades to.",
     )
+    harness_contract_version: str = Field(
+        default="",
+        description=(
+            "The SemVer of the harness contract this verb reports against — the "
+            "single ``HARNESS_CONTRACT_VERSION`` constant beside the verb "
+            "(``ops/harness_capabilities.py``), pinned equal to the "
+            "``docs/internals/harness-contract.md`` version line and the "
+            "conformance kit's stamped version (conformance-kit D-K6/K10). Within "
+            "major 1 the contract is additive-only."
+        ),
+    )
