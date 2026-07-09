@@ -103,6 +103,7 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
         "renders",  # <exp>/.hpc/renders/<audit_id>/** — the trusted-display render files
         "determinism-fingerprint",  # <exp>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl
+        "live-conformance",  # <exp>/_aggregated/_conformance/<registration_id>.jsonl
     }
 )
 
@@ -527,6 +528,41 @@ def _gather_aggregated(
         )
 
 
+def _gather_conformance(
+    experiment_dir: Path,
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+) -> None:
+    """Seal the registration-conformance ledgers as RAW BYTES (live-conformance C-dossier).
+
+    Every ``<exp>/_aggregated/_conformance/<registration_id>.jsonl`` — the live
+    evidence FOR/AGAINST each registration — is copied as OPAQUE BYTES under the
+    ``live-conformance`` store noun, so a RE-registration's sealed dossier carries
+    the live record that motivated it ("ran nonconforming for 3 windows before
+    re-registration" is printed where reviewers look — the anti-gaming-by-disclosure
+    pattern at the operation boundary). Never ``json``-parsed (the no-parse boundary
+    holds): the derived verdicts live in the code-rendered ``conformance-status``
+    brief, never here, so a deliberately-torn ledger round-trips byte-identical.
+
+    ABSENT-TOLERANT (unlike the run-scoped aggregated store): the conformance dir is
+    registration-scoped, not per-run, and most run dossiers legitimately have none —
+    an absent dir / empty dir seals nothing and records NO gap (a gap per run would
+    be noise). Keyed by archive path so a re-gather is stable. Gathered ONCE per
+    signature, not per run in the lineage.
+    """
+    base = Path(experiment_dir) / "_aggregated" / "_conformance"
+    if not base.is_dir():
+        return
+    for ledger in sorted(base.glob("*.jsonl")):
+        if not ledger.is_file():
+            continue
+        archive_path = f"conformance/{ledger.name}"
+        if archive_path in write_map:
+            continue
+        _seal("live-conformance", ledger, archive_path, write_map=write_map, entries=entries)
+
+
 def _gather_scope(
     experiment_dir: Path,
     tag: str,
@@ -666,6 +702,10 @@ def compute_dossier_signature(
             entries=entries,
             gaps=gaps,
         )
+
+    # live-conformance ledgers (C-dossier) — registration-scoped, sealed ONCE per
+    # signature (not per run), absent-tolerant (no gap when none exist).
+    _gather_conformance(experiment_dir, write_map=write_map, entries=entries)
 
     # Path-sort the entries (and the write order) so a store hashes identically
     # regardless of gather order.
