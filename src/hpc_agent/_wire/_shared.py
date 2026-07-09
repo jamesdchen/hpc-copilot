@@ -212,6 +212,10 @@ FailureCategoryResubmittable = Literal[
     "mpi_launcher_missing",
     "mpi_pe_invalid",
     "mpi_init_failed",
+    # Grid Engine / Lmod contentless env-init flake (notebook-audit Addendum 10
+    # item 15) — carried so a resubmit tagged with the classifier's emission
+    # isn't rejected at the boundary.
+    "cluster_env_init",
 ]
 
 # ── campaign optimization ─────────────────────────────────────────────────────

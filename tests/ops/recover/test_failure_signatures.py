@@ -6,16 +6,18 @@ from hpc_agent.infra.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
-    """The catalog covers the 18 documented failure modes (segv was
+    """The catalog covers the 19 documented failure modes (segv was
     removed when the SEGV blacklist feature was deleted; preempted was
     added when dispatch.py learned to trap SIGTERM; five empirical canary
     signatures — ``uv_not_on_path`` / ``conda_command_not_found`` /
     ``output_file_required`` / ``module_not_found_hpc_agent`` /
     ``undefined_var_expansion`` — were added so the verifier surfaces a
-    structured remediation instead of a bare ``dispatcher_failed``; and
-    three multi-rank signatures — ``mpi_launcher_missing`` /
-    ``mpi_pe_invalid`` / ``mpi_init_failed`` — for #293)."""
-    assert len(CATALOG) == 18
+    structured remediation instead of a bare ``dispatcher_failed``; three
+    multi-rank signatures — ``mpi_launcher_missing`` / ``mpi_pe_invalid`` /
+    ``mpi_init_failed`` — for #293; and ``cluster_env_init`` for the Grid
+    Engine / Lmod contentless env-init flake, notebook-audit Addendum 10
+    item 15)."""
+    assert len(CATALOG) == 19
 
 
 def test_preempted_matches_exit_130() -> None:
@@ -234,3 +236,60 @@ def test_classify_mpi_init_wins_over_traceback() -> None:
     # the structural MPI error (priority above the bare-traceback fallback).
     stderr = "Traceback (most recent call last):\n  ...\nMPI_Init failed: PMIx error"
     assert classify(stderr, 1)["error_class"] == "mpi_init_failed"
+
+
+# ── cluster env-init signature (notebook-audit Addendum 10, item 15) ─────────
+
+
+def test_cluster_env_init_matches_grid_engine_message() -> None:
+    """The exact run-#11 Grid Engine (UGE) contentless message classifies as
+    ``cluster_env_init`` with the retry-forward remediation.
+
+    HOFFMAN2 emitted this verbatim string on ONE array instance while its
+    siblings ran healthily — a transient per-task/per-node flake, not a
+    run-wide fault. The remediation must lead with RETRY, not "check the
+    stderr" (which punts when the tail is contentless).
+    """
+    out = classify("Unable to initialize environment because of error", None)
+    assert out["error_class"] == "cluster_env_init"
+    assert out["suggested_fix"]["action"] == "retry-task"
+    assert "retry" in out["suggested_fix"]["hint"].lower()
+    # The remediation names the real suspects in priority order.
+    hint = out["suggested_fix"]["hint"].lower()
+    assert "quota" in hint
+    assert "cache" in hint
+    assert "per-task" in hint or "per-node" in hint
+
+
+def test_cluster_env_init_matches_lmod_lookalike() -> None:
+    """Lmod's lookalike init failure (no trailing "because of error") also
+    classifies as ``cluster_env_init`` — one conservative phrase covers both
+    dialects without a scheduler branch."""
+    out = classify("Lmod has detected the following error: Unable to initialize environment", None)
+    assert out["error_class"] == "cluster_env_init"
+
+
+def test_cluster_env_init_case_insensitive() -> None:
+    out = classify("unable to initialize environment", None)
+    assert out["error_class"] == "cluster_env_init"
+
+
+def test_cluster_env_init_near_misses_do_not_match() -> None:
+    """Benign / adjacent strings must NOT classify as ``cluster_env_init`` —
+    the stem is specific enough that only the real env-init failure hits."""
+    # Success message — opposite meaning.
+    ok = classify("environment initialized successfully", None)
+    assert ok["error_class"] != "cluster_env_init"
+    # A module *load* failure names the environment but not the init stem.
+    assert classify("Unable to load module 'gcc/11'", None)["error_class"] != "cluster_env_init"
+    # "the environment" (extra word between init and environment) is not the
+    # Grid Engine / Lmod message shape — must fall through, not false-positive.
+    out = classify("Failed to initialize the environment variable PATH", None)
+    assert out["error_class"] != "cluster_env_init"
+
+
+def test_cluster_env_init_never_fires_on_exit_code_alone() -> None:
+    """Pattern-only row (exit_code=None): a bare exit code must never surface
+    ``cluster_env_init`` — only the message shape does."""
+    assert classify("", 1)["error_class"] != "cluster_env_init"
+    assert classify("", 271)["error_class"] != "cluster_env_init"
