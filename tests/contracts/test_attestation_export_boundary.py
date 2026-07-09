@@ -65,6 +65,7 @@ _EXPECTED_PREDICATE_TYPES = {
     "determinism-fingerprint": f"{_PREDICATE_TYPE_SCHEME}/determinism-fingerprint/v1",
     "pack-manifest": f"{_PREDICATE_TYPE_SCHEME}/pack-manifest/v1",
     "pack-journal": f"{_PREDICATE_TYPE_SCHEME}/pack-journal/v1",
+    "live-conformance": f"{_PREDICATE_TYPE_SCHEME}/live-conformance/v1",
 }
 
 # The DSSE envelope's fixed key set and the in-toto Statement's fixed key set —
