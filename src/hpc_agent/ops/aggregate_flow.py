@@ -74,7 +74,7 @@ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
-from hpc_agent.state.runs import read_run_sidecar
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
 
@@ -290,8 +290,16 @@ def _per_task_metrics_reduce(
     record: Any,
     out: Path,
     results_subdir: str,
+    summary_name: str,
 ) -> dict[str, Any]:
-    """Weighted-mean the per-task ``metrics.json`` over SSH — the no-combiner default.
+    """Weighted-mean the per-task summary file over SSH — the no-combiner default.
+
+    ``summary_name`` is the run's declared per-task summary filename (F-J),
+    resolved by the caller at the seam via ``resolved_summary_artifact`` — the
+    pull filter, the local rglob, and :func:`reduce_metrics` all key on it, so a
+    run whose executor emits e.g. ``results_reduce.json`` is reduced instead of
+    read as a harvest gap (run #10). An undeclared run resolves to
+    ``metrics.json`` upstream, keeping this path byte-identical.
 
     The SSH analogue of the LOCAL / pure-API ``reduce_metrics`` fallback
     (#342). When a run was submitted with NO reducer (``aggregate_cmd``) and
@@ -321,7 +329,7 @@ def _per_task_metrics_reduce(
         remote_path=record.remote_path,
         remote_subdir=results_subdir,
         local_dir=str(results_local),
-        include=["metrics.json"],
+        include=[summary_name],
     )
     if pull.returncode != 0:
         stderr_tail = (pull.stderr or "").strip()
@@ -330,17 +338,15 @@ def _per_task_metrics_reduce(
             f"{results_subdir}/ fallback pull failed (exit {pull.returncode}). "
             f"There is no deterministic numeric input to reduce — refusing to "
             f"fabricate an aggregate. Check that the run actually wrote per-task "
-            f"metrics.json sidecars under {record.remote_path}/{results_subdir}/. "
+            f"{summary_name} sidecars under {record.remote_path}/{results_subdir}/. "
             f"rsync_pull stderr: {stderr_tail[:300]}"
         )
 
-    # Every directory under the pulled tree that carries a metrics.json is a
-    # per-task result dir. reduce_metrics scans each for that sidecar and
-    # weighted-means across tasks — identical reduce semantics to the
+    # Every directory under the pulled tree that carries the declared summary
+    # file is a per-task result dir. reduce_metrics scans each for that sidecar
+    # and weighted-means across tasks — identical reduce semantics to the
     # combiner, run on the locally-pulled per-task sidecars.
-    result_dirs = sorted(
-        {str(p.parent) for p in results_local.rglob("metrics.json") if p.is_file()}
-    )
+    result_dirs = sorted({str(p.parent) for p in results_local.rglob(summary_name) if p.is_file()})
     # Canary anti-contamination (run #6 harvest): the ``<run_id>-canary``
     # sibling writes its metrics.json under the SAME results/ subtree (its
     # result_dir_template renders with the canary's run_id, whose name has the
@@ -363,7 +369,7 @@ def _per_task_metrics_reduce(
     if total > 0 and len(result_dirs) > total:
         raise errors.RemoteCommandFailed(
             f"per-task reduce for run_id {run_id!r} found {len(result_dirs)} "
-            f"result dirs with metrics.json but the run has only {total} tasks "
+            f"result dirs with {summary_name} but the run has only {total} tasks "
             f"— the {results_subdir}/ subtree carries FOREIGN rows (another "
             "run's results sharing the tree), and averaging them would corrupt "
             f"the aggregate. Contributing dirs: {result_dirs}. Remove or "
@@ -371,14 +377,14 @@ def _per_task_metrics_reduce(
             "result_dir_template like 'results/{run_id}/task_{task_id}'), then "
             "re-aggregate."
         )
-    aggregated = reduce_metrics(result_dirs)
+    aggregated = reduce_metrics(result_dirs, filename=summary_name)
     if not aggregated:
         raise errors.RemoteCommandFailed(
             f"no cluster-side _combiner/ for run_id {run_id!r} and the per-task "
-            f"{results_subdir}/ fallback found no readable metrics.json sidecars "
+            f"{results_subdir}/ fallback found no readable {summary_name} sidecars "
             f"under {record.remote_path}/{results_subdir}/. There is no numeric "
             f"input to reduce — refusing to fabricate an aggregate. The tasks "
-            f"likely never wrote metrics.json; inspect per-task stderr under "
+            f"likely never wrote {summary_name}; inspect per-task stderr under "
             f"{record.remote_path}/{run_id}/logs/."
         )
     return {run_id: aggregated}
@@ -390,6 +396,7 @@ def _combiner_only_reduce(
     *,
     record: Any,
     combiner_local: Path,
+    summary_name: str,
     results_subdir: str = "results",
     out: Path | None = None,
 ) -> tuple[dict[str, Any], list[int], str]:
@@ -466,6 +473,7 @@ def _combiner_only_reduce(
                     record=record,
                     out=(out if out is not None else combiner_local.parent),
                     results_subdir=results_subdir,
+                    summary_name=summary_name,
                 )
                 # No wave partials → no per-wave incomplete-task signal to
                 # surface; the per-task fallback either reduced over readable
@@ -1310,6 +1318,12 @@ def _aggregate_flow_impl(
             combiner_local=combiner_local,
             results_subdir=results_subdir,
             out=out,
+            # The run's declared per-task summary filename (F-J), resolved ONCE
+            # at this seam from the sidecar already read above; threaded down so
+            # the per-task fallback pull/rglob/reduce key on the real file (e.g.
+            # results_reduce.json) instead of the metrics.json hardcode that read
+            # run #10 as a harvest gap. Absent/blank sidecar → metrics.json.
+            summary_name=resolved_summary_artifact(sidecar_for_cmd),
         )
         # Persist a durable local aggregate artifact on the DEFAULT path. The
         # combiner-only reduce (and its per-task fallback) return
