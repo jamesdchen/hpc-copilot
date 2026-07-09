@@ -1539,15 +1539,21 @@ def _assert_conformance_baseline_membership(resolved: dict[str, Any], sig: Any) 
         return  # conformance is opt-in — no block, no machinery (byte-identical)
     path = declaration.baseline.path
     sha256 = declaration.baseline.sha256
-    for entry in sig.entries:
-        if entry.get("path") == path and entry.get("sha256") == sha256:
-            return
+    # Membership is by the sealed-bytes SHA — the integrity identity. The declared
+    # ``path`` is the caller's EXPERIMENT-RELATIVE locator the read-side (T5/T8)
+    # resolves; the dossier's manifest entries carry ARCHIVE paths (the ``_aggregated``
+    # → ``aggregated`` rename means the two path spellings differ by construction), so
+    # the sha is the ONE stable identity across both. A declared sha that is a sealed
+    # entry's sha proves the control limits derive from evidence INSIDE the sealed
+    # dossier — never a file swapped after sign-off (C-declare; recorded in the drift log).
+    if any(entry.get("sha256") == sha256 for entry in sig.entries):
+        return
     raise errors.SpecInvalid(
         "registration gate (lock 2, conformance): the declared conformance baseline "
-        f"{{path={path!r}, sha256={sha256[:12]}...}} is NOT a member of the sealed dossier's "
-        "manifest entries. The control limits must derive from evidence INSIDE the sealed "
-        "dossier by construction (C-declare) — never a file swapped after sign-off. Declare a "
-        "baseline artifact the dossier seals (an entry {path, sha256} the dry re-gather returns)."
+        f"{{path={path!r}, sha256={sha256[:12]}...}} is NOT sealed in the dossier — no manifest "
+        "entry carries that sha256. The control limits must derive from evidence INSIDE the "
+        "sealed dossier by construction (C-declare), never a file swapped after sign-off. "
+        "Declare a baseline artifact the dossier seals."
     )
 
 

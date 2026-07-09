@@ -1188,8 +1188,19 @@ def _read_conformance_baseline(
 
 
 def _newest_receipt_ts(window: Sequence[Mapping[str, Any]]) -> str | None:
-    """The newest ledger-append ``ts`` in the window (the finding's freshest evidence)."""
-    stamps: list[str] = [r["ts"] for r in window if isinstance(r.get("ts"), str) and r.get("ts")]
+    """The newest caller-attested ``observed_at`` in the window (the finding's freshest evidence).
+
+    Uses ``observed_at`` (the observation TIME), not the ledger-append ``ts``: the
+    finding ages from when the newest EVIDENCE occurred, and a verdict "post-dates the
+    window" when it was authored after that evidence (C-verdict). The append ``ts`` is
+    a wall-clock artefact that at production/replay cadence collides with the verdict's
+    own append ts.
+    """
+    stamps: list[str] = [
+        r["observed_at"]
+        for r in window
+        if isinstance(r.get("observed_at"), str) and r.get("observed_at")
+    ]
     return max(stamps, default=None)
 
 

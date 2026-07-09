@@ -251,7 +251,7 @@ def test_baseline_not_in_manifest_refused(tmp_path: Path, monkeypatch: pytest.Mo
         "view_sha": _expected_view_sha(template_sha=tsha, entries=[dict(_BASELINE_ENTRY)]),
         "conformance": bad_block,
     }
-    with pytest.raises(errors.SpecInvalid, match="NOT a member of the sealed dossier"):
+    with pytest.raises(errors.SpecInvalid, match="NOT sealed in the dossier"):
         append_decision(
             experiment_dir=tmp_path,
             spec=_spec(
