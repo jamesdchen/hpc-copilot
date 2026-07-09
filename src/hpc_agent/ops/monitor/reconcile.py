@@ -164,6 +164,7 @@ def _gather_failure_features(
     job_ids: list[str],
     scheduler: str,
     task_ids: list[int],
+    job_task_spans: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Fetch the failed run's cluster log tail for the envelope.
 
@@ -182,6 +183,12 @@ def _gather_failure_features(
     *task_ids* are the 0-based ids whose stderr to tail — the caller selects
     the actually-failed task(s) via :func:`_failed_evidence_task_ids` so the
     evidence never quotes a successful task's log.
+
+    *job_task_spans* is the sidecar's per-job global task-window map for a
+    WAVED run (``state.runs.read_job_task_spans``), threaded through to
+    ``fetch_task_logs`` so the evidence tail is read from the covering job
+    with the job-LOCAL log index. ``None`` (old sidecar / single array /
+    resubmit job) keeps the global-index probe.
 
     Best-effort: an SSH blip fetching the log degrades to an empty tail and a
     ``None`` classification, and a ``classify`` failure likewise degrades to
@@ -203,6 +210,7 @@ def _gather_failure_features(
             scheduler=scheduler,
             task_ids=task_ids,
             lines=50,
+            job_task_spans=job_task_spans,
         )
         if logs and isinstance(logs[0], dict):
             stderr_tail = str(logs[0].get("content") or "")
@@ -745,6 +753,8 @@ def _reconcile_one(
             # ``last_status.failure_features`` so ``_reconcile_envelope`` carries
             # it out (the skill's ``failed`` branch reads it), then mark terminal
             # ``failed`` (a valid JournalStatus + reconcile lifecycle_state).
+            from hpc_agent.state.runs import read_job_task_spans
+
             features = _gather_failure_features(
                 ssh_target=record.ssh_target,
                 remote_path=record.remote_path,
@@ -752,6 +762,10 @@ def _reconcile_one(
                 job_ids=list(record.job_ids),
                 scheduler=scheduler,
                 task_ids=_failed_evidence_task_ids(report),
+                # Waved runs: probe the covering job with the job-LOCAL log
+                # index; None (old sidecar / single array) keeps the global
+                # probe — read_job_task_spans never raises.
+                job_task_spans=read_job_task_spans(experiment_dir, run_id),
             )
             update_run_status(
                 experiment_dir, run_id, last_status={**recorded, "failure_features": features}
