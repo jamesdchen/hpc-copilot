@@ -61,6 +61,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.queries.determinism import DeterminismSampleRecord
 from hpc_agent._wire.queries.verify_reproduction import (
+    ExternalBaseline,
     ReproTolerance,
     VerifyReproductionResult,
     VerifyReproductionSpec,
@@ -752,6 +753,184 @@ def _append_fingerprint_sample(
         return None
 
 
+# --- the claim-check (external-baseline) mode (onboard-by-reproduction 6.5) ---
+#
+# The onboard-by-reproduction front door: the scientist arrives with a CLAIMED
+# result and no recorded original. The claim is the baseline; the comparison runs
+# the SAME caller-tolerance comparator; the receipt kind is `claim-check`, NEVER a
+# reproduction (ruling 6b, the anti-laundering naming lock). NO fingerprint sample
+# is minted — the fingerprint history starts from OBSERVED runs only.
+
+#: The CODE-emitted consistency sentence on a claim-check match. Rendered by code
+#: into the receipt and the result reason, relayed VERBATIM by the LLM — the
+#: consistency determination is the comparator's (trusted code, caller tolerance
+#: as data), never LLM-composed (ruling 6b, user-pinned 2026-07-07).
+CLAIM_CONSISTENT_SENTENCE = (
+    "the claim is consistent with a fresh observed run (within caller tolerance)"
+)
+
+
+def _assert_receipt_kind_matches_baseline(*, receipt_kind: str, external_baseline: bool) -> None:
+    """The anti-laundering seam at the receipt-write boundary (ruling 6b).
+
+    NO code path may write a reproduction-kind receipt with an external baseline:
+    a reproduction requires two OBSERVED runs, and labeling a claim-match a
+    "reproduction" would launder unattested history into the trust chain (the F1
+    class, at the front door). Both the recorded-original path (``reproduction``,
+    no external baseline) and the claim-check path (``claim-check``, external
+    baseline) route through here, so the violating combination is refused by
+    construction. Raises :class:`errors.SpecInvalid` on either incoherent pairing.
+    """
+    if external_baseline and receipt_kind != "claim-check":
+        raise errors.SpecInvalid(
+            "verify-reproduction: an external-baseline comparison may write only a "
+            f"'claim-check' receipt, never a {receipt_kind!r} receipt — an external "
+            "claim was never observed, and calling a claim-match a reproduction would "
+            "launder unattested history into the trust chain (onboard-by-reproduction "
+            "ruling 6b, the naming lock)."
+        )
+    if receipt_kind == "claim-check" and not external_baseline:
+        raise errors.SpecInvalid(
+            "verify-reproduction: a 'claim-check' receipt requires an external "
+            "baseline (the human's claim); a recorded-original comparison writes a "
+            "'reproduction' receipt."
+        )
+
+
+def _claim_check_receipt_path(experiment_dir: Path, repro_run_id: str) -> Path:
+    """Append-only claim-check ledger, beside the fresh run's metrics — NEVER the
+    reproduction ledger (the naming lock is enforced at the storage layer too)."""
+    return experiment_dir / "_aggregated" / repro_run_id / "claim_check_receipts.jsonl"
+
+
+def _claim_drift_disclosure(claimed_data_sha: str | None, observed_data_sha: Any) -> str:
+    """Code-rendered drift-dimension disclosure for a claim-check non-match.
+
+    Surfaces which identity dimension moved. The rung-0 data coupling: WITH a
+    manifest at claim time the brief can name the data dimension; WITHOUT one it
+    discloses that result decay and data drift cannot be distinguished.
+    """
+    if not claimed_data_sha:
+        return "cannot distinguish result decay from data drift — no manifest at claim time"
+    observed = str(observed_data_sha) if observed_data_sha else ""
+    if observed and observed != claimed_data_sha:
+        return (
+            f"the data changed since the claim (claimed data {claimed_data_sha[:12]}, "
+            f"observed {observed[:12]})"
+        )
+    return (
+        f"the data is unchanged since the claim (data {claimed_data_sha[:12]}); the "
+        "divergence is in code/env or result decay"
+    )
+
+
+def _render_claim_reason(overall: str, verdicts: list[dict[str, Any]], drift: str | None) -> str:
+    """Code-rendered one-line summary of a claim-check comparison (non-match).
+
+    A match's reason is the fixed consistency sentence; a non-match's reason names
+    the verdict + the per-key counts + the drift disclosure.
+    """
+    n_match = sum(1 for e in verdicts if e["verdict"] == "match")
+    n_mismatch = sum(1 for e in verdicts if e["verdict"] == "mismatch")
+    n_incomparable = sum(1 for e in verdicts if e["verdict"] == "incomparable")
+    total = len(verdicts)
+    counts = (
+        f"{n_match} matched, {n_mismatch} mismatched, {n_incomparable} incomparable of "
+        f"{total} claimed key{'s' if total != 1 else ''}"
+        if total
+        else "no comparable claimed keys"
+    )
+    tail = f"; {drift}" if drift else ""
+    return f"claim-check finding: {overall} — {counts}{tail}"
+
+
+def _run_claim_check(
+    experiment_dir: Path, *, repro_run_id: str, baseline: ExternalBaseline
+) -> VerifyReproductionResult:
+    """External-baseline (claim-check) comparison — the onboard-by-reproduction mode.
+
+    Compares a FRESH observed run's reduced metrics against the human-authored
+    CLAIM under the claim's own caller tolerance. Emits a ``claim-check`` receipt
+    that embeds the claim verbatim; mints NO fingerprint sample (observed-runs-only
+    lock). A mismatch/incomparable is a dated FINDING (``needs_decision``, exit-0),
+    never blocking; a match carries the code-emitted consistency sentence.
+    """
+    try:
+        repro_sidecar = read_run_sidecar(experiment_dir, repro_run_id)
+    except FileNotFoundError as exc:
+        raise errors.SpecInvalid(
+            f"fresh run {repro_run_id!r} has no sidecar under "
+            f"{experiment_dir}/.hpc/runs/ — a claim-check compares the claim against "
+            "an OBSERVED run that was actually submitted."
+        ) from exc
+
+    repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
+
+    consistency: str | None = None
+    drift: str | None = None
+    if repro_metrics is None:
+        # No fresh metrics yet — an incomparable FINDING, not an error.
+        per_key: list[dict[str, Any]] = []
+        overall = "incomparable"
+        reason = (
+            "claim-check verdict: incomparable — missing metrics artifact for the "
+            f"fresh run [{repro_source}]"
+        )
+    else:
+        claim = flatten_metrics(baseline.claimed_values)
+        per_key = _compare_metrics(claim, repro_metrics, baseline.tolerance)
+        overall = _fold_overall(per_key)
+        if overall == "match":
+            consistency = CLAIM_CONSISTENT_SENTENCE
+            reason = CLAIM_CONSISTENT_SENTENCE
+        else:
+            drift = _claim_drift_disclosure(
+                baseline.claimed_data_sha, repro_sidecar.get("data_sha")
+            )
+            reason = _render_claim_reason(overall, per_key, drift)
+
+    receipt: dict[str, Any] = {
+        "ts": utcnow_iso(),
+        "receipt_kind": "claim-check",
+        "schema_version": 1,
+        # The claim, embedded VERBATIM (ruling 6a — the claim lives in the receipt).
+        "claim": {
+            "claimed_values": dict(baseline.claimed_values),
+            "tolerance": (
+                baseline.tolerance.model_dump(mode="json")
+                if baseline.tolerance is not None
+                else None
+            ),
+            "claimed_data_sha": baseline.claimed_data_sha,
+        },
+        "repro": _identity(repro_sidecar, repro_run_id),
+        "per_key": per_key,
+        "overall": overall,
+        "consistency": consistency,
+        "drift_disclosure": drift,
+        "sources": {"repro_artifact": repro_source},
+    }
+
+    # Anti-laundering: a claim-check receipt is the ONLY receipt an external
+    # baseline may write (and it requires one). Refuses the launder by construction.
+    _assert_receipt_kind_matches_baseline(receipt_kind="claim-check", external_baseline=True)
+
+    path = _claim_check_receipt_path(experiment_dir, repro_run_id)
+    _append_receipt(path, receipt)
+
+    return VerifyReproductionResult.model_validate(
+        {
+            "stage_reached": overall,
+            "needs_decision": overall != "match",
+            "reason": reason,
+            "receipt": receipt,
+            "receipt_path": str(path),
+            # No fingerprint sample — the observed-runs-only lock (ruling 6b).
+            "appended_sample": None,
+        }
+    )
+
+
 @primitive(
     name="verify-reproduction",
     verb="query",
@@ -759,6 +938,11 @@ def _append_fingerprint_sample(
         SideEffect(
             "filesystem",
             "<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl (append-only)",
+        ),
+        SideEffect(
+            "filesystem",
+            "<experiment>/_aggregated/<repro_run_id>/claim_check_receipts.jsonl "
+            "(append-only; external-baseline mode)",
         ),
         SideEffect(
             "filesystem",
@@ -794,7 +978,21 @@ def verify_reproduction(
     — or when either run's identity sidecar is missing. Otherwise it always
     succeeds (exit-0): a mismatch, incomparable, or needs_verdict is a
     ``needs_decision`` finding, never an error.
+
+    In external-baseline mode (``spec.external_baseline`` set) the comparison rides
+    the SAME spec but the baseline is a human-authored CLAIM, not a recorded run:
+    it emits a ``claim-check`` receipt (never a reproduction) and mints no
+    fingerprint sample (onboard-by-reproduction, rulings 6a/6b).
     """
+    if spec.external_baseline is not None:
+        return _run_claim_check(
+            experiment_dir,
+            repro_run_id=spec.repro_run_id,
+            baseline=spec.external_baseline,
+        )
+
+    # Recorded-original mode: the validator guarantees original_run_id is present.
+    assert spec.original_run_id is not None
     original_run_id = spec.original_run_id
     repro_run_id = spec.repro_run_id
 
@@ -1056,6 +1254,7 @@ def verify_reproduction(
 
     receipt: dict[str, Any] = {
         "ts": utcnow_iso(),
+        "receipt_kind": "reproduction",
         "schema_version": schema_version,
         "original": _identity(original_sidecar, original_run_id),
         "repro": _identity(repro_sidecar, repro_run_id),
@@ -1087,6 +1286,10 @@ def verify_reproduction(
 
     # No-silent-caps: refuse a partial receipt missing any partiality field.
     _validate_receipt_partiality(receipt)
+
+    # Anti-laundering: the recorded-original path writes a REPRODUCTION receipt and
+    # never an external baseline — the guard refuses the launder by construction.
+    _assert_receipt_kind_matches_baseline(receipt_kind="reproduction", external_baseline=False)
 
     path = _receipt_path(experiment_dir, repro_run_id)
     _append_receipt(path, receipt)
