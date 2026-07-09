@@ -211,6 +211,75 @@ def _live_canary_attempt(experiment_dir: Path, run_id: str) -> dict[str, Any] | 
     }
 
 
+def _dirty_worktree_disclosure(experiment_dir: Path) -> str | None:
+    """DISCLOSE an uncommitted experiment worktree in the S1 brief — never a blocker.
+
+    Run #11 mechanization item 1 (dirty-worktree disclosure). Provenance
+    (``cmd_sha``, executor identity) is computed from COMMITTED state, so any
+    uncommitted work is INVISIBLE to it — a fact the human should see at the
+    y/nudge before relaunch. NEVER a blocker: hacking on a dirty tree is
+    legitimate; only *invisible*-dirty is the bug this surfaces.
+
+    Detection reuses the ONE bounded, fail-open :func:`~hpc_agent._build_info.git_output`
+    helper (2 s subprocess timeout) — the ``audit-preflight`` style, never an
+    ad-hoc shell-out. ``git_output`` returns ``None`` on BOTH a clean (empty)
+    porcelain read AND a hard failure (no git binary, non-repo cwd, timeout,
+    non-zero exit), so a clean tree, an absent repo, and a timeout all correctly
+    read as "no disclosure". FAIL-OPEN: any surprise degrades to ``None`` (the
+    E-embed precedent — a disclosure seam never mints a submit failure).
+    """
+    try:
+        from hpc_agent._build_info import git_output
+
+        # No git repo backs the experiment dir → the commit model can't be
+        # assessed; disclose nothing (git_output returns None on the non-repo cwd).
+        if git_output(["rev-parse", "--show-toplevel"], cwd=experiment_dir) is None:
+            return None
+        porcelain = git_output(["status", "--porcelain"], cwd=experiment_dir)
+        if porcelain is None or not porcelain.strip():
+            return None  # clean tree (or an unreadable status — fail-open silent)
+        return (
+            "dirty worktree: the experiment repo has uncommitted changes — "
+            "provenance (cmd_sha, executor identity) is derived from COMMITTED "
+            "state, so uncommitted work is INVISIBLE to it. Never a blocker; "
+            "commit before relaunch to capture the changes in provenance."
+        )
+    except Exception:  # noqa: BLE001 — disclosure-only seam, fail-open (E-embed)
+        return None
+
+
+def _audit_currency_disclosure(experiment_dir: Path) -> str | None:
+    """DISCLOSE the opted-in audit's currency in the S1 brief — disclosure only.
+
+    Run #11 mechanization item 1 (audit-currency disclosure). Reuses the ONE
+    notebook-status seam (:func:`hpc_agent.ops.notebook_gate.audit_currency` →
+    ``audit_module``): NEVER re-implements hashing. NOT opted into
+    ``audited_source`` → ``None`` (the D7 silence). Opted in → ``audit <id>:
+    current`` or ``audit <id>: STALE (<n> section(s) moved since sign-off)``.
+
+    Disclosure ONLY — the graduation gate
+    (:func:`~hpc_agent.ops.notebook_gate.assert_source_audited`, step 4b) stays
+    the single refusing seat, unchanged: a STALE audit is already
+    refused there, so on the ``resolved`` path this line confirms currency to the
+    human; the STALE branch is the honest fallback if the gate posture ever
+    changes. FAIL-OPEN (the E-embed precedent): ANY exception — a broken opted-in
+    repo, a currency-check bug — degrades to disclosed-ABSENT (``None``), never an
+    S1 error.
+    """
+    try:
+        from hpc_agent.ops.notebook_gate import audit_currency
+
+        cur = audit_currency(experiment_dir)
+        if cur is None:
+            return None
+        audit_id, moved = cur
+        if moved == 0:
+            return f"audit {audit_id}: current"
+        return f"audit {audit_id}: STALE ({moved} section(s) moved since sign-off)"
+    except Exception:  # noqa: BLE001 — disclosure-only seam, fail-open (E-embed)
+        return None
+
+
 @primitive(
     name="resolve-submit-inputs",
     verb="workflow",
@@ -517,6 +586,26 @@ def resolve_submit_inputs(
     contract = _probe_result_dir_contract(str(sidecar_spec.executor or ""), experiment_dir)
     if contract:
         reason = f"{contract} — {reason}"
+
+    # S1 disclosures (run #11 mechanization queue, item 1) — ADDITIVE brief
+    # content, NEVER blocking. Both fail-open (the E-embed precedent): a crash
+    # degrades to disclosed-absent, never an S1 error, and the decision surface
+    # (stage_reached, needs_decision) is byte-identical whether either fires:
+    #  (a) a DIRTY experiment worktree — uncommitted work is invisible to
+    #      provenance (cmd_sha / executor identity are committed-state only).
+    #  (b) audit CURRENCY when the run opts into audited_source — the SAME
+    #      notebook-status computation, disclosure only (4b stays the refusing
+    #      seat; a STALE audit is already refused there).
+    disclosures = [
+        d
+        for d in (
+            _dirty_worktree_disclosure(experiment_dir),
+            _audit_currency_disclosure(experiment_dir),
+        )
+        if d
+    ]
+    if disclosures:
+        reason = f"{reason} — DISCLOSURES (never blocking): " + "; ".join(disclosures)
 
     # Evidence-memory embed (E-embed): the ADVISORY point digest for this run's
     # declared scope tags + its lineage (run_id). ADDITIVE and FAIL-OPEN — the
