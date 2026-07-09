@@ -623,3 +623,13 @@ scheduler-unknown non-terminal records close per the existing reconcile
 classification (abandoned/completed_unknown), never one-by-one SSH. Candidate
 home: doctor (it already owns the dead-worker scan) or a snapshot
 `reconcile_all` arm.
+
+Addendum 7: **12. Declared-but-dark elicitation clients** (mcp server). Run
+#11: append-decision "hung" — all journal locks probed FREE; the wait was the
+elicitation popup, capability-declared by the client but (apparently) never
+rendered, so the refusal became a silent 300s stall. Two legs: (a) ADAPTIVE
+DEGRADATION — an elicitation that times out undisplayed flips the session to
+the hook path for subsequent refusals (re-probe next session; the capability
+declaration is a claim, not a proof); (b) the wait itself joins the item-10
+no-black-box contract — "waiting on human elicitation, Ns remaining" must be
+visible somewhere tail-able, never dead air inside a tool call.
