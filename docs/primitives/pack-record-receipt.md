@@ -1,3 +1,18 @@
+---
+name: pack-record-receipt
+verb: mutate
+side_effects:
+- file_write: <experiment>/.hpc/packs/<pack>.decisions.jsonl
+idempotent: false
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.pack.record_receipt_op.pack_record_receipt
+---
 # pack-record-receipt
 
 Journal a **CODE receipt** that a domain check reported `passed` for one

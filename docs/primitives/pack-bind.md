@@ -1,3 +1,18 @@
+---
+name: pack-bind
+verb: mutate
+side_effects:
+- file_write: <experiment>/.hpc/packs/<pack>.decisions.jsonl
+idempotent: false
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.pack.bind_op.pack_bind
+---
 # pack-bind
 
 Bind a **domain pack** into an experiment **as data**: the explicit, journalable

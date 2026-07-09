@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_bind.input.json",
+  "title": "pack-bind input spec",
+  "description": "Inputs to ``pack-bind`` — a single caller-referenced manifest relpath.\n\n``manifest`` is an experiment-dir-relative path to the pack manifest ``.py``\n/``.json`` (resolved exactly as ``_AuditedSource.source`` resolves — core\nnever asks how the bytes got there, DP3). The verb reads it ON DISK and\nrecomputes every file sha, the manifest sha, name, version, and seams; none\nof those are caller-suppliable.\n\n``pack`` is an OPTIONAL cross-check: when present, the verb refuses if the\nmanifest's own ``name`` does not equal it (a caller-side guard against\nbinding the wrong manifest). Absent → the manifest's ``name`` is taken as\nauthoritative with no cross-check.",
+  "type": "object",
+  "required": [
+    "manifest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "manifest": {
+      "description": "Experiment-dir-relative path to the pack manifest. Read on disk; the verb recomputes every listed file's raw-bytes SHA-256, the manifest sha, and the declared seams server-side (no sha is caller-suppliable).",
+      "minLength": 1,
+      "title": "Manifest",
+      "type": "string"
+    },
+    "pack": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional expected pack name (filesystem-safe slug). When present the verb refuses if the manifest's own `name` differs — a cross-check against binding the wrong manifest. Absent → manifest `name` wins.",
+      "title": "Pack"
+    }
+  }
+}

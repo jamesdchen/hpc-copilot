@@ -144,9 +144,7 @@ def _docstring_node_ids(tree: ast.Module) -> set[int]:
         body = getattr(node, "body", None)
         if not isinstance(body, list) or not body:
             continue
-        if not isinstance(
-            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         first = body[0]
         if (
@@ -261,9 +259,10 @@ def test_seam_loaders_are_shape_only_no_value_allowlist() -> None:
     from hpc_agent.state import pack
 
     # S1: any dotted callable name is accepted (no reader allowlist).
-    assert pack.load_reader_calls(
-        ["zz.made_up_reader", "nonsense.qqq"], source="s"
-    ) == ["zz.made_up_reader", "nonsense.qqq"]
+    assert pack.load_reader_calls(["zz.made_up_reader", "nonsense.qqq"], source="s") == [
+        "zz.made_up_reader",
+        "nonsense.qqq",
+    ]
 
     # S2: any slug id → any compiling regex (no privileged pattern id).
     assert pack.load_failure_patterns({"zzz-made-up": r"\d+ nonsense"}, source="s") == {
@@ -272,17 +271,15 @@ def test_seam_loaders_are_shape_only_no_value_allowlist() -> None:
 
     # S3: any regex + any CORE axis literal (identity against DataAxis only).
     some_axis = sorted(pack.AXIS_LITERALS)[0]
-    assert pack.load_axis_hints(
-        [{"pattern": r"^zqx", "axis": some_axis}], source="s"
-    ) == [{"pattern": r"^zqx", "axis": some_axis}]
+    assert pack.load_axis_hints([{"pattern": r"^zqx", "axis": some_axis}], source="s") == [
+        {"pattern": r"^zqx", "axis": some_axis}
+    ]
 
     # S5: any slug id → any number (no per-metric semantic).
     assert pack.load_tolerances({"zz-made-up": 3.14}, source="s") == {"zz-made-up": 3.14}
 
     # S6: any slug field (reserved; counted, never interpreted).
-    assert pack.load_registration_fields(["zz-made-up-field"], source="s") == [
-        "zz-made-up-field"
-    ]
+    assert pack.load_registration_fields(["zz-made-up-field"], source="s") == ["zz-made-up-field"]
 
 
 def test_axis_hint_rejects_non_core_axis() -> None:

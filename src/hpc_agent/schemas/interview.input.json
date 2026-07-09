@@ -186,9 +186,84 @@
       ],
       "default": null,
       "description": "Opt-in link to an audited ``.py`` source and its audit trail (D7). When present, the graduation gate refuses an entry point not hash-linked to a current audit; when ABSENT every notebook-audit gate passes silently and interview.json is byte-identical to the pre-audit output. The caller authors the ``audit_id`` slug — core never invents or defaults it (the fabrication class)."
+    },
+    "packs": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PackOptIn"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in domain-pack bindings (bind-as-data). Sibling to ``audited_source``: when present, each entry references a pack manifest (relpath core reads + hashes) and the caller-authored receipt-binding slots a gate requires; when ABSENT every pack gate returns silently and interview.json is byte-identical to a repo that never opted in (the D7 fail-safe). Core copies the opaque ``{pack, version, sha}`` echo verbatim and never reads a declared pack value for meaning.",
+      "title": "Packs"
     }
   },
   "$defs": {
+    "PackOptIn": {
+      "additionalProperties": false,
+      "description": "One domain-pack opt-in entry on the InterviewSpec ``packs`` block (bind-as-data).\n\nSibling to ``audited_source``: a caller-referenced pack, persisted verbatim\nin interview.json, absent → byte-identical. ``pack`` is the pack slug (it\nkeys the pack decision journal, so it is filesystem-safe); ``manifest`` is a\ncampaign-dir-relative path to the pack manifest core reads and hashes (the\n``_AuditedSource`` relpath precedent — never a blessed dir, never a search\npath, DP1). ``receipt_bindings`` lists the caller-authored slot→pack\nobligations the gate requires; empty means the pack contributes seam data\n(vocabularies, patterns) but gates on no receipt.\n\nCore copies the ``{pack, version, sha}`` echo verbatim onto every record\nthat consumed pack content and never reads a declared value for meaning —\nidentity only.",
+      "properties": {
+        "pack": {
+          "description": "Pack slug — keys the pack decision journal (``.hpc/packs/<pack>.decisions.jsonl``), so it must be filesystem-safe. Opaque to core; never a core vocabulary.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Pack",
+          "type": "string"
+        },
+        "manifest": {
+          "description": "Campaign-dir-relative path to the pack manifest core reads and hashes (the ``_AuditedSource`` relpath precedent). Core never asks how the bytes got there (DP3: distribution invisible).",
+          "minLength": 1,
+          "title": "Manifest",
+          "type": "string"
+        },
+        "receipt_bindings": {
+          "description": "Caller-authored slot→pack receipt obligations the gate requires (DP4). Empty → the pack contributes seam data but gates on no receipt. Renamed from ``required_receipts`` (coherence review) to disambiguate from the S6 manifest slug list.",
+          "items": {
+            "$ref": "#/$defs/ReceiptBinding"
+          },
+          "title": "Receipt Bindings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pack",
+        "manifest"
+      ],
+      "title": "PackOptIn",
+      "type": "object"
+    },
+    "ReceiptBinding": {
+      "additionalProperties": false,
+      "description": "One caller-authored receipt obligation inside a ``packs`` opt-in entry.\n\nBinds a caller-named *slot* (the obligation, e.g. ``\"data-audit\"``) to the\n*pack* whose current receipt fills it. Both are opaque slugs core never\ninterprets — the slot is the caller's name for the requirement (DP4: a\nrequirement always originates with the caller, never the pack), the pack is\nthe name a bound pack manifest declares. Cross-pack is legal: the slot's\n``pack`` need not equal the enclosing entry's ``pack``.\n\n``receipt_bindings`` is the object form, renamed from ``required_receipts``\nin the coherence review (2026-07-07) to disambiguate it from the S6 manifest\nlist ``required_receipts: [<slot slug>]`` — that list is a plain slug list on\nthe pack side; this is the caller-side slot→pack binding.",
+      "properties": {
+        "slot": {
+          "description": "Caller-authored slot slug — the caller's name for one receipt obligation a gate requires (opaque to core; the fabrication class forbids core inventing or defaulting one).",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Slot",
+          "type": "string"
+        },
+        "pack": {
+          "description": "The pack whose current receipt fills this slot (a bound-pack slug). Need not equal the enclosing entry's pack — a slot may bind cross-pack.",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Pack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "pack"
+      ],
+      "title": "ReceiptBinding",
+      "type": "object"
+    },
     "_AbortIfSpec": {
       "additionalProperties": true,
       "properties": {
