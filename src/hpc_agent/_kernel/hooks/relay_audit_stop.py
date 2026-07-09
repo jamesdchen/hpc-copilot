@@ -92,6 +92,42 @@ the omission-side complement:
 * the whole pass is fail-open: ANY exception in marker load/parse/check/
   discharge degrades to no-omission-findings (a hook that can wedge a session
   on one bad record is the failure class this posture exists to prevent).
+
+Sign-off echo detection — laundered authorship (run-#11 queue item 2)
+---------------------------------------------------------------------
+The audit skill's "never compose the sign-off utterance" ban is conduct prose
+with no code seat: a driving agent can DRAFT the very words the human then
+pastes as their typed attestation, and the journaled ``notebook-sign-off``
+record then reads as human-authored review it never was (the F-R number-word
+class in reverse — F-R catches the model restating REJECTED content; this
+catches the human restating MODEL-DRAFTED attestation). The same stop already
+has both halves on disk, so :func:`_sign_off_echo_findings` flags a journaled
+sign-off whose ``response`` echoes a *prior* assistant-authored line —
+verbatim (whitespace-normalized substring) or near (conservative token
+containment). Deliberate limits, all biased against a false block (a wrongly
+laundered flag on an honest human is worse than a miss):
+
+* only the LATEST sign-off per audit is checked (the freshest attestation is
+  the one that could just have been laundered; this also bounds re-firing);
+* the FINAL relay message is excluded from the corpus — a stop that legitimately
+  QUOTES the response back while relaying it is not laundering (only a *prior*,
+  pre-sign-off assistant line is);
+* a minimum length (chars AND tokens) floors out short responses ("y", "ok",
+  "looks good") that collide by chance; near-match needs high token containment.
+
+Decision-state claims — an unjournaled decision EVENT (run-#11 queue item 5)
+---------------------------------------------------------------------------
+verify-relay audits the run's *numbers/status*; nothing audited a claim about a
+DECISION EVENT — "revoked", "superseded", "greenlit", "journaled" (run #11: the
+relay "your y is revoked and nothing has advanced" with ZERO journal record of
+any revocation). :func:`_decision_state_findings` mirrors the rule-10 matching:
+a decision-state verb is only attributable to a scope the relay NAMES, and must
+be supported by that scope's decision journal — a positive verb needs a committed
+greenlight, a revocation/supersession verb needs the journal to actually show the
+greenlight no longer standing. An unsupported claim joins the rule-10 findings so
+it carries the standard correct-the-relay remedy. Conservative by construction:
+the verb and the scope id must share a LINE (so "the token was revoked" next to
+an unrelated run id does not fire), and a scope-less claim is a deliberate miss.
 """
 
 from __future__ import annotations
@@ -397,6 +433,257 @@ def _paraphrase_findings(experiment_dir: Path, relay_text: str, audit_ids: list[
     return findings
 
 
+# ─── Sign-off echo detection (laundered authorship — queue item 2) ───────────
+#
+# Conservative thresholds, all biased against a false block. A response shorter
+# than _MIN_ECHO_CHARS (or fewer than _MIN_ECHO_TOKENS words) is never matched —
+# short attestations ("y", "ok", "looks good") collide by chance. A near-match
+# needs the response's tokens to be almost wholly contained in an assistant line
+# (_ECHO_TOKEN_OVERLAP), so a minor human edit still flags but two unrelated
+# sentences sharing a few words do not.
+_MAX_ECHO_AUDITS = 10
+_MIN_ECHO_CHARS = 16
+_MIN_ECHO_TOKENS = 3
+_ECHO_TOKEN_OVERLAP = 0.9
+_MAX_PRIOR_ASSISTANT_BYTES = 2_000_000
+_MAX_ECHO_FINDINGS = 5
+
+# ─── Decision-state claims (an unjournaled decision EVENT — queue item 5) ─────
+#
+# A small, conservative lexicon of PAST-TENSE assertions that a decision event
+# happened. Word-boundary matched (so "unjournaled" does not read as a
+# "journaled" claim). Positive verbs assert a decision was recorded/approved;
+# the revocation verbs assert a prior decision no longer stands.
+_DECISION_STATE_POSITIVE_RE = re.compile(r"\b(?:greenlit|greenlighted|journaled)\b", re.IGNORECASE)
+_DECISION_STATE_NEGATIVE_RE = re.compile(r"\b(?:revoked|superseded)\b", re.IGNORECASE)
+_MAX_STATE_CLAIM_FINDINGS = 5
+
+
+def _norm(text: str) -> str:
+    """Whitespace-normalized, lowercased — the echo comparison key."""
+    return " ".join(text.split()).lower()
+
+
+def _entry_text(entry: dict[str, Any]) -> str:
+    """Join the text blocks of one transcript entry's message (str or list)."""
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            block_text = block.get("text")
+            if isinstance(block_text, str) and block_text:
+                parts.append(block_text)
+    return "\n".join(parts)
+
+
+def _prior_assistant_texts(transcript_path: Path) -> list[str]:
+    """Assistant texts BEFORE the final trailing assistant run, in order.
+
+    The echo check compares a journaled sign-off against a *prior* assistant
+    line — the drafting turn — so the final relay (which may legitimately QUOTE
+    the response back while relaying it) is excluded. Capped and tolerant:
+    unreadable file / corrupt lines yield ``[]`` / skip the line.
+    """
+    try:
+        text = transcript_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            entries.append(obj)
+
+    # The trailing run of assistant entries is the final relay — exclude it.
+    trailing_start = len(entries)
+    for idx in range(len(entries) - 1, -1, -1):
+        if entries[idx].get("type") == "assistant":
+            trailing_start = idx
+            continue
+        break
+
+    texts: list[str] = []
+    total = 0
+    for entry in entries[:trailing_start]:
+        if entry.get("type") != "assistant":
+            continue
+        entry_text = _entry_text(entry)
+        if not entry_text:
+            continue
+        texts.append(entry_text)
+        total += len(entry_text)
+        if total >= _MAX_PRIOR_ASSISTANT_BYTES:
+            break
+    return texts
+
+
+def _sign_off_echo_findings(
+    experiment_dir: Path, notebooks_dir: Path, prior_texts: list[str]
+) -> list[str]:
+    """Flag journaled sign-offs whose response echoes a prior assistant line.
+
+    For each discoverable audit (capped), the LATEST ``notebook-sign-off``
+    record's ``response`` is compared against the prior-assistant corpus:
+    whitespace-normalized substring (the human pasted the model's sentence) or
+    high token containment (a minor edit). Both gated by a minimum length so a
+    short attestation never collides. Fail-open at every grain; capped findings.
+    """
+    if not prior_texts:
+        return []
+    try:
+        audit_ids = sorted(
+            p.name[: -len(".decisions.jsonl")] for p in notebooks_dir.glob("*.decisions.jsonl")
+        )
+    except OSError:
+        return []
+
+    blob_parts: list[str] = []
+    lines: list[str] = []
+    for raw in prior_texts:
+        normalized = _norm(raw)
+        if normalized:
+            blob_parts.append(normalized)
+        for segment in raw.splitlines():
+            norm_line = _norm(segment)
+            if len(norm_line) >= _MIN_ECHO_CHARS:
+                lines.append(norm_line)
+    blob = " \n ".join(blob_parts)
+    if not blob:
+        return []
+
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import read_decisions
+
+    findings: list[str] = []
+    for audit_id in audit_ids[:_MAX_ECHO_AUDITS]:
+        if len(findings) >= _MAX_ECHO_FINDINGS:
+            break
+        try:
+            records = read_decisions(experiment_dir, "notebook", audit_id)
+        except Exception:
+            continue  # a journal we cannot read is a silent pass for that audit
+        sign_offs = [r for r in records if r.get("block") == nb.SIGN_OFF_BLOCK]
+        if not sign_offs:
+            continue
+        record = sign_offs[-1]  # only the latest attestation (conservative)
+        response = record.get("response")
+        if not isinstance(response, str):
+            continue
+        norm_resp = _norm(response)
+        resp_tokens = norm_resp.split()
+        if len(norm_resp) < _MIN_ECHO_CHARS or len(resp_tokens) < _MIN_ECHO_TOKENS:
+            continue  # too short to attribute — never flag
+
+        matched: str | None = None
+        if norm_resp in blob:
+            matched = norm_resp
+        else:
+            token_set = set(resp_tokens)
+            for candidate in lines:
+                cand_tokens = set(candidate.split())
+                if not cand_tokens:
+                    continue
+                if len(token_set & cand_tokens) / len(token_set) >= _ECHO_TOKEN_OVERLAP:
+                    matched = candidate
+                    break
+        if matched is None:
+            continue
+
+        resolved = record.get("resolved")
+        section = resolved.get("section") if isinstance(resolved, dict) else None
+        where = f" section {section}" if section else ""
+        findings.append(
+            f"[{audit_id}]{where}: the journaled sign-off response {response[:80]!r} "
+            f"echoes a prior assistant-authored line ({matched[:80]!r}) — laundered "
+            "authorship (the model drafted the words the human pasted as their "
+            "attestation). Disclose that the sign-off wording was model-composed."
+        )
+    return findings
+
+
+def _decision_state_findings(
+    experiment_dir: Path, relay_text: str, run_ids: list[str]
+) -> list[str]:
+    """Flag decision-state claims no journal record supports (queue item 5).
+
+    A decision-state verb is only attributable to a scope the relay NAMES (the
+    rule-10 discipline): candidate scopes are the mentioned runs plus any
+    mentioned campaign. The verb and the scope id must share a LINE, and the
+    scope's decision journal must support the claim — a positive verb needs a
+    committed ``y`` greenlight; a revocation/supersession verb needs the journal
+    to show that greenlight no longer standing (or nothing to revoke at all).
+    Fail-open per scope; capped; a scope-less claim is a deliberate miss.
+    """
+    has_pos = _DECISION_STATE_POSITIVE_RE.search(relay_text)
+    has_neg = _DECISION_STATE_NEGATIVE_RE.search(relay_text)
+    if not has_pos and not has_neg:
+        return []  # fast path: no decision-state vocabulary anywhere
+
+    scopes: list[tuple[str, str]] = [("run", rid) for rid in run_ids]
+    try:
+        campaign_ids = sorted(
+            p.parent.name
+            for p in (Path(experiment_dir) / ".hpc" / "campaigns").glob("*/decisions.jsonl")
+        )
+        scopes += [("campaign", c) for c in campaign_ids if c and c in relay_text]
+    except OSError:
+        pass
+    if not scopes:
+        return []  # attributable to no journaled scope — conservative miss
+
+    from hpc_agent.state.decision_journal import is_latest_committed_greenlight, read_decisions
+
+    relay_lines = relay_text.splitlines()
+    findings: list[str] = []
+    for scope_kind, scope_id in scopes:
+        if len(findings) >= _MAX_STATE_CLAIM_FINDINGS:
+            break
+        pos_here = False
+        neg_here = False
+        for line in relay_lines:
+            if scope_id not in line:
+                continue  # proximity: the verb must share the scope id's line
+            if _DECISION_STATE_POSITIVE_RE.search(line):
+                pos_here = True
+            if _DECISION_STATE_NEGATIVE_RE.search(line):
+                neg_here = True
+        if not pos_here and not neg_here:
+            continue
+        try:
+            records = read_decisions(experiment_dir, scope_kind, scope_id)
+            standing = is_latest_committed_greenlight(experiment_dir, scope_kind, scope_id)
+        except Exception:
+            continue  # a scope we cannot read is a silent pass
+        has_greenlight = any(r.get("response") == "y" for r in records)
+        if pos_here and not has_greenlight and len(findings) < _MAX_STATE_CLAIM_FINDINGS:
+            findings.append(
+                f"[{scope_id}] decision-state claim (greenlit/journaled) has no "
+                "committed greenlight in the decision journal"
+            )
+        if neg_here and (not records or standing) and len(findings) < _MAX_STATE_CLAIM_FINDINGS:
+            detail = (
+                "the latest decision is a standing greenlight, not a revocation"
+                if standing
+                else "there is no decision record at all"
+            )
+            findings.append(
+                f"[{scope_id}] decision-state claim (revoked/superseded) has no "
+                f"supporting journal record — {detail}"
+            )
+    return findings
+
+
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
     """Pure core: map a Stop *payload* to a block decision, or ``None``.
 
@@ -459,7 +746,29 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
 
     run_ids = mentioned_run_ids(relay_text, runs_dir) if runs_dir.is_dir() else []
     audit_ids = mentioned_audit_ids(relay_text, notebooks_dir) if notebooks_dir.is_dir() else []
-    if not run_ids and not audit_ids and not omissions:
+
+    # Sign-off echo detection (queue item 2): a laundered attestation names
+    # nothing in the final text, so this scans the audit journals directly
+    # (like the discharge pass). Fail-open in full; block-once (below the forced
+    # return, so a hook-forced continuation is never re-blocked).
+    echoes: list[str] = []
+    if notebooks_dir.is_dir():
+        try:
+            echoes = _sign_off_echo_findings(
+                cwd_dir, notebooks_dir, _prior_assistant_texts(Path(transcript))
+            )
+        except Exception:
+            echoes = []
+
+    # Decision-state claims (queue item 5): attributable to a named scope, so it
+    # keys on the mentioned runs (+ campaigns). Fail-open; folded into the
+    # rule-10 findings below so it carries the standard correct-the-relay remedy.
+    try:
+        state_findings = _decision_state_findings(cwd_dir, relay_text, run_ids)
+    except Exception:
+        state_findings = []
+
+    if not run_ids and not audit_ids and not omissions and not echoes and not state_findings:
         return None  # nothing attributable to audit — the run path stays untouched
 
     findings: list[str] = []
@@ -501,7 +810,11 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         # silence; this = re-typed content). Helper is fail-open and capped.
         findings.extend(_paraphrase_findings(cwd_dir, relay_text, audit_ids[:_MAX_AUDITS_AUDITED]))
 
-    if not findings and not omissions:
+    # Decision-state claims join the rule-10 findings — an unjournaled decision
+    # EVENT is a contradiction of the durable record, so it shares the remedy.
+    findings.extend(state_findings)
+
+    if not findings and not omissions and not echoes:
         return None
 
     segments: list[str] = []
@@ -513,6 +826,14 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
             + ". Correct the relay to match the journal (verify with "
             "`hpc-agent verify-relay`) before ending the turn — never relay "
             "numbers or state the journal does not support."
+        )
+    if echoes:
+        # Authorship laundering (not a relay/journal contradiction): a human
+        # attestation whose words the model drafted. Its own segment.
+        segments.append(
+            "hpc-agent sign-off echo (laundered authorship): "
+            + "; ".join(echoes)
+            + " Never compose the human's sign-off utterance."
         )
     if omissions:
         # The omission side of the same boundary: a computed terminal verdict

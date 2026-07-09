@@ -638,3 +638,143 @@ def test_paraphrase_ignores_non_audit_diff_blocks(tmp_path: Path) -> None:
     relay = "run10 status: I also edited the config:\n\n```diff\n+alpha = 2.0\n-alpha = 1.0\n```\n"
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, _transcript(tmp_path, relay)))
     assert out is None
+
+
+# ─── item 2: sign-off echo detection (laundered authorship) ──────────────────
+#
+# A journaled notebook-sign-off whose `response` echoes a PRIOR assistant line
+# is laundered authorship — the model drafted the words the human pasted.
+
+
+def _seed_signoff(exp: Path, response: str, *, audit_id: str = _NB_AUDIT) -> None:
+    """Journal ONE notebook-sign-off with a caller-chosen response utterance,
+    creating the audit journal (so the audit is discoverable)."""
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import append_decision
+
+    append_decision(
+        exp,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=nb.SIGN_OFF_BLOCK,
+        response=response,
+        resolved={
+            "audit_id": audit_id,
+            "section": "load-data",
+            "section_sha": "s",
+            "view_sha": "v",
+        },
+    )
+
+
+def _two_turn_transcript(tmp_path: Path, prior_assistant: str, final_text: str) -> Path:
+    """user → assistant(prior) → user → assistant(final): the drafting turn is
+    a NON-final assistant message; the final relay is separate."""
+    path = tmp_path / "transcript.jsonl"
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "draft a sign-off?"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": prior_assistant}]}},
+        {"type": "user", "message": {"role": "user", "content": "done, signed"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": final_text}]}},
+    ]
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_echo_fires_on_pasted_assistant_drafted_signoff(tmp_path: Path) -> None:
+    """The model drafted the exact attestation the human pasted — flag it."""
+    _seed_signoff(tmp_path, "I reviewed the load-data section and the parse looks correct.")
+    transcript = _two_turn_transcript(
+        tmp_path,
+        "You could sign off with: I reviewed the load-data section and the parse looks correct.",
+        "The section is signed off. Ending the turn.",
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "laundered authorship" in out["reason"]
+    assert _NB_AUDIT in out["reason"]
+
+
+def test_echo_passes_on_original_human_utterance(tmp_path: Path) -> None:
+    """A human-authored sign-off with no prior assistant echo does not fire —
+    the assistant only asked a logistics question, never drafted the words."""
+    _seed_signoff(tmp_path, "Checked the load-data parse against my notes; approving it.")
+    transcript = _two_turn_transcript(
+        tmp_path,
+        "The load-data render is ready for your review whenever you are.",
+        "Recorded your sign-off. Ending the turn.",
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_echo_ignores_final_message_quoting_the_response(tmp_path: Path) -> None:
+    """The FINAL relay legitimately quoting the response back is not laundering
+    (only a PRIOR assistant line is) — no false block."""
+    _seed_signoff(tmp_path, "I reviewed the load-data section and the parse looks correct.")
+    # The ONLY assistant text carrying the response is the final relay itself.
+    transcript = _two_turn_transcript(
+        tmp_path,
+        "The load-data render is ready for your review.",
+        "Recorded the human sign-off: 'I reviewed the load-data section and the "
+        "parse looks correct.' Ending the turn.",
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_echo_ignores_short_response(tmp_path: Path) -> None:
+    """A short attestation ('y') is below the length floor — never flagged even
+    if it appears verbatim in a prior assistant line."""
+    _seed_signoff(tmp_path, "y")
+    transcript = _two_turn_transcript(
+        tmp_path, "Just reply y to sign off.", "Signed. Ending the turn."
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+# ─── item 5: decision-state claims (an unjournaled decision EVENT) ───────────
+#
+# Run #11: "your y is revoked and nothing has advanced" with ZERO journal
+# record of the revocation. A decision-state verb about a NAMED scope must be
+# supported by that scope's decision journal.
+
+
+def test_state_claim_fires_on_unjournaled_revocation(tmp_path: Path) -> None:
+    """A standing greenlight ('y' committed via submit-s1) that the relay
+    falsely calls revoked → block: no supporting revocation record."""
+    _seed_run(tmp_path, status="failed")  # submit-s1 response 'y' stands as latest
+    transcript = _transcript(tmp_path, f"Run {RUN_ID}'s y is revoked and nothing has advanced.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert RUN_ID in out["reason"]
+    assert "revoked/superseded" in out["reason"]
+    assert "standing greenlight" in out["reason"]
+
+
+def test_state_claim_passes_when_greenlight_record_exists(tmp_path: Path) -> None:
+    """A positive decision-state claim ('greenlit'/'journaled') about a scope
+    that HAS a committed 'y' greenlight is supported → no block."""
+    _seed_run(tmp_path, status="failed")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} was greenlit and the decision is journaled.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_state_claim_silent_when_no_scope_named(tmp_path: Path) -> None:
+    """A scope-less decision-state claim is a deliberate miss (conservative):
+    the verb is attributable to no journaled scope."""
+    _seed_run(tmp_path, status="failed")
+    transcript = _transcript(tmp_path, "Your y is revoked and nothing has advanced.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+def test_state_claim_ignores_verb_on_a_different_line(tmp_path: Path) -> None:
+    """Proximity guard: a revocation verb about something unrelated, on a
+    different line from the run id, does not fire (no false block)."""
+    _seed_run(tmp_path, status="failed")
+    transcript = _transcript(
+        tmp_path,
+        f"Run {RUN_ID} completed cleanly across 10 tasks.\n"
+        "Separately, the stale API token was revoked by the admin.",
+    )
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
