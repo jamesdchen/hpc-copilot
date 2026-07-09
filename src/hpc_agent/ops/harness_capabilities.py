@@ -5,8 +5,12 @@ contract (``docs/internals/harness-contract.md``, "Capability negotiation"). It
 DETECTS and reports the four contract capabilities as code can OBSERVE them —
 never a self-asserted manifest:
 
-1. **The out-of-band utterance log.** Whether the log namespace already exists for
-   this repo (non-creating read via :mod:`hpc_agent.state.utterances`), plus which
+1. **The out-of-band utterance log.** Whether a log already exists for this repo —
+   the unsuffixed ``utterances.jsonl`` OR any actor-suffixed
+   ``utterances.<actor>.jsonl`` (non-creating read via
+   :mod:`hpc_agent.state.utterances`; multi-human MH2 attributes capture to the
+   suffixed locator, so an actor-only regime leaves the unsuffixed file absent),
+   plus which
    input channels are installed in ``~/.claude/settings.json`` (the utterance- and
    answer-capture hooks, matched by their :mod:`hpc_agent.agent_assets` module-path
    needles), plus whether the MCP elicitation SERVER code is implemented (the
@@ -178,8 +182,15 @@ def harness_capabilities(
     # Capability 1 — the out-of-band human-utterance log.
     utterance_capture = _needle_installed(settings, _UTTERANCE_CAPTURE_NEEDLE)
     answer_capture = _needle_installed(settings, _ANSWER_CAPTURE_NEEDLE)
+    # Presence probe: the unsuffixed log OR any actor-suffixed log
+    # (``utterances.<actor>.jsonl``, MH2 consequence 1). Under an actor-only
+    # capture regime the unsuffixed file never exists while attributed logs
+    # sit beside it, so a bare ``utterances.jsonl`` check would report the
+    # capability absent. Non-creating throughout: a glob over a missing
+    # namespace dir yields nothing and scaffolds nothing (the no-scaffold rule).
     try:
-        log_present = utterances_path(experiment_dir).exists()  # non-creating
+        base = utterances_path(experiment_dir)  # non-creating
+        log_present = base.exists() or any(base.parent.glob("utterances.*.jsonl"))
     except OSError:
         log_present = False
 

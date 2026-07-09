@@ -135,6 +135,55 @@ def test_utterance_log_namespace_present(
     assert r1.capabilities["utterance_log"].evidence["log_present_for_repo"] is True
 
 
+def test_actor_suffixed_log_alone_detects_capability_one(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MT4b (MH2 consequence 1): under an actor-only capture regime the
+    unsuffixed ``utterances.jsonl`` never exists, but an attributed
+    ``utterances.<actor>.jsonl`` sits beside it — the presence probe must still
+    detect capability 1."""
+    from hpc_agent.state.utterances import utterances_path
+
+    journal = tmp_path / "journal"
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
+    _write_settings(claude_dir, {})
+
+    exp_dir = tmp_path / "repo"
+    exp_dir.mkdir()
+
+    # Materialize ONLY the actor-suffixed log; the unsuffixed one never exists.
+    base = utterances_path(exp_dir)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    (base.parent / "utterances.alice.jsonl").write_text("", encoding="utf-8")
+    assert not base.exists()  # unsuffixed absent by construction
+
+    result = harness_capabilities(experiment_dir=exp_dir, spec=HarnessCapabilitiesSpec())
+    assert result.capabilities["utterance_log"].evidence["log_present_for_repo"] is True
+
+
+def test_empty_namespace_reads_absent_and_creates_no_directory(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No log of either shape -> capability absent, and the probe is
+    non-creating: no namespace directory is scaffolded by the glob."""
+    from hpc_agent.state.utterances import utterances_path
+
+    journal = tmp_path / "journal"
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
+    _write_settings(claude_dir, {})
+
+    exp_dir = tmp_path / "repo"
+    exp_dir.mkdir()
+
+    namespace = utterances_path(exp_dir).parent
+    assert not namespace.exists()  # nothing materialized
+
+    result = harness_capabilities(experiment_dir=exp_dir, spec=HarnessCapabilitiesSpec())
+    assert result.capabilities["utterance_log"].evidence["log_present_for_repo"] is False
+    # The glob over the missing namespace must not have scaffolded it.
+    assert not namespace.exists()
+
+
 def test_elicitation_flag_reported(claude_dir: Path, tmp_path: Path) -> None:
     # The server bit is identity with the imported flag (which flips as the pump
     # lands — assert identity, never a literal). The client bit is "per-session":

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/notebook_draft.output.json",
+  "title": "notebook-draft output data",
+  "description": "Echo of the journaled draft attestation.\n\n``section_sha`` is the freshly-parsed sha the draft was bound at; ``actor`` is\nthe SERVER-RESOLVED drafting actor (the session ``HPC_ACTOR`` when it is a\ndeclared actor, else ``null`` for an unattributed draft — zero/one declared\nactor). It is a server-computed OUTPUT, echoed for transparency; the wire\ninput never carries an actor.",
+  "type": "object",
+  "required": [
+    "audit_id",
+    "section",
+    "section_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "audit_id": {
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "section": {
+      "title": "Section",
+      "type": "string"
+    },
+    "section_sha": {
+      "title": "Section Sha",
+      "type": "string"
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The server-resolved drafting actor stamped as the attestation's attestor_id (opaque, harness-asserted, never verified), or null for an unattributed draft (zero/one declared actor). Server-computed; never a wire input.",
+      "title": "Actor"
+    }
+  }
+}

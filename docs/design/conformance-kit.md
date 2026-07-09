@@ -477,6 +477,39 @@ already exists: `tests/_mcp_harness.py` (`FakeMcpClient`, built by
 elicitation E1 — the cross-slate reuse-ledger item; one rig, two plans).
 No kit code here; the kit remains its own plan.
 
+**Multi-human reservation note (2026-07-09, `docs/design/multi-human.md` MT8
+landed on a sibling branch; no kit code exists here yet).** When the kit lands
+(K-final), its capability-1 module (`conformance/test_capability_utterance_log.py`,
+K4) gains — as an ADDITIVE MINOR under the D-K6 deprecation posture, never a
+breaking change — an **attributed-capture assertion**, mirroring the harness
+contract's MT8 extension (capability 1 = the "attributed utterance log"):
+
+- An adapter driven with an ACTOR-CONFIGURED session (the actor arrives
+  out-of-band, exactly like the utterance text — the reference binding is the
+  session's `HPC_ACTOR`, `docs/design/multi-human.md` MH1) lands its record in
+  the actor-suffixed locator `state/utterances.py::utterances_path(experiment_dir,
+  actor=<slug>)`, read back via
+  `state/utterances.py::read_utterances(experiment_dir, actor=<slug>)`, and the
+  FROZEN 3-field schema (`{ts, sha256, text}`, sorted-keys JSON, append-only)
+  STILL HOLDS PER FILE — attribution rides the locator, never a fourth record
+  field, so the existing byte-rule assertion is reused per file, not weakened.
+- An UNCONFIGURED adapter (no actor) is BYTE-IDENTICAL to the v1 assertions: it
+  writes the unsuffixed `utterances.jsonl` and no suffixed file is ever created.
+- **Both reference adapters (`claude_code.py`, `notebook_render.py`) stay green
+  by construction** — the unconfigured path is exactly today's, and the
+  attributed path adds a new assertion neither adapter's v1 behavior violates.
+  This is the D-K6 additive-minor rule satisfied: a new assertion lands as a
+  minor bump only because no previously-conforming harness fails it.
+
+The assertion is detection-BY-BEHAVIOR (the D-K3 rule for a per-harness cap-1
+seam): the adapter proving `read_utterances(experiment_dir, actor=<slug>)`
+accepts what its actor-configured session wrote, never a Claude-Code hook needle.
+No adapter-Protocol change is forced — the actor is a session-configuration
+concern (out-of-model, MH1), not a new `write_utterance` argument the kit
+supplies; a candidate harness that cannot attribute is honestly PARTIAL on the
+attributed leg, never a negotiation failure. No kit code here; the kit remains
+its own plan, and this reservation is the only multi-human obligation it carries.
+
 Wave C (sequential — hot/shared files):
 
 - **K8** — reference adapters `conformance/adapters/claude_code.py` +

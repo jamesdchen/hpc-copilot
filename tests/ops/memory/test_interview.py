@@ -1780,3 +1780,122 @@ def test_packs_typed_write_read_by_wave_b_readers(tmp_path: Path) -> None:
     assert read_status(tmp_path) == packs
     # pack_declarations reads it identically (its raw opt-in probe).
     assert read_decl(tmp_path) == packs
+
+
+# ─── multi-human actors opt-in (MH1, MT3) ──────────────────────────────────
+#
+# The ``actors`` block is the sibling of ``packs`` / ``audited_source``: a
+# caller-declared opt-in persisted VERBATIM into interview.json, and — the
+# load-bearing invariant — ABSENT → interview.json is byte-identical to a repo
+# that never declared actors (the D7 fail-safe, ``exclude_none``). ``ids`` are
+# opaque filesystem-safe slugs (the shared tag class); an optional ``policy``
+# mapping delegates gated blocks to actor subsets, with a dangling policy slug
+# (naming an id not in ``ids``) refused LOUDLY at validation time.
+
+
+def test_actors_persisted_verbatim_when_present(tmp_path: Path) -> None:
+    """Present → the whole ``actors`` block round-trips into interview.json
+    unchanged, including the nested ``policy`` block→[slug] mapping."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    actors = {
+        "ids": ["alice", "bob"],
+        "policy": {
+            "registration": ["alice"],
+            "campaign-greenlight": ["alice", "bob"],
+        },
+    }
+    intent = _minimal_intent(3, actors=actors)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == actors
+
+
+def test_actors_absent_policy_omitted_via_exclude_none(tmp_path: Path) -> None:
+    """``policy`` is optional (default None); a block that omits it persists as
+    just ``{"ids": [...]}`` — the exclude_none path drops the absent key, so no
+    policy gating is declared."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, actors={"ids": ["alice", "bob"]})
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == {"ids": ["alice", "bob"]}
+
+
+def test_actors_empty_ids_allowed(tmp_path: Path) -> None:
+    """Zero declared actors is not an error (MH1): an empty ``ids`` is today's
+    single-actor system, and it round-trips as an empty list."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, actors={"ids": []})
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["actors"] == {"ids": []}
+
+
+def test_absent_actors_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL GUARD (D7 fail-safe): with no ``actors`` block, interview.json is
+    byte-identical to the pre-change output — the field name never appears, and
+    the serialized model view carries no ``actors`` key (exclude_none path)."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    raw = (tmp_path / "interview.json").read_text()
+    assert "actors" not in raw
+    dumped = InterviewSpec.model_validate(intent).model_dump(exclude_none=True, mode="json")
+    assert "actors" not in dumped
+
+
+def test_actors_dangling_policy_slug_refused(tmp_path: Path) -> None:
+    """A ``policy`` value naming an actor NOT in ``ids`` is a LOUD refusal at
+    validation time (the dangling-reference posture, MH1) — never a silent
+    pass, and before any disk write."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        actors={
+            "ids": ["alice", "bob"],
+            "policy": {"registration": ["carol"]},  # carol is undeclared
+        },
+    )
+    with pytest.raises(ValidationError, match="not in actors.ids"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_non_slug_id(tmp_path: Path) -> None:
+    """An actor id uses the shared RunIdStrict character class — a slug with a
+    path separator (it becomes a path segment in the MH2 locator) is refused."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(3, actors={"ids": ["alice", "bad/slug"]})
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_non_slug_policy_value(tmp_path: Path) -> None:
+    """A policy value slug is likewise RunIdStrict — a non-slug actor slug is
+    refused (before the dangling check even needs to run)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        actors={"ids": ["alice"], "policy": {"registration": ["not a slug"]}},
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_actors_rejects_extra_keys(tmp_path: Path) -> None:
+    """extra='forbid' on the actors block: an unexpected key is refused (no
+    silent meaning-bearing field — e.g. a role vocabulary — smuggled on)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(3, actors={"ids": ["alice"], "roles": {"alice": "pi"}})
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)

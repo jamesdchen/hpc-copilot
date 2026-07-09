@@ -84,6 +84,42 @@ def test_validate_refuses_a_present_but_bad_view_sha(bad: object) -> None:
         attestation.validate(_rec(view_sha=bad))
 
 
+# ── attestor_id (MH3, multi-human): optional, view_sha-style validation ───────
+
+
+def test_validate_old_shape_record_has_no_attestor_id() -> None:
+    # An absent attestor_id validates byte-compatibly → single-actor semantics.
+    # Every pre-multi-human record (greenlight, sign-off, receipt, look) stays
+    # valid with attestor_id defaulting to None.
+    att = attestation.validate(_rec())
+    assert att.attestor_id is None
+
+
+def test_validate_carries_a_stamped_attestor_id() -> None:
+    att = attestation.validate(_rec(attestor="code", attestor_id="alice"))
+    assert att.attestor_id == "alice"
+    # attestor (WHAT KIND) and attestor_id (WHICH ONE) are independent.
+    assert att.attestor == "code"
+
+
+@pytest.mark.parametrize("bad", ["", 5, ["alice"]])
+def test_validate_refuses_a_present_but_bad_attestor_id(bad: object) -> None:
+    # Validated exactly like view_sha: present-but-empty (or non-string) refuses
+    # — an empty attribution is a diluted one, never a silent default.
+    with pytest.raises(errors.SpecInvalid):
+        attestation.validate(_rec(attestor_id=bad))
+
+
+def test_attestor_id_does_not_perturb_bind_or_reduce() -> None:
+    # bind/reduce are untouched by attestor_id: a stamped record binds by its
+    # content_sha and reduces by identity-of-subject, exactly as an unstamped one.
+    assert attestation.bind(_rec(attestor_id="bob"), recompute="sha-a").attestor_id == "bob"
+    stamped = [_rec(content_sha="sha-a", attestor_id="alice")]
+    unstamped = [_rec(content_sha="sha-a")]
+    assert attestation.reduce(stamped, current_sha="sha-a") == CURRENT
+    assert attestation.reduce(unstamped, current_sha="sha-a") == CURRENT
+
+
 def test_validate_refuses_a_non_mapping() -> None:
     with pytest.raises(errors.SpecInvalid):
         attestation.validate("not-a-record")  # type: ignore[arg-type]

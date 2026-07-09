@@ -117,6 +117,13 @@ class DecisionRecord(BaseModel):
     proposal: Proposal = ""
     resolved: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
+    # The opaque, harness-asserted multi-human actor slug of the authoring
+    # session (``docs/design/multi-human.md`` MH3/MH4). Additive + optional:
+    # ``None`` (omitted on disk) for every single-actor record — byte-identical
+    # to pre-multi-human. Server-RESOLVED only (never a caller-suppliable input
+    # field on ``AppendDecisionInput`` — the model must not choose its identity);
+    # core compares it by identity and NEVER verifies who set it.
+    attestor_id: str | None = None
 
 
 class AppendDecisionResult(BaseModel):

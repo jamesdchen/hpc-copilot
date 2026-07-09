@@ -10,6 +10,7 @@ registration kernel — are instances of ONE object, the **ATTESTATION**::
      subject_id:   <opaque str>,   # caller-authored id — NEVER core-invented
      content_sha:  <str>,          # the hash of what was attested
      view_sha?:    <str>,          # optional: the projection the human saw
+     attestor_id?: <str>,          # optional: WHICH attestor (opaque actor slug)
      evidence?:    <opaque>}       # opaque payload, never interpreted here
 
 An attestation is a PROJECTION over an existing decision-journal record (its
@@ -93,6 +94,14 @@ class Attestation:
     vocabulary): the kernel hashes, compares, and counts them, but never
     interprets what a subject means. ``evidence`` is likewise opaque — a payload
     the instance owns, never read here.
+
+    ``attestor_id`` (MH3, multi-human) is the optional opaque caller-authored
+    slug for WHICH attestor acted — ``attestor`` says WHAT KIND ("human" /
+    "code"), ``attestor_id`` says WHICH ONE. HARNESS-ASSERTED attribution, never
+    verified: core compares it by identity, never interprets it, and never
+    checks a credential. Absent → single-actor semantics, so every pre-multi-human
+    record validates byte-compatibly. ``bind``/``reduce`` are untouched by it
+    (drift-revocation is identity-of-subject, not identity-of-attestor).
     """
 
     attestor: str
@@ -100,6 +109,7 @@ class Attestation:
     subject_id: str
     content_sha: str
     view_sha: str | None = None
+    attestor_id: str | None = None
     evidence: Any = None
 
 
@@ -136,12 +146,22 @@ def validate(record: Mapping[str, Any]) -> Attestation:
         raise errors.SpecInvalid(
             f"attestation: view_sha, when present, must be a non-empty string; got {view_sha!r}"
         )
+    attestor_id = record.get("attestor_id")
+    if attestor_id is not None and (not isinstance(attestor_id, str) or not attestor_id):
+        # WHICH attestor (opaque actor slug) — validated exactly like view_sha:
+        # absent is fine (single-actor), present-but-empty is a refusal (an
+        # empty attribution is a diluted one, never a silent default).
+        raise errors.SpecInvalid(
+            "attestation: attestor_id, when present, must be a non-empty string; "
+            f"got {attestor_id!r}"
+        )
     return Attestation(
         attestor=attestor,
         subject_kind=record["subject_kind"],
         subject_id=record["subject_id"],
         content_sha=record["content_sha"],
         view_sha=view_sha,
+        attestor_id=attestor_id,
         evidence=record.get("evidence"),
     )
 

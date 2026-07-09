@@ -51,6 +51,7 @@ from hpc_agent._wire.queries.decision_journal import (
     ReadDecisionsResult,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import env_actor
 from hpc_agent.state.decision_journal import append_decision as _append_decision
 from hpc_agent.state.decision_journal import decisions_path as _decisions_path
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
@@ -96,6 +97,127 @@ def _refuse_missing_authorship(message: str) -> NoReturn:
     exc = errors.SpecInvalid(message)
     exc.failure_features = dict(_AUTHORSHIP_EVIDENCE_MISSING)  # type: ignore[attr-defined]
     raise exc
+
+
+# ── multi-human actor substrate (docs/design/multi-human.md MH1/MH4/MH6/MH8) ──
+#
+# Every helper here is a NO-OP under the single-actor world (zero or one declared
+# actor): the identity comparisons and policy consultation only mean something in
+# a group, and the byte-identity pin (enforcement rows) requires that a session
+# with fewer than two declared actors behaves byte-for-byte as before multi-human
+# — no new refusal, no attestor_id stamp, no policy read. The guard is ALWAYS the
+# ``len(ids) > 1`` census: the plumbing may resolve a session actor for stamping,
+# but no COMPARISON fires without the >1 declaration.
+
+
+def _read_interview_actors(experiment_dir: Path) -> tuple[list[str], dict[str, list[str]]]:
+    """The interview.json ``actors`` block as ``(ids, policy)`` — or ``([], {})``.
+
+    Reads the same interview.json the sign-off / audit gates already read
+    (``_read_interview_audited_source`` posture: campaign-dir root first,
+    ``.hpc/interview.json`` defensively; a corrupt / non-object file, or an absent
+    / malformed ``actors`` block, is tolerated as "no actors declared" → the
+    single-actor world, byte-identical). ``ids`` is the declared actor slugs;
+    ``policy`` is the optional ``{block: [slug, ...]}`` delegation mapping (MH8),
+    ``{}`` when absent. Core never interprets the slugs — it compares identity.
+    """
+    for rel in ("interview.json", ".hpc/interview.json"):
+        path = experiment_dir / rel
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        block = doc.get("actors")
+        if not isinstance(block, dict):
+            return [], {}
+        raw_ids = block.get("ids")
+        ids = [str(i) for i in raw_ids if isinstance(i, str)] if isinstance(raw_ids, list) else []
+        raw_policy = block.get("policy")
+        policy: dict[str, list[str]] = {}
+        if isinstance(raw_policy, dict):
+            for key, allowed in raw_policy.items():
+                if isinstance(key, str) and isinstance(allowed, list):
+                    policy[key] = [str(a) for a in allowed if isinstance(a, str)]
+        return ids, policy
+    return [], {}
+
+
+def _session_actor(experiment_dir: Path, ids: list[str] | None = None) -> str | None:
+    """The resolved session actor slug, or ``None`` when unattributed (MH4).
+
+    Reads ``HPC_ACTOR`` out-of-band (``infra/env_flags.py::env_actor`` — the slug
+    arrives from OUTSIDE the model's tool surface, exactly like the utterance
+    text, and is validated as a filesystem-safe slug there). The resolved slug is
+    accepted ONLY when it is one of the *declared* ``actors.ids`` — an
+    ``HPC_ACTOR`` naming an undeclared actor is UNRESOLVABLE (``None``), never a
+    silently-trusted identity. ``None`` also when the env is unset/blank/invalid,
+    or when no actors are declared. Core NEVER verifies who set the env var (the
+    harness-asserted attribution tier); it only compares the opaque slug.
+    """
+    if ids is None:
+        ids, _ = _read_interview_actors(experiment_dir)
+    actor = env_actor()
+    if actor is not None and actor in set(ids):
+        return actor
+    return None
+
+
+def _actor_scoped_human_texts(experiment_dir: Path, ids: list[str]) -> list[str] | None:
+    """The harness-captured evidence pool, actor-scoped under >1 declared actors (MH4).
+
+    * Zero/one declared actor → the union read (``_harness_human_texts`` with no
+      actor), byte-identical to the pre-multi-human evidence tier.
+    * >1 declared, session actor resolves → the SESSION ACTOR'S suffixed log ONLY
+      (``read_utterances(actor=<slug>)`` via ``_harness_human_texts`` — the
+      anti-laundering exclusion: actor A's agent cannot commit a value only actor
+      B ever typed, and the unsuffixed anonymous log never satisfies a scoped
+      check).
+    * >1 declared, session UNATTRIBUTED (no resolvable actor) → ``None`` so the
+      gate falls to the journal-response FRICTION tier: anonymous text must never
+      satisfy an actor-specific evidence check (the MT8 contract sentence, now
+      enforced). It does NOT fall back to the union — that would re-open
+      laundering.
+    """
+    if len(ids) > 1:
+        actor = _session_actor(experiment_dir, ids)
+        if actor is None:
+            return None
+        return _harness_human_texts(experiment_dir, actor=actor)
+    return _harness_human_texts(experiment_dir)
+
+
+def _assert_actor_policy(
+    ids: list[str], policy: dict[str, list[str]], block: str, actor: str | None
+) -> None:
+    """MH8 delegation gate: refuse a policy-restricted block by a non-member actor.
+
+    Pure lists+mappings core COMPARES, never evaluates (the domain-packs pattern
+    applied to people). Silent unless >1 actor is declared AND ``policy`` maps
+    *block* to a member list: then the session *actor* must be ``in`` that list —
+    a non-member (including an unresolvable ``None`` session actor) is refused,
+    naming the block and the allowed set. A block absent from the policy is
+    unrestricted (policy is opt-in per block); no ``actors`` / ``policy`` at all
+    is silent (byte-identical). IDENTITY + COUNTING only — core never learns WHY
+    the lab granted a block to an actor.
+    """
+    if len(ids) <= 1:
+        return
+    allowed = policy.get(block)
+    if not allowed:
+        return  # no policy entry for this block → unrestricted
+    if actor is None or actor not in set(allowed):
+        raise errors.SpecInvalid(
+            f"actor-policy gate (MH8): block {block!r} is delegated by "
+            f"actors.policy to {sorted(allowed)!r}; the session actor "
+            f"{actor!r} is not a member and may not author it. Configure "
+            "HPC_ACTOR to a delegated actor, or amend actors.policy in "
+            "interview.json (a policy entry is caller-declared delegation, "
+            "never a role core interprets)."
+        )
 
 
 @primitive(
@@ -156,6 +278,15 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_reproduction_verdict_authorship(experiment_dir, spec, resolved)
     _assert_conclusion_authorship(experiment_dir, spec, resolved)
     _assert_challenge_authorship(experiment_dir, spec, resolved)
+    # Multi-human (docs/design/multi-human.md MH4/MH8): resolve the session actor
+    # server-side (NEVER a caller-suppliable spec field — the model must not choose
+    # its identity), enforce the MH8 delegation policy for this block, and stamp the
+    # resolved actor as the record's ``attestor_id``. All three are NO-OPS under
+    # zero/one declared actor (``_session_actor`` → None, ``_assert_actor_policy``
+    # returns silently, ``attestor_id=None`` is omitted on disk) — byte-identical.
+    _actor_ids, _actor_policy = _read_interview_actors(experiment_dir)
+    attestor_id = _session_actor(experiment_dir, _actor_ids) if len(_actor_ids) > 1 else None
+    _assert_actor_policy(_actor_ids, _actor_policy, spec.block, attestor_id)
     record = _append_decision(
         experiment_dir,
         scope_kind=spec.scope_kind,
@@ -166,6 +297,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
         proposal=spec.proposal,
         resolved=resolved,
         provenance=spec.provenance,
+        attestor_id=attestor_id,
     )
     count = len(_read_decisions(experiment_dir, spec.scope_kind, spec.scope_id))
     path = _decisions_path(experiment_dir, spec.scope_kind, spec.scope_id)
@@ -462,7 +594,7 @@ def _ha_word_tokens(text: str) -> set[str]:
     return {m.group(0).lower() for m in _HA_WORD_RE.finditer(text or "")}
 
 
-def _harness_human_texts(experiment_dir: Path) -> list[str] | None:
+def _harness_human_texts(experiment_dir: Path, actor: str | None = None) -> list[str] | None:
     """The logged human utterances' texts, or ``None`` when none were captured.
 
     The harness-captured evidence tier BOTH authorship gates share
@@ -473,10 +605,17 @@ def _harness_human_texts(experiment_dir: Path) -> list[str] | None:
     agent-authored journal ``response``. ``None`` (no log / older session)
     signals the caller to fall back to the journal-response friction tier;
     a present-but-empty case reads the same.
+
+    *actor* (MH4): ``None`` → the UNION of every log (today's identity-less read,
+    byte-identical). An actor slug → that actor's suffixed log ONLY — the
+    anti-laundering scoped read the >1-actor authorship tier uses
+    (:func:`_actor_scoped_human_texts` is the caller that decides which). The
+    unsuffixed anonymous log is EXCLUDED from a scoped read by
+    ``read_utterances`` itself.
     """
     from hpc_agent.state.utterances import read_utterances
 
-    utterances = read_utterances(experiment_dir)
+    utterances = read_utterances(experiment_dir, actor=actor)
     if not utterances:
         return None
     return [str(u.get("text") or "") for u in utterances]
@@ -730,8 +869,12 @@ def _assert_human_authorship(
     prior = _read_decisions(experiment_dir, spec.scope_kind, spec.scope_id)
 
     # Tiered evidence source: prefer the harness-captured utterance log (the
-    # lock) over agent-authored journal responses (the friction fallback).
-    harness_texts = _harness_human_texts(experiment_dir)
+    # lock) over agent-authored journal responses (the friction fallback). Under
+    # >1 declared actors the pool is the SESSION ACTOR'S log only (MH4 — actor A's
+    # agent cannot commit a value only actor B ever typed); an unattributed
+    # >1-actor session falls to the friction tier (never the anonymous union).
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     harness_captured = harness_texts is not None
 
     if not harness_captured and prior and not any("response" in rec for rec in prior):
@@ -896,7 +1039,8 @@ def _assert_unlock_authorship(
             "re-opening the scope."
         )
 
-    harness_texts = _harness_human_texts(experiment_dir)
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     if harness_texts is not None:
         human_words: set[str] = set()
         for text in harness_texts:
@@ -908,7 +1052,8 @@ def _assert_unlock_authorship(
                 "installed, the unlock rationale must derive from a logged human "
                 "utterance (harness-captured), not the agent-relayed response "
                 f"{spec.response!r}. Have the human state why the scope is being "
-                "re-opened in a prompt."
+                "re-opened in a prompt. (Under >1 declared actors the pool is the "
+                "SESSION ACTOR'S log only — MH4.)"
             )
 
 
@@ -1155,6 +1300,64 @@ def _assert_signoff_render_current(
         )
 
 
+def _assert_signoff_reviewer_not_author(
+    experiment_dir: Path, *, audit_id: str, section: str, section_sha: str
+) -> None:
+    """MH6 reviewer≠author gate — refuse a self-sign under >1 declared actors.
+
+    Active ONLY when interview.json declares >1 actor (MH1); otherwise the gate
+    does not exist and this returns silently, byte-identical to today (no draft
+    lookup, no actor resolution, no new refusal). Under >1 actor, three refusals,
+    all the loud/dangling-reference posture (NOT D7 silence, NOT the E2
+    authorship-missing marker — a re-elicited utterance cannot fix a config /
+    attribution gap; the remedy is a config or a recorded draft, not a sentence):
+
+    * **No resolvable session actor** — an anonymous sign-off in a
+      declared-multi-actor experiment is the laundering channel (sign as nobody,
+      be everybody). Refused naming ``HPC_ACTOR``.
+    * **No current draft attribution** — the author is the ``attestor_id`` of the
+      newest ``notebook-draft`` attestation whose ``content_sha`` equals the
+      FRESHLY RECOMPUTED *section_sha* (:func:`state.notebook_audit.read_draft_author`
+      — routed through the ONE reducer, so a redrafted section's stale draft is no
+      attribution). A missing attribution is REFUSED, not skipped: an unattributed
+      section makes self-review undetectable by omission (draft, skip the draft
+      record, self-sign). The refusal names the remedy (record the draft).
+    * **signer == author** — the drafter's actor cannot sign their own section.
+      Pure identity over opaque slugs (Q1-clean); core never knows WHY the lab
+      wants this, it compares ids.
+    """
+    ids, _ = _read_interview_actors(experiment_dir)
+    if len(ids) <= 1:
+        return  # the gate does not exist under zero/one declared actor
+    from hpc_agent.state.notebook_audit import read_draft_author
+
+    signer = _session_actor(experiment_dir, ids)
+    if signer is None:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): >1 actor is declared "
+            f"but this session has no resolvable actor, so section {section!r} would "
+            "be signed by nobody — an anonymous act in a declared-multi-actor "
+            "experiment is the laundering channel. Configure HPC_ACTOR to a declared "
+            "actor before signing."
+        )
+    author = read_draft_author(experiment_dir, audit_id, section, current_sha=section_sha)
+    if author is None:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): section "
+            f"{section!r} has NO current draft attribution at its recomputed sha "
+            "(no `notebook-draft` record for this content), so an unattributed "
+            "section could be self-reviewed by omission. Record the draft (the "
+            "notebook-draft verb, part of the audit prelude) before signing."
+        )
+    if signer == author:
+        raise errors.SpecInvalid(
+            "notebook sign-off gate (MH6 reviewer≠author): the drafter's actor "
+            f"({author!r}) cannot sign off their own section {section!r} — a sign-off "
+            "by the drafting actor is self-review wearing a review's clothes. A "
+            "DIFFERENT declared actor must review and sign."
+        )
+
+
 def _assert_signoff_authorship(
     experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
 ) -> None:
@@ -1373,6 +1576,15 @@ def _assert_signoff_authorship(
             "attention order changed. Re-run notebook-audit-view for section "
             f"{section!r}, re-inspect the fresh view, and sign THAT view_sha."
         )
+    # MH6 (reviewer ≠ author): under >1 declared actors a sign-off may not be
+    # authored by the SECTION'S DRAFTER — self-review wearing a review's clothes.
+    # Applied BEFORE the tier branch so it covers the redundant (auto-cleared)
+    # path too: a redundant self-review is still recorded self-review. Silent under
+    # zero/one declared actor (the gate does not exist there — byte-identical).
+    _assert_signoff_reviewer_not_author(
+        experiment_dir, audit_id=audit_id, section=section, section_sha=sect.section_sha
+    )
+
     # The tier is now REAL — recomputed with the REAL lint flags (the recorded
     # conservative-floor gap is closed). A section made human-required SOLELY by a
     # lint flag is now distinguished here.
@@ -1450,8 +1662,13 @@ def _registration_authored_text(experiment_dir: Path, response: str) -> str:
     the agent-relayed ``response`` is the human's typed sign-off (the friction
     tier, honestly weaker). There is NO auto-clear / redundant tier here — the
     registration attestor is ALWAYS human (R6).
+
+    Actor-scoped under >1 declared actors (MH4): the pool is the SESSION ACTOR'S
+    log only (:func:`_actor_scoped_human_texts`); an unattributed >1-actor session
+    falls to the friction tier (the ``response``), never the anonymous union.
     """
-    harness_texts = _harness_human_texts(experiment_dir)
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
     if harness_texts is not None:
         return "\n".join(harness_texts)
     return response
@@ -2603,6 +2820,30 @@ def _challenge_filing_citations(experiment_dir: Path, challenge_id: str) -> Sequ
     return citations
 
 
+def _challenge_filing_attestor(experiment_dir: Path, challenge_id: str) -> str | None:
+    """The ``attestor_id`` (challenger) of *challenge_id*'s newest FILING, or ``None``.
+
+    MH7: the resolver≠challenger / withdrawer==challenger comparisons read WHO
+    filed the challenge from the filing record's own ``attestor_id`` — the opaque
+    actor slug the ops append stamped at filing time (server-resolved, never
+    caller-suppliable). ``None`` when no parseable filing exists OR the filing was
+    unattributed (a zero/one-actor filing, or a >1-actor filing with no resolvable
+    session actor) — the caller's >1-actor guard then decides the refusal.
+    """
+    from hpc_agent.state.challenges import CHALLENGE_BLOCK
+
+    attestor: str | None = None
+    for rec in _read_decisions(experiment_dir, "challenge", challenge_id):
+        if rec.get("block") != CHALLENGE_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get("challenge_id") != challenge_id:
+            continue
+        raw = rec.get("attestor_id")
+        attestor = raw if isinstance(raw, str) and raw else None
+    return attestor
+
+
 def _recompute_challenge_view_sha(
     experiment_dir: Path, challenge_id: str, carried_view_sha: str
 ) -> None:
@@ -2802,17 +3043,24 @@ def _assert_challenge_verdict_authorship(
     resolves). A carried ``view_sha`` is RECOMPUTED against the challenge-status
     render (:func:`_recompute_challenge_view_sha`, C-verb).
 
-    **Resolver-identity note (the multi-human sibling's ruling, RESERVED here).**
-    Core today has one human; this gate does NOT distinguish challenger from resolver
-    and deliberately invents no identity field. ``docs/design/multi-human.md`` MH7
-    owns attributed authorship + the ruling; when >1 actor is declared, the
-    resolver≠challenger check (and withdrawer==challenger) lands as a follow-up
-    extension HERE, citing MH7, once that plumbing exists. MH7 has NOT landed, so it
-    is not built. The verdict/withdraw being a SEPARATE record from the filing (above)
-    is what keeps the constraint expressible later.
+    **Resolver-identity extension (MH7 — LANDED HERE as the multi-human follow-up).**
+    ``docs/design/multi-human.md`` MH7 owns attributed authorship and reserved this
+    identity comparison to the challenge gate as "a follow-up task executed by
+    whichever plan lands second". Multi-human landed second, so it lands here now:
+    under >1 declared actors (MH1), the VERDICT gate refuses ``resolver ==
+    challenger`` (you may not adjudicate your own objection — the challenger is the
+    filing record's ``attestor_id``, :func:`_challenge_filing_attestor`; the resolver
+    is the session actor) and refuses an UNATTRIBUTED resolution; the WITHDRAWAL gate
+    refuses ``withdrawer != challenger`` (a second actor silencing another's standing
+    dissent is the suppression channel). Pure identity over opaque slugs — Q1-clean.
+    Zero/one actor declared → silent, byte-identical (a solo researcher legitimately
+    resolves their own past challenge). These identity refusals are the loud/dangling
+    posture (NOT the E2 marker — a re-elicited utterance cannot fix WHO the session
+    is). The verdict/withdraw being a SEPARATE record from the filing is what kept the
+    constraint expressible without a record-shape change.
 
-    Authorship-bar refusals carry the E2 marker; the missing-reason / stale-view
-    structural refusals raise plain :class:`errors.SpecInvalid` UNMARKED.
+    Authorship-bar refusals carry the E2 marker; the missing-reason / stale-view /
+    MH7-identity structural refusals raise plain :class:`errors.SpecInvalid` UNMARKED.
     """
     from hpc_agent.state.challenges import (
         CHALLENGE_VERDICT_BLOCK,
@@ -2864,6 +3112,38 @@ def _assert_challenge_verdict_authorship(
     view_sha = resolved.get("view_sha")
     if isinstance(view_sha, str) and view_sha:
         _recompute_challenge_view_sha(experiment_dir, challenge_id, view_sha)
+
+    # ── MH7: resolver ≠ challenger (verdict) / withdrawer == challenger (withdraw) ──
+    # Silent under zero/one declared actor (byte-identical — a solo researcher
+    # legitimately resolves their own past challenge).
+    ids, _policy = _read_interview_actors(experiment_dir)
+    if len(ids) > 1:
+        session_actor = _session_actor(experiment_dir, ids)
+        challenger = _challenge_filing_attestor(experiment_dir, challenge_id)
+        if is_verdict:
+            if session_actor is None:
+                raise errors.SpecInvalid(
+                    "challenge-verdict gate (MH7): >1 actor is declared but this "
+                    f"session has no resolvable actor, so challenge {challenge_id!r} "
+                    "would be resolved anonymously — an unattributed adjudication is "
+                    "the laundering channel. Configure HPC_ACTOR to a declared actor."
+                )
+            if challenger is not None and session_actor == challenger:
+                raise errors.SpecInvalid(
+                    "challenge-verdict gate (MH7): the resolver "
+                    f"({session_actor!r}) is the CHALLENGER who filed "
+                    f"{challenge_id!r} — you may not adjudicate your own objection. A "
+                    "DIFFERENT declared actor must resolve it."
+                )
+        else:  # CHALLENGE_WITHDRAW_BLOCK
+            if session_actor != challenger:
+                raise errors.SpecInvalid(
+                    "challenge-withdraw gate (MH7): only the CHALLENGER who filed "
+                    f"{challenge_id!r} (actor {challenger!r}) may withdraw it — the "
+                    f"session actor {session_actor!r} is someone else, and a second "
+                    "actor silencing another's standing dissent is the suppression "
+                    "channel. The challenger must withdraw their own challenge."
+                )
 
 
 def _assert_challenge_authorship(

@@ -202,9 +202,58 @@
       "default": null,
       "description": "Opt-in domain-pack bindings (bind-as-data). Sibling to ``audited_source``: when present, each entry references a pack manifest (relpath core reads + hashes) and the caller-authored receipt-binding slots a gate requires; when ABSENT every pack gate returns silently and interview.json is byte-identical to a repo that never opted in (the D7 fail-safe). Core copies the opaque ``{pack, version, sha}`` echo verbatim and never reads a declared pack value for meaning.",
       "title": "Packs"
+    },
+    "actors": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorsBlock"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in multi-human actor declaration (MH1). Sibling to ``packs`` / ``audited_source``: when present, ``ids`` names the shared repo's actor slugs and optional ``policy`` delegates gated blocks to actor subsets; when ABSENT (or with fewer than two ids) every identity comparison and policy consultation returns silently and interview.json is byte-identical to today's single-actor system (the D7 fail-safe). Slugs are opaque to core — never a role vocabulary; the attribution tier is harness-asserted, never verified. A session's own actor arrives via the HPC_ACTOR harness config, never this spec (the model must not choose its identity)."
     }
   },
   "$defs": {
+    "ActorsBlock": {
+      "additionalProperties": false,
+      "description": "The multi-human ``actors`` opt-in on the InterviewSpec (MH1).\n\nSibling to ``packs`` / ``audited_source``: a caller-declared block,\npersisted verbatim in interview.json, absent → byte-identical (the D7\nfail-safe, ``exclude_none``). Makes today's IMPLICIT single-actor identity\nEXPLICIT — an opaque slug the harness stamps and gates COMPARE, without core\never verifying who anyone is (the honest tier is *harness-asserted*, never\nverified).\n\n``ids`` — the declared actor slugs. Each uses the shared filesystem-safe\ntag class (``RunIdStrict`` — the same ``^[A-Za-z0-9._\\-]+$`` class\n``state/scopes.py::validate_tag`` pins), because a slug becomes a PATH\nSEGMENT in the per-actor utterance-log locator (MH2): the shape is\nload-bearing, not stylistic. Opaque to core — NEVER a role vocabulary: core\nhas no idea what a \"PI\", \"postdoc\", or \"reviewer\" is and no field may ever\ncarry those words (the caller-vocabulary rule).\n\n**Default-single-actor semantics (the D7 posture, exactly):** an absent\nblock, or ``ids`` with fewer than two entries, means every identity\ncomparison and policy consultation in every gate returns silently,\nbyte-identical to today. Zero declared actors is not an error, not a\nwarning — it is today's system; so ``ids`` may be empty.\n\n``policy`` — optional delegation mapping (MH8): ``{<gated block name>:\n[<actor slug>, ...]}``. Keys are existing gated block names core already\nowns (``\"notebook-sign-off\"``, ``\"campaign-greenlight\"``, ``\"scope-unlock\"``,\n``\"registration\"`` when the sibling kernel lands) — opaque strings core\nmembership-tests, never a closed vocabulary pinned here. Values are subsets\nof ``ids``. Absent → no policy gating. A policy entry naming an actor NOT in\n``ids`` is a LOUD refusal at validation time (the dangling-reference\nposture: an opted-in reference core cannot resolve must never silently\npass) — deliberately NOT D7 silence, which belongs to the un-opted-in world.\n\n**How a session knows its actor is harness configuration** (``HPC_ACTOR``),\nNOT a spec field: an agent-suppliable actor would let the model choose its\nidentity. The actor arrives from outside the model's tool surface, exactly\nlike the utterance text itself.",
+      "properties": {
+        "ids": {
+          "description": "Declared actor slugs (the shared filesystem-safe tag class — each becomes a path segment in the per-actor utterance-log locator). Opaque to core; never a role vocabulary. Fewer than two entries → single-actor semantics (comparisons stay off), byte-identical to today. May be empty (zero declared actors is not an error).",
+          "items": {
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "type": "string"
+          },
+          "title": "Ids",
+          "type": "array"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9._\\-]+$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional delegation mapping {<gated block name>: [<actor slug>, ...]} (MH8). Keys are existing gated block names core membership-tests (opaque strings, never a closed vocabulary); values are subsets of ``ids``. Absent → no policy gating. A value slug not in ``ids`` is refused at validation (the dangling-reference posture). Pure lists+mappings core COMPARES, never evaluates — never a predicate, a role vocabulary, or a quorum scheme.",
+          "title": "Policy"
+        }
+      },
+      "title": "ActorsBlock",
+      "type": "object"
+    },
     "PackOptIn": {
       "additionalProperties": false,
       "description": "One domain-pack opt-in entry on the InterviewSpec ``packs`` block (bind-as-data).\n\nSibling to ``audited_source``: a caller-referenced pack, persisted verbatim\nin interview.json, absent → byte-identical. ``pack`` is the pack slug (it\nkeys the pack decision journal, so it is filesystem-safe); ``manifest`` is a\ncampaign-dir-relative path to the pack manifest core reads and hashes (the\n``_AuditedSource`` relpath precedent — never a blessed dir, never a search\npath, DP1). ``receipt_bindings`` lists the caller-authored slot→pack\nobligations the gate requires; empty means the pack contributes seam data\n(vocabularies, patterns) but gates on no receipt.\n\nCore copies the ``{pack, version, sha}`` echo verbatim onto every record\nthat consumed pack content and never reads a declared value for meaning —\nidentity only.",

@@ -138,3 +138,67 @@ def test_main_is_a_clean_noop_on_garbage_stdin(
     monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
     assert answer_capture.main() == 0
     assert capsys.readouterr().out == ""
+
+
+# --- MT4: HPC_ACTOR attribution (seam onto MT1's ``append_utterance(actor=)``) ---
+
+
+def _spy_append(monkeypatch: pytest.MonkeyPatch) -> list[tuple[tuple, dict]]:
+    """Spy over ``append_utterance`` (imported at call time inside ``capture``)."""
+    calls: list[tuple[tuple, dict]] = []
+
+    def _spy(*args: object, **kwargs: object) -> dict:
+        calls.append((args, kwargs))
+        return {"ts": "t", "sha256": "s", "text": str(args[1]) if len(args) > 1 else ""}
+
+    monkeypatch.setattr("hpc_agent.state.utterances.append_utterance", _spy)
+    return calls
+
+
+def test_capture_passes_actor_kwarg_when_hpc_actor_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_ACTOR", "bob")
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs == {"actor": "bob"}
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HPC_ACTOR", raising=False)
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs
+
+
+def test_capture_omits_actor_kwarg_when_hpc_actor_invalid_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_ACTOR", "bad/slug here")
+    calls = _spy_append(monkeypatch)
+
+    answer_capture.capture(_payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"}))
+
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert "actor" not in kwargs
+
+
+def test_capture_unset_env_is_byte_identical_end_to_end(tmp_path: Path) -> None:
+    _scaffold_namespace(tmp_path)
+    records = answer_capture.capture(
+        _payload(tmp_path, questions=_SWEEP_Q, answers={"q": "typed value 42"})
+    )
+    assert len(records) == 1
+    assert utterances_path(tmp_path).name == "utterances.jsonl"
+    assert read_utterances(tmp_path)[0]["text"] == "typed value 42"

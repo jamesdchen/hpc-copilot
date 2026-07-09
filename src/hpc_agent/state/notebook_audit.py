@@ -94,10 +94,13 @@ __all__ = [
     "SIGN_OFF_BLOCK",
     "AUTO_CLEAR_BLOCK",
     "RENDER_RECEIPT_BLOCK",
+    "DRAFT_BLOCK",
     "AUDIT_CONFIG_BLOCK",
     "SUBJECT_KIND",
+    "DRAFT_SUBJECT_KIND",
     "AUTO_CLEAR_RESPONSE",
     "RENDER_RECEIPT_RESPONSE",
+    "DRAFT_RESPONSE",
     "AUDIT_CONFIG_RESPONSE",
     "SIGNED_CURRENT",
     "AUTO_CLEARED",
@@ -112,6 +115,8 @@ __all__ = [
     "record_auto_clear",
     "record_render_receipt",
     "read_render_receipts",
+    "record_draft",
+    "read_draft_author",
     "record_audit_config",
     "read_audit_config",
     "RELAY_DUE_BLOCK",
@@ -148,6 +153,24 @@ RENDER_RECEIPT_BLOCK = "notebook-render-receipt"
 #: a clearance token (not ``"auto_cleared"``): a receipt is evidence, not a
 #: sign-off class.
 RENDER_RECEIPT_RESPONSE = "rendered"
+
+#: The DRAFT-attestation block (multi-human MH5). A block class riding the SAME
+#: notebook journal: a CODE attestation that a section's source was DRAFTED by
+#: the actor whose session recorded it, bound to the section sha it was drafted
+#: at. Distinct block so a reader never confuses drafter-authorship with a
+#: clearance (auto-clear), execution evidence (receipt), or a human ack
+#: (sign-off). It is the SECTION AUTHOR the reviewer!=author gate (MH6) resolves.
+DRAFT_BLOCK = "notebook-draft"
+
+#: The honest, mechanical ``response`` a draft attestation carries — a draft was
+#: recorded, nothing was approved and nothing executed. NEVER a human-ack token.
+DRAFT_RESPONSE = "drafted"
+
+#: The opaque attestation ``subject_kind`` a draft attestation rides (MH5 — a
+#: DISTINCT kind from :data:`SUBJECT_KIND`, so a draft never enters the sign-off /
+#: auto-clear reduction and can never green a section). The kernel never
+#: interprets it.
+DRAFT_SUBJECT_KIND = "notebook-draft"
 
 #: The audit-CONFIG record block (run-#10 standalone-audit seat). A FOURTH block
 #: class riding the same notebook journal: the audit configuration
@@ -569,6 +592,142 @@ def read_render_receipts(
             "fresh": fresh,
         }
     return out
+
+
+# --- draft attestations (multi-human MH5) ------------------------------------
+# A block class riding the same journal, READ SEPARATELY from the sign-off /
+# auto-clear reduction: its projection is NOT registered in :data:`_BLOCK_ATTESTOR`,
+# so a draft can never enter :func:`audit_section` and can never change the T6
+# status vocabulary (a draft is authorship provenance, not a clearance). It rides
+# a DISTINCT :data:`DRAFT_SUBJECT_KIND` and carries the drafting session's actor
+# as the attestation's ``attestor_id`` (WHICH actor — opaque, harness-asserted,
+# never verified). The reviewer!=author gate (MH6) resolves the section AUTHOR by
+# reducing these draft records at the current sha (:func:`read_draft_author`).
+
+
+def _project_draft(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Project a journal record to a DRAFT attestation dict, or ``None``.
+
+    The draft attestation binds/reduces on the SECTION sha
+    (``content_sha == section_sha``) — this is what makes an OLD draft read STALE
+    the moment its section is redrafted, so authorship follows the CURRENT content
+    (the D8 no-state-machine property). The drafting session's actor rides
+    ``attestor_id`` (opaque, absent when the draft was unattributed — zero/one
+    declared actor). Returns ``None`` for any block other than :data:`DRAFT_BLOCK`,
+    so a sign-off / auto-clear / receipt record is filtered out before the kernel
+    sees it (and, symmetrically, a draft never reaches the sign-off reducer).
+    """
+    if record.get("block") != DRAFT_BLOCK:
+        return None
+    resolved = record.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    projected: dict[str, Any] = {
+        "attestor": "code",
+        "subject_kind": DRAFT_SUBJECT_KIND,
+        "subject_id": resolved.get("section"),
+        "content_sha": resolved.get("section_sha"),
+    }
+    actor = resolved.get("actor")
+    if actor:
+        # WHICH actor drafted — opaque slug, stamped only when the session was
+        # attributed. An unattributed draft (zero/one declared actor) carries no
+        # attestor_id, so it validates byte-compatibly as a single-actor record.
+        projected["attestor_id"] = actor
+    return projected
+
+
+def record_draft(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    section: str,
+    section_sha: str,
+    recompute: Callable[[], str] | str,
+    actor: str | None,
+) -> dict[str, Any]:
+    """Journal a CODE draft attestation for *section*, bound to its sha, un-fakeably.
+
+    A draft attestation records "the actor whose SESSION recorded this draft, at
+    this section sha" — the SECTION AUTHOR the reviewer!=author gate (MH6) needs,
+    recorded at DRAFT time by the drafting session, never reconstructed at review
+    time. It is NOT a clearance and NOT a sign-off; it carries the honest
+    mechanical response :data:`DRAFT_RESPONSE` (``"drafted"``), never a human-ack
+    token.
+
+    Un-fakeable + fresh-by-construction: the draft is bound through the ONE
+    attestation kernel (:func:`~hpc_agent.state.attestation.bind`) against the
+    SECTION sha, so a caller can no more assert a draft for a sha the ``.py`` does
+    not currently carry than a human can assert a sign-off (D5 lock 2). Because
+    the record binds the section sha, a REDRAFT (which moves the sha) leaves the
+    old draft STALE via the ONE reducer (:func:`read_draft_author`) — authorship
+    follows the current content with no state machine. The *actor* is
+    harness-asserted from outside the model's tool surface (``HPC_ACTOR``), never
+    caller-asserted on the wire; ``None`` records an unattributed draft (zero/one
+    declared actor) with no ``attestor_id`` — comparisons stay off.
+
+    The record: ``block="notebook-draft"``, ``response="drafted"``,
+    ``resolved={audit_id, section, section_sha, actor?}`` (``actor`` present only
+    when attributed).
+
+    Returns the appended record. Raises :class:`errors.SpecInvalid` (via ``bind``)
+    on a sha that does not match the recompute, or (via ``append_decision``) on a
+    bad ``audit_id`` scope.
+    """
+    resolved: dict[str, Any] = {
+        "audit_id": audit_id,
+        "section": section,
+        "section_sha": section_sha,
+    }
+    if actor is not None:
+        resolved["actor"] = actor
+    # Bind on the SECTION sha (routes through the ONE kernel; never re-inlined):
+    # the draft is stale-by-construction when the section moves, and can only be
+    # recorded against the sha the source currently carries.
+    projected = _project_draft({"block": DRAFT_BLOCK, "resolved": resolved}) or {}
+    attestation.bind(projected, recompute=recompute)
+    return append_decision(
+        experiment_dir,
+        scope_kind="notebook",
+        scope_id=audit_id,
+        block=DRAFT_BLOCK,
+        response=DRAFT_RESPONSE,
+        resolved=resolved,
+    )
+
+
+def read_draft_author(
+    experiment_dir: Path, audit_id: str, section: str, *, current_sha: str
+) -> str | None:
+    """The actor who drafted *section* at *current_sha*, or ``None``.
+
+    Reads *audit_id*'s notebook journal, projects the draft records, and returns
+    the ``attestor_id`` (drafting actor) of the newest VALID draft for *section*
+    — but ONLY when that draft is CURRENT at *current_sha*. A redrafted section
+    whose newest draft binds an older sha reads STALE and yields ``None`` (no
+    author at the current content), exactly the property MH6 relies on: a stale
+    draft attribution is no attribution. Both the newest-valid selection and the
+    current/stale verdict route through the SAME kernel machinery every other
+    attestation reader uses (:func:`_newest_valid` + :func:`reduce`), never a
+    re-inlined newest-first / sha-compare. Malformed draft records are skipped,
+    never fatal.
+
+    Returns ``None`` when there is no current draft OR when the current draft was
+    unattributed (no ``attestor_id`` — a zero/one-actor draft). The MH6 gate
+    distinguishes "no draft" from "unattributed draft" by whether ``>1`` actor is
+    declared; both read ``None`` here.
+    """
+    records = read_decisions(experiment_dir, "notebook", audit_id)
+    projected = [p for p in (_project_draft(r) for r in records) if p is not None]
+    newest = _newest_valid(projected, section)
+    if newest is None:
+        return None
+    verdict = attestation.reduce(projected, current_sha=current_sha, subject_id=section)
+    if verdict != attestation.CURRENT:
+        return None
+    # attestor_id (MH3) is the drafting actor; getattr keeps this readable against
+    # a mypy env pinned to a pre-multi-human Attestation shape (installed-pkg skew).
+    author: str | None = getattr(newest, "attestor_id", None)
+    return author
 
 
 # --- audit config record (run-#10 standalone-audit seat) ---------------------
