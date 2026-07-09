@@ -129,6 +129,35 @@ class _Probe(BaseModel):
     detail: str | None = None
 
 
+class _PackPatternEcho(BaseModel):
+    """One opted-in domain pack's failure-pattern HITS + its opaque
+    ``{pack, version, sha}`` echo (S2, ``docs/design/domain-packs.md``).
+
+    Core COMPILED and matched the pack's caller-opaque ``failure_patterns``
+    regexes against the failure's stderr/log text, recorded WHICH pattern ids hit
+    here, and stamped the pack echo verbatim — it NEVER maps a hit to a
+    ``FailureCategory``, an action, or a retry decision (that mapping is the
+    resolver's/human's). The echo is identity-only, copied and never read back for
+    meaning (the ``reproduces`` precedent)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack: str = Field(description="The pack name (the bind's subject_id).")
+    version: str | None = Field(
+        default=None,
+        description="The opaque version string the bind recorded; echoed, never compared.",
+    )
+    sha: str = Field(
+        description=(
+            "The bind's manifest_sha — the identity of the standards in force. A "
+            "re-bind moves it and revokes everything signed under the old one."
+        ),
+    )
+    pattern_ids: list[str] = Field(
+        description="This pack's HIT pattern ids (sorted, deduped) — evidence only.",
+    )
+
+
 class FailureFeatures(BaseModel):
     """Structured diagnostic evidence attached to an ``ok=false`` envelope on
     operation failure. Evidence only; no recovery logic. See issue #230."""
@@ -179,4 +208,25 @@ class FailureFeatures(BaseModel):
     probes: list[_Probe] | None = Field(
         default=None,
         description="Optional targeted probe outputs from caller-supplied probe hooks.",
+    )
+    pack_pattern_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Caller-opaque pattern ids that a BOUND domain pack's 'failure_patterns' "
+            "regexes MATCHED against this failure's stderr/log text — sorted, deduped, "
+            "united across every opted-in pack (S2, docs/design/domain-packs.md). "
+            "Evidence ONLY: core counts a hit and records its id, but NEVER maps it to "
+            "a FailureCategory, an action, or a retry decision — the resolver/human "
+            "reads the ids. None/omitted when no pack opted in or none matched, so an "
+            "envelope without pack hits is byte-identical to the pre-packs shape."
+        ),
+    )
+    pack_pattern_echoes: list[_PackPatternEcho] | None = Field(
+        default=None,
+        description=(
+            "Per-pack '{pack, version, sha, pattern_ids}' echoes — one entry for each "
+            "opted-in pack whose patterns hit — carrying the '{pack, version, sha}' "
+            "stamp verbatim so the dossier can prove WHICH pack's standards flagged the "
+            "failure. Identity only; core never reads the echo back for meaning."
+        ),
     )

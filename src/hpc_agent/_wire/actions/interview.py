@@ -12,6 +12,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from hpc_agent._wire._shared import RunIdStrict
+
 
 class _Provenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -636,6 +638,173 @@ class _AuditedSource(BaseModel):
     )
 
 
+class ReceiptBinding(BaseModel):
+    """One caller-authored receipt obligation inside a ``packs`` opt-in entry.
+
+    Binds a caller-named *slot* (the obligation, e.g. ``"data-audit"``) to the
+    *pack* whose current receipt fills it. Both are opaque slugs core never
+    interprets — the slot is the caller's name for the requirement (DP4: a
+    requirement always originates with the caller, never the pack), the pack is
+    the name a bound pack manifest declares. Cross-pack is legal: the slot's
+    ``pack`` need not equal the enclosing entry's ``pack``.
+
+    ``receipt_bindings`` is the object form, renamed from ``required_receipts``
+    in the coherence review (2026-07-07) to disambiguate it from the S6 manifest
+    list ``required_receipts: [<slot slug>]`` — that list is a plain slug list on
+    the pack side; this is the caller-side slot→pack binding.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    slot: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "Caller-authored slot slug — the caller's name for one receipt "
+            "obligation a gate requires (opaque to core; the fabrication class "
+            "forbids core inventing or defaulting one)."
+        ),
+    )
+    pack: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "The pack whose current receipt fills this slot (a bound-pack slug). "
+            "Need not equal the enclosing entry's pack — a slot may bind cross-pack."
+        ),
+    )
+
+
+class PackOptIn(BaseModel):
+    """One domain-pack opt-in entry on the InterviewSpec ``packs`` block (bind-as-data).
+
+    Sibling to ``audited_source``: a caller-referenced pack, persisted verbatim
+    in interview.json, absent → byte-identical. ``pack`` is the pack slug (it
+    keys the pack decision journal, so it is filesystem-safe); ``manifest`` is a
+    campaign-dir-relative path to the pack manifest core reads and hashes (the
+    ``_AuditedSource`` relpath precedent — never a blessed dir, never a search
+    path, DP1). ``receipt_bindings`` lists the caller-authored slot→pack
+    obligations the gate requires; empty means the pack contributes seam data
+    (vocabularies, patterns) but gates on no receipt.
+
+    Core copies the ``{pack, version, sha}`` echo verbatim onto every record
+    that consumed pack content and never reads a declared value for meaning —
+    identity only.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "Pack slug — keys the pack decision journal "
+            "(``.hpc/packs/<pack>.decisions.jsonl``), so it must be "
+            "filesystem-safe. Opaque to core; never a core vocabulary."
+        ),
+    )
+    manifest: str = Field(
+        min_length=1,
+        description=(
+            "Campaign-dir-relative path to the pack manifest core reads and "
+            "hashes (the ``_AuditedSource`` relpath precedent). Core never asks "
+            "how the bytes got there (DP3: distribution invisible)."
+        ),
+    )
+    receipt_bindings: list[ReceiptBinding] = Field(
+        default_factory=list,
+        description=(
+            "Caller-authored slot→pack receipt obligations the gate requires "
+            "(DP4). Empty → the pack contributes seam data but gates on no "
+            "receipt. Renamed from ``required_receipts`` (coherence review) to "
+            "disambiguate from the S6 manifest slug list."
+        ),
+    )
+
+
+class ActorsBlock(BaseModel):
+    """The multi-human ``actors`` opt-in on the InterviewSpec (MH1).
+
+    Sibling to ``packs`` / ``audited_source``: a caller-declared block,
+    persisted verbatim in interview.json, absent → byte-identical (the D7
+    fail-safe, ``exclude_none``). Makes today's IMPLICIT single-actor identity
+    EXPLICIT — an opaque slug the harness stamps and gates COMPARE, without core
+    ever verifying who anyone is (the honest tier is *harness-asserted*, never
+    verified).
+
+    ``ids`` — the declared actor slugs. Each uses the shared filesystem-safe
+    tag class (``RunIdStrict`` — the same ``^[A-Za-z0-9._\\-]+$`` class
+    ``state/scopes.py::validate_tag`` pins), because a slug becomes a PATH
+    SEGMENT in the per-actor utterance-log locator (MH2): the shape is
+    load-bearing, not stylistic. Opaque to core — NEVER a role vocabulary: core
+    has no idea what a "PI", "postdoc", or "reviewer" is and no field may ever
+    carry those words (the caller-vocabulary rule).
+
+    **Default-single-actor semantics (the D7 posture, exactly):** an absent
+    block, or ``ids`` with fewer than two entries, means every identity
+    comparison and policy consultation in every gate returns silently,
+    byte-identical to today. Zero declared actors is not an error, not a
+    warning — it is today's system; so ``ids`` may be empty.
+
+    ``policy`` — optional delegation mapping (MH8): ``{<gated block name>:
+    [<actor slug>, ...]}``. Keys are existing gated block names core already
+    owns (``"notebook-sign-off"``, ``"campaign-greenlight"``, ``"scope-unlock"``,
+    ``"registration"`` when the sibling kernel lands) — opaque strings core
+    membership-tests, never a closed vocabulary pinned here. Values are subsets
+    of ``ids``. Absent → no policy gating. A policy entry naming an actor NOT in
+    ``ids`` is a LOUD refusal at validation time (the dangling-reference
+    posture: an opted-in reference core cannot resolve must never silently
+    pass) — deliberately NOT D7 silence, which belongs to the un-opted-in world.
+
+    **How a session knows its actor is harness configuration** (``HPC_ACTOR``),
+    NOT a spec field: an agent-suppliable actor would let the model choose its
+    identity. The actor arrives from outside the model's tool surface, exactly
+    like the utterance text itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[RunIdStrict] = Field(
+        default_factory=list,
+        description=(
+            "Declared actor slugs (the shared filesystem-safe tag class — each "
+            "becomes a path segment in the per-actor utterance-log locator). "
+            "Opaque to core; never a role vocabulary. Fewer than two entries → "
+            "single-actor semantics (comparisons stay off), byte-identical to "
+            "today. May be empty (zero declared actors is not an error)."
+        ),
+    )
+    policy: dict[str, list[RunIdStrict]] | None = Field(
+        default=None,
+        description=(
+            "Optional delegation mapping {<gated block name>: [<actor slug>, "
+            "...]} (MH8). Keys are existing gated block names core "
+            "membership-tests (opaque strings, never a closed vocabulary); "
+            "values are subsets of ``ids``. Absent → no policy gating. A value "
+            "slug not in ``ids`` is refused at validation (the dangling-reference "
+            "posture). Pure lists+mappings core COMPARES, never evaluates — never "
+            "a predicate, a role vocabulary, or a quorum scheme."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_policy_slugs_declared(self) -> ActorsBlock:
+        # The dangling-reference refusal (MH1): a policy value naming an actor
+        # not in ``ids`` is an opted-in reference core cannot resolve — LOUD at
+        # validation, never a silent pass. Core compares identity only; it never
+        # interprets WHY the lab granted a block to an actor.
+        if self.policy is None:
+            return self
+        declared = set(self.ids)
+        for block, allowed in self.policy.items():
+            dangling = [slug for slug in allowed if slug not in declared]
+            if dangling:
+                raise ValueError(
+                    f"actors.policy[{block!r}] names actor(s) {sorted(dangling)!r} "
+                    f"not in actors.ids ({sorted(declared)!r}); a policy entry may "
+                    f"only reference declared actors (add them to ids or drop them "
+                    f"from the policy)."
+                )
+        return self
+
+
 class InterviewSpec(BaseModel):
     """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
@@ -744,6 +913,34 @@ class InterviewSpec(BaseModel):
             "gate passes silently and interview.json is byte-identical to the "
             "pre-audit output. The caller authors the ``audit_id`` slug — core "
             "never invents or defaults it (the fabrication class)."
+        ),
+    )
+    packs: list[PackOptIn] | None = Field(
+        default=None,
+        description=(
+            "Opt-in domain-pack bindings (bind-as-data). Sibling to "
+            "``audited_source``: when present, each entry references a pack "
+            "manifest (relpath core reads + hashes) and the caller-authored "
+            "receipt-binding slots a gate requires; when ABSENT every pack gate "
+            "returns silently and interview.json is byte-identical to a repo "
+            "that never opted in (the D7 fail-safe). Core copies the opaque "
+            "``{pack, version, sha}`` echo verbatim and never reads a declared "
+            "pack value for meaning."
+        ),
+    )
+    actors: ActorsBlock | None = Field(
+        default=None,
+        description=(
+            "Opt-in multi-human actor declaration (MH1). Sibling to ``packs`` / "
+            "``audited_source``: when present, ``ids`` names the shared repo's "
+            "actor slugs and optional ``policy`` delegates gated blocks to actor "
+            "subsets; when ABSENT (or with fewer than two ids) every identity "
+            "comparison and policy consultation returns silently and "
+            "interview.json is byte-identical to today's single-actor system "
+            "(the D7 fail-safe). Slugs are opaque to core — never a role "
+            "vocabulary; the attribution tier is harness-asserted, never "
+            "verified. A session's own actor arrives via the HPC_ACTOR harness "
+            "config, never this spec (the model must not choose its identity)."
         ),
     )
 

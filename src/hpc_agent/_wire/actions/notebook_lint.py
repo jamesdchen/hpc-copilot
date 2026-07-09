@@ -15,7 +15,14 @@ caller-declared, opaque path/import roots:
   under a declared ``output_root`` is a DECLARED OUTPUT — it is where the source
   WRITES, so "does not exist yet" is expected, not a finding; it is reported in
   ``declared_outputs`` (path + section — reported, never flagged, the run-#10
-  output-literal noise fix);
+  output-literal noise fix). Additionally, a CALLER-DECLARED opaque reader
+  vocabulary (``reader_calls``, a list of dotted callable names) lets the SAME
+  existence check reach a call's first string-literal argument: an ``ast.Call``
+  whose dotted name matches a declared reader (NAME IDENTITY only — the same
+  opacity as ``input_roots``; core never learns what the reader *does*, the S1 /
+  Q1 boundary) has its first literal arg checked; a non-literal first arg is
+  disclosed in ``unverifiable_paths``. Core adds NO reader vocabulary of its own
+  — the list is opaque and caller-supplied (empty → byte-identical);
 * **linked_sources** — imports resolving to a file under ``source_roots`` are
   reported as ``{module, file, module_sha}`` (import ORIGIN IDENTITY only —
   never import content/semantics);
@@ -108,6 +115,19 @@ class NotebookLintInput(BaseModel):
     # exempt from the executes-live not-exists flag, reported in
     # `declared_outputs` instead (an output does not exist before the run).
     output_roots: list[str] = Field(default_factory=list)
+    # CALLER-DECLARED OPAQUE reader vocabulary (S1): dotted callable names the
+    # executes-live rule matches by NAME IDENTITY on an `ast.Call`, then applies
+    # the existing exists-under-roots check to the call's first string-literal
+    # argument. Core attaches NO meaning to a name (it never learns what a reader
+    # does) and ships no vocabulary of its own — the caller (the audit skill /
+    # notebook machinery resolving pack declarations via
+    # `state/pack_declarations.py`) supplies it. Empty → byte-identical lint.
+    reader_calls: list[str] = Field(default_factory=list)
+    # The opaque `{pack, version, sha}` echo the caller optionally supplies when
+    # `reader_calls` came from a bound pack. Core copies it verbatim onto the
+    # result when a reader match surfaces a record; it never reads it for meaning
+    # (identity only — the `reproduces` field precedent). Absent → no echo.
+    reader_calls_echo: dict[str, Any] | None = None
 
 
 class DeclaredOutput(BaseModel):
@@ -134,6 +154,12 @@ class NotebookLintResult(BaseModel):
     * ``declared_outputs`` — path literals under a declared ``output_root``
       (write targets, exempt from the executes-live flag — reported, never
       flagged).
+    * ``reader_call_echo`` — the opaque ``{pack, version, sha}`` echo carried
+      verbatim from the input WHEN a caller-declared reader match surfaced a
+      record (a finding, an unverifiable gap, or a declared output attributable
+      to a matched reader call) AND the caller supplied one; else ``None``. Core
+      copies it, never interprets it — it is the provenance of the pack whose
+      vocabulary drove the record.
     """
 
     model_config = ConfigDict(extra="forbid", title="notebook-lint output data")
@@ -142,3 +168,4 @@ class NotebookLintResult(BaseModel):
     unverifiable_paths: list[str] = Field(default_factory=list)
     linked_sources: list[LinkedSource] = Field(default_factory=list)
     declared_outputs: list[DeclaredOutput] = Field(default_factory=list)
+    reader_call_echo: dict[str, Any] | None = None

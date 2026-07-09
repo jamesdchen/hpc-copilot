@@ -103,6 +103,8 @@ DOSSIER_SOURCES: frozenset[str] = frozenset(
         "notebook-journal",  # <exp>/.hpc/notebooks/<audit_id>.decisions.jsonl (attestation journal)
         "renders",  # <exp>/.hpc/renders/<audit_id>/** — the trusted-display render files
         "determinism-fingerprint",  # <exp>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl
+        "pack-manifest",  # the bound domain-pack manifest file (raw bytes; T10)
+        "pack-journal",  # <exp>/.hpc/packs/<pack>.decisions.jsonl (bind/receipt journal; T10)
     }
 )
 
@@ -314,6 +316,10 @@ def _gather_run(
     _gather_fingerprint(
         experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps
     )
+    # pack-manifest + pack-journal — sealed only when the sidecar echoed a `packs`
+    # block (domain-packs T10). The bound domain standards (manifest + journal),
+    # copied as RAW BYTES, never parsed.
+    _gather_packs(experiment_dir, run_id, sidecar, write_map=write_map, entries=entries, gaps=gaps)
     record = load_run(experiment_dir, run_id)
     projection = _project_run_identity(run_id, sidecar, record)
     tags = [str(t) for t in (sidecar.get("scopes") or []) if t]
@@ -474,6 +480,64 @@ def _gather_fingerprint(
         entries=entries,
         gaps=gaps,
     )
+
+
+def _gather_packs(
+    experiment_dir: Path,
+    run_id: str,
+    sidecar: dict[str, Any],
+    *,
+    write_map: dict[str, bytes],
+    entries: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> None:
+    """Seal each opted-in pack's manifest file + decision journal as RAW BYTES (T10).
+
+    The sidecar's opaque ``packs`` echo (a list of ``{pack, version, sha,
+    manifest}``) points at two per-pack stores, both sealed as OPAQUE BYTES and
+    NEVER parsed (the no-parse boundary): the bound manifest file at the echoed
+    ``manifest`` relpath (the ``pack-manifest`` store noun) and the pack decision
+    journal at ``.hpc/packs/<pack>.decisions.jsonl`` (the ``pack-journal`` noun —
+    the bind + receipt attestation trail). Both prove WHICH domain standards, at
+    WHICH hashes, gated the run.
+
+    A run with no ``packs`` echo seals nothing and records no gap (a pack-free run
+    legitimately has none); an echo whose store is missing records a gap
+    (present-or-gap accounting, never a crash). The manifest relpath comes from the
+    already-parsed sidecar echo, so this module still never parses interview.json.
+    """
+    echoes = sidecar.get("packs")
+    if not isinstance(echoes, list):
+        return
+    hpc = RepoLayout(experiment_dir).hpc
+    for echo in echoes:
+        if not isinstance(echo, dict):
+            continue
+        pack_name = echo.get("pack")
+        if not isinstance(pack_name, str) or not pack_name:
+            continue
+        manifest_rel = echo.get("manifest")
+        if isinstance(manifest_rel, str) and manifest_rel:
+            _gather_optional(
+                "pack-manifest",
+                Path(experiment_dir) / manifest_rel,
+                f"runs/{run_id}/packs/{pack_name}/manifest.json",
+                run_id,
+                f"bound pack manifest {manifest_rel!r} not on disk for pack {pack_name!r}",
+                write_map=write_map,
+                entries=entries,
+                gaps=gaps,
+            )
+        _gather_optional(
+            "pack-journal",
+            hpc / "packs" / f"{pack_name}.decisions.jsonl",
+            f"runs/{run_id}/packs/{pack_name}.decisions.jsonl",
+            run_id,
+            f"no pack decision journal on disk for pack {pack_name!r}",
+            write_map=write_map,
+            entries=entries,
+            gaps=gaps,
+        )
 
 
 def _gather_aggregated(
