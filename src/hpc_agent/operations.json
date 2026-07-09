@@ -330,6 +330,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "reconcile-stale",
+    "output_schema": null,
+    "python": "hpc_agent.ops.monitor.reconcile_stale.reconcile_stale",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "summary": "Bulk-close in-flight runs the scheduler no longer knows: ONE scheduler query per login node (via batch-status), then every run whose job_ids are all unknown is closed through the existing reconcile settle classification (abandoned/no-evidence) — never one-by-one SSH, never a cluster action. Ambiguous runs stay open and are listed.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>",
     "idempotent": true,
     "input_schema": "resubmit.input.json",
@@ -712,6 +727,20 @@
     "python": "hpc_agent.ops.detect_entry_point.detect_entry_point",
     "side_effects": [],
     "summary": "Scan an experiment dir for Python entry-point candidates (main.py/train.py/console-scripts/python -m targets/shell scripts), classify each candidate's argv style (argparse / click / typer / hydra / fire / __main__), and locate files carrying @register_run. Collapses the duplicated six-probe shell block in hpc-wrap-entry-point Steps 0 + 1. Also surfaces interview.json's materialized entry-point block (kind shell_command / register_run / python_module) so one call answers submit.md Step 0b's wrapper-honor + mature-repo probe.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "dir_digest.input.json",
+    "name": "dir-digest",
+    "output_schema": "dir_digest.output.json",
+    "python": "hpc_agent.ops.dir_digest.dir_digest",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Bounded, code-rendered digest of a directory tree — replaces raw `ls`/`find` in agent prose (a context-budget hazard on large trees). Reports file/dir counts, total size, the newest N entries, a top-~10 extension histogram, and (opt-in) per-marker line-hit counts across *.log/*.err files. LOCAL by default (path confined to the experiment dir); set --cluster to digest a scratch-confined REMOTE tree over ONE throttled ssh read (never ships a listing). Fails open on a missing/unreadable root. The `render` field is relayed verbatim.",
     "verb": "query"
   },
   {

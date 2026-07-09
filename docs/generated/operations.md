@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**160 operations total**: 133 primitive atoms + 27 workflow atoms.
+**162 operations total**: 135 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (72)
+## `query` (73)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -46,6 +46,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`decide-resubmit`](../primitives/decide-resubmit.md) | ✓ | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` | `_(none)_` | — | — |
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `_(none)_` | — | — |
 | [`detect-entry-point`](../primitives/detect-entry-point.md) | ✓ | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` | `_(none)_` | — | — |
+| [`dir-digest`](../primitives/dir-digest.md) | ✓ | ssh | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `_(none)_` | — | — |
 | [`discover-reducers`](../primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`discover-runs`](../primitives/discover-runs.md) | ✓ | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -117,7 +118,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (28)
+## `mutate` (29)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -146,6 +147,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`provenance-manifest`](../primitives/provenance-manifest.md) | ✓ | file_write | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`prune-orphan-sidecars`](../primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `_(none)_` | — | — |
 | [`reconcile-journal`](../primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `_(none)_` | — | — |
+| [`reconcile-stale`](../primitives/reconcile-stale.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` | `_(none)_` | — | — |
 | [`resubmit-failed`](../primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `_(none)_` | — | — |
 | [`scope-lock`](../primitives/scope-lock.md) | ✓ | file_write | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`update-run-constraints`](../primitives/update-run-constraints.md) | ✓ | ssh | `_(Python-only)_` | `_(none)_` | — | — |

@@ -653,6 +653,7 @@
               "discriminator": {
                 "mapping": {
                   "cartesian_product": "#/$defs/_CartesianProduct",
+                  "chunked_series": "#/$defs/_ChunkedSeries",
                   "enumerated": "#/$defs/_Enumerated",
                   "items_x_seeds": "#/$defs/_ItemsXSeeds",
                   "numeric_linspace": "#/$defs/_NumericLinspace",
@@ -675,6 +676,9 @@
                 },
                 {
                   "$ref": "#/$defs/_NumericLinspace"
+                },
+                {
+                  "$ref": "#/$defs/_ChunkedSeries"
                 }
               ]
             },
@@ -1390,6 +1394,79 @@
         "axes"
       ],
       "title": "_CartesianProductParams",
+      "type": "object"
+    },
+    "_ChunkedSeries": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "chunked_series",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ChunkedSeriesParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ChunkedSeries",
+      "type": "object"
+    },
+    "_ChunkedSeriesParams": {
+      "additionalProperties": false,
+      "description": "Tile a series ``[start + halo, series_length)`` into contiguous chunks.\n\nMaterializes one task per chunk (crossed with ``extra_axes``), each\ncarrying its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds. The\nscoring space is tiled into ``chunks`` contiguous chunks; the LAST chunk\nabsorbs the remainder so the final ``chunk_end`` equals ``series_length``\nexactly (no gaps, no overlaps). A run-#11-style executor replays ``halo``\nbars before each ``chunk_start`` (reading from ``chunk_start - halo``,\nwhich stays >= ``start``). Adds a code seat for the bounds arithmetic that\na hand-written ``enumerated`` list only ever cross-checked by COUNT — the\noff-by-one in halo / last-chunk-end otherwise sails through.",
+      "properties": {
+        "series_length": {
+          "description": "Length of the full series; the tiled space is [start + halo, series_length).",
+          "minimum": 1,
+          "title": "Series Length",
+          "type": "integer"
+        },
+        "chunks": {
+          "description": "Number of contiguous chunks; the last absorbs the remainder.",
+          "minimum": 1,
+          "title": "Chunks",
+          "type": "integer"
+        },
+        "halo": {
+          "description": "Bars each task replays before its chunk_start (so it reads from chunk_start - halo).",
+          "minimum": 0,
+          "title": "Halo",
+          "type": "integer"
+        },
+        "start": {
+          "default": 0,
+          "description": "First index of the series (default 0).",
+          "title": "Start",
+          "type": "integer"
+        },
+        "extra_axes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {},
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional named axes multiplied against the chunk grid (bucket x chunk). Each must have >=1 value.",
+          "title": "Extra Axes"
+        }
+      },
+      "required": [
+        "series_length",
+        "chunks",
+        "halo"
+      ],
+      "title": "_ChunkedSeriesParams",
       "type": "object"
     },
     "_DataAxisSpec": {

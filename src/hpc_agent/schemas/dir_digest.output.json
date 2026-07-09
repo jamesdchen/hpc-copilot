@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/dir_digest.output.json",
+  "title": "dir-digest output data",
+  "description": "The bounded, code-rendered digest of one directory tree.\n\nOn a missing/unreadable root the verb FAILS OPEN: ``readable`` is False,\n``error`` names the problem, the numbers are zero/empty, and ``render``\nstates it plainly — never a traceback.",
+  "type": "object",
+  "required": [
+    "path",
+    "scope",
+    "exists",
+    "readable",
+    "newest_requested",
+    "marker_scan",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "The resolved root that was digested (absolute).",
+      "title": "Path",
+      "type": "string"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The cluster digested over ssh, or null for a local digest.",
+      "title": "Cluster"
+    },
+    "scope": {
+      "description": "Whether the digest was local or remote.",
+      "enum": [
+        "local",
+        "remote"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "exists": {
+      "description": "Whether the root exists.",
+      "title": "Exists",
+      "type": "boolean"
+    },
+    "readable": {
+      "description": "Whether the root could be read/probed.",
+      "title": "Readable",
+      "type": "boolean"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fail-open diagnostic when the root is missing/unreadable; else null.",
+      "title": "Error"
+    },
+    "file_count": {
+      "default": 0,
+      "description": "Number of regular files under the root.",
+      "title": "File Count",
+      "type": "integer"
+    },
+    "dir_count": {
+      "default": 0,
+      "description": "Number of subdirectories under the root.",
+      "title": "Dir Count",
+      "type": "integer"
+    },
+    "total_size_bytes": {
+      "default": 0,
+      "description": "Sum of regular-file sizes in bytes under the root.",
+      "title": "Total Size Bytes",
+      "type": "integer"
+    },
+    "newest_requested": {
+      "description": "The `newest` count the caller asked for (echoed for provenance).",
+      "title": "Newest Requested",
+      "type": "integer"
+    },
+    "newest": {
+      "description": "Up to `newest_requested` entries, newest-mtime first. Always bounded.",
+      "items": {
+        "$ref": "#/$defs/DirEntry"
+      },
+      "title": "Newest",
+      "type": "array"
+    },
+    "histogram": {
+      "description": "Top ~10 extension/name-group buckets, count-descending. Always bounded.",
+      "items": {
+        "$ref": "#/$defs/HistogramBucket"
+      },
+      "title": "Histogram",
+      "type": "array"
+    },
+    "marker_scan": {
+      "description": "Whether a marker scan was requested.",
+      "title": "Marker Scan",
+      "type": "boolean"
+    },
+    "marker_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Per-marker count of lines CONTAINING each known engine marker across *.log/*.err files. Every known marker is present (0 when absent) when marker_scan is true; empty when marker_scan is false or unreadable.",
+      "title": "Marker Counts",
+      "type": "object"
+    },
+    "files_scanned_for_markers": {
+      "default": 0,
+      "description": "How many *.log/*.err files the (bounded) marker scan actually read.",
+      "title": "Files Scanned For Markers",
+      "type": "integer"
+    },
+    "render": {
+      "description": "Deterministic markdown digest (bounded numbers only) the caller relays VERBATIM — never re-interpreted into freeform prose.",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "DirEntry": {
+      "additionalProperties": false,
+      "description": "One tree entry in the bounded ``newest`` list.",
+      "properties": {
+        "relpath": {
+          "description": "Path relative to the digested root.",
+          "title": "Relpath",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size in bytes (st_size; for a dir, the entry's own size).",
+          "title": "Size",
+          "type": "integer"
+        },
+        "mtime": {
+          "description": "Modification time as a POSIX timestamp (epoch seconds).",
+          "title": "Mtime",
+          "type": "number"
+        }
+      },
+      "required": [
+        "relpath",
+        "size",
+        "mtime"
+      ],
+      "title": "DirEntry",
+      "type": "object"
+    },
+    "HistogramBucket": {
+      "additionalProperties": false,
+      "description": "One extension / name-group bucket, count-descending in the result.",
+      "properties": {
+        "name": {
+          "description": "The group key — a lowercased file extension incl. the dot, or '(noext)'.",
+          "title": "Name",
+          "type": "string"
+        },
+        "count": {
+          "description": "Number of files in this group.",
+          "title": "Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "count"
+      ],
+      "title": "HistogramBucket",
+      "type": "object"
+    }
+  }
+}

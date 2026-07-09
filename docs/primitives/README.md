@@ -111,6 +111,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [decide-resubmit](decide-resubmit.md) | yes | _none_ | `hpc-agent decide-resubmit --failed-count <failed_count> --total-tasks <total_tasks> [--resubmit-failed-threshold <resubmit_failed_threshold>]` |
 | [describe](describe.md) | yes | _none_ | `hpc-agent describe <name>` |
 | [detect-entry-point](detect-entry-point.md) | yes | _none_ | `hpc-agent detect-entry-point --experiment-dir <experiment_dir>` |
+| [dir-digest](dir-digest.md) | yes | ssh: `<cluster>` | `hpc-agent dir-digest --spec <path> [--experiment-dir <dir>]` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` |
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` |
 | [discover-runs](discover-runs.md) | yes | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` |
@@ -129,7 +130,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` |
 | [net-triage](net-triage.md) | yes | _none_ | `hpc-agent net-triage [--spec <path>]` |
-| [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
+| [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`; file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
 | [notebook-draft-context](notebook-draft-context.md) | yes | _none_ | `hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]` |
 | [notebook-status](notebook-status.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
 | [pack-status](pack-status.md) | yes | _none_ | `hpc-agent pack-status --spec <path> [--experiment-dir <dir>]` |
@@ -207,6 +208,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [provenance-manifest](provenance-manifest.md) | yes | file_write: `<experiment>/.hpc/provenance/<campaign_id>.json` | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` |
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` |
+| [reconcile-stale](reconcile-stale.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` |
 | [scope-lock](scope-lock.md) | yes | file_write: `<experiment>/.hpc/scopes/<tag>.decisions.jsonl` | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` |
 | [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |

@@ -3,6 +3,8 @@ name: notebook-audit-view
 verb: query
 side_effects:
 - file_write: <experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md
+- file_write: <experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl (render relay-due
+    marker, CANONICAL human-required sections only)
 idempotent: true
 idempotency_key: none
 error_codes:
