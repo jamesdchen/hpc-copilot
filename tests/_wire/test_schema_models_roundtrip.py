@@ -331,6 +331,9 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # fields the per-field synthesizer would otherwise skip. Keyed by model
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    # ChallengeStatusSpec requires EXACTLY ONE addressing mode; the generic
+    # synthesizer sets none (all fields optional), so supply one valid mode.
+    "ChallengeStatusSpec": {"challenge_id": "x"},
     "VerifyRegistrationSpec": {"registration_id": "x"},
     "UpdateRunConstraintsSpec": {"add_features": ["a"]},
     # _Provenance enforces ``session_sha`` when ``kind=='agent'``. The
