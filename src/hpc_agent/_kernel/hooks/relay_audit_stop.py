@@ -68,8 +68,13 @@ be said (tonight's proving run: ``notebook-status`` computed ``passed`` and
 the agent never relayed it). So the same stop also runs the discharge pass —
 the omission-side complement:
 
-* ``notebook-status`` journals a relay-due MARKER on a TERMINAL verdict
-  (:mod:`hpc_agent.state.notebook_audit` — v1's deliberately narrow set);
+* ``notebook-status`` journals a relay-due MARKER on a TERMINAL verdict, and
+  ``notebook-audit-view`` journals a per-section MARKER (key token: the
+  section's ``view_sha12``) when it builds the CANONICAL view of a
+  human-required section (run-#11 item 3 — a render that reached the human as
+  an unread file link is not a relay) (:mod:`hpc_agent.state.notebook_audit` —
+  the deliberately narrow set: preview views and auto_cleared sections arm
+  nothing);
 * at stop, the hook loads the UNDISCHARGED markers of every audit journal in
   the SAME ``.hpc/notebooks`` dir the mention scan uses (the identical
   experiment-dir resolution — payload ``cwd`` → no-scaffold raw path). Unlike
@@ -302,10 +307,15 @@ def _relay_due_discharge_pass(
                 elif len(omissions) < _MAX_RELAY_DUE_FINDINGS:
                     kind = str(marker.get("record_kind") or "notebook-status")
                     state = tokens[0]
-                    sha12 = tokens[1] if len(tokens) > 1 else "?"
+                    # A two-token marker (notebook-status: state @ module sha12)
+                    # names both; a one-token marker (notebook-audit-view: a
+                    # section's view_sha12) names just the sha to relay. The
+                    # record_kind already disambiguates, so the suffix is added
+                    # only when a second token exists — no dangling "@ ?".
+                    at = f" @ {tokens[1]}" if len(tokens) > 1 else ""
                     omissions.append(
-                        f"unrelayed terminal state: {kind} = {state} @ "
-                        f"{sha12} — relay it verbatim before closing."
+                        f"unrelayed terminal state: {kind} = {state}{at}"
+                        " — relay it verbatim before closing."
                     )
             except Exception:
                 continue  # a marker we cannot check/discharge is a silent pass

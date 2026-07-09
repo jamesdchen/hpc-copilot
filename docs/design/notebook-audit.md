@@ -517,6 +517,22 @@ above and E-render in mcp-elicitation.md):
    discharged by that section's `sha12` appearing in the turn, giving render
    relay the same omission-side enforcement the verdict relay got.
 
+   **SHIPPED.** The `notebook-audit-view` op is the omission gate's SECOND
+   producer: for a CANONICAL view only, each HUMAN-REQUIRED section arms a
+   relay-due marker (`record_kind: "notebook-audit-view"`, one key token — the
+   section's `view_sha12`, the render-file address) via the generalized
+   `record_scope_relay_due` writer. The Stop hook's EXISTING discharge pass
+   enforces it unchanged (it scans every notebook marker regardless of
+   `record_kind`); the sha12 appearing in the turn discharges, an absent one
+   blocks the stop once exactly like a `notebook-status` verdict. Reused whole:
+   the marker store, the discharge machinery, and the hook pass — the only new
+   code is the producer call + the `RENDER_RELAY_DUE_RECORD_KIND` constant (the
+   hook's omission line gained a one-token phrasing so a single-`sha12` marker
+   reads without a dangling `@ ?`). PREVIEW views and `auto_cleared` sections
+   arm nothing (the narrow set). No schema regen: `side_effects` projects as a
+   SET of kinds, so the added `file_write` marker side-effect left
+   `operations.json` byte-identical.
+
 Stays prose, correctly: "the pipeline is the plan — no plan-mode freestyle"
 (conduct with no code seat; observe/judge/route jurisdiction — a guard the
 LLM itself satisfies is not a guard).

@@ -15,11 +15,16 @@ template ``.py`` relpath, opaque chained ``lint_findings``, and an optional
    human unchanged).
 
 Local, no SSH, no scheduler. Derived state, recomputed from the ``.py`` on disk on
-every call, so it can never drift from a second source of truth. The one write is
-the TRUSTED-DISPLAY render: per section it writes the content-addressed render
-file (:mod:`hpc_agent.ops.notebook.render_store`) the T8 sign-off gate requires —
-DETERMINISTIC bytes at a ``view_sha``-addressed path, so the write is idempotent
-(same inputs → same file) and never a second source of truth.
+every call, so it can never drift from a second source of truth. Two deterministic
+writes, both idempotent and neither a second source of truth: (1) the
+TRUSTED-DISPLAY render — per section, the content-addressed render file
+(:mod:`hpc_agent.ops.notebook.render_store`) the T8 sign-off gate requires,
+DETERMINISTIC bytes at a ``view_sha``-addressed path; and (2) — for a CANONICAL
+view only — a per-HUMAN-REQUIRED-section render-relay-due MARKER (the omission
+gate's second producer, run-#11 item 3) whose ``view_sha12`` key token the
+relay-audit Stop hook discharges only when the render actually reaches the human
+(deduplicated on the key token, so re-viewing arms nothing new). A PREVIEW view
+journals no marker.
 
 Two modes (the full-view-recompute upgrade): the DEFAULT is the CANONICAL view —
 the verb recomputes the lint SERVER-SIDE from the audit's RECORDED roots
@@ -51,14 +56,23 @@ from hpc_agent._wire.queries.notebook_audit_view import (
     NotebookViewAssertion,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.ops.notebook.audit_view import AuditView, build_audit_view, render_markdown
+from hpc_agent.ops.notebook.audit_view import (
+    HUMAN_REQUIRED,
+    AuditView,
+    build_audit_view,
+    render_markdown,
+)
 from hpc_agent.ops.notebook.canonical import (
     AuditConfig,
     build_canonical_view,
     read_recorded_config,
 )
-from hpc_agent.ops.notebook.render_store import write_render
+from hpc_agent.ops.notebook.render_store import _VIEW_SHA_ADDRESS_LEN, write_render
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.notebook_audit import (
+    RENDER_RELAY_DUE_RECORD_KIND,
+    record_scope_relay_due,
+)
 
 __all__ = ["notebook_audit_view"]
 
@@ -96,10 +110,32 @@ def _to_result(
     projection carries the experiment-relative ``render_path`` that was written.
     ``canonical`` records whether this view's view_shas match what the T8 gate
     recomputes (a canonical build) or are a preview the gate may refuse.
+
+    The omission gate's SECOND producer (run-#11 item 3, "a link is not a
+    relay"): for a CANONICAL view only, each HUMAN-REQUIRED section arms a
+    render-relay-due marker (:func:`~hpc_agent.state.notebook_audit.record_scope_relay_due`)
+    whose single key token is that section's ``view_sha12`` — the same hash the
+    render filename is addressed by. The relay-audit Stop hook discharges it only
+    when that sha12 appears in the turn, so a render that reached the human as an
+    unread file link (run #11's live failure) blocks the stop exactly like an
+    unrelayed ``notebook-status`` verdict. Deduplicated on (record_kind,
+    key_tokens), so re-viewing the same section arms nothing new (the verb stays
+    idempotent). PREVIEW views (``canonical=false``) and auto_cleared sections
+    journal NOTHING — the narrow set is deliberate (D8 applied to the gate).
     """
     sections = []
     for sv in view.sections:
         written = write_render(experiment_dir, audit_id=audit_id, view=sv)
+        if canonical and sv.tier == HUMAN_REQUIRED:
+            # The view_sha12 embedded in the render filename is exactly the
+            # discharge token — relaying the render (its sha12) closes the marker.
+            record_scope_relay_due(
+                experiment_dir,
+                scope_kind="notebook",
+                scope_id=audit_id,
+                record_kind=RENDER_RELAY_DUE_RECORD_KIND,
+                key_tokens=[sv.view_sha[:_VIEW_SHA_ADDRESS_LEN]],
+            )
         try:
             # as_posix() so the persisted/relayed relpath is forward-slash on
             # every platform — a Windows backslash in a core-computed relpath
@@ -145,6 +181,11 @@ def _to_result(
     # what the T8 sign-off gate requires to exist.
     side_effects=[
         SideEffect("file_write", "<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md"),
+        SideEffect(
+            "file_write",
+            "<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl (render "
+            "relay-due marker, CANONICAL human-required sections only)",
+        ),
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,

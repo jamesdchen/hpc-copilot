@@ -122,6 +122,7 @@ __all__ = [
     "RELAY_DUE_BLOCK",
     "RELAY_DUE_RESPONSE",
     "RELAY_DUE_RECORD_KIND",
+    "RENDER_RELAY_DUE_RECORD_KIND",
     "RELAY_DISCHARGE_BLOCK",
     "RELAY_DISCHARGE_RESPONSE",
     "record_relay_due",
@@ -821,6 +822,15 @@ RELAY_DUE_RESPONSE = "relay_due"
 #: (the narrow set is deliberate: marking everything relay-due recreates alarm
 #: fatigue inside the enforcement itself).
 RELAY_DUE_RECORD_KIND = "notebook-status"
+
+#: The SECOND ``record_kind`` (run-#11 item 3, "a link is not a relay"). The
+#: ``notebook-audit-view`` verb arms a per-section marker when it builds the
+#: CANONICAL view of a HUMAN-REQUIRED section: its single key token is the
+#: section's ``view_sha12`` (the hash embedded in the trusted render filename),
+#: so the marker discharges only when that sha12 actually appears in the turn —
+#: the render reached the human as content, not as an unread file link. Still
+#: the narrow set: preview views and auto_cleared sections arm nothing.
+RENDER_RELAY_DUE_RECORD_KIND = "notebook-audit-view"
 
 #: The discharge block — "the final assistant text carried a key token of the
 #: named marker". Written by the relay-audit Stop hook, never by hand.

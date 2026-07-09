@@ -513,6 +513,71 @@ def test_omission_combines_with_contradiction_findings(tmp_path: Path) -> None:
     assert "unrelayed terminal state" in out["reason"]
 
 
+# ─── render relay-due markers (the omission gate's SECOND producer) ──────────
+#
+# notebook-audit-view arms a per-section marker (record_kind
+# "notebook-audit-view") whose single key token is the section's view_sha12 —
+# the render-file address. The SAME discharge pass enforces it: the sha12 must
+# reach the human (a render delivered as an unread file link is not a relay).
+# The producer side is pinned in
+# tests/ops/test_notebook_audit_view_relay_due.py; here we pin block + discharge.
+
+_VIEW_SHA12 = "76a31b89d7ac"
+
+
+def _seed_render_relay_due(exp: Path, *, sha12: str = _VIEW_SHA12) -> dict:
+    """Journal one render-relay-due marker (the notebook-audit-view write)."""
+    from hpc_agent.state import notebook_audit as nb
+
+    record = nb.record_scope_relay_due(
+        exp,
+        scope_kind="notebook",
+        scope_id=_NB_AUDIT,
+        record_kind=nb.RENDER_RELAY_DUE_RECORD_KIND,
+        key_tokens=[sha12],
+    )
+    assert record is not None
+    resolved = record["resolved"]
+    assert isinstance(resolved, dict)
+    return resolved
+
+
+def test_blocks_on_unrelayed_render_view_sha(tmp_path: Path) -> None:
+    """A canonical human-required render whose view_sha12 never reached the human
+    blocks the stop — the one-token marker names just the sha to relay (no
+    dangling '@ ?'), the record_kind naming the render."""
+    _seed_render_relay_due(tmp_path)
+    transcript = _transcript(tmp_path, "Sent the render files along; wrapping up.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert (
+        f"unrelayed terminal state: notebook-audit-view = {_VIEW_SHA12} — "
+        "relay it verbatim before closing." in out["reason"]
+    )
+    assert _discharges(tmp_path) == []
+
+
+def test_relayed_view_sha_discharges_and_passes(tmp_path: Path) -> None:
+    """The view_sha12 in the final text (case-insensitive substring) discharges
+    the render marker and the stop proceeds; a later token-absent stop stays
+    silent (the obligation is closed)."""
+    marker = _seed_render_relay_due(tmp_path)
+    transcript = _transcript(tmp_path, f"section feature-construction (view_sha {_VIEW_SHA12}).")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+    discharges = _discharges(tmp_path)
+    assert len(discharges) == 1
+    resolved = discharges[0]["resolved"]
+    assert resolved["record_kind"] == marker["record_kind"] == "notebook-audit-view"
+    assert resolved["key_tokens"] == marker["key_tokens"] == [_VIEW_SHA12]
+    assert resolved["discharged_at"]
+
+    later = _transcript(tmp_path, "Nothing new to report.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, later)) is None
+    assert len(_discharges(tmp_path)) == 1  # not double-discharged
+
+
 # ─── G1: the paraphrase pass (relayed diffs must be verbatim render content) ──
 
 
