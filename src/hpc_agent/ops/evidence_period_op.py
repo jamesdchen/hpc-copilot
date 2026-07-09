@@ -32,14 +32,15 @@ imported LATE (inside :func:`_render_period`) so this module imports cleanly
 before that parallel Wave-B file lands and so tests can stub it by injecting a
 ``hpc_agent.ops.evidence_render`` module into ``sys.modules``.
 
-NOTE for the orchestrator (shared-helper seam): the collection→wire projection
-below (:func:`_conclusion_lines`, :func:`_activity_lines`, :func:`_envelope_lines`,
-:func:`_citation_lines`, :func:`_unconcluded_items`) and the fleet
-:func:`_merge_collections` are duplicated in spirit with the sibling
-``evidence-brief`` verb (T5). Per the file-disjoint dispatch rule they are kept
-IN THIS MODULE and NOT factored into a shared file the parallel agent might also
-create. If both verbs land, promoting these to a shared ``ops`` helper (e.g.
-``ops/evidence_project.py``) is the obvious follow-up — flagged, not done here.
+Shared-helper seam (T12 follow-up, DONE): the genuinely byte-identical pieces of
+the collection→wire projection were extracted to ``ops/evidence_project.py`` — the
+envelope-line loop (:func:`_envelope_lines` now injects its own formatter into
+``project_envelope_lines``) and the fleet total-order sort (:func:`_merge_collections`
+calls ``apply_evidence_order``). The genuinely-different pieces stay local:
+:func:`_conclusion_lines` (full sha, empties dropped — brief truncates to 8),
+:func:`_activity_lines` (a different roll-up), :func:`_citation_lines`
+(``verified = matches`` — brief ANDs ``resolved``), :func:`_unconcluded_items`,
+and the merge's window/param derivation.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ from hpc_agent._wire.queries.evidence import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.attention_queue import discover_fleet_experiments
+from hpc_agent.ops.evidence_project import apply_evidence_order, project_envelope_lines
 from hpc_agent.state import evidence_cache
 from hpc_agent.state.evidence import (
     CURRENT,
@@ -144,15 +146,14 @@ def _merge_collections(collections: Sequence[EvidenceCollection]) -> EvidenceCol
         citations_status.extend(c.citations_status)
         skipped.extend(c.skipped)
 
-    conclusions.sort(key=lambda c: c.conclusion_id)
-    conclusions.sort(key=lambda c: c.ts or "", reverse=True)
-    activity.sort(key=lambda a: (a.kind, a.subject_id))
-    activity.sort(key=lambda a: a.ts or "", reverse=True)
-    unconcluded.sort(key=lambda a: a.subject_id)
-    unconcluded.sort(key=lambda a: a.ts or "", reverse=True)
-    envelopes.sort(key=lambda e: (e.cmd_sha, e.key))
-    citations_status.sort(key=lambda c: (c.conclusion_id, c.kind, c.ref))
-    skipped.sort(key=lambda s: (s.source, s.subject_id, s.reason))
+    apply_evidence_order(
+        conclusions=conclusions,
+        activity=activity,
+        unconcluded=unconcluded,
+        envelopes=envelopes,
+        citations_status=citations_status,
+        skipped=skipped,
+    )
 
     first = collections[0] if collections else None
     return EvidenceCollection(
@@ -251,18 +252,9 @@ def _fmt_envelope(e: Any) -> str:
 
 
 def _envelope_lines(collection: EvidenceCollection) -> list[EnvelopeLine]:
-    return [
-        EnvelopeLine(
-            lineage=e.cmd_sha,
-            envelope=_fmt_envelope(e),
-            n=e.n,
-            n_full=e.n_full,
-            n_partial=e.n_partial,
-            scales=list(e.scales),
-            clusters=list(e.clusters),
-        )
-        for e in collection.envelopes
-    ]
+    """Shared loop (``ops/evidence_project.py``); the period's own 1-decimal
+    formatter is injected and stays local."""
+    return project_envelope_lines(collection.envelopes, _fmt_envelope)
 
 
 def _citation_lines(collection: EvidenceCollection) -> list[CitationStatusLine]:

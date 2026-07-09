@@ -724,19 +724,29 @@ push → CI green. Every task lands with a fires+passes test pair.
   3. **The canonical citations sha reuses `determinism.canonical_sha`.**
      `citations_content_sha` routes through the ONE harness-contract
      canonicalization already in `state/determinism.py` rather than a fourth
-     local copy; the conformance suite pins `data_manifest._canonical_json` /
-     `fingerprint_store._canonical_json` byte-equal. **Canonical-sha
-     unification debt:** those sibling copies remain separate definitions — a
-     future consolidation should collapse them to one `state`-level helper.
+     local copy. **Canonical-sha unification debt — RESOLVED (2026-07-09, P-S1):**
+     the sibling copies are gone. `data_manifest.manifest_doc_sha` now routes
+     through `determinism.canonical_sha` and
+     `fingerprint_store.content_sha_over_payloads` through
+     `determinism.compute_content_sha` (their `_canonical_json` copies deleted),
+     pinned byte-for-byte by unit tests. See the `data-manifest.md` drift log for
+     the left-out lanes (`run_sha`, `provenance_manifest`, the `conformance*`
+     copy — a later pass).
   4. **T5/T6 verbs re-render rather than routing through `render_brief` (T4).**
      `ops/evidence_brief_op.py` / `ops/evidence_period_op.py` carry their OWN
      `_render` / line-builder helpers instead of calling
      `ops/evidence_render.py::render_brief`/`render_period`. Both verbs DO route
      through the ONE `collect_evidence` (the one-collector row holds, T11-pinned);
      the duplication is only in the pure string RENDER. **T5/T6
-     shared-projection-helper debt:** a future pass should collapse the verbs'
-     renderers and `ops/evidence_render.py` to one projection helper (the
-     `story_render` posture) so a render change lands in one place.
+     shared-projection-helper debt — PARTIALLY RESOLVED (2026-07-09):** the
+     genuinely byte-identical collection→WIRE projection subset now lives in
+     `ops/evidence_project.py` — `project_envelope_lines` (the envelope-line loop,
+     formatter injected) and `apply_evidence_order` (the fleet total-order sort).
+     Both verbs route through it; behavior byte-identical (full test files pass
+     unchanged). The genuinely-different pieces stay local (`_conclusion_lines`
+     sha truncation, `_activity_lines` roll-up, `_citation_lines` verified
+     predicate). STILL OPEN: collapsing the verbs' markdown RENDER helpers with
+     `ops/evidence_render.py` (a separate `list[str]` renderer) — a later pass.
   5. **T9 embed centralized into `ops/evidence_embed.py` (a new module).** The
      plan named two seats each wrapping the embed; both now call ONE shared
      helper `build_evidence_embed` that owns the broad fail-open guard (the
