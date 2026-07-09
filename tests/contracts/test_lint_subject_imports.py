@@ -170,6 +170,43 @@ def test_lint_subject_imports_rejects_alias_form(tmp_path: Path) -> None:
     )
 
 
+def test_lint_subject_imports_allows_role_root_module(tmp_path: Path) -> None:
+    """A role-root MODULE file (``ops/shared_helper.py`` — not inside any
+    subject directory) is shared op-level surface, not a subject; importing
+    it from a subject in either role must pass. Only directories under a
+    role root are subjects (the ``ops/evidence_embed.py`` E-embed class:
+    one design-pinned helper consumed by both the meta/campaign greenlight
+    seat and the ops-root S1 seat)."""
+    ops_root = tmp_path / "ops"
+    meta_x = tmp_path / "meta" / "x"
+    ops_a = tmp_path / "ops" / "a"
+    meta_x.mkdir(parents=True)
+    ops_a.mkdir(parents=True)
+    (ops_root / "__init__.py").write_text("", encoding="utf-8")
+    (ops_root / "shared_helper.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+    (meta_x / "__init__.py").write_text("", encoding="utf-8")
+    (ops_a / "__init__.py").write_text("", encoding="utf-8")
+    (meta_x / "uses_root.py").write_text(
+        "from hpc_agent.ops.shared_helper import helper\n",
+        encoding="utf-8",
+    )
+    (ops_a / "uses_root.py").write_text(
+        "from hpc_agent.ops.shared_helper import helper\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _driver(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, (
+        f"lint_subject_imports wrongly flagged a role-root module file as a subject:\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+
+
 def test_lint_subject_imports_rejects_meta_to_ops(tmp_path: Path) -> None:
     """A file in ``meta/<x>/`` importing from any ``ops.<y>`` subject is
     also a cross-subject violation (different role still counts)."""

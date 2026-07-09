@@ -15,9 +15,12 @@ evasive spellings are covered too: relative imports are resolved against
 the importing file's package (``from ...meta.registry import x`` climbs
 parents and crosses subjects like its absolute spelling), and
 ``from hpc_agent.<role> import <subject>`` binds the subject through an
-alias without its dotted path ever appearing in the ``from`` clause —
-alias-derived candidates are checked against the real subject
-directories so re-exported functions don't false-positive.
+alias without its dotted path ever appearing in the ``from`` clause.
+EVERY candidate is checked against the real subject directories: only a
+directory under a role root is a subject, so re-exported functions and
+role-root MODULE files (shared op-level surface like
+``ops/evidence_embed.py`` — design-pinned homes importable from any
+subject) don't false-positive.
 
 Allowed cross-cutting roots (these aren't subjects, they're substrate):
 
@@ -96,25 +99,26 @@ def _is_allowed_non_subject(module: str) -> bool:
     return False
 
 
-def _iter_imports(tree: ast.AST, module_package: str) -> list[tuple[int, str, bool]]:
-    """Yield ``(lineno, module_name, alias_derived)`` for every module an
-    import statement in ``tree`` could bind.
+def _iter_imports(tree: ast.AST, module_package: str) -> list[tuple[int, str]]:
+    """Yield ``(lineno, module_name)`` for every module an import
+    statement in ``tree`` could bind.
 
     Relative imports are resolved against *module_package* — a
     ``from ...meta.registry import x`` climbs parents and crosses subjects
     exactly like its absolute spelling, so it must not be skipped. For
-    ``from pkg import name``, ``pkg.name`` is additionally yielded per alias
-    with ``alias_derived=True``: when ``name`` is a subject package, that
-    form binds it just like ``import pkg.name`` — but the caller must check
-    alias-derived names against the real subject directories, because the
-    alias may equally be a re-exported function.
+    ``from pkg import name``, ``pkg.name`` is additionally yielded per
+    alias: when ``name`` is a subject package, that form binds it just
+    like ``import pkg.name``. The caller checks every candidate against
+    the real subject directories, so an alias that is a re-exported
+    function never false-positives.
     """
-    out: list[tuple[int, str, bool]] = []
+    out: list[tuple[int, str]] = []
     pkg_parts = module_package.split(".")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            out.extend((node.lineno, alias.name, False) for alias in node.names)
+            out.extend((node.lineno, alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
+            module: str | None
             if node.level:
                 if node.level > len(pkg_parts):
                     continue  # climbs above the distribution root — broken import
@@ -124,9 +128,9 @@ def _iter_imports(tree: ast.AST, module_package: str) -> list[tuple[int, str, bo
                 module = node.module
             if not module:
                 continue
-            out.append((node.lineno, module, False))
+            out.append((node.lineno, module))
             out.extend(
-                (node.lineno, f"{module}.{alias.name}", True)
+                (node.lineno, f"{module}.{alias.name}")
                 for alias in node.names
                 if alias.name != "*"
             )
@@ -153,7 +157,7 @@ def lint_file(
     # ``from pkg.sub import name`` yields both ``pkg.sub`` and
     # ``pkg.sub.name`` candidates for one line — report each crossing once.
     seen: set[tuple[int, str, str]] = set()
-    for lineno, module, alias_derived in _iter_imports(tree, module_package):
+    for lineno, module in _iter_imports(tree, module_package):
         if _is_allowed_non_subject(module):
             continue
         # Check both roles — a file in ``ops/foo`` may not import from
@@ -166,10 +170,12 @@ def lint_file(
             if role == own_role and other == own_subject:
                 # Same subject as ourselves — allowed.
                 continue
-            if alias_derived and other not in subjects_by_role.get(role, set()):
-                # ``from hpc_agent.<role> import <name>`` where <name> is a
-                # re-exported helper, not a subject directory — not a
-                # subject crossing.
+            if other not in subjects_by_role.get(role, set()):
+                # Not a subject DIRECTORY: a role-root module file
+                # (``from hpc_agent.ops.evidence_embed import ...``) or a
+                # re-exported helper bound via
+                # ``from hpc_agent.<role> import <name>`` — subjects are
+                # directories, so neither is a subject crossing.
                 continue
             if (lineno, role, other) in seen:
                 continue
