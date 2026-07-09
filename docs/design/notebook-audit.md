@@ -671,3 +671,12 @@ Lmod cache; broken module in login init) and marking the CLASS retry-worthy;
 (b) ssh-op failure_features gain the remote node identity (hostname the op
 actually landed on) — per-node flakiness is undiagnosable when the envelope
 doesn't say which node.
+
+Correction to item 15 (same hour): the live instance was HOFFMAN2 (UGE), not
+CARC — "Unable to initialize environment because of error" is Grid Engine's
+job/task env-init message (per-task, per-node; siblings unaffected — the
+rlin_tune array was running healthily while one instance emitted it). The
+signature row must cover both dialects (UGE's message + Lmod's lookalike),
+classify per-TASK not per-run, and the node-identity leg is the payload:
+the same contentless shape on two clusters in one night is only diagnosable
+if the envelope names scheduler + node + task id.
