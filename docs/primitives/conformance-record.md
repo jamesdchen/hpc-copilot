@@ -85,7 +85,11 @@ ships none of it; the ~30-line convention is the caller's, verbatim:
    of scope, honestly named.
 5. Cadence, batching, retention of raw domain data: caller policy, never core's.
 
-## Inputs
+## Composers
+
+- The caller-side EMITTER (a human/cron CLI invocation per the C-emitter contract above) — never an agent tool, never a chain/next_block member.
+
+## Invariants (spec fields)
 
 `ConformanceRecordSpec` (`hpc_agent._wire.actions.conformance_record`):
 
@@ -103,14 +107,14 @@ ships none of it; the ~30-line convention is the caller's, verbatim:
 Deliberately carries **no `content_sha`** — a sha on the wire is a claim core
 ignores, so it is not accepted at all.
 
-## Output
+## Coupling (result shape)
 
 `ConformanceRecordResult`: `registration_id`, the SERVER-recomputed
 `content_sha`, the stamped `status_at_record`
 (`current` | `stale` | `revoked` | `superseded`), the echoed `observed_at`, and
 the `ledger_path` the line appended to.
 
-## Boundary
+## Failure modes
 
 This verb OBSERVES and RECORDS; it never actuates. A recorded observation
 changes NO registration status, revokes nothing, halts nothing — drift routes
