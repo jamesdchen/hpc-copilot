@@ -691,3 +691,17 @@ spec-identity-bound gate (exists), (3) a WAKE — a harness-TRACKED wait
 driver. The skills must pair every pre-consent with arming the wake in the
 same breath; a pre-y without an armed watch is consent nobody can consume —
 true for failure (the overnight canary death) and success (this) alike.
+
+Addendum 11: **16. Scheduler-native concurrency caps vs. afterany waves**
+(backends; saturation). The #339 wave chain bounds concurrency by chaining
+full array jobs behind `afterany` — correct for failure isolation and
+per-wave combining, but each boundary drains to ~zero while stragglers
+finish (run #11: the human watched 76→20 and asked why nothing back-fills).
+Both schedulers offer in-array caps (UGE `qsub -tc N`, Slurm `--array=..%N`)
+= perfect back-fill inside ONE array, no boundaries. Evaluate: use -tc/%N
+for pure CONCURRENCY bounding (one array, scheduler saturates), keep waves
+only where they carry semantics (combine-per-wave checkpoints, staged
+canary gates). Related: #362 async-refill RFC (campaign-side). ALSO from the
+same exchange: the demo NARRATED a manual "push wave 2 below 20 threshold"
+mechanism that does not exist — mechanism claims are relay-audit material
+(item 5's class extended from decision-state to MECHANISM-state).
