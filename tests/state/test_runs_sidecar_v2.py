@@ -111,6 +111,27 @@ def test_v2_write_omits_none_keys_to_keep_sidecar_compact(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# trace_digests_override: data-trace T3 digest-override disclosure
+# ---------------------------------------------------------------------------
+
+
+def test_trace_digests_override_roundtrips(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), trace_digests_override="force_off")
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] == "force_off"
+
+
+def test_trace_digests_override_none_omitted_and_backfilled(tmp_path: Path) -> None:
+    """No override → the key is absent on disk (byte-compact) but read_run_sidecar
+    backfills it to None so callers can read it unconditionally."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    raw = json.loads(run_sidecar_path(tmp_path, _common_required_kwargs()["run_id"]).read_text())
+    assert "trace_digests_override" not in raw
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["trace_digests_override"] is None
+
+
+# ---------------------------------------------------------------------------
 # scopes: opaque caller-owned evidence-scope tags
 # ---------------------------------------------------------------------------
 

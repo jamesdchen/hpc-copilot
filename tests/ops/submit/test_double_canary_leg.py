@@ -74,3 +74,42 @@ def test_fire_second_canary_mirrors_sidecar_and_records(tmp_path: Path, monkeypa
     assert recorded["run_id"] == "run-x-canary2"
     assert recorded["job_ids"] == ["777"]
     assert recorded["total_tasks"] == 1
+
+
+def test_canary_forces_digests_on_even_when_main_array_is_off(tmp_path: Path, monkeypatch) -> None:
+    """data-trace T3: the canary IS an identity run (canary-vs-local trace-diff),
+    so it forces HPC_TRACE_DIGESTS=1 even when the main array's job_env carries
+    the classifier's "0" (a large main array)."""
+    from hpc_agent.ops import submit_flow as sf
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id="run-x",
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-07-08T00:00:00Z",
+        executor="python run.py --seed $SEED",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=4,
+        tasks_py_sha="b" * 64,
+        cluster="hoffman2",
+        remote_path="/remote",
+    )
+
+    captured: dict = {}
+
+    def _capture(*_a, **kw):
+        captured["job_env"] = dict(kw["job_env"])
+        return ["777"]
+
+    monkeypatch.setattr(sf, "build_remote_backend", lambda **_kw: object())
+    monkeypatch.setattr(sf, "_make_single_array_submission", _capture)
+    monkeypatch.setattr(sf, "submit_and_record", lambda *_a, **_k: (None, False))
+
+    # Main array classified digests OFF (a large array), carried on job_env.
+    spec = _spec().model_copy(update={"job_env": {"K": "v", "HPC_TRACE_DIGESTS": "0"}})
+    sf.fire_second_canary(tmp_path, spec=spec, canary_run_id="run-x-canary2")
+
+    assert captured["job_env"]["HPC_TRACE_DIGESTS"] == "1"
+    assert captured["job_env"]["HPC_TASK_COUNT"] == "1"

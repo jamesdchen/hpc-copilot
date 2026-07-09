@@ -1894,6 +1894,15 @@ def _fire_canary(
     canary_env = dict(job_env_full)
     canary_env["HPC_RUN_ID"] = canary_run_id
     canary_env["HPC_TASK_COUNT"] = "1"
+    # data-trace T3: the canary IS an identity run by construction —
+    # canary-vs-local trace-diff catches deploy/data divergence in one glance,
+    # which needs the digest atom. The canary inherits main's job_env (which the
+    # classifier may have set to "0" for a large main array), so force digests ON
+    # here at the canary seam — the "canary flag" classifier input applied where
+    # the canary env is actually built (the main-array classification stays off).
+    from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_DIGEST_ENV_VAR
+
+    canary_env[TRACE_DIGEST_ENV_VAR] = "1"
     # #294 PR4: a run that opted into auto_resume_on_kill must prove its
     # checkpoint format round-trips BEFORE the long main array launches —
     # otherwise it discovers an unreloadable checkpoint only at resume, hours in.

@@ -164,6 +164,57 @@ def test_resolved_builds_submit_spec(tmp_path: Path) -> None:
     assert "WARNING" not in res.reason
 
 
+def test_digest_override_disclosed_on_sidecar_and_reproduces_threaded(tmp_path: Path) -> None:
+    """data-trace T3: an exercised ``trace_digests`` override is disclosed on the
+    sidecar as ``trace_digests_override``; ``reproduction_of`` is threaded onto
+    the build-submit-spec input as ``reproduces`` so the classifier sees the
+    identity signal."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    spec = ResolveSubmitInputsSpec(
+        run_name="ridge",
+        submit=_submit_input().model_copy(update={"trace_digests": "force_on"}),
+        sidecar=_sidecar_input(),
+        reproduction_of="ridge-0badf00d",
+    )
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built) as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    ):
+        res = resolve_submit_inputs(tmp_path, spec=spec)
+
+    assert res.stage_reached == "resolved"
+    # the override rides the sidecar spec (disclosure), and reproduction_of is
+    # threaded onto the classifier's build input.
+    assert ws.call_args.kwargs["spec"].trace_digests_override == "force_on"
+    assert bs.call_args.kwargs["spec"].reproduces == "ridge-0badf00d"
+
+
+def test_no_digest_override_leaves_sidecar_field_none(tmp_path: Path) -> None:
+    """No ``trace_digests`` lever → the sidecar field stays None (omitted on
+    write; byte-identical to a pre-T3 sidecar). The classifier decides unaided."""
+    from hpc_agent.ops.resolve_submit_inputs import resolve_submit_inputs
+
+    _touch_tasks_py(tmp_path)
+    built = {"profile": "ridge", "run_id": "ridge-abcd1234", "total_tasks": 2}
+    with (
+        mock.patch(f"{_SEAM}.compute_run_id", return_value=_cr()),
+        mock.patch(f"{_SEAM}.find_prior_run", return_value=_fp(found=False)),
+        mock.patch(f"{_SEAM}.build_submit_spec", return_value=built) as bs,
+        mock.patch(f"{_SEAM}.write_run_sidecar", return_value=_sidecar_ret()) as ws,
+        mock.patch(f"{_SEAM}.build_tasks_py"),
+    ):
+        resolve_submit_inputs(tmp_path, spec=_spec())
+
+    assert ws.call_args.kwargs["spec"].trace_digests_override is None
+    assert bs.call_args.kwargs["spec"].reproduces is None
+
+
 def test_no_interview_interface_blind_executor_warns_in_reason(tmp_path: Path) -> None:
     """Run #8 live: a hand-onboarded ``executor: "run"`` (no interview.json to
     derive from) sailed to a FAILED canary on two clusters because the

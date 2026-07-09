@@ -125,6 +125,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "env_hash",  # str — resolved env identity: modules/conda/runtime (#222)
     "scopes",  # list[str] — opaque caller-owned evidence-scope tags; core never interprets them
     "reproduces",  # str — run_id of the ORIGINAL this run is a deliberate reproduction of
+    "trace_digests_override",  # str — data-trace T3: exercised digest override, disclosed
     "audited_source",  # dict — opaque caller-owned audit-trail identity; core never interprets it
     "packs",  # list[dict] — opaque domain-pack echoes; core never interprets them (T10)
 )
@@ -172,6 +173,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "env_hash": None,
     "scopes": None,
     "reproduces": None,
+    "trace_digests_override": None,
     "audited_source": None,
     "packs": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
@@ -248,6 +250,7 @@ def write_run_sidecar(
     job_ids: list[str] | None = None,
     scopes: list[str] | None = None,
     reproduces: str | None = None,
+    trace_digests_override: str | None = None,
     audited_source: dict[str, Any] | None = None,
     packs: list[dict[str, Any]] | None = None,
 ) -> Path:
@@ -389,6 +392,11 @@ def write_run_sidecar(
         # only-write-non-None pattern; a non-reproduction run's sidecar is
         # byte-identical). find_run_by_cmd_sha's reproduction_of lever reads it.
         "reproduces": reproduces,
+        # data-trace T3: DISCLOSURE of an exercised digest override
+        # (force_on/force_off). Same only-write-non-None pattern — the classifier
+        # decides unaided for the common case, so a non-overridden run's sidecar
+        # is byte-identical. A reader sees the "NO KNOB" policy was overridden.
+        "trace_digests_override": trace_digests_override,
         # Opaque caller-owned audit-trail identity — the sidecar echo of
         # interview.json's audited_source block ({source, template, audit_id};
         # notebook-audit T14). Recorded verbatim, never interpreted by core
