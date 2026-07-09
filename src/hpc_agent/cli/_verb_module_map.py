@@ -72,6 +72,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'net-triage': ('net-triage', 'hpc_agent.ops.recover.net_triage'),
     'notebook-audit-view': ('notebook-audit-view', 'hpc_agent.ops.notebook.view_op'),
     'notebook-auto-clear': ('notebook-auto-clear', 'hpc_agent.ops.notebook.auto_clear_op'),
+    'notebook-draft': ('notebook-draft', 'hpc_agent.ops.notebook.draft_op'),
     'notebook-draft-context': ('notebook-draft-context', 'hpc_agent.ops.notebook.draft_context_op'),
     'notebook-lint': ('notebook-lint', 'hpc_agent.ops.notebook.lint'),
     'notebook-record-config': ('notebook-record-config', 'hpc_agent.ops.notebook.record_config_op'),

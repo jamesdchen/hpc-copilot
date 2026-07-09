@@ -175,6 +175,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": null,
+    "name": "notebook-draft",
+    "output_schema": null,
+    "python": "hpc_agent.ops.notebook.draft_op.notebook_draft",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal a CODE draft attestation for one section of an audited source .py — the drafter-attribution seam (multi-human). Records the actor whose SESSION drove the drafting as the section's author, at DRAFT time (the reviewer!=author gate resolves it). Parses the source ON DISK and binds the draft to the freshly-parsed section sha (a draft can only be recorded against current source, and the old draft reads stale the moment the section is redrafted). The actor is resolved SERVER-SIDE from the session env (HPC_ACTOR) and validated against the interview's declared actors.ids — NEVER a wire field (an agent-suppliable actor would let the model choose its identity). Refuses when >1 actor is declared and no session actor resolves (an anonymous act is the laundering channel); records attestor_id=None when zero/one actor is declared. Pure local read + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]",
     "idempotent": false,
     "input_schema": "notebook_record_config.input.json",
