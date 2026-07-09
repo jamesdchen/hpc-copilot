@@ -141,6 +141,43 @@ class DataIdentityDisclosure(BaseModel):
     )
 
 
+class StageInterlockDisclosure(BaseModel):
+    """The v2 receipt's data-trace interlock disclosure (docs/design/data-trace.md).
+
+    Present only when at least one compared run carries an ingested stage trace
+    (absent → the receipt is byte-identical to a pre-interlock one — the
+    degradation-path posture: never fabricated). When BOTH sides are traced
+    (``compared: true``), the per-stage ``digest``/``row_count`` atoms were folded
+    into the compared payloads under the namespaced ``stage:<stage>.digest`` /
+    ``stage:<stage>.row_count`` keys listed in ``stage_keys`` — exact-class
+    entries riding the SAME per-key envelope + sample machinery (no new
+    admission rule). One-side-traced → ``compared: false``, nothing folded,
+    presence disclosed.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="reproduction stage-interlock disclosure")
+
+    original_trace_present: bool = Field(
+        description="True when the original run has an ingested stage trace."
+    )
+    repro_trace_present: bool = Field(
+        description="True when the reproduction run has an ingested stage trace."
+    )
+    compared: bool = Field(
+        description=(
+            "True when BOTH sides were traced and the per-stage keys were folded "
+            "into the comparison; false = disclosed-absent (nothing folded)."
+        )
+    )
+    stage_keys: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The namespaced stage:<stage>.{digest,row_count} keys folded into the "
+            "compared payloads (empty when compared is false)."
+        ),
+    )
+
+
 class ReproductionReceipt(BaseModel):
     """The durable receipt record appended to the reproduction receipts ledger.
 
@@ -205,6 +242,27 @@ class ReproductionReceipt(BaseModel):
             "priors excluded, no-manifest priors counted unknown). Null when the "
             "current data identity is unknown (no manifest) — the verify then stays "
             "byte-identical to a pre-amendment one."
+        ),
+    )
+    stage_interlock: StageInterlockDisclosure | None = Field(
+        default=None,
+        description=(
+            "Data-trace interlock disclosure (docs/design/data-trace.md, the "
+            "fingerprint interlock): which sides carried an ingested stage trace "
+            "and which stage:<stage>.* keys were folded into the comparison. Null "
+            "when neither side is traced — the receipt then stays byte-identical "
+            "to a pre-interlock one."
+        ),
+    )
+    diverged_stage: str | None = Field(
+        default=None,
+        description=(
+            "The FIRST stage (by pipeline order — the trace's seq) whose "
+            "digest/row_count atoms diverge, on a routed verdict (mismatch / "
+            "needs_verdict / incomparable) of a both-sides-traced comparison — "
+            "'diverges at <stage>' as a machine field, never prose-invented. Null "
+            "when stages agree, traces are absent, or the verdict auto-cleared. "
+            "Present only beside stage_interlock."
         ),
     )
 
@@ -274,5 +332,14 @@ class VerifyReproductionResult(BaseModel):
             "experiment's ledger (D-consume: verify appends the comparison as a new "
             "sample). Null when no sample was minted (e.g. a v1-only comparison, or "
             "missing artifacts). Echoed so a consumer sees the evidence just recorded."
+        ),
+    )
+    diverged_stage: str | None = Field(
+        default=None,
+        description=(
+            "Stage-localized mismatch (the data-trace fingerprint interlock): the "
+            "first diverging stage by pipeline order when both runs carry ingested "
+            "traces and the verdict routed to the human — the brief renders "
+            "'diverges at <stage>' from this machine field. Null otherwise."
         ),
     )
