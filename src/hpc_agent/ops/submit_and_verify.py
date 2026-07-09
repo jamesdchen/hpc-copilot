@@ -93,12 +93,18 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
     from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.fingerprint_store import pulls_dir
     from hpc_agent.state.journal import load_run
-    from hpc_agent.state.runs import read_run_sidecar
+    from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
     record = load_run(experiment_dir, canary_run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for canary {canary_run_id!r}")
     sidecar = read_run_sidecar(experiment_dir, canary_run_id)
+    # The canary's declared per-task summary filename (F-J). The canary is
+    # submitted through the same pipeline as the main run, so its sidecar
+    # carries the SAME summary_artifact — resolve it here (absent/blank →
+    # metrics.json) so the pull filter + rglob key on the real file instead of
+    # the metrics.json hardcode that missed a non-default emitter (run #10).
+    summary_name = resolved_summary_artifact(sidecar)
     template = sidecar.get("result_dir_template")
     if not isinstance(template, str) or not template:
         raise errors.SpecInvalid(
@@ -113,17 +119,17 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
         remote_path=record.remote_path,
         remote_subdir=result_subdir,
         local_dir=str(local),
-        include=["metrics.json"],
+        include=[summary_name],
     )
     if pull.returncode != 0:
         raise errors.RemoteCommandFailed(
-            f"pull of {canary_run_id!r} task-0 metrics.json failed (exit {pull.returncode}): "
+            f"pull of {canary_run_id!r} task-0 {summary_name} failed (exit {pull.returncode}): "
             f"{(pull.stderr or '').strip()[:200]}"
         )
-    hits = sorted(p for p in local.rglob("metrics.json") if p.is_file())
+    hits = sorted(p for p in local.rglob(summary_name) if p.is_file())
     if not hits:
         raise errors.RemoteCommandFailed(
-            f"no metrics.json pulled for canary {canary_run_id!r} under {result_subdir!r}"
+            f"no {summary_name} pulled for canary {canary_run_id!r} under {result_subdir!r}"
         )
     return hits[0]
 

@@ -98,9 +98,22 @@ __all__ = [
 ENGINE_ENV = "HPC_SSH_ENGINE"
 
 #: Close a per-host connection after this many idle seconds so a forgotten
-#: engine does not hold a login-node session open indefinitely (mirrors the
-#: broker's ``HPC_SSH_BROKER_IDLE_SEC`` default of 600).
-IDLE_CLOSE_SEC = float(os.environ.get("HPC_SSH_ENGINE_IDLE_SEC", "600"))
+#: engine does not hold a login-node session — and, crucially, its per-host ssh
+#: SLOT — open indefinitely. Default 120s (down from the broker's 600): the
+#: run-#10 F-B residual was an mcp-serve process that ran ONE quick verb and then
+#: held its slot until process exit, because the slot is released only at
+#: connection close and nothing closed the idle connection. A ~2-min idle close
+#: (enforced by the background sweep, :meth:`_Engine._sweep_idle`, not only the
+#: next-run() check) frees that slot promptly. Env: ``HPC_SSH_IDLE_CLOSE_SEC``.
+IDLE_CLOSE_SEC = float(os.environ.get("HPC_SSH_IDLE_CLOSE_SEC", "120"))
+
+#: How often the background reaper thread sweeps for idle connections. An
+#: mcp-serve that ran one quick verb has no further ``run()`` to trigger the
+#: per-acquire idle check (:meth:`_Engine._reap_if_idle`), so a periodic sweep is
+#: what actually frees its slot ~:data:`IDLE_CLOSE_SEC` after last use instead of
+#: holding it until process exit. Kept well under IDLE_CLOSE_SEC so the close
+#: latency is idle + at most one sweep interval.
+_SWEEP_INTERVAL_SEC = 30.0
 
 #: Concurrent sessions (channels) allowed on ONE connection. OpenSSH's default
 #: ``MaxSessions`` is 10; cap below it so a burst can't trip a channel-open
@@ -112,6 +125,16 @@ _MAX_SESSIONS = 8
 #: timeout should always trip first; this only catches a wedged EVENT LOOP.
 #: Module-level (not inlined) so tests can shrink it to force the backstop.
 _RESULT_MARGIN = 10.0
+
+#: Slack the IN-LOOP asyncio deadline (:func:`_await_bounded`) adds above the
+#: primitive's own timeout (asyncssh's per-op ``timeout=`` / ``connect_timeout``)
+#: so on a NORMAL timeout asyncssh's own error trips first (it carries partial
+#: output); the ``asyncio.wait_for`` is the backstop for the case asyncssh's own
+#: timeout does NOT fire — the live 2026-07-08 hang, a 15-min remote leg against
+#: a healthy cluster whose per-command asyncssh ``timeout=`` never tripped. Kept
+#: below :data:`_RESULT_MARGIN` so the ordering holds: asyncssh-timeout <
+#: in-loop-deadline < thread-backstop.
+_LOOP_DEADLINE_MARGIN = 5.0
 
 #: Outer bound for a connect/close op dispatched to the loop.
 _CLOSE_DEADLINE = 10.0
@@ -194,6 +217,12 @@ def _connect_timeout() -> float:
     return float(raw)
 
 
+def _sweep_interval() -> float:
+    """The idle-reaper sweep cadence, read fresh each loop so tests can shrink
+    it (:data:`_SWEEP_INTERVAL_SEC`)."""
+    return _SWEEP_INTERVAL_SEC
+
+
 # --- the asyncio loop thread (one per process, lazily created) ---------------
 
 _loop_lock = threading.Lock()
@@ -253,6 +282,33 @@ def _submit(coro: Coroutine[Any, Any, Any], *, deadline: float | None) -> Any:
         ) from exc
 
 
+async def _await_bounded(coro: Any, *, timeout: float | None) -> Any:
+    """Await *coro* under an IN-LOOP asyncio deadline — the engine's parity with
+    the subprocess path's :func:`bounded_subprocess.run_capture_bounded`.
+
+    Every asyncssh primitive the engine awaits (connect, run, channel close) runs
+    through here so a wedged primitive is bounded ON THE LOOP, not merely by the
+    thread-side ``future.result(timeout=)`` backstop in :func:`_submit` — which
+    cannot reliably interrupt a coroutine stuck inside asyncssh (the live
+    2026-07-08 aggregate hang: a 15-min remote leg against a healthy cluster
+    whose per-command asyncssh ``timeout=`` never tripped).
+
+    ``timeout=None`` is the caller's documented escape hatch (``ssh_run(...,
+    timeout=None)`` disables enforcement) and stays unbounded — the same None
+    semantics ``run_capture_bounded`` honours. On expiry
+    :func:`asyncio.wait_for` raises :class:`asyncio.TimeoutError` (the builtin
+    ``TimeoutError`` from 3.11), the SAME type asyncssh's own per-op timeout
+    raises: :func:`classify_engine_failure` maps it to ``"throttle"`` and
+    :meth:`_Engine.run` / :meth:`_Engine._open` already wrap it into
+    :class:`EngineUnavailable` — no new error class.
+    """
+    import asyncio
+
+    if timeout is None:
+        return await coro
+    return await asyncio.wait_for(coro, timeout=timeout)
+
+
 async def _connect(ssh_target: str) -> Any:
     """Open ONE persistent ``asyncssh`` connection to *ssh_target* (the seam
     tests monkeypatch with a stub).
@@ -306,9 +362,17 @@ async def _dial_multi_address(host: str, budget_sec: float) -> Any:
 
     loop = asyncio.get_running_loop()
     try:
-        infos = await loop.getaddrinfo(host, 22, type=socket.SOCK_STREAM)
+        # Bound the resolve: getaddrinfo runs in the default executor and a
+        # wedged resolver would otherwise hang the whole connect on the loop.
+        infos = await asyncio.wait_for(
+            loop.getaddrinfo(host, 22, type=socket.SOCK_STREAM), timeout=budget_sec
+        )
     except socket.gaierror:
         return None  # alias / unresolvable: asyncssh's config pass owns it
+    except (TimeoutError, asyncio.TimeoutError):
+        # DNS wedged within the budget: hand off to asyncssh's own (also
+        # connect_timeout-bounded) config-pass dial rather than raising here.
+        return None
     pairs = [(info[0], info[4]) for info in infos if info[0] in (socket.AF_INET, socket.AF_INET6)]
     if len(pairs) <= 1:
         return None
@@ -337,14 +401,30 @@ async def _do_connect(ssh_target: str) -> tuple[Any, asyncio.Semaphore]:
     the loop so it binds to the running loop)."""
     import asyncio
 
-    conn = await _connect(ssh_target)
+    # In-loop deadline over the WHOLE connect (multi-address dial + handshake),
+    # above the connect_timeout so asyncssh's own error trips first on a normal
+    # slow connect; the wait_for is the backstop for a connect that never
+    # returns (F-M — a hang here would otherwise ride the thread backstop only).
+    conn = await _await_bounded(
+        _connect(ssh_target), timeout=_connect_timeout() + _LOOP_DEADLINE_MARGIN
+    )
     return conn, asyncio.Semaphore(_MAX_SESSIONS)
 
 
 async def _do_run(hc: _HostConn, cmd: str, timeout: float | None) -> Any:
-    """Run *cmd* on *hc*'s connection under the session semaphore."""
-    async with hc.sem:
-        return await hc.conn.run(cmd, check=False, timeout=timeout)
+    """Run *cmd* on *hc*'s connection under the session semaphore, bounded.
+
+    The whole guarded op (semaphore acquire + ``conn.run``) runs under an in-loop
+    deadline (:func:`_await_bounded`) so neither a wedged channel read nor a
+    starved semaphore can outlive the caller's timeout — the F-M fix for the
+    15-min remote-leg hang. ``timeout=None`` stays unbounded (escape hatch)."""
+
+    async def _guarded() -> Any:
+        async with hc.sem:
+            return await hc.conn.run(cmd, check=False, timeout=timeout)
+
+    bound = None if timeout is None else timeout + _LOOP_DEADLINE_MARGIN
+    return await _await_bounded(_guarded(), timeout=bound)
 
 
 async def _do_close(hc: _HostConn) -> None:
@@ -355,7 +435,9 @@ async def _do_close(hc: _HostConn) -> None:
     with contextlib.suppress(Exception):
         waiter = conn.wait_closed()
         if waiter is not None:
-            await waiter
+            # Bound the close-wait: a connection that refuses to finish closing
+            # must not park the teardown on the loop indefinitely.
+            await _await_bounded(waiter, timeout=_CLOSE_DEADLINE)
 
 
 class _HostConn:
@@ -390,6 +472,11 @@ class _Engine:
         self._conns: dict[str, _HostConn] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()
+        # Background idle-reaper (F-B residual): started on first open, stopped
+        # by shutdown_all. Runs OFF the engine loop (a plain daemon thread) so
+        # it can drive _discard's thread→loop _submit without deadlocking.
+        self._sweeper: threading.Thread | None = None
+        self._stop_sweeper = threading.Event()
 
     def _host_lock(self, host: str) -> threading.Lock:
         with self._guard:
@@ -498,6 +585,7 @@ class _Engine:
             hc = _HostConn(ssh_target, conn, slot_token, sem)
             with self._guard:
                 self._conns[host] = hc
+            self._ensure_sweeper()
             return hc
 
     def _reap_if_idle(self, host: str) -> None:
@@ -506,6 +594,44 @@ class _Engine:
             stale = hc is not None and (not hc.alive or hc.idle_for() > IDLE_CLOSE_SEC)
         if stale and hc is not None:
             self._discard(host, hc)
+
+    def _ensure_sweeper(self) -> None:
+        """Start the background idle-reaper daemon on first open (idempotent)."""
+        with self._guard:
+            if self._sweeper is not None and self._sweeper.is_alive():
+                return
+            self._stop_sweeper.clear()
+            thread = threading.Thread(
+                target=self._sweeper_loop, name="hpc-ssh-engine-reaper", daemon=True
+            )
+            self._sweeper = thread
+            thread.start()
+
+    def _sweeper_loop(self) -> None:
+        """Wake every :func:`_sweep_interval` and reap idle connections until
+        stopped. Exceptions are swallowed — a reaper must never crash a run."""
+        while not self._stop_sweeper.wait(_sweep_interval()):
+            with contextlib.suppress(Exception):
+                self._sweep_idle()
+
+    def _sweep_idle(self) -> None:
+        """Close every connection idle past :data:`IDLE_CLOSE_SEC` (or already
+        dead) and free its slot — the background counterpart to
+        :meth:`_reap_if_idle`, which only fires on the NEXT run() to a host.
+
+        The F-B residual: an mcp-serve process that opened a connection for one
+        quick verb and then sat idle has no such trigger, so without this sweep
+        its per-host ssh slot stays claimed (slot is released only at connection
+        close) until process exit. The sweep frees it ~IDLE_CLOSE_SEC after last
+        use. An ACTIVE connection (idle ≤ threshold) is never touched."""
+        with self._guard:
+            stale = [
+                (host, hc)
+                for host, hc in self._conns.items()
+                if not hc.alive or hc.idle_for() > IDLE_CLOSE_SEC
+            ]
+        for host, hc in stale:
+            self._discard(host, hc)  # unregisters, closes on the loop, frees slot
 
     def _discard(self, host: str, hc: _HostConn | None) -> None:
         """Drop *hc*: unregister, close on the loop (best effort), free its slot."""
@@ -520,6 +646,7 @@ class _Engine:
         ssh_slots.release_slot(hc.slot_token)
 
     def shutdown_all(self) -> None:
+        self._stop_sweeper.set()  # halt the background reaper first
         with self._guard:
             items = list(self._conns.items())
             self._conns.clear()

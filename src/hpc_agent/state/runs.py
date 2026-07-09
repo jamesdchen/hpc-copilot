@@ -30,6 +30,7 @@ from hpc_agent.state.code_drift import detect_code_drift
 from hpc_agent.state.wave_map import derive_wave_map
 
 __all__ = [
+    "DEFAULT_SUMMARY_ARTIFACT",
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
     "find_existing_runs",
@@ -39,6 +40,7 @@ __all__ = [
     "prune_orphan_sidecars",
     "read_run_sidecar",
     "resolve_node_sha",
+    "resolved_summary_artifact",
     "run_sidecar_path",
     "sidecar_effective_identity",
     "update_run_sidecar_job_ids",
@@ -57,6 +59,33 @@ MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
 # subsequent commands have no need for a separate experiment-config file.
 # v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
 SIDECAR_SCHEMA_VERSION: int = 2
+
+# The per-task summary filename every reducer / per-task completion counter has
+# historically hardcoded. Made a declared sidecar field (``summary_artifact``,
+# F-J) so a run whose executor emits a differently-named summary
+# (e.g. ``results_reduce.json``) is read correctly instead of read incomplete/
+# abandoned. A sidecar WITHOUT the field resolves back to this literal, so
+# nothing existing moves.
+DEFAULT_SUMMARY_ARTIFACT: str = "metrics.json"
+
+
+def resolved_summary_artifact(sidecar: dict[str, Any] | None) -> str:
+    """Return the per-task summary filename declared on *sidecar*, or the default.
+
+    The single reader every completion/reduce consumer routes through so the
+    "which file marks a task's summary?" decision has ONE home (F-J). A sidecar
+    that never declared ``summary_artifact`` (every run written before this
+    field existed, and every run whose executor emits the historical name)
+    resolves to :data:`DEFAULT_SUMMARY_ARTIFACT` (``metrics.json``) — byte-for-byte
+    today's behavior. A ``None``/empty/blank value is treated as absent.
+    """
+    if not isinstance(sidecar, dict):
+        return DEFAULT_SUMMARY_ARTIFACT
+    declared = sidecar.get("summary_artifact")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    return DEFAULT_SUMMARY_ARTIFACT
+
 
 # A run_id is a timestamp-prefixed identifier produced by the slash command
 # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
@@ -116,6 +145,7 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "auto_retry",  # dict — per-category retry policy
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
     "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
+    "summary_artifact",  # str — per-task summary filename reducer reads (default metrics.json)
     "trial_tokens",  # list — opaque per-task tokens a closed-loop strategy round-trips
     "trial_params",  # list[dict] — opaque per-task resolved params (cmd_sha pre-image; provenance)
     "parent_run_ids",  # list — run_ids this run consumes outputs from (DAG lineage)
@@ -164,6 +194,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "auto_retry": None,
     "aggregate_defaults": None,
     "results": None,
+    "summary_artifact": None,
     "trial_tokens": None,
     "trial_params": None,
     "parent_run_ids": None,
@@ -240,6 +271,7 @@ def write_run_sidecar(
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
     results: dict[str, Any] | None = None,
+    summary_artifact: str | None = None,
     trial_tokens: list[Any] | None = None,
     trial_params: list[dict[str, Any]] | None = None,
     parent_run_ids: list[str] | None = None,
@@ -372,6 +404,10 @@ def write_run_sidecar(
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
         "results": results,
+        # Per-task summary filename the reducer + per-task completion counting
+        # read (F-J). Absent → the reader defaults to metrics.json via
+        # resolved_summary_artifact, so an existing sidecar is byte-identical.
+        "summary_artifact": summary_artifact,
         "trial_tokens": list(trial_tokens) if trial_tokens is not None else None,
         "trial_params": [dict(p) for p in trial_params] if trial_params is not None else None,
         "parent_run_ids": list(parent_run_ids) if parent_run_ids else None,

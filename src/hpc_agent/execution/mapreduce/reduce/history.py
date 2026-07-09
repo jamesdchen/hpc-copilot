@@ -27,7 +27,11 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_metrics
-from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
+from hpc_agent.state.runs import (
+    find_existing_runs,
+    read_run_sidecar,
+    resolved_summary_artifact,
+)
 
 __all__ = [
     "find_sidecars_by_campaign",
@@ -106,13 +110,16 @@ def result_dirs_for_sidecar(
     Substitutes ``{run_id}`` and ``{task_id}`` in the sidecar's
     ``result_dir_template`` from sidecar fields; replaces every other
     ``{name}`` placeholder with a glob ``*`` and walks the filesystem.
-    Each returned path is the directory containing a ``metrics.json``.
+    Each returned path is the directory containing the run's declared
+    per-task summary file — ``sidecar.summary_artifact`` (F-J), defaulting to
+    ``metrics.json`` when the run never declared one.
     """
     template = sidecar.get("result_dir_template")
     if not template:
         return []
     run_id = sidecar.get("run_id", "")
     task_count = int(sidecar.get("task_count") or 0)
+    summary_name = resolved_summary_artifact(sidecar)
     base = Path(experiment_dir)
 
     found: list[Path] = []
@@ -121,7 +128,7 @@ def result_dirs_for_sidecar(
         # such as ``{task_id:03d}``); any other ``{name}`` placeholder is
         # a per-task kwarg (seed, lr, …) whose value we cannot know
         # without tasks.py, so it becomes a glob wildcard and the
-        # presence of metrics.json narrows the over-match.
+        # presence of the declared summary file narrows the over-match.
         def _expand(m: re.Match[str], _rid: str = run_id, _tid: int = task_id) -> str:
             name, spec = m.group(1), m.group(2)
             if name == "run_id":
@@ -134,7 +141,7 @@ def result_dirs_for_sidecar(
         candidate = base / pattern if not Path(pattern).is_absolute() else Path(pattern)
         for hit in glob.glob(str(candidate)):
             p = Path(hit)
-            if (p / "metrics.json").is_file():
+            if (p / summary_name).is_file():
                 found.append(p)
     # De-duplicate while preserving order (one task may match multiple
     # globs when wildcards overlap, e.g. nested dirs).
@@ -167,7 +174,7 @@ def prior(
     history: list[dict[str, Any]] = []
     for sidecar in sidecars:
         dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
-        history.append(reduce_metrics(dirs))
+        history.append(reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)))
     return history
 
 
@@ -235,7 +242,7 @@ def prior_records(
                 "trial_tokens": sidecar.get("trial_tokens"),
                 "trial_params": sidecar.get("trial_params"),
                 "result_dirs": [str(d) for d in dirs],
-                "metrics": reduce_metrics(dirs),
+                "metrics": reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)),
                 "complete": bool(dirs),
             }
         )
@@ -281,7 +288,7 @@ def parent_records(
                 "trial_tokens": sidecar.get("trial_tokens"),
                 "trial_params": sidecar.get("trial_params"),
                 "result_dirs": [str(d) for d in dirs],
-                "metrics": reduce_metrics(dirs),
+                "metrics": reduce_metrics(dirs, filename=resolved_summary_artifact(sidecar)),
                 "complete": bool(dirs),
             }
         )

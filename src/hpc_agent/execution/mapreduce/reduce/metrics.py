@@ -109,8 +109,12 @@ def _weighted_mean(entries: list[dict]) -> dict:
     return agg
 
 
-def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
-    """Reduce per-task metrics JSON sidecars into a single summary.
+def reduce_metrics(
+    result_dirs: Sequence[str | Path],
+    *,
+    filename: str = "metrics.json",
+) -> dict:
+    """Reduce per-task summary JSON sidecars into a single summary.
 
     Computes a weighted mean of each metric key across tasks, weighted by
     ``n_samples`` when present.  The ``n_samples`` key itself is summed.
@@ -119,7 +123,11 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     Parameters
     ----------
     result_dirs : list of str or Path
-        Directories to scan for a ``metrics.json`` file in each.
+        Directories to scan for the per-task summary file in each.
+    filename : str
+        The per-task summary filename to read in each dir. Defaults to
+        ``metrics.json`` (the historical hardcode); callers thread the run's
+        declared ``summary_artifact`` (F-J) so a non-default emitter is read.
 
     Returns
     -------
@@ -129,7 +137,7 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     entries: list[dict] = []
 
     for rdir in result_dirs:
-        path = Path(rdir) / "metrics.json"
+        path = Path(rdir) / filename
         if not path.exists():
             continue
         try:

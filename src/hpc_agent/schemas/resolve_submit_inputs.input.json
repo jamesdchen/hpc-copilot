@@ -765,6 +765,18 @@
           "default": null,
           "title": "Results"
         },
+        "summary_artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary Artifact"
+        },
         "trial_tokens": {
           "anyOf": [
             {

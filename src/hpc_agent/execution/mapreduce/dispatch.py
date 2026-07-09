@@ -603,6 +603,18 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Per-task summary filename the run declared (F-J) — the per-task completion
+    # marker this dispatcher keys its idempotency skip on AND promotes LAST for
+    # crash-safety. Absent → the historical metrics.json literal, so an existing
+    # run is byte-identical. Resolved inline (deployed cluster-side standalone,
+    # no hpc_agent import) but in lock-step with state.runs.resolved_summary_artifact.
+    _declared_summary = sidecar.get("summary_artifact")
+    summary_name = (
+        _declared_summary.strip()
+        if isinstance(_declared_summary, str) and _declared_summary.strip()
+        else "metrics.json"
+    )
+
     # --- Fail loud on a self-referential per-task runner ---
     # The per-task command must NOT be the dispatcher itself. When a submit
     # ships a run sidecar whose ``executor`` was synthesized from the job
@@ -785,7 +797,7 @@ def main() -> None:
         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
             cmd_sha_changed = True
 
-    metrics_path = Path(result_dir) / "metrics.json"
+    metrics_path = Path(result_dir) / summary_name
     already_complete = False
     if metrics_path.is_file():
         try:
@@ -795,7 +807,7 @@ def main() -> None:
             already_complete = False
     if already_complete and not force_rerun and not cmd_sha_changed:
         print(
-            f"[hpc-agent] task {task_id} already complete (metrics.json found); skipping",
+            f"[hpc-agent] task {task_id} already complete ({summary_name} found); skipping",
             file=sys.stderr,
         )
         sys.exit(0)
@@ -1028,9 +1040,9 @@ def main() -> None:
                 src = os.path.join(root, fname)
                 rel = os.path.relpath(src, wip_dir)
                 promote_pairs.append((src, rel))
-        # Sort: metrics.json at the top level last (it's the
-        # idempotency marker); everything else alphabetically.
-        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
+        # Sort: the declared per-task summary file at the top level last (it's
+        # the idempotency marker); everything else alphabetically.
+        promote_pairs.sort(key=lambda pair: (pair[1] == summary_name, pair[1]))
         if not promote_pairs:
             # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
             # the executor produced NO files. Under WIP/atomic-promote

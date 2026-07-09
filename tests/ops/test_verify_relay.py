@@ -314,6 +314,236 @@ def test_bare_state_word_after_count_phrase_still_flagged(tmp_path: Path) -> Non
     assert state[0].nearest_source_value == "complete"
 
 
+# ── F-Q: code-written reduce artifacts widen the number corpus ─────────────────
+
+
+def _seed_metrics_aggregate(tmp_path: Path, aggregated: dict[str, object]) -> None:
+    """Write ``_aggregated/<run_id>/metrics_aggregate.json`` (the reducer artifact)."""
+    import json
+
+    agg_dir = tmp_path / "_aggregated" / RUN_ID
+    agg_dir.mkdir(parents=True, exist_ok=True)
+    (agg_dir / "metrics_aggregate.json").write_text(
+        json.dumps({"aggregated_metrics": aggregated, "provenance": {"source": "combiner"}}),
+        encoding="utf-8",
+    )
+
+
+def _seed_wave_partial(tmp_path: Path, wave: int, grid_points: object) -> None:
+    """Write ``_aggregated/<run_id>/_combiner/wave_<N>.json`` (a combiner partial)."""
+    import json
+
+    comb = tmp_path / "_aggregated" / RUN_ID / "_combiner"
+    comb.mkdir(parents=True, exist_ok=True)
+    (comb / f"wave_{wave}.json").write_text(json.dumps(grid_points), encoding="utf-8")
+
+
+def test_reducer_decimal_from_metrics_aggregate_is_clean(tmp_path: Path) -> None:
+    """F-Q regression: a code-drafted completion brief relaying reducer decimals
+    (present ONLY in metrics_aggregate.json) verifies CLEAN — including the
+    integer part of each decimal, which used to trip the job-id check."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+    _seed_metrics_aggregate(
+        tmp_path,
+        {
+            "qlike_sum": 29133.060892393198,
+            "qlike_count": 218894.5,
+            "n_samples": 437839,
+            "mse_sum": 13454.6,
+            "mae_sum": 40638.6,
+        },
+    )
+
+    out = _run(
+        tmp_path,
+        "Run run-1 complete (job 13610902): qlike_sum 29133.060892393198, "
+        "qlike_count 218894.5, n_samples 437839, mse_sum 13454.6, mae_sum 40638.6.",
+    )
+    assert out.clean is True, out.mismatches
+    assert out.mismatches == []
+    assert "reduce_artifacts" in out.sources_consulted
+
+
+def test_grid_point_from_wave_partial_is_clean(tmp_path: Path) -> None:
+    """F-Q: a combiner wave partial's grid numbers are in-corpus too."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_wave_partial(tmp_path, 1, {"grid": [0.375, 91234.5], "n": 512})
+
+    out = _run(tmp_path, "The best grid point scored 91234.5 over 512 rows.")
+    assert out.clean is True, out.mismatches
+
+
+def test_number_absent_from_reduce_artifacts_still_flagged(tmp_path: Path) -> None:
+    """F-Q counter: widening the corpus does not lower the bar — a number in NO
+    artifact still fires."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_metrics_aggregate(tmp_path, {"qlike_sum": 29133.060892393198})
+
+    out = _run(tmp_path, "The qlike_sum was 88888.5.")
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == "88888.5"
+
+
+# ── F-Q: campaign-scope briefs (numbers only) ──────────────────────────────────
+
+
+def _seed_sidecar_with_campaign(tmp_path: Path, campaign_id: str) -> None:
+    write_run_sidecar(
+        tmp_path,
+        run_id=RUN_ID,
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-07-03T00:00:00+00:00",
+        executor="python3 .hpc/_hpc_dispatch.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=10,
+        tasks_py_sha="b" * 64,
+        campaign_id=campaign_id,
+    )
+
+
+def test_campaign_complete_numbers_are_clean(tmp_path: Path) -> None:
+    """F-Q regression: the campaign-complete brief's own numbers verify CLEAN
+    when the run's sidecar carries the campaign_id."""
+    cid = "run10-proving"
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar_with_campaign(tmp_path, cid)
+    append_decision(
+        tmp_path,
+        scope_kind="campaign",
+        scope_id=cid,
+        block="campaign-complete",
+        response="y",
+        evidence_digest={"best_score": 12345.75, "iterations": 42},
+    )
+
+    out = _run(tmp_path, "Campaign run10-proving done: best_score 12345.75 across 42 iterations.")
+    assert out.clean is True, out.mismatches
+    assert "campaign_briefs" in out.sources_consulted
+
+
+def test_campaign_state_words_not_fed_to_run_state_check(tmp_path: Path) -> None:
+    """F-Q: a campaign brief's lifecycle words must NOT be checked against the
+    run's recorded status — only its numbers widen the corpus. The run is
+    'running'; a campaign 'complete' in the corpus does not make the run's own
+    'running' relay contradict anything."""
+    cid = "camp-x"
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar_with_campaign(tmp_path, cid)
+    _seed_record(tmp_path, status="in_flight")
+    append_decision(
+        tmp_path,
+        scope_kind="campaign",
+        scope_id=cid,
+        block="campaign-complete",
+        response="the campaign is complete and finished",
+        evidence_digest={"n": 7},
+    )
+
+    out = _run(tmp_path, "Run run-1 is still running.")
+    # 'running' matches the recorded in_flight family — no state mismatch, and
+    # the campaign's 'complete'/'finished' never entered the run-state check.
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+# ── F-Q: canary-adjacent state words are not misattributed ─────────────────────
+
+
+def test_canary_failed_not_flagged_against_main_run_state(tmp_path: Path) -> None:
+    """F-Q regression: 'canary failed' is a claim about the canary sibling, not
+    the main run — it must not flag against the main run's recorded 'abandoned'."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="abandoned")
+
+    out = _run(tmp_path, "Run run-1: the canary failed, so the run was abandoned.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_non_canary_state_word_still_flagged_alongside_canary(tmp_path: Path) -> None:
+    """F-Q counter: only the canary-adjacent word is skipped; a later bare
+    lifecycle word contradicting the record still fires."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "The canary failed early. Regardless, the main array is still running.")
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "running"
+    assert state[0].nearest_source_value == "complete"
+
+
+# ── F-R: spelled-out number-word laundering ────────────────────────────────────
+
+
+def test_number_word_laundering_fires(tmp_path: Path) -> None:
+    """F-R regression: the demonstrated live evasion — restating a rejected count
+    ('10') as the word 'nineteen' (19) — is caught as a number mismatch."""
+    _seed_journal(tmp_path, touch_count=10)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Touch count so far, in words: nineteen.")
+    assert out.clean is False
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim.lower() == "nineteen"
+    assert num[0].nearest_source_value == "10"
+
+
+def test_number_word_matching_source_passes(tmp_path: Path) -> None:
+    """F-R passes-side: a spelled count that MATCHES a source number is clean."""
+    _seed_journal(tmp_path, touch_count=19)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Touch count so far, in words: nineteen.")
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+
+
+def test_hyphenated_compound_number_word_fires(tmp_path: Path) -> None:
+    """F-R: hyphenated compounds ('twenty-one' = 21) are parsed and audited."""
+    _seed_journal(tmp_path, count=10)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The count reached twenty-one.")
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim.lower() == "twenty-one"
+
+
+def test_small_number_words_are_ordinary_prose(tmp_path: Path) -> None:
+    """F-R conservative guard: cardinals one..twelve are ordinary prose and are
+    NEVER audited (the false-positive flood the threshold prevents)."""
+    _seed_journal(tmp_path, touch_count=10)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete")
+
+    relay = (
+        "One of the two steps is done; there are three checks left and a dozen "
+        "tasks. Twelve of them completed. Check back in ~five minutes."
+    )
+    out = _run(tmp_path, relay)
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+    # And no spelled small-number was audited as a claim.
+    assert all(
+        m.claim.lower() not in {"one", "two", "three", "twelve", "five"} for m in out.mismatches
+    )
+
+
+def test_number_word_no_source_is_unverifiable(tmp_path: Path) -> None:
+    """F-R: a spelled count with no comparable source number is unverifiable
+    (flagged, never a silent pass) — same policy as a digit claim."""
+    out = _run(tmp_path, "The run touched files ninety-nine times.")
+    unv = [m for m in out.mismatches if m.kind == "unverifiable"]
+    assert len(unv) == 1
+    assert unv[0].claim.lower() == "ninety-nine"
+
+
 # ── notebook-audit relay (T11): status / passed / sha claims ────────────────────
 
 _NB_AUDIT = "demo-audit"

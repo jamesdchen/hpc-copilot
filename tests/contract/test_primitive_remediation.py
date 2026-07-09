@@ -143,6 +143,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # Spec-taking query; failure_features attaches at the shared dispatch
         # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
         "notebook-status",
+        # worker-log-digest (run-#10 G2): code-rendered digest of a local worker
+        # log. Spec-taking query; failure_features attaches at the shared dispatch
+        # seam (so it stays OUT of XFAIL_NO_FAILURE_FEATURES).
+        "worker-log-digest",
         # attention-queue (attention-queue T4): the fleet-wide read-only digest
         # ordered by needs-your-verdict-first. Spec-taking query; failure_features
         # attaches at the shared dispatch seam (so it stays OUT of
@@ -317,6 +321,9 @@ _BOGUS_KEY_SPEC: dict = {"contract-probe-bogus-key": 1}
 
 EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     "apply-safe-defaults": _BOGUS_KEY_SPEC,
+    # pack-status's spec is all-optional ({} = every opted-in pack) — probe
+    # with the bogus key so the wire model rejects it.
+    "pack-status": _BOGUS_KEY_SPEC,
     # attention-queue's spec is all-optional ({} is a valid experiment-scope
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,

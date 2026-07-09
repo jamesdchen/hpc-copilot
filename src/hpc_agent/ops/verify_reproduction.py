@@ -83,7 +83,7 @@ from hpc_agent.state.fingerprint_store import (
     load_evidence,
     pulls_dir,
 )
-from hpc_agent.state.runs import read_run_sidecar
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -242,18 +242,25 @@ def _pull_partial_task_metrics(
 
 
 def _load_partial_side(
-    experiment_dir: Path, run_id: str, indices: Sequence[int]
+    experiment_dir: Path, run_id: str, indices: Sequence[int], *, filename: str
 ) -> tuple[dict[str, Any], list[int]]:
     """Load one side's per-task metrics for *indices* → (flat_metrics, present).
 
     Each present task's leaves are prefixed ``task<idx>.`` so the comparator sees
     per-task keys. ``present`` is the subset of *indices* that yielded a readable
-    ``metrics.json`` (local, else the remote seam) — the rest are UNCOMPARED.
+    summary file (local, else the remote seam) — the rest are UNCOMPARED.
+
+    ``filename`` is the side's declared per-task summary filename (F-J),
+    resolved by the caller at the seam from that run's sidecar via
+    ``resolved_summary_artifact`` (absent/blank → ``metrics.json``). Each side is
+    resolved independently, so an original written before the field existed still
+    reads ``metrics.json`` while its reproduction can key on e.g.
+    ``results_reduce.json``.
     """
     flat: dict[str, Any] = {}
     present: list[int] = []
     for idx in indices:
-        path = _partial_dir(experiment_dir, run_id) / str(idx) / "metrics.json"
+        path = _partial_dir(experiment_dir, run_id) / str(idx) / filename
         payload: Any = None
         if path.is_file():
             try:
@@ -721,8 +728,22 @@ def verify_reproduction(
 
     if partial:
         assert indices is not None
-        orig_flat, orig_present = _load_partial_side(experiment_dir, original_run_id, indices)
-        repro_flat, repro_present = _load_partial_side(experiment_dir, repro_run_id, indices)
+        # Resolve each side's declared per-task summary filename (F-J) ONCE from
+        # the sidecars already read above, and thread it down — the original and
+        # its reproduction are resolved independently (an undeclared original
+        # stays on metrics.json while a reproduction can key on results_reduce.json).
+        orig_flat, orig_present = _load_partial_side(
+            experiment_dir,
+            original_run_id,
+            indices,
+            filename=resolved_summary_artifact(original_sidecar),
+        )
+        repro_flat, repro_present = _load_partial_side(
+            experiment_dir,
+            repro_run_id,
+            indices,
+            filename=resolved_summary_artifact(repro_sidecar),
+        )
         orig_source = str(_partial_dir(experiment_dir, original_run_id))
         repro_source = str(_partial_dir(experiment_dir, repro_run_id))
         orig_metrics: dict[str, Any] | None = orig_flat if orig_present else None

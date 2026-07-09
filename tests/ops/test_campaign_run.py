@@ -49,6 +49,9 @@ def _campaign_spec() -> CampaignRunSpec:
         status=StatusPipelineSpec(monitor=MonitorFlowSpec(run_id="ml-abcd1234")),
         aggregate=AggregateFlowSpec(run_id="ml-abcd1234"),
         campaign_id="camp-iter-7",
+        # These exercise the SYNCHRONOUS iteration spine; the detach-by-contract
+        # path (default ON) is pinned separately in test_campaign_run_detach.py.
+        detach=False,
     )
 
 
