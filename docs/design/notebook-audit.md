@@ -587,3 +587,18 @@ next turn — standing consent (item 8) must pair with push-on-terminal/anomaly
 "overnight mode" is just "morning surprise mode". Disclosure latency is part
 of the fallout the consent record claims to accept — record it in the morning
 brief (failed_at vs surfaced_at).
+
+Addendum 5: **9. dir-digest + the context-budget rule** (user-requested:
+"cut latency on stuff like ls-ing huge log directories"). Two parts:
+(a) **dir-digest verb** — generalize `worker-log-digest` (one local file) to
+directories: a bounded code-computed digest {file count, total size, newest N
+by mtime, failure-marker hits across files, name-pattern groups}, never a
+listing. Crucially REMOTE-capable: computed cluster-side by the deployed
+runtime and shipped back as numbers — an 800-log dir over the VPN becomes ten
+lines, not 800 filenames. An 800-task fleet makes every per-file surface a
+directory problem.
+(b) **the context-budget norm** (harness-contract.md) — the rule (a)
+instantiates: an agent-visible payload is bounded; large content rides disk
+by reference (path + sha + code digest); enforcement = a contract test
+capping agent_facing result sizes. The run-#11 evidence: transcript bloat
+was the "waiting for api response" latency, and ls-output is its next feeder.
