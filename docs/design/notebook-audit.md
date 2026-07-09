@@ -490,3 +490,33 @@ the task axes from journaled elicitations — which requires the audit OPEN to
 journal the intent/compute-shape utterances it already elicits (today they
 live only in chat). The slash then says one non-load-bearing line: "run
 audit-handoff, confirm its draft, pass it to the interview."
+
+## Future work — run #11 mechanization queue (NOTED 2026-07-09, post-deadline)
+
+Three prose rules from run #11 with real code seats, ranked value-per-effort
+(user-endorsed for after the thesis deadline; see also the audit-handoff note
+above and E-render in mcp-elicitation.md):
+
+1. **Dirty-worktree disclosure at S1** (smallest; submit-side). "Commit
+   before relaunch — uncommitted fixes are invisible to provenance" is
+   prose-only today: `dirty` detection exists in `audit-preflight`
+   (template-clean) and `verify_canary`, but nothing at submit resolve
+   discloses a dirty experiment repo. Add a disclosure line to the S1 brief —
+   NEVER a blocker (hacking dirty is legitimate; invisible-dirty is the bug).
+2. **Sign-off echo detection** (hook-side). The "never compose the sign-off
+   utterance" ban (skill invariant, 2026-07-09) is unenforced conduct prose;
+   the relay-audit Stop hook already reads transcript + journal (rule 10), so
+   it can flag a journaled `notebook-sign-off` `response` matching a prior
+   ASSISTANT-authored line — laundered authorship. Complement of the F-R
+   number-word class: F-R catches the model restating rejected content; this
+   catches the human restating model-drafted attestation.
+3. **Render relay-due markers** (medium; schema regen tail). "A link is not a
+   relay" is prose; the Amendment-3 relay-due pattern (journaled marker only
+   the relayed state word discharges) already covers `notebook-status`
+   verdicts — extend it to `notebook-audit-view`: a per-section marker
+   discharged by that section's `sha12` appearing in the turn, giving render
+   relay the same omission-side enforcement the verdict relay got.
+
+Stays prose, correctly: "the pipeline is the plan — no plan-mode freestyle"
+(conduct with no code seat; observe/judge/route jurisdiction — a guard the
+LLM itself satisfies is not a guard).
