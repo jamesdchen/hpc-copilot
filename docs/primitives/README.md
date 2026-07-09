@@ -152,7 +152,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]` |
 | [verify-registration](verify-registration.md) | yes | _none_ | `hpc-agent verify-registration --spec <path> [--experiment-dir <dir>]` |
 | [verify-relay](verify-relay.md) | yes | _none_ | `hpc-agent verify-relay --spec <path> [--experiment-dir <dir>]` |
-| [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl`; filesystem: `<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
+| [verify-reproduction](verify-reproduction.md) | no | filesystem: `<experiment>/_aggregated/<repro_run_id>/reproduction_receipts.jsonl`; filesystem: `<experiment>/_aggregated/<repro_run_id>/claim_check_receipts.jsonl`; filesystem: `<experiment>/_aggregated/_fingerprints/<cmd_sha[:16]>.jsonl` | `hpc-agent verify-reproduction --spec <path> [--experiment-dir <dir>]` |
 | [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |
 | [wait-detached](wait-detached.md) | yes | _none_ | `hpc-agent wait-detached --spec <path>` |
 | [walk-submit-ambiguities](walk-submit-ambiguities.md) | yes | _none_ | `hpc-agent walk-submit-ambiguities --spec <path>` |

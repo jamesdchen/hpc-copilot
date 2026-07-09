@@ -97,6 +97,7 @@ PREDICATE_TYPES: dict[str, str] = {
     "determinism-fingerprint": f"{PREDICATE_TYPE_SCHEME}/determinism-fingerprint/v1",
     "pack-manifest": f"{PREDICATE_TYPE_SCHEME}/pack-manifest/v1",
     "pack-journal": f"{PREDICATE_TYPE_SCHEME}/pack-journal/v1",
+    "live-conformance": f"{PREDICATE_TYPE_SCHEME}/live-conformance/v1",
 }
 
 
