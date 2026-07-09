@@ -47,7 +47,7 @@ with a ``;``) — only a real framework-command line is a runnable instruction.
 Scope
 -----
 
-* ``src/slash_commands/skills/**/SKILL.md``
+* ``src/hpc_agent/slash_commands/skills/**/SKILL.md``
 * ``src/hpc_agent/_kernel/extension/worker_prompts/*.md``
 
 A genuine human-debug doc adds a cited ``(path, category)`` entry to
@@ -65,7 +65,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCAN_ROOT = REPO / "src"
 
-_SKILL_GLOB = "slash_commands/skills/*/SKILL.md"
+_SKILL_GLOB = "hpc_agent/slash_commands/skills/*/SKILL.md"
 _WORKER_PROMPT_GLOB = "hpc_agent/_kernel/extension/worker_prompts/*.md"
 
 # Cited exemptions: ``(scan-root-relative path, category)`` for a genuine
@@ -78,8 +78,8 @@ ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
         # WSL install (`wsl.exe -- bash -lc 'pip install ...'`) are
         # interactive human idioms, not worker instructions. Ported from
         # ~/.claude/skills/release 2026-07-04.
-        ("slash_commands/skills/release/SKILL.md", "python -c"),
-        ("slash_commands/skills/release/SKILL.md", "bash -c"),
+        ("hpc_agent/slash_commands/skills/release/SKILL.md", "python -c"),
+        ("hpc_agent/slash_commands/skills/release/SKILL.md", "bash -c"),
     }
 )
 

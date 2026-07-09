@@ -798,3 +798,85 @@ def test_update_sidecar_job_ids_raises_when_sidecar_missing(
 
     with pytest.raises(FileNotFoundError):
         update_run_sidecar_job_ids(tmp_path, "20260101-000000-nope0000", ["12345"])
+
+
+# ---------------------------------------------------------------------------
+# job_task_spans: per-job global task windows for waved (over-cap) submits
+# ---------------------------------------------------------------------------
+
+
+def test_update_sidecar_job_ids_stamps_job_task_spans(tmp_path: Path) -> None:
+    """A waved submit records job_task_spans in the SAME post-qsub stamp as
+    job_ids: {job_id: [first, last]} 0-based inclusive GLOBAL windows, and
+    read_job_task_spans hands them back as the tuple map fetch_task_logs
+    consumes."""
+    from hpc_agent.state.runs import read_job_task_spans, update_run_sidecar_job_ids
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    update_run_sidecar_job_ids(
+        tmp_path,
+        rid,
+        ["100", "200"],
+        job_task_spans={"100": (0, 999), "200": (1000, 1999)},
+    )
+    raw = json.loads(run_sidecar_path(tmp_path, rid).read_text(encoding="utf-8"))
+    assert raw["job_ids"] == ["100", "200"]
+    assert raw["job_task_spans"] == {"100": [0, 999], "200": [1000, 1999]}
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999), "200": (1000, 1999)}
+
+
+def test_update_sidecar_job_ids_without_spans_preserves_existing_spans(tmp_path: Path) -> None:
+    """submit_and_record re-stamps job_ids WITHOUT spans after the submit
+    pre-stamp wrote them — the default-None call must not erase the field."""
+    from hpc_agent.state.runs import read_job_task_spans, update_run_sidecar_job_ids
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    update_run_sidecar_job_ids(tmp_path, rid, ["100"], job_task_spans={"100": (0, 999)})
+    # The journal-side re-stamp: same ids, no spans kwarg.
+    update_run_sidecar_job_ids(tmp_path, rid, ["100"])
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999)}
+
+
+def test_old_sidecar_without_job_task_spans_reads_as_none(tmp_path: Path) -> None:
+    """Back-compat: a sidecar written before the field existed (or by a ≤cap
+    single-array submit) yields None — the call sites then pass None through
+    to fetch_task_logs, keeping the global-index probe byte-for-byte."""
+    from hpc_agent.state.runs import read_job_task_spans
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    raw = json.loads(run_sidecar_path(tmp_path, rid).read_text(encoding="utf-8"))
+    assert "job_task_spans" not in raw
+    assert read_job_task_spans(tmp_path, rid) is None
+    # read_run_sidecar's uniform shape backfills the key to None.
+    assert read_run_sidecar(tmp_path, rid)["job_task_spans"] is None
+
+
+def test_read_job_task_spans_never_raises(tmp_path: Path) -> None:
+    """Best-effort reader contract: missing sidecar and malformed field both
+    resolve to None (or drop the malformed entries), never an exception —
+    the log-fetch call sites must behave exactly as before the field existed."""
+    from hpc_agent.state.runs import read_job_task_spans
+
+    # Missing sidecar.
+    assert read_job_task_spans(tmp_path, "20260101-000000-nope0000") is None
+
+    # Malformed field shapes: non-dict, and per-entry junk mixed with a good one.
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    rid = _common_required_kwargs()["run_id"]
+    path = run_sidecar_path(tmp_path, rid)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["job_task_spans"] = "not-a-dict"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert read_job_task_spans(tmp_path, rid) is None
+
+    doc["job_task_spans"] = {
+        "100": [0, 999],  # good
+        "200": [1000],  # wrong arity
+        "300": ["a", "b"],  # wrong types
+        "400": None,  # not a pair at all
+    }
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert read_job_task_spans(tmp_path, rid) == {"100": (0, 999)}

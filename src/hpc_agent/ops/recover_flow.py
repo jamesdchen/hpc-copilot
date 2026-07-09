@@ -201,6 +201,61 @@ def render_overrides_to_extra_flags(
     return out
 
 
+def _clear_terminal_failure_markers(
+    *,
+    ssh_target: str | None,
+    remote_path: str | None,
+    run_id: str,
+    task_ids: list[int],
+) -> None:
+    """Remove the retry preamble's terminal ``.hpc_failed`` markers for *task_ids*.
+
+    ``hpc_run_with_retry`` (hpc_preamble.sh) writes
+    ``$RESULT_DIR/.hpc_failed/<run>.<task>.failed`` after exhausting in-job
+    attempts and refuses on entry to re-run a (run, task) whose marker exists —
+    deliberate loop-bounding (#161) that would otherwise make every
+    resubmitted task exit 1 in milliseconds forever, defeating the documented
+    resubmit-with-adjusted-resources recovery. The resubmit path therefore
+    clears the markers for exactly the ids it re-submits, and nothing else.
+
+    One ``rm -f`` over ONE ssh call (the :func:`ssh_marker_scan` seam and
+    throttle discipline; ``$RESULT_DIR`` defaults to the job cwd =
+    *remote_path*, the same layout assumption that scan codifies). Best-effort:
+    a clear failure must not block the resubmit — ``rm -f`` on a reachable
+    cluster cannot fail on absent markers, and a transport failure here means
+    the batch submission is about to fail loudly anyway — but it is logged
+    with its consequence since the affected tasks would be refused again.
+    """
+    if not ssh_target or not remote_path or not task_ids:
+        return
+    import shlex
+
+    from hpc_agent.infra import remote
+
+    marker_dir = f"{remote_path.rstrip('/')}/.hpc_failed"
+    markers = " ".join(
+        shlex.quote(f"{marker_dir}/{run_id}.{int(tid)}.failed") for tid in sorted(set(task_ids))
+    )
+    try:
+        proc = remote.ssh_run(f"rm -f -- {markers}", ssh_target=ssh_target)
+        rc = proc.returncode
+        detail = (proc.stderr or "").strip()[:200]
+    except (TimeoutError, OSError) as exc:
+        rc, detail = -1, str(exc)
+    if rc != 0:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "could not clear .hpc_failed markers for run_id=%s tasks=%s (rc=%s: %s); "
+            "the retry preamble will refuse to re-run these tasks until the "
+            "markers are removed",
+            run_id,
+            sorted(set(task_ids)),
+            rc,
+            detail,
+        )
+
+
 def _format_walltime(walltime_sec: int) -> str:
     """Format seconds as ``HH:MM:SS`` for Slurm/SGE walltime flags.
 
@@ -389,18 +444,35 @@ def resubmit_flow(
                     },
                 )
 
+            # Prefer the sidecar's values (they carry any v2 config that
+            # supersedes the journal), but fall back to the journal record
+            # so a missing/empty sidecar doesn't blank these and trip
+            # downstream validation.
+            ssh_target = (sidecar or {}).get("ssh_target") or existing.ssh_target
+            remote_path = (sidecar or {}).get("remote_path") or existing.remote_path
+
+            # Clear the retry preamble's terminal ``.hpc_failed`` markers for
+            # the ids being re-submitted BEFORE any batch lands — with a
+            # marker in place the preamble refuses to re-run the task, so the
+            # resubmitted array would fail in milliseconds regardless of the
+            # adjusted resources (see _clear_terminal_failure_markers).
+            # Idempotent (``rm -f``), so the resume path re-clearing already
+            # cleared markers is harmless.
+            _clear_terminal_failure_markers(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                run_id=run_id,
+                task_ids=[int(t) for t in plan_failed_ids],
+            )
+
             try:
                 cluster_job_ids = _submit_resubmit_batches(
                     experiment_dir=experiment_dir,
                     run_id=run_id,
                     failed_task_ids=plan_failed_ids,
                     effective_overrides=plan_overrides,
-                    # Prefer the sidecar's values (they carry any v2
-                    # config that supersedes the journal), but fall back
-                    # to the journal record so a missing/empty sidecar
-                    # doesn't blank these and trip downstream validation.
-                    ssh_target=(sidecar or {}).get("ssh_target") or existing.ssh_target,
-                    remote_path=(sidecar or {}).get("remote_path") or existing.remote_path,
+                    ssh_target=ssh_target,
+                    remote_path=remote_path,
                     slurm_account=(sidecar or {}).get("slurm_account"),
                     slurm_cluster=(sidecar or {}).get("slurm_cluster"),
                     scheduler=backend,

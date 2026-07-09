@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 def _scan_dirs() -> list[Path]:
     out: list[Path] = []
     for rel in (
-        "src/slash_commands",
+        "src/hpc_agent/slash_commands",
         "src/hpc_agent/_kernel/extension/worker_prompts",
     ):
         d = REPO_ROOT / rel

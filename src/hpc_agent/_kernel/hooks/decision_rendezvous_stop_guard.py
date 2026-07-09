@@ -76,14 +76,22 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
     a trailing nudge (or no decision yet) is the valid "waiting for the human"
     stop and yields ``None``.
 
+    The decision journal is read under the SCOPE the marker's workflow selects
+    — mirroring how ``block_drive.run_tick`` locates the committed greenlight:
+    a ``campaign`` chain journals its decisions under scope ``"campaign"``
+    (keyed by the same id the marker is parked under), everything else under
+    scope ``"run"``. Reading only the run scope would make the guard blind to
+    every campaign-chain commit.
+
     Returns ``{"run_id", "block", "workflow"}`` for the first such run (block /
     workflow read from the marker; either may be ``None`` if the marker is
     partial). Filesystem / journal errors on any single run are swallowed — a
     run we cannot read is treated as not-pending.
     """
+    from hpc_agent import errors
     from hpc_agent.state.decision_journal import read_decisions
     from hpc_agent.state.index import find_in_flight_runs
-    from hpc_agent.state.journal import is_awaiting_decision, read_pending_decision
+    from hpc_agent.state.journal import read_pending_decision
 
     try:
         records = find_in_flight_runs(experiment_dir)
@@ -93,17 +101,18 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
     for record in records:
         run_id = record.run_id
         try:
-            if not is_awaiting_decision(run_id, experiment_dir=experiment_dir):
+            marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
+            if not marker:
                 continue
-            decisions = read_decisions(experiment_dir, "run", run_id)
-        except (OSError, ValueError):
+            scope_kind = "campaign" if marker.get("workflow") == "campaign" else "run"
+            decisions = read_decisions(experiment_dir, scope_kind, run_id)
+        except (OSError, ValueError, errors.SpecInvalid):
             continue
         if not decisions:
             continue
         if decisions[-1].get("response") != "y":
             # Latest touchpoint is a nudge / not an approval — still waiting.
             continue
-        marker = read_pending_decision(run_id, experiment_dir=experiment_dir)
         return {
             "run_id": run_id,
             "block": marker.get("block"),

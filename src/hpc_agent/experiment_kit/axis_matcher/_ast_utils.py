@@ -35,6 +35,34 @@ def _read_source(path: Path) -> str | None:
         return None
 
 
+# Method names that mutate their receiver in place (list / set / dict /
+# deque). A call ``recv.<method>(...)`` writes state back into ``recv``,
+# so the receiver is a store for carried-state purposes. ``.append`` is
+# the one member with an output-only convention (the append-only-sink
+# exemption in :func:`_carried_state_names`).
+_MUTATING_METHODS: frozenset[str] = frozenset(
+    {
+        "add",
+        "append",
+        "appendleft",
+        "clear",
+        "discard",
+        "extend",
+        "extendleft",
+        "insert",
+        "pop",
+        "popitem",
+        "popleft",
+        "remove",
+        "reverse",
+        "rotate",
+        "setdefault",
+        "sort",
+        "update",
+    }
+)
+
+
 def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Return the module-level function named *name*, or ``None``."""
     for node in tree.body:
@@ -183,7 +211,33 @@ def _carried_state_names(loop: ast.For | ast.While) -> set[str]:
             # but pay attention to Subscript/Attribute Stores nested
             # inside (rare in our patterns, but handle them).
             for sub in ast.walk(stmt):
-                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                if isinstance(sub, ast.Assign):
+                    # Mirror the top-level Assign handler's execution
+                    # order (value RHS before target LHS): ``ast.walk``
+                    # visits the Store target before the value's Loads,
+                    # which would misjudge a nested read-then-write
+                    # ``if c: total = total + x`` as loop-local (a wrong
+                    # `independent`). The generic branches below revisit
+                    # the same child nodes; ``setdefault`` keeps the
+                    # indices recorded here.
+                    _visit_load(sub.value)
+                    for tgt in sub.targets:
+                        _visit_target(tgt)
+                elif isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name):
+                    # An AugAssign is a read-modify-write by definition:
+                    # record its target as Load-then-Store regardless of
+                    # AST child order. The target Name carries only Store
+                    # ctx, so the generic branches below would otherwise
+                    # see a store-only name and judge a nested
+                    # ``if x > 0: total += x`` accumulator loop-local —
+                    # a wrong `independent` that corrupts results.
+                    loads.add(sub.target.id)
+                    first_load_index.setdefault(sub.target.id, counter)
+                    counter += 1
+                    fresh_binds.add(sub.target.id)
+                    first_fresh_bind_index.setdefault(sub.target.id, counter)
+                    counter += 1
+                elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                     loads.add(sub.id)
                     first_load_index.setdefault(sub.id, counter)
                     counter += 1
@@ -198,16 +252,22 @@ def _carried_state_names(loop: ast.For | ast.While) -> set[str]:
                     first_fresh_bind_index.setdefault(sub.id, counter)
                     counter += 1
 
-    # ``buf.append(x)`` mutates ``buf``. We treat it as a mutation iff
-    # ``buf`` is read elsewhere in the loop body as a value (not as
-    # another append-receiver) — i.e. its contents are actually carried
-    # into the next iteration's computation. This is the deque case.
+    # ``buf.append(x)`` (and the other standard container mutators —
+    # ``seen.add(x)``, ``acc.update(...)``, ``buf.extend(...)``, ...)
+    # mutates its receiver. ``.append`` counts iff the receiver is read
+    # elsewhere in the loop body as a value (not as another
+    # append-receiver) — i.e. its contents are actually carried into the
+    # next iteration's computation (the deque case); an append-only
+    # receiver is an output-only sink by convention. The other mutators
+    # have no such convention, so their receivers always count — a wrong
+    # `sequential` costs parallelism; a wrong `independent` corrupts
+    # results.
     append_only = _append_only_receivers(loop)
     for node in ast.walk(loop):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "append"
+            and node.func.attr in _MUTATING_METHODS
             and isinstance(node.func.value, ast.Name)
         ):
             continue
@@ -221,8 +281,8 @@ def _carried_state_names(loop: ast.For | ast.While) -> set[str]:
     candidates = loads & stores
 
     # Step 2: exclude append-only outer-scope writes. A name appears only
-    # as the receiver of ``.append(...)`` (or similar list mutators that
-    # are output-only by convention) — those Loads are method-resolution
+    # as the receiver of ``.append(...)`` — the one mutator with an
+    # output-only convention — so those Loads are method-resolution
     # loads, not state reads. We treat such a name as NOT carried state.
     append_only_receivers = _append_only_receivers(loop)
     candidates -= append_only_receivers

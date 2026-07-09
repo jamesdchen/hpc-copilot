@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The onboarding map — where the copilot meets scientists, and with what trust
 
 **Status: DOCTRINE + MAP (2026-07-07).** Written at Fable quality before the

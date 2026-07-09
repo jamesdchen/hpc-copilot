@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Design: the reproduction receipt — reproduce-run + verify-reproduction
 
 Status: **PROPOSED** (reproduction-receipt wave, task T4 = this decision

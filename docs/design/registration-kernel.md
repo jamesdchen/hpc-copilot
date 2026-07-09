@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The registration kernel — the deployment-boundary attestation
 
 **Status: PLANNED (2026-07-07), not yet implemented.** The durable hand-off

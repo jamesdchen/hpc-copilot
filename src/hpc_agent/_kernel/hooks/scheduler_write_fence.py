@@ -21,8 +21,11 @@ describe submit-flow`` mentioning ``qsub`` in a help string, ``echo qdel``.
 The fence blocks only when a fenced verb can actually EXECUTE:
 
 * first token of any shell segment (segments split on ``;``, ``&&``, ``||``,
-  ``|``, ``&``, newlines), after skipping env-assignment prefixes and benign
-  wrappers (``time``, ``timeout <n>``, ``nohup``, ``env``, ``nice``);
+  ``|``, ``&``, newlines), after skipping subshell parens, env-assignment
+  prefixes, and benign wrappers (``time``, ``timeout``, ``nohup``, ``env``,
+  ``nice``, ``stdbuf``) INCLUDING their flags/option values — the wrappers'
+  canonical usage carries flags (``nice -n 10``, ``timeout -k 5 60``,
+  ``stdbuf -oL``), and a flag must not hide the executing verb behind them;
 * anywhere in the remote command of an ``ssh``/``bash -c``/``bash -lc``
   segment — the transport nuance: ``ssh host qdel 1`` must be caught even
   though ``qdel`` is not the local first token. Inner shell strings are
@@ -43,29 +46,39 @@ import sys
 
 FENCED = frozenset({"qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"})
 
-# Wrappers whose next token is the real command.
-_SKIP_WRAPPERS = frozenset({"time", "nohup", "env", "nice", "stdbuf"})
-# Wrappers that consume ONE argument before the real command.
-_SKIP_WITH_ARG = frozenset({"timeout"})
+# Wrappers the fence sees through to the real command. Their flags and
+# option/duration values (``nice -n 10``, ``timeout -k 5 60``, ``stdbuf -oL``)
+# are skipped too — see :func:`_first_real_token`.
+_SKIP_WRAPPERS = frozenset({"time", "timeout", "nohup", "env", "nice", "stdbuf"})
 
 _SEGMENT_SPLIT = re.compile(r"(?:\|\||&&|[;|&\n])")
 _WORD_FENCED = re.compile(r"(?<![\w./-])(" + "|".join(sorted(FENCED)) + r")(?![\w.-])")
+# A wrapper's non-flag option value: a nice level, a signal number, or a
+# timeout duration (``10``, ``5``, ``60s``) — never an executable name.
+_WRAPPER_VALUE = re.compile(r"\d+(\.\d+)?[smhd]?", re.IGNORECASE)
 
 
 def _first_real_token(tokens: list[str]) -> tuple[str | None, int]:
     """The executing token of a segment (skipping env prefixes/wrappers) + index."""
     i = 0
+    in_wrapper = False
     while i < len(tokens):
         tok = tokens[i]
+        if tok and not tok.strip("("):  # subshell paren(s) — the command follows
+            i += 1
+            continue
         if "=" in tok and not tok.startswith(("=", "-")):  # VAR=value prefix
             i += 1
             continue
         base = tok.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
         if base in _SKIP_WRAPPERS:
+            in_wrapper = True
             i += 1
             continue
-        if base in _SKIP_WITH_ARG:
-            i += 2
+        if in_wrapper and (tok.startswith("-") or _WRAPPER_VALUE.fullmatch(tok)):
+            # The wrapper's flag or option/duration value, not the real
+            # command (``nice -n 10 CMD``, ``timeout -k 5 60 CMD``).
+            i += 1
             continue
         return base, i
     return None, len(tokens)

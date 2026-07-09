@@ -84,6 +84,15 @@ class TestLiveQstatUnavailable:
         assert out["gpus"] == [{"gpu": "A6000", "source": "fallback"}]
         assert out["errors"][0]["code"] == "qstat_unavailable"
 
+    def test_invalid_ssh_host_falls_back_to_static(self):
+        # validate_ssh_target raises errors.SpecInvalid (an HpcError, NOT
+        # ValueError); the guard must catch it so a malformed ssh_host
+        # degrades to the documented fallback envelope instead of raising
+        # out of the public pick_gpu.
+        out = gpu_mod.pick_gpu(preferred=["A100", "H200"], live=True, ssh_host="user@host; rm -rf")
+        assert out["gpus"] == [{"gpu": "A100", "source": "fallback"}]
+        assert out["errors"] == [{"code": "qstat_unavailable", "detail": "qstat could not be run"}]
+
 
 # ---------------------------------------------------------------------------
 # Live mode: qstat parses but no GPU has enough free slots

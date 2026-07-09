@@ -37,6 +37,7 @@ __all__ = [
     "is_orphan_sidecar",
     "prune_old_runs",
     "prune_orphan_sidecars",
+    "read_job_task_spans",
     "read_run_sidecar",
     "resolve_node_sha",
     "run_sidecar_path",
@@ -62,6 +63,17 @@ SIDECAR_SCHEMA_VERSION: int = 2
 # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
 # — anything filesystem-safe that doesn't contain a path separator works.
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
+
+# Co-tenant exclusion for the sidecar scan: ``state/block_terminal.py`` stores
+# each detached block's terminal record in this SAME ``.hpc/runs/`` directory
+# as ``<run_id>.<block>.terminal.json`` (see ``block_terminal.terminal_path``).
+# Run_ids may legally contain dots, so a name-shape parse cannot tell the two
+# apart — the exclusion keys on the fixed ``.terminal.json`` suffix instead,
+# the same ``endswith`` idiom ``state/index.py._all_run_files`` uses for its
+# ``.last_status.json`` co-tenant. Pinned against ``terminal_path``'s actual
+# output by ``tests/state/test_runs_terminal_cotenants.py`` so the two modules
+# cannot drift apart.
+_TERMINAL_RECORD_SUFFIX = ".terminal.json"
 
 
 def _runs_dir(experiment_dir: Path) -> Path:
@@ -178,6 +190,15 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     # `[]`) so the backfill stays distinguishable from a deliberate
     # "no job ids yet" empty list at write time.
     "job_ids": None,
+    # job_task_spans lands with job_ids in the SAME post-qsub stamp when the
+    # main array was submitted as concurrency-bounded waves on an
+    # index-bounded backend (#339): job_id → [first, last] 0-based INCLUSIVE
+    # global task-id window that job's array covers. Consumed by
+    # ``infra.cluster_logs.fetch_task_logs`` so each waved job is probed only
+    # for its own tasks, with the job-LOCAL log index. Default ``None`` — an
+    # old sidecar (or a single ≤cap array, or a resubmit-recorded job) keeps
+    # the global-index probe behaviour.
+    "job_task_spans": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -512,7 +533,15 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
-    """Return every ``.hpc/runs/<id>.json`` file, newest-first by mtime."""
+    """Return every run-sidecar ``.hpc/runs/<id>.json``, newest-first by mtime.
+
+    Only RUN SIDECARS: the ``<run_id>.<block>.terminal.json`` block-terminal
+    records ``state/block_terminal.py`` co-locates in the same directory are
+    excluded (:data:`_TERMINAL_RECORD_SUFFIX`). Sweeping them up made
+    :func:`prune_orphan_sidecars` delete them (they read back jobless), let
+    :func:`find_run_by_cmd_sha` return one as a dedup target, and burned
+    :data:`MAX_RUNS` retention slots on non-sidecars.
+    """
     runs = _runs_dir(experiment_dir)
     if not runs.exists():
         return []
@@ -524,6 +553,8 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     keyed: list[tuple[float, str, Path]] = []
     for p in runs.iterdir():
         if not (p.is_file() and p.suffix == ".json"):
+            continue
+        if p.name.endswith(_TERMINAL_RECORD_SUFFIX):
             continue
         try:
             mtime = p.stat().st_mtime
@@ -868,7 +899,13 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
     return not (sidecar_committed or journal_committed)
 
 
-def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[str]) -> Path:
+def update_run_sidecar_job_ids(
+    experiment_dir: Path,
+    run_id: str,
+    job_ids: list[str],
+    *,
+    job_task_spans: dict[str, tuple[int, int]] | None = None,
+) -> Path:
     """Rewrite an existing sidecar with *job_ids* set; return its path.
 
     Called from :func:`runner.submit_and_record` immediately after qsub
@@ -877,6 +914,17 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     constraints, …) untouched. This is the post-qsub finalize that
     distinguishes a real run from the half-baked sidecar Step 6d wrote
     before rsync.
+
+    *job_task_spans* (optional) rides the same stamp for a WAVED main array
+    on an index-bounded backend (#339): ``job_id`` → 0-based INCLUSIVE
+    ``(first, last)`` global task-id window that job's array covers, derived
+    from the submitted plan's global ``task_range`` per batch. Persisted as
+    ``{job_id: [first, last]}`` so ``fetch_task_logs`` probes each waved job
+    only for its own tasks with the job-LOCAL log index. ``None`` (the
+    default, and what every non-waved caller passes — including the resubmit
+    path, whose arrays replay GLOBAL ids) leaves any existing
+    ``job_task_spans`` untouched, so the journal-side re-stamp inside
+    ``submit_and_record`` never erases the spans the submit pre-stamp wrote.
 
     Idempotent: re-running with the same *job_ids* is a no-op rewrite.
     Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*
@@ -892,6 +940,11 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     from hpc_agent.infra.io import atomic_locked_update
 
     new_job_ids = [str(j) for j in job_ids]
+    new_spans = (
+        {str(j): [int(first), int(last)] for j, (first, last) in job_task_spans.items()}
+        if job_task_spans is not None
+        else None
+    )
 
     def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
         if existing is None:
@@ -899,10 +952,44 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
             # preserve the documented FileNotFoundError contract.
             raise FileNotFoundError(f"run sidecar not found: {target}")
         existing["job_ids"] = new_job_ids
+        if new_spans is not None:
+            existing["job_task_spans"] = new_spans
         return existing
 
     atomic_locked_update(target, _mutate)
     return target
+
+
+def read_job_task_spans(experiment_dir: Path, run_id: str) -> dict[str, tuple[int, int]] | None:
+    """The sidecar's recorded per-job task spans, or ``None`` — never raises.
+
+    Read side of the ``job_task_spans`` stamp above, shaped for
+    :func:`hpc_agent.infra.cluster_logs.fetch_task_logs`'s ``job_task_spans``
+    parameter: ``job_id`` → 0-based INCLUSIVE ``(first, last)`` global
+    task-id window. Best-effort by contract — the log-fetching call sites
+    (monitor ``logs``, recover ``failures``, reconcile's evidence gather,
+    verify-canary) must behave exactly as before this field existed when it
+    is unavailable, so a missing sidecar, an old sidecar without the field,
+    or a malformed value all yield ``None`` (the global-index probe).
+    Individual malformed entries are dropped rather than poisoning the map.
+    """
+    try:
+        raw = read_run_sidecar(experiment_dir, run_id).get("job_task_spans")
+    except Exception:  # noqa: BLE001 — best-effort reader; absence must equal pre-field behaviour
+        return None
+    if not isinstance(raw, dict):
+        return None
+    spans: dict[str, tuple[int, int]] = {}
+    for job_id, span in raw.items():
+        if not (isinstance(span, (list, tuple)) and len(span) == 2):
+            continue
+        first, last = span
+        if isinstance(first, bool) or isinstance(last, bool):
+            continue
+        if not (isinstance(first, int) and isinstance(last, int)):
+            continue
+        spans[str(job_id)] = (first, last)
+    return spans or None
 
 
 def backfill_run_sidecar_provenance(

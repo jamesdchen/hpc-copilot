@@ -1,7 +1,7 @@
 """``verify-relay`` — deterministic audit of the agent's relay vs. the journal.
 
 The machine counterpart to conduct rule 10 — "never relay numbers/state that
-don't match the journal" (``docs/design/proving-run-2-hardening.md`` §6). The
+don't match the journal" (``docs/design/history/proving-run-2-hardening.md`` §6). The
 doctrine already holds the LLM to relaying only code-digested briefs, but the
 *relay itself* is unguarded: a rounded number, a swapped run-id, or a stale
 state claim ("running" when the journal recorded "failed" — proving run #3)
@@ -33,7 +33,10 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   reference passes). A run-id-like token matching nothing → ``run_id``
   mismatch — EXCEPT the registry's verb vocabulary ("Next: submit-s3" names a
   verb, not a run; proving run #3 false positive), derived live from the
-  ``@primitive`` registry. Standalone digit runs (>= 5 digits) are treated as
+  ``@primitive`` registry, and EXCEPT ISO 8601 date/timestamp tokens
+  ("2026-07-03T00:00:00+00:00" — the journal's own timestamps; a faithful
+  quote is neither an id nor a number claim, so the whole span is consumed
+  and audited as neither). Standalone digit runs (>= 5 digits) are treated as
   job-id claims ONLY when the run has recorded job_ids to compare against
   (else they fall through to number checking) — and never when the digits are
   the fractional part of a decimal (``3.141338...``) or when they verify as a
@@ -230,6 +233,26 @@ _IDENT_RE = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+")
 _JOB_ID_RE = re.compile(r"\d{5,}")
 _TS_PREFIX_RE = re.compile(r"\d{8}-\d{6}")
 
+# ISO 8601 date / datetime spans ("2026-07-03", "2026-07-03T00:00:00+00:00") —
+# the journal's own timestamp dialect (``infra.time.utcnow_iso``). A faithful
+# relay quoting one is NOT an id or number claim, but the shape trips both
+# passes (same false-positive class as verbs and decimal fractions, proving
+# run #3): the date is hyphen+digit and >= 8 chars so it reads run-id-like,
+# and the ``:``-split time components leak bare digit runs into the number
+# pass that no source number can verify (identifier-shaped source strings are
+# excluded from the number pool). The whole span is therefore consumed up
+# front and audited as NEITHER. Distinct from the run-id timestamp shape
+# ``\d{8}-\d{6}`` (``_TS_PREFIX_RE``), which stays a run-id claim.
+_ISO_DATETIME_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"\d{4}-\d{2}-\d{2}"
+    r"(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
+    r"(?![0-9])"
+)
+# The fragments ``_IDENT_RE`` can carve out of an ISO date/datetime (its token
+# class stops at ``:`` / ``+``): the date, optionally with the hour attached.
+_ISO_DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}(?:T\d{2})?")
+
 
 def _is_run_id_like(token: str, scope_run_id: str) -> bool:
     if token == scope_run_id:
@@ -238,6 +261,10 @@ def _is_run_id_like(token: str, scope_run_id: str) -> bool:
         return True
     if _TS_PREFIX_RE.match(token):
         return True
+    if _ISO_DATE_TOKEN_RE.fullmatch(token):
+        # A faithful ISO date/timestamp quote, not a run-id claim (see
+        # ``_ISO_DATETIME_RE``); its span is consumed by the pre-pass.
+        return False
     return "-" in token and bool(re.search(r"\d", token)) and len(token) >= 8
 
 
@@ -554,6 +581,14 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
     mismatches: list[RelayMismatch] = []
     claims_checked = 0
     consumed_spans: list[tuple[int, int]] = []
+
+    # ── (0) ISO date/timestamp spans (consumed; neither id nor number claims) ──
+    for m in _ISO_DATETIME_RE.finditer(relay):
+        # A faithful quote of the journal's own timestamps ("submitted at
+        # 2026-07-03T00:00:00+00:00"). Consume the WHOLE span so the time
+        # components' digit runs never masquerade as numeric claims; the
+        # date-shaped token itself is exempted in _is_run_id_like.
+        consumed_spans.append((m.start(), m.end()))
 
     # ── (1) run-id / job-id tokens (first; their spans block number reads) ─────
     verb_names = _registry_verb_names()

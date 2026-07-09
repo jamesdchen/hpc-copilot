@@ -2,7 +2,7 @@
 block's OWN structured evidence (submit S1–S4 briefs; status snapshot/watch
 digests). The agent relays the returned string VERBATIM.
 
-Wave 5, finding 15 (``docs/design/proving-run-5-hardening.md`` §5.3): the
+Wave 5, finding 15 (``docs/design/history/proving-run-5-hardening.md`` §5.3): the
 driving agent used to RECONSTRUCT the human-facing relay from memory — it
 relayed "canary green / verified / 20" (a *stale* state plus the MAIN array's
 task count bled into the 1-task canary summary) against a journal reading

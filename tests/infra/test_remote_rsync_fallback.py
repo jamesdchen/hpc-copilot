@@ -9,7 +9,9 @@ helpers to verify routing without requiring a real cluster.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -299,9 +301,10 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
 def test_rsync_push_fallback_delete_true_stages_then_swaps(tmp_path: Path) -> None:
     """delete=True on the tar fallback is STAGE-THEN-SWAP (run-#10 F-G): the
     extract lands in a sibling staging dir first; the live tree is touched
-    only after a COMPLETE transfer — bounded clean, then a same-filesystem
-    move. Four bounded ssh legs, in order: stage drop, extract-into-stage,
-    pre-clean of the live tree, move+rmdir."""
+    only after a COMPLETE transfer — bounded clean, then a merge-copy swap
+    (cp -a merges into the non-empty dirs the pre-clean preserves; mv could
+    not). Four bounded ssh legs, in order: stage drop, extract-into-stage,
+    pre-clean of the live tree, merge+cleanup."""
     calls = _tar_fallback_run_calls(tmp_path, exclude=[], delete=True)
     assert len(calls) == 4
     drop_cmd = str(calls[0][0][0][-1])
@@ -312,10 +315,10 @@ def test_rsync_push_fallback_delete_true_stages_then_swaps(tmp_path: Path) -> No
     assert "tar x -C /r.hpc_stage" in extract_cmd  # NEVER extracts into /r
     assert "rm -rf" not in extract_cmd
     assert "find /r -mindepth 1" in clean_cmd
-    assert "xargs -0 -r rm -rf --" in clean_cmd
+    assert "xargs -0 -r rm -f --" in clean_cmd
     assert "tar x" not in clean_cmd
-    assert "mv -f -t /r" in move_cmd
-    assert "rmdir /r.hpc_stage" in move_cmd
+    assert "cp -a /r.hpc_stage/. /r/" in move_cmd
+    assert "rm -rf /r.hpc_stage" in move_cmd
     # The destructive legs carry their OWN bounded timeouts, strictly shorter
     # than the transfer's — and they run AFTER the transfer, so a transfer
     # timeout can no longer leave a gutted live tree.
@@ -349,9 +352,9 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
                 ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
             )
     cmds = [str(c[0][0][-1]) for c in run_mock.call_args_list if not _is_ssh_version_probe(c)]
-    # No pre-clean of /r, no move — the live tree was never touched.
+    # No pre-clean of /r, no merge-swap — the live tree was never touched.
     assert not any("find /r -mindepth 1" in c for c in cmds)
-    assert not any("mv -f -t /r" in c for c in cmds)
+    assert not any("cp -a /r.hpc_stage/. /r/" in c for c in cmds)
 
 
 def test_tar_fallback_preclean_prunes_output_dirs_even_if_caller_omits_them(
@@ -450,6 +453,104 @@ def test_rsync_push_fallback_delete_false_skips_preclean(tmp_path: Path) -> None
     assert "rm -rf" not in remote_cmd
 
 
+# --- re-push regression (audit 2026-07-09): execute the REAL remote command
+# strings against a local tree, so the preclean/swap semantics are pinned by
+# observed filesystem state, not by string shape alone. ---------------------
+
+_needs_posix_shell = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="executes the remote-side POSIX commands locally",
+)
+
+
+def _first_deploy_remote_tree(remote: Path) -> None:
+    """A live tree as it stands after a first deploy: pushed experiment files
+    plus the deploy_runtime-placed protected framework files and run output."""
+    for rel, content in {
+        ".hpc/tasks.py": "old tasks",
+        ".hpc/runs/r1.json": "{}",
+        ".hpc/_hpc_dispatch.py": "dispatch",
+        ".hpc/_hpc_combiner.py": "combiner",
+        ".hpc/templates/common/hpc_preamble.sh": "preamble",
+        "src/mod.py": "code v1",
+        "src/old_pkg/gone.py": "stale module",
+        "results/out.txt": "run output",
+        "logs/job.o1.1": "task log",
+        "hpc_agent/execution/mapreduce/metrics_io.py": "runtime stub",
+    }.items():
+        f = remote / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+
+def _sh(cmd: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=30)
+
+
+@_needs_posix_shell
+def test_preclean_preserves_protected_subtrees_on_disk(tmp_path: Path) -> None:
+    """The pre-clean must delete stale unprotected files WITHOUT rm -rf-ing
+    through the parent dirs of protected paths. The old single-pass
+    ``rm -rf`` deleted ``.hpc/`` wholesale on every re-push — templates,
+    dispatcher and all — because ``find`` prints the (unpruned) parent dir
+    before descending to the pruned child."""
+    remote = tmp_path / "remote"
+    _first_deploy_remote_tree(remote)
+    clean = _sh(transport._remote_clean_cmd(str(remote), transport._effective_excludes(None)))
+    assert clean.returncode == 0, clean.stderr
+    # Protected framework files and run output survive.
+    assert (remote / ".hpc" / "_hpc_dispatch.py").is_file()
+    assert (remote / ".hpc" / "_hpc_combiner.py").is_file()
+    assert (remote / ".hpc" / "templates" / "common" / "hpc_preamble.sh").is_file()
+    assert (remote / "results" / "out.txt").is_file()
+    assert (remote / "logs" / "job.o1.1").is_file()
+    assert (remote / "hpc_agent" / "execution" / "mapreduce" / "metrics_io.py").is_file()
+    # Unprotected pushed content is cleaned (the fresh extract re-lands it),
+    # including now-empty stale dirs (an empty leftover package dir would be
+    # importable as a namespace package and shadow a real module).
+    assert not (remote / ".hpc" / "tasks.py").exists()
+    assert not (remote / "src").exists()
+
+
+@_needs_posix_shell
+def test_stage_swap_merges_into_preserved_live_tree(tmp_path: Path) -> None:
+    """Re-push swap: after the pre-clean, ``.hpc/`` is ALWAYS non-empty (the
+    protected templates/dispatcher live there) and the staged tree always
+    carries ``.hpc/`` — so the swap must MERGE directories. The old
+    ``mv -f -t`` swap failed here with ``Directory not empty`` after the
+    pre-clean had already deleted ``.hpc/tasks.py`` — a destructive no-op
+    re-push."""
+    remote = tmp_path / "remote"
+    stage = tmp_path / "remote.hpc_stage"
+    _first_deploy_remote_tree(remote)
+    for rel, content in {
+        ".hpc/tasks.py": "new tasks",
+        ".hpc/runs/r1.json": "{}",
+        ".hpc/runs/r2.json": "{}",
+        "src/mod.py": "code v2",
+    }.items():
+        f = stage / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+    clean = _sh(transport._remote_clean_cmd(str(remote), transport._effective_excludes(None)))
+    assert clean.returncode == 0, clean.stderr
+    # The merge precondition the old mv swap could not handle: the live
+    # ``.hpc/`` is still present and non-empty after the clean.
+    assert any((remote / ".hpc").iterdir())
+
+    swap = _sh(transport._stage_swap_cmd(str(stage), str(remote)))
+    assert swap.returncode == 0, swap.stderr  # mv died 'Directory not empty' here
+    # Fresh content merged into the preserved dirs; staging dir consumed.
+    assert (remote / ".hpc" / "tasks.py").read_text() == "new tasks"
+    assert (remote / ".hpc" / "runs" / "r2.json").is_file()
+    assert (remote / "src" / "mod.py").read_text() == "code v2"
+    assert (remote / ".hpc" / "templates" / "common" / "hpc_preamble.sh").is_file()
+    assert (remote / ".hpc" / "_hpc_dispatch.py").is_file()
+    assert (remote / "results" / "out.txt").is_file()
+    assert not stage.exists()
+
+
 def test_remote_clean_cmd_anchors_excludes() -> None:
     """A bare name prunes at any depth (-name); an internal-slash pattern
     is anchored to the sync root (-path) — mirroring rsync's exclude rule."""
@@ -459,27 +560,37 @@ def test_remote_clean_cmd_anchors_excludes() -> None:
     assert "-name .git" in cmd
     assert "-name '*.pyc'" in cmd
     assert "-path /r/.hpc/_hpc_dispatch.py" in cmd
-    assert "-prune -o -print0" in cmd
+    assert "-prune -o ! -type d -print0" in cmd
+    assert "-prune -o -type d -print0" in cmd
 
 
 def test_remote_clean_cmd_protects_framework_files() -> None:
     """The deploy_runtime framework files (PROTECTED_RUNTIME_FILES, always
     unioned into the effective exclude set) land in prune clauses, so the
     pre-clean preserves them; a non-excluded stale file is not pruned and
-    therefore gets deleted by the trailing rm -rf."""
+    therefore gets deleted by the files pass. Files are removed with rm -f
+    (never rm -rf on a directory — that is what used to delete .hpc/
+    wholesale THROUGH the prunes) and stale dirs children-first with a
+    non-empty-tolerant rmdir, so a dir holding protected content survives."""
     cmd = transport._remote_clean_cmd("/r", transport._effective_excludes(None))
     assert "-path /r/.hpc/_hpc_dispatch.py" in cmd
     assert "-path /r/.hpc/_hpc_combiner.py" in cmd
     assert "-path /r/.hpc/templates" in cmd  # the preamble's home
     assert "-name hpc_agent" in cmd  # deployed runtime stubs
-    assert cmd.endswith("-print0 | xargs -0 -r rm -rf --")
+    assert "! -type d -print0 | xargs -0 -r rm -f --" in cmd
+    assert "rm -rf" not in cmd  # no recursive delete can bypass a prune
+    assert cmd.endswith("sort -rz | xargs -0 -r rmdir --ignore-fail-on-non-empty --")
 
 
 def test_remote_clean_cmd_empty_exclude_deletes_whole_subtree() -> None:
     """With no excludes the pre-clean removes everything under remote_path
     (but never remote_path itself — guarded by -mindepth 1)."""
     cmd = transport._remote_clean_cmd("/r", [])
-    assert cmd == "find /r -mindepth 1 -print0 | xargs -0 -r rm -rf --"
+    assert cmd == (
+        "find /r -mindepth 1 ! -type d -print0 | xargs -0 -r rm -f -- && "
+        "find /r -mindepth 1 -type d -print0 | sort -rz | "
+        "xargs -0 -r rmdir --ignore-fail-on-non-empty --"
+    )
 
 
 def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:

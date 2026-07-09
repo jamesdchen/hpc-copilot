@@ -4,7 +4,10 @@
 This script is scp'd to ``$REMOTE_PATH/.hpc/_hpc_combiner.py`` by
 ``deploy_runtime`` and executed on the login node after each wave
 completes. It reads per-task ``metrics.json`` sidecars and aggregates
-them into per-wave partial results grouped by grid point.
+them into per-wave partial results grouped by grid point. Per-task
+kwargs come from the run sidecar's frozen ``trial_params`` manifest
+(the same ground truth the dispatcher uses); ``.hpc/tasks.py`` is
+imported only for old sidecars that carry no manifest.
 
 Stays zero-dependency — only Python stdlib, no imports from the
 ``hpc_agent`` package.
@@ -33,7 +36,9 @@ independent of file enumeration order or wave-completion timing:
   swap), which is order-invariant for floats up to the compensation term's
   precision — re-running the combiner on the same per-task outputs produces
   the same aggregate regardless of which task finished first.
-* Weighted means use ``n_samples`` as the weight (default 1 when absent).
+* Weighted means use ``n_samples`` as the weight (default 1 when absent;
+  a partial whose entries carry no ``n_samples`` records its task count as
+  ``_hpc_group_n`` so the cross-wave reduce stays task-weighted).
 
 This means: if your executors are deterministic for a given task_id (see
 the executor scaffold for the seed-from-HPC_TASK_ID pattern), the entire
@@ -124,12 +129,21 @@ def _weighted_mean(entries):
     all_keys = set()
     for e in entries:
         all_keys.update(e.keys())
-    weights = [_coerce_weight(e.get("n_samples", 1), 1) for e in entries]
+    # Weight preference: the entry's own ``n_samples``, else the
+    # ``_hpc_group_n`` group-size carrier a previous ``_weighted_mean`` pass
+    # stamped on it (a per-wave partial), else 1 (a single task). Without the
+    # carrier, a grid point split 9/1 across two waves weighted both partials
+    # equally at the cross-wave reduce — the lone task got 9x its weight.
+    weights = [_coerce_weight(e.get("n_samples", e.get("_hpc_group_n", 1)), 1) for e in entries]
     result = {}
 
     for key in sorted(all_keys):
         if key == "n_samples":
             result["n_samples"] = sum(_coerce_weight(e.get("n_samples", 0), 0) for e in entries)
+            continue
+        if key == "_hpc_group_n":
+            # Weight carrier, never a metric — folded into the weights above
+            # and re-emitted below while the group still has no n_samples.
             continue
         # Skip non-numeric values: write_metrics accepts an arbitrary
         # JSON dict, so a metrics.json may carry string/list labels;
@@ -144,6 +158,15 @@ def _weighted_mean(entries):
         w_total = _neumaier_sum(w for _, w in pairs)
         numerator = _neumaier_sum(v * w for v, w in pairs)
         result[key] = numerator / w_total if w_total else 0.0
+
+    # Group-size carrier: when NO entry carried ``n_samples``, each weight
+    # above is a group size (1 per raw task entry), so their sum is the task
+    # count this aggregate covers. Stamped framework-namespaced (never
+    # collides with a user metric) so the cross-wave reduce weights each
+    # partial by its task count. Kept in sync with the copy in
+    # ``hpc_agent/execution/mapreduce/reduce/metrics.py``.
+    if "n_samples" not in result:
+        result["_hpc_group_n"] = sum(weights)
 
     return result
 
@@ -380,16 +403,30 @@ def main(max_workers=None, argv=None):
         print("[combiner] ERROR: sidecar missing result_dir_template", file=sys.stderr)
         sys.exit(1)
 
-    # --- Load tasks.py ---
-    tasks_path = here / "tasks.py"
-    if not tasks_path.is_file():
-        print(f"[combiner] ERROR: tasks.py not found: {tasks_path}", file=sys.stderr)
-        sys.exit(1)
-    try:
-        tasks = _load_tasks_module(tasks_path)
-    except Exception as exc:
-        print(f"[combiner] ERROR: failed to import tasks.py: {exc}", file=sys.stderr)
-        sys.exit(1)
+    # --- Resolve the per-task kwargs source (frozen manifest first) ---
+    # Mirrors dispatch.py's fast path: ``trial_params`` is serialized into the
+    # sidecar at submit time and is the ground truth the tasks were hashed
+    # (cmd_sha) and dispatched with. tasks.py must never be re-executed
+    # cluster-side when the manifest exists — a state-dependent ``resolve()``
+    # (the shipped optuna_strategy/pbt_strategy scaffolds) returns the NEXT
+    # iteration's kwargs at combine time: wrong result_dirs, silently empty
+    # partials, or a phantom optimizer trial minted on the login node.
+    #
+    # Fallback to importing tasks.py only when the sidecar has no frozen
+    # manifest (old sidecars written before trial_params existed) — full
+    # backward compatibility, same as the dispatcher.
+    trial_params = sidecar.get("trial_params")
+    if not isinstance(trial_params, list):
+        trial_params = None
+        tasks_path = here / "tasks.py"
+        if not tasks_path.is_file():
+            print(f"[combiner] ERROR: tasks.py not found: {tasks_path}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            tasks = _load_tasks_module(tasks_path)
+        except Exception as exc:
+            print(f"[combiner] ERROR: failed to import tasks.py: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     # --- Output path & --force handling (check BEFORE doing any work) ---
     out_dir = "_combiner"
@@ -409,14 +446,31 @@ def main(max_workers=None, argv=None):
     readable = []  # (tid, grid_key, metrics_path, runtime_path)
 
     for tid in task_ids:
-        try:
-            kwargs = tasks.resolve(int(tid))
-        except Exception as exc:
-            errors.append(f"task {tid}: tasks.resolve raised: {exc}")
-            continue
-        if not isinstance(kwargs, dict):
-            errors.append(f"task {tid}: tasks.resolve returned non-dict")
-            continue
+        if trial_params is not None:
+            try:
+                t = int(tid)
+            except (TypeError, ValueError):
+                errors.append(f"task {tid}: non-integer task id in wave_map")
+                continue
+            if not 0 <= t < len(trial_params):
+                errors.append(
+                    f"task {tid}: out of range of sidecar trial_params "
+                    f"({len(trial_params)} entries)"
+                )
+                continue
+            kwargs = trial_params[t]
+            if not isinstance(kwargs, dict):
+                errors.append(f"task {tid}: trial_params[{t}] is not a dict")
+                continue
+        else:
+            try:
+                kwargs = tasks.resolve(int(tid))
+            except Exception as exc:
+                errors.append(f"task {tid}: tasks.resolve raised: {exc}")
+                continue
+            if not isinstance(kwargs, dict):
+                errors.append(f"task {tid}: tasks.resolve returned non-dict")
+                continue
         try:
             result_dir = _format_result_dir(
                 result_dir_template, task_id=int(tid), run_id=run_id, kwargs=kwargs

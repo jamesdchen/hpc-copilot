@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # The run story — design + implementation plan
 
 **Status: IMPLEMENTED (2026-07-07).** Waves A/B/C landed
@@ -295,8 +298,8 @@ Wave C (sequential — hot/shared files, one at a time):
   `build_primitive_frontmatter.py`, `build_primitive_index.py`,
   `build_schemas.py`, `build_verb_module_map.py`) — the registry grows
   138→139 and `run-story` takes `--spec`, so expect and update the inventory
-  tails: `_SPEC_VERBS` in BOTH `tests/contract/test_schema_roundtrip.py` and
-  `tests/contract/test_primitive_remediation.py`, the prose primitive count,
+  tails: `_SPEC_VERBS` in BOTH `tests/contracts/test_schema_roundtrip.py` and
+  `tests/contracts/test_primitive_remediation.py`, the prose primitive count,
   `operations.json`, `cli/_verb_module_map.py`, the generated schemas +
   primitive doc.
 - **T7 — `docs/internals/engineering-principles.md` enforcement rows** (hot

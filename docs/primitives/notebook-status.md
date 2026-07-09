@@ -12,7 +12,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.notebook_status.notebook_status
+  python: hpc_agent.ops.notebook.status_op.notebook_status
 ---
 # notebook-status
 

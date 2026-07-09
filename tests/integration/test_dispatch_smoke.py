@@ -78,7 +78,7 @@ _HARVEST_SEAM = "hpc_agent.ops.monitor_flow.harvest_on_terminal"
 # ``interview --campaign-dir``, ``resubmit --run-id --task-ids``) — firing them
 # with only ``--spec`` exits via argparse with usage-help and no JSON envelope,
 # so the spec-validate path is unreachable from a ``--spec``-only probe. Mirrors
-# ``tests/contract/test_primitive_remediation.py::NEEDS_EXTRA_CLI_ARGS``. The
+# ``tests/contracts/test_primitive_remediation.py::NEEDS_EXTRA_CLI_ARGS``. The
 # per-verb probe below ALSO detects any required extra CliArg dynamically, so a
 # newly-added one is skipped even if it never lands in this set.
 NEEDS_EXTRA_CLI_ARGS: frozenset[str] = frozenset({"interview", "resubmit"})

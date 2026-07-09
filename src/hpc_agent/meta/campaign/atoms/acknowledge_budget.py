@@ -134,32 +134,47 @@ def _raise_manifest_caps(
 ) -> None:
     """Merge *raised_caps* into the manifest's ``budget`` section.
 
-    Preserves every other section (goal, stop_criteria, strategy) and the
-    existing budget caps not being raised. Creates a minimal manifest if
-    none exists yet so the new caps are durable across ticks.
+    Rewrites the existing document in place — only ``budget`` changes —
+    so every other section (goal, stop_criteria, strategy, anomaly_policy,
+    async_refill / max_in_flight, greenlit / greenlit_at, and any field
+    added after this atom was written) survives the ack. Creates a
+    minimal manifest if none exists yet so the new caps are durable
+    across ticks. Same flock :func:`write_manifest` uses.
     """
-    import json
-
     import jsonschema
 
-    from hpc_agent.meta.campaign.manifest import read_manifest, write_manifest
-
-    try:
-        manifest = read_manifest(experiment_dir, campaign_id) or {}
-    except (OSError, json.JSONDecodeError, jsonschema.ValidationError):
-        # A schema-invalid / malformed manifest must not block clearing a
-        # budget halt — degrade to no existing manifest and write fresh caps.
-        manifest = {}
-    budget = dict(manifest.get("budget") or {})
-    budget.update(raised_caps)
-
-    strategy = manifest.get("strategy")
-    write_manifest(
-        experiment_dir,
-        campaign_id=campaign_id,
-        goal=manifest.get("goal") or "",
-        budget=budget,
-        stop_criteria=manifest.get("stop_criteria"),
-        strategy=strategy if isinstance(strategy, dict) else None,
-        created_at=manifest.get("created_at"),
+    from hpc_agent.infra.io import atomic_locked_update
+    from hpc_agent.infra.time import utcnow_iso
+    from hpc_agent.meta.campaign.manifest import (
+        MANIFEST_SCHEMA_VERSION,
+        manifest_path,
+        validate_manifest,
     )
+
+    def _merge(existing: dict[str, Any] | None) -> dict[str, Any]:
+        updated = dict(existing) if isinstance(existing, dict) else {}
+        updated.setdefault("manifest_schema_version", MANIFEST_SCHEMA_VERSION)
+        updated.setdefault("campaign_id", campaign_id)
+        updated.setdefault("created_at", utcnow_iso())
+        updated.setdefault("goal", "")
+        budget = dict(updated.get("budget") or {})
+        budget.update(raised_caps)
+        updated["budget"] = budget
+        try:
+            validate_manifest(updated)
+        except jsonschema.ValidationError:
+            # A schema-invalid manifest must not block clearing a budget
+            # halt — degrade to a minimal fresh manifest carrying the new
+            # caps only (the invalid doc's budget may itself be the
+            # violation, so it is not carried over).
+            updated = {
+                "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+                "campaign_id": campaign_id,
+                "created_at": utcnow_iso(),
+                "goal": "",
+                "budget": dict(raised_caps),
+            }
+            validate_manifest(updated)
+        return updated
+
+    atomic_locked_update(manifest_path(experiment_dir, campaign_id), _merge)

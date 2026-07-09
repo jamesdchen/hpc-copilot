@@ -182,6 +182,20 @@ def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
     already run :func:`validate_remote_path`, so *remote_path* carries
     no shell metacharacters; every interpolated value is still
     ``shlex.quote``-d for defence in depth.
+
+    Two passes, files then dirs, because a protected subtree does not
+    protect its PARENT directory from ``find``'s pre-order print — a
+    single ``rm -rf`` over every printed path deleted ``.hpc/`` wholesale
+    (templates, dispatcher and all) on every re-push, defeating
+    :data:`PROTECTED_RUNTIME_FILES` (audit 2026-07-09). Pass 1 removes
+    non-directories only, so a dir with protected descendants is never
+    ``rm -rf``-d through. Pass 2 removes the now-empty directories,
+    children-first (``sort -rz``: a parent path is a strict prefix of its
+    children's, so reverse-lexicographic order is depth-first), with
+    ``rmdir --ignore-fail-on-non-empty`` leaving any dir that still holds
+    protected content standing. Empty stale dirs must go, not linger: a
+    leftover package dir is importable as a PEP 420 namespace package and
+    can shadow a real module.
     """
     quoted_remote = shlex.quote(remote_path)
     root = remote_path.rstrip("/")
@@ -197,11 +211,39 @@ def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
     find_cmd = f"find {quoted_remote} -mindepth 1"
     if prune_terms:
         find_cmd += " \\( " + " -o ".join(prune_terms) + " \\) -prune -o"
-    # -print0 / xargs -0 keep paths with spaces intact; -r skips rm on
-    # empty input; -- stops rm treating a dash-led name as a flag. The
-    # pipeline's exit status is rm's, which is 0 even if find races a
-    # just-deleted subtree (rm -f ignores missing operands).
-    return f"{find_cmd} -print0 | xargs -0 -r rm -rf --"
+    # -print0 / xargs -0 / sort -z keep paths with spaces intact; -r skips
+    # the delete verb on empty input; -- stops a dash-led name reading as a
+    # flag. Each pipeline's exit status is its delete verb's: rm -f is 0
+    # even if find races a just-deleted entry, and rmdir's non-empty
+    # failures are explicitly ignored.
+    files_pass = f"{find_cmd} ! -type d -print0 | xargs -0 -r rm -f --"
+    dirs_pass = (
+        f"{find_cmd} -type d -print0 | sort -rz | xargs -0 -r rmdir --ignore-fail-on-non-empty --"
+    )
+    return f"{files_pass} && {dirs_pass}"
+
+
+def _stage_swap_cmd(stage_path: str, remote_path: str) -> str:
+    """Build the remote command that merges the staged tree into the live one.
+
+    The swap must MERGE, not move: the pre-clean deliberately preserves
+    protected paths (``.hpc/templates/``, ``results/``, ...), so the live
+    tree's directories are non-empty on every re-push — and ``mv`` cannot
+    move a directory onto an existing non-empty one (``Directory not
+    empty``, which used to kill every re-push AFTER the pre-clean had
+    already deleted the unprotected files). ``cp -a`` merges into existing
+    directories, preserving modes/times, and is purely additive — a failure
+    mid-copy leaves the staging dir intact (the ``&&`` skips the cleanup)
+    and never deletes anything the bounded clean didn't. The deployed tree
+    is small (the big output dirs are excluded from the push), so the local
+    remote-side copy stays within the same seconds-scale exposure window
+    the same-filesystem move had.
+    """
+    quoted_stage = shlex.quote(stage_path)
+    quoted_remote = shlex.quote(remote_path)
+    # ``<stage>/.`` copies the staged tree's CONTENTS (dotfiles included)
+    # into the live root.
+    return f"cp -a {quoted_stage}/. {quoted_remote}/ && rm -rf {quoted_stage}"
 
 
 def _remote_preclean(
@@ -420,7 +462,7 @@ def _tar_ssh_push(
     # transfer that timed out mid-flight left the remote gutted (data/ emptied,
     # src/ partial). New sequence: extract into a sibling STAGING dir (a failed
     # or timed-out transfer leaves the live tree untouched), and only after a
-    # fully successful extract run the bounded clean + a same-filesystem move
+    # fully successful extract run the bounded clean + a merge-copy swap
     # (seconds, not transfer-length — the destructive window collapses).
     # delete=False keeps the direct overwrite extract (never destructive).
     stage_path = remote_path.rstrip("/") + ".hpc_stage"
@@ -504,9 +546,11 @@ def _tar_ssh_push(
 
     # Stage-then-swap tail (F-G): the transfer landed COMPLETE in the staging
     # dir; only now touch the live tree. Clean (bounded, excludes protected)
-    # then a same-filesystem move — seconds of exposure instead of the whole
-    # transfer. Any failure here returns loud with the staging dir intact on
-    # the remote (the next push drops it), never a half-cleaned live tree.
+    # then a merge-copy of the staged tree (see :func:`_stage_swap_cmd` for
+    # why it must MERGE, not ``mv``) — seconds of exposure instead of the
+    # whole transfer. Any failure here returns loud with the staging dir
+    # intact on the remote (the next push drops it), never a half-cleaned
+    # live tree.
     clean = _remote_preclean(
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -515,14 +559,9 @@ def _tar_ssh_push(
     )
     if clean.returncode != 0:
         return clean
-    move_cmd = (
-        f"cd {quoted_stage} && "
-        f"find . -mindepth 1 -maxdepth 1 -exec mv -f -t {quoted_remote} {{}} + && "
-        f"cd / && rmdir {quoted_stage}"
-    )
     move = _ssh_bounded(
         ssh_target,
-        move_cmd,
+        _stage_swap_cmd(stage_path, remote_path),
         timeout=small_timeout,
         what=f"stage swap into {remote_path}",
     )

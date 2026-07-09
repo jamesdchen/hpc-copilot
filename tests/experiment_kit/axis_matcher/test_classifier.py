@@ -158,6 +158,77 @@ def run(xs):
     assert result.kind == "sequential", result
 
 
+def test_nested_accumulator_is_sequential(tmp_path: Path) -> None:
+    """``if x > 0: total += x`` — a read-modify-write accumulator one level
+    deep inside a compound statement.
+
+    The AugAssign target Name carries only Store ctx in the AST, so a naive
+    child-order walk records no Load for ``total`` and judges it store-only /
+    loop-local — an auto-recorded ``independent`` that corrupts results. An
+    AugAssign is a read-modify-write by definition: carried → sequential.
+    """
+    src = _write(
+        tmp_path,
+        """
+def run(xs):
+    total = 0
+    for x in xs:
+        if x > 0:
+            total += x
+    return total
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind == "sequential", result
+
+
+def test_nested_plain_assign_accumulator_is_sequential(tmp_path: Path) -> None:
+    """``if x > 0: total = total + x`` — the plain-Assign spelling of the
+    nested accumulator. ``ast.walk`` visits the Store target before the RHS
+    Loads, so a naive child-order walk sees a fresh-bind-before-load and
+    judges ``total`` loop-local. It reads its own prior value: carried →
+    sequential."""
+    src = _write(
+        tmp_path,
+        """
+def run(xs):
+    total = 0
+    for x in xs:
+        if x > 0:
+            total = total + x
+    return total
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind == "sequential", result
+
+
+def test_set_add_accumulator_is_sequential(tmp_path: Path) -> None:
+    """``seen.add(x)`` + ``out.append(len(seen))`` — carried state via a
+    mutating method other than ``.append``.
+
+    ``seen`` is mutated every iteration and its contents feed the next
+    iteration's output — carried state. Only ``.append`` has the
+    output-only-sink convention; the other container mutators must count
+    as stores (a wrong `sequential` costs parallelism; a wrong
+    `independent` corrupts results).
+    """
+    src = _write(
+        tmp_path,
+        """
+def run(xs):
+    seen = set()
+    out = []
+    for x in xs:
+        seen.add(x)
+        out.append(len(seen))
+    return out
+""",
+    )
+    result = classify_axis_easy(src, "run")
+    assert result.kind == "sequential", result
+
+
 # ─── no_loop_detected ────────────────────────────────────────────────────
 
 

@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: rigor primitives — locked evidence scopes + a look ledger
 
 Status: **SHIPPED** (rigor-primitives wave, tasks T1–T6). The substrate is

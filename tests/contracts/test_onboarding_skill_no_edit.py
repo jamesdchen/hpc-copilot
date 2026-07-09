@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-_SKILLS = Path(__file__).resolve().parents[2] / "src" / "slash_commands" / "skills"
+_SKILLS = Path(__file__).resolve().parents[2] / "src" / "hpc_agent" / "slash_commands" / "skills"
 # Skills that touch the user's repo to onboard it — they wire entry points via
 # verbs, never by free-form editing of user source.
 _ONBOARDING_SKILLS = ["hpc-wrap-entry-point"]

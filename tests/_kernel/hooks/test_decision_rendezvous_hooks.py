@@ -156,6 +156,82 @@ def test_committed_y_but_no_marker_is_silent(tmp_path: Path) -> None:
     assert guard.build_hook_output(_stop_payload(tmp_path)) is None
 
 
+# ─── campaign scope: greenlights are journaled under scope "campaign" ────────
+
+_CAMPAIGN_ID = "camp-1"
+
+
+def _park_campaign(exp: Path, campaign_id: str = _CAMPAIGN_ID) -> None:
+    """Park a campaign chain: marker workflow 'campaign', keyed by campaign id
+    (block_drive drives a campaign chain under --run-id <campaign_id>)."""
+    upsert_run(exp, _record(campaign_id))
+    mark_pending_decision(
+        campaign_id,
+        block="campaign-greenlight",
+        workflow="campaign",
+        brief=_BRIEF,
+        resume_cursor={
+            "workflow": "campaign",
+            "run_id": campaign_id,
+            "next_verb": "campaign-watch",
+            "current_verb": "campaign-greenlight",
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=exp,
+    )
+
+
+def test_campaign_scoped_committed_y_forces_continue(tmp_path: Path) -> None:
+    """A campaign-workflow greenlight is journaled under scope 'campaign'
+    (mirroring block_drive.run_tick's read) — the guard must find it there or
+    the committed-but-unadvanced block can never fire for campaign chains."""
+    _park_campaign(tmp_path)
+    append_decision(
+        tmp_path,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        block="campaign-greenlight",
+        response="y",
+        resolved={"approved": True},
+    )
+
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+
+    assert out is not None
+    assert out["decision"] == "block"
+    assert _CAMPAIGN_ID in out["reason"]
+    assert "campaign" in out["reason"]
+
+
+def test_campaign_parked_with_trailing_nudge_is_silent(tmp_path: Path) -> None:
+    """The §5 subtlety holds in the campaign scope too: a trailing nudge means
+    still awaiting the human — the guard stays silent."""
+    _park_campaign(tmp_path)
+    append_decision(
+        tmp_path,
+        scope_kind="campaign",
+        scope_id=_CAMPAIGN_ID,
+        block="campaign-greenlight",
+        response="raise the budget to 500 core-hours",
+    )
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_campaign_marker_ignores_run_scope_decisions(tmp_path: Path) -> None:
+    """A campaign-parked chain keys on the CAMPAIGN journal — a `y` sitting in
+    the (empty-marker) run scope of the same id must not arm the guard."""
+    _park_campaign(tmp_path)
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id=_CAMPAIGN_ID,
+        block="campaign-greenlight",
+        response="y",
+        resolved={"approved": True},
+    )
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
 # ─── loop safety & defensive no-ops ─────────────────────────────────────────
 
 

@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The draft-context projection — mechanizing the drafting brief
 
 **Status: PLANNED (2026-07-07, written during run #10's audit prelude — the

@@ -14,13 +14,15 @@ Invoke the `hpc-aggregate` skill via the Skill tool (only the fields the user pi
 ```
 Skill("hpc-aggregate", {
   experiment_dir: ".",
-  profile: <if user stated>,
-  run_id: <if user stated>,
+  run_id: <required — confirm with the user if not stated>,
   allow_partial: <if user pre-approved>
 })
 ```
 
-The block auto-discovers profile / run / stage from on-disk state.
+`run_id` is required (`aggregate-check`'s spec demands it; nothing
+auto-discovers a run) — if the user didn't name one, list `.hpc/runs/`
+and confirm before the first tick. The block resumes its own stage from
+the journal.
 
 ## Relaying a brief
 

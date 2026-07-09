@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -15,6 +16,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from hpc_agent.state.run_record import RunRecord
+
+# The cluster combiner's no-force refusal (exit 1) when its output file is
+# already present — ``.../combiner.py``: "output already exists: <path>
+# (use --force to overwrite)" / "final aggregate already exists: <path>
+# (use --force)".
+_ALREADY_COMBINED_RE = re.compile(r"already exists: \S+ \(use --force")
 
 
 def _aggregate_handler(ns: argparse.Namespace) -> int:
@@ -101,6 +108,12 @@ def combine_wave(
     ``combined_waves``. On failure, append to ``failed_waves`` and never
     mark the wave combined. Returns ``(ok, stdout, stderr)`` from
     :func:`run_combiner_checked`.
+
+    Idempotent on ``(run_id, wave)``: a no-``force`` replay of a wave the
+    journal already records as combined returns success without touching
+    the cluster, and a replay whose journal lost the wave is recognized
+    by the combiner's no-force "already exists" refusal and recorded as
+    combined — never as a new ``failed_waves`` entry.
     """
     # Activate the run's cluster env for the control-plane combiner — it
     # runs directly on the login node via ssh_run and would otherwise hit
@@ -117,6 +130,16 @@ def combine_wave(
     # without the record's cluster to backfill, the combiner runs bare login
     # python (rc=127, the blind-watch class at the wave-combine surface).
     _rec = load_run(experiment_dir, run_id)
+    if not force and _rec is not None and wave in _rec.combined_waves:
+        # Idempotent replay (idempotency_key "(run_id, wave)"): the journal
+        # already records this wave combined. Without this return, the
+        # cluster combiner would refuse with "output already exists (use
+        # --force)" and the replay would land in failed_waves.
+        return (
+            True,
+            f"wave {wave} already combined (journal); pass --force to re-run the combiner",
+            "",
+        )
     _fallback_cluster = _rec.cluster if _rec is not None else None
 
     ok, stdout, stderr = transport.run_combiner_checked(
@@ -129,6 +152,13 @@ def combine_wave(
             _sidecar, fallback_cluster=_fallback_cluster
         ),
     )
+
+    if not ok and not force and _ALREADY_COMBINED_RE.search(stderr):
+        # The combiner's no-force refusal is the on-cluster witness that
+        # this wave's output already exists — the journal missed the wave
+        # (e.g. wiped local state). Record it combined, not failed.
+        ok = True
+        stdout = f"wave {wave} already combined on cluster; pass --force to re-run\n{stdout}"
 
     def _apply(record: RunRecord) -> None:
         # Mutate inside the journal's per-run lock: a concurrent

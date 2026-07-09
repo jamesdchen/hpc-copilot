@@ -26,11 +26,13 @@ so it can never drift from a second source of truth; the marker write is
 deduplicated on (state, module sha12), so recomputing the same terminal fact
 appends nothing new (idempotent by construction).
 
-This file lives at the ``ops/`` *role root* (sibling to ``export_dossier.py`` /
-``trace.py``, NOT inside ``ops/notebook/``) because it reads across subjects —
-the ``state.audit_source`` section model and the ``state.notebook_audit``
-reduction over the decision journal. The subject-imports lint short-circuits for
-role-root files, so the cross-subject reads here are allowed by construction.
+This module lives in the ``ops/notebook/`` subject (moved from the ``ops/``
+role root by the 2026-07-09 reorg, docs/internals/audit-2026-07-09.md R1): its
+only cross-package reads are ``state.audit_source`` and ``state.notebook_audit``,
+which are substrate (``hpc_agent.state.*``) always allowed by
+``scripts/lint_subject_imports.py`` regardless of the importing file's
+location, so subject placement never depended on the role-root lint
+short-circuit.
 """
 
 from __future__ import annotations

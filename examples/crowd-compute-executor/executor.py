@@ -35,21 +35,20 @@ _KW_PREFIX = "HPC_KW_"
 
 
 def read_kwargs() -> dict:
-    """Decode the dispatcher's ``HPC_KW_<KEY>`` exports into kwargs.
+    """Read the dispatcher's ``HPC_KW_<KEY>`` exports into kwargs.
 
     Mirrors ``hpc_agent.execution.mapreduce.metrics_io.read_kw_env``:
-    keys are lowercased, values are JSON-decoded with a raw-string
-    fallback for legacy un-encoded values.
+    keys are lowercased, values stay raw strings — the dispatcher
+    exports ``str(value)`` and does no encoding, so a JSON decode here
+    would re-type values (``"1e3"`` -> ``1000.0``) and break the "same
+    image runs under a SLURM dispatcher" portability claim. Executors
+    that need typed values parse their own flags, same as on-cluster.
     """
     kwargs: dict = {}
     for key, raw in os.environ.items():
         if not key.startswith(_KW_PREFIX):
             continue
-        name = key[len(_KW_PREFIX) :].lower()
-        try:
-            kwargs[name] = json.loads(raw)
-        except json.JSONDecodeError:
-            kwargs[name] = raw
+        kwargs[key[len(_KW_PREFIX) :].lower()] = raw
     return kwargs
 
 

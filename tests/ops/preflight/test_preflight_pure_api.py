@@ -116,6 +116,57 @@ def test_pure_api_cluster_skips_merged_uv_probe(
     assert "pure-API" in checks["runtime_uv"]["detail"]
 
 
+def test_pure_api_cluster_still_gets_placeholder_check(
+    monkeypatch: pytest.MonkeyPatch, pure_api_backend: str
+) -> None:
+    """``cluster_config_customized`` is purely local (no SSH), so skipping the
+    transport probes must NOT skip it: a packaged ``<your_user>`` /
+    ``<your_scratch>`` placeholder config on a pure-API backend fails
+    preflight instead of surfacing later as a confusing submit failure."""
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {
+            "crowd": {
+                "host": "ignored",
+                "scheduler": pure_api_backend,
+                "user": "<your_user>",
+                "scratch": "<your_scratch>",
+            }
+        },
+    )
+    with (
+        mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
+        mock.patch.object(preflight.socket, "create_connection", _boom_tcp),
+        mock.patch("hpc_agent.infra.remote.ssh_run", _boom_ssh),
+    ):
+        result = preflight.check_preflight(cluster="crowd")
+
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_config_customized"]["ok"] is False
+    assert "<your_" in checks["cluster_config_customized"]["detail"]
+    assert result["all_ok"] is False
+
+
+def test_pure_api_cluster_customized_config_passes_placeholder_check(
+    monkeypatch: pytest.MonkeyPatch, pure_api_backend: str
+) -> None:
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {"crowd": {"host": "ignored", "scheduler": pure_api_backend, "user": "jdc"}},
+    )
+    with (
+        mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})),
+        mock.patch.object(preflight.socket, "create_connection", _boom_tcp),
+        mock.patch("hpc_agent.infra.remote.ssh_run", _boom_ssh),
+    ):
+        result = preflight.check_preflight(cluster="crowd")
+
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_config_customized"]["ok"] is True
+
+
 def _tcp_ok() -> mock.MagicMock:
     cm = mock.MagicMock()
     cm.__enter__ = mock.MagicMock(return_value=cm)

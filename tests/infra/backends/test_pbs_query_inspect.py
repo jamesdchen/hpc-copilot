@@ -82,6 +82,42 @@ def test_query_pbs_torque_omits_x_flag():
         assert captured[0][:3] == ["qstat", "-f", "-t"] and "-x" not in captured[0]
 
 
+def _pbs_stanza(seq: str, idx: int, exit_status: int) -> str:
+    return (
+        f"Job Id: {seq}[{idx}].pbsserver\n"
+        "    Job_Name = cpu_array\n"
+        "    job_state = F\n"
+        f"    Exit_status = {exit_status}\n"
+    )
+
+
+def test_query_pbs_resubmitted_task_reports_newest_attempt():
+    """Run records append resubmit job_ids oldest→newest; consumers that
+    prefer the most-recent attempt rely on that order (the query_sacct
+    newest-wins contract). A task that failed in job 111 and completed in
+    resubmitted job 222 must report COMPLETED, not the stale failure."""
+
+    def _run(cmd, **kwargs):
+        job = cmd[-1]
+        out = _pbs_stanza(job, 3, 1 if job == "111" else 0)
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    with patch("hpc_agent.infra.backends.query.subprocess.run", side_effect=_run):
+        out = query_pbs(["111", "222"], fork="pbspro")
+
+    # subjob [3] (ArrayIndex) -> HpcTaskId 2. Newest (222) wins.
+    assert out["tasks"][2]["state"] == "COMPLETED"
+    assert out["tasks"][2]["job_id"] == "222"
+
+
+def test_parse_qstat_full_pbs_first_stanza_still_wins_within_one_job():
+    # Within ONE job's qstat buffer the pre-existing first-stanza-wins
+    # rule is preserved (the newest-wins dedup applies across JOBS only).
+    tasks: dict[int, dict] = {}
+    _parse_qstat_full_pbs(_pbs_stanza("42", 3, 0) + _pbs_stanza("42", 3, 1), tasks)
+    assert tasks[2]["state"] == "COMPLETED"
+
+
 def test_engine_query_jobs_dispatches_to_pbs():
     def _run(cmd, **kwargs):
         return SimpleNamespace(returncode=0, stdout=_QSTAT_XF, stderr="")

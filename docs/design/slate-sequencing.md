@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The slate sequencing plan — implementation order for the six planned features
 
 **Status: ACTIVE (2026-07-07).** The master order for implementing the planning
