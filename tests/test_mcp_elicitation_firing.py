@@ -412,3 +412,131 @@ def test_second_refusal_stands_exactly_one_retry(
     assert len(runner.calls) == 2
     # The utterance WAS appended (the capture is real even if the gate still bars).
     assert len(read_utterances(experiment_dir)) == before + 1
+
+
+# ─── item 12 / Addendum 7: declared-but-dark adaptive degradation ────────────
+
+
+def _append_tools_call(experiment_dir: Path, req_id: int) -> dict[str, Any]:
+    """A ``tools/call`` for ``append-decision`` bound to *experiment_dir*."""
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": "tools/call",
+        "params": {
+            "name": "append-decision",
+            "arguments": {
+                "experiment_dir": str(experiment_dir),
+                "spec": _append_call()["arguments"]["spec"],
+            },
+        },
+    }
+
+
+def test_timeout_marks_session_dark_next_refusal_immediate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SILENT (timed-out) elicitation flips the session dark: the NEXT authorship
+    refusal returns immediately with no ``elicitation/create`` sent (leg a)."""
+    monkeypatch.setattr(M, "_ELICITATION_TIMEOUT_SEC", 0.3)
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    server, runner = _scripted_server([(1, _authorship_refusal(), "")])
+    with FakeMcpClient(server) as client:
+        client.initialize(elicitation=True)
+        # First refusal → elicitation fires, but the client never answers.
+        client.send(_append_tools_call(experiment_dir, 1))
+        req = client.recv()
+        assert req["method"] == "elicitation/create"
+        resp1 = client.recv(timeout=10.0)  # the deadline fires → refusal
+        assert resp1["id"] == 1
+        assert resp1["result"]["structuredContent"]["ok"] is False
+        assert server._client_elicitation_dark is True
+        # Second refusal: the channel is dark, so NO elicitation/create is sent —
+        # the very next message the client reads is the tools/call response.
+        client.send(_append_tools_call(experiment_dir, 2))
+        resp2 = client.recv(timeout=10.0)
+    assert "method" not in resp2  # not a server-originated elicitation/create
+    assert resp2["id"] == 2
+    structured = resp2["result"]["structuredContent"]
+    assert structured["ok"] is False and "elicitation" not in structured
+    # Two append-decision calls, NEITHER retried (each is a bare refusal).
+    assert len(runner.calls) == 2
+
+
+def test_decline_does_not_go_dark_next_refusal_still_elicits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A human DECLINE is a real response, not silence: the channel stays live and
+    the NEXT authorship refusal still opens an elicitation (leg a, the other side)."""
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    server, runner = _scripted_server([(1, _authorship_refusal(), "")])
+    with FakeMcpClient(server) as client:
+        client.initialize(elicitation=True)
+        client.send(_append_tools_call(experiment_dir, 1))
+        req1 = client.recv()
+        assert req1["method"] == "elicitation/create"
+        client.send({"jsonrpc": "2.0", "id": req1["id"], "result": {"action": "decline"}})
+        resp1 = client.recv(timeout=10.0)
+        assert resp1["result"]["structuredContent"]["ok"] is False
+        assert server._client_elicitation_dark is False  # a decline never darkens
+        # Second refusal STILL elicits — the client rendered a popup, it is live.
+        client.send(_append_tools_call(experiment_dir, 2))
+        req2 = client.recv(timeout=10.0)
+        assert req2["method"] == "elicitation/create"
+        client.send({"jsonrpc": "2.0", "id": req2["id"], "result": {"action": "decline"}})
+        resp2 = client.recv(timeout=10.0)
+    assert resp2["result"]["structuredContent"]["ok"] is False
+
+
+def test_wait_disclosure_open_and_dark_close_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The wait is not dead air: an OPEN line names the tool + deadline, and the
+    timed-out CLOSE line names the ``timed-out-dark`` outcome (leg b)."""
+    monkeypatch.setattr(M, "_ELICITATION_TIMEOUT_SEC", 0.3)
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    server, runner = _scripted_server([(1, _authorship_refusal(), "")])
+    with FakeMcpClient(server) as client:
+        client.initialize(elicitation=True)
+        client.send(_append_tools_call(experiment_dir, 1))
+        assert client.recv()["method"] == "elicitation/create"
+        client.recv(timeout=10.0)  # timeout → dark
+    err = capsys.readouterr().err
+    assert "waiting on human elicitation" in err
+    assert "for append-decision" in err
+    assert "timed-out-dark" in err
+
+
+def test_wait_disclosure_declined_and_answered_close_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLOSE line names ``declined`` when a human responds without a sign-off,
+    and ``answered`` when a typed sign-off is captured (leg b outcomes)."""
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    typed = "reopen calibration for the drift reanalysis"
+    # Decline flow → 'declined' close line (no retry: the refusal is the last call).
+    server_d, _ = _scripted_server([(1, _authorship_refusal(), "")])
+    with FakeMcpClient(server_d) as client:
+        client.initialize(elicitation=True)
+        client.send(_append_tools_call(experiment_dir, 1))
+        req = client.recv()
+        client.send({"jsonrpc": "2.0", "id": req["id"], "result": {"action": "decline"}})
+        client.recv(timeout=10.0)
+    # Answered flow → 'answered' close line + capture (initial refuses, retry ok).
+    server_a, _ = _scripted_server([(1, _authorship_refusal(), ""), (0, _envelope(ok=True), "")])
+    with FakeMcpClient(server_a) as client:
+        client.initialize(elicitation=True)
+        client.send(_append_tools_call(experiment_dir, 1))
+        req = client.recv()
+        client.send(
+            {
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {"action": "accept", "content": {"utterance": typed}},
+            }
+        )
+        resp = client.recv(timeout=10.0)
+    assert resp["result"]["structuredContent"]["elicitation"] == "captured"
+    err = capsys.readouterr().err
+    assert "(declined)" in err
+    assert "(answered)" in err
