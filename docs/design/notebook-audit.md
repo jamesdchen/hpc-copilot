@@ -530,3 +530,15 @@ bounds arithmetic. An off-by-one in halo/last-chunk-end sails through. Add a
 generator kind (`{series_length, chunks, halo}` → code-emitted per-task
 bounds, property-tested) so the enumeration script disappears and the math
 gets a test seat.
+
+Addendum 2 (same day): **5. Decision-state claims join the relay-audit
+corpus** (hook-side, pairs with item 2). Run #11 live instance: the agent
+told the human "your y is revoked and nothing has advanced" with NO journal
+record of the revocation — it was only narrated retroactively inside the NEXT
+greenlight's evidence_digest. The state happened to be true (no scheduler
+job_ids; only the speculative canary was in flight), but the claim was
+unbacked at utterance time — rule 10's disease, outside rule 10's corpus
+(numbers + section/run states). Extension: assertions of decision events
+("revoked", "greenlit", "superseded", "journaled") must match a journal
+record, and a revocation is a NUDGE — its own append-only record BEFORE the
+claim, never a narration inside a later record.
