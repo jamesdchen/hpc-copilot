@@ -657,3 +657,17 @@ spec_invalid refusal today hands back a SCHEMA POINTER and the agent spelunks
 marked — derived from the same schema the validator already loaded. Code
 never accepts the bad spec; it returns the correct shape. Pairs with item 13
 (hints that never bounce) — 14 covers everything off-chain.
+
+Addendum 10: **15. cluster_env_init failure signature + node identity**
+(infra/failure_signatures.py). Run #11: CARC returned Lmod's contentless
+"Unable to initialize environment ... error without diagnosis message" and
+the envelope's remediation punted ("check the stderr") at exactly the moment
+the stderr had nothing in it. Live diagnosis: transient — quota clean
+(48/100 GiB), login init + module load + hpc_agent import all green minutes
+later. Fix: (a) a signature row matching the Lmod init-failure shape →
+classified `cluster_env_init`, remediation naming the real suspects in
+priority order (transient/per-node Lmod flake → retry; home quota; stale
+Lmod cache; broken module in login init) and marking the CLASS retry-worthy;
+(b) ssh-op failure_features gain the remote node identity (hostname the op
+actually landed on) — per-node flakiness is undiagnosable when the envelope
+doesn't say which node.
