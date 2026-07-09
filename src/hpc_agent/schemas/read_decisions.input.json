@@ -16,7 +16,8 @@
         "campaign",
         "scope",
         "notebook",
-        "registration"
+        "registration",
+        "pack"
       ],
       "title": "Scope Kind",
       "type": "string"

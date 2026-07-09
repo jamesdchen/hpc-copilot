@@ -374,29 +374,18 @@ def _abs(path: Path) -> Path:
 
 
 def _read_pack_journal(experiment_dir: Path, pack_name: str) -> list[dict[str, Any]]:
-    """T8-seam direct reader of ``.hpc/packs/<name>.decisions.jsonl`` (append order).
+    """The pack's decision-journal records (append order), for the fail-open echoes.
 
-    Mirrors ``ops/pack/bind_op._read_pack_records`` exactly — the SAME journal file
-    and record shape — so the fail-open template-echo lookup works standalone ahead
-    of T8's ``"pack"`` decision-journal scope kind (a not-yet-created file → ``[]``;
-    one corrupt line never strands the rest). Re-points to
-    :func:`decision_journal.read_decisions` (``"pack"`` kind) when T8 lands.
+    T8 (Wave C) landed the ``"pack"`` decision-journal scope kind + its
+    ``.hpc/packs/<name>.decisions.jsonl`` path branch, so this routes through the
+    ONE journal reader — ``read_decisions(experiment_dir, "pack", name)`` — like
+    ``_records_for`` above (both reconciled off the T8 seam; mirrors
+    ``ops/pack/bind_op._read_pack_records`` and ``ops/pack_gate._read_pack_journal``).
+    A not-yet-created journal → ``[]``; one corrupt line never strands the rest.
+    Its two callers are fail-open (they swallow the ``SpecInvalid`` a bad scope_id
+    would raise), so echo behaviour is byte-identical to the old direct reader.
     """
-    from hpc_agent._kernel.contract.layout import RepoLayout
-
-    path = RepoLayout(experiment_dir).hpc / "packs" / f"{pack_name}.decisions.jsonl"
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
+    return read_decisions(experiment_dir, "pack", pack_name)
 
 
 # --- public per-seam accessors + the combined resolve -----------------------

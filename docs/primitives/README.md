@@ -128,6 +128,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [notebook-audit-view](notebook-audit-view.md) | yes | file_write: `<experiment>/.hpc/renders/<audit_id>/<slug>.<view_sha12>.md` | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` |
 | [notebook-draft-context](notebook-draft-context.md) | yes | _none_ | `hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]` |
 | [notebook-status](notebook-status.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
+| [pack-status](pack-status.md) | yes | _none_ | `hpc-agent pack-status --spec <path> [--experiment-dir <dir>]` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` |
 | [read-decisions](read-decisions.md) | yes | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` |
@@ -191,6 +192,8 @@ The verb partitions primitives into bands the reader can scan independently:
 | [notebook-record-config](notebook-record-config.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` |
 | [notebook-record-receipt](notebook-record-receipt.md) | no | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` |
 | [notebook-scaffold-template](notebook-scaffold-template.md) | no | file_write: `<experiment>/<output_path>` | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` |
+| [pack-bind](pack-bind.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]` |
+| [pack-record-receipt](pack-record-receipt.md) | no | file_write: `<experiment>/.hpc/packs/<pack>.decisions.jsonl` | `hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]` |
 | [provenance-manifest](provenance-manifest.md) | yes | file_write: `<experiment>/.hpc/provenance/<campaign_id>.json` | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` |
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` |

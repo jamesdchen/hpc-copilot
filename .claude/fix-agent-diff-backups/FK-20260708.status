@@ -1,0 +1,21 @@
+ M src/hpc_agent/_kernel/extension/mcp_server.py
+ M src/hpc_agent/_kernel/lifecycle/detached.py
+ M src/hpc_agent/_wire/workflows/aggregate_blocks.py
+ M src/hpc_agent/_wire/workflows/aggregate_flow.py
+ M src/hpc_agent/_wire/workflows/campaign_run.py
+ M src/hpc_agent/infra/block_chain.py
+ M src/hpc_agent/ops/aggregate_blocks.py
+ M src/hpc_agent/ops/aggregate_flow.py
+ M src/hpc_agent/ops/campaign_run.py
+ M src/hpc_agent/schemas/aggregate_block.output.json
+ M src/hpc_agent/schemas/aggregate_flow.input.json
+ M src/hpc_agent/schemas/aggregate_flow.output.json
+ M src/hpc_agent/schemas/aggregate_run.input.json
+ M src/hpc_agent/schemas/campaign_run.input.json
+ M src/hpc_agent/schemas/campaign_run.output.json
+ M src/hpc_agent/schemas/submit_s4.input.json
+ M tests/ops/aggregate/test_blocks.py
+ M tests/ops/test_campaign_run.py
+ M tests/test_mcp_server.py
+?? tests/ops/aggregate/test_flow_detach.py
+?? tests/ops/test_campaign_run_detach.py

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**147 operations total**: 120 primitive atoms + 27 workflow atoms.
+**150 operations total**: 123 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (64)
+## `query` (65)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -63,6 +63,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`notebook-audit-view`](../primitives/notebook-audit-view.md) | ✓ | file_write | `hpc-agent notebook-audit-view --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-draft-context`](../primitives/notebook-draft-context.md) | ✓ | _none_ | `hpc-agent notebook-draft-context --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-status`](../primitives/notebook-status.md) | ✓ | file_write | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`pack-status`](../primitives/pack-status.md) | ✓ | _none_ | `hpc-agent pack-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`plan-throughput`](../primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` | `_(none)_` | — | — |
 | [`poll-run-status`](../primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `_(none)_` | — | — |
 | [`read-decisions`](../primitives/read-decisions.md) | ✓ | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
@@ -109,7 +110,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (23)
+## `mutate` (25)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -130,6 +131,8 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`notebook-record-config`](../primitives/notebook-record-config.md) | ✗ | file_write | `hpc-agent notebook-record-config --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-record-receipt`](../primitives/notebook-record-receipt.md) | ✗ | file_write | `hpc-agent notebook-record-receipt --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`notebook-scaffold-template`](../primitives/notebook-scaffold-template.md) | ✗ | file_write | `hpc-agent notebook-scaffold-template --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`pack-bind`](../primitives/pack-bind.md) | ✗ | file_write | `hpc-agent pack-bind --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`pack-record-receipt`](../primitives/pack-record-receipt.md) | ✗ | file_write | `hpc-agent pack-record-receipt --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`provenance-manifest`](../primitives/provenance-manifest.md) | ✓ | file_write | `hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`prune-orphan-sidecars`](../primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `_(none)_` | — | — |
 | [`reconcile-journal`](../primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `_(none)_` | — | — |

@@ -1,3 +1,17 @@
+---
+name: pack-status
+verb: query
+side_effects: []
+idempotent: true
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent pack-status --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.pack.status_op.pack_status
+---
 # pack-status
 
 Report an experiment's **domain-pack state** — read-only. Given a pack name (or

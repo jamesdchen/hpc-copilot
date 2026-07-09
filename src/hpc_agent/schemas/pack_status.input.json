@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/pack_status.input.json",
+  "title": "pack-status input spec",
+  "description": "Which pack(s) to report — one named pack, or every opted-in pack.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "pack": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pack slug to report; omit to report every opted-in pack.",
+      "title": "Pack"
+    }
+  }
+}

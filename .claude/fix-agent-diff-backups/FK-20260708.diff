@@ -1,0 +1,1489 @@
+diff --git a/src/hpc_agent/_kernel/extension/mcp_server.py b/src/hpc_agent/_kernel/extension/mcp_server.py
+index 25676baf..5e7436e8 100644
+--- a/src/hpc_agent/_kernel/extension/mcp_server.py
++++ b/src/hpc_agent/_kernel/extension/mcp_server.py
+@@ -531,18 +531,35 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
+ # detach-by-contract too — its monitor poll runs in a durable detached worker, so
+ # a blocking (detach=false) invocation over this synchronous server would wedge it
+ # exactly like an S2/S3/S4 watch.
+-_DETACH_REQUIRED_VERBS = frozenset({"submit-s2", "submit-s3", "submit-s4", "status-watch"})
++# ``aggregate-run`` / ``aggregate-flow`` / ``campaign-run`` joined 2026-07-08
++# (run-#10 F-K): a live ``aggregate-run`` call held the synchronous server for
++# 20+ minutes with zero observability (no log, no lease). Each is now
++# detach-by-contract — the combine SSH + rsync pull (or a whole campaign
++# iteration) runs in a durable detached worker.
++_DETACH_REQUIRED_VERBS = frozenset(
++    {
++        "submit-s2",
++        "submit-s3",
++        "submit-s4",
++        "status-watch",
++        "aggregate-run",
++        "aggregate-flow",
++        "campaign-run",
++    }
++)
+ 
+ 
+ def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
+     """Raise ``_Invalid`` for tool calls that would block the server.
+ 
+-    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch`` must carry
+-    ``spec.detach == true`` (the detached worker + ``wait-detached`` is the
+-    sanctioned wait; the S4 harvest's combine + rsync pull + breaker
+-    wait-and-retry — and the status-watch monitor poll — can hold the line for
+-    many minutes on a throttled host). The detached path returns a pid handle
+-    immediately; ``wait-detached`` (via backgrounded Bash) wakes the caller once.
++    ``submit-s2``/``submit-s3``/``submit-s4``/``status-watch``/``aggregate-run``/
++    ``aggregate-flow``/``campaign-run`` must carry ``spec.detach == true`` (the
++    detached worker + ``wait-detached`` is the sanctioned wait; the S4 /
++    aggregate harvest's combine + rsync pull + breaker wait-and-retry — the
++    status-watch monitor poll — and a full ``campaign-run`` submit→monitor→
++    aggregate iteration can hold the line for many minutes on a throttled host).
++    The detached path returns a pid handle immediately; ``wait-detached`` (via
++    backgrounded Bash) wakes the caller once.
+     """
+     spec = arguments.get("spec")
+     spec_dict = spec if isinstance(spec, dict) else {}
+diff --git a/src/hpc_agent/_kernel/lifecycle/detached.py b/src/hpc_agent/_kernel/lifecycle/detached.py
+index 68bdd139..82384fa7 100644
+--- a/src/hpc_agent/_kernel/lifecycle/detached.py
++++ b/src/hpc_agent/_kernel/lifecycle/detached.py
+@@ -83,8 +83,25 @@ __all__ = [
+ # spawn-and-return and no unattended path dials inline. The child polls the SAME
+ # ``monitor-flow`` body with ``detach`` OFF; ``ops/status_blocks.py`` records its
+ # terminal so a re-invoke replays instead of re-dialing.
++# ``aggregate-run`` / ``aggregate-flow`` / ``campaign-run`` joined on 2026-07-08
++# (run-#10 finding F-K): each is a cluster-bound harvest/iteration whose
++# wall-clock is minutes-to-hours (per-wave combine SSH + rsync pull + the
++# breaker-deadline wait-and-retry; a full submit→monitor→aggregate iteration for
++# ``campaign-run``), yet each still ran SYNCHRONOUSLY over the single-threaded
++# MCP server — a live ``aggregate-run`` call wedged the chat for 20+ minutes with
++# zero observability. Detaching them gives each its own lease + spec + log under
++# ``_detached/`` and a journal-polled handle, exactly like the submit blocks.
+ SUPPORTED_DETACHED_BLOCK_VERBS = frozenset(
+-    {"submit-s2", "submit-s3", "submit-s4", "submit-speculate", "status-watch"}
++    {
++        "submit-s2",
++        "submit-s3",
++        "submit-s4",
++        "submit-speculate",
++        "status-watch",
++        "aggregate-run",
++        "aggregate-flow",
++        "campaign-run",
++    }
+ )
+ 
+ 
+@@ -379,17 +396,19 @@ def _block_spec_run_id(spec: dict[str, Any]) -> str:
+     """Dig the run_id out of a detach-supported block spec dict (for the handle).
+ 
+     S2 / S3 / speculate embed the submit-and-verify spec under ``submit.submit``
+-    with the ``run_id`` on the inner submit-flow spec; S4 (harvest) carries it on
+-    its embedded aggregate-flow spec at ``aggregate.run_id``; ``status-watch``
+-    carries it on its embedded monitor-flow spec at ``monitor.run_id``. The
+-    run_id is what the parent hands back as the journal-poll key, so it must be
+-    present before the detach. Raises :class:`DriveModeError` when it can't be
++    with the ``run_id`` on the inner submit-flow spec; S4 (harvest),
++    ``aggregate-run``, and ``campaign-run`` carry it on their embedded
++    aggregate-flow spec at ``aggregate.run_id``; ``status-watch`` carries it on
++    its embedded monitor-flow spec at ``monitor.run_id``; ``aggregate-flow``
++    carries it FLAT at ``run_id`` (it IS the aggregate spec, not an embedder).
++    The run_id is what the parent hands back as the journal-poll key, so it must
++    be present before the detach. Raises :class:`DriveModeError` when it can't be
+     found — a detached block that can't name its run can't be polled.
+ 
+-    The submit shapes are checked FIRST and unchanged; the ``monitor`` fallback is
+-    additive (a submit spec resolves its run_id before the fallback is reached, so
+-    the submit paths stay byte-identical — pinned by
+-    ``tests/integration/test_spec_contract.py``).
++    The submit shapes are checked FIRST and unchanged; the ``aggregate`` /
++    ``monitor`` / flat ``run_id`` fallbacks are additive (a submit spec resolves
++    its run_id before the fallbacks are reached, so the submit paths stay
++    byte-identical — pinned by ``tests/integration/test_spec_contract.py``).
+     """
+     submit = spec.get("submit")
+     inner = submit.get("submit") if isinstance(submit, dict) else None
+@@ -400,11 +419,16 @@ def _block_spec_run_id(spec: dict[str, Any]) -> str:
+     if not isinstance(run_id, str) or not run_id:
+         monitor = spec.get("monitor")
+         run_id = monitor.get("run_id") if isinstance(monitor, dict) else None
++    if not isinstance(run_id, str) or not run_id:
++        # aggregate-flow is itself the aggregate spec — run_id sits FLAT.
++        flat = spec.get("run_id")
++        run_id = flat if isinstance(flat, str) else None
+     if not isinstance(run_id, str) or not run_id:
+         raise DriveModeError(
+             "detached block drive requires a string run_id at "
+             f"spec.submit.submit.run_id (S2/S3/speculate), spec.aggregate.run_id "
+-            f"(S4), or spec.monitor.run_id (status-watch); got {run_id!r}. The "
++            f"(S4/aggregate-run/campaign-run), spec.monitor.run_id (status-watch), "
++            f"or spec.run_id (aggregate-flow); got {run_id!r}. The "
+             "detached worker polls the journal by run_id, so it must be resolved "
+             "before the detach."
+         )
+@@ -419,8 +443,9 @@ def launch_submit_block_detached(
+     hpc_agent_bin: str | None = None,
+ ) -> DetachedLaunch:
+     """Launch a detach-by-contract block (``submit-s2`` / ``submit-s3`` /
+-    ``submit-s4`` / ``submit-speculate`` / ``status-watch``) as a DETACHED
+-    ``hpc-agent <verb>`` subprocess (design §3, detach-by-contract).
++    ``submit-s4`` / ``submit-speculate`` / ``status-watch`` / ``aggregate-run`` /
++    ``aggregate-flow`` / ``campaign-run``) as a DETACHED ``hpc-agent <verb>``
++    subprocess (design §3, detach-by-contract).
+ 
+     Generalized 2026-07-07 to cover ``status-watch`` (connection-broker.md): the
+     launcher is block-family-agnostic — the run_id extractor
+diff --git a/src/hpc_agent/_wire/workflows/aggregate_blocks.py b/src/hpc_agent/_wire/workflows/aggregate_blocks.py
+index c3954bbb..95488286 100644
+--- a/src/hpc_agent/_wire/workflows/aggregate_blocks.py
++++ b/src/hpc_agent/_wire/workflows/aggregate_blocks.py
+@@ -51,6 +51,11 @@ AggregateBlockStage = Literal[
+     # aggregate-run — combine + reduce + extract.
+     "harvested",  # every wave combined; results table ready.
+     "harvest_partial",  # some waves escalated; partial results table.
++    # Detach-by-contract (design §3; run-#10 F-K): aggregate-run spawned a durable
++    # detached worker to own the combine + rsync harvest and returned immediately —
++    # the results-table brief arrives on completion, read from the journal (never
++    # held in a process that could wedge the synchronous MCP server for 20+ min).
++    "detached",
+ ]
+ 
+ 
+@@ -109,6 +114,30 @@ class AggregateBlockResult(BaseModel):
+             "free-prose."
+         ),
+     )
++    started: bool = Field(
++        default=False,
++        description=(
++            "Detach-by-contract handle (design §3): True when aggregate-run spawned a "
++            "durable detached worker (which owns the combine SSH + rsync harvest) and "
++            "returned immediately instead of harvesting in-process. The results brief "
++            "is read from the journal on completion. False on the synchronous "
++            "(detach=False) path."
++        ),
++    )
++    watch: str | None = Field(
++        default=None,
++        description=(
++            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
++            "``started`` is True. None on the synchronous path."
++        ),
++    )
++    detached_pid: int | None = Field(
++        default=None,
++        description=(
++            "The detached worker's OS process id (informational — do NOT wait on it; "
++            "read the journal). None on the synchronous path."
++        ),
++    )
+ 
+ 
+ class AggregateCheckSpec(BaseModel):
+@@ -173,3 +202,18 @@ class AggregateRunSpec(BaseModel):
+             "failure); ensure_all_combined=false is the deliberate-partial opt-in."
+         ),
+     )
++    detach: bool = Field(
++        default=True,
++        description=(
++            "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is "
++            "the norm. When True the greenlight gate + scope gate fire SYNCHRONOUSLY "
++            "(gate → detach), then aggregate-run spawns a durable detached worker to "
++            "own the harvest (per-wave combine SSH + rsync pull can ride a throttled "
++            "cluster or an open breaker's wait-and-retry for many minutes) and returns "
++            "immediately with a {started, watch: journal, detached_pid} handle; the "
++            "results-table brief is read from the journal on completion, never held in "
++            "a process. Set False to run the harvest synchronously in-process "
++            "(block-drive child / tests / CI). NOTE the embedded aggregate-flow spec "
++            "carries its OWN detach (default OFF) — the composed reduce never detaches."
++        ),
++    )
+diff --git a/src/hpc_agent/_wire/workflows/aggregate_flow.py b/src/hpc_agent/_wire/workflows/aggregate_flow.py
+index 6cb959cc..9712ed1e 100644
+--- a/src/hpc_agent/_wire/workflows/aggregate_flow.py
++++ b/src/hpc_agent/_wire/workflows/aggregate_flow.py
+@@ -97,6 +97,24 @@ class AggregateFlowSpec(BaseModel):
+         ),
+     )
+ 
++    detach: bool = Field(
++        default=False,
++        description=(
++            "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the "
++            "aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a "
++            "COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's "
++            "finally), submit-s4, aggregate-run, and campaign-run all call it "
++            "SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach "
++            "would fork every one of those instead of harvesting. Detach is therefore "
++            "OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The "
++            "MCP seam still refuses a blocking aggregate-flow (it reads the raw spec "
++            "dict, not this default), so an agent calling it directly must pass "
++            "detach=true; when True aggregate-flow spawns a durable detached worker "
++            "(combine SSH + rsync pull) and returns a {started, watch: journal, "
++            "detached_pid} handle, the reduced metrics read from the journal on "
++            "completion."
++        ),
++    )
+     reconcile_terminal: bool = Field(
+         default=False,
+         description=(
+@@ -211,3 +229,27 @@ class AggregateFlowResult(BaseModel):
+             "existing consumers are untouched."
+         ),
+     )
++    started: bool = Field(
++        default=False,
++        description=(
++            "Detach-by-contract handle (design §3; run-#10 F-K): True when a DIRECT "
++            "aggregate-flow invocation with detach=true spawned a durable detached "
++            "worker to own the combine + rsync harvest and returned immediately. The "
++            "reduced metrics are read from the journal on completion; the data fields "
++            "above are empty on the handle. False on every synchronous / composed path."
++        ),
++    )
++    watch: str | None = Field(
++        default=None,
++        description=(
++            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
++            "``started`` is True. None on the synchronous path."
++        ),
++    )
++    detached_pid: int | None = Field(
++        default=None,
++        description=(
++            "The detached worker's OS process id (informational — do NOT wait on it; "
++            "read the journal). None on the synchronous path."
++        ),
++    )
+diff --git a/src/hpc_agent/_wire/workflows/campaign_run.py b/src/hpc_agent/_wire/workflows/campaign_run.py
+index cd0a1dff..b5838d66 100644
+--- a/src/hpc_agent/_wire/workflows/campaign_run.py
++++ b/src/hpc_agent/_wire/workflows/campaign_run.py
+@@ -83,6 +83,22 @@ class CampaignRunSpec(BaseModel):
+             "advance any cursor — the tag is pass-through context only."
+         ),
+     )
++    detach: bool = Field(
++        default=True,
++        description=(
++            "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is "
++            "the norm. A campaign iteration's spine (submit → monitor to terminal → "
++            "aggregate) is minutes-to-hours of cluster-bound wall-clock, yet it ran "
++            "synchronously over the single-threaded MCP server. When True the whole "
++            "iteration runs in a durable detached worker and campaign-run returns "
++            "immediately with a {started, watch: journal, detached_pid} handle; the "
++            "iteration outcome (and its relay-due marker) is read from the journal on "
++            "completion. The detach seat wraps OUTSIDE the relay-due seam, so the "
++            "detached child still arms the relay-due marker on its terminal. Set False "
++            "to run the iteration synchronously in-process (the campaign driver's "
++            "in-code chain / tests / CI)."
++        ),
++    )
+ 
+ 
+ class CampaignRunResult(BaseModel):
+@@ -108,13 +124,21 @@ class CampaignRunResult(BaseModel):
+         "run_abandoned",
+         "aggregate_failed",
+         "complete",
++        # Detach-by-contract (design §3; run-#10 F-K): campaign-run spawned a durable
++        # detached worker to own the whole submit→monitor→aggregate iteration and
++        # returned immediately — the real outcome (and its relay-due marker) arrives
++        # on completion, read from the journal (never held in a process that could
++        # wedge the synchronous MCP server for the length of an iteration).
++        "detached",
+     ] = Field(description="Which stage of the iteration spine the composite reached / stopped at.")
+     needs_decision: bool = Field(
+         description=(
+             "True for the failure / budget stages (submit_failed / run_failed / "
+             "run_timeout / run_abandoned / aggregate_failed) that hand a decision "
+-            "back; False for the clean `complete` terminal. run_timeout is the "
+-            "budget case — nothing failed; the driver re-invokes to keep watching."
++            "back; False for the clean `complete` terminal and for the `detached` "
++            "handle (nothing to decide yet — the outcome arrives via the journal). "
++            "run_timeout is the budget case — nothing failed; the driver re-invokes "
++            "to keep watching."
+         ),
+     )
+     reason: str = Field(description="Human-readable summary of the outcome / what must be decided.")
+@@ -147,3 +171,26 @@ class CampaignRunResult(BaseModel):
+             "or did not produce a clean result."
+         ),
+     )
++    started: bool = Field(
++        default=False,
++        description=(
++            "Detach-by-contract handle (design §3; run-#10 F-K): True when campaign-run "
++            "spawned a durable detached worker to own the whole iteration and returned "
++            "immediately instead of running the spine in-process. The outcome is read "
++            "from the journal on completion. False on the synchronous (detach=False) path."
++        ),
++    )
++    watch: str | None = Field(
++        default=None,
++        description=(
++            'How to learn the detached iteration\'s outcome — ``"journal"`` when '
++            "``started`` is True. None on the synchronous path."
++        ),
++    )
++    detached_pid: int | None = Field(
++        default=None,
++        description=(
++            "The detached worker's OS process id (informational — do NOT wait on it; "
++            "read the journal). None on the synchronous path."
++        ),
++    )
+diff --git a/src/hpc_agent/infra/block_chain.py b/src/hpc_agent/infra/block_chain.py
+index f094f252..7f3a4ce3 100644
+--- a/src/hpc_agent/infra/block_chain.py
++++ b/src/hpc_agent/infra/block_chain.py
+@@ -219,6 +219,7 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
+     # aggregate-run — end of the aggregate chain.
+     ("aggregate-run", "harvested"): None,
+     ("aggregate-run", "harvest_partial"): None,
++    ("aggregate-run", "detached"): None,  # brief arrives via the journal.
+     # ── campaign family ───────────────────────────────────────────────────────
+     # campaign-greenlight
+     ("campaign-greenlight", "greenlit"): "campaign-watch",  # stamped → observe.
+diff --git a/src/hpc_agent/ops/aggregate_blocks.py b/src/hpc_agent/ops/aggregate_blocks.py
+index 49c97b77..da230d9d 100644
+--- a/src/hpc_agent/ops/aggregate_blocks.py
++++ b/src/hpc_agent/ops/aggregate_blocks.py
+@@ -47,6 +47,8 @@ from hpc_agent.ops.aggregate_flow import aggregate_flow
+ from hpc_agent.ops.aggregate_preflight import aggregate_preflight
+ from hpc_agent.ops.block_gate import assert_greenlit_target
+ from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
++from hpc_agent.ops.scope_gate import assert_scopes_unlocked
++from hpc_agent.state.block_terminal import terminal_block_key
+ from hpc_agent.state.journal import load_run
+ from hpc_agent.state.run_record import TERMINAL_STATUSES
+ 
+@@ -56,6 +58,15 @@ if TYPE_CHECKING:
+ __all__ = ["aggregate_check", "aggregate_run"]
+ 
+ 
++# The block-terminal store, the detached lease, and the doctor dead-worker scan
++# all key a detached aggregate-run under its VERB ("aggregate-run") — the SAME
++# string ``_spawn_detached`` stamps into the lease. Sourced from the ONE key
++# derivation (:func:`state.block_terminal.terminal_block_key`) so this recorder
++# can never drift from the replay reader / doctor scan (the verb is already
++# canonical, so this is an identity call that documents the shared seam).
++_AGG_RUN_BLOCK_KEY = terminal_block_key("aggregate-run")
++
++
+ def _next_block(
+     current_verb: str, stage_reached: str, why: str, **spec_hint: Any
+ ) -> dict[str, Any] | None:
+@@ -382,6 +393,110 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
+     )
+ 
+ 
++# ── aggregate-run detach-by-contract helpers (design §3; run-#10 F-K) ─────────
++
++
++def _agg_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
++    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
++
++    The identity a terminal replay is keyed on (mirrors
++    ``ops/submit_blocks._current_cmd_sha`` / ``ops/status_blocks._watch_cmd_sha``):
++    a nudge that re-resolves the run rewrites the sidecar ``cmd_sha``, so a
++    mismatch is "the tree moved → do not replay a stale outcome". An
++    unreadable/absent sidecar yields ``""`` → the replay refuses (re-execute).
++    """
++    from hpc_agent.state.runs import read_run_sidecar
++
++    try:
++        sidecar = read_run_sidecar(experiment_dir, run_id)
++    except (OSError, ValueError, errors.HpcError):
++        return ""
++    return str((sidecar or {}).get("cmd_sha") or "")
++
++
++def _detached_agg_run_spec_dict(spec: AggregateRunSpec) -> dict[str, Any]:
++    """Serialize *spec* with ``detach`` forced OFF for the detached child.
++
++    The child runs the SAME aggregate-run body synchronously (its harvest IS the
++    point), so its spec must carry ``detach=False`` — a truthy detach would fork
++    forever (mirrors ``ops/submit_blocks._detached_spec_dict``).
++    """
++    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
++
++
++def _replay_agg_run_terminal(experiment_dir: Path, run_id: str) -> AggregateBlockResult | None:
++    """Return a finished aggregate-run worker's recorded terminal for the CURRENT
++    tree, else ``None`` (run #7 idempotent re-invoke).
++
++    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
++    the terminal — proof the outcome still applies. A moved/absent ``cmd_sha`` (a
++    nudge), an absent record, or a corrupt record all return ``None`` so the caller
++    re-executes (never replays a possibly-stale harvest). The replayed result was
++    already finalized on first completion, so the caller returns it as-is.
++    """
++    from hpc_agent.state.block_terminal import read_terminal
++
++    record = read_terminal(experiment_dir, run_id, _AGG_RUN_BLOCK_KEY)
++    if record is None:
++        return None
++    current_sha = _agg_run_cmd_sha(experiment_dir, run_id)
++    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
++        return None
++    try:
++        return AggregateBlockResult.model_validate(record["result"])
++    except (KeyError, TypeError, ValueError):
++        return None
++
++
++def _record_agg_run_terminal(experiment_dir: Path, result: AggregateBlockResult) -> None:
++    """Record a genuine aggregate-run terminal so a re-invoke replays it.
++
++    Called on the harvested / harvest_partial terminals (the detached handle,
++    ``stage_reached="detached"``, is not terminal and is never recorded). A run
++    with no run_id carries nothing to key on.
++    """
++    if not result.run_id:
++        return
++    from hpc_agent.state.block_terminal import record_terminal
++
++    record_terminal(
++        experiment_dir,
++        run_id=result.run_id,
++        block=_AGG_RUN_BLOCK_KEY,
++        cmd_sha=_agg_run_cmd_sha(experiment_dir, result.run_id),
++        result_dump=result.model_dump(mode="json"),
++    )
++
++
++def _detached_agg_run_result(
++    *, run_id: str, pid: int, log_path: str | None
++) -> AggregateBlockResult:
++    """The immediate-return handle for a detached aggregate-run (design §3).
++
++    ``needs_decision`` is False (nothing to decide yet — the results brief arrives
++    on completion, read from the journal) and ``next_block`` is null (the journal,
++    not this process, carries the next-block suggestion). ``block_drive._chain``
++    exits on this via ``_is_detached`` (started / watch / detached_pid /
++    stage=="detached").
++    """
++    return AggregateBlockResult(
++        block="run",
++        stage_reached="detached",
++        needs_decision=False,
++        reason=(
++            "aggregate-run detached — the combine + rsync harvest runs in a durable "
++            "background worker; its results brief arrives on completion (read the "
++            "journal). The greenlight and scope gates already passed synchronously "
++            "before the detach."
++        ),
++        run_id=run_id,
++        brief={"run_id": run_id, "log_path": log_path},
++        started=True,
++        watch="journal",
++        detached_pid=pid,
++    )
++
++
+ # ── aggregate-run ─────────────────────────────────────────────────────────────
+ 
+ 
+@@ -440,6 +555,14 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
+     ``aggregate-check``'s ready brief. The terminal-or-explicitly-partial
+     invariant is left to the composed ``aggregate-flow`` gate (compose, don't
+     duplicate).
++
++    Detach-by-contract (design §3; run-#10 F-K): with ``detach`` ON (default) the
++    greenlight + scope gates fire synchronously, then a durable detached worker
++    owns the harvest (combine SSH round-trips + rsync pull + the breaker-deadline
++    wait-and-retry) and the block returns a ``{started, watch: journal,
++    detached_pid}`` handle immediately — the results-table brief is read from the
++    journal on completion. A re-invoke after the worker finished REPLAYS the
++    recorded terminal (no re-combine, no SSH).
+     """
+     assert_greenlit_target(
+         experiment_dir,
+@@ -447,6 +570,37 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
+         verb="aggregate-run",
+         predecessor="aggregate-check",
+     )
++    # Scope gate (rigor-primitives T3), gate → detach ordering PROOF (same shape as
++    # submit-s4): a locked evidence-scope refuses SYNCHRONOUSLY in the parent, never
++    # inside a detached child's log where a "spent a reserved look" refusal is
++    # invisible. Defense in depth — ONE definition (assert_scopes_unlocked), TWO
++    # call sites: the detached CHILD re-hits the very same gate inside aggregate_flow,
++    # so a scope locked in the window between this parent check and the child's reduce
++    # is still caught. Fail-safe: a scope-less run passes silently.
++    assert_scopes_unlocked(experiment_dir, spec.aggregate.run_id)
++    # Detach-by-contract (design §3): the gates above fired SYNCHRONOUSLY (gate →
++    # detach — a gate failure surfaces here, loudly, never inside a detached child).
++    if spec.detach:
++        # Idempotent re-invoke (run #7): a prior detached worker may have already
++        # driven this block to its terminal for the current tree — replay that
++        # recorded outcome instead of re-spawning a redundant worker (no SSH, no
++        # re-combine). A moved cmd_sha (a nudge) or no record → fall through and
++        # spawn; a still-LIVE worker is refused by the single-lease.
++        replay = _replay_agg_run_terminal(experiment_dir, spec.aggregate.run_id)
++        if replay is not None:
++            return replay
++
++        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
++
++        launch = launch_submit_block_detached(
++            verb="aggregate-run",
++            experiment_dir=str(experiment_dir),
++            spec=_detached_agg_run_spec_dict(spec),
++        )
++        return _detached_agg_run_result(
++            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
++        )
++
+     agg = aggregate_flow(experiment_dir, spec=spec.aggregate)
+ 
+     brief: dict[str, Any] = {
+@@ -469,15 +623,15 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
+     # Per-scope PRIOR look counts recorded by the composed reduction (T3): copy
+     # verbatim, the framework interprets nothing. Key ABSENT (not None) for a
+     # scope-less run so a scope-less brief stays byte-identical to pre-T3. The
+-    # scope GATE (ScopeLocked refusal + the look-ledger side effect) fires ONCE,
+-    # inside the composed ``aggregate-flow`` — aggregate-run has no pre-flow seam
+-    # analogous to submit-s4's pre-detach gate, and it never detaches, so there
+-    # is no ordering hazard: the flow's gate + ledger write cover this block.
++    # look-ledger side effect fires ONCE, inside the composed ``aggregate-flow``;
++    # the scope GATE now fires TWICE (defense in depth) — the synchronous
++    # pre-detach ``assert_scopes_unlocked`` above AND the child's own check inside
++    # ``aggregate-flow`` — with one definition, so the two can never disagree.
+     if agg.scope_looks is not None:
+         brief["scope_looks"] = agg.scope_looks
+ 
+     partial = bool(agg.escalation_reason) or bool(agg.failed_waves)
+-    return AggregateBlockResult(
++    result = AggregateBlockResult(
+         block="run",
+         stage_reached="harvest_partial" if partial else "harvested",
+         needs_decision=True,
+@@ -489,3 +643,9 @@ def aggregate_run(experiment_dir: Path, *, spec: AggregateRunSpec) -> AggregateB
+         run_id=agg.run_id,
+         brief=brief,
+     )
++    # Record the genuine terminal so a re-invoke (the block-drive tick after the
++    # detached worker exits) REPLAYS this brief instead of re-combining a
++    # completed harvest. This runs on the synchronous path — which is exactly what
++    # the detached child executes — so the parent's replay finds it.
++    _record_agg_run_terminal(experiment_dir, result)
++    return result
+diff --git a/src/hpc_agent/ops/aggregate_flow.py b/src/hpc_agent/ops/aggregate_flow.py
+index fc79b59c..1ea379e3 100644
+--- a/src/hpc_agent/ops/aggregate_flow.py
++++ b/src/hpc_agent/ops/aggregate_flow.py
+@@ -71,6 +71,7 @@ from hpc_agent.ops.monitor.reconcile import mark_terminal
+ from hpc_agent.ops.monitor.status import record_status
+ from hpc_agent.ops.monitor.terminal import _is_terminal
+ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
++from hpc_agent.state.block_terminal import terminal_block_key
+ from hpc_agent.state.journal import load_run
+ from hpc_agent.state.run_record import TERMINAL_STATUSES
+ from hpc_agent.state.runs import read_run_sidecar
+@@ -99,6 +100,13 @@ class AggregateFlowResult:
+     #: for a scope-less run (existing consumers untouched). Two plain integers
+     #: per tag; no metric is ever consulted (rigor-primitives T3).
+     scope_looks: dict[str, dict[str, int]] | None = None
++    #: Detach-by-contract handle (design §3; run-#10 F-K). Set only on the handle
++    #: a DIRECT ``detach=true`` aggregate-flow invocation returns — the harvest
++    #: runs in a durable detached worker and the data fields above are empty. Every
++    #: synchronous / composed path leaves these at their defaults.
++    started: bool = False
++    watch: str | None = None
++    detached_pid: int | None = None
+ 
+     def to_envelope_data(self) -> dict[str, Any]:
+         return {
+@@ -115,6 +123,9 @@ class AggregateFlowResult:
+             "columns_checked": self.columns_checked,
+             "column_violations": list(self.column_violations or []),
+             "scope_looks": self.scope_looks,
++            "started": self.started,
++            "watch": self.watch,
++            "detached_pid": self.detached_pid,
+         }
+ 
+ 
+@@ -796,6 +807,107 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
+     return {}
+ 
+ 
++# ── aggregate-flow detach-by-contract helpers (design §3; run-#10 F-K) ────────
++#
++# aggregate-flow is a COMPOSED atom (default detach OFF) — the detach seat only
++# fires for a DIRECT top-level invocation that opts in. The block-terminal store,
++# the detached lease, and the doctor dead-worker scan all key it under its VERB
++# ("aggregate-flow") — the SAME string ``_spawn_detached`` stamps into the lease.
++_AGG_FLOW_BLOCK_KEY = terminal_block_key("aggregate-flow")
++
++
++def _agg_flow_cmd_sha(experiment_dir: Path, run_id: str) -> str:
++    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
++
++    The identity a terminal replay is keyed on (mirrors the submit-block /
++    status-watch recorders): a moved/absent ``cmd_sha`` → the replay refuses
++    (re-execute), never a false hit.
++    """
++    try:
++        sidecar = read_run_sidecar(experiment_dir, run_id)
++    except (OSError, ValueError, errors.HpcError):
++        return ""
++    return str((sidecar or {}).get("cmd_sha") or "")
++
++
++def _detached_agg_flow_spec_dict(spec: AggregateFlowSpec) -> dict[str, Any]:
++    """Serialize *spec* with ``detach`` forced OFF for the detached child.
++
++    The child runs the SAME aggregate-flow body synchronously (its harvest IS the
++    point), so its spec must carry ``detach=False`` — a truthy detach would fork
++    forever.
++    """
++    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
++
++
++def _replay_agg_flow_terminal(experiment_dir: Path, run_id: str) -> AggregateFlowResult | None:
++    """Return a finished aggregate-flow worker's recorded terminal for the CURRENT
++    tree, else ``None`` (run #7 idempotent re-invoke).
++
++    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
++    the terminal. A moved/absent ``cmd_sha``, an absent record, or a corrupt record
++    all return ``None`` so the caller re-executes.
++    """
++    from hpc_agent.state.block_terminal import read_terminal
++
++    record = read_terminal(experiment_dir, run_id, _AGG_FLOW_BLOCK_KEY)
++    if record is None:
++        return None
++    current_sha = _agg_flow_cmd_sha(experiment_dir, run_id)
++    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
++        return None
++    stored = record.get("result")
++    if not isinstance(stored, dict):
++        return None
++    try:
++        return AggregateFlowResult(**stored)
++    except TypeError:
++        return None
++
++
++def _record_agg_flow_terminal(experiment_dir: Path, result: AggregateFlowResult) -> None:
++    """Record a genuine aggregate-flow terminal so a re-invoke replays it.
++
++    Runs on the SYNCHRONOUS path — which is exactly what the detached child
++    executes — so the parent's replay finds it. A run with no run_id carries
++    nothing to key on; the detached HANDLE (``started``) is not terminal and is
++    skipped.
++    """
++    if not result.run_id or result.started:
++        return
++    from hpc_agent.state.block_terminal import record_terminal
++
++    record_terminal(
++        experiment_dir,
++        run_id=result.run_id,
++        block=_AGG_FLOW_BLOCK_KEY,
++        cmd_sha=_agg_flow_cmd_sha(experiment_dir, result.run_id),
++        result_dump=result.to_envelope_data(),
++    )
++
++
++def _detached_agg_flow_result(
++    *, run_id: str, pid: int, log_path: str | None
++) -> AggregateFlowResult:
++    """The immediate-return handle for a detached aggregate-flow (design §3).
++
++    The data fields are empty (the reduced metrics arrive on completion, read from
++    the journal); ``started`` / ``watch`` / ``detached_pid`` carry the handle that
++    ``_is_detached`` / ``wait-detached`` key on.
++    """
++    return AggregateFlowResult(
++        run_id=run_id,
++        combined_waves=[],
++        failed_waves=[],
++        waves_combined_this_call=[],
++        combiner_dir_local=str(log_path or ""),
++        aggregated_metrics={},
++        started=True,
++        watch="journal",
++        detached_pid=pid,
++    )
++
++
+ @primitive(
+     name="aggregate-flow",
+     verb="workflow",
+@@ -860,6 +972,64 @@ def aggregate_flow(
+ ) -> AggregateFlowResult:
+     """Finalize a run's aggregation; return paths + reduced metrics.
+ 
++    Detach-by-contract (design §3; run-#10 F-K) is handled HERE, in the thin
++    wrapper; the reduce itself is :func:`_aggregate_flow_impl`. aggregate-flow is a
++    COMPOSED atom (harvest-guard's §5 guaranteed harvest, submit-s4, aggregate-run,
++    campaign-run all call it SYNCHRONOUSLY and consume its metrics inline), so
++    ``detach`` defaults OFF and the wrapper is a pass-through on every composed
++    path. Only a DIRECT top-level invocation that opts in (``detach=true`` — the
++    MCP seam forces an agent to) detaches: the sync gates (no journal record →
++    ``JournalCorrupt``; a locked evidence scope → ``ScopeLocked``) fire in the
++    PARENT before the spawn, then a durable detached worker owns the combine +
++    rsync harvest and the wrapper returns a ``{started, watch: journal,
++    detached_pid}`` handle. A re-invoke after the worker finished REPLAYS the
++    recorded terminal. On the synchronous path the wrapper records the terminal so
++    the parent's replay finds it.
++    """
++    if spec.detach:
++        # gate → detach ordering PROOF: the fail-fast sync gates run in the parent.
++        record = load_run(experiment_dir, spec.run_id)
++        if record is None:
++            raise errors.JournalCorrupt(
++                f"no journal record for {spec.run_id!r}; submit the run first"
++            )
++        assert_scopes_unlocked(experiment_dir, spec.run_id)
++        replay = _replay_agg_flow_terminal(experiment_dir, spec.run_id)
++        if replay is not None:
++            return replay
++
++        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
++
++        launch = launch_submit_block_detached(
++            verb="aggregate-flow",
++            experiment_dir=str(experiment_dir),
++            spec=_detached_agg_flow_spec_dict(spec),
++        )
++        return _detached_agg_flow_result(
++            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
++        )
++
++    result = _aggregate_flow_impl(
++        experiment_dir,
++        spec=spec,
++        mode=mode,
++        aggregate_cmd=aggregate_cmd,
++        aggregate_output_path=aggregate_output_path,
++    )
++    _record_agg_flow_terminal(experiment_dir, result)
++    return result
++
++
++def _aggregate_flow_impl(
++    experiment_dir: Path,
++    *,
++    spec: AggregateFlowSpec,
++    mode: str | None = None,
++    aggregate_cmd: str | None = None,
++    aggregate_output_path: str | None = None,
++) -> AggregateFlowResult:
++    """Finalize a run's aggregation; return paths + reduced metrics.
++
+     The wire-validated ``spec`` carries the user-facing knobs
+     (``run_id``, ``output_dir``, ``ensure_all_combined``,
+     ``combiner_max_retries``, ``pull_summaries``, ``summary_glob``,
+diff --git a/src/hpc_agent/ops/campaign_run.py b/src/hpc_agent/ops/campaign_run.py
+index 21cc5d04..167336a4 100644
+--- a/src/hpc_agent/ops/campaign_run.py
++++ b/src/hpc_agent/ops/campaign_run.py
+@@ -35,7 +35,7 @@ I/O contracts:
+ 
+ from __future__ import annotations
+ 
+-from typing import TYPE_CHECKING
++from typing import TYPE_CHECKING, Any
+ 
+ from hpc_agent import errors
+ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+@@ -47,6 +47,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
+ from hpc_agent.ops.aggregate_flow import aggregate_flow
+ from hpc_agent.ops.status_pipeline import status_pipeline
+ from hpc_agent.ops.submit_pipeline import submit_pipeline
++from hpc_agent.state.block_terminal import terminal_block_key
+ 
+ if TYPE_CHECKING:
+     from pathlib import Path
+@@ -54,6 +55,113 @@ if TYPE_CHECKING:
+ __all__ = ["campaign_run"]
+ 
+ 
++# The block-terminal store, the detached lease, and the doctor dead-worker scan
++# all key a detached campaign-run under its VERB ("campaign-run") — the SAME
++# string ``_spawn_detached`` stamps into the lease AND the SAME run_id
++# ``_block_spec_run_id`` digs out of the spec (``spec.aggregate.run_id``, since a
++# campaign spec carries no ``submit.submit.run_id``). Sourced from the ONE key
++# derivation so this recorder can never drift from the replay reader / doctor scan.
++_CAMPAIGN_BLOCK_KEY = terminal_block_key("campaign-run")
++
++
++def _campaign_cmd_sha(experiment_dir: Path, run_id: str) -> str:
++    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
++
++    The identity a terminal replay is keyed on. Pre-submit (the parent's first
++    detach) there is no sidecar → ``""`` → the replay refuses and the parent
++    spawns; post-completion the submitted run's sidecar carries the sha so a
++    re-invoke replays. A moved sha (a nudge) also refuses.
++    """
++    from hpc_agent.state.runs import read_run_sidecar
++
++    try:
++        sidecar = read_run_sidecar(experiment_dir, run_id)
++    except (OSError, ValueError, errors.HpcError):
++        return ""
++    return str((sidecar or {}).get("cmd_sha") or "")
++
++
++def _detached_campaign_spec_dict(spec: CampaignRunSpec) -> dict[str, Any]:
++    """Serialize *spec* with ``detach`` forced OFF for the detached child.
++
++    The child runs the SAME campaign-run body synchronously (the whole iteration
++    spine IS the point), so its spec must carry ``detach=False`` — a truthy detach
++    would fork forever.
++    """
++    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
++
++
++def _replay_campaign_terminal(experiment_dir: Path, run_id: str) -> CampaignRunResult | None:
++    """Return a finished campaign-run worker's recorded terminal for the CURRENT
++    tree, else ``None`` (run #7 idempotent re-invoke).
++
++    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
++    the terminal — proof the iteration outcome still applies (a re-invoke must not
++    re-submit a fresh array). A moved/absent ``cmd_sha``, an absent record, or a
++    corrupt record all return ``None`` so the caller spawns a fresh iteration.
++    """
++    from hpc_agent.state.block_terminal import read_terminal
++
++    record = read_terminal(experiment_dir, run_id, _CAMPAIGN_BLOCK_KEY)
++    if record is None:
++        return None
++    current_sha = _campaign_cmd_sha(experiment_dir, run_id)
++    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
++        return None
++    try:
++        return CampaignRunResult.model_validate(record["result"])
++    except (KeyError, TypeError, ValueError):
++        return None
++
++
++def _record_campaign_terminal(
++    experiment_dir: Path, *, key_run_id: str, result: CampaignRunResult
++) -> None:
++    """Record a genuine campaign-run terminal so a re-invoke replays it.
++
++    Keyed on *key_run_id* — ``spec.aggregate.run_id``, the SAME value
++    ``_block_spec_run_id`` uses for the lease/poll — NOT ``result.run_id`` (which
++    is threaded from the submit sub-stage and may differ), so the parent's replay
++    (which only has the spec) reads the same key. The detached HANDLE
++    (``stage_reached="detached"``) is never recorded — the child records its real
++    terminal, and only that.
++    """
++    if not key_run_id or result.stage_reached == "detached":
++        return
++    from hpc_agent.state.block_terminal import record_terminal
++
++    record_terminal(
++        experiment_dir,
++        run_id=key_run_id,
++        block=_CAMPAIGN_BLOCK_KEY,
++        cmd_sha=_campaign_cmd_sha(experiment_dir, key_run_id),
++        result_dump=result.model_dump(mode="json"),
++    )
++
++
++def _detached_campaign_result(*, run_id: str, pid: int, log_path: str | None) -> CampaignRunResult:
++    """The immediate-return handle for a detached campaign-run (design §3).
++
++    ``needs_decision`` is False (nothing to decide yet — the iteration outcome, and
++    its relay-due marker, arrive on completion, read from the journal).
++    ``block_drive._chain`` / ``wait-detached`` exit on this via the
++    ``started`` / ``watch`` / ``detached_pid`` handle.
++    """
++    return CampaignRunResult(
++        stage_reached="detached",
++        needs_decision=False,
++        reason=(
++            "campaign-run detached — the whole submit→monitor→aggregate iteration "
++            "runs in a durable background worker; its outcome (and relay-due marker) "
++            "arrives on completion (read the journal)."
++        ),
++        run_id=run_id,
++        started=True,
++        watch="journal",
++        detached_pid=pid,
++    )
++
++
+ @primitive(
+     name="campaign-run",
+     verb="workflow",
+@@ -105,7 +213,35 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
+     relaying it gets stopped once by the relay-audit hook (the exact conduct
+     strike of run #10: two exit-1 iterations were never surfaced). Marking is
+     fail-open — a marker write error never fails the iteration.
++
++    DETACH-BY-CONTRACT (design §3; run-#10 F-K): the detach seat wraps OUTSIDE
++    ``_campaign_run_impl`` AND the relay-due seam below, so with ``detach`` ON
++    (default) the PARENT returns a handle immediately (no relay-due yet — nothing
++    terminal), and the detached CHILD re-enters this SAME body with
++    ``detach=False``, runs the impl, arms the relay-due marker on its terminal,
++    and records that terminal for the parent's idempotent replay. So a detached
++    iteration still arms relay-due exactly once, on its real outcome.
+     """
++    if spec.detach:
++        # The journal-poll key is spec.aggregate.run_id (what _block_spec_run_id
++        # digs out — a campaign spec has no submit.submit.run_id), so the lease,
++        # the handle, and the terminal record all agree on one run_id.
++        key_run_id = spec.aggregate.run_id
++        replay = _replay_campaign_terminal(experiment_dir, key_run_id)
++        if replay is not None:
++            return replay
++
++        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
++
++        launch = launch_submit_block_detached(
++            verb="campaign-run",
++            experiment_dir=str(experiment_dir),
++            spec=_detached_campaign_spec_dict(spec),
++        )
++        return _detached_campaign_result(
++            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
++        )
++
+     result = _campaign_run_impl(experiment_dir, spec=spec)
+     try:
+         if result.stage_reached in _RELAY_DUE_STAGES:
+@@ -120,6 +256,11 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
+             )
+     except Exception:  # noqa: BLE001 — the gate must never fail the work it guards
+         pass
++    # Record the genuine terminal (keyed by spec.aggregate.run_id, the lease key)
++    # so a re-invoke after the detached worker exits REPLAYS this outcome instead
++    # of re-submitting a fresh array. Runs on the synchronous path — which is what
++    # the detached child executes.
++    _record_campaign_terminal(experiment_dir, key_run_id=spec.aggregate.run_id, result=result)
+     return result
+ 
+ 
+diff --git a/src/hpc_agent/schemas/aggregate_block.output.json b/src/hpc_agent/schemas/aggregate_block.output.json
+index 9b5f03ed..34c6fa5b 100644
+--- a/src/hpc_agent/schemas/aggregate_block.output.json
++++ b/src/hpc_agent/schemas/aggregate_block.output.json
+@@ -27,7 +27,8 @@
+         "not_ready",
+         "integrity_review",
+         "harvested",
+-        "harvest_partial"
++        "harvest_partial",
++        "detached"
+       ],
+       "title": "Stage Reached",
+       "type": "string"
+@@ -75,6 +76,38 @@
+       "default": null,
+       "description": "The DETERMINISTICALLY-computed next block — ``{verb, why, spec_hint}`` — or null at a terminal / human-branch terminator (design §2, the ``_next_step_hint`` pattern generalized). ``verb`` names the next block's CLI verb; ``spec_hint`` carries the minimal next-spec skeleton (run_id etc.). Surfaced, greenlit, journaled under ``resolved.next_block``, and enforced by the successor gate — never free-prose.",
+       "title": "Next Block"
++    },
++    "started": {
++      "default": false,
++      "description": "Detach-by-contract handle (design §3): True when aggregate-run spawned a durable detached worker (which owns the combine SSH + rsync harvest) and returned immediately instead of harvesting in-process. The results brief is read from the journal on completion. False on the synchronous (detach=False) path.",
++      "title": "Started",
++      "type": "boolean"
++    },
++    "watch": {
++      "anyOf": [
++        {
++          "type": "string"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "How to learn the detached harvest's outcome — ``\"journal\"`` when ``started`` is True. None on the synchronous path.",
++      "title": "Watch"
++    },
++    "detached_pid": {
++      "anyOf": [
++        {
++          "type": "integer"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path.",
++      "title": "Detached Pid"
+     }
+   }
+ }
+diff --git a/src/hpc_agent/schemas/aggregate_flow.input.json b/src/hpc_agent/schemas/aggregate_flow.input.json
+index cc28c56b..55f390de 100644
+--- a/src/hpc_agent/schemas/aggregate_flow.input.json
++++ b/src/hpc_agent/schemas/aggregate_flow.input.json
+@@ -83,6 +83,12 @@
+       "title": "Mode",
+       "type": "string"
+     },
++    "detach": {
++      "default": false,
++      "description": "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's finally), submit-s4, aggregate-run, and campaign-run all call it SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach would fork every one of those instead of harvesting. Detach is therefore OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The MCP seam still refuses a blocking aggregate-flow (it reads the raw spec dict, not this default), so an agent calling it directly must pass detach=true; when True aggregate-flow spawns a durable detached worker (combine SSH + rsync pull) and returns a {started, watch: journal, detached_pid} handle, the reduced metrics read from the journal on completion.",
++      "title": "Detach",
++      "type": "boolean"
++    },
+     "reconcile_terminal": {
+       "default": false,
+       "description": "Skip-monitor escape hatch. When the journal still says in_flight (the caller went straight to aggregate on a short run without running monitor-flow), poll the cluster once and, if it confirms the run is done, mark the journal terminal before the terminal-state gate — using the SAME completion logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). If the cluster shows the run still genuinely running, the gate still fires. Default false preserves the strict gate: aggregate never silently reconciles unless the caller opts in.",
+diff --git a/src/hpc_agent/schemas/aggregate_flow.output.json b/src/hpc_agent/schemas/aggregate_flow.output.json
+index 1491363e..81ef15a5 100644
+--- a/src/hpc_agent/schemas/aggregate_flow.output.json
++++ b/src/hpc_agent/schemas/aggregate_flow.output.json
+@@ -125,6 +125,38 @@
+       "default": null,
+       "description": "Per-scope look counts recorded by this reduction, PRIOR to it: {tag: {prior_looks, distinct_lineages}}. `prior_looks` is the number of runs whose results were reduced against the scope BEFORE this one; `distinct_lineages` collapses supersession-chained reruns of the same experiment to one. Two plain integers per tag — the framework counts looks, it never interprets what they found. Null (key omitted in spirit) for a scope-less run, so existing consumers are untouched.",
+       "title": "Scope Looks"
++    },
++    "started": {
++      "default": false,
++      "description": "Detach-by-contract handle (design §3; run-#10 F-K): True when a DIRECT aggregate-flow invocation with detach=true spawned a durable detached worker to own the combine + rsync harvest and returned immediately. The reduced metrics are read from the journal on completion; the data fields above are empty on the handle. False on every synchronous / composed path.",
++      "title": "Started",
++      "type": "boolean"
++    },
++    "watch": {
++      "anyOf": [
++        {
++          "type": "string"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "How to learn the detached harvest's outcome — ``\"journal\"`` when ``started`` is True. None on the synchronous path.",
++      "title": "Watch"
++    },
++    "detached_pid": {
++      "anyOf": [
++        {
++          "type": "integer"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path.",
++      "title": "Detached Pid"
+     }
+   }
+ }
+diff --git a/src/hpc_agent/schemas/aggregate_run.input.json b/src/hpc_agent/schemas/aggregate_run.input.json
+index a0fa0188..da57da19 100644
+--- a/src/hpc_agent/schemas/aggregate_run.input.json
++++ b/src/hpc_agent/schemas/aggregate_run.input.json
+@@ -12,6 +12,12 @@
+     "aggregate": {
+       "$ref": "#/$defs/AggregateFlowSpec",
+       "description": "The aggregate-flow spec — ensures waves combined, pulls partials, reduces. Its terminal-status precondition gate is aggregate-run's own invariant (ensure_all_combined + non-terminal → precondition failure); ensure_all_combined=false is the deliberate-partial opt-in."
++    },
++    "detach": {
++      "default": true,
++      "description": "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is the norm. When True the greenlight gate + scope gate fire SYNCHRONOUSLY (gate → detach), then aggregate-run spawns a durable detached worker to own the harvest (per-wave combine SSH + rsync pull can ride a throttled cluster or an open breaker's wait-and-retry for many minutes) and returns immediately with a {started, watch: journal, detached_pid} handle; the results-table brief is read from the journal on completion, never held in a process. Set False to run the harvest synchronously in-process (block-drive child / tests / CI). NOTE the embedded aggregate-flow spec carries its OWN detach (default OFF) — the composed reduce never detaches.",
++      "title": "Detach",
++      "type": "boolean"
+     }
+   },
+   "$defs": {
+@@ -93,6 +99,12 @@
+           "title": "Mode",
+           "type": "string"
+         },
++        "detach": {
++          "default": false,
++          "description": "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's finally), submit-s4, aggregate-run, and campaign-run all call it SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach would fork every one of those instead of harvesting. Detach is therefore OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The MCP seam still refuses a blocking aggregate-flow (it reads the raw spec dict, not this default), so an agent calling it directly must pass detach=true; when True aggregate-flow spawns a durable detached worker (combine SSH + rsync pull) and returns a {started, watch: journal, detached_pid} handle, the reduced metrics read from the journal on completion.",
++          "title": "Detach",
++          "type": "boolean"
++        },
+         "reconcile_terminal": {
+           "default": false,
+           "description": "Skip-monitor escape hatch. When the journal still says in_flight (the caller went straight to aggregate on a short run without running monitor-flow), poll the cluster once and, if it confirms the run is done, mark the journal terminal before the terminal-state gate — using the SAME completion logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). If the cluster shows the run still genuinely running, the gate still fires. Default false preserves the strict gate: aggregate never silently reconciles unless the caller opts in.",
+diff --git a/src/hpc_agent/schemas/campaign_run.input.json b/src/hpc_agent/schemas/campaign_run.input.json
+index 536a9a48..eaae2759 100644
+--- a/src/hpc_agent/schemas/campaign_run.input.json
++++ b/src/hpc_agent/schemas/campaign_run.input.json
+@@ -35,6 +35,12 @@
+       "default": null,
+       "description": "Optional iteration tag for this campaign-run, carried through to the result for the driver's own bookkeeping. campaign-run does NOT advance any cursor — the tag is pass-through context only.",
+       "title": "Campaign Id"
++    },
++    "detach": {
++      "default": true,
++      "description": "Detach-by-contract (design §3; run-#10 F-K): default ON — never-stall is the norm. A campaign iteration's spine (submit → monitor to terminal → aggregate) is minutes-to-hours of cluster-bound wall-clock, yet it ran synchronously over the single-threaded MCP server. When True the whole iteration runs in a durable detached worker and campaign-run returns immediately with a {started, watch: journal, detached_pid} handle; the iteration outcome (and its relay-due marker) is read from the journal on completion. The detach seat wraps OUTSIDE the relay-due seam, so the detached child still arms the relay-due marker on its terminal. Set False to run the iteration synchronously in-process (the campaign driver's in-code chain / tests / CI).",
++      "title": "Detach",
++      "type": "boolean"
+     }
+   },
+   "$defs": {
+@@ -116,6 +122,12 @@
+           "title": "Mode",
+           "type": "string"
+         },
++        "detach": {
++          "default": false,
++          "description": "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's finally), submit-s4, aggregate-run, and campaign-run all call it SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach would fork every one of those instead of harvesting. Detach is therefore OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The MCP seam still refuses a blocking aggregate-flow (it reads the raw spec dict, not this default), so an agent calling it directly must pass detach=true; when True aggregate-flow spawns a durable detached worker (combine SSH + rsync pull) and returns a {started, watch: journal, detached_pid} handle, the reduced metrics read from the journal on completion.",
++          "title": "Detach",
++          "type": "boolean"
++        },
+         "reconcile_terminal": {
+           "default": false,
+           "description": "Skip-monitor escape hatch. When the journal still says in_flight (the caller went straight to aggregate on a short run without running monitor-flow), poll the cluster once and, if it confirms the run is done, mark the journal terminal before the terminal-state gate — using the SAME completion logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). If the cluster shows the run still genuinely running, the gate still fires. Default false preserves the strict gate: aggregate never silently reconciles unless the caller opts in.",
+diff --git a/src/hpc_agent/schemas/campaign_run.output.json b/src/hpc_agent/schemas/campaign_run.output.json
+index 2adcbb47..b6452abe 100644
+--- a/src/hpc_agent/schemas/campaign_run.output.json
++++ b/src/hpc_agent/schemas/campaign_run.output.json
+@@ -19,13 +19,14 @@
+         "run_timeout",
+         "run_abandoned",
+         "aggregate_failed",
+-        "complete"
++        "complete",
++        "detached"
+       ],
+       "title": "Stage Reached",
+       "type": "string"
+     },
+     "needs_decision": {
+-      "description": "True for the failure / budget stages (submit_failed / run_failed / run_timeout / run_abandoned / aggregate_failed) that hand a decision back; False for the clean `complete` terminal. run_timeout is the budget case — nothing failed; the driver re-invokes to keep watching.",
++      "description": "True for the failure / budget stages (submit_failed / run_failed / run_timeout / run_abandoned / aggregate_failed) that hand a decision back; False for the clean `complete` terminal and for the `detached` handle (nothing to decide yet — the outcome arrives via the journal). run_timeout is the budget case — nothing failed; the driver re-invokes to keep watching.",
+       "title": "Needs Decision",
+       "type": "boolean"
+     },
+@@ -94,6 +95,38 @@
+       "default": null,
+       "description": "The aggregate-flow `data` summary on a `complete` stage (combined_waves, failed_waves, aggregated_metrics, etc.); null when aggregate was not reached or did not produce a clean result.",
+       "title": "Aggregate Result"
++    },
++    "started": {
++      "default": false,
++      "description": "Detach-by-contract handle (design §3; run-#10 F-K): True when campaign-run spawned a durable detached worker to own the whole iteration and returned immediately instead of running the spine in-process. The outcome is read from the journal on completion. False on the synchronous (detach=False) path.",
++      "title": "Started",
++      "type": "boolean"
++    },
++    "watch": {
++      "anyOf": [
++        {
++          "type": "string"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "How to learn the detached iteration's outcome — ``\"journal\"`` when ``started`` is True. None on the synchronous path.",
++      "title": "Watch"
++    },
++    "detached_pid": {
++      "anyOf": [
++        {
++          "type": "integer"
++        },
++        {
++          "type": "null"
++        }
++      ],
++      "default": null,
++      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path.",
++      "title": "Detached Pid"
+     }
+   }
+ }
+diff --git a/src/hpc_agent/schemas/submit_s4.input.json b/src/hpc_agent/schemas/submit_s4.input.json
+index c0bb056e..c1658d62 100644
+--- a/src/hpc_agent/schemas/submit_s4.input.json
++++ b/src/hpc_agent/schemas/submit_s4.input.json
+@@ -99,6 +99,12 @@
+           "title": "Mode",
+           "type": "string"
+         },
++        "detach": {
++          "default": false,
++          "description": "Detach-by-contract (design §3; run-#10 F-K). Default OFF — UNLIKE the aggregate-run / submit-s4 blocks (default ON). aggregate-flow is a COMPOSED atom: harvest-guard's §5 guaranteed harvest (monitor-flow's finally), submit-s4, aggregate-run, and campaign-run all call it SYNCHRONOUSLY and consume its metrics inline, so a default-ON detach would fork every one of those instead of harvesting. Detach is therefore OPT-IN, for a DIRECT top-level aggregate-flow invocation (CLI/MCP). The MCP seam still refuses a blocking aggregate-flow (it reads the raw spec dict, not this default), so an agent calling it directly must pass detach=true; when True aggregate-flow spawns a durable detached worker (combine SSH + rsync pull) and returns a {started, watch: journal, detached_pid} handle, the reduced metrics read from the journal on completion.",
++          "title": "Detach",
++          "type": "boolean"
++        },
+         "reconcile_terminal": {
+           "default": false,
+           "description": "Skip-monitor escape hatch. When the journal still says in_flight (the caller went straight to aggregate on a short run without running monitor-flow), poll the cluster once and, if it confirms the run is done, mark the journal terminal before the terminal-state gate — using the SAME completion logic monitor-flow uses (`_is_terminal` → `mark-run-terminal`). If the cluster shows the run still genuinely running, the gate still fires. Default false preserves the strict gate: aggregate never silently reconciles unless the caller opts in.",
+diff --git a/tests/ops/aggregate/test_blocks.py b/tests/ops/aggregate/test_blocks.py
+index 90cbd48a..4605332b 100644
+--- a/tests/ops/aggregate/test_blocks.py
++++ b/tests/ops/aggregate/test_blocks.py
+@@ -231,7 +231,7 @@ def _agg_result(*, escalation_reason: str | None = None, failed_waves=None, scop
+ 
+ 
+ def test_run_returns_results_table_with_empty_interpretation_slot(experiment) -> None:
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()) as m_agg:
+@@ -255,7 +255,7 @@ def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
+     """A reduction over a scoped run copies the aggregate-flow result's
+     ``scope_looks`` onto the brief VERBATIM — two plain integers per tag, the
+     block interprets nothing (rigor-primitives T3)."""
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+     looks = {"held_out": {"prior_looks": 2, "distinct_lineages": 1}}
+ 
+@@ -268,7 +268,7 @@ def test_run_brief_carries_scope_looks_verbatim(experiment) -> None:
+ def test_run_brief_omits_scope_looks_key_for_scope_less_run(experiment) -> None:
+     """A scope-less reduction (``scope_looks is None``) leaves the key ABSENT —
+     not ``None`` — so a scope-less brief is byte-identical to a pre-T3 one."""
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(scope_looks=None)):
+@@ -278,7 +278,7 @@ def test_run_brief_omits_scope_looks_key_for_scope_less_run(experiment) -> None:
+ 
+ 
+ def test_run_partial_harvest_when_waves_escalate(experiment) -> None:
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(
+@@ -294,7 +294,7 @@ def test_run_partial_harvest_when_waves_escalate(experiment) -> None:
+ 
+ 
+ def test_run_partial_harvest_when_failed_waves(experiment) -> None:
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result(failed_waves=[3])):
+@@ -312,7 +312,7 @@ def test_run_surfaces_harvest_ledger_tail(journal_home, experiment) -> None:
+     ledger = harvest_marker_path(experiment, _RUN_ID)
+     ledger.parent.mkdir(parents=True, exist_ok=True)
+     ledger.write_text('{"terminal_cause": "complete", "harvest_ok": true}\n', encoding="utf-8")
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+@@ -342,7 +342,7 @@ def test_harvest_ledger_tail_falls_back_over_torn_final_line(journal_home, exper
+         '{"terminal_cause": "timeout", "harvest_ok": fal',
+         encoding="utf-8",
+     )
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+@@ -361,7 +361,7 @@ def test_harvest_ledger_tail_none_only_when_entirely_unparseable(journal_home, e
+     ledger = harvest_marker_path(experiment, _RUN_ID)
+     ledger.parent.mkdir(parents=True, exist_ok=True)
+     ledger.write_text("not json\n{also bad\n", encoding="utf-8")
+-    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++    spec = AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False)
+     _greenlight(experiment, "aggregate-run")
+ 
+     with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
+@@ -370,6 +370,117 @@ def test_harvest_ledger_tail_none_only_when_entirely_unparseable(journal_home, e
+     assert result.brief["harvest_ledger"] is None
+ 
+ 
++# ── aggregate-run detach-by-contract (design §3; run-#10 F-K) ──────────────────
++
++_LAUNCH_PATH = "hpc_agent._kernel.lifecycle.detached.launch_submit_block_detached"
++
++
++class _FakeLaunch:
++    run_id = _RUN_ID
++    pid = 4242
++    log_path = "/x/detached.log"
++
++
++def test_run_detaches_by_default_after_gate(experiment) -> None:
++    """detach ON (default): the harvest never runs in-process — a durable worker
++    is spawned and the handle envelope returned. The child spec carries detach OFF."""
++    _greenlight(experiment, "aggregate-run")
++    with (
++        mock.patch(_LAUNCH_PATH, return_value=_FakeLaunch()) as m_launch,
++        mock.patch.object(blocks, "aggregate_flow") as m_agg,
++    ):
++        result = blocks.aggregate_run(
++            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++        )
++
++    m_agg.assert_not_called()
++    m_launch.assert_called_once()
++    assert m_launch.call_args.kwargs["verb"] == "aggregate-run"
++    assert m_launch.call_args.kwargs["spec"]["detach"] is False
++    assert result.stage_reached == "detached"
++    assert result.started is True
++    assert result.watch == "journal"
++    assert result.detached_pid == 4242
++    assert result.needs_decision is False
++    assert result.next_block is None
++
++
++def test_run_gate_fires_before_detach(experiment) -> None:
++    """Ordering proof: no greenlight → the gate raises SYNCHRONOUSLY and the
++    detached launcher is NEVER reached (a gate failure can never hide in a child)."""
++    with (
++        mock.patch(_LAUNCH_PATH) as m_launch,
++        pytest.raises(errors.SpecInvalid, match="no journaled greenlight"),
++    ):
++        blocks.aggregate_run(
++            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++        )
++    m_launch.assert_not_called()
++
++
++def test_run_locked_scope_refuses_before_detach(experiment) -> None:
++    """Ordering proof (rigor-primitives T3): a LOCKED evidence-scope refuses
++    SYNCHRONOUSLY in the parent — the detached launcher is NEVER reached."""
++    from hpc_agent.state.runs import write_run_sidecar
++    from hpc_agent.state.scopes import record_lock
++
++    _greenlight(experiment, "aggregate-run")
++    write_run_sidecar(
++        experiment,
++        run_id=_RUN_ID,
++        cmd_sha="deadbeef",
++        hpc_agent_version="0.0.0-test",
++        submitted_at="2026-01-01T00:00:00+00:00",
++        executor="python run.py",
++        result_dir_template="results/{task_id}",
++        task_count=4,
++        tasks_py_sha="",
++        scopes=["holdout"],
++    )
++    record_lock(experiment, "holdout", reason="reserve this look")
++
++    with (
++        mock.patch(_LAUNCH_PATH) as m_launch,
++        pytest.raises(errors.ScopeLocked, match="holdout"),
++    ):
++        blocks.aggregate_run(
++            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++        )
++    m_launch.assert_not_called()
++
++
++def test_run_replays_recorded_terminal_without_respawn(experiment) -> None:
++    """Run #7 idempotent re-invoke: after the detached worker (a synchronous run)
++    records its terminal for the current tree, a re-invoke with detach ON REPLAYS
++    that brief — no second spawn, no re-combine."""
++    from tests.ops._block_fixtures import sidecar
++
++    _greenlight(experiment, "aggregate-run")
++    sidecar(experiment, cmd_sha="deadbeef", run_id=_RUN_ID)
++
++    # 1. The detached CHILD runs synchronously and records its terminal.
++    with mock.patch.object(blocks, "aggregate_flow", return_value=_agg_result()):
++        sync = blocks.aggregate_run(
++            experiment,
++            spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID), detach=False),
++        )
++    assert sync.stage_reached == "harvested"
++
++    # 2. The parent's re-invoke (detach ON) replays it — launcher never called.
++    with (
++        mock.patch(_LAUNCH_PATH) as m_launch,
++        mock.patch.object(blocks, "aggregate_flow") as m_agg,
++    ):
++        replay = blocks.aggregate_run(
++            experiment, spec=AggregateRunSpec(aggregate=AggregateFlowSpec(run_id=_RUN_ID))
++        )
++
++    m_launch.assert_not_called()
++    m_agg.assert_not_called()
++    assert replay.stage_reached == "harvested"
++    assert replay.brief["results_table"] == sync.brief["results_table"]
++
++
+ # ── registry metadata ─────────────────────────────────────────────────────────
+ 
+ 
+diff --git a/tests/ops/test_campaign_run.py b/tests/ops/test_campaign_run.py
+index 62bbc457..ce092cfd 100644
+--- a/tests/ops/test_campaign_run.py
++++ b/tests/ops/test_campaign_run.py
+@@ -49,6 +49,9 @@ def _campaign_spec() -> CampaignRunSpec:
+         status=StatusPipelineSpec(monitor=MonitorFlowSpec(run_id="ml-abcd1234")),
+         aggregate=AggregateFlowSpec(run_id="ml-abcd1234"),
+         campaign_id="camp-iter-7",
++        # These exercise the SYNCHRONOUS iteration spine; the detach-by-contract
++        # path (default ON) is pinned separately in test_campaign_run_detach.py.
++        detach=False,
+     )
+ 
+ 
+diff --git a/tests/test_mcp_server.py b/tests/test_mcp_server.py
+index 9c2d9d00..36524cd5 100644
+--- a/tests/test_mcp_server.py
++++ b/tests/test_mcp_server.py
+@@ -404,6 +404,60 @@ def test_mcp_allows_status_watch_with_detach() -> None:
+     assert runner.calls, "detached invocation must reach the runner"
+ 
+ 
++def test_mcp_refuses_aggregate_run_without_detach() -> None:
++    """run-#10 F-K: a synchronous aggregate-run (combine SSH + rsync pull) held the
++    server for 20+ minutes with zero observability — detach is required, like S4."""
++    server = _server(allow_mutations=True)
++    resp = _call(server, "aggregate-run", {"spec": {"detach": False}})
++    assert "error" in resp
++    assert "detach" in resp["error"]["message"]
++    assert "wait-detached" in resp["error"]["message"]
++
++
++def test_mcp_allows_aggregate_run_with_detach() -> None:
++    runner = FakeRunner()
++    server = _server(allow_mutations=True, runner=runner)
++    resp = _call(server, "aggregate-run", {"spec": {"detach": True}})
++    assert "error" not in resp
++    assert runner.calls, "detached invocation must reach the runner"
++
++
++def test_mcp_refuses_aggregate_flow_without_detach() -> None:
++    """aggregate-flow's default detach is OFF (composed atom), but a DIRECT blocking
++    MCP invocation is still refused — the seam reads the raw spec, not the default."""
++    server = _server(allow_mutations=True)
++    resp = _call(server, "aggregate-flow", {"spec": {"run_id": "r"}})
++    assert "error" in resp
++    assert "detach" in resp["error"]["message"]
++    assert "wait-detached" in resp["error"]["message"]
++
++
++def test_mcp_allows_aggregate_flow_with_detach() -> None:
++    runner = FakeRunner()
++    server = _server(allow_mutations=True, runner=runner)
++    resp = _call(server, "aggregate-flow", {"spec": {"detach": True, "run_id": "r"}})
++    assert "error" not in resp
++    assert runner.calls, "detached invocation must reach the runner"
++
++
++def test_mcp_refuses_campaign_run_without_detach() -> None:
++    """A whole campaign iteration (submit→monitor→aggregate) over the synchronous
++    server = a minutes-to-hours head-of-line wedge — detach is required."""
++    server = _server(allow_mutations=True)
++    resp = _call(server, "campaign-run", {"spec": {"detach": False}})
++    assert "error" in resp
++    assert "detach" in resp["error"]["message"]
++    assert "wait-detached" in resp["error"]["message"]
++
++
++def test_mcp_allows_campaign_run_with_detach() -> None:
++    runner = FakeRunner()
++    server = _server(allow_mutations=True, runner=runner)
++    resp = _call(server, "campaign-run", {"spec": {"detach": True}})
++    assert "error" not in resp
++    assert runner.calls, "detached invocation must reach the runner"
++
++
+ # ─── isolated runner deadline (src subprocess-timeout discipline) ────────────
+ 
+ 
