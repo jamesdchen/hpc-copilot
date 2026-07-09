@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent trace-diff --spec <spec.json> [--experiment-dir <dir>]
+  cli: hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.ops.trace_diff_op.trace_diff
 ---
 # trace-diff

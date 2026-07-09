@@ -355,6 +355,35 @@
           ],
           "default": null,
           "title": "Service Env"
+        },
+        "reproduces": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reproduces"
+        },
+        "trace_digests": {
+          "anyOf": [
+            {
+              "enum": [
+                "force_on",
+                "force_off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trace Digests"
         }
       },
       "required": [
@@ -1259,6 +1288,23 @@
           "default": null,
           "description": "run_id of the ORIGINAL run this submission deliberately REPRODUCES (the reproduction-receipt provenance field). Recorded verbatim on the sidecar; a later reproduction of the same original reads it back (find-prior-run / submit's reproduction_of lever) to skip this derived run too. Null = ordinary (non-reproduction) run.",
           "title": "Reproduces"
+        },
+        "trace_digests_override": {
+          "anyOf": [
+            {
+              "enum": [
+                "force_on",
+                "force_off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "DISCLOSURE of an exercised digest override (data-trace T3). force_on/force_off when the spec-level trace_digests lever overrode the digest classifier's sidecar-derived decision; recorded verbatim so the override is visible. Null = the classifier decided unaided (NO KNOB); omitted on write.",
+          "title": "Trace Digests Override"
         },
         "audited_source": {
           "anyOf": [

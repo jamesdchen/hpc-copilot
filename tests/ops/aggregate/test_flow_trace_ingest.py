@@ -172,11 +172,7 @@ def _rsync_stub(
 
 
 def _data_trace_records(experiment: Path) -> list[dict]:
-    return [
-        d
-        for d in read_decisions(experiment, "run", _RUN_ID)
-        if d.get("block") == "data-trace"
-    ]
+    return [d for d in read_decisions(experiment, "run", _RUN_ID) if d.get("block") == "data-trace"]
 
 
 def _metrics() -> list[dict]:
@@ -217,9 +213,7 @@ def test_absent_traces_are_silent_harvest_identical(journal_home, experiment, mo
     _seed_run(experiment)
     _seed_sidecar_no_reducer(experiment)
 
-    monkeypatch.setattr(
-        af_module, "rsync_pull", _rsync_stub(_metrics(), None, trace_pull_rc=23)
-    )
+    monkeypatch.setattr(af_module, "rsync_pull", _rsync_stub(_metrics(), None, trace_pull_rc=23))
 
     result = aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
 

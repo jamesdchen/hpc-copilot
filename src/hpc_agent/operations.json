@@ -1072,6 +1072,30 @@
     "verb": "query"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-diff --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_diff.input.json",
+    "name": "trace-diff",
+    "output_schema": "trace_diff.output.json",
+    "python": "hpc_agent.ops.trace_diff_op.trace_diff",
+    "side_effects": [],
+    "summary": "Overlay TWO traces from the local store and report, per stage and per atom, where their measurements diverge — dispatched through the ONE semantics registry (exact / set-delta / tolerance / exact-per-key / equality-chain / exact-endpoints). Highlights the FIRST diverging (stage, atom). Read-only, no SSH. Differences are FACTS (`row_count rows 100 → 90`), never verdicts; absence is disclosed. Tolerance is caller-owned (absent → exact).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent trace-render --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "trace_render.input.json",
+    "name": "trace-render",
+    "output_schema": "trace_render.output.json",
+    "python": "hpc_agent.ops.trace_render_op.trace_render",
+    "side_effects": [],
+    "summary": "Render one task's data trace as FOUR deterministic markdown views — row waterfall (with conservation flags), label-chain line, feature lineage (col_set deltas + column births), and the sketch table (value_sketch / null_count per column per stage) — under a self-describing run/config header. Read-only, no SSH. Selectors (exactly one): DIRECT {scope_kind, scope_id, task?}, or the REFERENCE lookup {cmd_sha} / {profile} (latest-by via a sidecar join). Absence is honest: 'no trace recorded for this scope' rides present/skipped, never an error. The render carries NO verdict vocabulary — the trace SHOWS, the scientist concludes; relay it verbatim.",
+    "verb": "query"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> [--combiner-dir <combiner_dir_local>] [--results-dir <results_dir_local>]",
     "idempotent": true,

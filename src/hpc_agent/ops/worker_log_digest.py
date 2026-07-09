@@ -145,9 +145,7 @@ def _render(
     ),
     agent_facing=True,
 )
-def worker_log_digest(
-    *, experiment_dir: Path, spec: WorkerLogDigestSpec
-) -> WorkerLogDigestResult:
+def worker_log_digest(*, experiment_dir: Path, spec: WorkerLogDigestSpec) -> WorkerLogDigestResult:
     """Digest a local worker log deterministically.
 
     Resolves ``spec.log_path`` to a path within the experiment dir, reads it

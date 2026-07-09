@@ -87,6 +87,8 @@ def _verb_from_schema_path(path: Path) -> str:
 # updates the inventory.
 _SPEC_VERBS: frozenset[str] = frozenset(
     {
+        "trace-diff",
+        "trace-render",
         "pack-bind",
         "pack-record-receipt",
         "pack-status",
