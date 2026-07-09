@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent.infra.io import append_jsonl_line, atomic_write_json
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state import determinism
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -155,27 +156,19 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _canonical_json(value: Any) -> str:
-    """Canonicalize *value* to a stable, whitespace-free, key-sorted JSON string.
-
-    P-S1: the canonical-JSON discipline appears several places
-    (``ops/check_task_generator_mismatch.py::canonical_json``,
-    ``ops/notebook/audit_view._canonical_json``). This is a LOCAL definition to
-    keep the manifest module free of a cross-subject import; it is a UNIFICATION
-    CANDIDATE for the P-S1 canonical-JSON helper when that lands.
-    """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
 def manifest_doc_sha(records: dict[str, Any]) -> str:
     """The manifest-doc sha: sha256 over the canonical JSON of the *records* map.
 
     The identity of the manifest AS A DOCUMENT (the ``{relpath: {...}}`` map),
-    NOT a raw-byte file hash — computed over :func:`_canonical_json` so key order
-    and whitespace never move it. This is what the journaled mint records as the
-    "this is the new known-good data identity" fingerprint.
+    NOT a raw-byte file hash — routed through the ONE canonical-sha definition
+    (:func:`state.determinism.canonical_sha` — the harness-contract form: sorted
+    keys, compact separators, ``ensure_ascii=False``) so key order and whitespace
+    never move it. This is the P-S1 re-point (the ``_canonical_json`` sibling copy
+    is gone; the conformance suite pins byte-for-byte agreement) — what the
+    journaled mint records as the "this is the new known-good data identity"
+    fingerprint.
     """
-    return hashlib.sha256(_canonical_json(records).encode("utf-8")).hexdigest()
+    return determinism.canonical_sha(records)
 
 
 def data_identity(experiment_dir: Path | str, *, output_path: str | None = None) -> str | None:

@@ -60,6 +60,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops import export_dossier
 from hpc_agent.ops.attention_queue import discover_fleet_experiments
+from hpc_agent.ops.evidence_project import apply_evidence_order, project_envelope_lines
 from hpc_agent.state import evidence_cache
 from hpc_agent.state.evidence import (
     CURRENT,
@@ -201,19 +202,14 @@ def _format_envelope(cls: str, rel_spread: float | None, lo: float | None, hi: f
 
 
 def _envelope_lines(coll: EvidenceCollection) -> list[EnvelopeLine]:
-    """Project each per-key determinism envelope, evidence labels QUOTED VERBATIM."""
-    return [
-        EnvelopeLine(
-            lineage=e.cmd_sha,
-            envelope=_format_envelope(e.cls, e.rel_spread, e.lo, e.hi),
-            n=e.n,
-            n_full=e.n_full,
-            n_partial=e.n_partial,
-            scales=list(e.scales),
-            clusters=list(e.clusters),
-        )
-        for e in coll.envelopes
-    ]
+    """Project each per-key determinism envelope, evidence labels QUOTED VERBATIM.
+
+    Shared loop (``ops/evidence_project.py``); the brief's own 2-decimal
+    formatter is injected and stays local.
+    """
+    return project_envelope_lines(
+        coll.envelopes, lambda e: _format_envelope(e.cls, e.rel_spread, e.lo, e.hi)
+    )
 
 
 def _citation_status_lines(coll: EvidenceCollection) -> list[CitationStatusLine]:
@@ -253,15 +249,14 @@ def _merge_collections(
     citations_status = [c for coll in colls for c in coll.citations_status]
     skipped = [s for coll in colls for s in coll.skipped]
 
-    conclusions.sort(key=lambda c: c.conclusion_id)
-    conclusions.sort(key=lambda c: c.ts or "", reverse=True)
-    activity.sort(key=lambda a: (a.kind, a.subject_id))
-    activity.sort(key=lambda a: a.ts or "", reverse=True)
-    unconcluded.sort(key=lambda a: a.subject_id)
-    unconcluded.sort(key=lambda a: a.ts or "", reverse=True)
-    envelopes.sort(key=lambda e: (e.cmd_sha, e.key))
-    citations_status.sort(key=lambda c: (c.conclusion_id, c.kind, c.ref))
-    skipped.sort(key=lambda s: (s.source, s.subject_id, s.reason))
+    apply_evidence_order(
+        conclusions=conclusions,
+        activity=activity,
+        unconcluded=unconcluded,
+        envelopes=envelopes,
+        citations_status=citations_status,
+        skipped=skipped,
+    )
 
     return EvidenceCollection(
         experiment_dir="<fleet>",
