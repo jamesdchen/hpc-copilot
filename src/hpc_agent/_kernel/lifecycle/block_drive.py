@@ -847,16 +847,41 @@ def _park(
         "next_spec_hint": _next_spec_hint(result),
     }
     brief = result.get("brief")
-    mark_pending_decision(
-        run_id,
-        block=verb,
-        workflow=wf or "",
-        brief=brief if isinstance(brief, dict) else {},
-        resume_cursor=resume_cursor,
-        awaiting_since=utcnow_iso(),
-        cmd_sha=_spec_sha(spec),
-        experiment_dir=experiment_dir,
-    )
+    # A park is a DISCLOSURE, not a mutation entitled to assume journal state.
+    # The journal RunRecord is minted by ``submit_and_record`` INSIDE the gated
+    # submit-s2 (the qsub) — S1's resolve leg writes only the per-run sidecar.
+    # So the FIRST park (the S1→S2 greenlight gate) is reached before any record
+    # exists, and ``mark_pending_decision`` → ``update_run_status`` raises
+    # FileNotFoundError for a sidecar-only run. That crashed the driver tick at
+    # the rendezvous for BOTH of run #11's runs, pushing the agent off-pipeline
+    # to per-block CLI (notebook-audit.md Addendum 13.0). The BlockDriveResult
+    # the caller returns already carries the brief to the human, so the human
+    # still sees the decision; only the DURABLE journal marker (the §5 "parked ≠
+    # stalled" flag + resume_cursor) is skipped here — and the §5 watchdog keys
+    # off journal records anyway, so a record-less run is unwatched regardless.
+    # Warn + continue, mirroring ``_repark_marker``'s OSError guard and
+    # ``_stamp_driver_tick``'s "warn, don't vanish" philosophy (drive.py).
+    try:
+        mark_pending_decision(
+            run_id,
+            block=verb,
+            workflow=wf or "",
+            brief=brief if isinstance(brief, dict) else {},
+            resume_cursor=resume_cursor,
+            awaiting_since=utcnow_iso(),
+            cmd_sha=_spec_sha(spec),
+            experiment_dir=experiment_dir,
+        )
+    except FileNotFoundError:
+        _log.warning(
+            "no run record for %s at park (%s → %s) — the sidecar-only run has "
+            "no journal record yet (minted at submit-s2/qsub); the decision brief "
+            "is still disclosed to the human but the durable pending-decision "
+            "marker is skipped until the record is minted",
+            run_id,
+            verb,
+            successor,
+        )
 
 
 def _repark_marker(experiment_dir: Path, run_id: str, marker: dict[str, Any]) -> None:
