@@ -130,9 +130,7 @@ def _iter_imports(tree: ast.AST, module_package: str) -> list[tuple[int, str]]:
                 continue
             out.append((node.lineno, module))
             out.extend(
-                (node.lineno, f"{module}.{alias.name}")
-                for alias in node.names
-                if alias.name != "*"
+                (node.lineno, f"{module}.{alias.name}") for alias in node.names if alias.name != "*"
             )
     return out
 
