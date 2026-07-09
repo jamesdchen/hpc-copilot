@@ -759,3 +759,77 @@ determinism-fingerprint substrate. Shape choices, each recorded:
   pre-interlock lines parse unchanged); `VerifyReproductionResult` gains
   `diverged_stage`. Schema regen NOT run here (serial-regen discipline) —
   rebake at merge.
+
+## Drift-log evaluations (2026-07-09): the two deferred-by-design leftovers
+
+Both items from the "Deferred by design" list were re-evaluated in the
+run-#11→#12 between-campaigns window. One stays deferred pending rulings; one
+stays deferred for want of a consumer. NO code changed and NO view_sha moved —
+recorded here so the next session does not re-derive.
+
+**(1) Audit-view section join — EVALUATED, STOPPED, three rulings needed.**
+The recorded intent (Amendment 9: each `human_required` section renders "its
+latest execution summary — rows/drops/labels/flags + the trace sha, cited in
+the trusted render") CANNOT be implemented now without inventing join
+semantics. Three independent hard blockers, each sufficient on its own:
+
+- **B1 — no producer.** Nothing emits audit-scope traces
+  (`.hpc/traces/audit/<audit_id>/`). The only trace producer in the tree is
+  the run-scope harvest ingest (`ops/aggregate_flow.py`). The T-R runner (the
+  notebook-render plugin's between-cell observation loop, A10/A12) that would
+  observe cell boundaries × declared observables and emit `source:runner`
+  records is NOT built (G-a was ruled in A14 "T-R unblocks", but the runner
+  itself was never implemented). A section join today renders EMPTY for every
+  real audit — the dead-display class.
+- **B2 — the record model carries no `source` tier.** A10 is doctrine:
+  "receipts/sign-off surfaces consume runner-tier only … draft-emitted never
+  enters receipts." The tier vocabulary exists ONLY in the T2 contract
+  (`execution/mapreduce/data_trace_contract.py`: `TRACE_SOURCE_{RUNNER,ENGINE,
+  DRAFT}`, `RECEIPT_GRADE_SOURCES`) and is consumed by nothing.
+  `state/data_trace.py` `make_record`/`validate_record` neither carry nor
+  validate a `source` field. A join that reads `read_trace(…,"audit",
+  audit_id,…)` and renders records unfiltered would put untrusted (draft/
+  engine) evidence into the SIGNED view — a direct A10 violation. There is no
+  runner-tier filter to apply because the field is not on the record.
+- **B3 — the per-section summary semantics are unspecified.** "One section :
+  many stages" (atom catalog). A9 names the fields to show but not: which of a
+  section's many stages supplies `rows/drops` (first / last / net
+  conservation?); what "the trace sha" means at SECTION granularity (sha of
+  the section's record subset, or the task's whole journaled `trace_sha`?);
+  and there is NO section-level freshness binding — trace records carry a
+  `section` slug but not a `section_sha`, so (unlike render receipts, which
+  bind `section_sha` and refuse drift in `_assertions_green`) a stale trace
+  would render as if current in a trusted view. Choosing any of these is
+  inventing semantics, which this task forbids.
+
+Framing correction for the implementer: the task presumed "a versioned
+canonicalization constant — find how the last bump was done." There is NONE in
+the audit-view path. `view_sha` is a pure content hash (`_sha_json` over the
+payload dict in `ops/notebook/audit_view.py`); the two prior payload-shape
+changes (T12 `attention_order`; the full-view-recompute) added payload FIELDS
+and rebaked fixtures with NO integer version bump. `TRACE_SCHEMA_VERSION`
+(`state/data_trace.py`) versions the TRACE record, not the audit view, and is
+"bump only on a breaking record-shape change." So there is no canon-version
+seam to turn — the join, when it lands, is a payload-shape change + fixture
+rebake, gated behind the three rulings below.
+
+RULINGS NEEDED before this can land (each a drift-log answer, not a redesign):
+(a) does the section join wait on T-R + the `source` tier landing on the
+record model (recommended — otherwise it renders dead/untrusted evidence), or
+is a v1 that reads whatever exists acceptable?; (b) the per-section summary
+reduction (which stage supplies rows/drops; the section-level trace-sha
+definition); (c) section-level freshness — bind a `section_sha` onto
+audit-scope records (mirroring receipts) so a drifted trace is refused, or
+render unbound with a disclosed "as-of" stamp.
+
+**(2) Temporal-scan index — EVALUATED, no consumer, stays deferred (correct
+by the doc's own gate).** Swept the tree for a would-be consumer of the
+"stage-drift-over-time / many runs" scan (the only scan-shaped consumer in the
+table). The COMPLETE trace-store consumer set is: `trace-render` (point lookup
++ Class-B latest-by-reference), `trace-diff` (two point lookups),
+`verify_reproduction` (run-scope task-0), and `aggregate_flow` (ingest). NONE
+walks many runs' traces linearly to compute drift over time. Per the storage
+ruling ("a DERIVED, disposable, content-keyed index when it becomes real —
+never a scan-optimized store for a consumer that does not yet exist") the index
+is NOT built. An index with no consumer is the dead-code class; it stays
+deferred until a stage-drift consumer is authored.
