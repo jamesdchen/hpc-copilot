@@ -542,3 +542,15 @@ unbacked at utterance time — rule 10's disease, outside rule 10's corpus
 ("revoked", "greenlit", "superseded", "journaled") must match a journal
 record, and a revocation is a NUDGE — its own append-only record BEFORE the
 claim, never a narration inside a later record.
+
+Addendum 3 (same night): **6. Deploy delta on rsync-less hosts** (transport).
+Run #11 live: a native-Windows host (no rsync on PATH) silently degraded to
+the tar full-copy fallback and re-shipped 8.4 GB to CARC over a ~1 MB/s VPN
+(hours) when >95% of the tree was already remote (17.8 GB from prior
+campaigns). Two parts: (a) DISCLOSURE — the fallback must say "no rsync →
+no delta → N MB will re-ship" at deploy start (the payload-size WARN exists;
+the cause line does not); (b) MANIFEST DELTA — the tar path can delta without
+rsync using the data-trace content-hash atoms: remote hashes its tree, local
+tars only mismatched files into the F-G stage dir. Windows rsync installs
+(MSYS/cwRsync) stay out of scope — the agent-blind-ssh / path-translation
+class killed ControlMaster here already.
