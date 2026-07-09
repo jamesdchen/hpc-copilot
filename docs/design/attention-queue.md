@@ -361,8 +361,8 @@ on the happy path, per `docs/internals/adding-a-primitive.md`.
   `scripts/build_verb_module_map.py`, `scripts/build_primitive_index.py`,
   `scripts/build_primitive_frontmatter.py` (the dev_regen_list lesson: a
   missed bake costs test failures). Inventory tails: `_SPEC_VERBS` in
-  `tests/contract/test_schema_roundtrip.py` and
-  `tests/contract/test_primitive_remediation.py`; the primitive doc page
+  `tests/contracts/test_schema_roundtrip.py` and
+  `tests/contracts/test_primitive_remediation.py`; the primitive doc page
   `docs/primitives/attention-queue.md`
   (`scripts/check_no_pending_primitive_docs.py`); the MCP curated-catalog
   prose in the server instructions if it enumerates query verbs; skill

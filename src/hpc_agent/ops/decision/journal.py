@@ -915,7 +915,7 @@ def _assert_unlock_authorship(
 # the gate can recognise — and lock — it (mirrors the ``scope-unlock`` block
 # convention). Lock 1 (no affordance) is organizational: there is NO sign-off
 # verb, chain, or next_block — append-decision under this block is the ONLY write
-# path (pinned by the contract test in tests/contract/).
+# path (pinned by the contract test in tests/contracts/).
 _SIGNOFF_BLOCK = "notebook-sign-off"
 
 # Identifier-shaped tokens: the substrate for the raised human-required bar and
@@ -1167,7 +1167,7 @@ def _assert_signoff_authorship(
 
     **Lock 1 (no affordance)** is organizational: there is no sign-off verb / chain
     / next_block — append-decision under this block is the only write path. Pinned
-    by the contract test in ``tests/contract/`` (no primitive is named sign-off).
+    by the contract test in ``tests/contracts/`` (no primitive is named sign-off).
 
     **Lock 2 (recompute, un-fakeable)** — the audited ``.py`` is resolved (from
     ``resolved['source']`` or the interview.json ``audited_source`` block), parsed

@@ -301,10 +301,13 @@ class ClusterPartiallyDegraded(HpcError):
     operation succeeded with partial data.
 
     Carries a ``partial_errors`` list attribute of ``{code, detail}``
-    dicts so the CLI dispatcher can surface the per-source failures to the
-    envelope's top-level ``partial_errors`` key. The operation that
-    raises this still set ok:true cluster-side; the exception is the
-    typed channel for surfacing what was missed.
+    dicts — the typed channel for the *raising operation's handler* to
+    surface per-source failures into the SUCCESS envelope's top-level
+    ``partial_errors`` key (the operation still succeeded cluster-side).
+    Note the generic CLI error path (``_err_from_hpc``) does not read the
+    attribute, and the error envelope has no ``partial_errors`` key: a
+    caller that lets this exception escape to the dispatcher gets an
+    ordinary error envelope and loses the per-source detail.
 
     Retry-safe because the typical cause is a transient scheduler
     daemon stall (qhost, sacct).

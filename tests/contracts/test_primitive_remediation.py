@@ -336,7 +336,7 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
 # Verbs whose contract conformance can't be probed without a richer
 # fixture (e.g. a real campaign dir, a real cluster, an existing
 # sidecar). They xfail with this reason; the punch-list item is "add a
-# fixture under tests/contract/fixtures/<verb>/" so the probe can run.
+# fixture under tests/contracts/fixtures/<verb>/" so the probe can run.
 XFAIL_NEEDS_FIXTURE: set[str] = set()
 
 

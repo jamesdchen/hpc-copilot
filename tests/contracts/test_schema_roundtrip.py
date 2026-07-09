@@ -176,7 +176,7 @@ KNOWN_GOOD_SPECS: dict[str, dict] = {
 # Verbs where no in-process known-good spec exists today (needs an
 # actual filesystem fixture or cluster). xfail surfaces the punch list
 # for the schema-author seam — adding a fixture under
-# ``tests/contract/fixtures/<verb>/spec.json`` drops the verb from
+# ``tests/contracts/fixtures/<verb>/spec.json`` drops the verb from
 # this set and the roundtrip runs as a hard assertion.
 XFAIL_NEEDS_FIXTURE: set[str] = {
     "interview",
@@ -353,7 +353,7 @@ def test_known_good_spec_passes_schema_validation(
     The fixture lookup ladder is:
 
     1. ``KNOWN_GOOD_SPECS[verb]`` — inline minimal spec.
-    2. ``tests/contract/fixtures/<verb>/spec.json`` — on-disk fixture
+    2. ``tests/contracts/fixtures/<verb>/spec.json`` — on-disk fixture
        (the canonical place for specs that need more than a literal).
 
     Verbs without either fixture surface in ``XFAIL_NEEDS_FIXTURE`` —

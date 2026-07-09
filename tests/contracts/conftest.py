@@ -8,7 +8,7 @@ they catch the exact regressions an upstream caller (slash command,
 worker prompt, MARs experiment runner) would hit at runtime.
 
 The ``contract`` and ``lint`` markers are registered here (not in
-``pyproject.toml``) so this work stays scoped to ``tests/contract/`` —
+``pyproject.toml``) so this work stays scoped to ``tests/contracts/`` —
 landing the WS4 enforcement infra without bumping the release tooling.
 Once the inventory pass settles and we want to ship the markers as a
 permanent gate, move the registrations into the top-level

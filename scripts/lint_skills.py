@@ -25,7 +25,7 @@ Run::
 
     python scripts/lint_skills.py
 
-CI integration: pytest ``-m lint`` (see ``tests/contract/test_lint_skills.py``).
+CI integration: pytest ``-m lint`` (see ``tests/contracts/test_lint_skills.py``).
 """
 
 from __future__ import annotations

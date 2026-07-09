@@ -1,6 +1,6 @@
 # WS4 lint + contract — design decisions
 
-The WS4 implementation (`scripts/lint_skills.py` + `tests/contract/*`)
+The WS4 implementation (`scripts/lint_skills.py` + `tests/contracts/*`)
 landed with 5 open design questions in its report. Verdicts + the
 landed implementation below.
 

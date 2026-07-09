@@ -9,7 +9,11 @@
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.4
+    # Keep in lock-step with the exact ``ruff==`` pin in pyproject's dev
+    # extra and CI: the formatter's output shifts between releases, so a
+    # skewed hook version formats locally what CI's ``ruff format
+    # --check`` then rejects.
+    rev: v0.15.18
     hooks:
       - id: ruff
         args: [--fix]
