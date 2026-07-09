@@ -205,9 +205,9 @@
     "agent_facing": true,
     "cli": "hpc-agent notebook-draft --spec <path> [--experiment-dir <dir>]",
     "idempotent": false,
-    "input_schema": null,
+    "input_schema": "notebook_draft.input.json",
     "name": "notebook-draft",
-    "output_schema": null,
+    "output_schema": "notebook_draft.output.json",
     "python": "hpc_agent.ops.notebook.draft_op.notebook_draft",
     "side_effects": [
       "file_write"

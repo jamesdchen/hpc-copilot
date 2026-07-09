@@ -719,6 +719,10 @@ def test_untraced_pair_receipt_byte_identical_to_pre_interlock(tmp_path: Path) -
         "per_key",
         "overall",
         "sources",
+        # receipt_kind joined every receipt with onboard-6.5's claim-check
+        # discriminator (a "reproduction" literal here) — the pre-interlock
+        # baseline legitimately includes it.
+        "receipt_kind",
     }
 
 

@@ -81,6 +81,7 @@ def _run_kit(
         capture_output=True,
         text=True,
         check=False,
+        timeout=600,
     )
 
 

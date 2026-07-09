@@ -133,6 +133,7 @@ def test_kit_module_runs_green_via_pytest_subprocess(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=600,
     )
     assert proc.returncode == 0, f"kit run failed:\nSTDOUT\n{proc.stdout}\nSTDERR\n{proc.stderr}"
     # the report hook fired for the certified reference

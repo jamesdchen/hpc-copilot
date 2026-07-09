@@ -331,6 +331,7 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # fields the per-field synthesizer would otherwise skip. Keyed by model
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    "VerifyReproductionSpec": {"original_run_id": "orig-run"},
     "EvidenceBriefSpec": {"tags": ["x"]},
     "TraceRenderSpec": {"scope_kind": "run", "scope_id": "x"},
     # ChallengeStatusSpec requires EXACTLY ONE addressing mode; the generic

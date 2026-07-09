@@ -178,10 +178,11 @@ def default_detect_capabilities(
             capture_output=True,
             text=True,
             cwd=str(experiment_dir),
+            timeout=120,
             check=False,
         )
         payload = json.loads(proc.stdout or "{}")
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return frozenset()
     detected: set[str] = set()
     caps = payload.get("result", payload) if isinstance(payload, dict) else {}

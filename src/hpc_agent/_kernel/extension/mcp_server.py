@@ -195,6 +195,8 @@ _CURATED_EXTRA_VERBS = frozenset(
         # ``notebook-draft-context`` — the deterministic drafting projection
         # (draft-context design): template slugs, resolved engines, call sites,
         # root inventories — the mechanized run-#10 drafting brief.
+        # ``notebook-draft`` — the drafter-attribution record (multi-human MH5).
+        "notebook-draft",
         "notebook-draft-context",
         # ``notebook-scaffold-template`` — the content-free template scaffold
         # that opens an audit.
