@@ -680,3 +680,20 @@ Hamilton lineage
 Drift-log line: 2026-07-08 — T0 gate discharged; all candidates refused as
 dependencies, OpenLineage facet field names adopted as a courtesy mapping
 recorded in the atom registry (Waves 1–3 unblocked).
+
+Drift-log line: 2026-07-08 — T5 `trace-render` landed (Wave 3, registry +1;
+regen deferred to a serial rebake). RECORDED ANSWER on the reference lookups
+(the `profile` under-specification the task flagged): `cmd_sha` resolves via
+`find_run_by_cmd_sha` (the T1/runs parameter-identity join, newest-first). The
+`profile` selector is IMPLEMENTED as a mechanical latest-by over the sidecar's
+LITERAL `profile` field (`find_existing_runs` yields sidecars newest-first, so
+the first match is the freshest exemplar) — NOT deferred, because the join is
+well-defined at the core layer: the sidecar carries a `profile` key and
+"latest-by-profile via sidecar keys" (A7 Class B) is exactly that scan. Core
+stays agnostic to WHICH profile string is the exemplar (pack/program naming) —
+the caller names it, core joins. Both reference lookups resolve to the matched
+run's `("run", run_id)` trace scope. Absence (no run matched, or a resolved
+scope with no recorded trace) is an honest `present=false` + `skipped` result,
+never an error. The four views + the self-describing header render as
+deterministic markdown carrying no verdict vocabulary (the never-judgment pin,
+grep-tested over the render output).
