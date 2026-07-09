@@ -514,8 +514,12 @@ def test_background_sweeper_reaps_without_a_triggering_run(
     monkeypatch.setattr(ssh_engine, "_SWEEP_INTERVAL_SEC", 0.05)  # sweep fast for the test
     _install_connect(monkeypatch, lambda _t: _StubConn())
     engine.run("echo x", ssh_target="u@h", timeout=15)  # opens conn + starts the reaper
+    # Poll for BOTH effects: the conn unregisters early in _discard (under the
+    # guard) while the slot release happens only after the bounded close, so
+    # asserting the release the instant the conn vanishes is a race (the slow
+    # py3.10 CI runner lost it, 2026-07-09).
     deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and "h" in engine._conns:
+    while time.monotonic() < deadline and ("h" in engine._conns or not released):
         time.sleep(0.05)
     assert "h" not in engine._conns, "the background reaper never closed the idle connection"
     assert released == ["SLOT"]
