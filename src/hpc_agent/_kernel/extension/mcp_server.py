@@ -86,6 +86,7 @@ from hpc_agent.cli._dispatch import CliShape, _leaf_verb
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
     from typing import IO
 
     from hpc_agent._kernel.registry.primitive import PrimitiveMeta
@@ -306,21 +307,33 @@ _ELICITATION_REQUESTED_SCHEMA: dict[str, Any] = {
 }
 
 
-def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
-    """Build the elicitation prompt from CODE-SELECTED identifiers ONLY (D5).
+def _render_elicitation_prompt(
+    arguments: Mapping[str, Any], experiment_dir: Path | None = None
+) -> str:
+    """Build the elicitation prompt from CODE-SELECTED identifiers + a code-read
+    render digest (D5 + E-render).
 
-    A PURE function: the prompt is assembled from fixed instructional text plus
-    the journal-derived identifiers the gate itself token-matches — the block
-    name, the scope kind/id, and (for a notebook sign-off) the section slug. It
-    NEVER embeds any model-authored free text from the tool arguments: not the
-    ``proposal``, not the ``response``, not the ``evidence_digest``. If the model
-    could author the prompt it would bait the human's reply into the trust
-    anchor — the laundering channel the authorship gate exists to close.
+    The prompt is assembled from fixed instructional text plus the journal-derived
+    identifiers the gate itself token-matches — the block name, the scope kind/id,
+    and (for a notebook sign-off) the section slug. It NEVER embeds any
+    model-authored free text from the tool arguments: not the ``proposal``, not the
+    ``response``, not the ``evidence_digest``. If the model could author the prompt
+    it would bait the human's reply into the trust anchor — the laundering channel
+    the authorship gate exists to close. The refusal envelope's own ``message`` is
+    deliberately NOT interpolated either: some authorship-gate messages quote the
+    model's ``response`` (the bare-ack refusal names it), so echoing the message
+    would reopen the same laundering channel.
 
-    The refusal envelope's own ``message`` is deliberately NOT interpolated
-    either: some authorship-gate messages quote the model's ``response`` (the
-    bare-ack refusal names it), so echoing the message would reopen the same
-    laundering channel. The identifiers below are the only variable content.
+    E-render (``docs/design/mcp-elicitation.md``, SHIPPED 2026-07-09): when the
+    refusal is a NOTEBOOK sign-off, the server reads the section's content-addressed
+    render off disk and embeds a CODE-COMPUTED digest (diff stats, assert table,
+    lint-flag count) + the ``view_sha12`` — code-read bytes in, typed utterance out,
+    one channel. Trust is unchanged: the digest is derived from the code-authored
+    render (the trusted-display artifact the T8 gate binds), NEVER from the notebook
+    source or any model text (RULING 1: digest, not full render — the full render
+    stays on disk for the Read pane). Missing/stale render → an explicit,
+    reason-disclosing fallback line, never an unmarked silent omission and never a
+    crash.
     """
     spec = arguments.get("spec")
     spec = spec if isinstance(spec, dict) else {}
@@ -330,9 +343,12 @@ def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
     resolved = spec.get("resolved")
     resolved = resolved if isinstance(resolved, dict) else {}
     section = ""
+    view_sha = ""
     if scope_kind == "notebook":
         raw_section = resolved.get("section")
         section = str(raw_section).strip() if isinstance(raw_section, str) else ""
+        raw_view_sha = resolved.get("view_sha")
+        view_sha = str(raw_view_sha).strip() if isinstance(raw_view_sha, str) else ""
 
     lines = ["Your sign-off must be typed by you, in your own words."]
     if scope_kind and scope_id:
@@ -341,11 +357,71 @@ def _render_elicitation_prompt(arguments: Mapping[str, Any]) -> str:
         lines.append(f"Block awaiting sign-off: {block}.")
     if section:
         lines.append(f"Notebook section to name in your sign-off: {section}.")
+    if scope_kind == "notebook":
+        lines.extend(
+            _render_digest_block(
+                experiment_dir, audit_id=scope_id, section=section, view_sha=view_sha
+            )
+        )
     lines.append(
         "Type what you reviewed and your decision, in your own words. A bare "
         "'y' or a clicked option cannot stand in for it."
     )
     return "\n".join(lines)
+
+
+def _render_digest_block(
+    experiment_dir: Path | None, *, audit_id: str, section: str, view_sha: str
+) -> list[str]:
+    """The E-render digest lines for a notebook sign-off, or a disclosed fallback.
+
+    Reads the content-addressed render off disk and returns a BOUNDED digest block
+    (diff stats, assert table excerpt, lint-flag count + ``view_sha12``). Every
+    non-embeddable condition — no experiment context, no bound ``view_sha`` yet, no
+    render on disk for that view, or a header that disagrees with the signed view —
+    returns a single reason-disclosing line instead (never a crash, never an
+    unmarked silent omission). The digest is code-authored throughout: no notebook
+    source, no model text, ever enters it.
+    """
+    view_sha12 = view_sha[:12]
+
+    def _fallback(reason: str) -> list[str]:
+        return [
+            "",
+            f"(render digest unavailable: {reason} — open the section render in your "
+            "Read pane before signing.)",
+        ]
+
+    if experiment_dir is None:
+        return _fallback("no experiment context on this call")
+    if not (audit_id and section and view_sha):
+        return _fallback("the sign-off carries no bound view_sha yet")
+
+    from hpc_agent.ops import notebook_view
+
+    path = notebook_view.render_path(
+        experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
+    )
+    digest = notebook_view.read_render_digest(path)
+    if digest is None:
+        return _fallback(f"no code-written render on disk for view_sha {view_sha12}")
+    if digest.view_sha != view_sha or digest.section != section:
+        return _fallback(f"the on-disk render is stale (view_sha {view_sha12} no longer matches)")
+
+    lines = [
+        "",
+        f"Reviewed render digest (view_sha {view_sha12}):",
+        f"- classification: {digest.classification or 'unknown'}",
+        f"- diff from template: +{digest.diff_added} / -{digest.diff_removed} lines",
+        f"- assertions declared: {digest.assertion_count}",
+    ]
+    for entry in digest.assertions:
+        lines.append(f"  · {entry}")
+    elided = digest.assertion_count - len(digest.assertions)
+    if elided > 0:
+        lines.append(f"  · … ({elided} more)")
+    lines.append(f"- lint flags: {digest.lint_flag_count}")
+    return lines
 
 
 def _accepted_utterance(response: dict[str, Any] | None) -> str | None:
@@ -1153,6 +1229,11 @@ class McpServer:
         whose filtered text is empty). Silence marks the channel dark so the rest
         of this session skips elicitation; a decline leaves it live.
         """
+        from pathlib import Path
+
+        exp = arguments.get("experiment_dir")
+        experiment_dir = Path(exp) if isinstance(exp, str) and exp else Path.cwd()
+
         timeout = _ELICITATION_TIMEOUT_SEC
         sys.stderr.write(
             f"[mcp] waiting on human elicitation ({timeout:.0f}s timeout) for {name}\n"
@@ -1160,7 +1241,9 @@ class McpServer:
         response = self._request_from_client(
             "elicitation/create",
             {
-                "message": _render_elicitation_prompt(arguments),
+                # E-render: the popup carries the code-computed render digest for a
+                # notebook sign-off (bytes read off disk here, model suspended).
+                "message": _render_elicitation_prompt(arguments, experiment_dir),
                 "requestedSchema": _ELICITATION_REQUESTED_SCHEMA,
             },
             timeout,
@@ -1188,12 +1271,9 @@ class McpServer:
             return refusal
         sys.stderr.write(f"[mcp] elicitation for {name}: sign-off captured (answered)\n")
 
-        from pathlib import Path
-
         from hpc_agent.state.utterances import append_utterance
 
-        exp = arguments.get("experiment_dir")
-        experiment_dir = Path(exp) if isinstance(exp, str) and exp else Path.cwd()
+        # ``experiment_dir`` was resolved above (shared with the render-digest read).
         record = append_utterance(experiment_dir, text)
         if record is None:
             # Fail-open (no namespace / unwritable log): nothing was recorded, so

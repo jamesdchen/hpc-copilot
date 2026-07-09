@@ -500,30 +500,70 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
   6. *E6* — regen byte-stability verified (all six scripts, zero drift): the
      phase adds no primitive and no wire model, exactly as planned.
 
-## Future work — E-render: the popup carries the render (NOTED 2026-07-09, user-endorsed, NOT scheduled)
+- **E-render (2026-07-09, SHIPPED; the "E-render" section below flipped from
+  NOTED to SHIPPED):** the notebook sign-off popup now carries a code-computed
+  render DIGEST (RULING 1: digest + `view_sha12`, not the full render — reading
+  ergonomics; trust identical) on the EXISTING retry-only firing site (RULING 2:
+  no D6 amendment, no second firing site). `read_render_digest` derives the
+  digest from the on-disk render's own code-authored bytes (reusing the
+  audit-view projections — diff/asserts/lint — never the notebook source);
+  missing/stale/no-`view_sha` degrade to a reason-disclosing fallback line
+  (fail-soft, never a crash, never an unmarked silent omission). Bounded by
+  construction: counts + a capped, per-item-truncated assertion list, never the
+  diff body. No new primitive, no wire-model change (regen debt: none expected —
+  same class as E6; the orchestrator's central regen run confirms byte
+  stability).
 
-Run #11 exposed the read/sign channel split: the v1 sign-off popup shows
-identifiers only, so the human must have READ the section render in some
+## E-render: the popup carries the render digest (SHIPPED 2026-07-09)
+
+Run #11 exposed the read/sign channel split: the v1 sign-off popup showed
+identifiers only, so the human had to READ the section render in some
 model-adjacent channel (chat relay, file link, an expanded Read pane) before
 typing into the model-untouched box. E-render closes the loop: when the
 refusal is a notebook sign-off, the SERVER reads the section's
 content-addressed render (`.hpc/renders/<audit_id>/<slug>.<view_sha12>.md`)
-off disk and embeds it in the elicitation `message` — code-read bytes in,
-typed utterance out, one channel, model suspended throughout.
+off disk and embeds a code-computed DIGEST of it in the elicitation `message`
+— code-read bytes in, typed utterance out, one channel, model suspended
+throughout.
 
 Compatibility with the D5 identifiers-only rule: the rule's PURPOSE is to bar
 MODEL-authored text from baiting the reply; a disk render is code-authored
-(the trusted-display artifact the T8 gate already binds), so embedding it
-honors the purpose while widening the letter — which is exactly why this is a
-recorded design change, not a patch.
+(the trusted-display artifact the T8 gate already binds), so embedding a digest
+of it honors the purpose while widening the letter — which is exactly why this
+was a recorded design change, not a patch.
 
-Two sub-decisions to rule when scheduled:
-1. **Full render vs. digest.** A ~6KB render makes the terminal dialog
-   scroll; the alternative embeds a code-computed digest (diff stats, assert
-   table, lint flags) + the `view_sha12`, keeping the full render in the Read
-   pane. Trust is identical either way (both server-composed); the question
-   is reading ergonomics.
-2. **Firing site.** D6 pins ONE firing site (the `append-decision`
-   authorship refusal), so v1 popups appear on the RETRY. Making the popup
-   the PRIMARY read surface means eliciting BEFORE first submission — a
-   second firing site, i.e. a D6 amendment, not a tweak.
+The two sub-decisions, RULED 2026-07-09 (user delegated to orchestrator
+judgment; recorded):
+
+1. **Digest + `view_sha12`, NOT the full render (RULING 1).** A ~6 KB render
+   makes the terminal dialog scroll; the popup instead embeds a code-computed
+   digest — diff stats (`+added / -removed`), the declared-assertion table
+   (bounded: `render_store._DIGEST_MAX_ASSERTIONS` entries, each truncated to
+   `_DIGEST_MAX_ASSERTION_CHARS`), the lint-flag count — plus the section's
+   `view_sha12`. The full render stays on disk for the Read pane. Trust is
+   identical either way (both server-composed from the same code-written render
+   file); the ruling is reading ergonomics. The digest is derived from the
+   render's own code-authored bytes (`render_store.read_render_digest`), NEVER
+   re-derived from the notebook source and never from model text.
+2. **Retry-only, no D6 amendment (RULING 2).** D6 pins ONE firing site (the
+   `append-decision` authorship refusal), so the popup appears on the RETRY, as
+   in v1. E-render adds NO second, pre-submission firing site and does NOT amend
+   D6 — it enriches the existing popup's `message`, nothing more.
+
+Edge cases (all handled + tested): a missing render (no file at the
+content-addressed path — the stale case, since the path is `view_sha`-addressed
+and a drifted source moves the `view_sha`), an unparseable/header-mismatched
+render, or a sign-off with no bound `view_sha` yet ⇒ a single reason-disclosing
+fallback line (`render digest unavailable: <reason> — open the section render in
+your Read pane before signing.`), never a crash and never an unmarked silent
+omission. `read_render_digest` is fail-soft (`None`) exactly like
+`read_render_header`.
+
+**Symbols:** `mcp_server._render_elicitation_prompt` (now takes `experiment_dir`
+and delegates the notebook block to `_render_digest_block`);
+`ops/notebook/render_store.py::{RenderDigest, read_render_digest}` (re-exported
+through the `ops/notebook_view` facade the T8 gate already uses, per the
+subject-import discipline). Tests: `tests/ops/notebook/test_render_store_digest.py`
+(the parser pinned against `write_render`), `tests/test_mcp_elicitation_render.py`
+(digest present + `view_sha12` + bounded, the missing/stale/no-`view_sha`
+fallbacks, non-notebook unchanged).
