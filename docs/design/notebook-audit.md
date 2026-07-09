@@ -680,3 +680,14 @@ signature row must cover both dialects (UGE's message + Lmod's lookalike),
 classify per-TASK not per-run, and the node-identity leg is the payload:
 the same contentless shape on two clusters in one night is only diagnosable
 if the envelope names scheduler + node + task id.
+
+Second amendment to item 8: **the wake leg.** Live proof (same run): canary
+went GREEN and the human's pre-journaled S3 y sat consumable for 30 minutes —
+the gate is passive, the S2 worker is detached (Option 1: not harness-
+tracked), and nothing ticked block-drive. Standing consent therefore has
+three legs or it is theater: (1) the journaled consent (exists), (2) the
+spec-identity-bound gate (exists), (3) a WAKE — a harness-TRACKED wait
+(status-watch backgrounded) whose terminal re-invokes the agent to tick the
+driver. The skills must pair every pre-consent with arming the wake in the
+same breath; a pre-y without an armed watch is consent nobody can consume —
+true for failure (the overnight canary death) and success (this) alike.
