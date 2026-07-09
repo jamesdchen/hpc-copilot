@@ -448,6 +448,31 @@ def test_family_set_admits_the_review_block() -> None:
     }
 
 
+def test_conformance_verdict_record_does_not_move_the_reduction() -> None:
+    """A conformance-verdict is dated evidence riding the journal — never a winner.
+
+    live-conformance C-verdict: appending a ``conformance-verdict`` record must NOT
+    become the reduction winner nor move the status (the drift verdict never mutates
+    the registration). The winner stays the registration; status stays CURRENT.
+    """
+    verdict = {
+        "schema_version": 1,
+        "ts": "2026-07-09T00:00:00Z",
+        "scope_kind": "registration",
+        "scope_id": _REG_ID,
+        "block": reg.CONFORMANCE_VERDICT_BLOCK,
+        "response": f"verdict for {_REG_ID}",
+        "resolved": {"registration_id": _REG_ID, "cites": ["s" * 64], "note": "judged drift"},
+    }
+    records = [_reg_record(), verdict]
+    status = reg.reduce_registration(
+        records, registration_id=_REG_ID, live_dossier_sha=_DOSSIER_SHA
+    )
+    assert status.status == reg.CURRENT
+    assert status.winner is not None
+    assert status.winner.get("dossier_sha") == _DOSSIER_SHA  # the registration, not the verdict
+
+
 def test_declaration_absent_is_none() -> None:
     """Opt-in (D7): no conformance block → None, no machinery, byte-identical."""
     assert reg.parse_conformance_declaration({}) is None

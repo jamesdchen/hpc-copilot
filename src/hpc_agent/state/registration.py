@@ -640,6 +640,11 @@ def reduce_registration(
         if block == REGISTRATION_REVIEW_BLOCK:
             review_records.append((index, record))
             continue
+        if block == CONFORMANCE_VERDICT_BLOCK:
+            # A conformance drift verdict is DATED EVIDENCE riding the journal
+            # (live-conformance C-verdict) — never a winner nor a supersession, and
+            # it never moves the registration status. Skip it in winner selection.
+            continue
         winner_record = record  # append order → the last reg/revoke is the winner
         winner_index = index
         if block == REGISTRATION_BLOCK:
