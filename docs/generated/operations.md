@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**155 operations total**: 128 primitive atoms + 27 workflow atoms.
+**156 operations total**: 129 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -115,7 +115,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `_(none)_` | — | — |
 
-## `mutate` (25)
+## `mutate` (26)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -129,6 +129,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`decorate-entry-point`](../primitives/decorate-entry-point.md) | ✓ | filesystem | `hpc-agent decorate-entry-point --path <path> --function-name <function_name>` | `_(none)_` | — | — |
 | [`doctor-install`](../primitives/doctor-install.md) | ✓ | file_write; scheduler | `hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`emit-skill-return`](../primitives/emit-skill-return.md) | ✓ | filesystem | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` | `_(none)_` | — | — |
+| [`export-attestations`](../primitives/export-attestations.md) | ✓ | file_write | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`export-dossier`](../primitives/export-dossier.md) | ✓ | file_write | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`kill`](../primitives/kill.md) | ✓ | ssh; writes-journal | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`mark-run-terminal`](../primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `_(none)_` | — | — |
