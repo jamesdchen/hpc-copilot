@@ -55,6 +55,8 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'discover-runs': ('discover-runs', 'hpc_agent.state.discover'),
     'doctor': ('doctor', 'hpc_agent.ops.recover.doctor'),
     'doctor-install': ('doctor-install', 'hpc_agent.ops.recover.doctor_install'),
+    'evidence-brief': ('evidence-brief', 'hpc_agent.ops.evidence_brief_op'),
+    'evidence-period': ('evidence-period', 'hpc_agent.ops.evidence_period_op'),
     'export-dossier': ('export-dossier', 'hpc_agent.ops.export_dossier'),
     'export-package': ('export-package', 'hpc_agent.incorporation.export_package'),
     'failures': ('failures', 'hpc_agent.ops.recover.failures_atom'),

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**153 operations total**: 126 primitive atoms + 27 workflow atoms.
+**155 operations total**: 128 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (68)
+## `query` (70)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -48,6 +48,8 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`discover-reducers`](../primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`discover-runs`](../primitives/discover-runs.md) | ✓ | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`doctor`](../primitives/doctor.md) | ✓ | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`evidence-brief`](../primitives/evidence-brief.md) | ✓ | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`evidence-period`](../primitives/evidence-period.md) | ✓ | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`failures`](../primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `_(none)_` | — | — |
 | [`fetch-skill-return`](../primitives/fetch-skill-return.md) | ✓ | filesystem | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` | `_(none)_` | — | — |
 | [`find`](../primitives/find.md) | ✓ | _none_ | `hpc-agent find <query> [--limit <limit>]` | `_(none)_` | — | — |

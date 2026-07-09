@@ -60,6 +60,7 @@ from hpc_agent.cli.setup_actions import find_prior_run
 from hpc_agent.incorporation.build.compute_run_id import compute_run_id
 from hpc_agent.incorporation.build.submit_spec import build_submit_spec
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
+from hpc_agent.ops.evidence_embed import build_evidence_embed
 from hpc_agent.ops.notebook_gate import assert_source_audited, audited_source_echo
 from hpc_agent.ops.pack_gate import assert_pack_receipts_current
 from hpc_agent.ops.write_run_sidecar import write_run_sidecar
@@ -517,6 +518,16 @@ def resolve_submit_inputs(
     if contract:
         reason = f"{contract} — {reason}"
 
+    # Evidence-memory embed (E-embed): the ADVISORY point digest for this run's
+    # declared scope tags + its lineage (run_id). ADDITIVE and FAIL-OPEN — the
+    # one helper wraps the whole collect+render in a broad guard, so a collector
+    # bug degrades to a disclosed {unavailable} stub and NEVER becomes a submit
+    # refusal. The decision surface (stage_reached, needs_decision) is byte-
+    # identical whether evidence collected, empty, or failed (the never-blocking
+    # pin; T-NB). Never a private re-collection — the one-collector row.
+    run_tags = [t for t in (sidecar_spec.scopes or []) if isinstance(t, str)]
+    evidence = build_evidence_embed(experiment_dir, tags=run_tags, lineage=run_id)
+
     return ResolveSubmitInputsResult(
         stage_reached="resolved",
         needs_decision=False,
@@ -525,4 +536,5 @@ def resolve_submit_inputs(
         cmd_sha=cmd_sha,
         submit_spec=submit_spec,
         sidecar_path=written.get("path"),
+        evidence=evidence,
     )

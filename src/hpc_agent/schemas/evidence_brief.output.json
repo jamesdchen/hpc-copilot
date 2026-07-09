@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/evidence_brief.output.json",
+  "title": "evidence-brief output data",
+  "description": "Shape of the ``data`` field on an ``evidence-brief`` envelope (E-verbs).\n\nThe point-query projection: conclusions (newest current first), per-tag\nactivity, per-lineage envelopes, per-citation read-time status, and the\nfleet skip accounting — plus the ``render`` markdown the agent relays VERBATIM\n(the ``AttentionQueueResult`` posture). ``computed_at`` dates the whole\nprojection; ``cache`` discloses whether it was served, recomputed, or bypassed.",
+  "type": "object",
+  "required": [
+    "computed_at",
+    "cache",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "computed_at": {
+      "description": "The instant the digest was computed against (ISO-8601 UTC).",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "as_of": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The as_of cut the collector applied (echoed from the spec); null when unbounded.",
+      "title": "As Of"
+    },
+    "conclusions": {
+      "description": "Dated, sha-cited conclusions — newest current first (the point query's lead).",
+      "items": {
+        "$ref": "#/$defs/ConclusionLine"
+      },
+      "title": "Conclusions",
+      "type": "array"
+    },
+    "activity": {
+      "description": "Per-tag prior-work counts (campaigns / runs / lineages / looks / newest).",
+      "items": {
+        "$ref": "#/$defs/ActivityLine"
+      },
+      "title": "Activity",
+      "type": "array"
+    },
+    "envelopes": {
+      "description": "Per-lineage determinism envelopes, quoting the fingerprint ledger's evidence block verbatim.",
+      "items": {
+        "$ref": "#/$defs/EnvelopeLine"
+      },
+      "title": "Envelopes",
+      "type": "array"
+    },
+    "citations_status": {
+      "description": "Per-citation read-time re-resolution disclosure (verified / unresolvable).",
+      "items": {
+        "$ref": "#/$defs/CitationStatusLine"
+      },
+      "title": "Citations Status",
+      "type": "array"
+    },
+    "skipped": {
+      "description": "Namespaces skipped during fleet collection (fail-open accounting).",
+      "items": {
+        "$ref": "#/$defs/SkippedNamespace"
+      },
+      "title": "Skipped",
+      "type": "array"
+    },
+    "cache": {
+      "description": "hit | miss | disabled — the cache disposition for this read.",
+      "enum": [
+        "hit",
+        "miss",
+        "disabled"
+      ],
+      "title": "Cache",
+      "type": "string"
+    },
+    "render": {
+      "description": "The deterministic markdown digest — relayed to the human verbatim.",
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "ActivityLine": {
+      "additionalProperties": false,
+      "description": "Per-tag prior-work counts — identity + counting, never a judgment (E-render).\n\nRenders 'PRIOR WORK · 3 campaigns, 14 runs, 2 lineages · newest 2025-11-02 ·\n9 looks on <tag>'. Every field is a COUNT or a DATE read from the records'\nown fields — no ranking, no urgency.",
+      "properties": {
+        "tag": {
+          "description": "The scope-tag slug this activity is counted under (opaque caller data).",
+          "title": "Tag",
+          "type": "string"
+        },
+        "campaigns": {
+          "default": 0,
+          "description": "Count of campaigns matched under this tag.",
+          "title": "Campaigns",
+          "type": "integer"
+        },
+        "runs": {
+          "default": 0,
+          "description": "Count of runs matched under this tag.",
+          "title": "Runs",
+          "type": "integer"
+        },
+        "lineages": {
+          "default": 0,
+          "description": "Count of distinct command-identity lineages matched.",
+          "title": "Lineages",
+          "type": "integer"
+        },
+        "looks": {
+          "default": 0,
+          "description": "Count of prior looks recorded on this tag's look ledger.",
+          "title": "Looks",
+          "type": "integer"
+        },
+        "newest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 ts of the newest matched record under this tag (null when none).",
+          "title": "Newest"
+        }
+      },
+      "required": [
+        "tag"
+      ],
+      "title": "evidence per-tag activity line",
+      "type": "object"
+    },
+    "CitationStatusLine": {
+      "additionalProperties": false,
+      "description": "Per-citation re-resolution disclosure at READ (E-shape: disclose, never refuse).\n\nEvidence legitimately moves after a conclusion is recorded (archived to S3, a\nstore re-exported, a repo wiped). The read side re-resolves each citation and\nreports ``verified`` / unresolvable per line — the conclusion stays a truthful\ndated record; the drift is disclosed, the reader decides. (The APPEND gate is\nthe deliberate exception where an unresolvable citation REFUSES — that never\nruns here.)",
+      "properties": {
+        "conclusion_id": {
+          "description": "The conclusion this citation belongs to (opaque slug).",
+          "title": "Conclusion Id",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The citation's mechanism kind (closed set) — its one resolver.",
+          "enum": [
+            "dossier",
+            "run",
+            "fingerprint",
+            "attestation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "description": "The opaque citation ref (run_id / cmd_sha key / dossier path); echoed, never parsed.",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sha": {
+          "description": "The full sha the conclusion recorded for this citation.",
+          "title": "Sha",
+          "type": "string"
+        },
+        "verified": {
+          "description": "True = re-resolved and the sha still matches here; False = unresolvable/mismatched at read time.",
+          "title": "Verified",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "conclusion_id",
+        "kind",
+        "ref",
+        "sha",
+        "verified"
+      ],
+      "title": "evidence citation-status line",
+      "type": "object"
+    },
+    "ConclusionLine": {
+      "additionalProperties": false,
+      "description": "One conclusion in the digest — a dated, sha-cited, human-authored finding.\n\nThe lead of the point query (newest current conclusion first). ``finding`` is\nopaque caller prose: stored, rendered VERBATIM, never parsed. ``cited_shas``\nechoes the sha prefixes the record rests on (the evidence-bound rule);\n``status`` is the reduced conclusion status.",
+      "properties": {
+        "conclusion_id": {
+          "description": "The conclusion's caller-authored slug (opaque path segment).",
+          "title": "Conclusion Id",
+          "type": "string"
+        },
+        "ts": {
+          "description": "The finding's date (the record's ts) — every line dated.",
+          "title": "Ts",
+          "type": "string"
+        },
+        "tags": {
+          "description": "The conclusion's own tags (retro-indexing key); opaque caller data.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "cited_shas": {
+          "description": "Evidence sha prefixes the conclusion cites (the evidence-bound rule); echoed, never parsed.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Cited Shas",
+          "type": "array"
+        },
+        "status": {
+          "description": "current | superseded | revoked | absent — the reduced conclusion status.",
+          "enum": [
+            "current",
+            "superseded",
+            "revoked",
+            "absent"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "finding": {
+          "description": "The human's free-text finding — opaque, rendered verbatim, never interpreted.",
+          "title": "Finding",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conclusion_id",
+        "ts",
+        "status",
+        "finding"
+      ],
+      "title": "evidence conclusion line",
+      "type": "object"
+    },
+    "EnvelopeLine": {
+      "additionalProperties": false,
+      "description": "One lineage's determinism envelope, quoting the fingerprint ledger VERBATIM.\n\nRenders 'ENVELOPE · lineage 7be4… · ±2.1% rel (n=4: 3 full + 1 partial,\nscales: main, clusters: hoffman2)'. ``envelope`` is the ledger's own rendered\nreduction (never recomputed or reinterpreted here); the evidence-label block\n``{n, n_full, n_partial, scales, clusters}`` is quoted verbatim from the\nfingerprint ledger (``docs/design/determinism-fingerprint.md``).",
+      "properties": {
+        "lineage": {
+          "description": "The command-identity lineage key (cmd_sha) this envelope is for.",
+          "title": "Lineage",
+          "type": "string"
+        },
+        "envelope": {
+          "description": "The ledger's own rendered envelope (e.g. '±2.1% rel'); quoted, never recomputed.",
+          "title": "Envelope",
+          "type": "string"
+        },
+        "n": {
+          "default": 0,
+          "description": "Total sample count (full + partial) — the ledger's evidence label.",
+          "title": "N",
+          "type": "integer"
+        },
+        "n_full": {
+          "default": 0,
+          "description": "Full-scale (non-partial) sample count — verbatim from the ledger.",
+          "title": "N Full",
+          "type": "integer"
+        },
+        "n_partial": {
+          "default": 0,
+          "description": "Partial-scale sample count — verbatim from the ledger.",
+          "title": "N Partial",
+          "type": "integer"
+        },
+        "scales": {
+          "description": "Scale labels present in the ledger's evidence block (opaque labels, verbatim).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Scales",
+          "type": "array"
+        },
+        "clusters": {
+          "description": "Cluster labels present in the ledger's evidence block (opaque labels, verbatim).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Clusters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "lineage",
+        "envelope"
+      ],
+      "title": "evidence envelope line",
+      "type": "object"
+    },
+    "SkippedNamespace": {
+      "additionalProperties": false,
+      "description": "One namespace skipped during fleet collection, with the reason (fail-open).\n\nA wiped repo, an unreadable/torn ``repo.json``, or an absent store must never\ncrash the read — it is skipped silently and counted here (the attention-queue\n``SkippedNamespace`` posture, mirrored).",
+      "properties": {
+        "ref": {
+          "description": "The repo_hash / namespace id that was skipped.",
+          "title": "Ref",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it was skipped (unreadable, torn, absent).",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "reason"
+      ],
+      "title": "evidence skipped namespace",
+      "type": "object"
+    }
+  }
+}

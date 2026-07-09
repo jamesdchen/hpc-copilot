@@ -172,6 +172,16 @@ class ResolveSubmitInputsResult(BaseModel):
             "stage_reached='resolved'."
         ),
     )
+    evidence: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "ADVISORY evidence-memory point digest for this run's declared tags + "
+            "lineage (evidence-memory E-embed): the newest conclusion, prior-work "
+            "counts, per-lineage envelopes — dated + sha-cited, code-rendered. "
+            "NEVER blocks: additive, and it degrades to {unavailable, reason} on "
+            "any collector failure (fail-open). Set only on stage_reached='resolved'."
+        ),
+    )
     prior_run_id: str | None = Field(
         default=None,
         description=(
