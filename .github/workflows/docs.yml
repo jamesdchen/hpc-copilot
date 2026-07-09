@@ -63,7 +63,7 @@ jobs:
           # ``github.sha`` (the pushed commit) is used.
           ref: ${{ github.event.pull_request.head.ref || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
