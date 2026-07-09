@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, runtime_checkable
 
 from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
@@ -51,6 +51,8 @@ __all__ = [
     "AtomSchema",
     "ATOM_REGISTRY",
     "ATOM_NAMES",
+    "Measurer",
+    "stdlib_measure",
     "atom_schema",
     "comparison_for",
     "make_flag",
@@ -219,6 +221,55 @@ def atom_schema(name: str) -> AtomSchema:
 def comparison_for(name: str) -> str:
     """Return the comparison-semantics token for atom *name* (T6's dispatch key)."""
     return atom_schema(name).comparison
+
+
+# --- the measurement-impl seam (A10/A12 T-R) ---------------------------------
+#
+# The observer is the RUNNER: it looks up a declared observable in the namespace
+# and MEASURES it into atoms. Core ships only the PROTOCOL a runner invokes and a
+# STDLIB fallback for plain values — the pack ships the frame-aware measurers and
+# registers them with the RUNNER (never core; DP2/DP3 — core never imports pack
+# code). A measurer returns ``{atom_name: value}`` (fed straight to
+# :func:`make_record`) or ``None`` for "nothing I can measure here".
+
+
+@runtime_checkable
+class Measurer(Protocol):
+    """The measurement callable a runner invokes on a declared observable.
+
+    ``measure(obj) -> {atom_name: value} | None``. The returned mapping is the
+    ``atoms`` of a T1 record (validated by :func:`make_record`); ``None`` means
+    "this object is not measurable by me" (the runner then tries the stdlib
+    fallback). The pack's pandas-aware impls satisfy this Protocol and are
+    injected caller-side — core never imports them (the receipts seam: caller
+    measures, core binds).
+    """
+
+    def __call__(self, obj: Any) -> dict[str, Any] | None: ...
+
+
+def stdlib_measure(obj: Any) -> dict[str, Any] | None:
+    """The core fallback measurer: ``len()`` of a sized value → ``row_count``.
+
+    STDLIB-ONLY and frame-BLIND by construction (the library-boundary guard):
+    core measures nothing pandas-shaped — it takes the one generic measurement a
+    sized object affords, its length, as a ``row_count`` atom (``dropped=0`` — a
+    point observation names no predecessor to have dropped from). Text is NOT
+    row-shaped (a string's length is characters, not rows), so ``str``/``bytes``/
+    ``bytearray`` measure to ``None``; anything without a non-negative ``len()``
+    measures to ``None`` (the honest "I cannot measure this" the runner skips).
+    The pack's injected measurer is what yields ``col_set`` / ``null_count`` /
+    ``value_sketch`` for a real frame — those need frame knowledge core refuses.
+    """
+    if isinstance(obj, (str, bytes, bytearray)):
+        return None
+    try:
+        n = len(obj)
+    except TypeError:
+        return None
+    if not _is_int(n) or n < 0:
+        return None
+    return {"row_count": {"rows": n, "dropped": 0}}
 
 
 # --- the flag shape (A12 G-c: the notebook-lint finding, reused system-wide) --

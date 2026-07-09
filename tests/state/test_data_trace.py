@@ -339,6 +339,35 @@ def test_data_trace_block_absent_from_notebook_attestation():
     assert na._project_receipt(fake) is None
 
 
+# --- the measurement-impl seam (T-R: stdlib fallback measurer) ---------------
+
+
+def test_stdlib_measure_sizes_a_collection_to_row_count():
+    # len() of a sized non-text value -> a row_count atom (dropped=0). The atoms
+    # it returns feed make_record unchanged.
+    atoms = dt.stdlib_measure([{"id": 1}, {"id": 2}, {"id": 3}])
+    assert atoms == {"row_count": {"rows": 3, "dropped": 0}}
+    rec = dt.make_record("load", 0, atoms)
+    assert dt.validate_record(rec) == []
+
+
+def test_stdlib_measure_is_frame_blind_on_text_and_unsized():
+    # Text is NOT row-shaped (chars, not rows); an object with no len() is not
+    # measurable. Both read as an honest None the runner skips.
+    assert dt.stdlib_measure("a string of many chars") is None
+    assert dt.stdlib_measure(b"bytes too") is None
+    assert dt.stdlib_measure(42) is None
+    assert dt.stdlib_measure(object()) is None
+
+
+def test_stdlib_measure_empty_collection_is_zero_rows():
+    assert dt.stdlib_measure([]) == {"row_count": {"rows": 0, "dropped": 0}}
+
+
+def test_measurer_protocol_accepts_stdlib_measure():
+    assert isinstance(dt.stdlib_measure, dt.Measurer)
+
+
 # --- the stdlib-only import pin (AST) ----------------------------------------
 
 

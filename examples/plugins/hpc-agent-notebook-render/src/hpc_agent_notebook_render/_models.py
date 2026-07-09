@@ -116,6 +116,16 @@ class NotebookRenderResult(BaseModel):
             "canonicalizer change, never silent receipt drift. None when not executed."
         ),
     )
+    trace_stages: int | None = Field(
+        default=None,
+        description=(
+            "The count of runner-tier trace records the between-cell observation "
+            "loop (T-R) ingested into the audit scope — one per declared-and-present "
+            "observable per cell boundary. None when the loop did not run (not "
+            "executed, or the audit config declares no observables — the loop is OFF "
+            "and the render is byte-identical); 0 when it ran but observed nothing."
+        ),
+    )
 
 
 # ── notebook-ingest-signoffs ─────────────────────────────────────────────────

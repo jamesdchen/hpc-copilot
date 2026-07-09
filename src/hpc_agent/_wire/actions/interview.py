@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from hpc_agent._wire._shared import RunIdStrict
 
@@ -636,6 +636,26 @@ class _AuditedSource(BaseModel):
             "fix). Absent → []."
         ),
     )
+    observables: list[str] | None = Field(
+        default=None,
+        description=(
+            "The OBSERVATION PLAN (A14, G-a ruled): opaque declared-observable "
+            "names the sanctioned runner (the notebook-render plugin's between-cell "
+            "loop, T-R) looks up in the exec namespace and measures into "
+            "runner-tier trace records. Rides the signed audit surface, so the "
+            "human's sign-off covers the observation plan; versioned with the "
+            "roots. Absent → no plan (the loop is OFF; execution byte-identical)."
+        ),
+    )
+
+    @field_validator("observables")
+    @classmethod
+    def _observables_nonempty(cls, value: list[str] | None) -> list[str] | None:
+        """Observable names are opaque but must be NON-EMPTY strings (a blank name
+        binds nothing) — absent stays absent (byte-identity)."""
+        if value is not None and any(not name.strip() for name in value):
+            raise ValueError("observables entries must be non-empty strings")
+        return value
 
 
 class ReceiptBinding(BaseModel):
