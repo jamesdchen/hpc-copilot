@@ -362,6 +362,80 @@ def test_run_tick_parks_before_gated_successor(faked: dict[str, Any]) -> None:
     assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
 
 
+def _gated_park_results() -> dict[str, Any]:
+    """A clean entry block whose gated successor forces a park (the rendezvous).
+
+    ``aggregate-check`` is bare-startable from a ``(run_id, workflow)`` tick, so
+    this drives ``run_tick`` all the way into ``_park`` — unlike ``submit-s1``,
+    which is not bare-startable and short-circuits to ``skip`` before parking.
+    The ``_park`` code path (and its ``mark_pending_decision`` call) is identical
+    for both boundaries, so this faithfully exercises the sidecar-only crash.
+    """
+    return {
+        "aggregate-check": {
+            "block": "check",
+            "stage_reached": "ready",
+            "needs_decision": False,
+            "run_id": "r1",
+            "brief": {"terminal": True},
+            "next_block": {"verb": "aggregate-run", "spec_hint": {"aggregate": {"run_id": "r1"}}},
+        },
+    }
+
+
+def test_run_tick_parks_sidecar_only_run_without_a_record_does_not_crash(
+    faked: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sidecar-only run (no journal RunRecord) PARKS without crashing the tick.
+
+    notebook-audit.md Addendum 13.0: the journal RunRecord is minted by
+    ``submit_and_record`` INSIDE the gated submit-s2 (qsub) — S1's resolve leg
+    writes only the per-run sidecar. So the FIRST park (the S1→S2 greenlight
+    gate) is reached before any record exists, and ``mark_pending_decision`` →
+    ``update_run_status`` raises FileNotFoundError for the record-less run. That
+    crashed the driver tick at the rendezvous for both of run #11's runs. The
+    park must DEGRADE DISCLOSED: the human still gets the brief
+    (``awaiting_decision``), only the durable journal marker is skipped. FIRES on
+    the unguarded call (FileNotFoundError propagates out of the tick).
+    """
+
+    def _raise_missing(run_id: str, **_kw: Any) -> None:
+        raise FileNotFoundError(f"no run record for {run_id!r}")
+
+    monkeypatch.setattr(bd, "mark_pending_decision", _raise_missing)
+    faked["results"] = _gated_park_results()
+    # Must NOT raise even though the marker write hits a missing record.
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.current_verb == "aggregate-check"
+    assert result.next_verb == "aggregate-run"
+    # The brief still rode out to the human (disclosure survived) …
+    assert result.brief == {"terminal": True}
+    # … but no durable marker was persisted (the raise swallowed, not appended).
+    assert faked["parked"] == []
+
+
+def test_run_tick_parks_with_a_record_still_writes_the_marker(
+    faked: dict[str, Any],
+) -> None:
+    """The normal park (a journal RunRecord exists) still persists the §5 marker.
+
+    The record-less guard added for Addendum 13.0 must not weaken the happy path:
+    when ``mark_pending_decision`` succeeds, the durable pending-decision marker
+    (the "parked ≠ stalled" flag + resume_cursor) is still written.
+    """
+    faked["results"] = _gated_park_results()
+    result, code = run_tick(Path("."), run_id="r1", workflow="aggregate")
+    assert code == 0
+    assert result.action == "awaiting_decision"
+    assert result.next_verb == "aggregate-run"
+    assert len(faked["parked"]) == 1
+    marker = faked["parked"][0]
+    assert marker["run_id"] == "r1"
+    assert marker["resume_cursor"]["next_verb"] == "aggregate-run"
+
+
 def test_run_tick_parks_at_decision(faked: dict[str, Any]) -> None:
     """A ``needs_decision`` span writes the pending marker and exits (rendezvous)."""
     faked["results"] = {
