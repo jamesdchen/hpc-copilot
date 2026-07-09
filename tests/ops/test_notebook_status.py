@@ -14,7 +14,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.queries.notebook_status import NotebookStatusResult, NotebookStatusSpec
-from hpc_agent.ops.notebook_status import notebook_status
+from hpc_agent.ops.notebook.status_op import notebook_status
 from hpc_agent.state import notebook_audit as nb
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import append_decision

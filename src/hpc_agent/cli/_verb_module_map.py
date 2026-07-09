@@ -77,7 +77,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'notebook-record-config': ('notebook-record-config', 'hpc_agent.ops.notebook.record_config_op'),
     'notebook-record-receipt': ('notebook-record-receipt', 'hpc_agent.ops.notebook.record_receipt_op'),
     'notebook-scaffold-template': ('notebook-scaffold-template', 'hpc_agent.ops.notebook.scaffold_template_op'),
-    'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook_status'),
+    'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook.status_op'),
     'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
     'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),
     'prepare-followup-specs': ('prepare-followup-specs', 'hpc_agent.ops.prepare_followup_specs'),
