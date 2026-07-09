@@ -53,8 +53,7 @@ A `not_ready` / `integrity_review` check carries `needs_decision: true` — a no
 | Field | Source |
 |---|---|
 | `experiment_dir` | Required |
-| `profile` | Caller, else the check auto-discovers the profile with terminal runs |
-| `run_id` | Caller, else the latest terminal run for the profile |
+| `run_id` | Required — `aggregate-check`'s spec demands it and nothing auto-discovers a run. If the user didn't name one, list `.hpc/runs/` (or `hpc-agent load-context`) and confirm the intended run before the first tick. |
 | `allow_partial` | Caller (default `false`; surfaced as the `missing_waves` decision otherwise) |
 
 ## Notes

@@ -834,7 +834,9 @@ def main() -> None:
         # disambiguation the preserved-failed-WIP rename uses. Best-effort:
         # on a rename failure the stale file stays exactly as before this
         # guard existed, so warn rather than abort the re-run.
-        stale_target = Path(result_dir) / f"_wip_{task_id}_stale_metrics_{time.time_ns()}.json"
+        stale_target = os.path.join(
+            result_dir, f"_wip_{task_id}_stale_metrics_{time.time_ns()}.json"
+        )
         try:
             os.replace(metrics_path, stale_target)
             print(f"[dispatch] quarantined stale metrics.json at {stale_target}")

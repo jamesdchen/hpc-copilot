@@ -26,6 +26,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tar \
         python3 \
         python3-pip \
+        # The status reporter's remote command runs bare ``python`` when no
+        # conda/module activation supplies one (cluster_status._ENV_PYTHON);
+        # real clusters get it from the activation prefix, this container's
+        # login shell must provide the alias itself or every monitor poll
+        # exits 127 (reporter UNREACHABLE) while the jobs themselves pass.
+        python-is-python3 \
         procps \
         tzdata \
         ca-certificates \
