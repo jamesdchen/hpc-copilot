@@ -78,6 +78,7 @@ __all__ = [
     "KIND_SCOPE_BUDGET",
     "KIND_PACK_RECEIPT",
     "KIND_ATTESTATION",
+    "UNCONTESTED_REQUIRES_KEY",
     "REGISTRATION_BLOCK",
     "REVOKE_BLOCK",
     "REGISTRATION_BLOCK_FAMILY",
@@ -140,10 +141,22 @@ PREREQUISITE_KINDS = frozenset(
     }
 )
 
-#: The kinds that accept NO ``requires`` mapping — the generic ``attestation``
-#: escape hatch carries no evidence-tier vocabulary core could interpret (R3),
-#: so a non-empty ``requires`` on it is a loud refusal, never a silent pass.
+#: The kinds that accept NO KIND-SPECIFIC ``requires`` mapping — the generic
+#: ``attestation`` escape hatch carries no evidence-tier vocabulary core could
+#: interpret (R3), so a kind-specific ``requires`` on it is a loud refusal, never a
+#: silent pass.
 _KINDS_WITHOUT_REQUIRES = frozenset({KIND_ATTESTATION})
+
+#: The one CROSS-KIND ``requires`` key EVERY ``PREREQUISITE_KINDS`` member accepts,
+#: INCLUDING the otherwise requires-free ``attestation`` kind (challenge-attestation
+#: C-registration). This is a deliberate AMENDMENT to R3's "attestation accepts NO
+#: requires" line: that line's whole test was "nothing core could interpret", and
+#: ``uncontested`` is a MECHANISM property core CAN check by COUNTING standing
+#: challenges (``standing_challenges(content_sha=<entry sha>)`` open-count == 0 —
+#: the ``evidence_meets`` declarative pattern: the caller opts in, core counts, core
+#: never decides). It NEVER blocks unless the caller declares it; the per-kind check
+#: lives in ``ops/registration/prereqs.py`` (T8).
+UNCONTESTED_REQUIRES_KEY = "uncontested"
 
 # --- the record blocks + the maintained block family (R6) -------------------
 
@@ -222,12 +235,18 @@ def _validate_requires(kind: str, requires: Any, *, where: str) -> dict[str, Any
         raise errors.SpecInvalid(
             f"registration: {where} 'requires' must be a mapping when present; got {requires!r}"
         )
-    if kind in _KINDS_WITHOUT_REQUIRES and requires:
-        raise errors.SpecInvalid(
-            f"registration: {where} kind {kind!r} accepts no 'requires' (the generic "
-            f"attestation kind carries no evidence-tier vocabulary core can interpret); "
-            f"got {dict(requires)!r}"
-        )
+    if kind in _KINDS_WITHOUT_REQUIRES:
+        # AMENDED (C-registration): the attestation kind accepts NO kind-specific
+        # requires, but DOES accept the one cross-kind ``uncontested`` demand core
+        # can check by counting standing challenges. Any OTHER key is still refused.
+        extra = {k for k in requires if k != UNCONTESTED_REQUIRES_KEY}
+        if extra:
+            raise errors.SpecInvalid(
+                f"registration: {where} kind {kind!r} accepts no 'requires' other than the "
+                f"cross-kind {UNCONTESTED_REQUIRES_KEY!r} (the generic attestation kind carries "
+                f"no evidence-tier vocabulary core can interpret); got extra key(s) "
+                f"{sorted(extra)}"
+            )
     return dict(requires)
 
 

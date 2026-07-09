@@ -513,3 +513,106 @@ def test_check_chain_is_pure_dispatch() -> None:
         "_receipt_path",
     ):
         assert forbidden not in src, f"check_chain must not re-inline {forbidden}"
+
+
+# ── C-registration: the cross-kind ``uncontested`` demand (T8) ────────────────
+
+
+def _write_challenge_against(tmp_path: Path, cid: str, content_sha: str) -> None:
+    """A well-formed ``challenge`` filing whose target binds *content_sha* (open)."""
+    rec = {
+        "ts": "2026-07-08T00:00:00Z",
+        "block": "challenge",
+        "resolved": {
+            "challenge_id": cid,
+            "target": {
+                "kind": "run",
+                "subject_kind": "scope",
+                "subject_id": "widget-lock",
+                "content_sha": content_sha,
+                "scope": {"scope_kind": "scope", "scope_id": "widget-lock"},
+            },
+            "citations": [{"kind": "run", "ref": "widget-run-1", "sha": "d" * 64}],
+            "grounds": "the widget lock rests on refuted evidence",
+        },
+    }
+    p = tmp_path / ".hpc" / "challenges" / f"{cid}.decisions.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def _uncontested_entry(content_sha: str) -> ChainEntry:
+    return ChainEntry(
+        slot="attest-slot",
+        kind="attestation",
+        subject_id="scope:widget-lock",
+        content_sha=content_sha,
+        requires={"uncontested": True},
+    )
+
+
+def test_uncontested_demand_unmet_downgrades_to_stale(tmp_path: Path) -> None:
+    """A contested prerequisite under an ``uncontested`` demand fails, naming the ids."""
+    _attest(tmp_path, scope_kind="scope", scope_id="widget-lock", content_sha="sha-1")
+    _write_challenge_against(tmp_path, "widget-dissent-x", "sha-1")
+    [v] = prereqs.check_chain(tmp_path, [_uncontested_entry("sha-1")])
+    assert v.status == "stale"  # DISCLOSED-and-counted, the caller-declared gate
+    assert "widget-dissent-x" in v.evidence_note
+    assert "uncontested demand UNMET" in v.evidence_note
+
+
+def test_same_chain_without_demand_passes_byte_identically(tmp_path: Path) -> None:
+    """WITHOUT the demand, contest presence never reshapes the verdict (T-NB)."""
+    _attest(tmp_path, scope_kind="scope", scope_id="widget-lock", content_sha="sha-1")
+    _write_challenge_against(tmp_path, "widget-dissent-x", "sha-1")
+    [contested] = prereqs.check_chain(tmp_path, [_attest_entry("sha-1")])
+    assert contested.status == "current"  # ten challenges greenlight like none
+
+    # Byte-identical to an UNCHALLENGED namespace under the same (demand-free) entry.
+    other = tmp_path / "clean"
+    other.mkdir()
+    _attest(other, scope_kind="scope", scope_id="widget-lock", content_sha="sha-1")
+    [clean] = prereqs.check_chain(other, [_attest_entry("sha-1")])
+    assert (contested.status, contested.recomputed_sha, contested.evidence_note) == (
+        clean.status,
+        clean.recomputed_sha,
+        clean.evidence_note,
+    )
+
+
+def test_uncontested_demand_met_passes(tmp_path: Path) -> None:
+    """An ``uncontested`` demand with NO standing challenge passes (open-count 0)."""
+    _attest(tmp_path, scope_kind="scope", scope_id="widget-lock", content_sha="sha-1")
+    [v] = prereqs.check_chain(tmp_path, [_uncontested_entry("sha-1")])
+    assert v.status == "current"
+
+
+def test_uncontested_accepted_on_attestation_but_other_keys_refused(tmp_path: Path) -> None:
+    """The R3 amendment: attestation accepts ``uncontested`` alone; other keys refuse."""
+    from hpc_agent.state.registration import parse_chain_entry
+
+    ok = parse_chain_entry(
+        {
+            "slot": "s",
+            "kind": "attestation",
+            "subject_id": "scope:widget-lock",
+            "content_sha": "sha-1",
+            "requires": {"uncontested": True},
+        }
+    )
+    assert ok.requires == {"uncontested": True}
+    with pytest.raises(errors.SpecInvalid):
+        parse_chain_entry(
+            {
+                "slot": "s",
+                "kind": "attestation",
+                "subject_id": "scope:widget-lock",
+                "content_sha": "sha-1",
+                "requires": {"bogus": True},
+            }
+        )
+
+
+def test_uncontested_route_through_pin() -> None:
+    """C-registration enforcement row: the demand counts via standing_challenges."""
+    assert "standing_challenges(" in inspect.getsource(prereqs._uncontested_open_count)
