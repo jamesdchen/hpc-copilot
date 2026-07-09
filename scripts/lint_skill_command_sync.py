@@ -68,6 +68,11 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     ("hpc-status", "monitor-hpc"),
     ("hpc-aggregate", "aggregate-hpc"),
     ("hpc-campaign", "campaign-hpc"),
+    # Notebook-audit gained its slash 2026-07-09: run #11 showed the
+    # skill-only surface has no human on-ramp — nothing routes a user
+    # who says "audit my analysis" into the loop, so the agent
+    # freestyles instead. Same interview/relay split as the others.
+    ("hpc-notebook-audit", "notebook-audit-hpc"),
 ]
 
 # Workflow-trigger slashes that route directly to the spawn pipeline
@@ -85,10 +90,6 @@ WORKFLOW_TRIGGER_SLASHES: set[str] = set()
 SKILL_ONLY_OK: set[str] = {
     "hpc-build-executor",
     "hpc-classify-axis",
-    # Notebook-audit loop (2026-07-08): agent-only in-session driver
-    # (draft -> lint -> auto-clear -> view -> sign-off -> status); no
-    # paired user-typed slash ships in v1.
-    "hpc-notebook-audit",
     "hpc-wrap-entry-point",
     # Human-run release procedure (tracked here since 2026-07-04 so it lives
     # under the repo lints; formerly an untracked ~/.claude/skills copy that

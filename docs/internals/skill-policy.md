@@ -108,17 +108,21 @@ Slash command (interview /  │ /submit-hpc          │ —                    
    relay; human consumer)   │ /monitor-hpc         │   ← slashes relay     │   ← the user types the
                             │ /aggregate-hpc       │     briefs; they do    │     y / nudge
                             │ /campaign-hpc        │     not execute        │
+                            │ /notebook-audit-hpc  │                       │
 ────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
 Workflow skill (block-loop  │ hpc-submit           │ (starts the block     │ —
    relay; paired w/ slash)  │ hpc-status           │  verbs; does not      │   ← the skill never
                             │ hpc-aggregate        │  resolve or interpret) │     resolves a decision
                             │ hpc-campaign         │                       │
+                            │ hpc-notebook-audit   │                       │
 ────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
 Block verb (code; execution │ —                    │ submit-s1..s4,        │ —
    + digestion; terminates  │   ← blocks are not    │ status-snapshot/watch, │   ← a block terminates
    at a decision point)     │     prose             │ aggregate-check/run,   │     AT a decision; the
                             │                      │ campaign-*,           │     human decides
-                            │                      │ submit-speculate      │
+                            │                      │ submit-speculate,     │
+                            │                      │ notebook-lint/-view/  │
+                            │                      │ -auto-clear/-status   │
 ────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
 Worker prompt (execution    │ —  STRANDED (design §6): the headless `claude -p --bare` worker is removed
    layer, PRE-FORK)         │    from default routing — there is no LLM inside execution to spawn; the
