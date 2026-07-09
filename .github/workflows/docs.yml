@@ -50,7 +50,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # On ``pull_request`` events ``actions/checkout`` defaults to
           # the ephemeral ``refs/pull/<n>/merge`` ref (a merge of PR

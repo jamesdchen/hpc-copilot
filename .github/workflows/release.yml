@@ -39,7 +39,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: setup.py's build_py hook runs ``git rev-parse HEAD``
           # to stamp BUILD_SHA into the wheel. A shallow (default fetch-depth: 1)

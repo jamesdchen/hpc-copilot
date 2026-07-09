@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Same PR-head reasoning as docs.yml — the auto-commit
           # push target must be the PR branch itself, not the ephemeral
@@ -87,7 +87,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # When the auto-regen above pushes a new commit, the
           # workflow-level concurrency cancels this run and the
@@ -188,7 +188,7 @@ jobs:
         # Plugins that ship a ``tests/`` dir. Add a plugin here when it grows one.
         plugin: ["hpc-agent-github-actions", "hpc-agent-notebook-render"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
@@ -266,7 +266,7 @@ jobs:
         # (capability 1 only). Each maps to a ``module.path:factory`` below.
         adapter: ["claude-code", "notebook-render"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
@@ -326,7 +326,7 @@ jobs:
     runs-on: windows-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
