@@ -555,7 +555,7 @@
     "output_schema": "challenge_status.output.json",
     "python": "hpc_agent.ops.challenge_status_op.challenge_status",
     "side_effects": [],
-    "summary": "Read the standing dissent over a committed record. Two views: a challenge_id (the filing/verdict/withdraw thread) or a target address (a content_sha, or a subject_kind+subject_id pair) — 'what stands against this record?'. Reduces each challenge to open / upheld / dismissed / withdrawn / superseded, re-resolves the target (found-current / found-superseded / unresolvable) and each cited evidence sha (verified / unresolvable) — DISCLOSED, never refused. Contested is an orthogonal flag beside the target's status, never blocking. Fleet-capable. Read-only; renders a deterministic markdown brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind.",
+    "summary": "Read the standing dissent over a committed record. Two views: a challenge_id (the filing/verdict/withdraw thread) or a target address (a content_sha, or a subject_kind+subject_id pair) — 'what stands against this record?'. Reduces each challenge to open / upheld / dismissed / withdrawn / superseded, re-resolves the target (found-current / found-superseded) and each cited evidence sha (verified / unresolvable) — DISCLOSED, never refused. Contested is an orthogonal flag beside the target's status, never blocking. Fleet-capable. Read-only; renders a deterministic markdown brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind.",
     "verb": "query"
   },
   {
