@@ -125,7 +125,7 @@ hpc-block-drive = "hpc_agent._kernel.lifecycle.block_drive:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["hpc_agent*", "slash_commands*"]
+include = ["hpc_agent*"]
 
 [tool.setuptools.package-data]
 hpc_agent = [
@@ -141,11 +141,9 @@ hpc_agent = [
     "execution/mapreduce/templates/runtime/common/*.sh",
     "_kernel/extension/worker_prompts/*.md",
     "py.typed",
-]
-slash_commands = [
-    "commands/*.md",
-    "skills/*/SKILL.md",
-    "agents/*.md",
+    "slash_commands/commands/*.md",
+    "slash_commands/skills/*/SKILL.md",
+    "slash_commands/agents/*.md",
 ]
 
 [tool.pytest.ini_options]
@@ -286,7 +284,6 @@ paths_to_mutate = ["src/hpc_agent/infra/throughput.py"]
 # to the full ``src/hpc_agent/``, drop the src/hpc_agent/ entry here.
 also_copy = [
     "src/hpc_agent/",
-    "src/slash_commands/",
     "scripts/",
     "docs/",
 ]

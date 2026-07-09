@@ -347,7 +347,7 @@ on the happy path, per `docs/internals/adding-a-primitive.md`.
   summarizes; the queue's own render is the digest surface). Test: the
   brief carries the field; ordering matches `order_items` byte-for-byte
   (the one-definition seat).
-* **T7** `src/slash_commands/skills/hpc-status/SKILL.md` — one added
+* **T7** `src/hpc_agent/slash_commands/skills/hpc-status/SKILL.md` — one added
   paragraph: the morning read is `attention-queue` (MCP, read-only, direct
   — no spec-file round-trip), relay the returned `render` VERBATIM; the
   snapshot's `attention` field is the same projection in-flow. **Skill-prose

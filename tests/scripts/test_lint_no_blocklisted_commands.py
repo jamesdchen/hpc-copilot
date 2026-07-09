@@ -34,7 +34,7 @@ _SPEC.loader.exec_module(lint)
 
 def _skill(tmp_path: Path, body: str, *, name: str = "hpc-demo") -> Path:
     root = tmp_path / "src"
-    p = root / "slash_commands" / "skills" / name / "SKILL.md"
+    p = root / "hpc_agent" / "slash_commands" / "skills" / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return root
@@ -140,7 +140,7 @@ def test_python_type_hint_in_python_fence_is_clean(tmp_path: Path) -> None:
 
 def test_allowlist_exempts_a_path_and_category(tmp_path: Path, monkeypatch) -> None:
     root = _skill(tmp_path, "Cancel with `scancel 9580235`.\n", name="hpc-debug")
-    rel = "slash_commands/skills/hpc-debug/SKILL.md"
+    rel = "hpc_agent/slash_commands/skills/hpc-debug/SKILL.md"
     assert lint.main(root) == 1  # fires without the exemption
     monkeypatch.setattr(lint, "ALLOWLIST", frozenset({(rel, "scancel")}))
     assert lint.main(root) == 0  # cited (path, category) exemption clears it

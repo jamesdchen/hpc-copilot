@@ -39,8 +39,14 @@ _MARKER = re.compile(
 # Files known to participate. Add new entries here when introducing a
 # new shared block in another file. The lint walks only these files.
 PARTICIPATING_FILES: list[Path] = [
-    REPO_ROOT / "src" / "slash_commands" / "skills" / "hpc-classify-axis" / "SKILL.md",
-    REPO_ROOT / "src" / "slash_commands" / "commands" / "submit-hpc.md",
+    REPO_ROOT
+    / "src"
+    / "hpc_agent"
+    / "slash_commands"
+    / "skills"
+    / "hpc-classify-axis"
+    / "SKILL.md",
+    REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "commands" / "submit-hpc.md",
     # The inline-mode "Isolation ceiling" caveat is byte-identical across the
     # three workflow skills (decision-content:inline-isolation-ceiling). It is
     # subtle, agent-facing, and was edited as a block once already — pin it so a
@@ -48,9 +54,9 @@ PARTICIPATING_FILES: list[Path] = [
     # carries a sibling phrasing in data.instructions, but it's a Python string,
     # not markdown, so it can't host these markers — it's the runtime-canonical
     # copy and stays out of this cross-check by design.)
-    REPO_ROOT / "src" / "slash_commands" / "skills" / "hpc-submit" / "SKILL.md",
-    REPO_ROOT / "src" / "slash_commands" / "skills" / "hpc-status" / "SKILL.md",
-    REPO_ROOT / "src" / "slash_commands" / "skills" / "hpc-aggregate" / "SKILL.md",
+    REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills" / "hpc-submit" / "SKILL.md",
+    REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills" / "hpc-status" / "SKILL.md",
+    REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills" / "hpc-aggregate" / "SKILL.md",
 ]
 
 

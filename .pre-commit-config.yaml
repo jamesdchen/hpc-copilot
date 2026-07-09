@@ -105,18 +105,18 @@ repos:
         files: '^docs/primitives/.*\.md$'
 
       - id: lint-skill-command-sync
-        name: check src/slash_commands/skills/ <-> src/slash_commands/commands/ stay paired
+        name: check src/hpc_agent/slash_commands/skills/ <-> src/hpc_agent/slash_commands/commands/ stay paired
         entry: python scripts/lint_skill_command_sync.py
         language: system
         pass_filenames: false
-        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'
 
       - id: lint-decision-content
         name: operationally-shared markdown blocks stay byte-identical across files
         entry: python scripts/lint_decision_content.py
         language: system
         pass_filenames: false
-        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_decision_content\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/slash_commands/commands/.*\.md|scripts/lint_decision_content\.py)$'
 
       - id: lint-pure-files
         name: '@pure: no-io files must not import I/O modules'
@@ -147,7 +147,7 @@ repos:
         entry: python scripts/lint_no_raw_ssh.py
         language: python
         pass_filenames: false
-        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_raw_ssh\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_raw_ssh\.py)$'
 
       - id: lint-telemetry-labels
         name: every emitted telemetry field declares cumulative vs per-tick delta
@@ -161,7 +161,7 @@ repos:
         entry: python scripts/lint_no_blocklisted_commands.py
         language: python
         pass_filenames: false
-        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_blocklisted_commands\.py)$'
+        files: '^(src/hpc_agent/slash_commands/skills/.*/SKILL\.md|src/hpc_agent/_kernel/extension/worker_prompts/.*\.md|scripts/lint_no_blocklisted_commands\.py)$'
 
       - id: lint-plugin-manifests
         name: every loaded plugin's MANIFEST reconciles with runtime reality

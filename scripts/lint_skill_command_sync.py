@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check ``skills/`` against ``src/slash_commands/commands/``.
+"""Cross-check ``skills/`` against ``src/hpc_agent/slash_commands/commands/``.
 
 Both trees describe the same workflows (submit, monitor, aggregate,
 campaign, build-executor, classify-axis) in different prose: the skill
@@ -27,7 +27,8 @@ of workflows stays in sync.
 Mapping rules
 -------------
 
-* ``src/slash_commands/skills/<id>/SKILL.md``  ↔  ``src/slash_commands/commands/<cmd>.md``
+* ``src/hpc_agent/slash_commands/skills/<id>/SKILL.md``  ↔
+  ``src/hpc_agent/slash_commands/commands/<cmd>.md``
 * The ``<id>`` and ``<cmd>`` may differ (e.g. ``hpc-submit`` vs
   ``submit-hpc``). The mapping below pins which pair represents the
   same workflow.
@@ -46,8 +47,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / "src" / "slash_commands" / "skills"
-COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
+SKILLS_DIR = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills"
+COMMANDS_DIR = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
 #
