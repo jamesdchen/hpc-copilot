@@ -203,6 +203,17 @@ _CURATED_EXTRA_VERBS = frozenset(
         # run-#10 rootless-canonical fix); unreachable it would be the next
         # hand-authored spec JSON.
         "notebook-record-config",
+        # ``audit-preflight`` — the GO/NO-GO substrate-prereq brief the
+        # notebook-audit skill runs FIRST (before drafting). Human-sequenced
+        # like the rest of the audit loop (no ``next_block``), so it is
+        # unioned explicitly — unreachable, the agent re-derives the checks
+        # by hand (the exact prose-rot the verb mechanized away).
+        "audit-preflight",
+        # ``evidence-brief`` — the evidence-memory point digest the audit
+        # onboarding relays VERBATIM when the human named scope tags. A pure
+        # read with no ``next_block``; unreachable, the agent skips the
+        # prior-evidence surface or hand-walks the stores.
+        "evidence-brief",
     }
 )
 

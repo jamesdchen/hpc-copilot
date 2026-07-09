@@ -48,7 +48,8 @@
             "scope",
             "notebook",
             "registration",
-            "pack"
+            "pack",
+            "conclusion"
           ],
           "title": "Scope Kind",
           "type": "string"

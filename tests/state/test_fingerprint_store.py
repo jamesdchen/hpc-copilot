@@ -403,3 +403,21 @@ def test_load_evidence_produces_aligned_samples_and_flags(tmp_path: Path) -> Non
     assert ev.excluded_unadmitted == 1
     assert len(ev.stale) == 1
     assert ev.malformed_skipped == 0
+
+
+# --- P-S1 one-definition pin (the re-point to determinism.compute_content_sha) --
+
+
+def test_content_sha_over_payloads_routes_to_kernel_byte_for_byte() -> None:
+    """P-S1: ``content_sha_over_payloads`` IS ``determinism.compute_content_sha``.
+
+    The store's append bind-recompute and the pure kernel's reduction now share
+    ONE canonicalization; this pins them byte-for-byte so a future edit to either
+    surfaces as a failure here rather than a silent fingerprint drift.
+    """
+    from hpc_agent.state import determinism
+
+    a = {"loss": 0.5, "acc": {"top1": 0.9}}
+    b = {"loss": 0.5, "acc": {"top1": 0.91}}
+    assert content_sha_over_payloads(a, b) == determinism.compute_content_sha(a, b)
+    assert content_sha_over_payloads(a, b) == determinism.canonical_sha([a, b])

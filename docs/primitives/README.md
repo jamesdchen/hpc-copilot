@@ -113,6 +113,8 @@ The verb partitions primitives into bands the reader can scan independently:
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` |
 | [discover-runs](discover-runs.md) | yes | _none_ | `hpc-agent discover-runs [--experiment-dir <dir>]` |
 | [doctor](doctor.md) | yes | _none_ | `hpc-agent doctor --spec <path> [--experiment-dir <dir>]` |
+| [evidence-brief](evidence-brief.md) | yes | _none_ | `hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]` |
+| [evidence-period](evidence-period.md) | yes | _none_ | `hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` |
 | [fetch-skill-return](fetch-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent fetch-skill-return [--experiment-dir <dir>] --skill <skill> [--no-clear]` |
 | [find](find.md) | yes | _none_ | `hpc-agent find <query> [--limit <limit>]` |

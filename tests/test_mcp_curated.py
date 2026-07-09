@@ -55,6 +55,11 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "notebook-record-receipt",
         "notebook-scaffold-template",
         "notebook-record-config",
+        # The audit prelude's non-notebook-prefixed companions (run #11: the
+        # skill calls both MCP-first; human-sequenced, no next_block, so
+        # unioned explicitly like the loop verbs).
+        "audit-preflight",
+        "evidence-brief",
     }
 
     assert names == expected
@@ -90,6 +95,10 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         "notebook-scaffold-template",
         "notebook-record-config",
     } <= names
+    # The prelude verbs the notebook-audit skill calls MCP-first before any
+    # drafting (run #11): the GO/NO-GO preflight brief + the evidence point
+    # digest — unreachable, each is the next hand-derived check / store walk.
+    assert {"audit-preflight", "evidence-brief"} <= names
     assert "clusters" not in names
 
 

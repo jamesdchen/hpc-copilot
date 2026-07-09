@@ -712,6 +712,30 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent evidence-brief --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_brief.input.json",
+    "name": "evidence-brief",
+    "output_schema": "evidence_brief.output.json",
+    "python": "hpc_agent.ops.evidence_brief_op.evidence_brief",
+    "side_effects": [],
+    "summary": "The evidence brief: the POINT query over the research program's sealed records. Keyed by scope tags and/or a lineage run_id, it projects the cross-store digest for that scope — dated sha-cited conclusions (newest current first), per-tag prior-work counts, per-lineage determinism envelopes quoted verbatim from the fingerprint ledger, and each conclusion's citations re-resolved at read (verified / unresolvable — disclosed, never refused). Cheap (journal-first, no SSH), content-cached, fleet-capable. Read-only; renders a deterministic markdown digest relayed to the human verbatim.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent evidence-period --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "evidence_period.input.json",
+    "name": "evidence-period",
+    "output_schema": "evidence_period.output.json",
+    "python": "hpc_agent.ops.evidence_period_op.evidence_period",
+    "side_effects": [],
+    "summary": "The evidence PERIOD digest: a time-window projection over the one evidence collector (conclusions, per-tag activity, determinism envelopes) that ENDS with the unconcluded-campaigns list — the standing invitation to close the conclusion loop. since is the inclusive window start; until the inclusive end (default open/now). Read-only, no SSH; recomputed on every read (a content-keyed cache only memoizes — deleting it changes no output). A pure projection: identity, counting, and verbatim record fields — it never interprets what a tag means or what a finding says.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]",
     "idempotent": true,
     "input_schema": null,

@@ -68,6 +68,7 @@ from hpc_agent._wire.queries.verify_reproduction import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.execution.mapreduce.reduce.metrics import reduce_partials
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state.data_trace import read_trace
 from hpc_agent.state.determinism import (
     Sample,
     build_sample_record,
@@ -275,6 +276,120 @@ def _load_partial_side(
         for key, value in flatten_metrics(payload).items():
             flat[f"task{idx}.{key}"] = value
     return flat, present
+
+
+# --- the data-trace fingerprint interlock (docs/design/data-trace.md) --------
+#
+# "The fingerprint interlock": stage digests are fingerprint-admissible
+# evidence. When BOTH compared runs carry ingested traces, the per-stage
+# ``digest`` + ``row_count`` atoms fold into the compared metrics payloads as
+# EXACT-CLASS keys (``stage:<stage>.digest`` / ``stage:<stage>.row_count``), so
+# they ride the SAME per-key envelope + sample machinery with NO new admission
+# rule — and a reproduction mismatch LOCALIZES to a named stage. Absent traces
+# on either side → nothing folded, disclosed (never fabricated): the
+# degradation-path posture.
+
+#: The flattened-key prefix for a folded per-stage atom (flatten convention: a
+#: ``.`` joins the stage-namespaced key to the atom name).
+_STAGE_KEY_PREFIX = "stage:"
+
+
+def _read_run_trace(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """The run's task-0 stage trace — the interlock's localization unit.
+
+    v1 reads the ``("run", run_id)`` task-0 trace (the canonical single-/first-
+    task trace the design's "diverges at <stage>" example names); multi-task
+    enumeration is a deferred refinement (drift-logged). Returns ``[]`` when the
+    run has no ingested trace — the degradation path (no trace → nothing folded,
+    disclosed).
+    """
+    return read_trace(experiment_dir, "run", run_id, 0)
+
+
+def _stage_atoms(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Reduce a trace to ``{stage: {seq, digest, rows}}`` — the interlock evidence.
+
+    Only the two fingerprint-admissible atoms (the ``digest`` sha + the
+    ``row_count`` row total) are lifted; a stage seen more than once keeps its
+    LAST record (append order). A malformed/absent atom degrades to ``None``
+    (disclosed, never fabricated) so an off-digest-policy run still folds its
+    row counts.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        stage = rec.get("stage")
+        if not isinstance(stage, str) or not stage:
+            continue
+        atoms = rec.get("atoms")
+        atoms = atoms if isinstance(atoms, dict) else {}
+        digest = atoms.get("digest")
+        digest = digest if isinstance(digest, str) and digest else None
+        rc = atoms.get("row_count")
+        rows_raw = rc.get("rows") if isinstance(rc, dict) else None
+        rows = rows_raw if isinstance(rows_raw, int) and not isinstance(rows_raw, bool) else None
+        seq = rec.get("seq")
+        out[stage] = {
+            "seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
+            "digest": digest,
+            "rows": rows,
+        }
+    return out
+
+
+def _stage_overlay(stage_atoms: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Flatten stage atoms into ``stage:<stage>.{digest,row_count}`` metric keys.
+
+    The namespaced, flatten-convention-consistent keys the interlock folds into
+    the compared payloads. Exact-class by construction: a digest is a sha (str),
+    a row_count is an int — both always compare exactly (no envelope needed).
+    """
+    overlay: dict[str, Any] = {}
+    for stage, a in stage_atoms.items():
+        if a.get("digest") is not None:
+            overlay[f"{_STAGE_KEY_PREFIX}{stage}.digest"] = a["digest"]
+        if a.get("rows") is not None:
+            overlay[f"{_STAGE_KEY_PREFIX}{stage}.row_count"] = a["rows"]
+    return overlay
+
+
+def _first_diverged_stage(
+    orig_stages: Mapping[str, Mapping[str, Any]],
+    repro_stages: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    """The FIRST stage (by pipeline order = trace ``seq``) whose atoms diverge.
+
+    A stage present on ONE side only is a structural divergence; otherwise a
+    ``digest`` that moved (recorded on both) or a ``row_count`` that moved. A
+    digest recorded on only one side is NOT called a divergence — that is a
+    degraded observation, not proven drift. Returns ``None`` when every shared
+    stage agrees.
+    """
+    names = set(orig_stages) | set(repro_stages)
+
+    def _order(name: str) -> tuple[int, str]:
+        seqs = [
+            s["seq"]
+            for s in (orig_stages.get(name), repro_stages.get(name))
+            if s is not None and isinstance(s.get("seq"), int)
+        ]
+        return (min(seqs) if seqs else 2**63, name)
+
+    for name in sorted(names, key=_order):
+        o = orig_stages.get(name)
+        r = repro_stages.get(name)
+        if o is None or r is None:
+            return name
+        digest_div = (
+            o.get("digest") is not None
+            and r.get("digest") is not None
+            and o["digest"] != r["digest"]
+        )
+        rows_div = (
+            o.get("rows") is not None and r.get("rows") is not None and o["rows"] != r["rows"]
+        )
+        if digest_div or rows_div:
+            return name
+    return None
 
 
 # --- the byte-preserved v1 comparator (NO metric vocabulary) -----------------
@@ -725,6 +840,12 @@ def verify_reproduction(
     # tiered path (an envelope exists to have applied the data leg); stays None on
     # the incomparable / empty-ledger paths.
     data_identity_disclosure: dict[str, Any] | None = None
+    # The data-trace interlock disclosure (both/one/neither side traced) and the
+    # localized stage — populated only on the full metrics-present path below;
+    # stay None on the incomparable / partial paths (nothing folded, nothing to
+    # disclose).
+    stage_interlock: dict[str, Any] | None = None
+    diverged_stage: str | None = None
 
     if partial:
         assert indices is not None
@@ -770,6 +891,35 @@ def verify_reproduction(
         schema_version = RECEIPT_SCHEMA_VERSION_TIERED if partial else RECEIPT_SCHEMA_VERSION
         appended_record = None
     else:
+        # The data-trace fingerprint interlock (full path only — a partial
+        # reproduction already namespaces per task). When BOTH runs carry an
+        # ingested trace, fold the per-stage digest/row_count atoms into the
+        # compared payloads as EXACT-CLASS keys so they ride the same envelope +
+        # sample machinery, and localize the first diverging stage. One side or
+        # neither → nothing folded; the presence is disclosed (never fabricated).
+        stage_diverged: str | None = None
+        if not partial:
+            orig_stages = _stage_atoms(_read_run_trace(experiment_dir, original_run_id))
+            repro_stages = _stage_atoms(_read_run_trace(experiment_dir, repro_run_id))
+            orig_traced = bool(orig_stages)
+            repro_traced = bool(repro_stages)
+            if orig_traced or repro_traced:
+                both_traced = orig_traced and repro_traced
+                stage_keys: list[str] = []
+                if both_traced:
+                    overlay_o = _stage_overlay(orig_stages)
+                    overlay_r = _stage_overlay(repro_stages)
+                    orig_metrics = {**orig_metrics, **overlay_o}
+                    repro_metrics = {**repro_metrics, **overlay_r}
+                    stage_keys = sorted(set(overlay_o) | set(overlay_r))
+                    stage_diverged = _first_diverged_stage(orig_stages, repro_stages)
+                stage_interlock = {
+                    "original_trace_present": orig_traced,
+                    "repro_trace_present": repro_traced,
+                    "compared": both_traced,
+                    "stage_keys": stage_keys,
+                }
+
         # v1 comparator (BYTE-PRESERVED, no metric vocabulary) — the base per-key
         # observation + verdict every path starts from.
         per_key_v1 = _compare_metrics(orig_metrics, repro_metrics, spec.tolerance)
@@ -837,10 +987,14 @@ def verify_reproduction(
         # data_moved forces v2 even on an empty envelope: when ALL priors were
         # excluded as data drift the envelope is empty (untiered), yet the
         # exclusion is exactly what must be disclosed (a rebuilt input).
+        # An active interlock (at least one side traced) FORCES v2 so its
+        # stage_interlock disclosure + diverged_stage ride the receipt; an
+        # untraced comparison never forces it (byte-identical to a pre-interlock
+        # receipt — nothing folded, nothing disclosed).
         tiered = bool(envelope.per_key)
         schema_version = (
             RECEIPT_SCHEMA_VERSION_TIERED
-            if (tiered or partial or data_moved)
+            if (tiered or partial or data_moved or stage_interlock is not None)
             else RECEIPT_SCHEMA_VERSION
         )
 
@@ -878,6 +1032,15 @@ def verify_reproduction(
             stage = overall_v1
             reason = _render_reason(per_key_v1, overall_v1) + data_phrase
 
+        # Stage-localized mismatch: surface the first diverging stage ONLY when
+        # the overall verdict routes to the human (mismatch / needs_verdict /
+        # incomparable) — an auto-cleared / exact-match comparison never diverges
+        # at a stage (its stage keys matched). Never prose-invented.
+        if stage_diverged is not None and stage not in ("match", "auto_cleared"):
+            diverged_stage = stage_diverged
+            # Code-rendered off the machine field — never prose-invented.
+            reason += f"; diverges at stage {diverged_stage!r} (data-trace interlock)"
+
         appended_record = _append_fingerprint_sample(
             experiment_dir,
             original_run_id=original_run_id,
@@ -914,6 +1077,13 @@ def verify_reproduction(
         # + what the data leg did to the prior evidence. None on an empty-ledger v2
         # (partial-but-untiered) receipt — no envelope applied the data leg.
         receipt["data_identity"] = data_identity_disclosure
+        # v2 data-trace interlock (docs/design/data-trace.md): only present when a
+        # trace exists on at least one side (else the receipt is byte-identical to
+        # a pre-interlock one). ``diverged_stage`` names the first stage a routed
+        # verdict localizes to; null otherwise.
+        if stage_interlock is not None:
+            receipt["stage_interlock"] = stage_interlock
+            receipt["diverged_stage"] = diverged_stage
 
     # No-silent-caps: refuse a partial receipt missing any partiality field.
     _validate_receipt_partiality(receipt)
@@ -942,5 +1112,6 @@ def verify_reproduction(
         "receipt": receipt,
         "receipt_path": str(path),
         "appended_sample": sample_echo,
+        "diverged_stage": diverged_stage,
     }
     return VerifyReproductionResult.model_validate(result_payload)

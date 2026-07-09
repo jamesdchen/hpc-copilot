@@ -579,6 +579,163 @@ def test_partial_receipt_missing_field_refused() -> None:
     _validate_receipt_partiality({"partial": False})
 
 
+# --------------------------------------------------------------------------- #
+# the data-trace fingerprint interlock (docs/design/data-trace.md)
+# --------------------------------------------------------------------------- #
+from hpc_agent.state.data_trace import make_record, write_trace  # noqa: E402
+
+
+def _toy_trace(
+    exp: Path, run_id: str, digests: dict[str, str], *, rows: dict[str, int] | None = None
+) -> None:
+    """Write an ingested-store toy trace: one record per stage, seq = pipeline order."""
+    rows = rows or {}
+    records = [
+        make_record(
+            stage,
+            seq,
+            {
+                "digest": sha,
+                "row_count": {"rows": rows.get(stage, 100), "dropped": 0},
+            },
+            created_at="2026-01-01T00:00:00Z",
+        )
+        for seq, (stage, sha) in enumerate(digests.items())
+    ]
+    write_trace(exp, "run", run_id, 0, records)
+
+
+def _clustered_pair(exp: Path, orig: dict[str, Any], repro: dict[str, Any]) -> None:
+    """A pair with a known cluster, so the fingerprint sample is minted."""
+    _write_sidecar(exp, ORIG, cluster="hoffman2")
+    _write_sidecar(exp, REPRO, reproduces=ORIG, cluster="hoffman2")
+    _write_aggregate(exp, ORIG, {"gp": orig})
+    _write_aggregate(exp, REPRO, {"gp": repro})
+
+
+def test_traced_pair_stage_keys_present_and_exact(tmp_path: Path) -> None:
+    # Both runs traced, identical stage digests -> the namespaced stage keys ride
+    # the comparison as exact-class entries and everything still matches.
+    _clustered_pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    digests = {"load": "1" * 64, "scaling": "2" * 64, "fit": "3" * 64}
+    _toy_trace(tmp_path, ORIG, digests)
+    _toy_trace(tmp_path, REPRO, digests)
+    res = _run(tmp_path)
+    assert res.stage_reached == "match"
+    assert res.diverged_stage is None
+    keys = {e["key"] for e in res.receipt["per_key"]}
+    assert "stage:scaling.digest" in keys
+    assert "stage:scaling.row_count" in keys
+    by_key = {e["key"]: e for e in res.receipt["per_key"]}
+    assert by_key["stage:scaling.digest"]["verdict"] == "match"
+    # Exact semantics: a sha is a string, no tolerance ever applies.
+    assert by_key["stage:scaling.digest"]["tolerance_applied"] is None
+    # The interlock disclosure rides the (forced-v2) receipt.
+    assert res.receipt["schema_version"] == 2
+    interlock = res.receipt["stage_interlock"]
+    assert interlock["compared"] is True
+    assert interlock["original_trace_present"] is True
+    assert interlock["repro_trace_present"] is True
+    assert "stage:scaling.digest" in interlock["stage_keys"]
+    assert res.receipt["diverged_stage"] is None
+    ReproductionReceipt.model_validate(res.receipt)
+    # Envelope accrual: the stage keys fold into the appended sample's per_key
+    # (the SAME machinery, no new admission rule).
+    assert res.appended_sample is not None
+    sample_keys = {d.key for d in res.appended_sample.per_key}
+    assert "stage:scaling.digest" in sample_keys
+
+
+def test_planted_stage_divergence_localizes_to_named_stage(tmp_path: Path) -> None:
+    # FIRES: a planted digest divergence at 'scaling' (and downstream 'fit')
+    # localizes to 'scaling' — the FIRST diverging stage by pipeline order (seq).
+    _clustered_pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    _toy_trace(tmp_path, ORIG, {"load": "1" * 64, "scaling": "2" * 64, "fit": "3" * 64})
+    _toy_trace(tmp_path, REPRO, {"load": "1" * 64, "scaling": "9" * 64, "fit": "8" * 64})
+    res = _run(tmp_path)
+    assert res.stage_reached == "mismatch"  # a sha is exact-class; it moved
+    assert res.needs_decision is True
+    assert res.diverged_stage == "scaling"
+    assert res.receipt["diverged_stage"] == "scaling"
+    assert "diverges at stage 'scaling'" in res.reason
+    by_key = {e["key"]: e for e in res.receipt["per_key"]}
+    assert by_key["stage:scaling.digest"]["verdict"] == "mismatch"
+    assert by_key["stage:load.digest"]["verdict"] == "match"
+    ReproductionReceipt.model_validate(res.receipt)
+    # The diverging stage key rides the appended sample (fingerprint-admissible).
+    assert res.appended_sample is not None
+    sample_by_key = {d.key: d for d in res.appended_sample.per_key}
+    assert sample_by_key["stage:scaling.digest"].a != sample_by_key["stage:scaling.digest"].b
+
+
+def test_row_count_divergence_localizes(tmp_path: Path) -> None:
+    # A row_count move alone (digests identical) still localizes to its stage.
+    _pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    digests = {"load": "1" * 64, "pool": "2" * 64}
+    _toy_trace(tmp_path, ORIG, digests, rows={"load": 246059, "pool": 218905})
+    _toy_trace(tmp_path, REPRO, digests, rows={"load": 246059, "pool": 218900})
+    res = _run(tmp_path)
+    assert res.stage_reached == "mismatch"
+    assert res.diverged_stage == "pool"
+
+
+def test_one_side_traced_disclosed_not_fabricated(tmp_path: Path) -> None:
+    # Only the original is traced: nothing folded (no stage keys, no divergence),
+    # the presence/absence DISCLOSED on the receipt — never fabricated.
+    _pair(tmp_path, {"pi": 3.14}, {"pi": 3.14})
+    _toy_trace(tmp_path, ORIG, {"load": "1" * 64})
+    res = _run(tmp_path)
+    assert res.stage_reached == "match"
+    assert res.diverged_stage is None
+    keys = {e["key"] for e in res.receipt["per_key"]}
+    assert not any(k.startswith("stage:") for k in keys)
+    assert res.receipt["schema_version"] == 2
+    interlock = res.receipt["stage_interlock"]
+    assert interlock == {
+        "original_trace_present": True,
+        "repro_trace_present": False,
+        "compared": False,
+        "stage_keys": [],
+    }
+    assert res.receipt["diverged_stage"] is None
+    ReproductionReceipt.model_validate(res.receipt)
+
+
+def test_untraced_pair_receipt_byte_identical_to_pre_interlock(tmp_path: Path) -> None:
+    # The no-trace regression pin: no traces on either side -> the receipt carries
+    # NO interlock fields and keeps the v1 posture (byte-identical to today).
+    _pair(tmp_path, {"pi": 3.14159}, {"pi": 3.14159})
+    res = _run(tmp_path)
+    assert res.receipt["schema_version"] == 1
+    assert "stage_interlock" not in res.receipt
+    assert "diverged_stage" not in res.receipt
+    assert res.diverged_stage is None
+    assert set(res.receipt) == {
+        "ts",
+        "schema_version",
+        "original",
+        "repro",
+        "tolerance_spec",
+        "per_key",
+        "overall",
+        "sources",
+    }
+
+
+def test_auto_cleared_verdict_never_names_a_stage(tmp_path: Path) -> None:
+    # diverged_stage surfaces ONLY on a routed verdict; a matching traced pair
+    # (even with an envelope in play) names no stage.
+    _well_evidenced_pi(tmp_path)
+    _pair_pi(tmp_path, 3.14, 3.155)  # auto_cleared inside the envelope
+    digests = {"load": "1" * 64}
+    _toy_trace(tmp_path, ORIG, digests)
+    _toy_trace(tmp_path, REPRO, digests)
+    res = _run(tmp_path)
+    assert res.stage_reached == "auto_cleared"
+    assert res.diverged_stage is None
+    assert res.receipt["diverged_stage"] is None
+
+
 def test_human_acceptance_admits_a_mismatch_sample(tmp_path: Path) -> None:
     # A planted mismatch sample is inadmissible until a reproduction-verdict
     # accept names its content_sha; once accepted it widens the envelope.

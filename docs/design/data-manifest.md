@@ -38,7 +38,8 @@ nothing fails — only an identity record sees it.
   `interview.json`/`axes.yaml` as a copilot-consumed caller record,
   git-trackable, machine-minted.
 - **Record shape**: `{relpath: {sha256, size, built_by?}}` + a manifest-doc
-  sha computed via the canonical-JSON helper (P-S1; file-content shas are
+  sha computed via the ONE canonical-sha definition (P-S1 UNIFIED — see the
+  drift log; `state.determinism.canonical_sha`; file-content shas are
   raw-byte hashes — two hash disciplines, each in its lane, allowlisted in
   the grep lint). `built_by` is OPTIONAL caller-authored free text, carried
   opaquely (the scope-tag pattern) — the build audit itself is out of
@@ -190,6 +191,28 @@ commons, the catalog to the quant pack, bindings to program specs.**
 
 ## Drift log
 
+- 2026-07-09: **P-S1 canonical-JSON sha UNIFIED — one definition.** The debt was
+  three sibling copies of the harness-contract canonicalization. The definition
+  is now `state/determinism.py::canonical_sha` (the pure kernel;
+  `compute_content_sha(a, b) = canonical_sha([a, b])`). Re-pointed:
+  `state/data_manifest.py::manifest_doc_sha` (the `_canonical_json` copy DELETED
+  → `determinism.canonical_sha(records)`) and
+  `state/fingerprint_store.py::content_sha_over_payloads` (its `_canonical_json`
+  copy DELETED → `determinism.compute_content_sha`). `state/evidence.py::
+  citations_content_sha` already routed. Byte-for-byte pins:
+  `tests/state/test_data_manifest.py::test_manifest_doc_sha_routes_to_canonical_sha_byte_for_byte`
+  and `tests/state/test_fingerprint_store.py::test_content_sha_over_payloads_routes_to_kernel_byte_for_byte`.
+  Note: `data_manifest`'s old copy lacked `ensure_ascii=False`; adopting the
+  canonical form is byte-identical for ASCII records (relpaths/`built_by`) and,
+  for the rare non-ASCII case, converges on the ONE harness-contract form (a
+  strict move toward the single definition, not a regression). Left as-is (a
+  DIFFERENT canonicalization lane or a different subject, out of this debt's
+  scope): `state/run_sha.py` (the run-IDENTITY discipline — cmd_sha/node_sha
+  dedup keys; no `ensure_ascii=False`; changing its bytes would bust dedup +
+  journal keys), `ops/provenance_manifest.py::manifest_signature` (operator-
+  signable digest; no `ensure_ascii=False`), `ops/check_task_generator_mismatch.py`
+  (canonical-STRING comparator, not a doc sha). The `state/conformance*` canonical
+  copy stays for a later pass (owned by the Wave-C interlock).
 - 2026-07-07: written (Fable, pre-deadline), rulings 0a/0b folded.
 - 2026-07-08: **the fingerprint amendment LANDED (Phase-3, the three legs).**
   - **`data_sha` shape PINNED — one canonical sha over the manifest's `files`
