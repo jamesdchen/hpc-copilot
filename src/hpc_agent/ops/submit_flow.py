@@ -549,6 +549,173 @@ def _run_executor_existence_preflight(
         )
 
 
+# Default hard wall-clock cap on the pre-stage local task-0 smoke (item 7),
+# mirroring DryRunLocalSpec.smoke_timeout_sec. A spec's
+# ``pre_stage_smoke_timeout_sec`` overrides per-submission.
+_PRE_STAGE_SMOKE_TIMEOUT_DEFAULT = 60
+
+
+def _disclose_smoke(message: str) -> None:
+    """Surface a NON-blocking pre-stage-smoke disclosure to the operator.
+
+    An inconclusive (timeout) or fail-open (smoke-infra error) outcome is not a
+    refusal — it must be VISIBLE (the run #11 lesson is 'disclose, don't hide')
+    yet never abort the submit. Written to both the module logger and stderr so
+    it rides the same progress-legibility surface as the staging lines.
+    """
+    logging.getLogger(__name__).warning(message)
+    print(message, file=sys.stderr, flush=True)
+
+
+def _pre_stage_smoke_gate(
+    experiment_dir: Path,
+    specs: list[SubmitFlowSpec],
+    fresh_indices: list[int],
+) -> None:
+    """Bounded LOCAL task-0 dry-run of each executor BEFORE transport (item 7).
+
+    notebook-audit Addendum 4 item 7: run #11's units bug (executor
+    ``train_window`` in DAYS) survived the audit, the interview, and S1, and was
+    first caught by the REMOTE canary — after an hours-long 8.4 GB staging. It
+    would have crashed a LOCAL task-0 run in seconds. This gate wires the
+    existing ``ops/validate/dry_run_local`` smoke seam in HERE, before any rsync/
+    deploy, so a broken executor never pays for the stage first.
+
+    Per fresh spec (opt-out ``pre_stage_smoke=false``), read the just-written
+    sidecar for the REAL per-task executor + result_dir_template and smoke task
+    0 once per DISTINCT executor string (dedup keeps a campaign fan-out bounded).
+    Interpretation of the smoke findings lives here, not in core's smoke runner —
+    core relays the executor's own stderr and never interprets the failure:
+
+    * ``smoke_nonzero_exit`` → REFUSE the stage; the executor's stderr tail is
+      relayed VERBATIM in the raised message.
+    * ``smoke_import_error`` → REFUSE, but the message states it MAY be a
+      local-env artifact (a cluster-only dependency) and names ``pre_stage_smoke``
+      as the skip.
+    * ``smoke_timeout`` → NOT a failure (long tasks are normal); disclose
+      "smoke inconclusive (timeout after Ns)" and PROCEED.
+    * any other smoke code (spawn error, misconfig) → fail-open: disclose and
+      PROCEED, never block on a smoke-infrastructure issue.
+
+    The whole per-spec smoke is wrapped so an exception in the smoke runner
+    itself is fail-open too (disclose + proceed) — the gate can never be the
+    thing that blocks a submit.
+    """
+    from hpc_agent.state.runs import read_run_sidecar
+
+    seen: set[str] = set()
+    for i in fresh_indices:
+        spec = specs[i]
+        if not getattr(spec, "pre_stage_smoke", True):
+            continue
+        try:
+            sidecar = read_run_sidecar(experiment_dir, spec.run_id)
+        except Exception:  # noqa: BLE001 — best-effort read; a missing sidecar is fail-open
+            continue
+        if not isinstance(sidecar, dict):
+            continue
+        executor = sidecar.get("executor")
+        result_dir_template = sidecar.get("result_dir_template")
+        # The sidecar guards (_ensure_run_sidecar / _is_runnable_executor) already
+        # own the "must carry a real executor" refusal; here a non-runnable or
+        # template-less sidecar simply contributes no smoke (the smoke is
+        # best-effort defense-in-depth, never the owner of that contract).
+        if not _is_runnable_executor(executor) or not result_dir_template:
+            continue
+        if str(executor) in seen:
+            continue
+        seen.add(str(executor))
+        _smoke_one_executor(
+            experiment_dir,
+            spec=spec,
+            executor=str(executor),
+            result_dir_template=str(result_dir_template),
+        )
+
+
+def _smoke_one_executor(
+    experiment_dir: Path,
+    *,
+    spec: SubmitFlowSpec,
+    executor: str,
+    result_dir_template: str,
+) -> None:
+    """Smoke ONE executor's task 0 via the dry_run_local seam; raise to refuse.
+
+    Reuses the ``dry-run-local`` primitive (``smoke=true``) rather than
+    duplicating the dispatch-env / subprocess machinery — that atom already
+    exports the ``HPC_KW_*`` env, a temp ``HPC_RESULT_DIR``, and captures the
+    stderr tail. This function only INTERPRETS the returned findings per item 7
+    (refuse / disclose-and-proceed) and does the fail-open wrap.
+    """
+    from hpc_agent._wire.validators.dry_run_local import DryRunLocalSpec
+    from hpc_agent.ops.validate.dry_run_local import dry_run_local
+
+    timeout = int(getattr(spec, "pre_stage_smoke_timeout_sec", _PRE_STAGE_SMOKE_TIMEOUT_DEFAULT))
+    try:
+        result = dry_run_local(
+            experiment_dir,
+            spec=DryRunLocalSpec(
+                result_dir_template=result_dir_template,
+                run_id=spec.run_id,
+                smoke=True,
+                executor=executor,
+                smoke_task_id=0,
+                smoke_timeout_sec=timeout,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-open: a smoke-runner bug never blocks a submit
+        _disclose_smoke(
+            f"pre-stage smoke runner errored for run {spec.run_id!r} "
+            f"({type(exc).__name__}: {exc}); proceeding to stage without a local "
+            "smoke result."
+        )
+        return
+
+    # Only the smoke layer's findings are this gate's concern; the template-render
+    # layer (collision / unfilled-field) has its own gate (validate-campaign) and
+    # is not a reason to refuse the stage here.
+    smoke_findings = [f for f in result.findings if f.code.startswith("smoke_")]
+
+    # Refuse first (a hard failure wins over any co-emitted disclosure). A single
+    # smoke run emits at most one finding, so order is not load-bearing.
+    for f in smoke_findings:
+        tail = (f.evidence or {}).get("stderr_tail") or ""
+        if f.code == "smoke_nonzero_exit":
+            rc = (f.evidence or {}).get("returncode")
+            raise errors.SpecInvalid(
+                f"pre-stage local smoke of run {spec.run_id!r} task 0 exited {rc} "
+                "BEFORE any transport ran — refusing to stage a broken executor "
+                "(notebook-audit item 7). The cluster would fail identically after "
+                "an expensive stage. Executor stderr (verbatim):\n"
+                f"{tail}\n"
+                "Fix the executor so a local task-0 run exits 0, or set "
+                "pre_stage_smoke=false on the submit spec to skip this gate."
+            )
+        if f.code == "smoke_import_error":
+            raise errors.SpecInvalid(
+                f"pre-stage local smoke of run {spec.run_id!r} task 0 failed to "
+                "import a module BEFORE any transport ran (notebook-audit item 7). "
+                "This MAY be a local-env artifact — a dependency present only in the "
+                "cluster env, not a real bug; if so, set pre_stage_smoke=false on the "
+                "submit spec to skip this gate. Executor stderr (verbatim):\n"
+                f"{tail}"
+            )
+
+    # Non-fatal smoke outcomes: disclose and proceed.
+    for f in smoke_findings:
+        if f.code == "smoke_timeout":
+            _disclose_smoke(
+                f"pre-stage smoke inconclusive (timeout after {timeout}s) for run "
+                f"{spec.run_id!r} — long tasks are normal; proceeding to stage."
+            )
+        else:
+            _disclose_smoke(
+                f"pre-stage smoke could not run ({f.code}) for run {spec.run_id!r}; "
+                f"proceeding to stage. Detail: {f.message}"
+            )
+
+
 # Paths a scaffolded ``.gitignore`` marks as generated but the cluster
 # node *needs*: the executor package built at Step 0 (``src/``) and the
 # dispatch contract (``.hpc/tasks.py`` / ``.hpc/cli.py``). A caller derives
@@ -2596,6 +2763,18 @@ def _submit_flow_batch_locked(
         # once this sidecar exists. (``canary_only`` requires ``canary``.)
         if specs[i].canary:
             _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
+
+    # notebook-audit Addendum 4 item 7: bounded LOCAL task-0 dry-run BEFORE any
+    # transport/staging. A units/arg/import bug that would crash every task is
+    # caught here in seconds rather than first at the REMOTE canary after an
+    # expensive stage (run #11: 8.4 GB). Refuses the stage on a genuine nonzero
+    # exit (executor stderr relayed verbatim); a timeout is inconclusive (long
+    # tasks are normal) and proceeds; fail-open on any smoke-infra error. Skipped
+    # on a Phase-2 re-entry that already staged + canaried (skip_rsync_deploy),
+    # where the executor was already validated on the cluster. Opt-out per spec:
+    # pre_stage_smoke=false.
+    if not skip_rsync_deploy:
+        _pre_stage_smoke_gate(experiment_dir, specs, fresh_indices)
 
     # Shared prelude (#280): one connectivity gate, then rsync+deploy run
     # CONCURRENT with the independent ``command -v uv`` probe. Still 1 ×
