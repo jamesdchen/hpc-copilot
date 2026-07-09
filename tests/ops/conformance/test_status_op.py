@@ -189,18 +189,14 @@ def test_baseline_sha_drift_is_disclosed_not_refused(tmp_path: Path) -> None:
 
 def test_absent_registration_refused(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid, match="no registration named"):
-        conformance_status(
-            experiment_dir=tmp_path, spec=_spec(registration_id="ghost", last_n=3)
-        )
+        conformance_status(experiment_dir=tmp_path, spec=_spec(registration_id="ghost", last_n=3))
 
 
 def test_missing_declaration_refused(tmp_path: Path) -> None:
     _write_baseline(tmp_path, [{"reading": 0.95}])
     _write_registration(tmp_path, conformance_block=None)  # opted OUT
     with pytest.raises(errors.SpecInvalid, match="no 'conformance' declaration"):
-        conformance_status(
-            experiment_dir=tmp_path, spec=_spec(registration_id=_REG_ID, last_n=3)
-        )
+        conformance_status(experiment_dir=tmp_path, spec=_spec(registration_id=_REG_ID, last_n=3))
 
 
 # ── window selection modes ────────────────────────────────────────────────────
@@ -252,7 +248,5 @@ def _spec(**kw: Any) -> Any:
 def _tree_snapshot(root: Path) -> dict[str, bytes]:
     """Path -> bytes for every file under *root* (the write-probe snapshot)."""
     return {
-        str(p.relative_to(root)): p.read_bytes()
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
+        str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()
     }

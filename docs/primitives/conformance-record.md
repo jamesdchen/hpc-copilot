@@ -1,3 +1,18 @@
+---
+name: conformance-record
+verb: mutate
+side_effects:
+- file_write: <experiment>/_aggregated/_conformance/<registration_id>.jsonl
+idempotent: false
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.conformance.record_op.conformance_record
+---
 # conformance-record
 
 Journal **one live conformance observation** against the registration it tests —

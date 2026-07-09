@@ -1,6 +1,13 @@
 ---
 name: conformance-status
 verb: query
+side_effects: []
+idempotent: true
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.ops.conformance.status_op.conformance_status

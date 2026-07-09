@@ -1,3 +1,17 @@
+---
+name: challenge-status
+verb: query
+side_effects: []
+idempotent: true
+idempotency_key: none
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+backed_by:
+  cli: hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]
+  python: hpc_agent.ops.challenge_status_op.challenge_status
+---
 # challenge-status
 
 The **read-only query over standing dissent**: given a `challenge_id` (the

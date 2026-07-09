@@ -60,6 +60,20 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": false,
+    "cli": "hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "conformance_record.input.json",
+    "name": "conformance-record",
+    "output_schema": "conformance_record.output.json",
+    "python": "hpc_agent.ops.conformance.record_op.conformance_record",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Journal ONE live conformance observation against the registration it tests — the emitter's evidence FOR/AGAINST a sealed hypothesis at production cadence. Recomputes the payload content_sha SERVER-SIDE over {payload, labels, observed_at} and binds it (a caller cannot assert a sha; there is no sha field on the spec), stamps the registration's reduced status_at_record (the live dossier-sha leg — current/stale/revoked), and appends exactly one line to <experiment>/_aggregated/_conformance/<registration_id>.jsonl. An absent registration is refused loudly (no hypothesis to test); a stale/revoked/superseded registration is RECORDED and its status disclosed (fail-open for evidence — production is the experiment that never stops). payload/observed_at values stay caller-attested (the emitter's truthfulness, not core's). Local read + one journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
     "agent_facing": true,
     "cli": "hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]",
     "idempotent": false,
@@ -506,6 +520,18 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "challenge_status.input.json",
+    "name": "challenge-status",
+    "output_schema": "challenge_status.output.json",
+    "python": "hpc_agent.ops.challenge_status_op.challenge_status",
+    "side_effects": [],
+    "summary": "Read the standing dissent over a committed record. Two views: a challenge_id (the filing/verdict/withdraw thread) or a target address (a content_sha, or a subject_kind+subject_id pair) — 'what stands against this record?'. Reduces each challenge to open / upheld / dismissed / withdrawn / superseded, re-resolves the target (found-current / found-superseded / unresolvable) and each cited evidence sha (verified / unresolvable) — DISCLOSED, never refused. Contested is an orthogonal flag beside the target's status, never blocking. Fleet-capable. Read-only; renders a deterministic markdown brief relayed verbatim, whose canonical-JSON view_sha a verdict may bind.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>",
     "idempotent": true,
     "input_schema": null,
@@ -562,6 +588,18 @@
     "python": "hpc_agent.incorporation.build.compute_run_id.compute_run_id",
     "side_effects": [],
     "summary": "Compute the run_id from .hpc/tasks.py cmd_sha (run_id = <run_name>-<sha[:8]>).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "conformance_status.input.json",
+    "name": "conformance-status",
+    "output_schema": "conformance_status.output.json",
+    "python": "hpc_agent.ops.conformance.status_op.conformance_status",
+    "side_effects": [],
+    "summary": "Report a registration's LIVE conformance: reduce its journal, read its sealed conformance declaration + baseline, select a caller-named window over the ledger ({since,until?} or last_n), and judge it against the REGISTERED evidence via the one comparator. Returns per-key verdicts (within/outside the envelope, or a thin/novel/incomparable route to needs_verdict), the overall tier, both sides' range-phrased evidence, and a deterministic brief. Verdicts are DERIVED on every read — no verdict store, nothing marked seen. A reporter: a nonconforming window is a FINDING that changes no registration status. Read-only, no SSH.",
     "verb": "query"
   },
   {

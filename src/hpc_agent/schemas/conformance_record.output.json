@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/conformance_record.output.json",
+  "title": "conformance-record output data",
+  "description": "Echo of one appended ledger line (C-store record shape).\n\nEverything here is what core COMPUTED or STAMPED, not what the caller\nclaimed: ``content_sha`` is the server-recomputed canonical-JSON sha over\n``{payload, labels, observed_at}``; ``status_at_record`` is the registration's\nreduced status at record time (fail-open recording discloses it, never mixes\nit silently). ``observed_at`` is echoed for the caller to reconcile.",
+  "type": "object",
+  "required": [
+    "registration_id",
+    "content_sha",
+    "status_at_record",
+    "observed_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "registration_id": {
+      "description": "The registration the observation was recorded against.",
+      "title": "Registration Id",
+      "type": "string"
+    },
+    "content_sha": {
+      "description": "SERVER-recomputed canonical-JSON SHA-256 over {payload, labels, observed_at} (the harness sha canonicalization), bound at append. The sha the ledger line carries — never a value the caller supplied.",
+      "title": "Content Sha",
+      "type": "string"
+    },
+    "status_at_record": {
+      "description": "The registration's REDUCED status at record time, stamped into the ledger line. Recording is fail-open: a stale/revoked/superseded registration is recorded-and-stamped, never refused (refusing evidence is the one thing an evidence system must not do).",
+      "enum": [
+        "current",
+        "stale",
+        "revoked",
+        "superseded"
+      ],
+      "title": "Status At Record",
+      "type": "string"
+    },
+    "observed_at": {
+      "description": "The caller-declared observation timestamp, echoed back.",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "ledger_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path of the append-only conformance ledger this observation appended to (_aggregated/_conformance/<registration_id>.jsonl).",
+      "title": "Ledger Path"
+    }
+  }
+}

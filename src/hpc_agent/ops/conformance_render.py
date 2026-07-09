@@ -137,9 +137,7 @@ def render_status_brief(
         span = f" spanning {window_since} to {window_until}"
     elif window_since is not None:
         span = f" since {window_since}"
-    lines.append(
-        f"- n={report.window_n}{span} (min required: {report.min_window_n})"
-    )
+    lines.append(f"- n={report.window_n}{span} (min required: {report.min_window_n})")
     if window_labels:
         lines.append(f"- label sets observed: {', '.join(window_labels)}")
     else:

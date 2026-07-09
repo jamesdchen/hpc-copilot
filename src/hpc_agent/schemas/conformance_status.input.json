@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/conformance_status.input.json",
+  "title": "conformance-status input spec",
+  "description": "Input spec for ``conformance-status`` — a registration + a window selection.\n\nThe window is an EXPLICIT caller selection over the ledger (C-compare, the\nlive side); core never picks, defaults, or recommends a window. Two mutually\nexclusive selection modes:\n\n* a COUNT selection — ``last_n`` (the trailing N receipts), or\n* a TIMESTAMP selection — ``since`` (required anchor), with optional ``until``\n  upper bound.\n\nThe selection rule (pinned by the model validator):\n\n1. ``last_n`` and ``since``/``until`` are MUTUALLY EXCLUSIVE — a count\n   selection and a timestamp selection cannot be mixed.\n2. AT LEAST ONE selection must be present — one of ``since`` / ``last_n``.\n   ``until`` alone is refused: it only bounds a ``since``-anchored window and\n   is not itself a selection (core never invents the missing anchor).",
+  "type": "object",
+  "required": [
+    "registration_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "registration_id": {
+      "description": "The registration whose live conformance to report. A caller-authored filesystem-safe slug keying the ledger.",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Registration Id",
+      "type": "string"
+    },
+    "since": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Timestamp window anchor (ISO): select receipts with observed_at >= since. Mutually exclusive with last_n; required if last_n is absent.",
+      "title": "Since"
+    },
+    "until": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional timestamp upper bound (ISO): select receipts with observed_at <= until. Only bounds a since-anchored window; refused without since.",
+      "title": "Until"
+    },
+    "last_n": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Count selection: the trailing N receipts. Mutually exclusive with since/until.",
+      "title": "Last N"
+    }
+  }
+}
