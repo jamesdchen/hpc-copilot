@@ -12,6 +12,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from hpc_agent._wire._shared import RunIdStrict
+
 
 class _Provenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -636,6 +638,87 @@ class _AuditedSource(BaseModel):
     )
 
 
+class ReceiptBinding(BaseModel):
+    """One caller-authored receipt obligation inside a ``packs`` opt-in entry.
+
+    Binds a caller-named *slot* (the obligation, e.g. ``"data-audit"``) to the
+    *pack* whose current receipt fills it. Both are opaque slugs core never
+    interprets — the slot is the caller's name for the requirement (DP4: a
+    requirement always originates with the caller, never the pack), the pack is
+    the name a bound pack manifest declares. Cross-pack is legal: the slot's
+    ``pack`` need not equal the enclosing entry's ``pack``.
+
+    ``receipt_bindings`` is the object form, renamed from ``required_receipts``
+    in the coherence review (2026-07-07) to disambiguate it from the S6 manifest
+    list ``required_receipts: [<slot slug>]`` — that list is a plain slug list on
+    the pack side; this is the caller-side slot→pack binding.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    slot: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "Caller-authored slot slug — the caller's name for one receipt "
+            "obligation a gate requires (opaque to core; the fabrication class "
+            "forbids core inventing or defaulting one)."
+        ),
+    )
+    pack: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "The pack whose current receipt fills this slot (a bound-pack slug). "
+            "Need not equal the enclosing entry's pack — a slot may bind cross-pack."
+        ),
+    )
+
+
+class PackOptIn(BaseModel):
+    """One domain-pack opt-in entry on the InterviewSpec ``packs`` block (bind-as-data).
+
+    Sibling to ``audited_source``: a caller-referenced pack, persisted verbatim
+    in interview.json, absent → byte-identical. ``pack`` is the pack slug (it
+    keys the pack decision journal, so it is filesystem-safe); ``manifest`` is a
+    campaign-dir-relative path to the pack manifest core reads and hashes (the
+    ``_AuditedSource`` relpath precedent — never a blessed dir, never a search
+    path, DP1). ``receipt_bindings`` lists the caller-authored slot→pack
+    obligations the gate requires; empty means the pack contributes seam data
+    (vocabularies, patterns) but gates on no receipt.
+
+    Core copies the ``{pack, version, sha}`` echo verbatim onto every record
+    that consumed pack content and never reads a declared value for meaning —
+    identity only.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack: RunIdStrict = Field(
+        min_length=1,
+        description=(
+            "Pack slug — keys the pack decision journal "
+            "(``.hpc/packs/<pack>.decisions.jsonl``), so it must be "
+            "filesystem-safe. Opaque to core; never a core vocabulary."
+        ),
+    )
+    manifest: str = Field(
+        min_length=1,
+        description=(
+            "Campaign-dir-relative path to the pack manifest core reads and "
+            "hashes (the ``_AuditedSource`` relpath precedent). Core never asks "
+            "how the bytes got there (DP3: distribution invisible)."
+        ),
+    )
+    receipt_bindings: list[ReceiptBinding] = Field(
+        default_factory=list,
+        description=(
+            "Caller-authored slot→pack receipt obligations the gate requires "
+            "(DP4). Empty → the pack contributes seam data but gates on no "
+            "receipt. Renamed from ``required_receipts`` (coherence review) to "
+            "disambiguate from the S6 manifest slug list."
+        ),
+    )
+
+
 class InterviewSpec(BaseModel):
     """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
@@ -744,6 +827,19 @@ class InterviewSpec(BaseModel):
             "gate passes silently and interview.json is byte-identical to the "
             "pre-audit output. The caller authors the ``audit_id`` slug — core "
             "never invents or defaults it (the fabrication class)."
+        ),
+    )
+    packs: list[PackOptIn] | None = Field(
+        default=None,
+        description=(
+            "Opt-in domain-pack bindings (bind-as-data). Sibling to "
+            "``audited_source``: when present, each entry references a pack "
+            "manifest (relpath core reads + hashes) and the caller-authored "
+            "receipt-binding slots a gate requires; when ABSENT every pack gate "
+            "returns silently and interview.json is byte-identical to a repo "
+            "that never opted in (the D7 fail-safe). Core copies the opaque "
+            "``{pack, version, sha}`` echo verbatim and never reads a declared "
+            "pack value for meaning."
         ),
     )
 

@@ -33,6 +33,7 @@ __all__ = [
     "SiblingRunLive",
     "ScopeLocked",
     "SourceUnaudited",
+    "PackReceiptsMissing",
     "SubmissionIncomplete",
     "StructuredOutputError",
     "ModelEndpointError",
@@ -560,6 +561,67 @@ class SourceUnaudited(HpcError):
             "append-decision (scope_kind='notebook', block='notebook-sign-off'); "
             "an edit (or a drifted linked source) after signing reads unsigned by "
             "construction (drift = unsigned)."
+        )
+
+
+class PackReceiptsMissing(HpcError):
+    """The submit pipeline refuses an opted-in experiment whose required domain-pack
+    receipts are not CURRENT + ``passed``.
+
+    Raised by :func:`hpc_agent.ops.pack_gate.assert_pack_receipts_current` — the
+    domain-pack receipt gate (``docs/design/domain-packs.md``, "Receipt naming +
+    the gate contract") — at its two synchronous submit seats
+    (:mod:`hpc_agent.ops.resolve_submit_inputs` pre-sidecar,
+    :mod:`hpc_agent.ops.submit_flow` pre-staging) when the interview opted into a
+    ``packs`` block (D7) but one or more caller-authored ``receipt_bindings`` slots
+    do not reduce to a CURRENT, ``passed=true`` receipt: ``missing`` (no receipt),
+    ``stale`` (the bind or a checked file drifted — drift = unsigned by
+    construction), or ``failed`` (the check ran against live content and reported
+    ``passed=false``).
+
+    Opt-in and fail-safe by construction: with NO ``packs`` block the gate is a
+    byte-identical no-op and this never raises. It fires ONLY inside the opted-in
+    surface; a BROKEN setup (a dangling manifest, an unresolvable/unbound pack) is
+    a :class:`SpecInvalid` instead — this class is only the uncleared-receipt case
+    (the T9 refusal split).
+
+    Reuses the ``precondition_failed`` error_code (the :class:`SourceUnaudited` /
+    :class:`ScopeLocked` precedent, itself following :class:`PreconditionFailed`):
+    submitting under un-cleared domain standards is a workflow step invoked against
+    on-disk state that forbids it, and adding a new error_code value is a breaking
+    wire-envelope change. ``retry_safe=False``: a bare retry re-hits the same
+    uncleared state; the one exit is to run the pack's own check and record a
+    current receipt (or re-bind + re-check on drift).
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    remediation = (
+        "One or more required pack receipt slots are missing, stale, or failed. "
+        "Run the pack's own check and record a current receipt via `hpc-agent "
+        "pack-record-receipt` for each named slot; a slot reads stale when the "
+        "bind or a checked file drifted — re-bind via `hpc-agent pack-bind`, then "
+        "re-check. There is no code override: a code receipt never softens a human "
+        "tier, and a human sign-off never fills a code-receipt slot."
+    )
+
+    @classmethod
+    def for_slots(cls, slots: list[tuple[str, str]]) -> PackReceiptsMissing:
+        """Build the loud message naming each uncleared slot + its status.
+
+        *slots* is a list of ``(slot, status)`` pairs (``status`` one of
+        ``missing`` / ``stale`` / ``failed``) — exactly what the caller must
+        re-receipt. The message names every one so the refusal is actionable
+        without a separate ``pack-status`` query.
+        """
+        detail = ", ".join(f"{slot!r} ({status})" for slot, status in slots)
+        return cls(
+            f"domain-pack receipts are not cleared for graduation — "
+            f"{len(slots)} required slot(s) not current+passed: {detail}. Record a "
+            "current receipt for each via `hpc-agent pack-record-receipt`; a stale "
+            "slot means the bind or a checked file drifted — re-bind and re-check "
+            "(drift = unsigned by construction)."
         )
 
 

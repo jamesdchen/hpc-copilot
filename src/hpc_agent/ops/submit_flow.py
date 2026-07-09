@@ -974,6 +974,8 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         )
         cap_wave_map = {str(w): ids for w, ids in build_wave_map(plan).items()}
 
+    from hpc_agent.state.pack_declarations import resolve_pack_echoes
+
     write_run_sidecar(
         experiment_dir,
         run_id=spec.run_id,
@@ -1012,6 +1014,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         # covers the bare submit-flow path where no resolve leg ran). Lets a
         # later reproduction of the same original skip this derived run too.
         reproduces=spec.reproduction_of,
+        # Domain-pack echoes (T10): one opaque {pack, version, sha, manifest} per
+        # bound pack the experiment opted into, so export-dossier can seal each
+        # pack's manifest + decision journal. FAIL-OPEN + additive — resolve_pack_
+        # echoes returns [] when not opted in (or on any dangling/drift), so the
+        # `or None` omits the field entirely and a pack-less run's sidecar stays
+        # byte-identical. The gate at the pre-staging seat above already verified
+        # every opted-in pack is current before this point.
+        packs=resolve_pack_echoes(experiment_dir) or None,
     )
 
 
@@ -2452,6 +2462,20 @@ def _submit_flow_batch_locked(
     from hpc_agent.ops.notebook_gate import assert_source_audited
 
     assert_source_audited(experiment_dir)
+
+    # Domain-pack receipt gate (docs/design/domain-packs.md, ONE definition —
+    # ops/pack_gate — TWO synchronous seats, beside the notebook gate): the
+    # PRE-STAGING seat. Before any rsync/SSH, refuse a submit whose opted-in
+    # `packs` block (interview.json, D7) carries a required receipt_bindings slot
+    # not CURRENT + passed (missing / stale / failed). Defense in depth with the
+    # resolve-submit-inputs pre-sidecar (S1) seat: covers the bare submit-flow path
+    # AND a pack file edited (drift) between S1 and here. Per experiment, not per
+    # spec — ONE call before the fresh-spec loops, after the fully-deduped
+    # short-circuit so a no-cluster-traffic batch stays a byte-identical no-op.
+    # Fail-safe: NO packs block → byte-identical no-op. Local reads — no SSH.
+    from hpc_agent.ops.pack_gate import assert_pack_receipts_current
+
+    assert_pack_receipts_current(experiment_dir)
 
     # Supersession conduct (proving run #4, findings e/g/h): a NEW run_id
     # submitted while a SIBLING prior run_id with the SAME code identity

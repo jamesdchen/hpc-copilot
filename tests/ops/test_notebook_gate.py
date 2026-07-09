@@ -520,3 +520,120 @@ def test_submit_flow_seat_passes_proceeds(
 
     with pytest.raises(_ReachedStaging):
         submit_flow(experiment, spec=_submit_flow_spec())
+
+
+# ── T9d: audited_source_echo carries the S4 pack echo additively ─────────────
+
+
+def _raw_sha(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def _build_template_pack(
+    experiment: Path, *, template_rel: str = "template.py"
+) -> tuple[str, dict]:
+    """Write a toy pack whose manifest lists an audit-template ``.py`` file. Returns
+    ``(manifest_sha, manifest)``. Toy-domain vocabulary only."""
+    pack_root = experiment / "packs" / "toy"
+    pack_root.mkdir(parents=True, exist_ok=True)
+    tmpl_blob = _MODULE.encode("utf-8")
+    (pack_root / template_rel).write_bytes(tmpl_blob)
+    reader_blob = json.dumps(["widgets.load_widget"]).encode("utf-8")
+    (pack_root / "readers.json").write_bytes(reader_blob)
+    manifest = {
+        "name": "toy-widgets",
+        "version": "1.2.0",
+        "files": [
+            {"path": template_rel, "sha256": _raw_sha(tmpl_blob)},
+            {"path": "readers.json", "sha256": _raw_sha(reader_blob)},
+        ],
+        "seams": {"reader_calls": "readers.json"},
+    }
+    manifest_blob = json.dumps(manifest).encode("utf-8")
+    (pack_root / "manifest.json").write_bytes(manifest_blob)
+    return _raw_sha(manifest_blob), manifest
+
+
+def _write_pack_bind_journal(experiment: Path, manifest: dict, manifest_sha: str) -> None:
+    """Write the CURRENT bind to the pack journal on disk (the T8-seam path the
+    fail-open echo reader consumes)."""
+    from hpc_agent._kernel.contract.layout import RepoLayout
+    from hpc_agent.state.pack_receipts import PACK_BIND_BLOCK
+
+    record = {
+        "block": PACK_BIND_BLOCK,
+        "resolved": {
+            "pack": manifest["name"],
+            "version": manifest["version"],
+            "manifest_sha": manifest_sha,
+            "files": manifest["files"],
+            "seams": list(manifest["seams"]),
+        },
+    }
+    path = RepoLayout(experiment).hpc / "packs" / f"{manifest['name']}.decisions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def _write_interview_with_packs(experiment: Path, *, template: str, with_packs: bool) -> None:
+    doc: dict[str, Any] = {
+        "goal": "toy",
+        "audited_source": {"source": template, "audit_id": _AUDIT_ID, "template": template},
+    }
+    if with_packs:
+        doc["packs"] = [
+            {"pack": "toy-widgets", "manifest": "packs/toy/manifest.json", "receipt_bindings": []}
+        ]
+    (experiment / "interview.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_echo_carries_pack_when_template_is_a_bound_pack_file(experiment: Path) -> None:
+    from hpc_agent.ops.notebook_gate import audited_source_echo
+
+    manifest_sha, manifest = _build_template_pack(experiment)
+    _write_pack_bind_journal(experiment, manifest, manifest_sha)
+    _write_interview_with_packs(experiment, template="packs/toy/template.py", with_packs=True)
+
+    echo = audited_source_echo(experiment)
+    assert echo is not None
+    assert echo["template"] == "packs/toy/template.py"
+    assert echo["audit_id"] == _AUDIT_ID
+    # The S4 addition: {pack, version, sha} stamped additively.
+    assert echo["pack"] == {"pack": "toy-widgets", "version": "1.2.0", "sha": manifest_sha}
+
+
+def test_echo_omits_pack_when_no_packs_optin_byte_identical(experiment: Path) -> None:
+    # A pack is on disk + bound, but interview.json has NO packs block → the echo
+    # is byte-identical to the pack-free echo (no ``pack`` key).
+    manifest_sha, manifest = _build_template_pack(experiment)
+    _write_pack_bind_journal(experiment, manifest, manifest_sha)
+    _write_interview_with_packs(experiment, template="packs/toy/template.py", with_packs=False)
+
+    from hpc_agent.ops.notebook_gate import audited_source_echo
+
+    echo = audited_source_echo(experiment)
+    assert echo == {
+        "source": "packs/toy/template.py",
+        "template": "packs/toy/template.py",
+        "audit_id": _AUDIT_ID,
+    }
+
+
+def test_echo_omits_pack_when_template_not_in_pack_files(experiment: Path) -> None:
+    # Opted into the pack, but the audited template is a repo-local file NOT in the
+    # pack's manifest → no pack key (silent-absent, the template is not pack-bound).
+    manifest_sha, manifest = _build_template_pack(experiment)
+    _write_pack_bind_journal(experiment, manifest, manifest_sha)
+    _write_source(experiment, name="local_template.py")
+    _write_interview_with_packs(experiment, template="local_template.py", with_packs=True)
+
+    from hpc_agent.ops.notebook_gate import audited_source_echo
+
+    echo = audited_source_echo(experiment)
+    assert echo == {
+        "source": "local_template.py",
+        "template": "local_template.py",
+        "audit_id": _AUDIT_ID,
+    }

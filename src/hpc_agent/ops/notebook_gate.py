@@ -196,7 +196,23 @@ def audited_source_echo(experiment_dir: Path) -> dict[str, Any] | None:
     block = _read_audited_source(experiment_dir)
     if block is None:
         return None
-    return {key: block.get(key) for key in ("source", "template", "audit_id")}
+    echo: dict[str, Any] = {key: block.get(key) for key in ("source", "template", "audit_id")}
+
+    # S4 domain-pack echo (docs/design/domain-packs.md, T9d): when the audited
+    # TEMPLATE .py is itself a file in a CURRENT-bound pack's manifest, additively
+    # stamp the opaque {pack, version, sha} echo so export-dossier can prove WHICH
+    # pack's template gated the audit. FAIL-OPEN + cheap (the gate's read posture):
+    # no packs opt-in, a template in no bound pack, or any dangling/drifted pack
+    # reference → NO ``pack`` key → a byte-identical echo (the D7 silence). Core
+    # copies the echo verbatim; it never reads it back for meaning.
+    template = echo.get("template")
+    if isinstance(template, str) and template:
+        from hpc_agent.state.pack_declarations import resolve_template_pack_echo
+
+        pack_echo = resolve_template_pack_echo(experiment_dir, template)
+        if pack_echo is not None:
+            echo["pack"] = pack_echo
+    return echo
 
 
 def assert_source_audited(experiment_dir: Path) -> None:

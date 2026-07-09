@@ -1605,3 +1605,144 @@ def test_audited_source_config_absent_is_byte_identical(tmp_path: Path) -> None:
     assert "output_roots" not in raw
     persisted = json.loads(raw)
     assert persisted["audited_source"] == audited
+
+
+# ─── domain-pack opt-in (bind-as-data, T8a) ────────────────────────────────
+#
+# The ``packs`` block is the sibling of ``audited_source``: a caller-referenced
+# opt-in persisted VERBATIM into interview.json, and — the load-bearing
+# invariant — ABSENT → interview.json is byte-identical to a repo that never
+# opted in (the D7 fail-safe). The two Wave-B raw readers
+# (``ops/pack/status_op._read_packs_optin`` and
+# ``state/pack_declarations._read_packs_optin``) must parse the typed-written
+# block, proving the typed shape and the raw readers agree on ONE shape.
+
+
+def test_packs_persisted_verbatim_when_present(tmp_path: Path) -> None:
+    """Present → the whole ``packs`` list round-trips into interview.json
+    unchanged, including nested receipt_bindings slot→pack objects."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [
+                {"slot": "data-audit", "pack": "toy-widgets"},
+                {"slot": "stats-check", "pack": "toy-stats"},
+            ],
+        },
+        {
+            "pack": "toy-stats",
+            "manifest": "packs/toy-stats/manifest.json",
+            "receipt_bindings": [],
+        },
+    ]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["packs"] == packs
+
+
+def test_packs_empty_receipt_bindings_defaults_to_list(tmp_path: Path) -> None:
+    """receipt_bindings is optional (default []); a pack that omits it persists
+    with an empty list — seam-data-only, gates on no receipt."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [{"pack": "toy-widgets", "manifest": "packs/toy-widgets/manifest.json"}]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["packs"] == [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [],
+        }
+    ]
+
+
+def test_absent_packs_is_byte_identical(tmp_path: Path) -> None:
+    """CRITICAL GUARD (D7 fail-safe): with no ``packs`` block, interview.json is
+    byte-identical to the pre-change output — the field name never appears, and
+    the serialized model view carries no ``packs`` key (exclude_none path)."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    raw = (tmp_path / "interview.json").read_text()
+    assert "packs" not in raw
+    dumped = InterviewSpec.model_validate(intent).model_dump(exclude_none=True, mode="json")
+    assert "packs" not in dumped
+
+
+def test_packs_rejects_non_slug_pack_name(tmp_path: Path) -> None:
+    """The pack slug uses the shared RunIdStrict character class — a name with
+    a path separator (or other non-slug char) is refused before any disk write."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[{"pack": "toy/widgets", "manifest": "m.json"}],
+    )
+    with pytest.raises(ValidationError, match="pack"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_rejects_non_slug_slot(tmp_path: Path) -> None:
+    """A receipt_binding slot slug is likewise RunIdStrict — a non-slug slot is
+    refused (the caller-authored-slug discipline, DP4)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[
+            {
+                "pack": "toy-widgets",
+                "manifest": "m.json",
+                "receipt_bindings": [{"slot": "bad slot", "pack": "toy-widgets"}],
+            }
+        ],
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_rejects_extra_keys(tmp_path: Path) -> None:
+    """extra='forbid' on the opt-in models: an unexpected key is refused (no
+    silent meaning-bearing field smuggled onto the wire)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        packs=[{"pack": "toy-widgets", "manifest": "m.json", "version": "1.2.0"}],
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
+
+
+def test_packs_typed_write_read_by_wave_b_readers(tmp_path: Path) -> None:
+    """Integration: the block written through interview persistence is parsed by
+    BOTH Wave-B raw readers — proving the typed shape and the shape-tolerant
+    readers agree on ONE documented shape (the reconciliation invariant)."""
+    from hpc_agent.ops.pack.status_op import _read_packs_optin as read_status
+    from hpc_agent.state.pack_declarations import _read_packs_optin as read_decl
+
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    packs = [
+        {
+            "pack": "toy-widgets",
+            "manifest": "packs/toy-widgets/manifest.json",
+            "receipt_bindings": [{"slot": "data-audit", "pack": "toy-widgets"}],
+        }
+    ]
+    intent = _minimal_intent(3, packs=packs)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    # status_op reads campaign-dir-root interview.json → the same list of dicts.
+    assert read_status(tmp_path) == packs
+    # pack_declarations reads it identically (its raw opt-in probe).
+    assert read_decl(tmp_path) == packs
