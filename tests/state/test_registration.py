@@ -110,14 +110,16 @@ def test_status_vocabulary_is_the_closed_r7_set() -> None:
 
 
 def test_block_family_is_the_reviewed_set() -> None:
-    """R6: the family is registration + registration-revoke + registration-review.
+    """R6: the family is registration + revoke + review + conformance-verdict.
 
-    ``registration-review`` is the reviewed addition C-horizon anticipated (T6);
-    ``conformance-verdict`` stays a PLANNED member added by its own task — this
-    pin fails loudly if another block is added without review (equality, not
-    subset). Membership + intent are exercised by ``test_family_set_admits_the_review_block``.
+    ``registration-review`` (T6) and ``conformance-verdict`` (live-conformance T7)
+    are the reviewed additions; this pin fails loudly if another block is added
+    without review (equality, not subset). Membership + intent are exercised by
+    ``test_family_set_admits_the_review_block``.
     """
-    expected = frozenset({"registration", "registration-revoke", "registration-review"})
+    expected = frozenset(
+        {"registration", "registration-revoke", "registration-review", "conformance-verdict"}
+    )
     assert frozenset(reg.REGISTRATION_BLOCK_FAMILY) == expected
     assert reg.SUBJECT_KIND == "dossier"
 
@@ -435,12 +437,14 @@ def _review_record(
 
 
 def test_family_set_admits_the_review_block() -> None:
-    """R6: the maintained family gained ``registration-review`` (reviewed addition)."""
+    """R6: the maintained family gained ``registration-review`` + ``conformance-verdict``."""
     assert reg.REGISTRATION_REVIEW_BLOCK == "registration-review"
+    assert reg.CONFORMANCE_VERDICT_BLOCK == "conformance-verdict"
     assert set(reg.REGISTRATION_BLOCK_FAMILY) == {
         "registration",
         "registration-revoke",
         "registration-review",
+        "conformance-verdict",
     }
 
 

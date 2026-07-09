@@ -418,14 +418,15 @@ def test_registration_block_refused_on_non_registration_scope(tmp_path: Path) ->
 
 
 def test_registration_scope_refuses_foreign_block(tmp_path: Path) -> None:
-    # ``conformance-verdict`` is a PLANNED-but-not-yet-added family member — the
-    # family exists to gate exactly this: an unreviewed block on the scope.
-    # (``registration-review`` is now an ADMITTED member — live-conformance T6 —
-    # so it is no longer the foreign example; see the review test below.)
+    # A block outside REGISTRATION_BLOCK_FAMILY on the registration scope is
+    # refused — the family exists to gate exactly this: an unreviewed block on the
+    # scope. (``registration-review`` and ``conformance-verdict`` are now ADMITTED
+    # family members — live-conformance T6/T7 — so a genuinely foreign block is the
+    # example; their dedicated floors are exercised in test_conformance_authorship.)
     with pytest.raises(errors.SpecInvalid, match="accepts only its block family"):
         append_decision(
             experiment_dir=tmp_path,
-            spec=_spec(block="conformance-verdict", response="whatever", resolved={}),
+            spec=_spec(block="some-foreign-block", response="whatever", resolved={}),
         )
 
 

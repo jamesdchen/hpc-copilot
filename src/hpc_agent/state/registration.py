@@ -37,9 +37,9 @@ plan):
 * the record blocks (:data:`REGISTRATION_BLOCK` / :data:`REVOKE_BLOCK` /
   :data:`REGISTRATION_REVIEW_BLOCK`), the maintained block FAMILY
   (:data:`REGISTRATION_BLOCK_FAMILY`, R6 — the reg/revoke pair PLUS the
-  ``registration-review`` re-affirmation the family anticipated;
-  ``conformance-verdict`` stays a PLANNED future member added by its own task),
-  and :data:`SUBJECT_KIND` (``"dossier"``).
+  ``registration-review`` re-affirmation and the ``conformance-verdict`` drift
+  verdict, each a reviewed family admission), and :data:`SUBJECT_KIND`
+  (``"dossier"``).
 * :func:`parse_conformance_declaration` — structure-only validation of the
   OPTIONAL ``conformance`` declaration block on a registration's ``resolved``
   (C-declare), routed through the ONE validator in ``state/conformance.py``.
@@ -89,6 +89,7 @@ __all__ = [
     "REGISTRATION_BLOCK",
     "REVOKE_BLOCK",
     "REGISTRATION_REVIEW_BLOCK",
+    "CONFORMANCE_VERDICT_BLOCK",
     "REGISTRATION_BLOCK_FAMILY",
     "SUBJECT_KIND",
     "CURRENT",
@@ -188,13 +189,26 @@ REVOKE_BLOCK = "registration-revoke"
 #: the reduction only READS its horizon (it is never a winner nor a supersession).
 REGISTRATION_REVIEW_BLOCK = "registration-review"
 
+#: The conformance drift-verdict block (live-conformance C-verdict): a human,
+#: non-bare, sha-citing record resolving a ``needs_verdict`` / ``nonconforming``
+#: FINDING on a registration's live evidence. ``resolved = {registration_id,
+#: cites: [<receipt content_sha>, ...], note}``; it binds no NEW dossier (the
+#: drift verdict is DATED EVIDENCE, never a re-registration), and the reduction
+#: never treats it as a winner nor a supersession — it rides the registration's
+#: journal as an ABOUT-this-registration record (the R9 scope test). The T7 gate
+#: resolves each cited sha against the conformance ledger at append.
+CONFORMANCE_VERDICT_BLOCK = "conformance-verdict"
+
 #: The MAINTAINED block family the ``"registration"`` scope accepts (R6): a set
 #: growing by REVIEWED addition. Ships the two registration/revoke blocks PLUS
-#: ``registration-review`` (C-horizon's re-affirmation — the family set anticipated
-#: exactly this reviewed addition). ``conformance-verdict`` remains a PLANNED
-#: member (``docs/design/live-conformance.md`` C-verdict) added by its own task —
-#: each addition is the reviewed vocabulary change the family exists to gate.
-REGISTRATION_BLOCK_FAMILY = frozenset({REGISTRATION_BLOCK, REVOKE_BLOCK, REGISTRATION_REVIEW_BLOCK})
+#: ``registration-review`` (C-horizon's re-affirmation) and ``conformance-verdict``
+#: (live-conformance C-verdict's drift verdict) — each admission is the reviewed
+#: vocabulary change the family exists to gate. The reduction treats ONLY
+#: ``registration`` / ``registration-revoke`` as winner/supersession candidates;
+#: review + conformance-verdict records ride the journal without moving the status.
+REGISTRATION_BLOCK_FAMILY = frozenset(
+    {REGISTRATION_BLOCK, REVOKE_BLOCK, REGISTRATION_REVIEW_BLOCK, CONFORMANCE_VERDICT_BLOCK}
+)
 
 #: The opaque attestation ``subject_kind`` every registration rides (R1). The
 #: kernel never interprets it; it distinguishes this subject class (the sealed
