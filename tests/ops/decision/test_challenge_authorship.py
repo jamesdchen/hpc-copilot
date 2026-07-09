@@ -25,7 +25,6 @@ domain's words.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -33,7 +32,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
 from hpc_agent.ops.decision.journal import append_decision
-from hpc_agent.state.challenges import reduce_challenge
+from hpc_agent.state.challenges import ChallengeStatus, StandingChallenges, reduce_challenge
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.runs import write_run_sidecar
 
@@ -325,46 +324,56 @@ def test_challenge_scope_refuses_foreign_block(tmp_path: Path) -> None:
 
 
 # ── the C-verb view_sha recompute (reuse the op's pure render) ──────────────────
-# The op⇄state (T1) / op⇄wire (T2) entry-shape reconciliation is the integrator's
-# Wave-A/B step; until it lands the op is exercised under the SAME collector
-# monkeypatch its own T3 tests use — the gate recomputes via the real op path.
+# The gate recomputes a carried view_sha via the real op path; the op routes
+# through the ONE collector (``standing_challenges``), monkeypatched here to the
+# SAME real ``StandingChallenges`` bundle shape the op's own T3 tests feed it.
 
 
-def _op_entry() -> SimpleNamespace:
-    return SimpleNamespace(
+def _op_status() -> ChallengeStatus:
+    target = {
+        "kind": "run",
+        "subject_kind": "conclusion",
+        "subject_id": _TGT_RUN,
+        "content_sha": _TGT_SHA,
+        "scope": {"scope_kind": "run", "scope_id": _TGT_RUN},
+    }
+    return ChallengeStatus(
         challenge_id=_CHALLENGE_ID,
         status="open",
-        filed_ts="2026-07-01T00:00:00+00:00",
-        grounds="the widget batch replication did not reproduce the row",
-        target=SimpleNamespace(
-            kind="run", subject_kind="conclusion", subject_id=_TGT_RUN, content_sha=_TGT_SHA
-        ),
-        target_resolution="found-current",
+        target=target,
+        filing={
+            "challenge_id": _CHALLENGE_ID,
+            "target": target,
+            "citations": [{"kind": "run", "ref": _CIT_RUN, "sha": _CIT_SHA}],
+            "grounds": "the widget batch replication did not reproduce the row",
+            "content_sha": _TGT_SHA,
+        },
+        filed_at="2026-07-01T00:00:00+00:00",
+        content_sha=_TGT_SHA,
         verdict=None,
         reasoning=None,
-        citations=[SimpleNamespace(kind="run", ref=_CIT_RUN, sha=_CIT_SHA, verified=True)],
+        resolved_at=None,
+        superseded=False,
     )
 
 
 def _stub_op(monkeypatch: pytest.MonkeyPatch) -> Any:
     # importlib (not a static import) so this test's own type-check does not follow
-    # into the PRE-INTEGRATION op module (its placeholder-vs-real T2/T1 divergence is
-    # the integrator's debt) — the same reason the gate reaches the op this way.
+    # into the op module across the subject boundary — the same reason the gate
+    # reaches the op this way (the export_dossier ops-facade precedent).
     import importlib
 
     op = importlib.import_module("hpc_agent.ops.challenge_status_op")
 
-    def _standing(experiment_dir: Any, **kw: Any) -> list[SimpleNamespace]:
-        return [_op_entry()]
-
-    def _contested(entries: list[Any]) -> dict[str, Any]:
-        keys = ("open", "upheld", "dismissed", "withdrawn", "superseded")
-        out: dict[str, Any] = {k: sum(1 for e in entries if e.status == k) for k in keys}
-        out["challenge_ids"] = [e.challenge_id for e in entries]
-        return out
+    def _standing(experiment_dir: Any, **kw: Any) -> StandingChallenges:
+        return StandingChallenges(
+            experiment_dir=str(experiment_dir),
+            statuses=(_op_status(),),
+            contested=None,
+            skipped=(),
+        )
 
     monkeypatch.setattr(op, "standing_challenges", _standing)
-    monkeypatch.setattr(op, "contested_projection", _contested)
     return op
 
 
