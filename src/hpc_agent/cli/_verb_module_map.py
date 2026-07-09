@@ -126,5 +126,6 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'wait-detached': ('wait-detached', 'hpc_agent.ops.monitor.wait_detached'),
     'walk-submit-ambiguities': ('walk-submit-ambiguities', 'hpc_agent.ops.walk_submit_ambiguities'),
     'watcher-install': ('watcher-install', 'hpc_agent.ops.monitor.watcher_install'),
+    'worker-log-digest': ('worker-log-digest', 'hpc_agent.ops.worker_log_digest'),
     'write-run-sidecar': ('write-run-sidecar', 'hpc_agent.ops.write_run_sidecar'),
 }

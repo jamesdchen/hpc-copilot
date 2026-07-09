@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/worker_log_digest.output.json",
+  "title": "worker-log-digest output data",
+  "description": "The code-rendered digest of one worker log.\n\nOn an unreadable/missing file the verb FAILS OPEN: ``readable`` is False,\n``error`` names the problem, the counts/tail are empty, and ``render``\nstates it plainly — never a traceback.",
+  "type": "object",
+  "required": [
+    "log_path",
+    "exists",
+    "readable",
+    "tail_lines_requested",
+    "render"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "log_path": {
+      "description": "The resolved absolute path that was digested.",
+      "title": "Log Path",
+      "type": "string"
+    },
+    "exists": {
+      "description": "Whether the log file exists on disk.",
+      "title": "Exists",
+      "type": "boolean"
+    },
+    "readable": {
+      "description": "Whether the log file could be read.",
+      "title": "Readable",
+      "type": "boolean"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fail-open diagnostic when the file is missing/unreadable; else null.",
+      "title": "Error"
+    },
+    "total_lines": {
+      "default": 0,
+      "description": "Total line count of the log (0 when unreadable).",
+      "title": "Total Lines",
+      "type": "integer"
+    },
+    "tail_lines_requested": {
+      "description": "The tail_lines the caller asked for (echoed back for provenance).",
+      "title": "Tail Lines Requested",
+      "type": "integer"
+    },
+    "marker_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Per-marker count of lines CONTAINING that known engine marker, keyed by the exact marker string. Empty when unreadable. Every known marker is present (0 when absent) so the shape is stable.",
+      "title": "Marker Counts",
+      "type": "object"
+    },
+    "tail": {
+      "description": "The last tail_lines lines of the log, VERBATIM (newlines stripped).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Tail",
+      "type": "array"
+    },
+    "render": {
+      "description": "Deterministic markdown digest (counts + verbatim fenced tail) the caller relays VERBATIM — never re-interpreted into freeform prose.",
+      "title": "Render",
+      "type": "string"
+    }
+  }
+}
