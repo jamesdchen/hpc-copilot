@@ -34,11 +34,15 @@ plan):
   or sha-compare (the enforcement-map "one kernel" row,
   ``docs/internals/engineering-principles.md``; pinned by an
   ``inspect.getsource`` assertion in ``tests/state/test_registration.py``).
-* the record blocks (:data:`REGISTRATION_BLOCK` / :data:`REVOKE_BLOCK`), the
-  maintained block FAMILY (:data:`REGISTRATION_BLOCK_FAMILY`, R6 — starting with
-  those two; ``registration-review`` / ``conformance-verdict`` are PLANNED
-  future members and are deliberately NOT added here), and
-  :data:`SUBJECT_KIND` (``"dossier"``).
+* the record blocks (:data:`REGISTRATION_BLOCK` / :data:`REVOKE_BLOCK` /
+  :data:`REGISTRATION_REVIEW_BLOCK`), the maintained block FAMILY
+  (:data:`REGISTRATION_BLOCK_FAMILY`, R6 — the reg/revoke pair PLUS the
+  ``registration-review`` re-affirmation and the ``conformance-verdict`` drift
+  verdict, each a reviewed family admission), and :data:`SUBJECT_KIND`
+  (``"dossier"``).
+* :func:`parse_conformance_declaration` — structure-only validation of the
+  OPTIONAL ``conformance`` declaration block on a registration's ``resolved``
+  (C-declare), routed through the ONE validator in ``state/conformance.py``.
 
 NOT in T1 (do not add here):
 
@@ -62,6 +66,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -71,6 +76,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
+    from hpc_agent.state.conformance import ConformanceDeclaration
+
 __all__ = [
     "PREREQUISITE_KINDS",
     "KIND_NOTEBOOK_AUDIT",
@@ -78,8 +85,11 @@ __all__ = [
     "KIND_SCOPE_BUDGET",
     "KIND_PACK_RECEIPT",
     "KIND_ATTESTATION",
+    "UNCONTESTED_REQUIRES_KEY",
     "REGISTRATION_BLOCK",
     "REVOKE_BLOCK",
+    "REGISTRATION_REVIEW_BLOCK",
+    "CONFORMANCE_VERDICT_BLOCK",
     "REGISTRATION_BLOCK_FAMILY",
     "SUBJECT_KIND",
     "CURRENT",
@@ -88,6 +98,7 @@ __all__ = [
     "SUPERSEDED",
     "ABSENT",
     "STATUSES",
+    "HORIZON_LAPSED",
     "PrerequisiteSpec",
     "RegistrationTemplate",
     "ChainEntry",
@@ -95,6 +106,7 @@ __all__ = [
     "load_template",
     "parse_template",
     "parse_chain_entry",
+    "parse_conformance_declaration",
     "reduce_registration",
 ]
 
@@ -140,10 +152,22 @@ PREREQUISITE_KINDS = frozenset(
     }
 )
 
-#: The kinds that accept NO ``requires`` mapping — the generic ``attestation``
-#: escape hatch carries no evidence-tier vocabulary core could interpret (R3),
-#: so a non-empty ``requires`` on it is a loud refusal, never a silent pass.
+#: The kinds that accept NO KIND-SPECIFIC ``requires`` mapping — the generic
+#: ``attestation`` escape hatch carries no evidence-tier vocabulary core could
+#: interpret (R3), so a kind-specific ``requires`` on it is a loud refusal, never a
+#: silent pass.
 _KINDS_WITHOUT_REQUIRES = frozenset({KIND_ATTESTATION})
+
+#: The one CROSS-KIND ``requires`` key EVERY ``PREREQUISITE_KINDS`` member accepts,
+#: INCLUDING the otherwise requires-free ``attestation`` kind (challenge-attestation
+#: C-registration). This is a deliberate AMENDMENT to R3's "attestation accepts NO
+#: requires" line: that line's whole test was "nothing core could interpret", and
+#: ``uncontested`` is a MECHANISM property core CAN check by COUNTING standing
+#: challenges (``standing_challenges(content_sha=<entry sha>)`` open-count == 0 —
+#: the ``evidence_meets`` declarative pattern: the caller opts in, core counts, core
+#: never decides). It NEVER blocks unless the caller declares it; the per-kind check
+#: lives in ``ops/registration/prereqs.py`` (T8).
+UNCONTESTED_REQUIRES_KEY = "uncontested"
 
 # --- the record blocks + the maintained block family (R6) -------------------
 
@@ -157,12 +181,34 @@ REGISTRATION_BLOCK = "registration"
 #: reduction maps a newest-record revoke to :data:`REVOKED`.
 REVOKE_BLOCK = "registration-revoke"
 
+#: The re-affirmation block (C-horizon): a human, R6-form record that EXTENDS a
+#: registration's ``review_horizon`` WITHOUT re-registration when nothing has
+#: drifted. ``resolved = {registration_id, dossier_sha, review_horizon}``. It
+#: binds no NEW dossier (it re-affirms the existing one — the gate's T7 leg
+#: recomputes the live signature so a DRIFTED registration cannot be re-affirmed);
+#: the reduction only READS its horizon (it is never a winner nor a supersession).
+REGISTRATION_REVIEW_BLOCK = "registration-review"
+
+#: The conformance drift-verdict block (live-conformance C-verdict): a human,
+#: non-bare, sha-citing record resolving a ``needs_verdict`` / ``nonconforming``
+#: FINDING on a registration's live evidence. ``resolved = {registration_id,
+#: cites: [<receipt content_sha>, ...], note}``; it binds no NEW dossier (the
+#: drift verdict is DATED EVIDENCE, never a re-registration), and the reduction
+#: never treats it as a winner nor a supersession — it rides the registration's
+#: journal as an ABOUT-this-registration record (the R9 scope test). The T7 gate
+#: resolves each cited sha against the conformance ledger at append.
+CONFORMANCE_VERDICT_BLOCK = "conformance-verdict"
+
 #: The MAINTAINED block family the ``"registration"`` scope accepts (R6): a set
-#: growing by REVIEWED addition. It starts with exactly the two blocks this task
-#: ships; ``registration-review`` / ``conformance-verdict`` are PLANNED members
-#: (``docs/design/live-conformance.md``) and are deliberately NOT added here —
-#: adding one is the reviewed vocabulary change the family exists to gate.
-REGISTRATION_BLOCK_FAMILY = frozenset({REGISTRATION_BLOCK, REVOKE_BLOCK})
+#: growing by REVIEWED addition. Ships the two registration/revoke blocks PLUS
+#: ``registration-review`` (C-horizon's re-affirmation) and ``conformance-verdict``
+#: (live-conformance C-verdict's drift verdict) — each admission is the reviewed
+#: vocabulary change the family exists to gate. The reduction treats ONLY
+#: ``registration`` / ``registration-revoke`` as winner/supersession candidates;
+#: review + conformance-verdict records ride the journal without moving the status.
+REGISTRATION_BLOCK_FAMILY = frozenset(
+    {REGISTRATION_BLOCK, REVOKE_BLOCK, REGISTRATION_REVIEW_BLOCK, CONFORMANCE_VERDICT_BLOCK}
+)
 
 #: The opaque attestation ``subject_kind`` every registration rides (R1). The
 #: kernel never interprets it; it distinguishes this subject class (the sealed
@@ -184,6 +230,13 @@ ABSENT = "absent"
 
 #: Every status the registration reduction can yield.
 STATUSES = frozenset({CURRENT, STALE, REVOKED, SUPERSEDED, ABSENT})
+
+#: The named cause a :data:`STALE` status carries when it is TIME-based rather
+#: than drift-based (C-horizon): a current registration whose ``review_horizon``
+#: lapsed before ``now``. Drift-based staleness carries no cause (``None``) — this
+#: is the ONE named cause, so ``verify-registration`` / the deployment refusal /
+#: the queue can distinguish "the dossier moved" from "a human owes a re-affirm".
+HORIZON_LAPSED = "horizon-lapsed"
 
 
 def _validate_slug(value: Any, *, what: str) -> str:
@@ -222,12 +275,18 @@ def _validate_requires(kind: str, requires: Any, *, where: str) -> dict[str, Any
         raise errors.SpecInvalid(
             f"registration: {where} 'requires' must be a mapping when present; got {requires!r}"
         )
-    if kind in _KINDS_WITHOUT_REQUIRES and requires:
-        raise errors.SpecInvalid(
-            f"registration: {where} kind {kind!r} accepts no 'requires' (the generic "
-            f"attestation kind carries no evidence-tier vocabulary core can interpret); "
-            f"got {dict(requires)!r}"
-        )
+    if kind in _KINDS_WITHOUT_REQUIRES:
+        # AMENDED (C-registration): the attestation kind accepts NO kind-specific
+        # requires, but DOES accept the one cross-kind ``uncontested`` demand core
+        # can check by counting standing challenges. Any OTHER key is still refused.
+        extra = {k for k in requires if k != UNCONTESTED_REQUIRES_KEY}
+        if extra:
+            raise errors.SpecInvalid(
+                f"registration: {where} kind {kind!r} accepts no 'requires' other than the "
+                f"cross-kind {UNCONTESTED_REQUIRES_KEY!r} (the generic attestation kind carries "
+                f"no evidence-tier vocabulary core can interpret); got extra key(s) "
+                f"{sorted(extra)}"
+            )
     return dict(requires)
 
 
@@ -473,6 +532,11 @@ class RegistrationStatus:
     * ``superseded`` — the ``resolved`` mappings of every registration record
       made historical by a newer registration, newest-superseded last. Each is
       a :data:`SUPERSEDED` record; the attention queue / history views read it.
+    * ``stale_cause`` — when ``status`` is :data:`STALE`, the named cause:
+      :data:`HORIZON_LAPSED` for a lapsed ``review_horizon`` (C-horizon), or
+      ``None`` for drift-based staleness (a moved/unrecomputable dossier). Always
+      ``None`` for a non-stale status. Additive with a safe default — existing
+      callers and the ``now=None`` path leave it ``None``, byte-identical.
     """
 
     registration_id: str
@@ -480,6 +544,7 @@ class RegistrationStatus:
     winner: Mapping[str, Any] | None
     registered_at: str | None
     superseded: tuple[Mapping[str, Any], ...] = ()
+    stale_cause: str | None = None
 
 
 def _project_registration(record: Mapping[str, Any], registration_id: str) -> dict[str, Any] | None:
@@ -515,6 +580,7 @@ def reduce_registration(
     *,
     registration_id: str,
     live_dossier_sha: str | None,
+    now: str | None = None,
 ) -> RegistrationStatus:
     """Reduce a registration_id's records to a :class:`RegistrationStatus` (R7).
 
@@ -526,6 +592,11 @@ def reduce_registration(
     it via T3's ``compute_dossier_signature``); ``None`` when it cannot be
     recomputed (a moved/absent run) → the winner reads :data:`STALE`.
 
+    *now* is an OPTIONAL caller ISO timestamp (the ``doctor`` deterministic-testing
+    precedent): ``None`` (the safe default) runs NO horizon evaluation, so every
+    existing caller is byte-identical. When supplied, C-horizon's time-based
+    staleness joins drift in this ONE reduction (below).
+
     The reduction adds ONLY winner-selection to the ONE kernel (the
     ``_newest_valid`` precedent). The drift verdict — is the winning
     registration's recorded ``dossier_sha`` still the live one? — routes through
@@ -533,22 +604,32 @@ def reduce_registration(
     or sha-compare (the enforcement-map "one kernel" row):
 
     * :data:`ABSENT` — no record in :data:`REGISTRATION_BLOCK_FAMILY` for the id.
-    * :data:`REVOKED` — the NEWEST family record is a :data:`REVOKE_BLOCK` (an
-      explicit overturn withdraws; it binds no sha).
+    * :data:`REVOKED` — the NEWEST winner record is a :data:`REVOKE_BLOCK` (an
+      explicit overturn withdraws; it binds no sha). A revoke ignores the horizon.
     * :data:`CURRENT` — the newest record is a registration whose ``dossier_sha``
-      equals *live_dossier_sha* (kernel :data:`~hpc_agent.state.attestation.CURRENT`).
-    * :data:`STALE` — the newest registration matches an OLDER dossier sha, or
-      the live sha could not be recomputed (a sealed store moved out from under
-      the registration — failure class 4 closed for free at read time).
+      equals *live_dossier_sha* (kernel :data:`~hpc_agent.state.attestation.CURRENT`)
+      AND, when *now* is given, whose effective ``review_horizon`` has not lapsed.
+    * :data:`STALE` — the newest registration matches an OLDER dossier sha, or the
+      live sha could not be recomputed (drift; ``stale_cause`` ``None``); OR — with
+      *now* — an otherwise-current registration whose effective ``review_horizon``
+      is non-null and strictly before *now* (``stale_cause`` :data:`HORIZON_LAPSED`).
+
+    A :data:`REGISTRATION_REVIEW_BLOCK` record re-affirms without re-registration
+    (C-horizon): it is NEVER a winner and NEVER a supersession — it only EXTENDS
+    the horizon. The effective horizon is the newest among the winning registration
+    and any SUBSEQUENT current review records (:func:`_effective_horizon`).
 
     Registration records older than the newest registration are :data:`SUPERSEDED`
     (re-registration is the remedy for staleness) and returned in
     :attr:`RegistrationStatus.superseded`. Malformed records are skipped.
     """
-    # Winner = the newest well-formed family record (registration OR revoke).
+    # Winner = the newest well-formed reg/revoke record; reviews are NOT winners
+    # (they only extend the horizon), tracked by position for the "subsequent" test.
     winner_record: Mapping[str, Any] | None = None
+    winner_index = -1
     registration_records: list[Mapping[str, Any]] = []
-    for record in records:
+    review_records: list[tuple[int, Mapping[str, Any]]] = []
+    for index, record in enumerate(records):
         block = record.get("block")
         if block not in REGISTRATION_BLOCK_FAMILY:
             continue
@@ -556,7 +637,16 @@ def reduce_registration(
         resolved = resolved if isinstance(resolved, Mapping) else {}
         if resolved.get("registration_id") != registration_id:
             continue
-        winner_record = record  # append order → the last match is the newest
+        if block == REGISTRATION_REVIEW_BLOCK:
+            review_records.append((index, record))
+            continue
+        if block == CONFORMANCE_VERDICT_BLOCK:
+            # A conformance drift verdict is DATED EVIDENCE riding the journal
+            # (live-conformance C-verdict) — never a winner nor a supersession, and
+            # it never moves the registration status. Skip it in winner selection.
+            continue
+        winner_record = record  # append order → the last reg/revoke is the winner
+        winner_index = index
         if block == REGISTRATION_BLOCK:
             registration_records.append(record)
 
@@ -598,13 +688,98 @@ def reduce_registration(
         subject_id=registration_id,
     )
     status = CURRENT if verdict == attestation.CURRENT else STALE
+    stale_cause: str | None = None
+
+    # C-horizon: time-based staleness. Only an otherwise-CURRENT registration can
+    # lapse (a drift-stale or revoked one already has its verdict). now=None → no
+    # horizon evaluation at all (the byte-identical existing-caller path).
+    if status == CURRENT and now is not None:
+        horizon = _effective_horizon(winner_resolved, review_records, after=winner_index)
+        if horizon is not None and _horizon_lapsed(horizon, now):
+            status = STALE
+            stale_cause = HORIZON_LAPSED
+
     return RegistrationStatus(
         registration_id=registration_id,
         status=status,
         winner=winner_resolved,
         registered_at=registered_at,
         superseded=superseded,
+        stale_cause=stale_cause,
     )
+
+
+def _effective_horizon(
+    winner_resolved: Mapping[str, Any],
+    review_records: Sequence[tuple[int, Mapping[str, Any]]],
+    *,
+    after: int,
+) -> str | None:
+    """The ``review_horizon`` in force (C-horizon), or ``None``.
+
+    The newest horizon among the winning registration's ``conformance.review_horizon``
+    and any SUBSEQUENT current review records' ``review_horizon``. A review that
+    PREDATES the winning registration referred to an older registration and is
+    ignored (``index <= after``); among the rest — already in append order — the
+    newest (last-appended) non-null horizon wins, so a re-affirmation EXTENDS the
+    horizon without re-registration. Order statistics of TIME, no cadence invented.
+    """
+    conformance = winner_resolved.get("conformance")
+    horizon = conformance.get("review_horizon") if isinstance(conformance, Mapping) else None
+    horizon = horizon if isinstance(horizon, str) and horizon else None
+    for index, record in review_records:
+        if index <= after:
+            continue
+        review_horizon = _resolved(record).get("review_horizon")
+        if isinstance(review_horizon, str) and review_horizon:
+            horizon = review_horizon
+    return horizon
+
+
+def _parse_iso(ts: str) -> datetime:
+    """Parse an ISO-8601 timestamp (a trailing ``Z`` → ``+00:00``) for comparison."""
+    raw = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
+    return datetime.fromisoformat(raw)
+
+
+def _horizon_lapsed(horizon: str, now: str) -> bool:
+    """True iff review *horizon* is strictly before *now* — timestamp comparison only.
+
+    C-horizon: core names no period and computes no cadence — it only asks whether
+    a caller-computed timestamp is in the past. An unparseable or tz-mismatched
+    pair yields ``False`` (no fabricated lapse — the tolerant-read idiom; the T7
+    gate validates a review's horizon at append time).
+    """
+    try:
+        return _parse_iso(horizon) < _parse_iso(now)
+    except (ValueError, TypeError):
+        return False
+
+
+def parse_conformance_declaration(
+    resolved: Mapping[str, Any],
+) -> ConformanceDeclaration | None:
+    """Structure-only validation of the OPTIONAL ``conformance`` declaration block.
+
+    Conformance is opt-in per registration (the D7 fail-safe posture): an ABSENT
+    block → ``None`` (no machinery runs, byte-identical). When present, routes
+    through the ONE declaration validator,
+    ``state/conformance.py::validate_declaration`` — never a second validator;
+    unknown keys are refused LOUD there (the R4 dangling-reference posture). NO
+    dossier-membership check here: the ``(path, sha256)``-in-manifest recompute is
+    the append gate's T7 leg (C-declare "the append gate verifies"); the state
+    substrate imports no ``ops`` and re-gathers no dossier.
+
+    The import is FUNCTION-LOCAL: ``state/conformance.py`` imports this module at
+    load (for the ONE status vocabulary), so the reverse edge stays lazy to break
+    the cycle.
+    """
+    block = resolved.get("conformance")
+    if block is None:
+        return None
+    from hpc_agent.state import conformance
+
+    return conformance.validate_declaration(block)
 
 
 def _resolved(record: Mapping[str, Any]) -> Mapping[str, Any]:

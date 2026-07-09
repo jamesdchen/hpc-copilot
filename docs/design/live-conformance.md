@@ -3,9 +3,11 @@ status: plan
 ---
 # Live conformance — the registration watchdog
 
-**Status: PLANNED (2026-07-07), not yet implemented — sequenced after the
-slate (`docs/design/slate-sequencing.md`) and its registration/fingerprint
-dependencies.** This document is the durable hand-off (the
+**Status: IMPLEMENTED (2026-07-09) — Waves A/B/C landed on `br-lc-c` atop the
+registration / fingerprint / determinism kernels.** The kernel, store, wire,
+verbs, attention kinds, dossier noun, decision-journal gates, boundary suite, and
+skill prose are all in place; recorded deviations are folded into the drift log at
+the foot. This document is the durable hand-off (the
 `docs/design/notebook-audit.md` pattern): settled decisions with recorded
 rationale, file-disjoint task waves for parallel Opus dispatch, enforcement
 rows, and boundary-drift flags. Cite `path::symbol`, never line numbers.
@@ -713,6 +715,81 @@ for T2; `_SPEC_VERBS` inventory tails; primitive doc pages
 
 ## Implementation drift log
 
-(Empty — populate per deviation, each with its recorded reason, when
-implementation lands. The `docs/design/notebook-audit.md` drift log is the
-form to follow.)
+Waves A/B/C landed 2026-07-08/09. Deviations, each with its recorded reason:
+
+**Wave A**
+
+- **T1 — local-envelope-then-T1a.** `state/conformance.py` was built in parallel
+  with the fingerprint's T1a envelope extraction, so it first carried its own
+  order-statistics leg; once `state/determinism.py::order_statistics_envelope`
+  landed, `_order_statistics_envelope` collapsed to a thin alias wrapping the ONE
+  shared `(lo, hi, rel_spread)` helper (enforcement row — a route-through pin holds
+  it). No second envelope definition survives.
+- **T2 — the `baseline` denylist reading + module split.** The wire denylist is the
+  dossier set **MINUS `baseline`** (a permitted SPC mechanism noun here — the
+  sealed reference envelope, named ~40× in this doc as core terminology) **PLUS**
+  market vocab; the reading is recorded in
+  `tests/_wire/test_conformance_wire.py`'s module docstring. The two specs live in
+  SEPARATE modules (`_wire/actions/conformance_record.py` +
+  `_wire/queries/conformance_status.py`), mirroring the action/query split.
+- **T3 — server-side `ts` stamping.** `state/conformance_store.py::append_observation`
+  stamps the ledger-append `ts` server-side when absent (the receipt idiom), while
+  `observed_at` stays the caller-attested observation time — the two times are
+  distinct and both preserved. The T1/T3 canonical-payload-sha seam merged cleanly
+  (one `_canonical_json` form).
+
+**Wave B**
+
+- **T4 — dossier-sha-leg status resolution.** `ops/conformance/record_op.py` resolves
+  ONLY the dossier-sha leg to stamp `status_at_record` (not the full four-leg verify
+  view — that is the query/verify seat's job). Recorded cost note: re-gathering the
+  dossier signature per observation is the honest price of an honest stamp; a caching
+  optimization at high cadence is future work (the append stays O(1)).
+- **T5 — disclose-not-refuse baseline drift.** `ops/conformance/status_op.py` reads the
+  sealed baseline from the experiment tree and DISCLOSES a sha mismatch / absent
+  artifact in the brief, never refusing — the honest read-side posture; the
+  append-time membership GATE is T7's job. The declaration is read off the winner's
+  `resolved["conformance"]` via the ONE `validate_declaration` (the T6 seam).
+
+**Wave C**
+
+- **T6 — review-family admission.** `registration-review` joined
+  `REGISTRATION_BLOCK_FAMILY` (C-horizon's re-affirmation), and
+  `parse_conformance_declaration` is a FUNCTION-LOCAL import of
+  `state/conformance.py` (the reverse edge stays lazy to break the load cycle:
+  conformance imports registration's status vocabulary at load).
+- **T7 — baseline membership is by SEALED-BYTES SHA, not the (path, sha) pair.** The
+  design said "the (path, sha256) pair is a MEMBER of the manifest entries", but the
+  dossier's manifest entries carry ARCHIVE paths (`aggregated/<run>/x`) while the
+  read-side (T5/T8) resolves the caller's EXPERIMENT-RELATIVE path
+  (`_aggregated/<run>/x`) — the two spellings differ by construction (the export
+  `_aggregated`→`aggregated` rename). The sha is the ONE stable identity across both
+  reader and gate, so `_assert_conformance_baseline_membership` checks
+  `declaration.baseline.sha256 ∈ {entry.sha256}` (the sealed-bytes integrity
+  identity); the declared `path` is the reader's locator. `conformance-verdict` also
+  joined the block family, and `reduce_registration` skips it in winner selection (a
+  drift verdict is dated evidence riding the journal, never a winner — pinned by a
+  state test).
+- **T8 — the "cleared"/aging marker is `observed_at`, not the append `ts`.** The
+  queue clears a finding when a verdict post-dates the newest window receipt, and
+  `since` ages from that point; both use the receipt's caller-attested `observed_at`
+  (the observation TIME), because the ledger-append `ts` collides across receipts +
+  verdict at test/replay cadence. Horizon lapse threads `now=` into
+  `collect_registrations`' reduction and surfaces `stale_cause` on the EXISTING
+  `registration-stale` item (no new kind). The collector's baseline read is a small
+  self-contained helper (disclose-not-refuse, `()` on gap) rather than importing
+  T5's private reader — `judge_window` remains the ONE pinned definition; file I/O
+  is legitimately done in both readers.
+- **T9 — `live-conformance` is ABSENT-TOLERANT (no gap) and gathered ONCE.** Unlike
+  the run-scoped `aggregated` store, the conformance dir is registration-scoped and
+  most run dossiers legitimately have none, so an absent/empty dir seals nothing and
+  records NO gap (a per-run gap would be noise); the ledgers are gathered once per
+  signature, not per run in a lineage.
+- **T10 — the toy uses a generic `attestation` prerequisite.** The registration gate
+  requires a NON-EMPTY prerequisite chain (`prerequisites` is a required-non-empty
+  lock-2 key), so `tests/fixtures/toy_conformance/` carries one `attestation`-kind
+  prerequisite backed by a real sign-off record — the minimal real chain, avoiding
+  the audit/reproduction substrate. The whole loop runs UN-STUBBED (real dossier
+  signature, real gate, real verbs); the market-vocabulary walk scans the FIXTURE
+  only (core-source words like "order statistics" are SPC/English, not market
+  vocabulary — field-name vocab is pinned by the T2 wire walk).

@@ -69,6 +69,7 @@ _EXPECTED_SOURCES = frozenset(
         "determinism-fingerprint",
         "pack-manifest",
         "pack-journal",
+        "live-conformance",
     }
 )
 

@@ -33,10 +33,16 @@ from hpc_agent._wire._shared import RunIdStrict
 # ``registration`` / ``registration-revoke`` records gated by R6); ``conclusion``
 # journals the human-authored finding touchpoints of evidence memory under a
 # caller-authored ``conclusion_id`` (``docs/design/evidence-memory.md`` E-shape —
-# the ``conclusion`` / ``conclusion-revoke`` records gated by the E-shape locks).
+# the ``conclusion`` / ``conclusion-revoke`` records gated by the E-shape locks);
+# ``challenge`` journals the human-authored structured-dissent touchpoints under a
+# caller-authored ``challenge_id`` (``docs/design/challenge-attestation.md``
+# C-shape — the ``challenge`` / ``challenge-verdict`` / ``challenge-withdraw``
+# records gated by the C-gate locks).
 # Kept in lockstep with ``state.decision_journal.SCOPE_KINDS`` (schema regen is the
 # integrator's job; the ScopeKind literal change regenerates schemas).
-ScopeKind = Literal["run", "campaign", "scope", "notebook", "registration", "pack", "conclusion"]
+ScopeKind = Literal[
+    "run", "campaign", "scope", "notebook", "registration", "pack", "conclusion", "challenge"
+]
 
 # The evidence the proposal was drafted over — an opaque free-text digest
 # OR a structured dict. The journal never interprets it; it round-trips it

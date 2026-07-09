@@ -473,3 +473,68 @@ def test_collect_dossier_citation_verified_with_resolver(tmp_path: Path) -> None
 def test_reduce_attestation_kernel_is_the_one_kernel() -> None:
     # sanity: our reduction's CURRENT constant aligns with the kernel's verdict
     assert attestation.CURRENT == "current"
+
+
+# --- C-disclose: the conclusion contested seam (route-through the ONE collector) ---
+
+
+def test_conclusion_contested_route_through_pin() -> None:
+    """C-disclose enforcement row: the seat calls ``standing_challenges``, no re-glob."""
+    import inspect
+
+    assert "standing_challenges(" in inspect.getsource(evidence._conclusion_contested)
+
+
+def test_conclusion_uncontested_field_is_none(tmp_path: Path) -> None:
+    """Byte-parity: a namespace with no challenge store leaves ``contested`` None."""
+    _write_conclusion(
+        tmp_path,
+        "widget-c1",
+        _conclusion_record(
+            "widget-c1",
+            ts="2026-07-08T00:00:00Z",
+            tags=["widget"],
+            finding="f",
+            citations=_WIDGET_CITE,
+        ),
+    )
+    got = evidence.collect_evidence(tmp_path, tags=["widget"])
+    assert len(got.conclusions) == 1
+    assert got.conclusions[0].contested is None
+    assert not (tmp_path / ".hpc" / "challenges").exists()  # non-creating
+
+
+def test_conclusion_contested_populated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the conclusion's content_sha is challenged, the flag rides the point (open)."""
+    from hpc_agent.state import challenges as _challenges
+
+    _write_conclusion(
+        tmp_path,
+        "widget-c1",
+        _conclusion_record(
+            "widget-c1",
+            ts="2026-07-08T00:00:00Z",
+            tags=["widget"],
+            finding="f",
+            citations=_WIDGET_CITE,
+        ),
+    )
+
+    def _fake(experiment_dir, *, content_sha=None, **kw):  # noqa: ANN001, ANN202
+        block = _challenges.Contested(
+            open=1,
+            upheld=0,
+            dismissed=0,
+            withdrawn=0,
+            superseded=0,
+            challenge_ids=("widget-dissent-a",),
+        )
+        return _challenges.StandingChallenges(
+            experiment_dir=str(experiment_dir), statuses=(), contested=block, skipped=()
+        )
+
+    monkeypatch.setattr(_challenges, "standing_challenges", _fake)
+    got = evidence.collect_evidence(tmp_path, tags=["widget"])
+    assert got.conclusions[0].contested is not None
+    assert got.conclusions[0].contested.open == 1
+    assert got.conclusions[0].contested.challenge_ids == ("widget-dissent-a",)

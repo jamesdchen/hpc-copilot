@@ -16,6 +16,7 @@ import pytest
 
 from hpc_agent.ops import evidence_render
 from hpc_agent.state import evidence
+from hpc_agent.state.challenges import Contested
 
 # --- fixture builders (T1 dataclasses, widget vocabulary) --------------------
 
@@ -430,3 +431,42 @@ def test_no_interpretation_vocabulary_in_source() -> None:
 def test_render_brief_returns_str() -> None:
     with pytest.raises(TypeError):
         evidence_render.render_brief(_collection())  # type: ignore[call-arg]  # computed_at required
+
+
+# --- C-disclose: the conclusion-line contested flag --------------------------
+
+
+def _contested(open_: int, *ids: str) -> Contested:
+    return Contested(
+        open=open_, upheld=0, dismissed=0, withdrawn=0, superseded=0, challenge_ids=tuple(ids)
+    )
+
+
+def test_conclusion_line_discloses_contested() -> None:
+    """C-disclose: a contested conclusion gains a ``contested (N open · ids)`` follow line."""
+    conc = evidence.ConclusionEvidence(
+        conclusion_id="widget-c1",
+        status=evidence.CURRENT,
+        ts="2026-07-08T00:00:00Z",
+        tags=("widget",),
+        concludes=(),
+        citations=({"kind": "run", "ref": "widget-run-1", "sha": "a" * 64},),
+        finding="no widget alpha",
+        content_sha="c" * 64,
+        superseded_count=0,
+        matched_by=("all",),
+        contested=_contested(1, "widget-dissent-a"),
+    )
+    out = evidence_render.render_brief(
+        _collection(conclusions=(conc,)), computed_at="2026-07-08T00:00Z"
+    )
+    assert "contested (1 open · widget-dissent-a)" in out
+
+
+def test_conclusion_line_omits_contested_when_absent() -> None:
+    """Byte-parity: an uncontested conclusion (contested=None) prints no contested line."""
+    out = evidence_render.render_brief(
+        _collection(conclusions=(_conc("widget-c1", ts="2026-07-08T00:00:00Z"),)),
+        computed_at="2026-07-08T00:00Z",
+    )
+    assert "contested" not in out

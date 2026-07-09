@@ -59,6 +59,7 @@ from hpc_agent.state.registration import (
     KIND_PACK_RECEIPT,
     KIND_REPRODUCTION,
     KIND_SCOPE_BUDGET,
+    UNCONTESTED_REQUIRES_KEY,
 )
 
 if TYPE_CHECKING:
@@ -170,7 +171,11 @@ def _reject_unknown_requires(entry: ChainEntry) -> None:
     already pinned by the T1 loader, re-checked here for the composer's own
     inputs.)
     """
-    allowed = _REQUIRES_KEYS.get(entry.kind, frozenset())
+    # ``uncontested`` is the ONE cross-kind key (C-registration): every kind accepts
+    # it, INCLUDING the otherwise requires-free attestation kind, because it is a
+    # mechanism property core checks by counting standing challenges (never a domain
+    # word). Every OTHER key stays kind-scoped and loud-refused.
+    allowed = _REQUIRES_KEYS.get(entry.kind, frozenset()) | {UNCONTESTED_REQUIRES_KEY}
     unknown = sorted(k for k in entry.requires if k not in allowed)
     if unknown:
         raise errors.SpecInvalid(
@@ -680,5 +685,61 @@ def check_chain(
                 f"registration chain entry {entry.slot!r}: kind {entry.kind!r} is not a "
                 "checkable PREREQUISITE_KINDS member — no per-kind checker is registered."
             )
-        verdicts.append(checker(experiment_dir, entry, dossier_run_ids=dossier_run_ids))
+        verdict = checker(experiment_dir, entry, dossier_run_ids=dossier_run_ids)
+        verdicts.append(_apply_uncontested_demand(experiment_dir, entry, verdict))
     return verdicts
+
+
+def _apply_uncontested_demand(
+    experiment_dir: Path, entry: ChainEntry, verdict: SlotVerdict
+) -> SlotVerdict:
+    """Downgrade *verdict* to :data:`STALE` when a declared ``uncontested`` demand is UNMET.
+
+    C-registration, the ``evidence_meets`` declarative pattern: the caller opts in
+    with ``requires: {"uncontested": true}``; core COUNTS standing challenges against
+    the entry's ``content_sha`` (the ONE collector
+    ``state/challenges.py::standing_challenges``, the D5 route-through — never a
+    re-glob) and, when the OPEN count is non-zero, the slot reads :data:`STALE` with
+    the challenge ids named. Core never decides on the challenge's MERITS — it counts.
+
+    Only the declared demand gates: absent ``uncontested``, contest presence never
+    reshapes the verdict (the never-blocking pin, T-NB). A challenge whose target no
+    longer carries the sha reduces to ``superseded`` and drops out of the open count,
+    so a remedied prerequisite passes again. Fail-open: any collector failure counts
+    ZERO (a disclosure gap never blocks the chain — the codebase-wide read posture).
+    """
+    if entry.requires.get(UNCONTESTED_REQUIRES_KEY) is not True:
+        return verdict
+    open_n, ids = _uncontested_open_count(experiment_dir, entry.content_sha)
+    if open_n <= 0:
+        return verdict
+    named = ", ".join(ids) if ids else "(ids unavailable)"
+    return _verdict(
+        entry,
+        status=STALE,
+        recomputed_sha=verdict.recomputed_sha,
+        evidence_note=(
+            f"uncontested demand UNMET: {open_n} open challenge(s) against the recorded "
+            f"content_sha ({named}) — DISCLOSED and counted, the caller-declared gate"
+        ),
+    )
+
+
+def _uncontested_open_count(experiment_dir: Path, content_sha: str) -> tuple[int, tuple[str, ...]]:
+    """The OPEN standing-challenge count + ids against *content_sha* (fail-open).
+
+    Routes through the ONE collector ``state/challenges.py::standing_challenges``
+    (the C-disclose / C-registration route-through — never a private re-reduction).
+    Returns ``(0, ())`` when uncontested, when nothing matches, or on ANY collector
+    failure (fail-open: a challenge-store read gap never bricks a registration chain).
+    """
+    from hpc_agent.state.challenges import standing_challenges
+
+    try:
+        collected = standing_challenges(experiment_dir, content_sha=content_sha)
+    except Exception:  # noqa: BLE001 — a disclosure gap never blocks the chain
+        return 0, ()
+    block = collected.contested
+    if block is None or block.open <= 0:
+        return 0, ()
+    return block.open, tuple(block.challenge_ids)
