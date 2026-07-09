@@ -475,3 +475,18 @@ the stop proceed — the Option-3 failure class), narrow set (non-terminal runs
 journal nothing). The skill prose gained the belt to the gate's suspenders
 (the close-the-loop sentence, pinned by
 `tests/contracts/test_notebook_relay_due_guidance.py`).
+
+## Future work — audit-handoff: mechanize the audit→interview bridge (NOTED 2026-07-09)
+
+Run #11: after an audit passes, the submit interview re-derives facts the
+audit flow already holds, and the interim fix was a PROSE mapping in
+`/new-experiment-hpc` step 4 — load-bearing prose, the rot class. The proper
+seat is a deterministic projection verb (`audit-handoff` or a
+`notebook-status` extension) that emits a draft `InterviewSpec` from durable
+records: entry point + `audited_source` from the audit config,
+`summary_artifact` CANDIDATES by AST-scanning the source's `$HPC_RESULT_DIR`
+writes (detected-and-disclosed, never invented; caller confirms), `goal` and
+the task axes from journaled elicitations — which requires the audit OPEN to
+journal the intent/compute-shape utterances it already elicits (today they
+live only in chat). The slash then says one non-load-bearing line: "run
+audit-handoff, confirm its draft, pass it to the interview."
