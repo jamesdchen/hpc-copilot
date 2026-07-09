@@ -117,6 +117,30 @@ class ReproKeyVerdict(BaseModel):
     )
 
 
+class DataIdentityDisclosure(BaseModel):
+    """The v2 receipt's data-dimension disclosure (Phase-3 amendment, ruled 0b).
+
+    The data-identity leg's effect on the prior evidence, DISCLOSED so a verdict
+    NAMES which dimension moved: ``current`` is the comparison's data identity
+    (the sidecar's ``data_manifest_sha``), ``excluded_data_drift`` counts prior
+    samples dropped as a different data identity (a rebuilt input — data drift,
+    NOT nondeterminism), and ``data_identity_unknown`` counts current-code priors
+    with no recorded manifest (disclosed, never fabricated). Present only when the
+    current data identity is known.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="reproduction data-identity disclosure")
+
+    current: str = Field(description="The comparison's data identity (sidecar data_manifest_sha).")
+    excluded_data_drift: int = Field(
+        ge=0, description="Prior samples excluded as a DIFFERENT data identity (data drift)."
+    )
+    data_identity_unknown: int = Field(
+        ge=0,
+        description="Current-code prior samples with no recorded manifest (disclosed unknown).",
+    )
+
+
 class ReproductionReceipt(BaseModel):
     """The durable receipt record appended to the reproduction receipts ledger.
 
@@ -172,6 +196,16 @@ class ReproductionReceipt(BaseModel):
     uncompared_tasks: int | None = Field(
         default=None,
         description="Count of tasks NOT compared (partial disclosure); null when full/unknown.",
+    )
+    data_identity: DataIdentityDisclosure | None = Field(
+        default=None,
+        description=(
+            "Data-dimension disclosure (Phase-3 amendment, ruled 0b): the current "
+            "data identity + what the data leg did to the prior evidence (cross-data "
+            "priors excluded, no-manifest priors counted unknown). Null when the "
+            "current data identity is unknown (no manifest) — the verify then stays "
+            "byte-identical to a pre-amendment one."
+        ),
     )
 
 

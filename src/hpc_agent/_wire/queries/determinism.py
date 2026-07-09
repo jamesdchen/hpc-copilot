@@ -200,6 +200,17 @@ class SampleIdentity(BaseModel):
     cmd_sha: str = Field(description="Param identity (state/run_sha.py) — the ledger key.")
     tasks_py_sha: str = Field(description="Task-generator code identity.")
     executor: str = Field(description="Executor script identity.")
+    data_sha: str | None = Field(
+        default=None,
+        description=(
+            "Data-identity leg (Phase-3 amendment, ruled 0b): the data-manifest sha of "
+            "the declared input roots at record time, lifted from the run sidecar's "
+            "data_manifest_sha. ADDITIVE + optional — null is 'data identity unknown "
+            "(no manifest at record time)', disclosed and never blocking. A sample under "
+            "DIFFERENT data is excluded as data drift, never admitted as nondeterminism "
+            "evidence; a pre-amendment record (no data_sha) parses byte-identically."
+        ),
+    )
 
 
 class SampleKeyDiff(BaseModel):
