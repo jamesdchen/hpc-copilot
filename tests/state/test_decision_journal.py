@@ -250,6 +250,49 @@ def test_scope_kinds_lockstep_with_wire_literal() -> None:
 
     assert set(get_args(ScopeKind)) == set(SCOPE_KINDS)
     assert "conclusion" in SCOPE_KINDS
+    assert "challenge" in SCOPE_KINDS
+
+
+def test_challenge_scope_kind_path_and_roundtrip(tmp_path: Path) -> None:
+    """The ninth kind ``challenge`` lands its own ``.hpc/challenges/`` branch.
+
+    The C-shape store decision: a challenge rides its OWN journal (never the
+    target's), so ``decisions_path`` gives it a dedicated path branch, and a
+    filing round-trips like any other exchange (the state layer carries no gate —
+    the C-gate is the ``ops`` layer's, T5).
+    """
+    rec = append_decision(
+        tmp_path,
+        scope_kind="challenge",
+        scope_id="widget-concl-dissent",
+        block="challenge",
+        response="I dispute widget-concl-dissent at sha a3f2c9d1 (cites f1c2b3a4)",
+        resolved={
+            "challenge_id": "widget-concl-dissent",
+            "grounds": "the widget batch replication did not reproduce the row",
+        },
+    )
+    assert rec["scope_kind"] == "challenge"
+    path = decisions_path(tmp_path, "challenge", "widget-concl-dissent")
+    assert path == tmp_path / ".hpc" / "challenges" / "widget-concl-dissent.decisions.jsonl"
+    records = read_decisions(tmp_path, "challenge", "widget-concl-dissent")
+    assert len(records) == 1
+    assert records[0]["resolved"]["challenge_id"] == "widget-concl-dissent"
+
+
+def test_challenge_scope_path_agrees_with_challenges_collector(tmp_path: Path) -> None:
+    """The T4 ``decisions_path`` and the T1 collector's hand-built path agree.
+
+    ``state/challenges.py`` builds the same ``.hpc/challenges/<id>.decisions.jsonl``
+    path NON-CREATINGLY (it must never ``mkdir``); ``decisions_path`` routes through
+    ``RepoLayout`` which creates the parent. Two spellings, one location — this pins
+    they never drift (the reconciled T4 seam).
+    """
+    from hpc_agent.state.challenges import _target_journal_path
+
+    canonical = decisions_path(tmp_path, "challenge", "cid")
+    hand_built = _target_journal_path(tmp_path, "challenge", "cid")
+    assert canonical == hand_built
 
 
 def test_scope_kind_is_a_separate_store_from_run_and_campaign(tmp_path: Path) -> None:

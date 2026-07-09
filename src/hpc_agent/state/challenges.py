@@ -483,8 +483,12 @@ def _target_journal_path(experiment_dir: Path, scope_kind: str, scope_id: str) -
     if scope_kind == "pack":
         return hpc / "packs" / f"{scope_id}.decisions.jsonl"
     if scope_kind == "challenge":
-        # T4 seam: the "challenge" scope kind lands in decision_journal later;
-        # the PATH is pinned here now. Non-creating.
+        # The "challenge" scope kind lands in decision_journal (T4:
+        # ``decision_journal.SCOPE_KINDS`` + ``decisions_path``). This hand-built
+        # path stays deliberately NON-CREATING (the collector must never ``mkdir``);
+        # ``decision_journal.decisions_path`` routes through ``RepoLayout`` which
+        # creates the parent, so it is NOT reused here — the two spellings agree on
+        # ``.hpc/challenges/<id>.decisions.jsonl`` (pinned by the T4 lockstep test).
         return hpc / "challenges" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign"
     return hpc / "campaigns" / scope_id / "decisions.jsonl"
