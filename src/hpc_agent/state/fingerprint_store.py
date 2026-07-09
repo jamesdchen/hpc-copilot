@@ -45,20 +45,18 @@ algorithms by problem size, so canary-scale evidence is thin for a main-scale
 verdict; (3) same-node correlated samples — the double canary's two executions
 may land on one node/SKU (``same_submission: true`` records it).
 
-Parallel-work seam (T1 not yet in tree): the sample-record shape is the D-store
-dict verbatim (below), NOT a T1 import. The canonical content-sha over the two
-payloads (:func:`content_sha_over_payloads`) is implemented here so the append's
-bind-recompute is self-contained; T1's kernel owns the same canonicalization
-(``docs/design/determinism-fingerprint.md`` T1 — "the canonical content-sha over
-two metrics payloads") and a later commit should re-point one at the other so
-there is ONE definition. The pure envelope reduction / tiered classifier /
-``evidence_meets`` consume :class:`LedgerEvidence` (``samples`` +
-``admitted_flags``, aligned).
+The sample-record shape is the D-store dict verbatim (below). The canonical
+content-sha over the two payloads (:func:`content_sha_over_payloads`) routes
+through the ONE canonical-sha definition (``state/determinism.py::
+compute_content_sha`` — the harness-contract form; the one-definition rule, P-S1
+unification, pinned byte-for-byte by the conformance suite) so the append's
+bind-recompute cannot drift from the kernel's own reduction. The pure envelope
+reduction / tiered classifier / ``evidence_meets`` consume
+:class:`LedgerEvidence` (``samples`` + ``admitted_flags``, aligned).
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -67,7 +65,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state import attestation
+from hpc_agent.state import attestation, determinism
 from hpc_agent.state.decision_journal import read_decisions
 
 if TYPE_CHECKING:
@@ -135,16 +133,6 @@ _DATA_IDENTITY_FIELD = "data_sha"
 # ── canonical content sha ────────────────────────────────────────────────────
 
 
-def _canonical_json(obj: Any) -> str:
-    """The harness sha canonicalization (``docs/internals/harness-contract.md``).
-
-    Sorted keys, compact separators, unicode kept as-is — deterministic and
-    platform-stable. The ONE serialization every ``content_sha`` here is taken
-    over.
-    """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def content_sha_over_payloads(payload_a: Any, payload_b: Any) -> str:
     """SHA-256 (lowercase hex) over the two COMPARED payloads, canonical form.
 
@@ -154,11 +142,13 @@ def content_sha_over_payloads(payload_a: Any, payload_b: Any) -> str:
     artifacts. Payloads are the PARSED JSON (not raw bytes), so cosmetic
     formatting differences don't move the sha but semantic content does.
 
-    T1's pure kernel owns the same canonicalization; keep the two definitions
-    identical (one should re-point at the other once T1 lands — the
-    one-definition rule).
+    Routes through the ONE canonical content-sha definition
+    (:func:`state.determinism.compute_content_sha` — the harness-contract form:
+    sorted keys, compact separators, ``ensure_ascii=False``). The kernel owns the
+    canonicalization; this is the P-S1 re-point so there is ONE definition, pinned
+    byte-for-byte by the conformance suite (the one-definition rule).
     """
-    return hashlib.sha256(_canonical_json([payload_a, payload_b]).encode("utf-8")).hexdigest()
+    return determinism.compute_content_sha(payload_a, payload_b)
 
 
 # ── path derivation ──────────────────────────────────────────────────────────

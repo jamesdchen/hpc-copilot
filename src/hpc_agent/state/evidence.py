@@ -203,9 +203,10 @@ def citations_content_sha(citations: Sequence[Citation | Mapping[str, Any]]) -> 
     append so a finding is hash-locked to its evidence set. Uses the ONE
     harness-contract canonicalization via
     :func:`state.determinism.canonical_sha` (reused rather than a fourth local
-    copy — the one-definition rule; ``state/data_manifest.py::_canonical_json``
-    and ``state/fingerprint_store.py::_canonical_json`` are the sibling copies
-    the conformance suite pins agree byte-for-byte).
+    copy — the one-definition rule; P-S1 UNIFIED — ``state/data_manifest.py::
+    manifest_doc_sha`` and ``state/fingerprint_store.py::content_sha_over_payloads``
+    now route through the same kernel definition, pinned byte-for-byte by their
+    unit tests).
     """
     normalized = [
         c.to_dict() if isinstance(c, Citation) else validate_citation(c).to_dict()
