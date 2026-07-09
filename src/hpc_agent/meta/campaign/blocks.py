@@ -72,14 +72,25 @@ def _next_block(
 # ── greenlight helpers ───────────────────────────────────────────────────────
 
 
-def _digest_spec(manifest: dict[str, Any]) -> dict[str, Any]:
+def _digest_spec(experiment_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Digest the greenlit-once campaign spec into the brief's shape (§4).
 
     Pulls exactly the fields the design names as the campaign contract —
     goal / budget / strategy / stop_criteria / anomaly_policy / async_refill —
     plus the greenlight provenance marker so the brief shows whether it is
     already stamped. Round-tripped verbatim: the block never interprets them.
+
+    Additive ``evidence`` field (evidence-memory E-embed): the ADVISORY
+    point digest for this campaign's declared scope tags. FAIL-OPEN — the one
+    :func:`ops.evidence_embed.build_evidence_embed` helper wraps the whole
+    collect+render in a broad guard, so a collector bug degrades to a disclosed
+    ``{unavailable}`` stub and NEVER reshapes the greenlight (the never-blocking
+    pin; T-NB). Never a private re-collection — the one-collector row.
     """
+    from hpc_agent.ops.evidence_embed import build_evidence_embed
+
+    scopes = manifest.get("scopes") or manifest.get("tags") or []
+    tags = [t for t in scopes if isinstance(t, str)] if isinstance(scopes, list) else []
     return {
         "goal": manifest.get("goal", ""),
         "budget": manifest.get("budget"),
@@ -90,6 +101,7 @@ def _digest_spec(manifest: dict[str, Any]) -> dict[str, Any]:
         "max_in_flight": manifest.get("max_in_flight"),
         "greenlit": bool(manifest.get("greenlit", False)),
         "greenlit_at": manifest.get("greenlit_at"),
+        "evidence": build_evidence_embed(experiment_dir, tags=tags),
     }
 
 
@@ -188,7 +200,7 @@ def campaign_greenlight(
     # (needs_decision=False); the block only persists it.
     if spec.confirm:
         updated = mark_greenlit(experiment_dir, campaign_id=cid)
-        brief = _digest_spec(updated)
+        brief = _digest_spec(experiment_dir, updated)
         if spec.journal:
             from hpc_agent.state.decision_journal import append_decision
 
@@ -220,7 +232,7 @@ def campaign_greenlight(
             ),
         )
 
-    brief = _digest_spec(manifest)
+    brief = _digest_spec(experiment_dir, manifest)
 
     # Already greenlit (and not re-confirming): an idempotent re-read. Nothing
     # is stamped or journaled — the decision was recorded on the first confirm.

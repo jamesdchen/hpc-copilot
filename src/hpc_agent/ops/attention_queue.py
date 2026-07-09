@@ -84,6 +84,11 @@ __all__ = [
     "REGISTRATION_BLOCKED",
     "REPRODUCTION_NEEDS_VERDICT",
     "collect_reproduction_verdicts",
+    "CAMPAIGN_UNCONCLUDED",
+    "collect_campaign_unconcluded",
+    "CHALLENGE_OPEN",
+    "CHALLENGE_UPHELD_UNREMEDIED",
+    "collect_challenges",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -138,6 +143,32 @@ REGISTRATION_STALE = "registration-stale"
 #: ``reproduction-verdict`` records, never re-implementing the envelope math (the
 #: recorded sample verdict IS T1's classifier output).
 REPRODUCTION_NEEDS_VERDICT = "reproduction-needs-verdict"
+#: evidence-memory aging standing item (docs/design/evidence-memory.md E-queue +
+#: E1(a)): a TERMINAL campaign that no CURRENT conclusion names. INFORMATIONAL —
+#: no verdict is pending, nothing is blocked; it is the standing invitation to
+#: close the conclusion loop, aging by the campaign's completion ts. Fan-out stays
+#: 0 (a missing conclusion blocks nothing, by E3's never-blocking pin). Routes the
+#: unconcluded predicate through ``state/evidence.py::collect_evidence``'s
+#: ``unconcluded`` reduction (the D5 one-definition rule), never a re-inlined join.
+CAMPAIGN_UNCONCLUDED = "campaign-unconcluded"
+
+#: An OPEN challenge (challenge-attestation C-queue): a human verdict is pending
+#: (the queue's namesake class). Routes through the ONE reduction
+#: (``state/challenges.py::standing_challenges``) — never a re-read of the
+#: challenge journals. ``since`` is the filing ts so it AGES (old unresolved
+#: dissent is the signal). Fan-out = the pending registrations whose prerequisite
+#: chains name the contested ``content_sha`` (the R8 edge; no other encoded edge
+#: exists → other targets count 0). A dismissed / withdrawn / superseded challenge
+#: yields NO item (resolved).
+CHALLENGE_OPEN = "challenge-open"
+
+#: An UPHELD challenge whose target family has NOT yet moved (no revoke, no
+#: re-registration) — awareness that the archive holds a standing refutation
+#: nothing has answered (C-queue; the E-queue ``campaign-unconcluded`` form: a
+#: loop-closing invitation, not a gate). INFORMATIONAL, fan-out 0, never blocking.
+#: An upheld challenge whose subject HAS moved reduces to ``superseded`` (the
+#: headline wins) and yields no item — the remedy already landed.
+CHALLENGE_UPHELD_UNREMEDIED = "challenge-upheld-unremedied"
 
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
@@ -165,6 +196,13 @@ KIND_CLASS: dict[str, str] = {
     # cannot mechanize → VERDICT. Fan-out stays 0 (Amendment 2: leverage-zero,
     # pull-only) until a consumer blocks on the verdict — no encoded edge yet.
     REPRODUCTION_NEEDS_VERDICT: VERDICT,
+    # A terminal campaign with no current conclusion is an AGING standing item —
+    # nothing is blocked, it is an awareness invitation to close the loop.
+    CAMPAIGN_UNCONCLUDED: INFORMATIONAL,
+    # An OPEN challenge is a pending human verdict (the namesake class); an UPHELD-
+    # but-unremedied challenge is a loop-closing awareness invitation (never a gate).
+    CHALLENGE_OPEN: VERDICT,
+    CHALLENGE_UPHELD_UNREMEDIED: INFORMATIONAL,
 }
 
 
@@ -867,6 +905,123 @@ def _needs_verdict_answered(experiment_dir: Path, repro_run_id: str, content_sha
     return False
 
 
+# ── evidence-memory collector (E-queue) ──────────────────────────────────────
+
+
+def collect_campaign_unconcluded(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Terminal campaigns no current conclusion names (E-queue) — an AGING item.
+
+    The D5 route-through: the predicate is ``state/evidence.py::collect_evidence``'s
+    ``unconcluded`` reduction (itself composing ``latest_decision`` over campaign
+    journals joined against the conclusion journals' ``concludes`` sets) — this
+    collector CALLS it, never re-implements the join (the module's ``inspect.getsource``
+    route-through pin). ``since`` is the campaign's completion ts (the ActivityItem's
+    ``ts``), so the item ages honestly. Class INFORMATIONAL — a missing conclusion
+    blocks nothing (E3), so it carries NO ``action`` prose beyond the identity line
+    and its fan-out stays 0 (no encoded edge in :func:`_apply_fanout`).
+
+    Fail-open (D3): any exception collecting evidence yields NO items rather than
+    crashing the queue read — an advisory standing item is never load-bearing.
+    """
+    from hpc_agent.state.evidence import collect_evidence
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    try:
+        collection = collect_evidence(experiment_dir)
+    except Exception:  # noqa: BLE001 — fail-open: the advisory item never strands the read
+        return items
+    for row in collection.unconcluded:
+        items.append(
+            AttentionItem(
+                kind=CAMPAIGN_UNCONCLUDED,
+                item_class=KIND_CLASS[CAMPAIGN_UNCONCLUDED],
+                experiment_dir=exp,
+                scope_kind="campaign",
+                scope_id=row.subject_id,
+                since=row.ts,
+                evidence={
+                    "latest_block": row.detail.get("latest_block"),
+                    "terminal": row.detail.get("terminal"),
+                    "concluded": row.detail.get("concluded"),
+                },
+            )
+        )
+    return items
+
+
+# ── challenge collector (docs/design/challenge-attestation.md C-queue) ─────────
+
+
+def collect_challenges(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Open + upheld-unremedied challenges (C-queue) — the dissent attention edges.
+
+    The D5 route-through: the predicate is the ONE reduction
+    ``state/challenges.py::standing_challenges`` (no address filter → every
+    challenge under the namespace) — this collector CALLS it, never re-reads a
+    challenge journal (the module's ``inspect.getsource`` route-through pin). Two
+    tiers, mirroring the reduced per-challenge status:
+
+    * an ``open`` challenge → ``challenge-open`` (VERDICT — a human judgment is
+      pending; the namesake class). ``since`` is the filing ts so the item AGES.
+      Fan-out is the pending registrations whose prerequisite chains name the
+      contested ``content_sha`` (:func:`_fanout_for`; the R8 edge) — a contested
+      registration prerequisite blocks capital, high-leverage by construction.
+    * an ``upheld`` challenge → ``challenge-upheld-unremedied`` (INFORMATIONAL — a
+      standing refutation nothing has answered; fan-out 0, never blocking). An
+      upheld challenge whose subject already MOVED reduces to ``superseded`` (the
+      headline) and yields no item — the remedy landed.
+
+    A ``dismissed`` / ``withdrawn`` / ``superseded`` challenge is resolved and
+    yields nothing (silence-by-record). Fail-open (D3): any exception collecting
+    yields NO items rather than crashing the queue read — an advisory standing
+    item is never load-bearing. The ``content_sha`` rides ``evidence`` so the
+    fan-out edge can read it without a second journal walk.
+    """
+    from hpc_agent.state.challenges import OPEN, UPHELD, standing_challenges
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    try:
+        collected = standing_challenges(experiment_dir)
+    except Exception:  # noqa: BLE001 — fail-open: the advisory item never strands the read
+        return items
+    for st in collected.statuses:
+        target = st.target if isinstance(st.target, dict) else {}
+        content_sha = target.get("content_sha") if isinstance(target, dict) else None
+        evidence = {
+            "content_sha": content_sha,
+            "target_kind": target.get("kind"),
+            "target_subject_kind": target.get("subject_kind"),
+            "target_subject_id": target.get("subject_id"),
+        }
+        if st.status == OPEN:
+            items.append(
+                AttentionItem(
+                    kind=CHALLENGE_OPEN,
+                    item_class=KIND_CLASS[CHALLENGE_OPEN],
+                    experiment_dir=exp,
+                    scope_kind="challenge",
+                    scope_id=st.challenge_id,
+                    since=st.filed_at,
+                    evidence=evidence,
+                )
+            )
+        elif st.status == UPHELD:
+            items.append(
+                AttentionItem(
+                    kind=CHALLENGE_UPHELD_UNREMEDIED,
+                    item_class=KIND_CLASS[CHALLENGE_UPHELD_UNREMEDIED],
+                    experiment_dir=exp,
+                    scope_kind="challenge",
+                    scope_id=st.challenge_id,
+                    since=st.filed_at,
+                    evidence=evidence,
+                )
+            )
+    return items
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
@@ -891,6 +1046,8 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *collect_data_manifest(experiment_dir, now=now),
         *collect_registrations(experiment_dir, now=now),
         *verdicts.items,
+        *collect_campaign_unconcluded(experiment_dir, now=now),
+        *collect_challenges(experiment_dir, now=now),
     ]
     return QueueCollection(
         items=_apply_fanout(items, experiment_dir),
@@ -1025,6 +1182,11 @@ def _fanout_for(item: AttentionItem, experiment_dir: Path) -> int:
         ) + _count_registrations_naming_audit(experiment_dir, item.scope_id)
     if item.kind == CAMPAIGN_PENDING:
         return _count_campaign_pending_runs(experiment_dir, item.scope_id)
+    if item.kind == CHALLENGE_OPEN:
+        content_sha = item.evidence.get("content_sha")
+        if not isinstance(content_sha, str) or not content_sha:
+            return 0
+        return _count_registrations_naming_challenge(experiment_dir, content_sha)
     return 0
 
 
@@ -1250,6 +1412,39 @@ def _count_registrations_naming_audit(experiment_dir: Path, audit_id: str) -> in
             and e.get("subject_id") == audit_id
             for e in raw
         ):
+            count += 1
+    return count
+
+
+def _count_registrations_naming_challenge(experiment_dir: Path, content_sha: str) -> int:
+    """Live registrations whose winning chain names *content_sha* (the R8 leverage edge).
+
+    The challenge→registration fan-out (C-queue): a contested ``content_sha`` blocks
+    capital wherever a live registration's prerequisite chain binds it — the one
+    encoded edge the challenge machinery reuses. A NON-CREATING, fail-open read of
+    the registration journals mirroring :func:`_count_registrations_naming_audit`: a
+    torn journal is skipped; a revoked/absent id contributes nothing. Routes winner
+    selection through ``reduce_registration`` (never a re-inlined newest-first). The
+    match is on the prerequisite entry's ``content_sha`` (the full address's
+    discriminator — the SAME sha the challenge targets), across every kind.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+    from hpc_agent.state.registration import reduce_registration
+
+    count = 0
+    for reg_id in _discover_registration_ids(experiment_dir):
+        try:
+            records = read_decisions(experiment_dir, "registration", reg_id)
+        except Exception:  # noqa: BLE001 — fail-open: a bad journal never inflates/crashes
+            continue
+        status = reduce_registration(records, registration_id=reg_id, live_dossier_sha=None)
+        winner = status.winner
+        if winner is None or status.status in ("revoked", "absent"):
+            continue
+        raw = winner.get("prerequisites")
+        if not isinstance(raw, list):
+            continue
+        if any(isinstance(e, dict) and e.get("content_sha") == content_sha for e in raw):
             count += 1
     return count
 

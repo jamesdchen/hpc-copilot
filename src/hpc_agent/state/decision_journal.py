@@ -22,6 +22,9 @@ sidecars and campaign scratch already live under)::
     <experiment_dir>/.hpc/scopes/<tag>.decisions.jsonl         # scope_kind="scope"
     <experiment_dir>/.hpc/notebooks/<audit_id>.decisions.jsonl # scope_kind="notebook"
     <experiment_dir>/.hpc/registrations/<registration_id>.decisions.jsonl  # "registration"
+    <experiment_dir>/.hpc/packs/<pack_name>.decisions.jsonl    # scope_kind="pack"
+    <experiment_dir>/.hpc/conclusions/<conclusion_id>.decisions.jsonl  # "conclusion"
+    <experiment_dir>/.hpc/challenges/<challenge_id>.decisions.jsonl  # scope_kind="challenge"
 
 One JSONL record per exchange, newest last, **append-only**: a write
 never rewrites or truncates a prior record. Appends are serialized under
@@ -79,7 +82,33 @@ SCHEMA_VERSION = 1
 # ``append-decision`` under the R6 gate; the journal stores the shape, never any
 # field/prerequisite vocabulary. It is a SIXTH kind (never coupled to a run's
 # journal — a registration outlives any single run and spans dossier re-exports).
-SCOPE_KINDS = frozenset({"run", "campaign", "scope", "notebook", "registration"})
+# A "pack" decision journals the bind/receipt touchpoints of a domain pack
+# (``docs/design/domain-packs.md``, "The bind event") — the mechanical
+# ``pack-bind`` / ``pack-receipt`` CODE attestations that ride ``append-decision``
+# under a caller-authored pack ``name``; the journal stores the shape, never any
+# seam/reader/pattern vocabulary. It is a SEVENTH kind; packs and the registration
+# kernel took the next two slots in whichever order they landed — the kinds are
+# independent (``docs/design/registration-kernel.md`` R9).
+# A "conclusion" decision journals a human-authored finding — the one new record
+# type of evidence memory (``docs/design/evidence-memory.md`` E-shape) — under a
+# caller-authored ``conclusion_id``: the ``conclusion`` / ``conclusion-revoke``
+# attestations that ride ``append-decision`` under the E-shape gate; the journal
+# stores the shape, never any tag/finding vocabulary. It is an EIGHTH kind (never
+# coupled to a run or campaign journal — a conclusion typically spans several and
+# outlives any one of them; the R9 rationale).
+# A "challenge" decision journals a human-authored, evidence-bound, sha-targeted
+# attestation of DISSENT against a committed record — the missing "this is wrong"
+# object (``docs/design/challenge-attestation.md`` C-shape) — under a
+# caller-authored ``challenge_id``: the ``challenge`` / ``challenge-verdict`` /
+# ``challenge-withdraw`` records that ride ``append-decision`` under the C-gate
+# locks; the journal stores the shape, never any grounds/reasoning vocabulary. It
+# is a NINTH kind, deliberately its OWN store rather than riding the target's
+# journal (C-shape: a challenge may target a conclusion / registration / sign-off /
+# fingerprint sample across four+ path branches, and some targets have no journal
+# to ride — the R9 one-branch-per-family rule).
+SCOPE_KINDS = frozenset(
+    {"run", "campaign", "scope", "notebook", "registration", "pack", "conclusion", "challenge"}
+)
 
 _log = logging.getLogger(__name__)
 
@@ -132,6 +161,18 @@ def decisions_path(experiment_dir: Path, scope_kind: str, scope_id: str) -> Path
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         return RepoLayout(experiment_dir).hpc / "registrations" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "pack":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "packs" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "conclusion":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "conclusions" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "challenge":
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        return RepoLayout(experiment_dir).hpc / "challenges" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign" (validated above)
     from hpc_agent.meta.campaign.dirs import campaign_dir
 

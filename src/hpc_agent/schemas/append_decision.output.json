@@ -43,7 +43,10 @@
             "campaign",
             "scope",
             "notebook",
-            "registration"
+            "registration",
+            "pack",
+            "conclusion",
+            "challenge"
           ],
           "title": "Scope Kind",
           "type": "string"
