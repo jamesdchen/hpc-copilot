@@ -177,6 +177,7 @@ def default_detect_capabilities(
             [*cli, "harness-capabilities"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             cwd=str(experiment_dir),
             timeout=120,
             check=False,
