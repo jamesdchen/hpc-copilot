@@ -644,3 +644,16 @@ zero describe calls). The CORE contract: for every edge in the block_chain
 successor table, `spec_hint` ∪ the successor schema's defaults MUST validate
 against that schema — one parametrized test over SUCCESSORS; a hint that
 bounces off its own successor's validator is a driver bug, not an agent task.
+
+Addendum 9: **14. Refusals carry a valid skeleton** (spec seam ergonomics).
+The leniency principle is deliberately scoped: intent-intake seams are
+tolerant (partial InterviewSpec + detection + safe defaults), machine-chain
+spec seams are strict (a lenient normalizer guesses intent; a guessed field
+becomes a journaled fact — the halo_expr class). The gap between them: a
+spec_invalid refusal today hands back a SCHEMA POINTER and the agent spelunks
+(run #11: five describe|grep round-trips). Fix without guessing: the
+--spec/MCP validation refusal embeds a code-generated MINIMAL VALID SKELETON
+— defaults filled, required fields as placeholders, the failing JSON path
+marked — derived from the same schema the validator already loaded. Code
+never accepts the bad spec; it returns the correct shape. Pairs with item 13
+(hints that never bounce) — 14 covers everything off-chain.
