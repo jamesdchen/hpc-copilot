@@ -46,6 +46,7 @@ the same run_id is safe and cheap.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -56,6 +57,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.execution.mapreduce.data_trace_contract import TRACE_TRANSPORT_FILENAME
 from hpc_agent.execution.mapreduce.reduce.metrics import (
     collect_wave_errors,
     reduce_metrics,
@@ -71,6 +73,7 @@ from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import _is_terminal
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
+from hpc_agent.state.data_trace import ingest_trace, trace_store_path
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_sidecar
@@ -274,6 +277,7 @@ def _combine_missing(
 
 
 def _per_task_metrics_reduce(
+    experiment_dir: Path,
     run_id: str,
     *,
     record: Any,
@@ -370,7 +374,164 @@ def _per_task_metrics_reduce(
             f"likely never wrote metrics.json; inspect per-task stderr under "
             f"{record.remote_path}/{run_id}/logs/."
         )
+
+    # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission
+    # is transport"): pull + ingest each task's ``_trace.jsonl`` beside the
+    # metrics harvest. Fires AFTER the metrics pull and NEVER blocks it — a
+    # trace pull/parse failure is disclosed, never a harvest failure.
+    _ingest_task_traces(
+        experiment_dir,
+        run_id,
+        record=record,
+        out=out,
+        results_subdir=results_subdir,
+    )
     return {run_id: aggregated}
+
+
+_TASK_DIR_RE = re.compile(r"\d+(?!.*\d)")  # the LAST run of digits in a name
+
+
+def _task_id_from_dir(result_dir: Path) -> int | None:
+    """Extract the integer task id from a per-task result dir (``task-<n>``).
+
+    The ``result_dir_template`` renders ``task-{task_id}`` / ``task_{task_id}``;
+    the trailing integer is the key the trace store files a task by
+    (``task-<n>.jsonl``). Returns ``None`` when the dir name carries no integer
+    — an unkeyable trace is a DISCLOSED skip, never a fabricated key.
+    """
+    m = _TASK_DIR_RE.search(result_dir.name)
+    return int(m.group(0)) if m else None
+
+
+def _ingest_task_traces(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    record: Any,
+    out: Path,
+    results_subdir: str,
+) -> dict[str, int]:
+    """Pull each task's ``_trace.jsonl`` and ingest it — data-trace **T4**.
+
+    Ingestion-at-harvest: the trace transport files the tasks emitted beside
+    their outputs are pulled (one extra rsync on the already-flowing per-task
+    seam) and moved into the one canonical store via :func:`ingest_trace`,
+    scope ``("run", run_id)``. Absence is the NORMAL shape for a non-emitting
+    run — silent, harvest identical.
+
+    NEVER blocks the harvest — the trace is EVIDENCE, not a gate. Every failure
+    mode is DISCLOSED (skip-counted + logged), never raised:
+
+    * the trace pull failing (cluster hiccup / no ``_trace.jsonl`` anywhere —
+      rsync 404s the include) — the metrics harvest already succeeded, log+return;
+    * an absent trace for a task — silent (the task simply emitted none);
+    * a torn / schema-invalid trace — :func:`ingest_trace` refuses it (T1 is
+      strict; an invalid record never enters the trust chain), counted as a
+      disclosed skip.
+
+    DOUBLE-INGEST GUARD (re-harvest safety): the cluster ``_trace.jsonl``
+    persists and is re-pulled every harvest, so a naive re-ingest would append
+    a second copy to the store. Before ingesting a task we check the store — if
+    ``task-<n>.jsonl`` already exists the task was ingested on a prior harvest
+    and is skipped. (Local runs never reach this seam; they ingest at emission
+    per T2's fallback rule, so there is no double-ingest there either.)
+
+    Canary-family siblings are excluded exactly as the metrics reduce excludes
+    them — their ``_trace.jsonl`` shares the same ``results/`` subtree. Returns
+    a counts dict (the disclosure surface for tests/callers; no run gate).
+    """
+    log = logging.getLogger(__name__)
+    counts = {"pulled": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
+
+    traces_local = out / "_per_task_traces"
+    try:
+        pull = rsync_pull(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            remote_subdir=results_subdir,
+            local_dir=str(traces_local),
+            include=[TRACE_TRANSPORT_FILENAME],
+        )
+    except OSError as exc:  # a transport-layer explosion is still just evidence
+        log.warning(
+            "data-trace T4: trace pull for run_id %r raised %s — harvest "
+            "unaffected, traces skipped",
+            run_id,
+            exc,
+        )
+        return counts
+    if pull.returncode != 0:
+        # Absence is NORMAL for a non-emitting run (the subtree carries no
+        # _trace.jsonl, rsync's include matches nothing) — DISCLOSE, never fail.
+        log.info(
+            "data-trace T4: no per-task _trace.jsonl pulled for run_id %r "
+            "(rsync exit %d) — traces skipped, harvest unaffected",
+            run_id,
+            pull.returncode,
+        )
+        return counts
+
+    from hpc_agent.ops.monitor.reconcile import _sibling_run_ids
+
+    canary_ids = set(_sibling_run_ids(run_id))
+    trace_files = sorted(
+        p
+        for p in traces_local.rglob(TRACE_TRANSPORT_FILENAME)
+        if p.is_file() and canary_ids.isdisjoint(p.parts)
+    )
+    for trace_path in trace_files:
+        counts["pulled"] += 1
+        task = _task_id_from_dir(trace_path.parent)
+        if task is None:
+            log.warning(
+                "data-trace T4: cannot key task for trace %s (no task-<n> "
+                "component in %r) — disclosed skip",
+                trace_path,
+                trace_path.parent.name,
+            )
+            counts["skipped_invalid"] += 1
+            continue
+        # Double-ingest guard: a prior harvest already moved this task's trace
+        # into the store; re-pulling the persistent cluster copy must not append
+        # a second time.
+        if trace_store_path(experiment_dir, "run", run_id, task).exists():
+            counts["skipped_existing"] += 1
+            continue
+        try:
+            ingest_trace(experiment_dir, "run", run_id, task, trace_path)
+        except errors.SpecInvalid as exc:
+            log.warning(
+                "data-trace T4: task %d trace for run_id %r is invalid (%s) — "
+                "disclosed skip, harvest unaffected",
+                task,
+                run_id,
+                exc,
+            )
+            counts["skipped_invalid"] += 1
+        except OSError as exc:
+            log.warning(
+                "data-trace T4: task %d trace for run_id %r failed to ingest "
+                "(%s) — disclosed skip, harvest unaffected",
+                task,
+                run_id,
+                exc,
+            )
+            counts["skipped_invalid"] += 1
+        else:
+            counts["ingested"] += 1
+
+    if counts["pulled"]:
+        log.info(
+            "data-trace T4: run_id %r traces — %d ingested, %d already-present, "
+            "%d skipped-invalid (of %d pulled)",
+            run_id,
+            counts["ingested"],
+            counts["skipped_existing"],
+            counts["skipped_invalid"],
+            counts["pulled"],
+        )
+    return counts
 
 
 def _combiner_only_reduce(
@@ -451,6 +612,7 @@ def _combiner_only_reduce(
                 # metrics.json the LOCAL / pure-API path uses, so reduction is
                 # ALWAYS code, never the model improvising a mean by hand.
                 aggregated = _per_task_metrics_reduce(
+                    experiment_dir,
                     run_id,
                     record=record,
                     out=(out if out is not None else combiner_local.parent),
