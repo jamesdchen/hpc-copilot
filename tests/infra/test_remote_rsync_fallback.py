@@ -484,7 +484,7 @@ def _first_deploy_remote_tree(remote: Path) -> None:
 
 
 def _sh(cmd: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["sh", "-c", cmd], capture_output=True, text=True)
+    return subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=30)
 
 
 @_needs_posix_shell
