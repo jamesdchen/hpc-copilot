@@ -130,6 +130,12 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "reproduce-run",
         "verify-reproduction",
         "export-dossier",
+        # export-attestations (conformance-kit K3): the in-toto/DSSE portability
+        # projection over the sealed dossier. Spec-taking mutate; its input
+        # schema (export_attestations.input.json) is baked in the same commit,
+        # so it also appears in the schema-file-parametrized remediation probes
+        # ({} is invalid — run_id is required).
+        "export-attestations",
         "archive-dossier",
         "status-snapshot",
         "status-watch",

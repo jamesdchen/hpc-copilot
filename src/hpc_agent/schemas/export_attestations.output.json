@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_attestations.output.json",
+  "title": "export-attestations output data",
+  "description": "The emitted attestations bundle's provenance and integrity fingerprint.\n\nEvery field describes the bundle by PROVENANCE (where it landed, which\nruns it covers, how many Statements, the dossier signature it ties back\nto, which stores were absent), never by the meaning of any Statement — a\nStatement is typed by its source store's predicateType, not by a\ncaller-owned role.",
+  "type": "object",
+  "required": [
+    "output_path",
+    "run_ids",
+    "statement_count",
+    "bundle_sha256"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "output_path": {
+      "title": "Output Path",
+      "type": "string"
+    },
+    "run_ids": {
+      "description": "The run ids projected, in lineage order (newest first, root last) when include_lineage is set; otherwise the single requested run.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Run Ids",
+      "type": "array"
+    },
+    "statement_count": {
+      "minimum": 0,
+      "title": "Statement Count",
+      "type": "integer"
+    },
+    "bundle_sha256": {
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "gaps": {
+      "description": "Expected-but-absent stores (carried through from the dossier gather), each a record naming the missing source store and its run. Reported, not fatal — an absent store yields no Statement.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Gaps",
+      "type": "array"
+    }
+  }
+}
