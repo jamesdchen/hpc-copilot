@@ -19,10 +19,14 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import IO, Any, Final
 
 from hpc_agent.infra.bounded_subprocess import run_capture_bounded
 from hpc_agent.infra.remote import (
@@ -310,7 +314,7 @@ _PAYLOAD_WARN_BYTES = 200 * 1024 * 1024
 _PAYLOAD_WALK_CAP = 50_000
 
 
-def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
+def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
     """One stderr line naming what this push is about to ship (F-E).
 
     Approximates the transfer's own filtering: a path is skipped when ANY
@@ -319,9 +323,13 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
     misreading cost the run-#10 src/data drop; the disclosure makes them
     VISIBLE before the bytes move). Best-effort and fail-open: a disclosure
     error never blocks a push.
+
+    Returns the total payload size in bytes (0 on any error) so the caller can
+    reuse it as the transfer-progress denominator (queue item 10) without a
+    second tree walk. A walk-capped total is a lower bound; the progress line's
+    ``~`` prefix already reads as an estimate.
     """
     import fnmatch
-    import sys
 
     try:
         pats = [p.rstrip("/") for p in exclude]
@@ -381,8 +389,112 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> None:
                     "top-level one.",
                     file=sys.stderr,
                 )
+        return total
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        return 0
+
+
+def _disclose_no_rsync(total_bytes: int) -> None:
+    """One WARN naming the tar full-copy fallback's cost (queue item 6a).
+
+    Fired at transfer start whenever :func:`_have_rsync` is False, alongside the
+    :func:`_disclose_payload` WARN. The run-#11 evidence: an 8.4 GB tree silently
+    re-shipped to CARC in full because no rsync was on PATH — the tar fallback
+    has NO delta, so every byte crosses the wire even when the remote is
+    byte-identical, and nothing said so. This makes the cause visible before the
+    multi-hour transfer, in the same ``[transport]`` style as the payload WARN.
+    Fail-open (ASCII arrows so a cp1252 console can't raise): disclosure never
+    blocks a push.
+    """
+    try:
+        mb = total_bytes / (1024 * 1024)
+        print(
+            f"[transport] WARN no rsync on PATH -> tar full-copy fallback -> NO DELTA "
+            f"-> the full {mb:.1f} MB re-ships even if the remote is identical "
+            f"(install rsync, or WSL/MSYS rsync on Windows, to ship only changed bytes).",
+            file=sys.stderr,
+        )
     except Exception:  # noqa: BLE001 — disclosure is never load-bearing
         pass
+
+
+#: Transfer-progress heartbeat cadence (queue item 10). The tar|ssh pipe emits
+#: nothing until it exits, so a multi-hour full re-ship looked hung; a line every
+#: ~15s to the detached-worker log makes the transfer observable. Override for
+#: tests via the ``interval_sec`` arg on :func:`_pump_with_progress`.
+_PROGRESS_INTERVAL_SEC: Final[float] = 15.0
+#: Pump read/write granularity. 1 MiB balances syscall overhead against the
+#: heartbeat's byte-count resolution; binary-safe regardless of value.
+_PUMP_CHUNK_BYTES: Final[int] = 1024 * 1024
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write every byte of *data* to *fd*, looping over partial ``os.write``s.
+
+    ``os.write`` may write fewer bytes than offered (a full pipe buffer), so a
+    single call can silently truncate the stream. The memoryview slice avoids
+    re-copying the tail on each iteration.
+    """
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
+def _pump_with_progress(
+    src: IO[bytes],
+    dst_fd: int,
+    *,
+    total_bytes: int,
+    interval_sec: float = _PROGRESS_INTERVAL_SEC,
+    chunk_size: int = _PUMP_CHUNK_BYTES,
+    now: Callable[[], float] = time.monotonic,
+) -> int:
+    """Copy *src* to *dst_fd* in chunks, emitting a progress heartbeat (item 10).
+
+    Interposed on the ``tar c | ssh tar x`` pipe so the otherwise-silent transfer
+    reports ``[transport] progress: X MB / ~Y MB (Z%), elapsed Ts`` every
+    ~*interval_sec* to stderr (the detached-worker log — the tail-able surface).
+    *total_bytes* is the estimate :func:`_disclose_payload` already computed; a 0
+    total prints ``0%`` rather than dividing by zero.
+
+    Transfer-semantics-preserving: reads/writes raw bytes (binary-safe), and
+    :func:`_write_all` blocks on a full pipe so backpressure flows to ``tar``
+    exactly as a direct fd hand-off would. Returns the byte count forwarded.
+    Always closes *dst_fd* on exit — that EOF is what tells the remote ``tar x``
+    the stream is complete.
+    """
+    start = now()
+    last_emit = start
+    sent = 0
+    try:
+        while True:
+            chunk = src.read(chunk_size)
+            if not chunk:
+                break
+            _write_all(dst_fd, chunk)
+            sent += len(chunk)
+            current = now()
+            if current - last_emit >= interval_sec:
+                _emit_progress(sent, total_bytes, start, current)
+                last_emit = current
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(dst_fd)
+    return sent
+
+
+def _emit_progress(sent: int, total_bytes: int, start: float, current: float) -> None:
+    """Print one ``[transport] progress: ...`` heartbeat line to stderr."""
+    sent_mb = sent / (1024 * 1024)
+    total_mb = total_bytes / (1024 * 1024)
+    pct = (100 * sent / total_bytes) if total_bytes > 0 else 0.0
+    elapsed = current - start
+    print(
+        f"[transport] progress: {sent_mb:.0f} MB / ~{total_mb:.0f} MB "
+        f"({pct:.0f}%), elapsed {elapsed:.0f}s",
+        file=sys.stderr,
+    )
 
 
 def _ssh_bounded(
@@ -417,8 +529,13 @@ def _tar_ssh_push(
     exclude: list[str],
     delete: bool = False,
     timeout: float | None,
+    total_bytes: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
+
+    *total_bytes* is the payload estimate (from :func:`_disclose_payload`) used
+    as the progress-heartbeat denominator (queue item 10); 0 means "unknown"
+    and the heartbeat prints ``0%``.
 
     Used as the rsync_push fallback when rsync is absent. Respects the
     same *exclude* patterns as rsync (passed through to ``tar
@@ -499,18 +616,40 @@ def _tar_ssh_push(
         # large tree) would block ``tar`` and deadlock the whole push.
         tar_stderr_file = tempfile.TemporaryFile()  # noqa: SIM115 - closed in finally below
         tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=tar_stderr_file)
+        # Byte-counting pump between tar and ssh (queue item 10): tar writes into
+        # ``pump_w``, a thread copies it to ``pump_r`` (ssh's stdin) chunk by
+        # chunk emitting a ~15s heartbeat. ssh reads ``pump_r`` exactly as it
+        # read tar's stdout before, so backpressure/binary-safety are unchanged;
+        # the pump thread runs concurrently with the blocking run_capture_bounded.
+        pump_r, pump_w = os.pipe()
+        pump_error: list[BaseException] = []
+
+        def _pump() -> None:
+            try:
+                assert tar_proc.stdout is not None
+                _pump_with_progress(tar_proc.stdout, pump_w, total_bytes=total_bytes)
+            except BaseException as exc:  # noqa: BLE001 — surfaced via pump_error
+                pump_error.append(exc)
+                with contextlib.suppress(OSError):
+                    os.close(pump_w)
+
+        pump_thread = threading.Thread(target=_pump, daemon=True)
+        pump_thread.start()
         try:
             assert tar_proc.stdout is not None
-            ssh_proc = run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=tar_proc.stdout)
+            ssh_proc = run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=pump_r)
+            pump_thread.join()
             tar_proc.stdout.close()
             tar_proc.wait(timeout=timeout)
             tar_stderr_file.seek(0)
             tar_stderr_bytes = tar_stderr_file.read()
         except subprocess.TimeoutExpired as exc:
             tar_proc.kill()
-            # Reap the killed child and close its stdout pipe — otherwise the
-            # pipe FD and the zombie process leak on this timeout path (the
-            # happy path closes/waits, this one did not).
+            # Killing tar EOFs the pump's source so the pump thread unwinds and
+            # closes pump_w; join it (bounded) then reap tar and close pipes —
+            # otherwise the pump thread, pipe FDs and the zombie leak on this
+            # timeout path (the happy path closes/waits, this one did not).
+            pump_thread.join(timeout=5)
             if tar_proc.stdout is not None:
                 with contextlib.suppress(OSError):
                     tar_proc.stdout.close()
@@ -521,11 +660,27 @@ def _tar_ssh_push(
                 f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"
             ) from exc
         finally:
+            # Close our copy of the read end (ssh dup'd its own); the pump owns
+            # and closes the write end.
+            with contextlib.suppress(OSError):
+                os.close(pump_r)
             tar_stderr_file.close()
 
         tar_stderr = tar_stderr_bytes.decode(errors="replace")
         combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))
+        # Exit-code check is unchanged (ssh wins, else tar). A pump-side failure
+        # (e.g. ssh died mid-stream -> BrokenPipeError on the write) truncates the
+        # byte stream; ssh/tar normally then exit non-zero on their own, but if
+        # BOTH somehow reported 0 we must NOT report success on a truncated
+        # transfer — fold the pump error into the returncode + stderr so the
+        # caller's existing non-zero branch fires, without changing the contract
+        # (still a CompletedProcess, never a new raise).
         rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_proc.returncode
+        if pump_error and rc == 0:
+            rc = 1
+            combined_stderr = "\n".join(
+                filter(None, [combined_stderr, f"transfer pump error: {pump_error[0]!r}"])
+            )
 
         return subprocess.CompletedProcess(
             args=tar_cmd + ["|"] + ssh_cmd,
@@ -676,7 +831,7 @@ def rsync_push(
     # No-op unless HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
     throttle_connection(ssh_target)
     exclude = _effective_excludes(exclude)
-    _disclose_payload(local_path, exclude)
+    payload_bytes = _disclose_payload(local_path, exclude)
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
     # Validate the remote path up front so push and pull share one
@@ -686,6 +841,9 @@ def rsync_push(
     validate_remote_path(remote_path.rstrip("/"))
 
     if not _have_rsync():
+        # Name the tar full-copy fallback's NO-DELTA cost before the bytes move
+        # (queue item 6a) — the run-#11 8.4 GB silent full re-ship.
+        _disclose_no_rsync(payload_bytes)
         # The tar|ssh fallback returns before the _with_ssh_backoff wrap
         # below, so it must consult the per-host circuit breaker itself —
         # on native Windows (no rsync) this IS the live push path.
@@ -698,6 +856,7 @@ def rsync_push(
                 exclude=exclude,
                 delete=delete,
                 timeout=effective_timeout,
+                total_bytes=payload_bytes,
             ),
         )
 
