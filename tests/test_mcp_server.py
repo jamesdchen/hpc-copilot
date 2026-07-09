@@ -404,6 +404,60 @@ def test_mcp_allows_status_watch_with_detach() -> None:
     assert runner.calls, "detached invocation must reach the runner"
 
 
+def test_mcp_refuses_aggregate_run_without_detach() -> None:
+    """run-#10 F-K: a synchronous aggregate-run (combine SSH + rsync pull) held the
+    server for 20+ minutes with zero observability — detach is required, like S4."""
+    server = _server(allow_mutations=True)
+    resp = _call(server, "aggregate-run", {"spec": {"detach": False}})
+    assert "error" in resp
+    assert "detach" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_aggregate_run_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "aggregate-run", {"spec": {"detach": True}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
+
+
+def test_mcp_refuses_aggregate_flow_without_detach() -> None:
+    """aggregate-flow's default detach is OFF (composed atom), but a DIRECT blocking
+    MCP invocation is still refused — the seam reads the raw spec, not the default."""
+    server = _server(allow_mutations=True)
+    resp = _call(server, "aggregate-flow", {"spec": {"run_id": "r"}})
+    assert "error" in resp
+    assert "detach" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_aggregate_flow_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "aggregate-flow", {"spec": {"detach": True, "run_id": "r"}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
+
+
+def test_mcp_refuses_campaign_run_without_detach() -> None:
+    """A whole campaign iteration (submit→monitor→aggregate) over the synchronous
+    server = a minutes-to-hours head-of-line wedge — detach is required."""
+    server = _server(allow_mutations=True)
+    resp = _call(server, "campaign-run", {"spec": {"detach": False}})
+    assert "error" in resp
+    assert "detach" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+
+
+def test_mcp_allows_campaign_run_with_detach() -> None:
+    runner = FakeRunner()
+    server = _server(allow_mutations=True, runner=runner)
+    resp = _call(server, "campaign-run", {"spec": {"detach": True}})
+    assert "error" not in resp
+    assert runner.calls, "detached invocation must reach the runner"
+
+
 # ─── isolated runner deadline (src subprocess-timeout discipline) ────────────
 
 

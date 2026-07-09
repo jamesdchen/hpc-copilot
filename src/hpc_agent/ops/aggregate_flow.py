@@ -71,6 +71,7 @@ from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import _is_terminal
 from hpc_agent.ops.scope_gate import assert_scopes_unlocked
+from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_sidecar
@@ -99,6 +100,13 @@ class AggregateFlowResult:
     #: for a scope-less run (existing consumers untouched). Two plain integers
     #: per tag; no metric is ever consulted (rigor-primitives T3).
     scope_looks: dict[str, dict[str, int]] | None = None
+    #: Detach-by-contract handle (design §3; run-#10 F-K). Set only on the handle
+    #: a DIRECT ``detach=true`` aggregate-flow invocation returns — the harvest
+    #: runs in a durable detached worker and the data fields above are empty. Every
+    #: synchronous / composed path leaves these at their defaults.
+    started: bool = False
+    watch: str | None = None
+    detached_pid: int | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         return {
@@ -115,6 +123,9 @@ class AggregateFlowResult:
             "columns_checked": self.columns_checked,
             "column_violations": list(self.column_violations or []),
             "scope_looks": self.scope_looks,
+            "started": self.started,
+            "watch": self.watch,
+            "detached_pid": self.detached_pid,
         }
 
 
@@ -796,6 +807,107 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
     return {}
 
 
+# ── aggregate-flow detach-by-contract helpers (design §3; run-#10 F-K) ────────
+#
+# aggregate-flow is a COMPOSED atom (default detach OFF) — the detach seat only
+# fires for a DIRECT top-level invocation that opts in. The block-terminal store,
+# the detached lease, and the doctor dead-worker scan all key it under its VERB
+# ("aggregate-flow") — the SAME string ``_spawn_detached`` stamps into the lease.
+_AGG_FLOW_BLOCK_KEY = terminal_block_key("aggregate-flow")
+
+
+def _agg_flow_cmd_sha(experiment_dir: Path, run_id: str) -> str:
+    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
+
+    The identity a terminal replay is keyed on (mirrors the submit-block /
+    status-watch recorders): a moved/absent ``cmd_sha`` → the replay refuses
+    (re-execute), never a false hit.
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, ValueError, errors.HpcError):
+        return ""
+    return str((sidecar or {}).get("cmd_sha") or "")
+
+
+def _detached_agg_flow_spec_dict(spec: AggregateFlowSpec) -> dict[str, Any]:
+    """Serialize *spec* with ``detach`` forced OFF for the detached child.
+
+    The child runs the SAME aggregate-flow body synchronously (its harvest IS the
+    point), so its spec must carry ``detach=False`` — a truthy detach would fork
+    forever.
+    """
+    return spec.model_copy(update={"detach": False}).model_dump(mode="json")
+
+
+def _replay_agg_flow_terminal(experiment_dir: Path, run_id: str) -> AggregateFlowResult | None:
+    """Return a finished aggregate-flow worker's recorded terminal for the CURRENT
+    tree, else ``None`` (run #7 idempotent re-invoke).
+
+    Replays ONLY when the current sidecar ``cmd_sha`` equals the one recorded with
+    the terminal. A moved/absent ``cmd_sha``, an absent record, or a corrupt record
+    all return ``None`` so the caller re-executes.
+    """
+    from hpc_agent.state.block_terminal import read_terminal
+
+    record = read_terminal(experiment_dir, run_id, _AGG_FLOW_BLOCK_KEY)
+    if record is None:
+        return None
+    current_sha = _agg_flow_cmd_sha(experiment_dir, run_id)
+    if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
+        return None
+    stored = record.get("result")
+    if not isinstance(stored, dict):
+        return None
+    try:
+        return AggregateFlowResult(**stored)
+    except TypeError:
+        return None
+
+
+def _record_agg_flow_terminal(experiment_dir: Path, result: AggregateFlowResult) -> None:
+    """Record a genuine aggregate-flow terminal so a re-invoke replays it.
+
+    Runs on the SYNCHRONOUS path — which is exactly what the detached child
+    executes — so the parent's replay finds it. A run with no run_id carries
+    nothing to key on; the detached HANDLE (``started``) is not terminal and is
+    skipped.
+    """
+    if not result.run_id or result.started:
+        return
+    from hpc_agent.state.block_terminal import record_terminal
+
+    record_terminal(
+        experiment_dir,
+        run_id=result.run_id,
+        block=_AGG_FLOW_BLOCK_KEY,
+        cmd_sha=_agg_flow_cmd_sha(experiment_dir, result.run_id),
+        result_dump=result.to_envelope_data(),
+    )
+
+
+def _detached_agg_flow_result(
+    *, run_id: str, pid: int, log_path: str | None
+) -> AggregateFlowResult:
+    """The immediate-return handle for a detached aggregate-flow (design §3).
+
+    The data fields are empty (the reduced metrics arrive on completion, read from
+    the journal); ``started`` / ``watch`` / ``detached_pid`` carry the handle that
+    ``_is_detached`` / ``wait-detached`` key on.
+    """
+    return AggregateFlowResult(
+        run_id=run_id,
+        combined_waves=[],
+        failed_waves=[],
+        waves_combined_this_call=[],
+        combiner_dir_local=str(log_path or ""),
+        aggregated_metrics={},
+        started=True,
+        watch="journal",
+        detached_pid=pid,
+    )
+
+
 @primitive(
     name="aggregate-flow",
     verb="workflow",
@@ -851,6 +963,64 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
     agent_facing=True,
 )
 def aggregate_flow(
+    experiment_dir: Path,
+    *,
+    spec: AggregateFlowSpec,
+    mode: str | None = None,
+    aggregate_cmd: str | None = None,
+    aggregate_output_path: str | None = None,
+) -> AggregateFlowResult:
+    """Finalize a run's aggregation; return paths + reduced metrics.
+
+    Detach-by-contract (design §3; run-#10 F-K) is handled HERE, in the thin
+    wrapper; the reduce itself is :func:`_aggregate_flow_impl`. aggregate-flow is a
+    COMPOSED atom (harvest-guard's §5 guaranteed harvest, submit-s4, aggregate-run,
+    campaign-run all call it SYNCHRONOUSLY and consume its metrics inline), so
+    ``detach`` defaults OFF and the wrapper is a pass-through on every composed
+    path. Only a DIRECT top-level invocation that opts in (``detach=true`` — the
+    MCP seam forces an agent to) detaches: the sync gates (no journal record →
+    ``JournalCorrupt``; a locked evidence scope → ``ScopeLocked``) fire in the
+    PARENT before the spawn, then a durable detached worker owns the combine +
+    rsync harvest and the wrapper returns a ``{started, watch: journal,
+    detached_pid}`` handle. A re-invoke after the worker finished REPLAYS the
+    recorded terminal. On the synchronous path the wrapper records the terminal so
+    the parent's replay finds it.
+    """
+    if spec.detach:
+        # gate → detach ordering PROOF: the fail-fast sync gates run in the parent.
+        record = load_run(experiment_dir, spec.run_id)
+        if record is None:
+            raise errors.JournalCorrupt(
+                f"no journal record for {spec.run_id!r}; submit the run first"
+            )
+        assert_scopes_unlocked(experiment_dir, spec.run_id)
+        replay = _replay_agg_flow_terminal(experiment_dir, spec.run_id)
+        if replay is not None:
+            return replay
+
+        from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
+
+        launch = launch_submit_block_detached(
+            verb="aggregate-flow",
+            experiment_dir=str(experiment_dir),
+            spec=_detached_agg_flow_spec_dict(spec),
+        )
+        return _detached_agg_flow_result(
+            run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
+        )
+
+    result = _aggregate_flow_impl(
+        experiment_dir,
+        spec=spec,
+        mode=mode,
+        aggregate_cmd=aggregate_cmd,
+        aggregate_output_path=aggregate_output_path,
+    )
+    _record_agg_flow_terminal(experiment_dir, result)
+    return result
+
+
+def _aggregate_flow_impl(
     experiment_dir: Path,
     *,
     spec: AggregateFlowSpec,
