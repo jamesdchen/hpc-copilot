@@ -317,6 +317,9 @@ _BOGUS_KEY_SPEC: dict = {"contract-probe-bogus-key": 1}
 
 EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     "apply-safe-defaults": _BOGUS_KEY_SPEC,
+    # pack-status's spec is all-optional ({} = every opted-in pack) — probe
+    # with the bogus key so the wire model rejects it.
+    "pack-status": _BOGUS_KEY_SPEC,
     # attention-queue's spec is all-optional ({} is a valid experiment-scope
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,
