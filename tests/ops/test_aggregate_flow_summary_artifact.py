@@ -66,6 +66,7 @@ def test_fires_declared_summary_artifact_reduces(
 
     # Declared name honored → reduced.
     out = agg._per_task_metrics_reduce(
+        tmp_path,
         _RUN_ID,
         record=_fake_record(),
         out=tmp_path,
@@ -78,6 +79,7 @@ def test_fires_declared_summary_artifact_reduces(
     # pulled → refuses to fabricate an aggregate (the run #10 read-as-gap).
     with pytest.raises(errors.RemoteCommandFailed):
         agg._per_task_metrics_reduce(
+            tmp_path,
             _RUN_ID,
             record=_fake_record(),
             out=tmp_path / "hardcode",
@@ -90,6 +92,7 @@ def test_default_metrics_json_unchanged(tmp_path: Path, monkeypatch: pytest.Monk
     """PASSES: an undeclared run (resolved default metrics.json) reduces as before."""
     _install_fake_pull(monkeypatch, remote_emits="metrics.json")
     out = agg._per_task_metrics_reduce(
+        tmp_path,
         _RUN_ID,
         record=_fake_record(),
         out=tmp_path,

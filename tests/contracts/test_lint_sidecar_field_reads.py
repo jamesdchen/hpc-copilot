@@ -88,6 +88,9 @@ _V2_CONFIG = frozenset(
         # identity of the declared input roots at submit — the fingerprint's
         # data-identity dimension reads it.
         "data_manifest_sha",
+        # trace_digests_override (data-trace T3): the exercised caller override
+        # of the digest classifier, disclosed on the sidecar.
+        "trace_digests_override",
         # packs (domain-packs T10): opaque {pack, version, sha, manifest} echoes
         # of the bound packs at submit; export-dossier seals the named files.
         "packs",

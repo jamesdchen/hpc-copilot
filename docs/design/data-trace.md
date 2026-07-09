@@ -700,3 +700,18 @@ scope with no recorded trace) is an honest `present=false` + `skipped` result,
 never an error. The four views + the self-describing header render as
 deterministic markdown carrying no verdict vocabulary (the never-judgment pin,
 grep-tested over the render output).
+
+## Amendment 14 (2026-07-09): G-a RULED — the observation plan lives in the audit configuration
+
+**User-ruled (2026-07-09): candidate 1.** The audit configuration gains
+`observables: [names]` on the audited_source / notebook-record-config seam —
+inside the signed surface automatically, versioned with the roots, read by
+the ONE recorded-config reader. Candidate 2 (a template marker) was rejected
+on the altitude test: observable names are PROGRAM bindings (the
+`endbartime` class), while templates are the shareable standard — baking
+names into a template would force per-program template forks; and a second
+in-file parsing convention beside `# hpc-audit-section:` is a new lint/canon
+surface. Precedent: `attention_order` faced the same choice and landed in
+the config. Authoring visibility is a RENDER concern (draft-context / the
+audit view display the declared observables), not a storage one. T-R
+unblocks.
