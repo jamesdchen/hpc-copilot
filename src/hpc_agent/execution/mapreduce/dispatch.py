@@ -78,6 +78,16 @@ _EXIT_NO_RUNNER = 3
 # for N. Kept in lock-step with HPC_DISPATCH_EXIT_NO_OUTPUT in hpc_preamble.sh.
 _EXIT_NO_OUTPUT = 4
 
+# The data-trace emission contract (T2). Kept in LOCK-STEP with
+# ``hpc_agent.execution.mapreduce.data_trace_contract`` — this standalone
+# dispatcher is scp'd to the compute node without ``hpc_agent`` on the path,
+# so (like ``_EXIT_NO_OUTPUT`` ↔ ``HPC_DISPATCH_EXIT_NO_OUTPUT`` above) it
+# hardcodes a copy of the two constants the emitter and the (T3) digest
+# export need. ``test_data_trace_contract`` pins these equal to the canonical
+# module. The env-var EXPORT itself is wired by T3, not here.
+_TRACE_TRANSPORT_FILENAME = "_trace.jsonl"
+_TRACE_DIGEST_ENV_VAR = "HPC_TRACE_DIGESTS"
+
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
