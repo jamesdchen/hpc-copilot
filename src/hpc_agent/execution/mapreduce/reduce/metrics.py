@@ -77,7 +77,11 @@ def _weighted_mean(entries: list[dict]) -> dict:
     Used by both :func:`reduce_metrics` (per-task sidecars) and
     :func:`reduce_partials` (per-wave grid_points entries). Each entry
     contributes its keys weighted by ``n_samples`` (default 1 per entry
-    when missing); the resulting ``n_samples`` is the plain sum.
+    when missing); the resulting ``n_samples`` is the plain sum. When no
+    entry carries ``n_samples``, the output instead carries the
+    framework-namespaced ``_hpc_group_n`` group-size carrier (the task
+    count), so a later pass over these partials weights each by its
+    group size rather than equally.
 
     Empty input returns an empty dict.
     """
@@ -85,12 +89,21 @@ def _weighted_mean(entries: list[dict]) -> dict:
         return {}
 
     all_keys = {k for e in entries for k in e}
-    weights = [_coerce_weight(e.get("n_samples", 1), 1) for e in entries]
+    # Weight preference: the entry's own ``n_samples``, else the
+    # ``_hpc_group_n`` group-size carrier a previous ``_weighted_mean`` pass
+    # stamped on it (a per-wave partial), else 1 (a single task). Without the
+    # carrier, a grid point split 9/1 across two waves weighted both partials
+    # equally at the cross-wave reduce — the lone task got 9x its weight.
+    weights = [_coerce_weight(e.get("n_samples", e.get("_hpc_group_n", 1)), 1) for e in entries]
     agg: dict = {}
 
     for key in sorted(all_keys):
         if key == "n_samples":
             agg["n_samples"] = sum(_coerce_weight(e.get("n_samples", 0), 0) for e in entries)
+            continue
+        if key == "_hpc_group_n":
+            # Weight carrier, never a metric — folded into the weights above
+            # and re-emitted below while the group still has no n_samples.
             continue
         # Skip non-numeric values: a metrics.json may carry string/list
         # labels, and ``v * w`` on those would raise. Kept in sync with
@@ -105,6 +118,15 @@ def _weighted_mean(entries: list[dict]) -> dict:
         w_total = _neumaier_sum(w for _, w in pairs)
         numerator = _neumaier_sum(v * w for v, w in pairs)
         agg[key] = numerator / w_total if w_total else 0.0
+
+    # Group-size carrier: when NO entry carried ``n_samples``, each weight
+    # above is a group size (1 per raw task entry), so their sum is the task
+    # count this aggregate covers. Stamped framework-namespaced (never
+    # collides with a user metric) so the cross-wave reduce weights each
+    # partial by its task count. Kept in sync with the copy in
+    # ``hpc_agent/execution/mapreduce/combiner.py``.
+    if "n_samples" not in agg:
+        agg["_hpc_group_n"] = sum(weights)
 
     return agg
 

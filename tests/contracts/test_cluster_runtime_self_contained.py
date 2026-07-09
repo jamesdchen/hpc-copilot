@@ -31,6 +31,7 @@ separate, cluster-gated half of #349.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -164,6 +165,68 @@ def test_dispatch_imports_from_deployed_copy(deploy_tree: Path) -> None:
     assert "[dispatch]" in proc.stderr or proc.returncode == 0, (
         f"dispatch did not reach its own main(): exit={proc.returncode}\n{proc.stderr}"
     )
+
+
+def _hpc_agent_imports(source: str) -> list[str]:
+    """Every ``hpc_agent`` import binding in *source*, module-level OR nested.
+
+    Walks the whole AST (not just module top-level) because the escape route
+    this guard exists for was a *function-local* ``from hpc_agent.ops...``
+    inside dispatch.py's main() — invisible to the ``--help`` runtime tests
+    above, fatal (ModuleNotFoundError) on the first real task that hit it.
+    """
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found.extend(
+                alias.name
+                for alias in node.names
+                if alias.name == "hpc_agent" or alias.name.startswith("hpc_agent.")
+            )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+            and (node.module == "hpc_agent" or node.module.startswith("hpc_agent."))
+        ):
+            found.append(node.module)
+    return found
+
+
+def test_standalone_dot_hpc_files_never_import_hpc_agent() -> None:
+    """STATIC ban: no ``hpc_agent`` import anywhere in the ``.hpc/`` files.
+
+    The ``.hpc/`` standalone entry points (``_hpc_dispatch.py``,
+    ``_hpc_combiner.py``) run with NO ``hpc_agent`` package on the cluster —
+    deploy ships only what ``_build_deploy_items`` enumerates, and none of it
+    provides the installed package. Any ``import hpc_agent`` / ``from
+    hpc_agent`` in them — including a lazy, function-local one — is a
+    guaranteed cluster-side ModuleNotFoundError on whichever path executes
+    it. (The ``hpc_agent/``-prefixed reporter-closure items are exempt: they
+    ARE a namespace-package subset and import within it by design.)
+    """
+    items = transport._build_deploy_items(scheduler="sge")
+    checked = 0
+    offenders: list[str] = []
+    for it in items:
+        if not (it.dst_rel.startswith(".hpc/") and it.dst_rel.endswith(".py")):
+            continue
+        source = it.src_path.read_text(encoding="utf-8") if it.src_path else (it.content or "")
+        checked += 1
+        offenders.extend(f"{it.dst_rel}: imports {mod}" for mod in _hpc_agent_imports(source))
+    assert checked >= 2, "expected at least dispatch + combiner under .hpc/"
+    assert offenders == [], (
+        "standalone .hpc/ files must never import the hpc_agent package "
+        f"(deploy does not ship it): {offenders}"
+    )
+
+
+def test_hpc_agent_import_scanner_fires_on_lazy_import() -> None:
+    """Fire-path proof for the static scanner: a function-local import — the
+    exact shape that escaped the ``--help`` runtime tests — is detected."""
+    snippet = "def main():\n    from hpc_agent.ops.recover.service import inject_service_env\n"
+    assert _hpc_agent_imports(snippet) == ["hpc_agent.ops.recover.service"]
+    assert _hpc_agent_imports("import json\nimport hpc_agent_not_us\n") == []
 
 
 def test_reporter_help_runs_from_deployed_copy(deploy_tree: Path) -> None:

@@ -505,6 +505,35 @@ def _latest_checkpoint(checkpoint_dir):
     return best
 
 
+# Prefix every injected service var gets, so an address can never silently
+# clobber an executor's $HOME/$PATH (the bare-uppercase footgun the HPC_KW_*
+# namespacing already guards against on the kwargs side). Stdlib-only twin of
+# ``hpc_agent.ops.recover.service.SERVICE_ENV_NAMESPACE`` — this file ships
+# standalone (deploy_runtime never ships the package), so the contract is
+# duplicated here by design; behavior parity is pinned by
+# tests/execution/mapreduce/test_dispatch.py::TestServiceEnvPassthrough.
+_SERVICE_ENV_NAMESPACE = "HPC_SERVICE_"
+
+
+def _inject_service_env(env, service_env):
+    """Thread an externally-provisioned service address into a task env.
+
+    Each ``service_env`` entry ships as ``HPC_SERVICE_<KEY>`` (namespaced,
+    collision-free), mirroring the ``HPC_KW_*`` kwarg contract. Returns *env*
+    (mutated in place). A ``None``/empty *service_env* is a clean no-op.
+
+    Stdlib-only twin of ``hpc_agent.ops.recover.service.inject_service_env``,
+    inlined because the dispatcher cannot import the package cluster-side
+    (#231 Tier 1 passthrough; the ``from hpc_agent.ops...`` form died with
+    ModuleNotFoundError on every array task of a service_env run).
+    """
+    if not service_env:
+        return env
+    for key, value in service_env.items():
+        env[f"{_SERVICE_ENV_NAMESPACE}{key.upper()}"] = str(value)
+    return env
+
+
 def _task_is_included(task_id, env):
     """True when *task_id* is in the ``HPC_TASK_INCLUDE`` partial-reproduction set.
 
@@ -795,6 +824,25 @@ def main() -> None:
             f"(prior={prior_cmd_sha[:8]}, current={current_cmd_sha[:8]}); re-running",
             file=sys.stderr,
         )
+        # Quarantine the PREVIOUS experiment's metrics.json before re-running.
+        # metrics.json is the per-task completion marker: left in place, a
+        # failed (or still-running) new attempt lets status/combiner count the
+        # stale file as THIS run's completed result. Rename — never delete —
+        # so the evidence survives for forensics, under the ``_wip_*`` naming
+        # family every result scanner (check_results*, the combiner's
+        # exact-name lookup) already skips, with the same ``time_ns()``
+        # disambiguation the preserved-failed-WIP rename uses. Best-effort:
+        # on a rename failure the stale file stays exactly as before this
+        # guard existed, so warn rather than abort the re-run.
+        stale_target = Path(result_dir) / f"_wip_{task_id}_stale_metrics_{time.time_ns()}.json"
+        try:
+            os.replace(metrics_path, stale_target)
+            print(f"[dispatch] quarantined stale metrics.json at {stale_target}")
+        except OSError as exc:
+            print(
+                f"[dispatch] WARN: could not quarantine stale metrics.json {metrics_path}: {exc}",
+                file=sys.stderr,
+            )
     elif already_complete and force_rerun:
         print(
             f"[hpc-agent] task {task_id} metrics.json exists but HPC_FORCE_RERUN=1; re-running",
@@ -921,15 +969,13 @@ def main() -> None:
     # var → clean no-op for sweeps with no service dependency.
     raw_service_env = os.environ.get("HPC_SERVICE_ENV", "").strip()
     if raw_service_env:
-        from hpc_agent.ops.recover.service import inject_service_env
-
         try:
             service_env = json.loads(raw_service_env)
         except json.JSONDecodeError as exc:
             print(f"[dispatch] WARN: ignoring malformed HPC_SERVICE_ENV: {exc}", file=sys.stderr)
         else:
             if isinstance(service_env, dict):
-                inject_service_env(env, service_env)
+                _inject_service_env(env, service_env)
 
     # #293: a multi-rank job prefixes the per-task command with the launcher
     # (srun/mpirun/aprun) so this single dispatcher spawns N coordinated ranks

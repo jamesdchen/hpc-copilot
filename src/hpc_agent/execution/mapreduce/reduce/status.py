@@ -672,6 +672,30 @@ def _accounting_complete(state: str, *, result_dir_vanished: bool) -> bool:
     return result_dir_vanished and str(state or "").strip().upper() in _TERMINAL_SUCCESS_STATES
 
 
+# Scheduler accounting fields carried onto a task classified complete by its
+# result FILE. Discarding the whole job_info record there starved
+# ``reduce_resource_usage`` of cpu_s/gpu_s/elapsed_s for exactly the tasks
+# that consumed the compute — a fully complete run reported cpu_hours 0 /
+# tasks_counted 0. Only these fields merge: state/exit_code stay OUT so
+# completion classification and the preempt signal keep reading the
+# result-file evidence, never a superseded scheduler record.
+_ACCOUNTING_FIELDS = ("cpu_s", "gpu_s", "elapsed_s")
+
+
+def _merge_accounting(entry: dict, info: object) -> dict:
+    """Copy the scheduler's usage fields from *info* onto *entry* (mutated).
+
+    *entry* is a completion record built from a result file; *info* is the
+    scheduler's job_info record for the same task (or ``None`` when the
+    accounting window has no row). Existing keys on *entry* always win.
+    """
+    if isinstance(info, dict):
+        for key in _ACCOUNTING_FIELDS:
+            if key in info and key not in entry:
+                entry[key] = info[key]
+    return entry
+
+
 # Dispatcher exit codes that mean "the scheduler bumped this task" — its
 # SIGTERM trap exits 130 (128+SIGINT) on preemption / walltime; 143
 # (128+SIGTERM) covers an untrapped SIGTERM kill. Single-sourced in spirit
@@ -773,7 +797,9 @@ def report_status(
     # and the keys we emit all speak the domain space.
     for tid in range(total_tasks):
         if tid in complete_ids:
-            tasks[str(tid)] = csv_results[tid]
+            # Keep the scheduler's accounting fields alongside the
+            # result-file completion evidence (see _merge_accounting).
+            tasks[str(tid)] = _merge_accounting(dict(csv_results[tid]), job_info.get(tid))
             summary["complete"] += 1
         elif tid in job_info:
             info = job_info[tid]
@@ -1000,7 +1026,9 @@ def report_status_from_tasks(
         if tid in complete_ids:
             entry = dict(completed[tid])
             entry["cmd_sha"] = cmd_sha
-            tasks[str(tid)] = entry
+            # Keep the scheduler's accounting fields alongside the
+            # result-file completion evidence (see _merge_accounting).
+            tasks[str(tid)] = _merge_accounting(entry, job_info.get(tid))
             summary["complete"] += 1
         elif tid in job_info:
             info = job_info[tid]
