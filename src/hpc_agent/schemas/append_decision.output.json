@@ -103,6 +103,18 @@
           "additionalProperties": true,
           "title": "Provenance",
           "type": "object"
+        },
+        "attestor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestor Id"
         }
       },
       "required": [

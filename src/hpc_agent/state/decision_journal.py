@@ -202,6 +202,7 @@ def append_decision(
     proposal: str | list[Any] | dict[str, Any] | None = None,
     resolved: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
+    attestor_id: str | None = None,
     ts: str | None = None,
 ) -> dict[str, Any]:
     """Append one ``y``/nudge exchange to a scope's decision journal.
@@ -211,6 +212,15 @@ def append_decision(
     auto-stamped (current UTC ISO-8601) when omitted — the one field no
     caller has any business asserting. Returns the record written (the
     caller can echo it back as confirmation).
+
+    *attestor_id* is the OPAQUE, harness-asserted multi-human actor slug of the
+    session that authored this record (``docs/design/multi-human.md`` MH3/MH4).
+    It is ADDITIVE and default-``None``: when ``None`` (today's single-actor
+    world, or a >1-actor session whose actor did not resolve) the key is NOT
+    emitted, so the on-disk record is byte-identical to before multi-human — the
+    byte-identity pin. Present only when the ``ops`` gate resolved a session
+    actor under a >1-actor declaration; readers tolerate the extra key
+    (forward-compat, no schema bump). Core never verifies who set it.
 
     Append-only: this never reads-modifies-writes a prior record; a second
     call always adds a new line after the first.
@@ -237,6 +247,10 @@ def append_decision(
         "resolved": dict(resolved) if resolved else {},
         "provenance": dict(provenance) if provenance else {},
     }
+    if attestor_id is not None:
+        # Additive, opaque, harness-asserted (MH3): stamped ONLY when a session
+        # actor resolved under a >1-actor declaration. Absent → byte-identical.
+        record["attestor_id"] = attestor_id
     _append_jsonl_line(decisions_path(experiment_dir, scope_kind, scope_id), record)
     return record
 
