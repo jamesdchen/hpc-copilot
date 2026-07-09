@@ -1,9 +1,9 @@
 """Pydantic models for the ``interview`` scaffold's wire contract.
 
-The ``task_generator`` field is a discriminated union over five
+The ``task_generator`` field is a discriminated union over six
 recipe shapes (enumerated, cartesian_product, items_x_seeds,
-numeric_logspace, numeric_linspace). Pydantic v2 emits this as a
-``oneOf`` in the JSON schema with proper field-level constraints.
+numeric_logspace, numeric_linspace, chunked_series). Pydantic v2 emits
+this as a ``oneOf`` in the JSON schema with proper field-level constraints.
 """
 
 from __future__ import annotations
@@ -190,8 +190,76 @@ class _NumericLinspace(BaseModel):
     params: _NumericLinspaceParams
 
 
+class _ChunkedSeriesParams(BaseModel):
+    """Tile a series ``[start + halo, series_length)`` into contiguous chunks.
+
+    Materializes one task per chunk (crossed with ``extra_axes``), each
+    carrying its ``chunk_start`` / ``chunk_end`` / ``halo`` bounds. The
+    scoring space is tiled into ``chunks`` contiguous chunks; the LAST chunk
+    absorbs the remainder so the final ``chunk_end`` equals ``series_length``
+    exactly (no gaps, no overlaps). A run-#11-style executor replays ``halo``
+    bars before each ``chunk_start`` (reading from ``chunk_start - halo``,
+    which stays >= ``start``). Adds a code seat for the bounds arithmetic that
+    a hand-written ``enumerated`` list only ever cross-checked by COUNT — the
+    off-by-one in halo / last-chunk-end otherwise sails through.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    series_length: int = Field(
+        ge=1,
+        description="Length of the full series; the tiled space is [start + halo, series_length).",
+    )
+    chunks: int = Field(
+        ge=1, description="Number of contiguous chunks; the last absorbs the remainder."
+    )
+    halo: int = Field(
+        ge=0,
+        description="Bars each task replays before its chunk_start (so it reads from chunk_start - halo).",
+    )
+    start: int = Field(default=0, description="First index of the series (default 0).")
+    extra_axes: dict[str, list[Any]] | None = Field(
+        default=None,
+        description="Optional named axes multiplied against the chunk grid (bucket x chunk). Each must have >=1 value.",
+    )
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> _ChunkedSeriesParams:
+        # Mirrors interview._validate_chunked_series so a bad recipe fails at
+        # the schema boundary too (the cartesian-product empty-axes precedent).
+        if self.start + self.halo >= self.series_length:
+            raise ValueError(
+                f"chunked_series requires start + halo < series_length; got "
+                f"start={self.start}, halo={self.halo}, series_length={self.series_length}"
+            )
+        span = self.series_length - self.start - self.halo
+        if span // self.chunks < 1:
+            raise ValueError(
+                f"chunked_series chunk width < 1: span {span} with chunks="
+                f"{self.chunks} leaves an empty chunk"
+            )
+        empties = [name for name, vals in (self.extra_axes or {}).items() if not vals]
+        if empties:
+            raise ValueError(
+                f"chunked_series extra_axes must each have >=1 value; empty: {empties}"
+            )
+        return self
+
+
+class _ChunkedSeries(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["chunked_series"]
+    params: _ChunkedSeriesParams
+
+
 _TaskGenerator = Annotated[
-    _Enumerated | _CartesianProduct | _ItemsXSeeds | _NumericLogspace | _NumericLinspace,
+    _Enumerated
+    | _CartesianProduct
+    | _ItemsXSeeds
+    | _NumericLogspace
+    | _NumericLinspace
+    | _ChunkedSeries,
     Field(discriminator="kind"),
 ]
 
@@ -878,7 +946,7 @@ class InterviewSpec(BaseModel):
         description=(
             "Optional opt-in: when present, the materializer "
             "regenerates tasks.py from a typed recipe instead of "
-            "consuming the agent-written one. The five shapes cover "
+            "consuming the agent-written one. The six shapes cover "
             "common ground without locking out exotic campaigns. "
             "Materializer cross-checks the produced task count "
             "against intent.task_count before any disk writes."
