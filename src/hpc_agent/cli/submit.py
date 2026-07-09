@@ -11,9 +11,12 @@ auto-dispatcher cannot model:
 * :func:`cmd_submit_flow` — auto-routes to :func:`cmd_submit_flow_batch`
   when ``spec.specs`` is a list; injects ``--partial-ok`` into the spec
   dict before validation; dry-run shape diverges from success.
-* :func:`cmd_submit_flow_batch` — runs TWO schema passes (wrapper +
-  per-entry against ``submit_flow.input.json``) and the dry-run shape
-  surfaces ``would_launch``/``shared_targets`` instead of ``results``.
+* :func:`cmd_submit_flow_batch` — injects ``--partial-ok`` /
+  ``--invalidate-on-code-change`` into EVERY entry (flag wins over the
+  per-entry spec value, matching the single-spec contract); runs TWO
+  schema passes (wrapper + per-entry against ``submit_flow.input.json``)
+  and the dry-run shape surfaces ``would_launch``/``shared_targets``
+  instead of ``results``.
 
 Helpers come from :mod:`hpc_agent.cli._helpers` (the adapter SDK) —
 external plugins import the same symbols, so the adapter contract here
@@ -179,6 +182,26 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     from hpc_agent.ops.submit_flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
+    # Honor the shared submit-flow CLI levers for batch shapes too:
+    # ``cmd_submit_flow`` auto-routes a ``{"specs": [...]}`` spec here BEFORE
+    # its single-spec flag injection runs, and this handler re-loads the spec
+    # from disk — without this injection both flags were silently discarded
+    # for batches (the standalone verb reaches here with neither flag set;
+    # ``getattr`` default keeps it a no-op). Flag wins over the per-entry spec
+    # value, the same contract as the single-spec path; a False/absent flag
+    # leaves entries untouched. Injected before validation so the schema
+    # passes judge the shape that actually runs.
+    flag_overrides = {
+        key: True
+        for key in ("partial_ok", "invalidate_on_code_change")
+        if getattr(args, key, False)
+    }
+    if flag_overrides and isinstance(raw, dict) and isinstance(raw.get("specs"), list):
+        raw = dict(raw)
+        raw["specs"] = [
+            {**entry, **flag_overrides} if isinstance(entry, dict) else entry
+            for entry in raw["specs"]
+        ]
     # Wrapper-shape validation (object with `specs` array, per-entry
     # required keys via submit_flow_batch.input.json), then full per-entry
     # validation against submit_flow.input.json. The two schemas overlap

@@ -54,7 +54,7 @@ A closed-loop campaign's `.hpc/tasks.py` **is** the strategy. Scaffold it with `
 
 - **ask/tell run ONLY on the orchestrator; compute nodes call ONLY `resolve(task_id)`.** The optimizer import is local to `_propose`; proposals are indexed by completed count (load-idempotent).
 - **`trial_token` is the reconciliation key** — stripped from `cmd_sha` (never busts dedup) but exported as `$HPC_KW_TRIAL_TOKEN` and re-paired with results; opaque bytes the framework never interprets.
-- **`_optuna_trial_number` (or equivalent unique marker) is mandatory on path B** — without it repeat params collide on `cmd_sha`, the second iteration dedupes, and the campaign silently collapses. `campaign-greenlight`'s validation surfaces `missing_stochastic_marker` as a hard gate.
+- **`_optuna_trial_number` (or equivalent unique marker) is mandatory on path B** — without it repeat params collide on `cmd_sha`, the second iteration dedupes, and the campaign silently collapses. `campaign-greenlight`'s validation surfaces `stochastic_marker_missing` as a hard gate.
 - **Custom reduce is an `aggregate_cmd` on the sidecar, run cluster-side** (env-var I/O; pulls back one JSON).
 
 See [campaign-lifecycle.md](../../../../docs/internals/campaign-lifecycle.md) and [campaign-seam.md](../../../../docs/design/campaign-seam.md).

@@ -1024,6 +1024,8 @@ def verify_canary(
             f"to guess 'slurm' and risk misrouting the SGE log fetch"
         )
 
+    from hpc_agent.state.runs import read_job_task_spans
+
     logs = fetch_task_logs(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
@@ -1032,6 +1034,11 @@ def verify_canary(
         scheduler=scheduler,
         task_ids=[0],
         lines=50,
+        # A 1-task canary is never waved, so its sidecar carries no spans and
+        # this resolves to None (the global probe) — threaded anyway so every
+        # fetch_task_logs call site shares one contract, and read_job_task_spans
+        # never raises.
+        job_task_spans=read_job_task_spans(experiment_dir, canary_run_id),
     )
     stderr_tail = ""
     log_path: str | None = None

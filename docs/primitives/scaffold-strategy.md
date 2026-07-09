@@ -30,7 +30,7 @@ space** — never the ask/tell plumbing, the `trial_token` round-trip, or the
 Reach for this whenever the sweep is **adaptive** — ask/tell, Bayesian
 optimization (Optuna/Ax), population-based training, walk-forward — i.e. when a
 later iteration's parameters depend on earlier iterations' results. That is the
-[hpc-campaign](../../src/slash_commands/skills/hpc-campaign/SKILL.md) territory;
+[hpc-campaign](../../src/hpc_agent/slash_commands/skills/hpc-campaign/SKILL.md) territory;
 do not hand-roll an `sbatch` controller and do not `Read` the framework's
 strategy source to infer the contract — it is stated, load-bearing, in that
 skill's **Strategy authoring contract** section.

@@ -39,7 +39,7 @@ def test_real_tree_is_clean() -> None:
 def _skill(tmp_path: Path, body: str, *, name: str = "hpc-demo") -> Path:
     """Write *body* as a SKILL.md under a synthetic scan root and return the root."""
     root = tmp_path / "src"
-    p = root / "slash_commands" / "skills" / name / "SKILL.md"
+    p = root / "hpc_agent" / "slash_commands" / "skills" / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return root
@@ -119,7 +119,7 @@ def test_placeholder_destination_is_clean(tmp_path: Path) -> None:
 
 def test_allowlist_exempts_a_path(tmp_path: Path, monkeypatch) -> None:
     root = _skill(tmp_path, 'Debug with `ssh usc-discovery "ls"`.\n', name="hpc-debug")
-    rel = "slash_commands/skills/hpc-debug/SKILL.md"
+    rel = "hpc_agent/slash_commands/skills/hpc-debug/SKILL.md"
     assert lint.main(root) == 1  # fires without the exemption
     monkeypatch.setattr(lint, "ALLOWLIST", frozenset({rel}))
     assert lint.main(root) == 0  # cited exemption clears it

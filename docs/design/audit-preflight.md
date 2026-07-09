@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # audit-preflight — the GO/NO-GO brief for the audit loop
 
 **Status: PLANNED, USER-RULED into the slate (2026-07-07, during run #10 —

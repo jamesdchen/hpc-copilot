@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_SKILLS = REPO_ROOT / "src" / "slash_commands" / "skills"
+_SKILLS = REPO_ROOT / "src" / "hpc_agent" / "slash_commands" / "skills"
 
 # (skill_id, first block verb the relay must start).
 _FIRST_BLOCK = {

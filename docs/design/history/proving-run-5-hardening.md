@@ -1,3 +1,6 @@
+---
+status: retro
+---
 # Proving run #5 — structural hardening: the nudge is the last hand-authoring surface
 
 **Status:** DRAFT — findings + plan from proving run #5. Waves 1–2 SHIPPED this
@@ -9,8 +12,8 @@ boundary.
 **Origin:** Proving run #5 against real clusters (demo `C:\Users\james\demo-hpc`,
 `monte_carlo_pi`, 20 seeds), driven through `/submit-hpc` → the block-drive
 surface, across a discovery→hoffman2 cluster retarget under a live canary.
-Companion to [human-amplification-blocks.md](human-amplification-blocks.md) (the
-§2 propose→`y`/nudge primitive) and [block-drive.md](block-drive.md) (the §6
+Companion to [human-amplification-blocks.md](../human-amplification-blocks.md) (the
+§2 propose→`y`/nudge primitive) and [block-drive.md](../block-drive.md) (the §6
 code-driven chain); this hardens both where they *leak in practice*.
 
 ---
@@ -45,7 +48,7 @@ judgment — and a verb should apply that delta to the journaled `resolved` spec
 and **re-derive everything the delta invalidates**. The model cannot drop
 `job_env` because it never touches `job_env`; it names one field and code
 recomputes the rest. This is the determinism boundary
-([engineering-principles.md](../internals/engineering-principles.md)) applied to
+([engineering-principles.md](../../internals/engineering-principles.md)) applied to
 its last hold-out: *judgment in the LLM (the delta), mechanism in the verb (the
 re-resolve).*
 

@@ -1,8 +1,11 @@
+---
+status: shipped
+---
 # Design: parallel canvassing during worker startup
 
 > **Status:** implemented. Tracks
 > [#286](https://github.com/jamesdchen/hpc-agent/issues/286).
-> Shipped: `src/slash_commands/commands/submit-hpc.md` (the parallel-startup
+> Shipped: `src/hpc_agent/slash_commands/commands/submit-hpc.md` (the parallel-startup
 > flow). Slash-side only — the `hpc-submit` skill and the worker contract
 > are unchanged.
 

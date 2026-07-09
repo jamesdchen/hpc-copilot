@@ -1,3 +1,6 @@
+---
+status: retro
+---
 # Proving run #2 — structural hardening: close the agent's improvisation affordances
 
 **Status:** DRAFT — findings + plan from proving run #2. Implementation held until
@@ -6,7 +9,7 @@ code mid-run mutates the running flow).
 **Date:** 2026-07-04
 **Origin:** Proving run #2 against real UCLA Hoffman2 (demo `C:\Users\james\demo-hpc`,
 `monte_carlo_pi`, 10 seeds), driven through the block-drive / MCP surface.
-Companion to [human-amplification-blocks.md](human-amplification-blocks.md); this
+Companion to [human-amplification-blocks.md](../human-amplification-blocks.md); this
 hardens its §1 principle where that principle *leaks in practice*.
 
 ---
@@ -164,5 +167,5 @@ checks over durable records*, which is the pattern every future conduct rule
 should follow. When a new conduct rule cannot be given a mechanism, that is a
 design smell in the rule.
 
-See [human-amplification-blocks.md](human-amplification-blocks.md) §1/§5/§6 and
-[block-drive.md](block-drive.md).
+See [human-amplification-blocks.md](../human-amplification-blocks.md) §1/§5/§6 and
+[block-drive.md](../block-drive.md).

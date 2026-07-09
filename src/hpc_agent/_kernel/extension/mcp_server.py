@@ -797,7 +797,9 @@ def _read_command_md(name: str) -> str | None:
     try:
         from importlib.resources import files
 
-        body = (files("slash_commands") / "commands" / f"{name}.md").read_text(encoding="utf-8")
+        body = (files("hpc_agent.slash_commands") / "commands" / f"{name}.md").read_text(
+            encoding="utf-8"
+        )
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     return body

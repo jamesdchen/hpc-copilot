@@ -1,6 +1,6 @@
 # WS4 lint + contract — design decisions
 
-The WS4 implementation (`scripts/lint_skills.py` + `tests/contract/*`)
+The WS4 implementation (`scripts/lint_skills.py` + `tests/contracts/*`)
 landed with 5 open design questions in its report. Verdicts + the
 landed implementation below.
 
@@ -21,7 +21,7 @@ in `scripts/lint_skills.py`. The rationale lives in each rule's
 
 ## 2. Slash-command wrappers
 
-> The `/submit-hpc`-style files under `src/slash_commands/commands/` are
+> The `/submit-hpc`-style files under `src/hpc_agent/slash_commands/commands/` are
 > human-dialog wrappers and legitimately need free-form prose. Currently
 > out of scope — should the linter have a separate looser mode for them,
 > or just stay silent?
@@ -32,7 +32,7 @@ cluster?") — applying the agent-skill lint rules to them would force
 either many false positives or a confusing severity ladder.
 
 **Landed**: `SKILLS_DIR` in `lint_skills.py` is already
-`src/slash_commands/skills/` and never walks into `commands/`. No code
+`src/hpc_agent/slash_commands/skills/` and never walks into `commands/`. No code
 change required — the silent skip is the design.
 
 ## 3. `step-without-action-ending` over-fires

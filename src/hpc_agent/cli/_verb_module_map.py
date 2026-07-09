@@ -77,10 +77,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'notebook-record-config': ('notebook-record-config', 'hpc_agent.ops.notebook.record_config_op'),
     'notebook-record-receipt': ('notebook-record-receipt', 'hpc_agent.ops.notebook.record_receipt_op'),
     'notebook-scaffold-template': ('notebook-scaffold-template', 'hpc_agent.ops.notebook.scaffold_template_op'),
-    'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook_status'),
-    'pack-bind': ('pack-bind', 'hpc_agent.ops.pack.bind_op'),
-    'pack-record-receipt': ('pack-record-receipt', 'hpc_agent.ops.pack.record_receipt_op'),
-    'pack-status': ('pack-status', 'hpc_agent.ops.pack.status_op'),
+    'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook.status_op'),
     'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
     'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),
     'prepare-followup-specs': ('prepare-followup-specs', 'hpc_agent.ops.prepare_followup_specs'),
@@ -126,6 +123,5 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'wait-detached': ('wait-detached', 'hpc_agent.ops.monitor.wait_detached'),
     'walk-submit-ambiguities': ('walk-submit-ambiguities', 'hpc_agent.ops.walk_submit_ambiguities'),
     'watcher-install': ('watcher-install', 'hpc_agent.ops.monitor.watcher_install'),
-    'worker-log-digest': ('worker-log-digest', 'hpc_agent.ops.worker_log_digest'),
     'write-run-sidecar': ('write-run-sidecar', 'hpc_agent.ops.write_run_sidecar'),
 }

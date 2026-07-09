@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # MCP elicitation — the bidirectional protocol upgrade (design + implementation plan)
 
 **Status: IMPLEMENTED (2026-07-08; E1–E7 landed, drift log at foot).** This plan settles how

@@ -1,3 +1,6 @@
+---
+status: retro
+---
 # Comparison: Bohrium + SciMaster (arXiv:2512.20469) vs. hpc-agent
 
 > **Status:** analysis. No core changes proposed here directly; this records

@@ -395,7 +395,7 @@ def describe(*, name: str) -> dict[str, Any]:
     """
     from importlib.resources import files
 
-    skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
+    skill_md = files("hpc_agent.slash_commands") / "skills" / name / "SKILL.md"
     if skill_md.is_file():
         body = skill_md.read_text(encoding="utf-8")
         if body.startswith("---"):

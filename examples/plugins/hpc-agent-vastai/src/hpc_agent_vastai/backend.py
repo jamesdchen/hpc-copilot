@@ -63,6 +63,12 @@ class VastAIBackend(HPCBackend):
     scheduler_name = "vastai"
     template_ext = ".sh"
     supports_test_only_eta = False
+    # Control plane is the marketplace API, not a login node: preflight,
+    # deploy, and reconcile must not run SSH-target validation or rsync
+    # against this backend (per-instance SSH is a data-plane detail).
+    # ``from_build_context`` below ignores the ctx SSH fields for the
+    # same reason.
+    requires_ssh = False
 
     def __init__(
         self,
@@ -118,6 +124,9 @@ class VastAIBackend(HPCBackend):
         job_env: dict[str, str],
         *,
         cwd: Path | None = None,
+        per_wave_extra_flags: list[str] | None = None,
+        gate_job_ids: list[str] | None = None,
+        setup_log_dir: bool = True,
     ) -> list[tuple[int, str, str]]:
         """Rent instances and launch one executor container per batch.
 

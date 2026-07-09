@@ -881,7 +881,7 @@
     "input_schema": "notebook_status.input.json",
     "name": "notebook-status",
     "output_schema": "notebook_status.output.json",
-    "python": "hpc_agent.ops.notebook_status.notebook_status",
+    "python": "hpc_agent.ops.notebook.status_op.notebook_status",
     "side_effects": [
       "file_write"
     ],

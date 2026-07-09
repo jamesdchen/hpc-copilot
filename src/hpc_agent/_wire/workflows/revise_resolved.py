@@ -1,7 +1,7 @@
 """Pydantic models for the ``revise-resolved`` workflow primitive.
 
 ``revise-resolved`` is proving-run #5 wave 5.1 (the ROOT fix,
-``docs/design/proving-run-5-hardening.md`` §3/§4): it removes the last
+``docs/design/history/proving-run-5-hardening.md`` §3/§4): it removes the last
 hand-authoring surface in the submit loop — the nudge. Instead of the LLM
 folding a spec-changing nudge into a hand-written spec JSON (where ``job_env``
 got dropped, finding 13; ``EXECUTOR`` mangled, finding 17; ``scope_id``

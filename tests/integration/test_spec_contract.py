@@ -403,7 +403,7 @@ def test_every_spec_model_verb_has_a_schema_and_is_a_basemodel() -> None:
 
     Catches a model added without a schema (or a verb whose model went missing) —
     the light mapping check, distinct from the JSON-roundtrip in
-    ``tests/contract/test_schema_roundtrip.py``.
+    ``tests/contracts/test_schema_roundtrip.py``.
     """
     verbs = _spec_model_verbs()
     assert verbs, "no spec_model verbs found — registry not populated?"

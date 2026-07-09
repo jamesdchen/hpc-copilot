@@ -15,7 +15,7 @@ PBT? → Path B.
 ```
 
 **Path A:** walk the user through `tasks.py` with the manual grid.
-**Path B:** scaffold with `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir .` and customize only the search space. Critical: **add `_optuna_trial_number` (or equivalent unique marker) to kwargs** so each iteration's `cmd_sha` differs even on repeat params — without it the framework dedupes the second iteration and the campaign collapses. `campaign-greenlight`'s validation enforces this via `missing_stochastic_marker`.
+**Path B:** scaffold with `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir .` and customize only the search space. Critical: **add `_optuna_trial_number` (or equivalent unique marker) to kwargs** so each iteration's `cmd_sha` differs even on repeat params — without it the framework dedupes the second iteration and the campaign collapses. `campaign-greenlight`'s validation enforces this via `stochastic_marker_missing`.
 
 ### Slug
 
@@ -53,7 +53,7 @@ Skill("hpc-campaign", {
   | `literal_value_not_allowed` | Fix the value in `tasks.py.resolve(i)` per `evidence.allowed`. |
   | `missing_parameter` | Remove the kwarg or add it to the executor signature. |
   | `walltime_below_quantile` | Raise `requested_walltime_sec` to `evidence.quantile_sec`. |
-  | `missing_stochastic_marker` (Path B) | Add `_optuna_trial_number` to kwargs. |
+  | `stochastic_marker_missing` (Path B) | Add `_optuna_trial_number` to kwargs. |
 
   There is no `--force` by design. If a rule is wrong for the project, edit `.hpc/playbook.yaml` (version-controlled).
 

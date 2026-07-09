@@ -5,7 +5,7 @@
 > fully unit-tested, but its *payoff* — a pool that stays full across iteration
 > boundaries — is only observable on a real cluster. Per
 > [`docs/design/campaign-async-refill.md`](../design/campaign-async-refill.md) §10
-> and the [implementation plan](../design/campaign-async-refill-implementation-plan.md)
+> and the [implementation plan](../design/history/campaign-async-refill-implementation-plan.md)
 > Phase 3, the feature stays experimental until **all four** criteria below pass
 > on a real **CARC** or **Hoffman2** campaign. Green unit tests are necessary,
 > not sufficient.

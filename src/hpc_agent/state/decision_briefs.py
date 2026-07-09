@@ -1,7 +1,7 @@
 """Decision briefs — the durable record of the brief a block emitted at a
 decision boundary (conduct rule 9, the provenance gate).
 
-Design origin: ``docs/design/proving-run-2-hardening.md`` §6 (rule 9).
+Design origin: ``docs/design/history/proving-run-2-hardening.md`` §6 (rule 9).
 Proving run #3 surfaced the failure this store closes: the agent
 hand-injected a ``resolved`` field (``result_dir_template``) that no brief
 had recommended and no human nudge named — a silent LLM default paper-over.

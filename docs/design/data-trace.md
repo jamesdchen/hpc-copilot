@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # The data trace — stage receipts for the pipeline (the audit's runtime twin)
 
 **Status: PLANNED, USER-RULED (2026-07-08; consolidated from six amendments

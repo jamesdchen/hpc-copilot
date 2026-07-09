@@ -778,11 +778,13 @@ def _materialize_tasks_py(
     inject = dict(inject_kwargs or {})
     inject_prefix = f"_INJECT = {inject!r}\n" if inject else ""
     # When inject is non-empty, every resolve() return gets merged with
-    # _INJECT. Inject takes second place (``{**task, **_INJECT}``) so an
-    # explicit task kwarg with the same name wins — defensive against an
+    # _INJECT. Inject takes first place (``{**_INJECT, **task}``) so an
+    # explicit task kwarg with the same name wins — a swept axis is
+    # per-task, the inject value is only the constant fallback (the
+    # ``fixed_params`` wire contract), and it also defends against an
     # axis named ``foo_sha`` colliding with an inject key.
     merge_resolve = (
-        "def resolve(i: int) -> dict: return {**_TASKS[i], **_INJECT}\n"
+        "def resolve(i: int) -> dict: return {**_INJECT, **_TASKS[i]}\n"
         if inject
         else "def resolve(i: int) -> dict: return _TASKS[i]\n"
     )

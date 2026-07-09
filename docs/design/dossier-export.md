@@ -1,3 +1,6 @@
+---
+status: shipped
+---
 # Design: export-dossier — a store-typed evidence bundle
 
 Status: **SHIPPED** (dossier-export wave). The bundler is

@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Live conformance — the registration watchdog
 
 **Status: PLANNED (2026-07-07), not yet implemented — sequenced after the

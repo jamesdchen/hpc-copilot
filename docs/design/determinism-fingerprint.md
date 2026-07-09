@@ -1,3 +1,6 @@
+---
+status: plan
+---
 # Design: the determinism fingerprint — measure, don't ask
 
 Status: **PLANNED (2026-07-07), not yet implemented.** User-co-designed

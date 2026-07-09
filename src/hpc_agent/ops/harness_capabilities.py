@@ -29,7 +29,7 @@ Fail-open throughout: an unreadable / absent ``settings.json`` degrades to "no
 channels detected", never an exception — a broken config read must not wedge a
 read-only probe. Pure local read: no SSH, no scheduler, no write, no state moved.
 
-This file lives at the ``ops/`` *role root* (sibling to ``notebook_status.py`` /
+This file lives at the ``ops/`` *role root* (sibling to ``export_dossier.py`` /
 ``attention_op.py``, NOT inside a subject package) because it reads across
 subjects — the harness-config needles in :mod:`hpc_agent.agent_assets`, the
 utterance-log locator in :mod:`hpc_agent.state.utterances`, and the MCP server's

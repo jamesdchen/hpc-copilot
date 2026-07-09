@@ -21,7 +21,7 @@ from pathlib import Path
 from hpc_agent.ops.submit.field_partition import REQUIRED_CALLER_FIELDS
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_WRAP_SKILL = _REPO_ROOT / "src/slash_commands/skills/hpc-wrap-entry-point/SKILL.md"
+_WRAP_SKILL = _REPO_ROOT / "src/hpc_agent/slash_commands/skills/hpc-wrap-entry-point/SKILL.md"
 
 # The distinctive sentence carrying the rule — kept in lockstep with the SKILL.
 _MARKER = "carries no authorship"
