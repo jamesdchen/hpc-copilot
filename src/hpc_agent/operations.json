@@ -132,6 +132,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "export_attestations.input.json",
+    "name": "export-attestations",
+    "output_schema": "export_attestations.output.json",
+    "python": "hpc_agent.ops.export_attestations.export_attestations",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Project a run's sealed dossier evidence into portable in-toto Statements (one per sealed store entry), each wrapped in an unsigned DSSE envelope, as a JSONL stream ecosystem tooling can verify without hpc-agent. Delegates the gather to export-dossier (the stores are never walked twice); subject digests are copied verbatim and record bytes ride verbatim in the predicate — the export never parses what it attests. --include-lineage widens it to the whole supersession chain. Pure local reads + one local write, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "export_dossier.input.json",

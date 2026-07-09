@@ -1,0 +1,82 @@
+{
+  "note": "normalize_source vectors: newlines unified (CRLF and lone CR -> LF) then trailing whitespace stripped per line (str.rstrip, which covers \\t \\v \\f, not only space); nothing else. Reference: state/audit_source.py::normalize_source / ::sha256_normalized. `input_b64` / `expected_normalized_b64` are base64 of the exact UTF-8 bytes so CRLF/CR survive git EOL normalization. `expected_sha256` is sha256 of the normalized UTF-8 bytes (== sha256_normalized(input)).",
+  "cases": [
+    {
+      "name": "crlf",
+      "note": "CRLF -> LF",
+      "input_b64": "YQ0KYg0K",
+      "expected_normalized_b64": "YQpiCg==",
+      "expected_sha256": "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2"
+    },
+    {
+      "name": "lone_cr",
+      "note": "lone CR (old-mac) -> LF",
+      "input_b64": "YQ1iDWM=",
+      "expected_normalized_b64": "YQpiCmM=",
+      "expected_sha256": "ea7fb08b7a2dc4619ffb7c7bb38d95a2047935fa165d71b12efd3852a2e6d0cc"
+    },
+    {
+      "name": "mixed_eol",
+      "note": "CRLF + lone CR + LF all unify to LF",
+      "input_b64": "eA0KeQ16Cg==",
+      "expected_normalized_b64": "eAp5CnoK",
+      "expected_sha256": "81884b5f2cb68edc6286363dcc4699a913a2d5ba05818d0fdc43ba68bb990bd8"
+    },
+    {
+      "name": "trailing_spaces_tabs",
+      "note": "per-line rstrip: trailing spaces/tabs stripped, LEADING kept, last line rstripped too",
+      "input_b64": "YSAgCmIJCiAgYyAg",
+      "expected_normalized_b64": "YQpiCiAgYw==",
+      "expected_sha256": "9c24fdf6402659c005c9d4a338aef6f14c49fc20928cdd1af240d70107cf62bc"
+    },
+    {
+      "name": "trailing_ws_crlf_combo",
+      "note": "CRLF unify + trailing-ws strip; interior indentation preserved",
+      "input_b64": "Y29kZSA9IDEgICANCiAgICByZXR1cm4NCg==",
+      "expected_normalized_b64": "Y29kZSA9IDEKICAgIHJldHVybgo=",
+      "expected_sha256": "d5622b3443337c72145ddacbd86f344737e5cc4be3b37071de2533861b182975"
+    },
+    {
+      "name": "no_trailing_newline",
+      "note": "no final newline is added",
+      "input_b64": "YQpi",
+      "expected_normalized_b64": "YQpi",
+      "expected_sha256": "7e18f737311b2dc3b2f269dd78396b0351f14fb66efa879f768cb23181883c78"
+    },
+    {
+      "name": "empty",
+      "note": "empty stays empty",
+      "input_b64": "",
+      "expected_normalized_b64": "",
+      "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "only_newlines",
+      "note": "blank lines survive; only EOLs unify",
+      "input_b64": "DQoNCg==",
+      "expected_normalized_b64": "Cgo=",
+      "expected_sha256": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070"
+    },
+    {
+      "name": "unicode_line_trailing_space",
+      "note": "trailing space stripped, multibyte char preserved, CRLF->LF",
+      "input_b64": "Y2Fmw6kgDQo=",
+      "expected_normalized_b64": "Y2Fmw6kK",
+      "expected_sha256": "7b49b9e063bd91a4f9252b413261f5557b9c570aa61516989499f64a62dbcdd6"
+    },
+    {
+      "name": "vtab_formfeed_trailing",
+      "note": "str.rstrip() strips \\t \\v \\f (more than ASCII space) when TRAILING -> this line collapses to 'a'",
+      "input_b64": "YQkLDCAK",
+      "expected_normalized_b64": "YQo=",
+      "expected_sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7"
+    },
+    {
+      "name": "formfeed_interior_kept",
+      "note": "an interior form-feed is NOT touched (only trailing whitespace)",
+      "input_b64": "YQxiCg==",
+      "expected_normalized_b64": "YQxiCg==",
+      "expected_sha256": "c0e222f364db4094c86f70b169abb62bf6498d46ff31b8cabdf7bf6253d3d90a"
+    }
+  ]
+}

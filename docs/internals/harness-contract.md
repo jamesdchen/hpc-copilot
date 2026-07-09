@@ -21,6 +21,30 @@ move a trust anchor OUT of the model's reach; where a harness cannot provide
 it, the machinery degrades HONESTLY to a weaker, named tier rather than
 pretending the guarantee still holds.
 
+## Contract version
+
+Contract version: 1.0.0
+
+This is the SemVer of the contract this page specifies. It has ONE home in
+code — `HARNESS_CONTRACT_VERSION` in `ops/harness_capabilities.py` — and this
+line, that constant, and the conformance kit's stamped verdict
+(`hpc_agent.conformance.report.CONTRACT_VERSION`) are pinned mutually equal by
+`tests/contracts/test_harness_contract.py`. The `harness-capabilities` verb
+reports it to a negotiating harness as its `harness_contract_version` result
+field. The conformance verdict line names only the MAJOR — `conforming:
+harness contract v1 (kit hpc-agent X.Y.Z)` (`docs/design/conformance-kit.md`
+D-K6).
+
+**Deprecation posture.** Within major 1 the contract is **ADDITIVE-ONLY**: a
+new capability, a new assertion, or a new conforming implementation SHAPE (as
+capability 2's ACT gained the response-gateway alongside the Stop hook) may
+land as a MINOR bump, but only if both reference adapters stay conforming — a
+previously-conforming harness failing a minor is the definition of a breaking
+change and forces a MAJOR. Capability REMOVAL never happens. The sha
+canonicalization (below) is the canonical MAJOR trigger: changing it
+drift-revokes every stored attestation, so it can only ever ship as v2 with a
+`canon_version` field on new records, never silently.
+
 ## The three capabilities
 
 A conforming harness MUST provide all three. Each names what it provides, the

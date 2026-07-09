@@ -54,7 +54,19 @@ from hpc_agent._wire.queries.harness_capabilities import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
-__all__ = ["harness_capabilities"]
+__all__ = ["HARNESS_CONTRACT_VERSION", "harness_capabilities"]
+
+# The ONE home of the harness-contract SemVer (conformance-kit D-K6/K10). This
+# constant is the single source of truth for three surfaces pinned equal by
+# ``tests/contracts/test_harness_contract.py``: the ``harness-capabilities``
+# result field below, the ``docs/internals/harness-contract.md`` version line,
+# and the conformance kit's stamped verdict
+# (``hpc_agent.conformance.report.CONTRACT_VERSION``, which imports THIS). It
+# lives beside the verb (not in the kit) because the verb reports it to any
+# harness at negotiation time, and the kit does not ship in every install. SemVer
+# posture (harness-contract.md "Contract version"): within major 1 the contract
+# is ADDITIVE-ONLY; the sha canonicalization is the canonical major trigger.
+HARNESS_CONTRACT_VERSION = "1.0.0"
 
 _log = logging.getLogger(__name__)
 
@@ -258,4 +270,5 @@ def harness_capabilities(
                 "code; no tier claim is made either way."
             ),
         },
+        harness_contract_version=HARNESS_CONTRACT_VERSION,
     )

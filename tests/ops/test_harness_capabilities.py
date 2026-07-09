@@ -157,6 +157,17 @@ def test_tier_consequences_present_for_every_capability(claude_dir: Path, tmp_pa
     assert result.tier_consequences["relay_enforcement"]
 
 
+def test_result_stamps_harness_contract_version(claude_dir: Path, tmp_path: Path) -> None:
+    # The E3-a-reserved additive field (conformance-kit K10): the verb reports the
+    # ONE constant beside it, never a re-typed literal. The three-way agreement
+    # (doc line == constant == kit stamp) is pinned in test_harness_contract.py.
+    from hpc_agent.ops.harness_capabilities import HARNESS_CONTRACT_VERSION
+
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    assert result.harness_contract_version == HARNESS_CONTRACT_VERSION
+
+
 def test_spec_accepts_empty_rejects_bogus_key() -> None:
     # {} is the valid empty spec (all-optional).
     HarnessCapabilitiesSpec.model_validate({})

@@ -359,3 +359,30 @@ from the `@primitive` registry, then auto-stages the result. Without it
 you'll see CI fail on the corresponding `--check` gates and have to
 push a follow-up `chore: regenerate ...` commit.
 
+### Harness conformance kit
+
+hpc-agent's authorship/relay/backgrounding guarantees are specified by a
+[harness contract](docs/internals/harness-contract.md) (SemVer, `Contract
+version: 1.0.0`) that any harness — Claude Code, a jupytext notebook render, a
+third — can implement. The conformance kit (`hpc_agent.conformance`) is the TCK
+that certifies a candidate against that contract. A harness supplies an adapter
+(`hpc_agent.conformance.adapter.HarnessAdapter`) and runs the kit against it:
+
+```bash
+# Address the kit modules by FILE PATH (or their conformance/ directory), NOT
+# `--pyargs`: the kit's package conftest registers `--harness-adapter` during
+# option parsing, which requires the conftest to be discovered along the arg
+# path — `pytest --pyargs hpc_agent.conformance` collects it too late and the
+# option is unrecognized. This is a known pytest conftest/`--pyargs` ordering
+# quirk; the file/directory form is the supported invocation.
+pytest -o addopts="" src/hpc_agent/conformance/ \
+  --harness-adapter your.module:build
+```
+
+The run stamps a verdict: `conforming: harness contract v1 (kit hpc-agent
+X.Y.Z)` when all three capabilities pass, or `partial: <caps> …` with each
+skipped capability listed at its contract-named degraded tier. The two shipped
+reference adapters (`hpc_agent.conformance.adapters.claude_code:build`, fully
+conforming; `…notebook_render:build`, honestly partial) run the kit against
+themselves in CI. See [`docs/design/conformance-kit.md`](docs/design/conformance-kit.md).
+

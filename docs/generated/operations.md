@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**158 operations total**: 131 primitive atoms + 27 workflow atoms.
+**156 operations total**: 129 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (72)
+## `query` (70)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -32,13 +32,11 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-replay`](../primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` | `_(none)_` | — | — |
 | [`campaign-status`](../primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `_(none)_` | — | — |
 | [`capabilities`](../primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities [--full]` | `_(none)_` | — | — |
-| [`challenge-status`](../primitives/challenge-status.md) | ✓ | _none_ | `hpc-agent challenge-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`classify-axis-easy`](../primitives/classify-axis-easy.md) | ✓ | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` | `_(none)_` | — | — |
 | [`classify-campaign-path`](../primitives/classify-campaign-path.md) | ✓ | _none_ | `hpc-agent classify-campaign-path --source-path <source_path>` | `_(none)_` | — | — |
 | [`clusters-describe`](../primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `_(none)_` | — | — |
 | [`clusters-list`](../primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `_(none)_` | — | — |
 | [`compute-run-id`](../primitives/compute-run-id.md) | ✓ | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` | `_(none)_` | — | — |
-| [`conformance-status`](../primitives/conformance-status.md) | ✓ | _none_ | `hpc-agent conformance-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`dag-frontier`](../primitives/dag-frontier.md) | ✓ | _none_ | `hpc-agent dag-frontier [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`decide-concurrency`](../primitives/decide-concurrency.md) | ✓ | _none_ | `hpc-agent decide-concurrency [--supports-async] [--remaining-jobs <remaining_jobs>] [--in-flight <in_flight>] [--k-cap <k_cap>]` | `_(none)_` | — | — |
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `_(none)_` | — | — |
@@ -127,11 +125,11 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`archive-dossier`](../primitives/archive-dossier.md) | ✓ | network-upload | `hpc-agent archive-dossier --spec <path>` | `_(none)_` | — | — |
 | [`cluster-reduce`](../primitives/cluster-reduce.md) | ✓ | ssh; sync-pull | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` | `_(none)_` | — | — |
 | [`combine-wave`](../primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave> [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]` | `_(none)_` | — | — |
-| [`conformance-record`](../primitives/conformance-record.md) | ✗ | file_write | `hpc-agent conformance-record --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`data-manifest`](../primitives/data-manifest.md) | ✗ | file_write | `hpc-agent data-manifest [--spec <path>] [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`decorate-entry-point`](../primitives/decorate-entry-point.md) | ✓ | filesystem | `hpc-agent decorate-entry-point --path <path> --function-name <function_name>` | `_(none)_` | — | — |
 | [`doctor-install`](../primitives/doctor-install.md) | ✓ | file_write; scheduler | `hpc-agent doctor-install --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`emit-skill-return`](../primitives/emit-skill-return.md) | ✓ | filesystem | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` | `_(none)_` | — | — |
+| [`export-attestations`](../primitives/export-attestations.md) | ✓ | file_write | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`export-dossier`](../primitives/export-dossier.md) | ✓ | file_write | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`kill`](../primitives/kill.md) | ✓ | ssh; writes-journal | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`mark-run-terminal`](../primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `_(none)_` | — | — |

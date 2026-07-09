@@ -244,6 +244,76 @@ jobs:
             echo "no workflow-template for ${{ matrix.plugin }} — skipping"
           fi
 
+  conformance:
+    # The harness-conformance kit run against our two reference adapters
+    # (``docs/design/conformance-kit.md`` D-K5). Self-conformance in CI: every
+    # push re-certifies that the Claude Code hook cores and the notebook-render
+    # plugin still satisfy the published harness contract — if either fails, the
+    # contract has drifted from the code that implements it.
+    #
+    # Plugins-style ISOLATED for the same reason as the ``plugins`` job: the
+    # notebook leg installs the notebook-render plugin, whose entry point shifts
+    # ``registered_backend_names()``; that registry pollution must never leak into
+    # the core ``test`` matrix. Offline ONLY — the adapters drive the hook cores /
+    # render stack in-process; no live harness, no token, no socket (the
+    # conformance-lane boundary in the design's Q1 watch list).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two reference adapters shipped with the kit. ``claude-code`` is the
+        # FULLY-conforming reference; ``notebook-render`` is honestly PARTIAL
+        # (capability 1 only). Each maps to a ``module.path:factory`` below.
+        adapter: ["claude-code", "notebook-render"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - name: Install core (with test harness) + kit lane deps
+        # ``.[dev]`` FIRST so ``hpc_agent.conformance`` resolves to the workspace
+        # and the kit runs under the repo's pytest harness. ``in-toto`` +
+        # ``securesystemslib`` are dev-deps of THIS lane ONLY (the K7 stock
+        # round-trip ``pytest.importorskip``s them) — installed here like the
+        # plugins job installs jupytext, NEVER in core dependencies (the design's
+        # in-toto boundary rule). The notebook leg additionally needs the render
+        # stack (jupytext/nbformat/nbclient + ipykernel for the ``python3``
+        # kernelspec, nbdime) and the plugin itself installed ``--no-deps`` so the
+        # workspace hpc-agent stays authoritative — mirroring the ``plugins`` job.
+        run: |
+          pip install -e '.[dev]'
+          pip install in-toto securesystemslib
+          if [ "${{ matrix.adapter }}" = "notebook-render" ]; then
+            pip install jupytext nbformat nbclient ipykernel nbdime
+            pip install -e "examples/plugins/hpc-agent-notebook-render" --no-deps
+          fi
+      - name: Run the conformance kit against the ${{ matrix.adapter }} adapter
+        # The kit is addressed by DIRECTORY (not ``--pyargs``, not a file list):
+        # the package ``conftest.py`` in that dir registers ``--harness-adapter``
+        # during initial-path conftest collection — ``--pyargs`` names a module,
+        # not a path, so the option would be unknown at parse time (the quirk the
+        # K4/K6/K8 reports document). Directory form also means the K7 attestation
+        # module joins the run automatically when its branch merges — no file list
+        # to update. ``-o addopts=`` drops the repo's ``-n auto`` so the run stays
+        # single-process and the conformance report's verdict tally (a
+        # session-scoped stash) is coherent in one terminal summary; the verdict
+        # line surfaces in this job log.
+        run: |
+          case "${{ matrix.adapter }}" in
+            claude-code) factory="hpc_agent.conformance.adapters.claude_code:build" ;;
+            notebook-render) factory="hpc_agent.conformance.adapters.notebook_render:build" ;;
+            *) echo "unknown adapter ${{ matrix.adapter }}" >&2; exit 1 ;;
+          esac
+          pytest -o addopts= -p no:cacheprovider -q \
+            src/hpc_agent/conformance/ \
+            --harness-adapter "$factory"
+
   test-windows:
     # Signal-only Windows lane (ref #163): there is otherwise no Windows
     # coverage in CI, so Windows-specific correctness only surfaces during

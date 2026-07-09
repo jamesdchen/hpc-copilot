@@ -18,10 +18,15 @@ no single lint that holds them, so — the drift-guard philosophy of
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOC = _REPO_ROOT / "docs/internals/harness-contract.md"
+
+# The doc's SemVer header line — ``Contract version: 1.0.0`` (D-K6). One capture
+# group is the version; the three-way pin below anchors it to the code constant.
+_DOC_VERSION_RE = re.compile(r"^Contract version:\s*(\d+\.\d+\.\d+)\s*$", re.MULTILINE)
 
 
 def _doc_text() -> str:
@@ -230,6 +235,55 @@ def test_mcp_server_elicitation_flag_is_true_and_backed() -> None:
     )
     assert callable(mcp_server._render_elicitation_prompt), (
         "the flag asserts a code-rendered prompt builder that must exist"
+    )
+
+
+def test_contract_version_stamp_is_the_three_way_agreement() -> None:
+    """K10 version-stamp pin (D-K6, enforcement map "Doc stamp == reported
+    contract version"). The harness contract's SemVer has ONE home —
+    ``ops/harness_capabilities.py::HARNESS_CONTRACT_VERSION`` — and three
+    surfaces MUST agree with it, or a publish ships a lying stamp:
+
+    1. the doc's ``Contract version: X.Y.Z`` header line;
+    2. the constant the ``harness-capabilities`` verb reports;
+    3. the conformance kit's stamped verdict version
+       (``hpc_agent.conformance.report.CONTRACT_VERSION``, re-pointed at the
+       constant in K10).
+
+    The verb's RESULT carries the constant on ``harness_contract_version`` — the
+    additive field E3-a left open — so a negotiating harness reads the same
+    version the doc prints and the kit stamps.
+    """
+    from hpc_agent.conformance.report import CONTRACT_VERSION
+    from hpc_agent.ops.harness_capabilities import (
+        HARNESS_CONTRACT_VERSION,
+        harness_capabilities,
+    )
+
+    match = _DOC_VERSION_RE.search(_doc_text())
+    assert match is not None, (
+        "docs/internals/harness-contract.md must carry a 'Contract version: X.Y.Z' line"
+    )
+    doc_version = match.group(1)
+
+    # SemVer shape (a malformed constant would let the regex above pass a garbage
+    # stamp through unnoticed).
+    assert re.fullmatch(r"\d+\.\d+\.\d+", HARNESS_CONTRACT_VERSION), (
+        f"HARNESS_CONTRACT_VERSION must be SemVer, got {HARNESS_CONTRACT_VERSION!r}"
+    )
+
+    # The three-way agreement.
+    assert doc_version == HARNESS_CONTRACT_VERSION == CONTRACT_VERSION, (
+        "the harness-contract.md version line, HARNESS_CONTRACT_VERSION, and the "
+        "kit report's CONTRACT_VERSION must all agree: "
+        f"doc={doc_version!r} constant={HARNESS_CONTRACT_VERSION!r} "
+        f"kit={CONTRACT_VERSION!r}"
+    )
+
+    # The verb reports the SAME constant on its result (the E3-a-reserved field).
+    result = harness_capabilities(experiment_dir=_REPO_ROOT)
+    assert result.harness_contract_version == HARNESS_CONTRACT_VERSION, (
+        "the harness-capabilities result must stamp harness_contract_version from the ONE constant"
     )
 
 
