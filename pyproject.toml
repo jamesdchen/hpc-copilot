@@ -314,10 +314,10 @@ pytest_add_cli_args = [
     "--deselect=tests/infra/test_atomic_locked_update.py",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest-xdist>=3.8.0",
-]
+# Dev dependencies live in ONE place: the ``dev`` extra above
+# (``pip install -e '.[dev]'`` / ``uv sync --extra dev``). A parallel
+# [dependency-groups] dev list held a duplicate pytest-xdist pin and
+# the two would drift; removed 2026-07-09.
 
 [tool.uv.workspace]
 members = []
