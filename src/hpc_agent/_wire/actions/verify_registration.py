@@ -29,6 +29,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import RunIdStrict
 
+# The C-status contested projection (``docs/design/challenge-attestation.md``
+# C-disclose): reused VERBATIM from the challenge-status query wire — the ONE
+# projection shape every disclosure seat carries (counts + identities, never a
+# severity score). Imported, never re-declared (the one-definition rule); the
+# schema auto-walk inlines it as a shared ``$def``. ``contested`` is ORTHOGONAL to
+# the ``status`` vocabulary (C-status) and is deliberately kept OUT of the
+# ``view_sha`` projection (a challenge filed later must not drift a bound witness —
+# R6) — it rides as an additive top-level result field only.
+from hpc_agent._wire.queries.challenge_status import ContestedCounts
+
 # ── mechanism vocabularies (core-owned) ────────────────────────────────────
 
 # The reduced registration status (R7). ``current`` requires the newest record
@@ -306,6 +316,25 @@ class FieldsBlock(BaseModel):
     )
 
 
+class SlotContested(BaseModel):
+    """One prerequisite slot that has standing challenges against its content_sha.
+
+    C-disclose: a ``contested`` block per prerequisite leg whose ``content_sha`` is
+    challenged. Only slots WITH standing challenges appear (the emitted-only-when-
+    present precedent); ``contested`` is orthogonal to the leg's ``status`` — a
+    ``current`` prerequisite may be ``contested`` (never-blocking, C4). Kept OUT of
+    the ``PrerequisiteLeg`` (and thus out of ``view_sha``) so a challenge filed
+    later never drifts a bound witness (R6).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="prerequisite slot contested block")
+
+    slot: str = Field(description="The chain slot slug whose content_sha is contested (opaque).")
+    contested: ContestedCounts = Field(
+        description="The standing-challenge counts + ids against this slot's content_sha."
+    )
+
+
 class VerifyRegistrationResult(BaseModel):
     """Result of a ``verify-registration`` read — reduced status + per-leg detail.
 
@@ -314,6 +343,12 @@ class VerifyRegistrationResult(BaseModel):
     ``status`` (R8). ``view_sha`` is the canonical-JSON sha of ``brief`` — the
     witness a subsequent registration sign-off must carry (R6), recomputed by
     the gate from the same deterministic projection.
+
+    ``contested`` / ``prerequisite_contested`` are the C-disclose additions: the
+    registration's own standing challenges and the per-slot ones. Both are
+    DISCLOSED, never blocking (C4), orthogonal to ``status`` (C-status), and kept
+    OUT of the ``view_sha`` projection (R6 — a later challenge must not drift a
+    bound witness). Absent when nothing is contested (the all-zero omission).
     """
 
     model_config = ConfigDict(extra="forbid", title="verify-registration output")
@@ -352,4 +387,18 @@ class VerifyRegistrationResult(BaseModel):
     view_sha: str = Field(
         default="",
         description="Canonical-JSON sha of the rendered brief — the view witness a sign-off must carry (R6).",
+    )
+    contested: ContestedCounts | None = Field(
+        default=None,
+        description=(
+            "Standing challenges against the registration itself (C-disclose) — counts + ids, "
+            "orthogonal to status, never blocking. None when uncontested (the all-zero omission)."
+        ),
+    )
+    prerequisite_contested: list[SlotContested] = Field(
+        default_factory=list,
+        description=(
+            "Per-slot standing challenges — one entry per prerequisite whose content_sha is "
+            "contested (C-disclose). Empty when no prerequisite is contested."
+        ),
     )

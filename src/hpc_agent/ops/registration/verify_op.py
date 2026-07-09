@@ -72,11 +72,13 @@ from hpc_agent._wire.actions.verify_registration import (
     FieldsBlock,
     PrerequisiteKind,
     PrerequisiteLeg,
+    SlotContested,
     TemplateLeg,
     TemplateStatus,
     VerifyRegistrationResult,
     VerifyRegistrationSpec,
 )
+from hpc_agent._wire.queries.challenge_status import ContestedCounts
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 # Reach the top-level ``ops/export_dossier.py`` module through the ``from
@@ -86,6 +88,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 # (``scripts/lint_subject_imports.py``). The module-level alias keeps
 # ``verify_op.compute_dossier_signature`` a patchable attribute for tests.
 from hpc_agent.ops import export_dossier
+from hpc_agent.state.challenges import standing_challenges
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.registration import (
     ABSENT,
@@ -569,6 +572,123 @@ def _finalize(
     )
 
 
+# ── the C-disclose contested seam (route-through the ONE collector) ────────────
+# Every ``contested`` block this seat surfaces routes through
+# ``state/challenges.py::standing_challenges`` — the ONE collector (C-disclose
+# enforcement row; the attention-queue D5 route-through form). Never a private
+# re-glob or re-reduction; the T6 test pins ``standing_challenges`` in this source.
+# DISCLOSED, never blocking (C4): ``status`` is whatever R7 computed and the flag
+# rides beside it (C-status). Fail-open: any collector failure yields no block.
+
+
+def _challenge_dossier_resolver(experiment_dir: Path) -> Any:
+    """The INJECTED dossier resolver for target re-resolution (state never imports ops).
+
+    A ``dossier`` target's newest signature is recomputed through the ONE seam
+    (:func:`compute_dossier_signature`); an unresolvable dossier returns ``None`` →
+    the collector DISCLOSES it (read side never raises). Mirrors the
+    evidence-brief / conclusion-gate injection idiom.
+    """
+
+    def _resolve(ref: str) -> str | None:
+        try:
+            sig = compute_dossier_signature(experiment_dir, ref)
+        except Exception:  # noqa: BLE001 — read side: any failure is "unresolvable here"
+            return None
+        return sig.bundle_sha256
+
+    return _resolve
+
+
+def _contested_counts(
+    experiment_dir: Path, resolver: Any, **address: Any
+) -> ContestedCounts | None:
+    """Collect standing challenges for an address → :class:`ContestedCounts` or None.
+
+    Routes through the ONE collector (:func:`standing_challenges`); returns the
+    C-status counts + ids, or ``None`` when nothing is contested (the all-zero
+    omission — ``StandingChallenges.contested`` is already ``None`` then). FAIL-OPEN:
+    any collector error yields ``None`` (a disclosure gap never breaks the report,
+    and never blocks — C4).
+    """
+    try:
+        collected = standing_challenges(experiment_dir, dossier_resolver=resolver, **address)
+    except Exception:  # noqa: BLE001 — a reporter's disclosure seat never raises
+        return None
+    block = collected.contested
+    if block is None:
+        return None
+    return ContestedCounts(
+        open=block.open,
+        upheld=block.upheld,
+        dismissed=block.dismissed,
+        withdrawn=block.withdrawn,
+        superseded=block.superseded,
+        challenge_ids=list(block.challenge_ids),
+    )
+
+
+def _attach_contested(
+    experiment_dir: Path, result: VerifyRegistrationResult
+) -> VerifyRegistrationResult:
+    """Attach the C-disclose ``contested`` blocks to *result* — OUTSIDE ``view_sha``.
+
+    The registration's OWN standing challenges (addressed by
+    ``{subject_kind='registration', subject_id}``) plus one :class:`SlotContested`
+    per prerequisite whose ``recorded_sha`` (content_sha) is contested. Mutates the
+    already-``_finalize``d result so the ``view_sha`` (computed over the deterministic
+    projection) is NEVER perturbed by a later-filed challenge (R6); the contested
+    brief lines are appended AFTER, for the same reason. All-zero blocks are omitted
+    (the emitted-only-when-present precedent). Fail-open throughout.
+    """
+    if result.registration_id is None:
+        return result  # absent — no subject to address
+    resolver = _challenge_dossier_resolver(experiment_dir)
+
+    own = _contested_counts(
+        experiment_dir, resolver, subject_kind="registration", subject_id=result.registration_id
+    )
+    result.contested = own
+
+    slot_blocks: list[SlotContested] = []
+    for leg in result.prerequisites:
+        if not leg.recorded_sha:
+            continue
+        block = _contested_counts(experiment_dir, resolver, content_sha=leg.recorded_sha)
+        if block is not None:
+            slot_blocks.append(SlotContested(slot=leg.slot, contested=block))
+    result.prerequisite_contested = slot_blocks
+
+    # Brief addendum — appended AFTER view_sha so a later challenge never drifts the
+    # bound witness (R6). One line per open challenge (C-disclose).
+    addendum = _render_contested_lines(own, slot_blocks)
+    if addendum:
+        result.brief = result.brief + addendum
+    return result
+
+
+def _render_contested_lines(own: ContestedCounts | None, slots: list[SlotContested]) -> str:
+    """Render the contested brief addendum (dated, id-cited), or ``""`` when clean.
+
+    NOT part of ``view_sha`` (see :func:`_attach_contested`). Mechanism-nouned:
+    counts + ids only, no urgency vocabulary (the D1 no-urgency rule).
+    """
+    if own is None and not slots:
+        return ""
+    lines: list[str] = ["", "## Contested"]
+    if own is not None:
+        ids = ", ".join(own.challenge_ids)
+        lines.append(
+            f"- registration: {own.open} open · {own.upheld} upheld · "
+            f"{own.dismissed} dismissed ({ids}) — DISCLOSED, not blocking"
+        )
+    for sc in slots:
+        c = sc.contested
+        ids = ", ".join(c.challenge_ids)
+        lines.append(f"- prerequisite {sc.slot}: {c.open} open · {c.upheld} upheld ({ids})")
+    return "\n".join(lines) + "\n"
+
+
 # ── the primitive ──────────────────────────────────────────────────────────────
 
 
@@ -643,14 +763,17 @@ def verify_registration(
     if peek.status == REVOKED:
         # An explicit overturn binds no new sha (R7): report the withdrawal and
         # its timestamp; there is no dossier/template/chain to recompute.
-        return _finalize(
-            status=REVOKED,
-            registration_id=registration_id,
-            registered_at=peek.registered_at,
-            dossier=None,
-            template=None,
-            prerequisites=[],
-            fields=FieldsBlock(),
+        return _attach_contested(
+            experiment_dir,
+            _finalize(
+                status=REVOKED,
+                registration_id=registration_id,
+                registered_at=peek.registered_at,
+                dossier=None,
+                template=None,
+                prerequisites=[],
+                fields=FieldsBlock(),
+            ),
         )
 
     # The winner is a registration (SUPERSEDED never surfaces as the id's overall
@@ -673,7 +796,7 @@ def verify_registration(
     if status == CURRENT and any(leg.status != "current" for leg in prerequisite_legs):
         status = STALE
 
-    return _finalize(
+    result = _finalize(
         status=status,
         registration_id=registration_id,
         registered_at=reduced.registered_at,
@@ -682,3 +805,4 @@ def verify_registration(
         prerequisites=prerequisite_legs,
         fields=_fields_report(declared, winner),
     )
+    return _attach_contested(experiment_dir, result)

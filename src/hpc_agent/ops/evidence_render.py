@@ -212,6 +212,12 @@ def _conclusion_lines(
         follow: list[str] = []
         if conc.superseded_count:
             follow.append(f"supersedes {conc.superseded_count} earlier")
+        # C-disclose: the contested flag rides BESIDE the conclusion (never gates
+        # it — C4). Counts + ids only, no urgency vocabulary (the D1 no-urgency
+        # rule). Emitted only when the conclusion's content_sha is contested.
+        if conc.contested is not None and conc.contested.open:
+            ids = ", ".join(conc.contested.challenge_ids)
+            follow.append(f"contested ({conc.contested.open} open · {ids})")
         if conc.tags:
             follow.append(f"tags: {_tags_phrase(conc.tags)}")
         if follow:

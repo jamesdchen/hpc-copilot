@@ -50,6 +50,8 @@ from hpc_agent.state.decision_journal import SCOPE_KINDS
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from hpc_agent.state.challenges import Contested
+
 __all__ = [
     "CITATION_KINDS",
     "KIND_DOSSIER",
@@ -711,6 +713,11 @@ class ConclusionEvidence:
     content_sha: str | None
     superseded_count: int
     matched_by: tuple[str, ...]
+    contested: Contested | None = None
+    """C-disclose: the conclusion's standing-challenge projection when its
+    ``content_sha`` is contested, else ``None`` (the all-zero omission). DISCLOSED,
+    never blocking (C4); orthogonal to ``status`` (C-status). Routed through the
+    ONE collector ``state/challenges.py::standing_challenges``; fail-open."""
 
 
 @dataclass(frozen=True)
@@ -817,6 +824,33 @@ def _within_as_of(ts: Any, as_of: str | None) -> bool:
 def _newest_ts(records: Sequence[Mapping[str, Any]]) -> str | None:
     tss: list[str] = [r["ts"] for r in records if isinstance(r.get("ts"), str)]
     return max(tss) if tss else None
+
+
+def _conclusion_contested(
+    experiment_dir: Path,
+    content_sha: str | None,
+    dossier_resolver: Callable[[str], str | None] | None,
+) -> Contested | None:
+    """The C-disclose contested projection for a conclusion, or ``None`` (fail-open).
+
+    Routes through the ONE collector ``state/challenges.py::standing_challenges``
+    (the C-disclose enforcement row — never a private re-collection), matched on
+    the conclusion's ``content_sha`` (the full address's discriminator). DISCLOSED,
+    never blocking (C4); orthogonal to ``status`` (C-status). Lazily imported to
+    keep ``state/challenges.py``'s import of this module acyclic. Any collector
+    failure — or an absent challenge store — yields ``None`` (the all-zero
+    omission), so a disclosure gap never breaks the digest.
+    """
+    if not content_sha:
+        return None
+    from hpc_agent.state.challenges import standing_challenges
+
+    try:
+        return standing_challenges(
+            experiment_dir, content_sha=content_sha, dossier_resolver=dossier_resolver
+        ).contested
+    except Exception:  # noqa: BLE001 — a reader's disclosure seat never raises
+        return None
 
 
 def collect_evidence(
@@ -991,6 +1025,7 @@ def collect_evidence(
                 content_sha=c_content_sha,
                 superseded_count=len(status.superseded),
                 matched_by=tuple(dict.fromkeys(matched_by)),
+                contested=_conclusion_contested(exp, c_content_sha, dossier_resolver),
             )
         )
 
