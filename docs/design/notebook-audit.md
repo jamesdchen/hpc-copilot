@@ -705,3 +705,18 @@ canary gates). Related: #362 async-refill RFC (campaign-side). ALSO from the
 same exchange: the demo NARRATED a manual "push wave 2 below 20 threshold"
 mechanism that does not exist — mechanism claims are relay-audit material
 (item 5's class extended from decision-state to MECHANISM-state).
+
+Addendum 12: run-#11 late findings, both conduct-class extensions.
+(a) **Off-pipeline submit produced the textbook duplicate**: the linear
+"fleet" was raw qsub (no sidecar job_ids) and within the hour a duplicate
+wave-1 array (13992449 shadowing completed 13992170) was racing the same
+result paths — the run_id-dedup/one-submitter guard class demonstrated by
+its absence. Cite as enforcement evidence; the mechanized counter is item 5's
+hook class (a "fleet launched/running" claim must be journal-backed — a
+sidecar with no job_ids contradicts it) — MECHANISM/STATE claims need
+journal witness.
+(b) **Composite consent**: the re-entry greenlight's `response: "y"` was
+assembled by the agent from three stale utterances (one of them relay-steer
+prose the human pasted). A greenlight record should carry the human's FRESH
+utterance over the CURRENT proposal; synthesis-from-history is authorship
+laundering's quieter sibling (extends item 2/5).
