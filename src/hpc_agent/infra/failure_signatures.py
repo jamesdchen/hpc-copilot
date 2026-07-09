@@ -347,6 +347,61 @@ CATALOG: list[FailureSignature] = [
         },
         priority=80,
     ),
+    # ── cluster env-init failures (notebook-audit Addendum 10, item 15) ──────
+    # The contentless env-init failure both Grid Engine and Lmod emit when a
+    # task's environment could not be set up — the tail names NO cause, so the
+    # generic "check the stderr" remediation punts at exactly the moment the
+    # stderr is empty. Run #11: HOFFMAN2 (UGE) surfaced the exact Grid Engine
+    # string on ONE ``rlin_tune`` array instance while its siblings ran
+    # healthily (quota clean, login-init + module-load green minutes later) —
+    # a transient, PER-TASK / PER-NODE flake, not a run-wide fault.
+    FailureSignature(
+        error_class="cluster_env_init",
+        # One conservative phrase anchors both dialects: Grid Engine (UGE/SGE)
+        # prints "Unable to initialize environment because of error" and Lmod
+        # emits the lookalike "Unable to initialize environment ..." on a
+        # module-init failure. Nothing benign carries this exact phrase, so the
+        # bare substring (case-insensitive) is safe and covers both without a
+        # scheduler-specific branch. Deliberately NOT anchored on the trailing
+        # "because of error" / a diagnosis token — the whole point is that the
+        # message is contentless, so we match the stable stem only.
+        stderr_pattern=re.compile(
+            r"Unable to initialize environment",
+            re.I,
+        ),
+        # Pattern-only: no reliable exit code (the job/task env-init failure is
+        # surfaced in the log, not a distinct scheduler exit), so this never
+        # fires on exit code alone.
+        exit_code=None,
+        suggested_fix={
+            # ``retry-task`` is the retry-forward signal the structure carries
+            # (the ``action`` string IS the retry marker — cf. preempted's
+            # ``resubmit-preempted`` and node_failure's ``retry-on-different-node``):
+            # a transient per-node env-init flake usually clears on a retry, and
+            # the reduce-side status map routes ``cluster_env_init`` to the
+            # ``node_failure`` infra category rather than a code-bug escalation.
+            "action": "retry-task",
+            "hint": (
+                "Grid Engine / Lmod could not initialize the task's environment "
+                "and the log tail names no cause. This is typically a transient, "
+                "PER-TASK / PER-NODE flake — sibling array tasks are unaffected — "
+                "so RETRY the task/op first. If it recurs, check in priority "
+                "order: (1) a transient scheduler-or-module flake on that exec "
+                "node, (2) home-directory quota exhaustion (a full $HOME breaks "
+                "login-init), (3) a stale module cache (clear the Lmod cache / "
+                "`module --purge` and retry), (4) a broken module or line in the "
+                "login init (.bashrc / .modulerc / a module load in the profile). "
+                "Which scheduler + task the failure landed on is carried in "
+                "failure_features (the remote host is surfaced when the log or a "
+                "scheduler probe names it)."
+            ),
+        },
+        # Same band as node_failure (90): a transient infra class that outranks
+        # the bare-traceback fallback but sits below the exact-token config
+        # signatures (95). No pattern overlap with any other row, so the tie is
+        # moot — list order is deterministic regardless.
+        priority=90,
+    ),
 ]
 
 

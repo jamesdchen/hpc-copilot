@@ -201,6 +201,8 @@ def _gather_failure_features(
 
     stderr_tail = ""
     log_path: str | None = None
+    failed_task_id: int | None = None
+    failed_job_id: str | None = None
     try:
         logs = fetch_task_logs(
             ssh_target=ssh_target,
@@ -216,6 +218,12 @@ def _gather_failure_features(
             stderr_tail = str(logs[0].get("content") or "")
             raw_path = logs[0].get("path")
             log_path = raw_path if isinstance(raw_path, str) else None
+            # Node identity (item 15): surface WHICH task+job the evidence tail
+            # came from — the fetch already resolved these, so it's free here.
+            raw_tid = logs[0].get("task_id")
+            failed_task_id = raw_tid if isinstance(raw_tid, int) else None
+            raw_jid = logs[0].get("job_id")
+            failed_job_id = raw_jid if isinstance(raw_jid, str) else None
     except Exception:  # noqa: BLE001 — log fetch is best-effort, never gates the verdict
         stderr_tail = ""
         log_path = None
@@ -231,6 +239,22 @@ def _gather_failure_features(
         "cluster_log_tail": stderr_tail,
         "log_path": log_path,
         "classified_error": classified_error,
+        # Node identity (notebook-audit Addendum 10, item 15): the contentless
+        # ``cluster_env_init`` shape ("Unable to initialize environment") is a
+        # per-task/per-node flake that is only diagnosable when the envelope
+        # names WHICH scheduler + task the failure landed on. ``scheduler`` is a
+        # parameter and ``task_id`` / ``job_id`` are already resolved by the log
+        # fetch, so they are surfaced here for free. The remote HOST/node is the
+        # remaining leg: it is not cleanly in scope at reconcile time (the job
+        # has left the scheduler, and ``fetch_task_logs`` tails the LAST lines,
+        # which for Grid Engine do not carry the exec-node header) — recovering
+        # it needs a dedicated ``qstat -j`` / ``sacct --format=NodeList`` probe
+        # or a GE ``.o`` header parse, so ``node`` is an explicit ``None``
+        # placeholder until that probe is plumbed rather than a silent omission.
+        "scheduler": scheduler,
+        "task_id": failed_task_id,
+        "job_id": failed_job_id,
+        "node": None,
     }
 
 
