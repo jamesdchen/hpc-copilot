@@ -84,6 +84,8 @@ __all__ = [
     "REGISTRATION_BLOCKED",
     "REPRODUCTION_NEEDS_VERDICT",
     "collect_reproduction_verdicts",
+    "CAMPAIGN_UNCONCLUDED",
+    "collect_campaign_unconcluded",
     "collect_items",
     "order_items",
     "collect_queue",
@@ -138,6 +140,14 @@ REGISTRATION_STALE = "registration-stale"
 #: ``reproduction-verdict`` records, never re-implementing the envelope math (the
 #: recorded sample verdict IS T1's classifier output).
 REPRODUCTION_NEEDS_VERDICT = "reproduction-needs-verdict"
+#: evidence-memory aging standing item (docs/design/evidence-memory.md E-queue +
+#: E1(a)): a TERMINAL campaign that no CURRENT conclusion names. INFORMATIONAL —
+#: no verdict is pending, nothing is blocked; it is the standing invitation to
+#: close the conclusion loop, aging by the campaign's completion ts. Fan-out stays
+#: 0 (a missing conclusion blocks nothing, by E3's never-blocking pin). Routes the
+#: unconcluded predicate through ``state/evidence.py::collect_evidence``'s
+#: ``unconcluded`` reduction (the D5 one-definition rule), never a re-inlined join.
+CAMPAIGN_UNCONCLUDED = "campaign-unconcluded"
 
 #: The one place a kind is bound to its D2 class. A new kind must name its
 #: one-definition source predicate first (D5), then land here.
@@ -165,6 +175,9 @@ KIND_CLASS: dict[str, str] = {
     # cannot mechanize → VERDICT. Fan-out stays 0 (Amendment 2: leverage-zero,
     # pull-only) until a consumer blocks on the verdict — no encoded edge yet.
     REPRODUCTION_NEEDS_VERDICT: VERDICT,
+    # A terminal campaign with no current conclusion is an AGING standing item —
+    # nothing is blocked, it is an awareness invitation to close the loop.
+    CAMPAIGN_UNCONCLUDED: INFORMATIONAL,
 }
 
 
@@ -867,6 +880,51 @@ def _needs_verdict_answered(experiment_dir: Path, repro_run_id: str, content_sha
     return False
 
 
+# ── evidence-memory collector (E-queue) ──────────────────────────────────────
+
+
+def collect_campaign_unconcluded(experiment_dir: Path, *, now: str) -> list[AttentionItem]:
+    """Terminal campaigns no current conclusion names (E-queue) — an AGING item.
+
+    The D5 route-through: the predicate is ``state/evidence.py::collect_evidence``'s
+    ``unconcluded`` reduction (itself composing ``latest_decision`` over campaign
+    journals joined against the conclusion journals' ``concludes`` sets) — this
+    collector CALLS it, never re-implements the join (the module's ``inspect.getsource``
+    route-through pin). ``since`` is the campaign's completion ts (the ActivityItem's
+    ``ts``), so the item ages honestly. Class INFORMATIONAL — a missing conclusion
+    blocks nothing (E3), so it carries NO ``action`` prose beyond the identity line
+    and its fan-out stays 0 (no encoded edge in :func:`_apply_fanout`).
+
+    Fail-open (D3): any exception collecting evidence yields NO items rather than
+    crashing the queue read — an advisory standing item is never load-bearing.
+    """
+    from hpc_agent.state.evidence import collect_evidence
+
+    exp = _exp(experiment_dir)
+    items: list[AttentionItem] = []
+    try:
+        collection = collect_evidence(experiment_dir)
+    except Exception:  # noqa: BLE001 — fail-open: the advisory item never strands the read
+        return items
+    for row in collection.unconcluded:
+        items.append(
+            AttentionItem(
+                kind=CAMPAIGN_UNCONCLUDED,
+                item_class=KIND_CLASS[CAMPAIGN_UNCONCLUDED],
+                experiment_dir=exp,
+                scope_kind="campaign",
+                scope_id=row.subject_id,
+                since=row.ts,
+                evidence={
+                    "latest_block": row.detail.get("latest_block"),
+                    "terminal": row.detail.get("terminal"),
+                    "concluded": row.detail.get("concluded"),
+                },
+            )
+        )
+    return items
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
@@ -891,6 +949,7 @@ def collect_items(experiment_dir: Path, *, now: str) -> QueueCollection:
         *collect_data_manifest(experiment_dir, now=now),
         *collect_registrations(experiment_dir, now=now),
         *verdicts.items,
+        *collect_campaign_unconcluded(experiment_dir, now=now),
     ]
     return QueueCollection(
         items=_apply_fanout(items, experiment_dir),
