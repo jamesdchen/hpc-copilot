@@ -905,6 +905,16 @@ class McpServer:
         # from ``params["capabilities"]["elicitation"]``; elicitation fires only
         # when this is true (the gate check lands in E4).
         self._client_elicitation: bool = False
+        # ADAPTIVE DEGRADATION (notebook-audit item 12 / Addendum 7, run #11): a
+        # client can DECLARE elicitation at ``initialize`` yet render no popup, so
+        # a refusal becomes a silent 300s stall (all journal locks probed free).
+        # When an elicitation times out with NO response of ANY kind (silence —
+        # NOT a human DECLINE, which IS a response), the channel is marked dark and
+        # every later authorship refusal this session degrades to the hook path
+        # IMMEDIATELY (the same plain-refusal path a never-declaring client takes).
+        # A capability declaration is a claim, not a proof; it is re-probed next
+        # session (this is per-session state, reset on construction).
+        self._client_elicitation_dark: bool = False
 
     # -- projection ---------------------------------------------------------
 
@@ -1087,15 +1097,19 @@ class McpServer:
 
         Every leg is required (D4 step 2): the tool is ``append-decision`` (D6 —
         the sole firing site), the client negotiated elicitation at initialize
-        (:attr:`_client_elicitation`, D2), a live transport exists, no elicitation
-        is already in flight and none is suppressed (nested dispatch takes the
-        degrade path), and the envelope is ``ok:false`` carrying E2's distinct
-        ``authorship_evidence`` KEY in ``failure_features`` — never the block's
-        mere presence (the synthesized spec_invalid default), never prose.
+        (:attr:`_client_elicitation`, D2) AND that channel has not gone dark
+        (:attr:`_client_elicitation_dark` — a prior elicitation this session timed
+        out with no response of any kind, so the declaration is treated as unproven
+        and every later refusal degrades to the hook path; item 12 / Addendum 7),
+        a live transport exists, no elicitation is already in flight and none is
+        suppressed (nested dispatch takes the degrade path), and the envelope is
+        ``ok:false`` carrying E2's distinct ``authorship_evidence`` KEY in
+        ``failure_features`` — never the block's mere presence (the synthesized
+        spec_invalid default), never prose.
         """
         if name != _ELICITATION_FIRING_TOOL:
             return False
-        if not self._client_elicitation:
+        if not self._client_elicitation or self._client_elicitation_dark:
             return False
         if self._transport is None or self._msg_queue is None:
             return False
@@ -1126,18 +1140,53 @@ class McpServer:
         non-capture outcome (decline/cancel/timeout/EOF/injected/empty, or a
         no-op append) returns the ORIGINAL *refusal* unchanged — no utterance
         appended, never a JSON-RPC error.
+
+        Wait disclosure (item 12 leg b / Addendum 10's no-black-box contract): the
+        wait is not dead air. One ``[mcp]`` line at OPEN names the tool + deadline
+        and one at CLOSE names the outcome (answered / declined / timed-out-dark),
+        landing on the same tail-able stderr surface the per-call telemetry uses
+        (the harness's MCP log, never the JSON-RPC channel).
+
+        Adaptive degradation (item 12 leg a): a ``None`` from the wait is SILENCE
+        (timeout / EOF — the transport is present, :meth:`_elicitation_applies`
+        guaranteed it), which is DISTINCT from a human DECLINE (a real response
+        whose filtered text is empty). Silence marks the channel dark so the rest
+        of this session skips elicitation; a decline leaves it live.
         """
+        timeout = _ELICITATION_TIMEOUT_SEC
+        sys.stderr.write(
+            f"[mcp] waiting on human elicitation ({timeout:.0f}s timeout) for {name}\n"
+        )
         response = self._request_from_client(
             "elicitation/create",
             {
                 "message": _render_elicitation_prompt(arguments),
                 "requestedSchema": _ELICITATION_REQUESTED_SCHEMA,
             },
-            _ELICITATION_TIMEOUT_SEC,
+            timeout,
         )
+        if response is None:
+            # SILENCE — no response of any kind within the deadline (or EOF). The
+            # client declared elicitation but rendered nothing (run #11): mark the
+            # channel dark so subsequent authorship refusals return the plain
+            # refusal immediately, and log the close outcome.
+            self._client_elicitation_dark = True
+            sys.stderr.write(
+                f"[mcp] elicitation channel DARK for {name}: no response within "
+                f"{timeout:.0f}s — degrading to the hook path for the rest of this "
+                "session (timed-out-dark)\n"
+            )
+            return refusal
         text = _accepted_utterance(response)
         if text is None:
-            return refusal  # decline / cancel / timeout / EOF / injected / empty
+            # A real response arrived (decline / cancel / injected / empty): the
+            # human saying no is a valid outcome, not a fault — the channel stays
+            # LIVE, never marked dark.
+            sys.stderr.write(
+                f"[mcp] elicitation for {name}: human response, no sign-off (declined)\n"
+            )
+            return refusal
+        sys.stderr.write(f"[mcp] elicitation for {name}: sign-off captured (answered)\n")
 
         from pathlib import Path
 
