@@ -263,3 +263,10 @@ commons, the catalog to the quant pack, bindings to program specs.**
     gained `data_sha` and the run sidecar gained `data_manifest_sha` —
     `bake_operations_json.py --write` + schema regen owe an update. Additive +
     optional, so existing baked schemas + v1 records still parse.
+
+## Ruling record (2026-07-10 user, recorded from session): bounded auto-prune
+
+Remote extras that are MANIFEST-KNOWN (files the manifest names as ours,
+present remotely but no longer in the deploy set) may be auto-pruned under a
+disclosed bound; anything NOT manifest-known is an anomaly → ASK, never
+delete. Spec + build = post-run-#12 batch item 6.

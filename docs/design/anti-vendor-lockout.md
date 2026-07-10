@@ -448,3 +448,11 @@ contract that pretends everything is portable is dishonest:
   stands until an external harness asks).
 - (Populate per deviation, each with its recorded reason, when implementation
   lands. The `docs/design/notebook-audit.md` drift log is the form to follow.)
+- **Ruling records (2026-07-10 user, recorded from session):** (a) raw-ssh
+  DENY rule — the agent-facing environment gains a deny on raw `ssh`/`scp`
+  invocation against cluster hosts (the sanctioned verbs are the only dial
+  path; the improvisation class dies at the permission layer, not in conduct
+  prose); (b) the MCP elicitation display-receipt gap is to be FILED UPSTREAM
+  (spec issue: a client-side receipt that the elicitation was actually
+  displayed), per this doc's honest-trust-limit note. Both = post-run-#12
+  batch item 8 riders.

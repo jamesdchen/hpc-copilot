@@ -867,3 +867,24 @@ ruling ("a DERIVED, disposable, content-keyed index when it becomes real —
 never a scan-optimized store for a consumer that does not yet exist") the index
 is NOT built. An index with no consumer is the dead-code class; it stays
 deferred until a stage-drift consumer is authored.
+
+## Amendment 16 (2026-07-09 user ruling, recorded from session 2026-07-10): B3 RESOLVED as B3-LEAN
+
+The per-section summary + freshness semantics B3 named unspecified are ruled,
+LEAN shape (the section join is now unblocked; build = post-run-#12 batch
+item 7):
+
+- **Which stages supply rows/drops**: FIRST→LAST **per CHANGED observable**
+  (not per stage) — a summary line exists only for an observable whose value
+  moved across the section, showing its first and last values; unchanged
+  observables render nothing.
+- **Which execution**: the LATEST execution only.
+- **The section-level sha**: the SET-sha of the section's record subset,
+  cited in the render (never the task's whole `trace_sha`).
+- **Freshness binding**: the runner stamps `section_sha` on the records it
+  emits (the render-receipt precedent); a stale section's summary is ELIDED
+  with a disclosed stale marker, never rendered as if current.
+- **Scope split**: comprehension ≠ attestation — the signed view carries only
+  the above; interactive brainstorm/comprehension rides `trace-render` +
+  verify-relay once the trace corpus joins the relay corpus (NOT the signed
+  join).

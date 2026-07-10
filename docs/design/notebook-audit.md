@@ -971,3 +971,18 @@ state); (c) a fires-and-passes test: drive a sidecar-only run to a
 rendezvous. Weight for the digest: a driver that crashes exactly when the
 run is in its most manual state pushes the agent off-pipeline at the worst
 possible moment.
+
+## Ruling record (2026-07-10 user, recorded from session): item-8 poka-yoke conversions
+
+- **Wake auto-arm at consent record**: recording a standing consent ARMS the
+  wake in the same breath (code composes the status-watch detach) instead of
+  refusing when the watch is absent — the wake-gate refusal
+  (`ops/overnight.py::assert_wake_armed`) converts to a never-fires assertion.
+- **Cap defaults**: the consent flow COMPOSES default `expires_at`/cap values
+  for the human to edit/accept rather than refusing a capless spec (the caps
+  gate likewise becomes the assertion).
+- **Draft-at-pass**: when an audit loop pass computes a draftable next step,
+  the draft is composed AT the pass rather than a refusal instructing the
+  model to draft.
+Doctrine: compose/default/auto-remedy what code can; refuse only trust
+boundaries. Build = post-run-#12 batch item 8.

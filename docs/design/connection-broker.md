@@ -253,3 +253,10 @@ primitive frontmatter still need the human's full bake.
 Rejected: Option 3 (refuse to dial outside a detached context, keep polling
 in-process) — achieves zero unattended SSH but drops self-advance on
 timed-out runs: a silent wedge traded for a silent stall.
+
+## Ruling record (2026-07-10 user, recorded from session): sentinel-ack transport
+
+Success on every transport op = an AFFIRMATIVE token (the per-command sentinel
+pattern above, promoted to a rule): silence, an empty read, or a timeout is
+NEVER success — timeouts report UNKNOWN, not pass (positive-evidence verdicts).
+Kills the silence-as-success class. Spec + build = post-run-#12 batch item 5.
