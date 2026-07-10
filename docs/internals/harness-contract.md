@@ -23,7 +23,7 @@ pretending the guarantee still holds.
 
 ## Contract version
 
-Contract version: 1.0.0
+Contract version: 1.1.0
 
 This is the SemVer of the contract this page specifies. It has ONE home in
 code — `HARNESS_CONTRACT_VERSION` in `ops/harness_capabilities.py` — and this
@@ -378,6 +378,21 @@ named seam:
   reported honestly.
 - **Capability 4 (trusted display)** — reported `"unknown"`: no detection seam
   exists yet for a trusted-render surface, so the verb asserts nothing.
+- **Capability 5 (Stop-hook append channel)** — a hook `systemMessage` the
+  harness DISPLAYS to the human (added v1.1.0, additive; `docs/design/stop-hook-completer.md`,
+  D1). It is what lets the relay-audit Stop hook COMPLETE — code-append the owed
+  render / verdict / correction and PROCEED — instead of bouncing the model into
+  re-relaying what deterministic code already holds verbatim. Reported tri-state
+  like capability 4: there is no passive install seam, so it reads `"unknown"`
+  until a conforming harness's conformance probe confirms `systemMessage` display
+  (the probe MUST cover BOTH output shapes — a bare `systemMessage` on a
+  proceeding stop AND a `systemMessage` combined with `decision:"block"`, since
+  display may differ) and activates it via `detect_stop_hook_append` /
+  `detect_stop_hook_append_on_block` (`ops/harness_capabilities.py`). **Degrades
+  when absent/unknown** (the default — no harness declares it yet): the Stop hook
+  stays the REJECTOR (block-once bounce, `_kernel/hooks/relay_audit_stop.py`), an
+  owed verdict or contradicted claim re-relayed by the MODEL, never code-appended.
+  No wedge — the completer path is dark until the append channel is confirmed.
 
 **The detection asymmetry (D-K3; anti-vendor-lockout T2).** The needles above
 detect OUR reference providers — the Claude Code hooks this repo installs;

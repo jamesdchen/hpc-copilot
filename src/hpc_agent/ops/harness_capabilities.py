@@ -2,7 +2,7 @@
 
 A read-only ``query`` primitive: LSP-style capability NEGOTIATION for the harness
 contract (``docs/internals/harness-contract.md``, "Capability negotiation"). It
-DETECTS and reports the four contract capabilities as code can OBSERVE them —
+DETECTS and reports the contract capabilities as code can OBSERVE them —
 never a self-asserted manifest:
 
 1. **The out-of-band utterance log.** Whether a log already exists for this repo —
@@ -58,7 +58,12 @@ from hpc_agent._wire.queries.harness_capabilities import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
-__all__ = ["HARNESS_CONTRACT_VERSION", "harness_capabilities"]
+__all__ = [
+    "HARNESS_CONTRACT_VERSION",
+    "detect_stop_hook_append",
+    "detect_stop_hook_append_on_block",
+    "harness_capabilities",
+]
 
 # The ONE home of the harness-contract SemVer (conformance-kit D-K6/K10). This
 # constant is the single source of truth for three surfaces pinned equal by
@@ -70,9 +75,64 @@ __all__ = ["HARNESS_CONTRACT_VERSION", "harness_capabilities"]
 # harness at negotiation time, and the kit does not ship in every install. SemVer
 # posture (harness-contract.md "Contract version"): within major 1 the contract
 # is ADDITIVE-ONLY; the sha canonicalization is the canonical major trigger.
-HARNESS_CONTRACT_VERSION = "1.0.0"
+HARNESS_CONTRACT_VERSION = "1.1.0"
 
 _log = logging.getLogger(__name__)
+
+#: The env markers a conformance-proven harness sets to ACTIVATE the Stop-hook
+#: append channel (capability 5, ``stop-hook-append``; D1 of
+#: ``docs/design/stop-hook-completer.md``). Unlike capabilities 1–3 there is no
+#: passive install seam yet — a hook ``systemMessage`` has ZERO evidence in this
+#: repo (``trusted_display`` sits at ``"unknown"`` for the same no-seam reason),
+#: so the channel is DECLARED explicitly, and only after a harness's conformance
+#: probe confirms it displays a ``systemMessage``. Two markers because the D1
+#: probe covers TWO output shapes (display may differ between them):
+#: ``HPC_STOP_HOOK_APPEND`` — ``systemMessage`` on a PROCEEDING stop; and
+#: ``HPC_STOP_HOOK_APPEND_ON_BLOCK`` — ``systemMessage`` combined with
+#: ``decision:"block"``. Absent/unknown → the completer degrades to the REJECTOR
+#: (block-once bounce), never to silence.
+_STOP_HOOK_APPEND_ENV = "HPC_STOP_HOOK_APPEND"
+_STOP_HOOK_APPEND_ON_BLOCK_ENV = "HPC_STOP_HOOK_APPEND_ON_BLOCK"
+
+
+def _read_tristate_env(var: str) -> bool | str:
+    """A tri-state env probe: ``True`` / ``False`` when set, ``"unknown"`` absent.
+
+    The honest non-answer posture: an unset marker reads ``"unknown"`` (no seam
+    confirmed), never ``False`` — a caller distinguishes "declared absent" from
+    "never probed". Truthy: ``1/true/yes/on``; falsey: ``0/false/no/off``.
+    """
+    raw = (os.environ.get(var) or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return "unknown"
+
+
+def detect_stop_hook_append() -> bool | str:
+    """Whether the harness DISPLAYS a hook ``systemMessage`` on a PROCEEDING stop.
+
+    Capability 5's proceeding-shape bit (D1). This is the seam the Stop-hook
+    completer (:mod:`hpc_agent._kernel.hooks.relay_audit_stop`) gates on: only
+    when this reads ``True`` does the completer append owed artifacts /
+    corrections instead of bouncing. ``"unknown"`` (the default — no env marker,
+    no conformance probe yet) and ``False`` both keep the REJECTOR. See
+    :data:`_STOP_HOOK_APPEND_ENV`.
+    """
+    return _read_tristate_env(_STOP_HOOK_APPEND_ENV)
+
+
+def detect_stop_hook_append_on_block() -> bool | str:
+    """Whether the harness displays a ``systemMessage`` on a BLOCKED stop (D1).
+
+    The mixed-class bit (D2's discharge-gating). When this is NOT ``True``, a
+    stop that also blocks (a poisoned-decision violation) DEFERS its completions
+    to the post-continuation stop rather than riding them on a possibly-swallowed
+    blocked ``systemMessage`` — the discharge-gated-on-confirmed-display rule.
+    See :data:`_STOP_HOOK_APPEND_ON_BLOCK_ENV`.
+    """
+    return _read_tristate_env(_STOP_HOOK_APPEND_ON_BLOCK_ENV)
 
 
 def _claude_dir() -> Path:
@@ -139,14 +199,16 @@ def _needle_installed(settings: dict[str, Any], needle: str) -> bool:
     cli=CliShape(
         help=(
             "Detect and report the harness capability set as CODE can observe it "
-            "(LSP-style negotiation for the harness contract). Reports the four "
+            "(LSP-style negotiation for the harness contract). Reports the "
             "contract capabilities — the out-of-band utterance log (installed "
             "capture hooks + this repo's log presence + MCP elicitation flag), "
             "relay/verbatim enforcement (the relay-audit Stop hook), backgrounding "
-            "(core-side, always present; watchdog hook reported honestly), and "
-            "trusted display (unknown — no detection seam yet) — each with the "
-            "named tier its absence degrades to. Read-only, no SSH, fail-open on an "
-            "unreadable settings.json. The declaration IS what code can verify."
+            "(core-side, always present; watchdog hook reported honestly), "
+            "trusted display (unknown — no detection seam yet), and the Stop-hook "
+            "append channel (unknown until a conformance probe activates it) — each "
+            "with the named tier its absence degrades to. Read-only, no SSH, "
+            "fail-open on an unreadable settings.json. The declaration IS what "
+            "code can verify."
         ),
         spec_arg=True,
         spec_required=False,
@@ -159,7 +221,7 @@ def _needle_installed(settings: dict[str, Any], needle: str) -> bool:
 def harness_capabilities(
     *, experiment_dir: Path, spec: HarnessCapabilitiesSpec | None = None
 ) -> HarnessCapabilitiesResult:
-    """Detect the four harness-contract capabilities for *experiment_dir*.
+    """Detect the harness-contract capabilities for *experiment_dir*.
 
     Pure observation: reads ``settings.json`` (fail-open), checks the utterance
     log's namespace for this repo (non-creating), and consults the MCP elicitation
@@ -250,12 +312,39 @@ def harness_capabilities(
         },
     )
 
+    # Capability 5 — the Stop-hook APPEND channel (D1 of the stop-hook completer).
+    # Tri-state like trusted_display: no passive install seam exists, so it reads
+    # "unknown" until a conforming harness's conformance probe confirms it displays
+    # a hook ``systemMessage`` and activates it via the env markers. Absent/unknown
+    # → the relay-audit Stop hook stays the REJECTOR (block-once), never silence.
+    append_proceeding = detect_stop_hook_append()
+    append_on_block = detect_stop_hook_append_on_block()
+    stop_hook_append = CapabilityEntry(
+        present=append_proceeding,
+        channel=(
+            "hook systemMessage display -> the relay-audit Stop hook COMPLETES "
+            "(code-appends the owed artifact / correction) instead of bouncing"
+        ),
+        evidence={
+            "append_on_proceeding": append_proceeding,
+            "append_on_block": append_on_block,
+            "activation_markers": [_STOP_HOOK_APPEND_ENV, _STOP_HOOK_APPEND_ON_BLOCK_ENV],
+            "note": (
+                "no passive install seam yet (like trusted_display); a conforming "
+                "harness activates the append channel explicitly once its "
+                "systemMessage-display conformance probe confirms it. Absent/unknown "
+                "-> the completer degrades to the rejector, never to silence."
+            ),
+        },
+    )
+
     return HarnessCapabilitiesResult(
         capabilities={
             "utterance_log": utterance_log,
             "relay_enforcement": relay_enforcement,
             "backgrounding": backgrounding,
             "trusted_display": trusted_display,
+            "stop_hook_append": stop_hook_append,
         },
         tier_consequences={
             "utterance_log": (
@@ -279,6 +368,12 @@ def harness_capabilities(
             "trusted_display": (
                 "unknown -> the trusted-render capability cannot be verified from "
                 "code; no tier claim is made either way."
+            ),
+            "stop_hook_append": (
+                "absent/unknown -> the relay-audit Stop hook stays the REJECTOR: an "
+                "owed terminal verdict or a contradicted claim is re-relayed by the "
+                "MODEL (the block-once bounce), never code-appended. No wedge; the "
+                "completer path is dark until the append channel is confirmed."
             ),
         },
         harness_contract_version=HARNESS_CONTRACT_VERSION,
