@@ -199,6 +199,20 @@ def assert_pack_receipts_current(experiment_dir: Path) -> None:
     if not optin:
         return  # D7 fail-safe: not opted in → byte-identical no-op
 
+    # AUTO-REMEDY (2026-07-10 ruling: "the pack gate MAY auto-remedy; latency is to
+    # be OBLITERATED"). Before refusing, run the pack-refresh core mechanically:
+    # re-seal + rebind any manifest that is merely STALE against on-disk bytes (from
+    # its sweep.json recipe, pure hashing — DP2 holds, no pack code runs), journaling
+    # old→new shas (the drift event IS the archive record, which is why this is
+    # sound). Best-effort: a pack with no recipe, or a genuine broken setup, is left
+    # for the assert below to refuse loudly. A re-seal is a NO-OP when nothing is
+    # stale, so a clean gate stays byte-identical. The only step this CANNOT do is
+    # re-run the caller-side domain CHECK (DP2) — so after re-binding, a covered
+    # receipt reads stale and the refusal below carries the exact check command(s).
+    from hpc_agent.ops.pack.refresh_op import refresh_opted_in_packs, slot_check_commands
+
+    refresh_opted_in_packs(experiment_dir, optin)
+
     # Pass 1: every opted-in pack must be CURRENT (broken setup → SpecInvalid),
     # building the per-pack bind + records index cross-pack slots resolve through.
     binds_by_pack, records_by_pack = _resolve_current_packs(experiment_dir, optin)
@@ -206,8 +220,12 @@ def assert_pack_receipts_current(experiment_dir: Path) -> None:
     # Pass 2: every receipt_bindings slot must reduce to CURRENT + passed. A slot
     # bound to a pack that is not opted-in/current is a dangling reference (loud);
     # an opted-in slot that is not current+passed is an uncleared receipt (the
-    # PackReceiptsMissing precondition), named with its status.
+    # PackReceiptsMissing precondition), named with its status. The caller-authored
+    # check command for each slot rides the refusal so the driving skill re-earns
+    # it UNPROMPTED (the auto-remedy already re-sealed + re-bound any stale manifest).
+    checks_by_key = slot_check_commands(optin)
     failures: list[tuple[str, str]] = []
+    checks_by_slot: dict[str, str | None] = {}
     for entry in optin:
         for binding in _receipt_bindings(entry):
             slot = binding.get("slot")
@@ -229,6 +247,7 @@ def assert_pack_receipts_current(experiment_dir: Path) -> None:
             )
             if not status.passing:
                 failures.append((slot, status.reason or status.status))
+                checks_by_slot[slot] = checks_by_key.get((str(target_name), slot))
 
     if failures:
-        raise errors.PackReceiptsMissing.for_slots(failures)
+        raise errors.PackReceiptsMissing.for_slots(failures, checks=checks_by_slot)
