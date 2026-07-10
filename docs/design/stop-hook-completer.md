@@ -1,5 +1,5 @@
 ---
-status: planned
+status: implemented (dark — capability-gated; see drift log 2026-07-10)
 ---
 # Stop-hook completer — rejector → completer (design)
 
@@ -220,4 +220,49 @@ degrades to the token-level floor plus a file reference.
 
 ## Drift log
 
-*(empty — no implementation yet)*
+* **2026-07-10 — BUILT (rejector → completer, capability-gated dark).** The
+  completer path is fully implemented and tested but DARK by default (D1's safe
+  landing): with no harness declaring the capability, `build_hook_output`
+  degrades to the REJECTOR byte-for-byte (`_rejector_output`), so every
+  pre-existing test still passes unchanged.
+  * **Capability 5 `stop-hook-append`** — added to `ops/harness_capabilities.py`
+    (`detect_stop_hook_append` / `detect_stop_hook_append_on_block`, the ONE
+    detection home the hook imports) and reported by the `harness-capabilities`
+    verb as a fifth `CapabilityEntry` + tier consequence. Tri-state like
+    `trusted_display`: no passive install seam exists, so it reads `"unknown"`
+    until a conforming harness activates it. **Deviation from D1 as written:** the
+    activation seam is TWO env markers (`HPC_STOP_HOOK_APPEND`,
+    `HPC_STOP_HOOK_APPEND_ON_BLOCK`), NOT the `conformance/` probe. Reason: the
+    doc names the conformance probe as "build step 1 … the systemMessage-display
+    conformance probe is follow-up" — the mechanize-now order is the completer
+    machinery FIRST behind an explicit opt-in, the passive probe seam SECOND. The
+    two markers cover D1's two required output shapes (proceeding vs blocked). The
+    harness contract bumped 1.0.0 → **1.1.0** (additive minor — a new capability;
+    doc line + `HARNESS_CONTRACT_VERSION` + kit `CONTRACT_VERSION` stay three-way
+    equal).
+  * **D3** — `state/notebook_audit.py::record_relay_discharge` gained
+    `discharged_by` (`DISCHARGED_BY_RELAY` default / `DISCHARGED_BY_COMPLETER`);
+    the field is additive (pre-D3 records read `"relay"`) and NOT part of
+    `_marker_key`, so it never changes which marker a discharge closes.
+  * **D4** — `_compose_owed_artifact` sources a render view-marker's owed content
+    from the trusted render file selected BY `view_sha12` in its filename
+    (`_render_by_view_sha`, the ONE composer — verbatim by construction), degrades
+    to the token floor + a file reference over the append cap
+    (`_MAX_APPEND_ARTIFACT_BYTES`), and falls to the token floor for a
+    `notebook-status` terminal (no render file). Never quotes model text.
+  * **Poisoned-decision test** — `_is_poisoned_decision` keys on
+    `state/decision_briefs.py::read_briefs` (latest brief with no subsequent
+    committed `y` + claim-token intersection with the brief content); explicitly
+    NOT on `pending_decision` and NOT on `is_latest_committed_greenlight`. Bias to
+    the append path everywhere (any error → not poisoned). It is itself
+    block-once (never fires on a `stop_hook_active` forced continuation).
+  * **Judgment class — no members here (scope note, not a deviation).** §3's
+    judgment bounces (unanswered question, abandoned continuation) live in the
+    SIBLING Stop guards (`decision_rendezvous_stop_guard`,
+    `skill_return_stop_guard`), not this hook, so the only surviving bounce in the
+    completer is the poisoned-decision one.
+  * **Decision-state / paraphrase violations** carry an empty/verb-category
+    `claim` and take the APPEND path in practice (a paraphrase/audit-scope finding
+    never poisons — no per-claim value token to intersect a brief; the sign-off
+    boundary has its own gates), matching §2's "audit-scope violations ALWAYS take
+    the append path."

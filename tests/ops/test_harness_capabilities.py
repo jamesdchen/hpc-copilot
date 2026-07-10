@@ -230,3 +230,58 @@ def test_spec_none_defaults_to_empty(claude_dir: Path, tmp_path: Path) -> None:
     _write_settings(claude_dir, {})
     result = harness_capabilities(experiment_dir=tmp_path, spec=None)
     assert "utterance_log" in result.capabilities
+
+
+# ─── capability 5: the Stop-hook append channel (stop-hook completer D1) ──────
+
+
+def test_stop_hook_append_unknown_by_default(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No passive install seam (like trusted_display): absent env markers ->
+    "unknown", and the completer degrades to the rejector. This is the safe
+    landing — the completer stays dark until a conformance probe activates it."""
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    cap = result.capabilities["stop_hook_append"]
+    assert cap.present == "unknown"
+    assert cap.evidence["append_on_proceeding"] == "unknown"
+    assert cap.evidence["append_on_block"] == "unknown"
+    # the tier consequence names the rejector degrade, and every cap has one.
+    assert set(result.tier_consequences) == set(result.capabilities)
+    assert "REJECTOR" in result.tier_consequences["stop_hook_append"]
+
+
+def test_stop_hook_append_activates_via_env(
+    claude_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conformance-proven harness activates BOTH output-shape bits explicitly."""
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", "true")
+    _write_settings(claude_dir, {})
+    result = harness_capabilities(experiment_dir=tmp_path, spec=HarnessCapabilitiesSpec())
+    cap = result.capabilities["stop_hook_append"]
+    assert cap.present is True
+    assert cap.evidence["append_on_proceeding"] is True
+    assert cap.evidence["append_on_block"] is True
+
+
+def test_stop_hook_append_detection_tri_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The detection seam the Stop hook gates on: truthy True, falsey False,
+    unset "unknown" — the honest non-answer distinguishes "declared absent"
+    from "never probed"."""
+    from hpc_agent.ops.harness_capabilities import (
+        detect_stop_hook_append,
+        detect_stop_hook_append_on_block,
+    )
+
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    assert detect_stop_hook_append() == "unknown"
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "yes")
+    assert detect_stop_hook_append() is True
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "off")
+    assert detect_stop_hook_append() is False
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+    assert detect_stop_hook_append_on_block() == "unknown"
