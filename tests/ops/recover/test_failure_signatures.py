@@ -332,9 +332,7 @@ def test_conda_run_blind_ignores_whitespace_only_stdout() -> None:
 def test_conda_run_blind_does_not_fire_on_non_conda_empty_command() -> None:
     """A legitimately-empty NON-conda command must never be tagged blind."""
     assert (
-        classify_conda_run_blind(
-            command="python -m analysis.summarize", stdout="", exit_code=0
-        )
+        classify_conda_run_blind(command="python -m analysis.summarize", stdout="", exit_code=0)
         is None
     )
     # A bare `true` / no-op that legitimately prints nothing.
@@ -355,8 +353,6 @@ def test_conda_run_blind_does_not_fire_on_nonzero_rc() -> None:
     """A `conda run` that failed loudly (rc != 0) is a normal failure, not the
     silent-success blindness class."""
     assert (
-        classify_conda_run_blind(
-            command="conda run -n env python -m foo", stdout="", exit_code=1
-        )
+        classify_conda_run_blind(command="conda run -n env python -m foo", stdout="", exit_code=1)
         is None
     )

@@ -301,9 +301,7 @@ def pack_bind(*, experiment_dir: Path, spec: PackBindSpec) -> PackBindResult:
     # the sealed bytes? Checked over the listed files in the pack's repo. Kept
     # OFF the journal record (its ``resolved`` shape is pinned byte-identical);
     # it rides the result only, as a disclosure the caller relays.
-    exposed = _translation_exposed_files(
-        manifest_path.parent, [f.path for f in manifest.files]
-    )
+    exposed = _translation_exposed_files(manifest_path.parent, [f.path for f in manifest.files])
 
     return PackBindResult(
         pack=manifest.name,
