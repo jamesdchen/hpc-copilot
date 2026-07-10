@@ -32,6 +32,7 @@ content address is stable across platforms.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,35 +154,69 @@ def read_render_header(path: Path) -> dict[str, str] | None:
     return _parse_header(text)
 
 
-# --- the bounded audit-view digest (E-render) -------------------------------
-# ``docs/design/mcp-elicitation.md`` E-render (SHIPPED 2026-07-09): the sign-off
-# elicitation popup carries a CODE-COMPUTED digest of the trusted render — diff
-# stats, assert table, lint-flag count + the ``view_sha12`` — while the full
-# render stays on disk for the Read pane (RULING 1: digest, not full render).
-# The digest is derived from the ON-DISK render file (the code-authored trusted
-# artifact the T8 gate binds), NEVER re-derived from the notebook ``.py`` source
-# — same input the human signed against. It is BOUNDED by construction: counts
-# plus a capped, per-item-truncated assertion list, never the diff body and
-# never an unbounded source echo.
+# --- the bounded audit-view digest (E-render, DIGEST v2) --------------------
+# ``docs/design/mcp-elicitation.md`` E-render (SHIPPED 2026-07-09; DIGEST v2 amended
+# same-day per RULING 2): the sign-off elicitation popup is a SIGNING surface, not a
+# reading surface, so the digest carries only what serves one of three jobs — BIND
+# (identity + freshness), WHY-YOUR-JUDGMENT (the tier-trigger headline, the assert
+# table, the lint-flag NAMES + locations, per-hunk one-liners), and ROUTE (the
+# on-disk path). The full render stays on disk for the Read pane (RULING 1: digest,
+# not full render). The digest is derived from the ON-DISK render file (the
+# code-authored trusted artifact the T8 gate binds), NEVER re-derived from the
+# notebook ``.py`` source — the same input the human signed against.
+#
+# BOUNDED by construction: counts + capped, per-item-truncated lists — never the
+# diff body, never an unbounded source echo. Every list carries its FULL count too
+# so the popup composer (``mcp_server._render_digest_block``) can DISCLOSE how many
+# were elided; a silent drop of a judgment-critical item (a failed assert) is the
+# misleading-summary class the honesty rule (``mcp_server``) refuses outright.
+#
+# STATIC-AUDIT invariant (``audit_view``: "No execution ever happens here"): the
+# trusted render carries STATIC assertions only — declared expressions, never a
+# computed/execution value, and never a per-assertion pass/fail. So the assert
+# table reports the DECLARED assertions and the ``tier`` the section was rendered
+# at; a "computed value" the render does not hold is never fabricated (fabricating
+# one would BE the misleading-summary class). See the digest-v2 spec in the design
+# doc for why this honors the ruling's letter under the static-audit constraint.
 
 #: How many declared assertions the digest lists verbatim before eliding.
 _DIGEST_MAX_ASSERTIONS = 6
 #: The per-assertion character cap in the digest (each entry truncated to this).
 _DIGEST_MAX_ASSERTION_CHARS = 120
+#: How many diff HUNK one-liners the digest lists before eliding.
+_DIGEST_MAX_HUNKS = 6
+#: The per-hunk-line character cap (the first changed line is truncated to this).
+_DIGEST_MAX_HUNK_CHARS = 100
+#: How many lint-flag name+location lines the digest lists before eliding.
+_DIGEST_MAX_LINT_FLAGS = 8
+
+#: A unified-diff hunk header ``@@ -a,b +c,d @@`` — the SOURCE-side range (``+c,d``)
+#: is what the human is signing, so the one-liner names ``c … c+d-1``.
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<span>\d+))? @@")
 
 
 @dataclass(frozen=True)
 class RenderDigest:
-    """A bounded, code-computed digest of ONE section's on-disk render (E-render).
+    """A bounded, code-computed digest of ONE section's on-disk render (E-render v2).
 
     Every field is derived from the render file's own header + code-rendered body
     (the same three audit-view projections — diff-from-template, assertion table,
     lint flags — plus the identifiers), never from the notebook source. ``view_sha``
     / ``section`` / ``section_sha`` / ``audit_id`` come from the header;
-    ``classification`` and the counts come from the body. :attr:`assertions` is
-    capped at :data:`_DIGEST_MAX_ASSERTIONS` entries each truncated to
-    :data:`_DIGEST_MAX_ASSERTION_CHARS`; :attr:`assertion_count` is the full count,
-    so a caller can disclose how many were elided.
+    ``classification`` / ``tier`` and the counts/lists come from the body.
+
+    The three lists are each capped and carry their FULL count beside them so the
+    popup composer can disclose elision honestly:
+
+    * ``assertions`` — capped at :data:`_DIGEST_MAX_ASSERTIONS`, each truncated to
+      :data:`_DIGEST_MAX_ASSERTION_CHARS`; ``assertion_count`` is the full count.
+      STATIC declarations (no per-assertion computed value exists — see the module
+      note); the composer marks them unverified rather than inventing a value.
+    * ``diff_hunks`` — capped at :data:`_DIGEST_MAX_HUNKS` per-hunk one-liners
+      (source line range + the first changed line, truncated); ``diff_hunk_count``
+      is the full count. NEVER the diff body.
+    * ``lint_flags`` — capped at :data:`_DIGEST_MAX_LINT_FLAGS` ``rule @ location``
+      strings (NAMES + locations, not counts); ``lint_flag_count`` is the full count.
     """
 
     audit_id: str
@@ -189,27 +224,58 @@ class RenderDigest:
     section_sha: str
     view_sha: str
     classification: str
+    tier: str
     diff_added: int
     diff_removed: int
+    diff_hunks: tuple[str, ...]
+    diff_hunk_count: int
     assertion_count: int
     assertions: tuple[str, ...]
     lint_flag_count: int
+    lint_flags: tuple[str, ...]
 
 
-def _parse_body_digest(text: str) -> tuple[str, int, int, int, tuple[str, ...]]:
+def _parse_tier(text: str) -> str:
+    """The tier from the section header ``## section: <slug>  [tier: <tier>]``."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## section:") and "[tier:" in stripped:
+            return stripped.split("[tier:", 1)[1].rstrip("]").strip()
+    return ""
+
+
+def _parse_body_digest(
+    text: str,
+) -> tuple[str, int, int, tuple[str, ...], int, int, tuple[str, ...]]:
     """Scan a render body for its digest fields (pure, fail-soft on shape drift).
 
-    Returns ``(classification, diff_added, diff_removed, assertion_count,
-    assertions)``. Anchored on the stable ``_render_section`` sub-headers
-    (``### diff-from-template`` / ``### assertions`` / ``### lint flags``); a
-    render body carries exactly ONE section, so there is no cross-section
-    ambiguity. Diff stats count added/removed lines INSIDE the ```` ```diff ````
-    fence only (never the ``+++``/``---`` file labels); assertion entries are the
-    ``- L<n>: …`` lines; each is truncated for the bound.
+    Returns ``(classification, diff_added, diff_removed, diff_hunks,
+    diff_hunk_count, assertion_count, assertions)``. Anchored on the stable
+    ``_render_section`` sub-headers (``### diff-from-template`` / ``### assertions``
+    / ``### lint flags``); a render body carries exactly ONE section, so there is no
+    cross-section ambiguity. Diff stats count added/removed lines INSIDE the
+    ```` ```diff ```` fence only (never the ``+++``/``---`` file labels); each HUNK
+    (``@@ … @@``) yields a one-liner naming its source line range + first changed
+    line; assertion entries are the ``- L<n>: …`` lines, each truncated. The diff
+    BODY never leaves this function — only counts + hunk one-liners.
     """
     classification = ""
     diff_added = diff_removed = 0
     assertions: list[str] = []
+    hunks: list[str] = []
+    hunk_count = 0
+    pending_hunk_range: str | None = None
+    pending_hunk_first: str | None = None
+
+    def _flush_hunk() -> None:
+        nonlocal pending_hunk_range, pending_hunk_first
+        if pending_hunk_range is None:
+            return
+        first = pending_hunk_first or "(no changed line)"
+        if len(hunks) < _DIGEST_MAX_HUNKS:
+            hunks.append(f"{pending_hunk_range}: {first}")
+        pending_hunk_range = pending_hunk_first = None
+
     section: str | None = None
     in_diff_fence = False
     for line in text.splitlines():
@@ -221,28 +287,59 @@ def _parse_body_digest(text: str) -> tuple[str, int, int, int, tuple[str, ...]]:
             section, in_diff_fence = "diff", False
             continue
         if stripped == "### assertions":
+            _flush_hunk()
             section = "assertions"
             continue
         if stripped == "### lint flags":
+            _flush_hunk()
             section = "lint"
             continue
         if section == "diff":
             if stripped.startswith("```"):
+                if in_diff_fence:  # closing fence — finalize the last hunk
+                    _flush_hunk()
                 in_diff_fence = not in_diff_fence
                 continue
             if in_diff_fence:
+                m = _HUNK_HEADER_RE.match(stripped)
+                if m is not None:
+                    _flush_hunk()
+                    hunk_count += 1
+                    start = int(m.group("start"))
+                    span = int(m.group("span")) if m.group("span") else 1
+                    end = start + max(span, 1) - 1
+                    pending_hunk_range = f"L{start}" if start == end else f"L{start}–{end}"
+                    continue
                 if line.startswith("+") and not line.startswith("+++"):
                     diff_added += 1
+                    if pending_hunk_first is None:
+                        pending_hunk_first = _trunc_hunk_line("+" + line[1:].strip())
                 elif line.startswith("-") and not line.startswith("---"):
                     diff_removed += 1
+                    if pending_hunk_first is None:
+                        pending_hunk_first = _trunc_hunk_line("-" + line[1:].strip())
         elif section == "assertions" and stripped.startswith("- L"):
             entry = stripped[2:]
             if len(entry) > _DIGEST_MAX_ASSERTION_CHARS:
                 entry = entry[: _DIGEST_MAX_ASSERTION_CHARS - 1] + "…"
             if len(assertions) < _DIGEST_MAX_ASSERTIONS:
                 assertions.append(entry)
+    _flush_hunk()
     assertion_count = _count_assertion_lines(text)
-    return classification, diff_added, diff_removed, assertion_count, tuple(assertions)
+    return (
+        classification,
+        diff_added,
+        diff_removed,
+        tuple(hunks),
+        hunk_count,
+        assertion_count,
+        tuple(assertions),
+    )
+
+
+def _trunc_hunk_line(text: str) -> str:
+    """Truncate one changed diff line to :data:`_DIGEST_MAX_HUNK_CHARS`."""
+    return text if len(text) <= _DIGEST_MAX_HUNK_CHARS else text[: _DIGEST_MAX_HUNK_CHARS - 1] + "…"
 
 
 def _count_assertion_lines(text: str) -> int:
@@ -260,6 +357,50 @@ def _count_assertion_lines(text: str) -> int:
         if in_assertions and stripped.startswith("- L"):
             count += 1
     return count
+
+
+def _parse_lint_flags(text: str) -> tuple[tuple[str, ...], int]:
+    """The lint flags as ``rule @ location`` NAME strings (bounded) + full count.
+
+    Each rendered flag line is ``- <canonical-json-of-the-finding>``
+    (``_render_section``); this parses that JSON and lifts the ``rule`` NAME plus a
+    location (``evidence.line`` → ``L<n>``, else the finding/evidence ``section``/
+    ``slug``). A finding whose JSON does not parse falls back to a truncated raw
+    line — fail-soft, never a crash. ``(none)`` renders without a ``- `` and so
+    counts zero. The list is capped at :data:`_DIGEST_MAX_LINT_FLAGS`; the count is
+    full (:func:`_count_lint_flag_lines`) so the composer discloses elision.
+    """
+    flags: list[str] = []
+    in_lint = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "### lint flags":
+            in_lint = True
+            continue
+        if stripped.startswith("### ") or stripped.startswith("## "):
+            in_lint = False
+            continue
+        if in_lint and stripped.startswith("- ") and len(flags) < _DIGEST_MAX_LINT_FLAGS:
+            flags.append(_lint_flag_label(stripped[2:]))
+    return tuple(flags), _count_lint_flag_lines(text)
+
+
+def _lint_flag_label(raw: str) -> str:
+    """``rule @ location`` for one rendered lint-flag JSON blob (fail-soft)."""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return _trunc_hunk_line(raw)
+    if not isinstance(obj, dict):
+        return _trunc_hunk_line(raw)
+    rule = str(obj.get("rule") or "flag")
+    evidence = obj.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    line_no = evidence.get("line")
+    if isinstance(line_no, int):
+        return f"{rule} @ L{line_no}"
+    where = obj.get("section") or evidence.get("slug") or evidence.get("name")
+    return f"{rule} @ {where}" if where else rule
 
 
 def _count_lint_flag_lines(text: str) -> int:
@@ -295,16 +436,29 @@ def read_render_digest(path: Path) -> RenderDigest | None:
     header = _parse_header(text)
     if header is None:
         return None
-    classification, diff_added, diff_removed, assertion_count, assertions = _parse_body_digest(text)
+    (
+        classification,
+        diff_added,
+        diff_removed,
+        diff_hunks,
+        diff_hunk_count,
+        assertion_count,
+        assertions,
+    ) = _parse_body_digest(text)
+    lint_flags, lint_flag_count = _parse_lint_flags(text)
     return RenderDigest(
         audit_id=header["audit_id"],
         section=header["section"],
         section_sha=header["section_sha"],
         view_sha=header["view_sha"],
         classification=classification,
+        tier=_parse_tier(text),
         diff_added=diff_added,
         diff_removed=diff_removed,
+        diff_hunks=diff_hunks,
+        diff_hunk_count=diff_hunk_count,
         assertion_count=assertion_count,
         assertions=assertions,
-        lint_flag_count=_count_lint_flag_lines(text),
+        lint_flag_count=lint_flag_count,
+        lint_flags=lint_flags,
     )

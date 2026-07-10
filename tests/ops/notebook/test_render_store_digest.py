@@ -109,6 +109,35 @@ def test_digest_bounds_assertion_list(tmp_path: Path) -> None:
     assert all(len(a) <= 121 for a in digest.assertions)
 
 
+def test_digest_carries_tier_and_diff_hunk_one_liners(tmp_path: Path) -> None:
+    _sv, path = _write(tmp_path, SOURCE)
+    digest = read_render_digest(path)
+    assert digest is not None
+    # The tier rides off the section header ``## section: model  [tier: …]``.
+    assert digest.tier in ("human_required", "auto_cleared")
+    # Per-hunk one-liners: a source line range + the first changed line, never the
+    # diff body. The ``model`` body changed (return 42 → 99) so there is a hunk.
+    assert digest.diff_hunk_count >= 1
+    assert len(digest.diff_hunks) >= 1
+    joined = " ".join(digest.diff_hunks)
+    assert joined.startswith("L") or " L" in joined  # a line range like L1 / L1–4
+    # A changed line (the added assert or the new return) is surfaced, truncated.
+    assert any(("return" in h or "assert" in h) for h in digest.diff_hunks)
+
+
+def test_digest_lists_lint_flag_names_and_locations(tmp_path: Path) -> None:
+    findings = [
+        {"slug": "model", "rule": "executes_live", "evidence": {"line": 9, "path": "x.csv"}},
+        {"slug": "model", "rule": "template_import_shadowed", "evidence": {"name": "np"}},
+    ]
+    _sv, path = _write(tmp_path, SOURCE, findings)
+    digest = read_render_digest(path)
+    assert digest is not None
+    assert digest.lint_flag_count == 2
+    assert "executes_live @ L9" in digest.lint_flags
+    assert "template_import_shadowed @ np" in digest.lint_flags
+
+
 def test_missing_render_reads_none(tmp_path: Path) -> None:
     sv = _section_view(SOURCE)
     path = render_path(tmp_path, audit_id="audit-1", section="model", view_sha=sv.view_sha)

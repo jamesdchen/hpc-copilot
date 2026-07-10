@@ -414,6 +414,81 @@ def test_second_refusal_stands_exactly_one_retry(
     assert len(read_utterances(experiment_dir)) == before + 1
 
 
+# ─── RULING 1 (2026-07-09): the popup is the PRIMARY read-and-sign channel ───
+
+
+def _notebook_append(experiment_dir: Path, req_id: int) -> dict[str, Any]:
+    """A ``tools/call`` for a NOTEBOOK sign-off append-decision."""
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": "tools/call",
+        "params": {
+            "name": "append-decision",
+            "arguments": {
+                "experiment_dir": str(experiment_dir),
+                "spec": {
+                    "scope_kind": "notebook",
+                    "scope_id": "audit-77",
+                    "block": "notebook-sign-off",
+                    "response": "reviewed the model section",
+                    "resolved": {"section": "model", "view_sha": "abc123def456"},
+                },
+            },
+        },
+    }
+
+
+def test_primary_popup_fires_before_any_refusal_for_notebook_signoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate-failing human-required NOTEBOOK sign-off ELICITS FIRST: the FIRST
+    message the client receives is the ``elicitation/create`` popup, never an
+    interim refusal (the model never sees one — this call is atomic)."""
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    server, runner = _scripted_server([(1, _authorship_refusal(), "")])
+    with FakeMcpClient(server) as client:
+        client.initialize(elicitation=True)
+        client.send(_notebook_append(experiment_dir, 1))
+        first = client.recv(timeout=10.0)
+        # PRIMARY: the very first server→client message is the popup, not a refusal.
+        assert first["method"] == "elicitation/create"
+        assert str(first["id"]).startswith("hpc-srv-")
+        # The popup carries the code-rendered sign-off prompt (D5) for the section.
+        assert "model" in first["params"]["message"]
+        # Answer it; the retry (now the fallback mechanism) lands the verdict.
+        client.send(
+            {
+                "jsonrpc": "2.0",
+                "id": first["id"],
+                "result": {"action": "accept", "content": {"utterance": "sign the model section"}},
+            }
+        )
+        resp = client.recv(timeout=10.0)
+    assert resp["id"] == 1
+    assert resp["result"]["structuredContent"]["elicitation"] == "captured"
+    assert len(runner.calls) == 2  # initial (would-refuse) + the retry
+
+
+def test_valid_utterance_append_never_pops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An append that ALREADY passes the gate (ok:true) returns straight through —
+    no popup on an already-valid append (RULING 1 pin c)."""
+    experiment_dir = _prime_namespace(tmp_path, monkeypatch)
+    server, runner = _scripted_server([(0, _envelope(ok=True), "")])
+    with FakeMcpClient(server) as client:
+        client.initialize(elicitation=True)
+        client.send(_notebook_append(experiment_dir, 1))
+        first = client.recv(timeout=10.0)
+    # The FIRST (and only) server→client message is the tools/call response, not an
+    # elicitation/create — the popup never fired.
+    assert "method" not in first
+    assert first["id"] == 1
+    structured = first["result"]["structuredContent"]
+    assert structured["ok"] is True
+    assert "elicitation" not in structured
+    assert len(runner.calls) == 1  # no retry, no popup
+
+
 # ─── item 12 / Addendum 7: declared-but-dark adaptive degradation ────────────
 
 
