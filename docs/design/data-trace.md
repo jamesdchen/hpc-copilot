@@ -888,3 +888,67 @@ item 7):
   the above; interactive brainstorm/comprehension rides `trace-render` +
   verify-relay once the trace corpus joins the relay corpus (NOT the signed
   join).
+
+Drift-log line: 2026-07-10 — **B3-LEAN section join LANDED** (post-run-#12
+batch item 7, user-ordered mechanize-now). What shipped vs Amendment 16:
+
+- **Freshness binding (core record model).** `state/data_trace.py`
+  `make_record(..., section_sha=)` stamps an additive `section_sha`;
+  `validate_record` enforces "non-empty string when present", absent = valid
+  (byte-identical to a pre-B3 record — a runner that does not stamp degrades to
+  stale-elide). NO `TRACE_SCHEMA_VERSION` bump (additive key; readers tolerate
+  it — the A14/A15 additive-field precedent).
+- **The reducer + render (core, `ops/notebook/audit_view.py`).**
+  `build_audit_view(..., audit_traces=)` takes the audit-scope trace records;
+  `_section_trace_summary` reduces them EXACTLY per A16: runner-tier ONLY
+  (`RECEIPT_GRADE_SOURCES`, A10), LATEST execution (`_latest_execution`
+  segments the runner stream on a `seq` reset), this section's subset, freshness
+  = the subset's stamped `section_sha` set must equal `{current_section_sha}`
+  (any missing/mismatched → `{"stale": True}`, elided with a disclosed marker),
+  then first→last per CHANGED observable (`_changed_observables`; unchanged →
+  nothing), citing `records_sha(subset)` as the SET-sha. `render_markdown` grew
+  a "runtime evidence (latest execution)" block; verdict-free (no
+  good/bad/wrong/suspicious/should).
+- **Signed, one-definition.** The summary is bound into the section's `view_sha`
+  (signed evidence, unlike the presentation-only next-actions footer) and is
+  read through `build_canonical_view` (`read_trace(experiment_dir, "audit",
+  audit_id, 0)`) — the ONE definition the T8 gate, the `notebook-audit-view`
+  verb, and the render plugin all recompute against, so their shas agree. The
+  preview path reads the same on-disk trace. Gated to `human_required` sections.
+- **Plugin (`examples/plugins/hpc-agent-notebook-render/_observe.py`).**
+  `observe_source` now derives `slug → section_sha` from
+  `parse_percent_source(source_text)` and threads it through
+  `run_observation`/`observe_cell` → `make_record(section_sha=)`, so each
+  runner-tier record carries the SAME normalized-section hash the audit view
+  computes (end-to-end freshness). This is the full plugin side the existing
+  observation loop allows.
+
+**Deviations from A16 (each with reason):**
+
+1. **No fixture rebake was needed** (the task anticipated one). `trace_summary`
+   is PRESENT-ONLY on the payload (added iff a `human_required` section has
+   non-stale changed evidence OR is stale), so a trace-free view — every
+   existing fixture, which carries no audit trace — is byte-identical. This
+   follows the `make_record` section/source present-only convention rather than
+   an always-present key; it is the cleaner house pattern and keeps view_sha
+   stable for the common (no-observable) section. The payload-shape change is
+   real (new key when evidence exists) and moves view_sha for exactly those
+   sections — the intended signed-evidence behaviour.
+2. **The structured wire result carries no `trace_summary` mirror.** The signed
+   surface is the `markdown` render (relayed verbatim) + the `view_sha` the
+   payload binds — both carry the summary. A `NotebookSectionView.trace_summary`
+   field would be a schema move (regen); like the `observables` wire field
+   (A14) and the `stage_interlock` fields (A15) it is deferred wire debt for the
+   serial rebake. Regen `--check` is GREEN (registry unchanged at 164; 209
+   schema models) precisely because nothing wire-facing moved.
+3. **Scope split honoured** — only the LEAN signed summary landed; no
+   interactive/comprehension features (those ride `trace-render` + verify-relay,
+   A16 scope split).
+
+Tests: `tests/ops/notebook/test_audit_view.py` +8 (changed-renders-first→last,
+the MANDATORY unchanged-renders-nothing + stale-wrong-sha-elided guards,
+missing-sha-stale, human_required-only, runner-tier-only, latest-execution-only,
+view_sha-binds); `tests/state/test_data_trace.py` +3 (stamp/validate/absent);
+`test_observe.py` +1 (stamped shas equal `parse_percent_source`'s). Targeted
+suites green (data_trace, audit_view, canonical, multi_human_gate, relay_due,
+data_trace_acceptance, flow_trace_ingest, trace_render, trace_diff, observe).
