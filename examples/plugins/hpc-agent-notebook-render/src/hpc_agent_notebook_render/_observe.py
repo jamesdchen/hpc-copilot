@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any
 import jupytext
 
 from hpc_agent.execution.mapreduce.data_trace_contract import (
-    TRACE_SOURCE_FIELD,
     TRACE_SOURCE_RUNNER,
     TRACE_TRANSPORT_FILENAME,
 )
@@ -98,10 +97,13 @@ def observe_cell(
         atoms = measure_observable(namespace[name], measurer=measurer)
         if atoms is None:
             continue
-        record = make_record(stage=name, seq=seq, atoms=atoms, section=section)
         # The runner stamps its OWN trust tier (A10): it is the trust-bearing
         # observer, so the record is receipt-grade ``runner`` by construction.
-        record[TRACE_SOURCE_FIELD] = TRACE_SOURCE_RUNNER
+        # ``source`` rides the record model — make_record validates it against
+        # the closed T2-contract tier set (no external post-stamp).
+        record = make_record(
+            stage=name, seq=seq, atoms=atoms, section=section, source=TRACE_SOURCE_RUNNER
+        )
         records.append(record)
         seq += 1
     return records, seq

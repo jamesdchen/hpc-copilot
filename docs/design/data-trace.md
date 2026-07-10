@@ -717,6 +717,36 @@ the config. Authoring visibility is a RENDER concern (draft-context / the
 audit view display the declared observables), not a storage one. T-R
 unblocks.
 
+**T-R LANDED (salvaged 2026-07-09, reviewed).** The runner between-cell
+observation loop shipped: the `observables: list[str] | None` config field
+rides the audited_source / notebook-record-config seam (absent → the loop is
+OFF and interview.json is byte-identical — the `attention_order` precedent,
+pinned by `test_audited_source_config_absent_is_byte_identical`); core's
+frame-blind `stdlib_measure` + the `Measurer` protocol land in
+`state/data_trace.py` (no pandas — the AST import pin holds); the plugin's
+`_observe.observe_source` execs the audited source cell-by-cell, measures each
+declared observable, and ingests **runner-tier** records into the audit scope
+(`traces/audit/<audit_id>/`). Reviewed adversarially against A10/A12/A14; one
+follow-up hardening applied over the salvaged commit: the `source` trust tier
+now rides the RECORD MODEL — `make_record(..., source=)` stamps it and
+`validate_record` enforces the closed T2-contract tier set
+(`TRACE_SOURCE_TIERS`), replacing the plugin's external post-stamp so an
+off-vocabulary tier can never enter the trust chain.
+
+Drift-log line: 2026-07-09 — T-R salvaged from the orphaned data-trace branch,
+reviewed, landed. **Section-join blockers B1 + B2 now CLOSED** (see the
+"Audit-view section join — EVALUATED, STOPPED" evaluation): **B1 (no
+producer)** — `observe_source` is the audit-scope trace producer that
+evaluation named missing; **B2 (record model carries no `source` tier)** —
+`make_record`/`validate_record` now carry and validate `source` against the
+closed tier set, so a receipt/sign-off consumer has a runner-tier field to
+filter on. The section join now waits **only on B3** (the per-section summary
++ freshness semantics ruling) and its payload-shape rebake. Wire/regen debt
+(deferred to the serial rebake): the new `observables` field on the
+`interview` `_AuditedSource` + `NotebookRecordConfigSpec`/`Result` schemas, and
+the source-tier field is additive on the trace record (no `TRACE_SCHEMA_VERSION`
+bump — readers tolerate the new key).
+
 ## Amendment 15 (2026-07-09): the fingerprint interlock LANDED (the Phase-3 amendment)
 
 Implemented in `ops/verify_reproduction.py`, riding the landed

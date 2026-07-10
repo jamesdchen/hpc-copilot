@@ -35,6 +35,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, runtime_checkable
 
 from hpc_agent import errors
+from hpc_agent.execution.mapreduce.data_trace_contract import (
+    TRACE_SOURCE_FIELD,
+    TRACE_SOURCE_TIERS,
+)
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.decision_journal import append_decision
@@ -422,15 +426,21 @@ def make_record(
     atoms: dict[str, Any],
     *,
     section: str | None = None,
+    source: str | None = None,
     flags: list[dict[str, Any]] | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
     """Build one validated trace record dict.
 
     ``stage`` is the fine-grained emit; ``section`` optionally names the audit
-    slug housing it (one section : many stages; both opaque to core). ``created_at``
-    auto-stamps UTC ISO-8601 when omitted. Raises :class:`errors.SpecInvalid` on
-    any shape violation (unknown atom, malformed value, bad flag).
+    slug housing it (one section : many stages; both opaque to core). ``source``
+    optionally stamps the emission's TRUST TIER (A10 — the T2-contract closed set
+    :data:`TRACE_SOURCE_TIERS`: ``runner``/``engine``/``draft``); the sanctioned
+    runner stamps ``runner`` so a receipt/sign-off consumer can filter to
+    receipt-grade records. Absent → no tier claimed (byte-identical for a legacy
+    or scope-emitted record). ``created_at`` auto-stamps UTC ISO-8601 when omitted.
+    Raises :class:`errors.SpecInvalid` on any shape violation (unknown atom,
+    malformed value, bad flag, or a ``source`` outside the closed tier set).
     """
     record: dict[str, Any] = {
         "stage": stage,
@@ -442,6 +452,8 @@ def make_record(
     }
     if section is not None:
         record["section"] = section
+    if source is not None:
+        record[TRACE_SOURCE_FIELD] = source
     errs = validate_record(record)
     if errs:
         raise errors.SpecInvalid("invalid trace record: " + "; ".join(errs))
@@ -452,8 +464,11 @@ def validate_record(record: Any) -> list[str]:
     """Return a list of shape errors for *record* (empty = valid). PURE.
 
     Validates the container shape, that every atom name is in the closed
-    registry set, each atom value matches its registry shape, and each flag is
-    the ``{rule, detail, evidence}`` finding shape.
+    registry set, each atom value matches its registry shape, each flag is
+    the ``{rule, detail, evidence}`` finding shape, and — when a ``source``
+    tier is present — that it is one of the closed T2-contract tiers
+    (:data:`TRACE_SOURCE_TIERS`; A10). A record with no ``source`` is valid
+    (absent = no tier claimed).
     """
     if not isinstance(record, dict):
         return ["record must be an object"]
@@ -465,6 +480,11 @@ def validate_record(record: Any) -> list[str]:
     section = record.get("section")
     if section is not None and not isinstance(section, str):
         errs.append("section must be a string when present")
+    if TRACE_SOURCE_FIELD in record and record[TRACE_SOURCE_FIELD] not in TRACE_SOURCE_TIERS:
+        errs.append(
+            f"{TRACE_SOURCE_FIELD} must be one of {list(TRACE_SOURCE_TIERS)} when present; "
+            f"got {record[TRACE_SOURCE_FIELD]!r}"
+        )
     if record.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
         errs.append(f"trace_schema_version must be {TRACE_SCHEMA_VERSION}")
     if not isinstance(record.get("created_at"), str) or not record.get("created_at"):
