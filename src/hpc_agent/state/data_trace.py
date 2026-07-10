@@ -5,7 +5,7 @@ a named, typed, meaning-free measurement of tabular data flow; each atom carries
 its COMPARISON SEMANTICS, which is what makes the diff engine discipline-generic.
 This module owns the *core* layer only (the design's layer split):
 
-* the record container (``{stage, section?, seq, atoms{}, flags[],
+* the record container (``{stage, section?, section_sha?, seq, atoms{}, flags[],
   trace_schema_version, created_at}``) and its shape validation,
 * THE ATOM SCHEMA REGISTRY — one definition (:data:`ATOM_REGISTRY`) carrying,
   per atom, the value shape, the comparison semantics, and the OpenLineage
@@ -426,6 +426,7 @@ def make_record(
     atoms: dict[str, Any],
     *,
     section: str | None = None,
+    section_sha: str | None = None,
     source: str | None = None,
     flags: list[dict[str, Any]] | None = None,
     created_at: str | None = None,
@@ -433,14 +434,22 @@ def make_record(
     """Build one validated trace record dict.
 
     ``stage`` is the fine-grained emit; ``section`` optionally names the audit
-    slug housing it (one section : many stages; both opaque to core). ``source``
+    slug housing it (one section : many stages; both opaque to core).
+    ``section_sha`` optionally binds the SECTION-LEVEL FRESHNESS (Amendment 16
+    B3-LEAN): the sanctioned runner stamps the section's current ``section_sha``
+    (the ``state.audit_source`` normalized-section hash) so the audit-view section
+    join can ELIDE a stale section's summary (a trace stamped with an older sha is
+    drift, never rendered as if current — the render-receipt ``section_sha``
+    precedent). Absent → the reader treats the record as unbound and therefore
+    stale-elides (core tolerates a runner that does not stamp). ``source``
     optionally stamps the emission's TRUST TIER (A10 — the T2-contract closed set
     :data:`TRACE_SOURCE_TIERS`: ``runner``/``engine``/``draft``); the sanctioned
     runner stamps ``runner`` so a receipt/sign-off consumer can filter to
     receipt-grade records. Absent → no tier claimed (byte-identical for a legacy
     or scope-emitted record). ``created_at`` auto-stamps UTC ISO-8601 when omitted.
     Raises :class:`errors.SpecInvalid` on any shape violation (unknown atom,
-    malformed value, bad flag, or a ``source`` outside the closed tier set).
+    malformed value, bad flag, a non-string ``section_sha``, or a ``source``
+    outside the closed tier set).
     """
     record: dict[str, Any] = {
         "stage": stage,
@@ -452,6 +461,8 @@ def make_record(
     }
     if section is not None:
         record["section"] = section
+    if section_sha is not None:
+        record["section_sha"] = section_sha
     if source is not None:
         record[TRACE_SOURCE_FIELD] = source
     errs = validate_record(record)
@@ -465,10 +476,11 @@ def validate_record(record: Any) -> list[str]:
 
     Validates the container shape, that every atom name is in the closed
     registry set, each atom value matches its registry shape, each flag is
-    the ``{rule, detail, evidence}`` finding shape, and — when a ``source``
-    tier is present — that it is one of the closed T2-contract tiers
-    (:data:`TRACE_SOURCE_TIERS`; A10). A record with no ``source`` is valid
-    (absent = no tier claimed).
+    the ``{rule, detail, evidence}`` finding shape, that a ``section_sha`` (when
+    present) is a non-empty string (the B3-LEAN freshness binding), and — when a
+    ``source`` tier is present — that it is one of the closed T2-contract tiers
+    (:data:`TRACE_SOURCE_TIERS`; A10). A record with no ``source`` / no
+    ``section_sha`` is valid (absent = nothing claimed).
     """
     if not isinstance(record, dict):
         return ["record must be an object"]
@@ -480,6 +492,9 @@ def validate_record(record: Any) -> list[str]:
     section = record.get("section")
     if section is not None and not isinstance(section, str):
         errs.append("section must be a string when present")
+    section_sha = record.get("section_sha")
+    if section_sha is not None and (not isinstance(section_sha, str) or not section_sha):
+        errs.append("section_sha must be a non-empty string when present")
     if TRACE_SOURCE_FIELD in record and record[TRACE_SOURCE_FIELD] not in TRACE_SOURCE_TIERS:
         errs.append(
             f"{TRACE_SOURCE_FIELD} must be one of {list(TRACE_SOURCE_TIERS)} when present; "
