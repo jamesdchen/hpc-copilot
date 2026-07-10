@@ -38,6 +38,27 @@
       },
       "title": "Seams",
       "type": "array"
+    },
+    "translation_exposed_files": {
+      "description": "Sealed files that git would apply line-ending/text translation to on a future checkout (per `git check-attr text` in the pack's repo), which would silently change the bytes under the sha seal. Empty when every file is pinned (`-text`) or when exposure could not be determined.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Translation Exposed Files",
+      "type": "array"
+    },
+    "translation_disclosure": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "NEVER-blocking disclosure about future-checkout byte drift (the seal still binds the bytes as they are NOW). A WARNING naming the exposed files + the exact `.gitattributes` remedy when any sealed file is exposed to git text/eol translation; a disclosed 'translation-exposure unknown' line when git is absent or the pack is not in a git repo (disclosure-or-refusal — never silence); None when every sealed file was checked and is pinned safe.",
+      "title": "Translation Disclosure"
     }
   },
   "$defs": {
