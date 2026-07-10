@@ -36,7 +36,9 @@ every call — no cache, no second source of truth.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -182,6 +184,7 @@ def _status_for_pack(
 
     bind_state = binds_by_pack.get(pack_name)
     bind_wire: PackBind | None = None
+    audit_template: str | None = None
     if bind_state is not None:
         bind_wire = PackBind(
             pack=bind_state.pack,
@@ -189,6 +192,22 @@ def _status_for_pack(
             manifest_sha=bind_state.manifest_sha,
             bound_at=_bound_at(records_by_pack.get(pack_name, []), bind_state.manifest_sha),
         )
+        # Run-#12 finding 1: COMPOSE the audit-template default from the bound
+        # pack's ``audit_template`` seam (identity/pointer only). Resolve the seam
+        # relpath (manifest-dir-relative) to an experiment-dir-relative path — what
+        # the caller would pass as ``template`` — so the on-ramp presents a
+        # confirm-default rather than an open question. Only when the pack is
+        # current-bound AND declares the seam; a manifest missing/drifted → None.
+        manifest = manifests_by_pack.get(pack_name)
+        manifest_rel = entry.get("manifest")
+        if manifest is not None and isinstance(manifest_rel, str) and manifest_rel:
+            seam_rel = manifest.seams.get("audit_template")
+            if isinstance(seam_rel, str) and seam_rel:
+                template_path = (experiment_dir / manifest_rel).parent / seam_rel
+                with contextlib.suppress(ValueError):  # cross-drive (Windows) → None
+                    audit_template = os.path.relpath(template_path, experiment_dir).replace(
+                        os.sep, "/"
+                    )
 
     slots: list[PackSlotStatus] = []
     unfillable: list[PackUnfillableRequirement] = []
@@ -257,7 +276,13 @@ def _status_for_pack(
                 )
             )
 
-    return PackStatusEntry(bind=bind_wire, slots=slots, unfillable=unfillable, dangling=dangling)
+    return PackStatusEntry(
+        bind=bind_wire,
+        slots=slots,
+        unfillable=unfillable,
+        dangling=dangling,
+        audit_template=audit_template,
+    )
 
 
 @primitive(

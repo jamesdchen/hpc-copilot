@@ -108,6 +108,18 @@ class PackStatusEntry(BaseModel):
     slots: list[PackSlotStatus] = Field(default_factory=list)
     unfillable: list[PackUnfillableRequirement] = Field(default_factory=list)
     dangling: list[PackDanglingReference] = Field(default_factory=list)
+    audit_template: str | None = Field(
+        default=None,
+        description=(
+            "Experiment-dir-relative path to this current-bound pack's "
+            "``audit_template`` seam file, when it declares one — the AUDIT-FACING "
+            "template prepared for building an experiment off the pack (run-#12 "
+            "finding 1). Identity/pointer only: the on-ramp COMPOSES the default "
+            "template path from this seam and presents a confirm-default rather "
+            "than an open path question. ``None`` when the pack declares no "
+            "``audit_template`` seam or is not current-bound."
+        ),
+    )
 
 
 class PackStatusResult(BaseModel):
