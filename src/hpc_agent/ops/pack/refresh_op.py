@@ -24,6 +24,9 @@ Lives inside the ``pack`` subject, reaching only ``state.*`` + the same-subject
 
 from __future__ import annotations
 
+import os
+import shlex
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +41,8 @@ from hpc_agent._wire.actions.pack_refresh import (
     PackSlotToReearn,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.io import append_jsonl_line
+from hpc_agent.infra.time import utcnow
 from hpc_agent.ops.pack.bind_op import pack_bind
 from hpc_agent.state import pack_sweep
 from hpc_agent.state.decision_journal import read_decisions
@@ -51,9 +56,31 @@ from hpc_agent.state.pack_receipts import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-__all__ = ["pack_refresh", "refresh_opted_in_packs", "RefreshedPack", "read_packs_optin"]
+__all__ = [
+    "pack_refresh",
+    "refresh_opted_in_packs",
+    "RefreshedPack",
+    "read_packs_optin",
+    "CheckRun",
+    "run_check_command",
+    "run_slot_checks",
+    "check_timeout_sec",
+    "pack_checks_log_path",
+]
 
 _PRIMITIVE = "pack-refresh"
+
+#: The auto-remedy subprocess timeout (2026-07-10 evening ruling, CONVERSION 1:
+#: "the gate auto-remedy RUNS the caller-authored check command itself"). A domain
+#: check may hash/replay real data, so this is generous relative to the smoke-test
+#: probe's 60s. Overridable per-deployment via :data:`_CHECK_TIMEOUT_ENV` — the
+#: env is the override channel (the gate signature stays ``(experiment_dir)`` at
+#: both submit seats; no per-caller plumbing).
+_DEFAULT_CHECK_TIMEOUT_SEC = 300.0
+_CHECK_TIMEOUT_ENV = "HPC_PACK_CHECK_TIMEOUT_SEC"
+#: Cap on captured stdout/stderr kept per check run (the journal is a trail, not a
+#: transcript store) — the smoke-test ``_tail`` posture.
+_CHECK_OUTPUT_TAIL = 4000
 
 #: The reduced slot-status word → the wire/report status literal. A re-bind moves
 #: the manifest sha so a covered receipt reduces STALE by construction.
@@ -74,6 +101,203 @@ class RefreshedPack:
     removed_files: list[str] = field(default_factory=list)
     changed_files: list[str] = field(default_factory=list)
     note: str | None = None
+
+
+@dataclass(frozen=True)
+class CheckRun:
+    """The outcome of running ONE caller-authored check command (CONVERSION 1).
+
+    ``ok`` is True only when the subprocess spawned, did not time out, and exited
+    0. ``exit_code`` is ``None`` on a timeout or a spawn failure (the command was
+    unparseable / not found). ``stdout_tail`` / ``stderr_tail`` are bounded
+    captures (:data:`_CHECK_OUTPUT_TAIL`) — the journal is a trail, not a store.
+    """
+
+    check: str
+    argv: list[str]
+    exit_code: int | None
+    timed_out: bool
+    spawn_error: str | None
+    stdout_tail: str
+    stderr_tail: str
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0 and not self.timed_out and self.spawn_error is None
+
+
+def check_timeout_sec() -> float:
+    """The auto-remedy check timeout: :data:`_CHECK_TIMEOUT_ENV` override, else default.
+
+    A non-numeric / non-positive env value falls back to the default (a
+    misconfigured override must never make the timeout zero/negative).
+    """
+    raw = os.environ.get(_CHECK_TIMEOUT_ENV)
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            return _DEFAULT_CHECK_TIMEOUT_SEC
+        if value > 0:
+            return value
+    return _DEFAULT_CHECK_TIMEOUT_SEC
+
+
+def pack_checks_log_path(experiment_dir: Path, pack: str) -> Path:
+    """The per-pack auto-remedy check-run log — sibling to the decisions journal.
+
+    ``.hpc/packs/<pack>.checks.jsonl`` next to ``.hpc/packs/<pack>.decisions.jsonl``.
+    A dedicated OPERATIONAL ledger, deliberately NOT the attestation journal: the
+    sha-bound receipt trail must stay pure (a receipt is a check's *result*; this
+    log records that core *ran* the check and what it emitted).
+    """
+    return experiment_dir / ".hpc" / "packs" / f"{pack}.checks.jsonl"
+
+
+def _tail(text: str) -> str:
+    """Keep only the trailing :data:`_CHECK_OUTPUT_TAIL` chars (the ``_tail`` posture)."""
+    return text[-_CHECK_OUTPUT_TAIL:] if len(text) > _CHECK_OUTPUT_TAIL else text
+
+
+def run_check_command(check: str, *, cwd: Path, timeout_sec: float) -> CheckRun:
+    """Run ONE caller-authored check command as a subprocess. Never raises.
+
+    **The exact exec form (CONVERSION 1, the executor precedent — core already
+    subprocesses caller code; DP2 bans importing/interpreting pack logic, not
+    orchestrating caller-side execution):**
+
+    * The command string is tokenized with :func:`shlex.split` (POSIX quoting
+      rules — quote-aware) into an argv list.
+    * It is run with ``subprocess.run(argv, shell=False, cwd=<experiment dir>)``.
+      ``shell=False`` means there is NO shell interpolation — a pipe, ``$(...)``,
+      a glob, or ``&&`` in the caller's string is a LITERAL argv token, never a
+      shell operation (the "no shell string splitting surprises" contract). The
+      trust boundary is identical to an executor: an in-repo caller-authored
+      command, run in the experiment dir.
+
+    A timeout, a non-zero exit, an unparseable command, or a missing executable
+    all surface in the returned :class:`CheckRun` (never a raise) so the gate
+    branches deterministically. ``cwd`` is the experiment dir so a relative check
+    (``python packs/rv/check_rv.py --experiment-dir .``) resolves as authored.
+    """
+    try:
+        argv = shlex.split(check)
+    except ValueError as exc:
+        return CheckRun(
+            check=check,
+            argv=[],
+            exit_code=None,
+            timed_out=False,
+            spawn_error=f"unparseable check command ({exc})",
+            stdout_tail="",
+            stderr_tail="",
+        )
+    if not argv:
+        return CheckRun(
+            check=check,
+            argv=[],
+            exit_code=None,
+            timed_out=False,
+            spawn_error="empty check command",
+            stdout_tail="",
+            stderr_tail="",
+        )
+    try:
+        proc = subprocess.run(  # noqa: S603 — caller-authored in-repo command, the executor precedent
+            argv,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout_sec,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = (
+            exc.stdout
+            if isinstance(exc.stdout, str)
+            else (exc.stdout or b"").decode("utf-8", "replace")
+        )
+        stderr = (
+            exc.stderr
+            if isinstance(exc.stderr, str)
+            else (exc.stderr or b"").decode("utf-8", "replace")
+        )
+        return CheckRun(
+            check=check,
+            argv=argv,
+            exit_code=None,
+            timed_out=True,
+            spawn_error=None,
+            stdout_tail=_tail(stdout),
+            stderr_tail=_tail(stderr + f"\n[pack-check] timed out after {timeout_sec}s"),
+        )
+    except OSError as exc:
+        # The executable was not found / not runnable — a spawn failure, not a
+        # check verdict. Refusal survives; the gate names this.
+        return CheckRun(
+            check=check,
+            argv=argv,
+            exit_code=None,
+            timed_out=False,
+            spawn_error=f"{type(exc).__name__}: {exc}",
+            stdout_tail="",
+            stderr_tail="",
+        )
+    return CheckRun(
+        check=check,
+        argv=argv,
+        exit_code=proc.returncode,
+        timed_out=False,
+        spawn_error=None,
+        stdout_tail=_tail(proc.stdout or ""),
+        stderr_tail=_tail(proc.stderr or ""),
+    )
+
+
+def run_slot_checks(
+    experiment_dir: Path,
+    targets: dict[tuple[str, str], str],
+    *,
+    timeout_sec: float | None = None,
+) -> dict[tuple[str, str], CheckRun]:
+    """Run each failing slot's caller check ONCE, journal the outcome, return the runs.
+
+    *targets* maps ``(target_pack, slot) -> check command``. Distinct command
+    strings run exactly once (two slots sharing a command re-use the single run —
+    a check often records receipts for several slots). Every ``(pack, slot)`` gets
+    a journal line under that pack's :func:`pack_checks_log_path`, recording the
+    exact argv + bounded output + outcome. Returns the per-slot :class:`CheckRun`
+    so the gate re-evaluates and, on a surviving refusal, names the outcome.
+    """
+    if timeout_sec is None:
+        timeout_sec = check_timeout_sec()
+    runs_by_cmd: dict[str, CheckRun] = {}
+    out: dict[tuple[str, str], CheckRun] = {}
+    for (pack, slot), check in targets.items():
+        if check not in runs_by_cmd:
+            runs_by_cmd[check] = run_check_command(
+                check, cwd=experiment_dir, timeout_sec=timeout_sec
+            )
+        run = runs_by_cmd[check]
+        out[(pack, slot)] = run
+        append_jsonl_line(
+            pack_checks_log_path(experiment_dir, pack),
+            {
+                "at": utcnow().isoformat(),
+                "pack": pack,
+                "slot": slot,
+                "check": check,
+                "argv": run.argv,
+                "exit_code": run.exit_code,
+                "timed_out": run.timed_out,
+                "spawn_error": run.spawn_error,
+                "ok": run.ok,
+                "stdout_tail": run.stdout_tail,
+                "stderr_tail": run.stderr_tail,
+            },
+        )
+    return out
 
 
 def read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]]:

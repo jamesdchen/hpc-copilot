@@ -600,10 +600,12 @@ class PackReceiptsMissing(HpcError):
     error_code = "precondition_failed"
     retry_safe = False
     category = "user"
-    #: Structured per-slot remedy — ``[{slot, status, check}]`` — populated by
-    #: :meth:`for_slots`. ``check`` is the caller-authored command the driving skill
-    #: runs UNPROMPTED to re-earn the slot (``None`` when the caller recorded none).
-    #: Default empty; instances built via :meth:`for_slots` set their own.
+    #: Structured per-slot remedy — ``[{slot, status, check, check_run}]`` —
+    #: populated by :meth:`for_slots`. ``check`` is the caller-authored command the
+    #: gate ALREADY RAN (CONVERSION 1) to re-earn the slot (``None`` when the caller
+    #: recorded none). ``check_run`` is a one-line outcome of that run when it fired
+    #: but did not clear the slot (``None`` when no check ran). Default empty;
+    #: instances built via :meth:`for_slots` set their own.
     remedy: list[dict[str, str | None]] = []  # noqa: RUF012
     remediation = (
         "One or more required pack receipt slots are missing, stale, or failed. "
@@ -620,6 +622,7 @@ class PackReceiptsMissing(HpcError):
         slots: list[tuple[str, str]],
         *,
         checks: dict[str, str | None] | None = None,
+        check_runs: dict[str, str] | None = None,
     ) -> PackReceiptsMissing:
         """Build the loud message naming each uncleared slot + its status.
 
@@ -630,33 +633,55 @@ class PackReceiptsMissing(HpcError):
 
         *checks* optionally maps a slot slug → its caller-authored check command
         (the receipt/check association recorded on the interview ``receipt_bindings``
-        entry). When supplied, the AUTO-REMEDY has already re-sealed + re-bound any
-        stale manifest (journaled old→new), so the only step left is caller-side:
-        the exact check command(s) ride the refusal as :attr:`remedy`, phrased for
-        the driving skill to run UNPROMPTED and retry — zero human turns (core never
-        runs the check itself, DP2). The instance attribute :attr:`remedy` carries
-        the structured ``[{slot, status, check}]`` list for a harness to consume.
+        entry). By the time this refusal is raised the AUTO-REMEDY has already
+        re-sealed + re-bound any stale manifest (journaled old→new) AND EXECUTED the
+        caller-side check itself (CONVERSION 1: the gate runs it as a subprocess in
+        the experiment dir, DP2-safe caller-side execution — core never *imports*
+        pack logic). The refusal therefore only survives when a slot declared no
+        check, the check failed/timed out, or the slot is still uncleared after it
+        ran.
+
+        *check_runs* optionally maps a slot slug → a one-line outcome of the check
+        the gate ran (why it did not clear — non-zero exit + tail, timeout, spawn
+        failure). Woven into the message so a surviving refusal NAMES the check
+        output. The instance attribute :attr:`remedy` carries the structured
+        ``[{slot, status, check, check_run}]`` list for a harness to consume.
         """
         detail = ", ".join(f"{slot!r} ({status})" for slot, status in slots)
         checks = checks or {}
+        check_runs = check_runs or {}
         remedy: list[dict[str, str | None]] = [
-            {"slot": slot, "status": status, "check": checks.get(slot)} for slot, status in slots
+            {
+                "slot": slot,
+                "status": status,
+                "check": checks.get(slot),
+                "check_run": check_runs.get(slot),
+            }
+            for slot, status in slots
         ]
-        cmds = [r["check"] for r in remedy if r["check"]]
+        ran = sorted((slot, out) for slot, out in check_runs.items() if out)
+        no_check = sorted(slot for slot, _status in slots if not checks.get(slot))
         remedy_line = ""
-        if cmds:
-            joined = "; ".join(str(c) for c in cmds)
-            remedy_line = (
-                " AUTO-REMEDY: any stale manifest was already re-sealed + re-bound "
-                "(journaled old→new). Run the caller-side check command(s) to re-earn "
-                f"the receipt(s), then retry the submit WITHOUT asking the human: {joined}"
+        if ran:
+            joined = "; ".join(f"{slot!r}: {out}" for slot, out in ran)
+            remedy_line += (
+                " AUTO-REMEDY re-sealed + re-bound any stale manifest AND RAN the "
+                f"caller-side check(s), but the slot(s) did not clear — {joined}. "
+                "Fix the check (it is caller-authored, run entirely outside core) or "
+                "the pack content, then retry."
+            )
+        if no_check:
+            names = ", ".join(repr(s) for s in no_check)
+            remedy_line += (
+                f" No check command is declared for {names}; record a current receipt "
+                "via `hpc-agent pack-record-receipt` (or add a `check` to the "
+                "receipt_bindings entry so the gate can re-earn it unprompted)."
             )
         err = cls(
             f"domain-pack receipts are not cleared for graduation — "
-            f"{len(slots)} required slot(s) not current+passed: {detail}. Record a "
-            "current receipt for each via `hpc-agent pack-record-receipt`; a stale "
-            "slot means the bind or a checked file drifted — re-bind and re-check "
-            f"(drift = unsigned by construction).{remedy_line}"
+            f"{len(slots)} required slot(s) not current+passed: {detail}. A stale "
+            "slot means the bind or a checked file drifted (drift = unsigned by "
+            f"construction).{remedy_line}"
         )
         err.remedy = remedy
         return err
