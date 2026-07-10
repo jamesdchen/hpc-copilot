@@ -149,6 +149,11 @@ def test_doc_pins_the_attributed_utterance_log() -> None:
     assert "declared-multi-actor" in lower or "more than one actor" in lower, (
         "the >1-declared-actors degradation condition must be pinned"
     )
+    # (e) the auth boundary rides the same trust limit (anti-vendor-lockout T2).
+    assert "ANTHROPIC_API_KEY" in text and "harness-side concern" in lower, (
+        "the auth boundary (provider credentials are harness-side, out of scope "
+        "exactly as disabling a capture hook) must be pinned"
+    )
 
 
 def test_utterances_all_carries_the_api_names() -> None:
@@ -206,6 +211,10 @@ def test_doc_pins_capability_negotiation() -> None:
     )
     assert "declared == detected == behaved" in text, (
         "the conformance-kit alignment claim must be pinned"
+    )
+    assert "detection asymmetry" in text.lower() and "BY BEHAVIOR" in text, (
+        "the D-K3 rule must be pinned: needles detect OUR reference providers; "
+        "a foreign harness is detected by behavior (the kit verdict)"
     )
 
 

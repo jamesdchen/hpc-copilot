@@ -294,6 +294,15 @@ exactly as today. Attributed ≠ verified. The tier is stated, not
 overclaimed: full-strength when the harness holds up its end, named friction
 when it does not.
 
+The AUTH boundary is the same class (anti-vendor-lockout T2): how a harness's
+own processes authenticate to their model provider — e.g. the
+`ANTHROPIC_API_KEY` a subscription user must export before any spawned worker
+can run — is a harness-side concern, OUT OF SCOPE of this contract exactly as
+disabling a capture hook is. Core neither checks, stores, nor forwards
+provider credentials; a conforming harness earns no extra trust by naming its
+provider, and an auth failure inside the harness is the harness's own named
+friction, not a contract violation.
+
 ## The CLI is the invariant substrate
 
 The `hpc-agent` CLI stays the invariant substrate under every harness (the
@@ -369,6 +378,15 @@ named seam:
   reported honestly.
 - **Capability 4 (trusted display)** — reported `"unknown"`: no detection seam
   exists yet for a trusted-render surface, so the verb asserts nothing.
+
+**The detection asymmetry (D-K3; anti-vendor-lockout T2).** The needles above
+detect OUR reference providers — the Claude Code hooks this repo installs;
+they are not the definition of the capability. A foreign harness is detected
+BY BEHAVIOR: it proves each capability by running the conformance kit against
+its own providers (declared == detected == behaved), and `harness-capabilities`
+reporting a needle absent means only that the REFERENCE provider is absent —
+never that a conforming foreign provider is. The needle is a fast path for our
+own install; the kit verdict is the portable claim.
 
 **Tiers key off detection, not declaration** — this is existing behavior, not a
 new rule. The gate already reads the DETECTED presence of the log (capability 1)
