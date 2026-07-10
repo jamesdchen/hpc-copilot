@@ -37,8 +37,10 @@ if TYPE_CHECKING:
 __all__ = [
     "FileEntry",
     "Manifest",
+    "ManifestDelta",
     "VerifyReport",
     "build_manifest",
+    "manifest_delta",
     "verify_manifest",
 ]
 
@@ -102,6 +104,73 @@ class Manifest:
             for f in payload.get("files", [])
         )
         return cls(entries=tuple(sorted(entries, key=lambda e: e.path)))
+
+
+@dataclass(frozen=True)
+class ManifestDelta:
+    """The ADDITIVE delta from a REMOTE manifest to a LOCAL one.
+
+    Answers "what must a transfer ship so the remote's content matches local,
+    WITHOUT deleting anything the remote already has". This is the atom the
+    rsync-less deploy delta (queue item 6b) stands on: when no ``rsync`` is on
+    PATH the tar fallback would re-ship the whole tree, so instead it hashes
+    both trees (the same content-hash identity :class:`Manifest` computes),
+    diffs them here, and tars only :attr:`to_ship`.
+
+    * ``missing``    — paths present locally, ABSENT on the remote (never shipped)
+    * ``mismatched`` — paths on BOTH sides whose content sha256 differs
+    * ``extra``      — paths on the remote, absent locally. Reported for
+      disclosure only and **never deleted** — deletion is out of scope for the
+      rsync-less delta (an rsync ``--delete`` is the tool for that). Kept
+      distinct so a caller can surface it without acting on it.
+
+    Comparison is by content sha256 (size is redundant once the hash matches),
+    so two byte-identical files at the same path are never re-shipped.
+    """
+
+    missing: tuple[str, ...]
+    mismatched: tuple[str, ...]
+    extra: tuple[str, ...]
+
+    @property
+    def to_ship(self) -> tuple[str, ...]:
+        """The exact set a delta transfer tars — ``missing + mismatched``, sorted.
+
+        Excludes ``extra`` (additive-only: the remote keeps files local dropped).
+        """
+        return tuple(sorted((*self.missing, *self.mismatched)))
+
+    @property
+    def nothing_to_ship(self) -> bool:
+        """True when the remote is already content-identical for every local file."""
+        return not self.missing and not self.mismatched
+
+
+def manifest_delta(local: Manifest, remote: Manifest) -> ManifestDelta:
+    """Diff a LOCAL manifest against a REMOTE one — the additive transfer set.
+
+    Pure function over two manifests. A local path absent on the remote is
+    ``missing``; present on both with a differing sha256 is ``mismatched``;
+    present on the remote but not locally is ``extra`` (reported, never acted
+    on). :attr:`ManifestDelta.to_ship` is ``missing + mismatched`` — exactly the
+    files a delta tar must carry so the remote's content matches local.
+    """
+    remote_sha = {e.path: e.sha256 for e in remote.entries}
+    local_paths = {e.path for e in local.entries}
+    missing: list[str] = []
+    mismatched: list[str] = []
+    for e in local.entries:
+        rsha = remote_sha.get(e.path)
+        if rsha is None:
+            missing.append(e.path)
+        elif rsha != e.sha256:
+            mismatched.append(e.path)
+    extra = [p for p in remote_sha if p not in local_paths]
+    return ManifestDelta(
+        missing=tuple(sorted(missing)),
+        mismatched=tuple(sorted(mismatched)),
+        extra=tuple(sorted(extra)),
+    )
 
 
 def build_manifest(root: Path, *, paths: Iterable[str] | None = None) -> Manifest:

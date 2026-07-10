@@ -276,6 +276,10 @@ def _tar_fallback_run_calls(tmp_path: Path, *, exclude: list[str], delete: bool)
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        # No remote hash manifest -> the full-copy tar shape this helper pins
+        # (queue item 6b routes to full copy when the remote can't hash). The
+        # delta shape has its own coverage below.
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -343,6 +347,10 @@ def test_tar_fallback_transfer_death_leaves_live_tree_untouched(tmp_path: Path) 
             "hpc_agent.infra.transport.run_capture_bounded",
             side_effect=[ok, subprocess.TimeoutExpired(cmd="ssh", timeout=300)],
         ) as run_mock,
+        # Force the full-copy path so the two-leg side_effect maps to
+        # stage-drop then a dying extract (item 6b's delta leg is covered
+        # separately); without this the manifest fetch would consume a leg.
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
@@ -404,6 +412,9 @@ def test_tar_fallback_preclean_timeout_is_actionable(tmp_path: Path) -> None:
             "hpc_agent.infra.transport.run_capture_bounded",
             side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=300),
         ),
+        # Full-copy path: the first bounded leg is then the stage-dir drop
+        # (item 6b's manifest fetch would otherwise be the first timeout).
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -429,6 +440,9 @@ def test_tar_fallback_preclean_failure_aborts_before_extract(tmp_path: Path) -> 
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=fail) as run_mock,
+        # Full-copy path so the single non-probe leg is the pre-clean itself
+        # (item 6b's manifest fetch would otherwise add a leg).
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
         # Absorb the lazy `ssh -V` probe (see _is_ssh_version_probe): the
         # Popen patch below is GLOBAL (transport.subprocess IS the stdlib
         # module), so a cold-cache probe would otherwise run the REAL
@@ -874,3 +888,208 @@ def test_pump_emits_progress_on_forced_short_interval(
     assert "[transport] progress:" in err
     assert "MB / ~" in err and "elapsed" in err
     assert err.count("[transport] progress:") >= 2  # multiple chunks -> multiple beats
+
+
+# --- queue item 6b: content-hash DELTA on rsync-less hosts ---------------------
+
+
+def _remote_manifest_like(local_root: Path, *, drop: set[str], flip: set[str]):
+    """Build a REMOTE :class:`Manifest` from the local tree, then simulate the
+    remote diverging: *drop* paths are absent remotely (-> local `missing`),
+    *flip* paths get a different sha (-> `mismatched`). Everything else is
+    byte-identical (-> never shipped)."""
+    from dataclasses import replace
+
+    from hpc_agent.ops.transfer.manifest import Manifest, build_manifest
+
+    entries = []
+    for e in build_manifest(local_root).entries:
+        if e.path in drop:
+            continue
+        entries.append(replace(e, sha256="0" * 64) if e.path in flip else e)
+    return Manifest(entries=tuple(entries))
+
+
+def test_delta_tars_exactly_the_changed_set(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """6b fires-test: with a remote hash manifest available, the rsync-less push
+    tars EXACTLY the missing+mismatched files (not the whole tree), extracts them
+    ADDITIVELY (no pre-clean / stage-swap), and discloses the delta. If the delta
+    were not applied, tar would archive ``.`` and this assertion would fail."""
+    (tmp_path / "same.txt").write_text("identical")
+    (tmp_path / "changed.txt").write_text("v1")
+    (tmp_path / "new.txt").write_text("brand new")
+    remote_manifest = _remote_manifest_like(tmp_path, drop={"new.txt"}, flip={"changed.txt"})
+
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    assert result.returncode == 0
+    tar_cmd = popen_mock.call_args[0][0]
+    # tar c -C <src> changed.txt new.txt  — exactly the sorted changed set, no ".".
+    assert tar_cmd[:3] == ["tar", "c", "-C"]
+    assert tar_cmd[4:] == ["changed.txt", "new.txt"]
+    assert "." not in tar_cmd[4:]
+    assert "same.txt" not in tar_cmd  # identical file is never shipped
+    # ADDITIVE extract: no pre-clean, no stage-swap (delta never prunes remote).
+    remote_cmd = str(run_mock.call_args[0][0][-1])
+    assert "tar x -C /r" in remote_cmd
+    assert "find /r -mindepth 1" not in remote_cmd
+    assert ".hpc_stage" not in remote_cmd
+    err = capsys.readouterr().err
+    assert "content-hash DELTA" in err
+    assert "shipping 2 changed/new" in err
+    assert "Additive only" in err
+
+
+def test_delta_identical_remote_ships_zero_bytes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When the remote manifest matches every local file, the push ships nothing —
+    no tar, no ssh transfer — and says so. The empty-ship guard must fire."""
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "b.txt").write_text("b")
+    remote_manifest = _remote_manifest_like(tmp_path, drop=set(), flip=set())
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    assert result.returncode == 0
+    popen_mock.assert_not_called()  # no tar spawned
+    run_mock.assert_not_called()  # no ssh transfer
+    err = capsys.readouterr().err
+    assert "already identical for all 2 files" in err
+    assert "shipping 0 bytes" in err
+
+
+def test_manifest_unavailable_falls_back_to_full_tar_with_disclosure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """First deploy / pre-delta runtime: no remote manifest -> the whole tree
+    ships via the full-copy tar (archives ``.``), and the 6a disclosure names
+    the NO-DELTA cost AND the reason (item 6b). The reason guard must fire."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    tar_cmd = popen_mock.call_args[0][0]
+    assert tar_cmd[-1] == "."  # whole tree, not a delta file list
+    err = capsys.readouterr().err
+    assert "NO DELTA" in err
+    assert "remote content-hash manifest unavailable" in err
+
+
+def test_delta_kill_switch_forces_full_tar(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HPC_NO_DEPLOY_DELTA=1 forces the whole-tree copy even when a remote
+    manifest WOULD be available — the manifest is never even fetched — and the
+    disclosure names the kill-switch as the reason."""
+    monkeypatch.setenv("HPC_NO_DEPLOY_DELTA", "1")
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()),
+        patch("hpc_agent.infra.transport._remote_push_manifest") as manifest_mock,
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stdout.read.return_value = b""
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+    manifest_mock.assert_not_called()  # kill-switch skips the round-trip entirely
+    assert popen_mock.call_args[0][0][-1] == "."  # whole tree
+    assert "HPC_NO_DEPLOY_DELTA=1" in capsys.readouterr().err
+
+
+def test_remote_snippet_agrees_with_local_manifest(tmp_path: Path) -> None:
+    """The DEPLOYED-runtime snippet and the LOCAL manifest must describe the same
+    tree with the same content-hash atoms, or the delta would ship phantom
+    diffs. Execute the real snippet (as the cluster would, cwd = the tree, same
+    excludes) under this interpreter and assert byte-for-byte manifest equality
+    with :func:`build_manifest`."""
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+
+    from hpc_agent.ops.transfer.manifest import Manifest, build_manifest
+
+    tree = tmp_path / "tree"
+    for rel, content in {
+        "keep.txt": "a",
+        "src/mod.py": "code",
+        "data/x.bin": "\x00\x01",
+        "results/out.txt": "OUTPUT",  # excluded -> must appear in NEITHER manifest
+        "sub/nested/deep.txt": "deep",
+    }.items():
+        f = tree / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+    exclude = ["results/", ".git/"]
+    snippet_file = tmp_path / "snippet.py"
+    snippet_file.write_text(transport._REMOTE_MANIFEST_SNIPPET, encoding="utf-8")
+    env = {
+        **_os.environ,
+        "HPC_DELTA_EXCLUDES": _json.dumps([p.rstrip("/") for p in exclude]),
+        "HPC_DELTA_CAP": str(transport._DELTA_MANIFEST_FILE_CAP),
+    }
+    proc = _sp.run(
+        [sys.executable, str(snippet_file)],
+        cwd=str(tree),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    remote = Manifest.from_dict(_json.loads(proc.stdout))
+    local = transport._local_push_manifest(tree, exclude)
+    # Same content identity -> zero delta either direction.
+    assert remote.digest == local.digest
+    assert remote.digest == build_manifest(tree, paths=list(local.paths)).digest
+    assert "results/out.txt" not in remote.paths  # excluded on both sides
+    from hpc_agent.ops.transfer.manifest import manifest_delta
+
+    assert manifest_delta(local, remote).nothing_to_ship

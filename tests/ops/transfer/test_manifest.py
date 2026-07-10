@@ -14,6 +14,7 @@ import pytest
 from hpc_agent.ops.transfer.manifest import (
     Manifest,
     build_manifest,
+    manifest_delta,
     verify_manifest,
 )
 
@@ -139,3 +140,62 @@ def test_corruption_projects_to_corrupt_transfer(tmp_path: Path) -> None:
     _tree(tmp_path / "dst", {"x.txt": b"hellp"})
     features = verify_manifest(tmp_path / "dst", m).failure_features()
     assert features.error_class_raw == "corrupt_transfer"
+
+
+# ── manifest_delta: the additive rsync-less deploy delta (queue item 6b) ──────
+
+
+def test_manifest_delta_classifies_missing_mismatched_extra(tmp_path: Path) -> None:
+    """The pure diff sorts each local file into missing / mismatched and reports
+    remote-only files as extra. ``same.txt`` (byte-identical on both) appears in
+    NONE of the three buckets — it is never re-shipped."""
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    _tree(
+        local,
+        {
+            "same.txt": b"identical",  # on both, same bytes -> not shipped
+            "changed.txt": b"local version",  # on both, differs -> mismatched
+            "new.txt": b"only local",  # absent remote -> missing
+        },
+    )
+    _tree(
+        remote,
+        {
+            "same.txt": b"identical",
+            "changed.txt": b"REMOTE version",
+            "stale.txt": b"only remote",  # absent local -> extra (never deleted)
+        },
+    )
+    delta = manifest_delta(build_manifest(local), build_manifest(remote))
+    assert delta.missing == ("new.txt",)
+    assert delta.mismatched == ("changed.txt",)
+    assert delta.extra == ("stale.txt",)
+    # to_ship is exactly missing + mismatched, sorted — never the identical file
+    # and never the remote-only (extra) file: the delta is additive.
+    assert delta.to_ship == ("changed.txt", "new.txt")
+    assert "same.txt" not in delta.to_ship
+    assert "stale.txt" not in delta.to_ship
+    assert not delta.nothing_to_ship
+
+
+def test_manifest_delta_identical_trees_ship_nothing(tmp_path: Path) -> None:
+    """Byte-identical trees produce an empty ship set — the >95%-already-remote
+    case the delta exists to make free (the run-#11 8.4 GB re-ship)."""
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    files = {"a.txt": b"one", "sub/b.bin": b"\x00\x01\x02"}
+    _tree(local, files)
+    _tree(remote, files)
+    delta = manifest_delta(build_manifest(local), build_manifest(remote))
+    assert delta.to_ship == ()
+    assert delta.nothing_to_ship
+    assert delta.missing == () and delta.mismatched == () and delta.extra == ()
+
+
+def test_manifest_delta_empty_remote_ships_all(tmp_path: Path) -> None:
+    """A first deploy (empty remote manifest) makes every local file missing —
+    so to_ship == the whole local tree (a delta that ships everything, once)."""
+    local = tmp_path / "local"
+    _tree(local, {"a.txt": b"a", "b.txt": b"b"})
+    delta = manifest_delta(build_manifest(local), Manifest(entries=()))
+    assert delta.to_ship == ("a.txt", "b.txt")
+    assert delta.extra == ()
