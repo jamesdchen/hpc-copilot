@@ -827,17 +827,47 @@ latency. Skills prose: hpc-submit / hpc-campaign name `status-watch` as the ONLY
 sanctioned cluster watch and pair every pre-consent with arming the wake.
 Tested in `tests/ops/decision/test_overnight_consent.py` (18 cases: bare-ack /
 model-composed refusal, each cap, spec-change kills consent, expired/over-cap,
-wake-not-armed, morning-brief latency). SEAMS LEFT FOR INTEGRATION (noted for
-the orchestrator): the block bodies (submit-s3 / campaign anomaly) do not yet
-CALL `standing_consent_status` to auto-advance overnight and `record_consumption`
-on each auto-advance, and the morning brief is a library function not yet folded
-into the `status-snapshot` brief — both are wiring, not new substrate. A campaign
-scope's wake liveness probe is skipped (per-run lease key does not apply); the
-token presence + kind is still required — USER RULED (2026-07-09): ship as-is,
-DEFER the reconcile-tick-recency liveness marker to run-#12 evidence (watch the
-campaign's overnight behavior live, then rule). NO new registry verb was added (the
-consent rides `append-decision`, the gate/brief are library functions), so there
-is no `_SPEC_VERBS` / registry-count / prose-count / primitive-doc debt.
+wake-not-armed, morning-brief latency). A campaign scope's wake liveness probe is
+skipped (per-run lease key does not apply); the token presence + kind is still
+required. NO new registry verb was added (the consent rides `append-decision`,
+the gate/brief are library functions), so there is no `_SPEC_VERBS` /
+registry-count / prose-count / primitive-doc debt.
+
+**Wiring landed (2026-07-09).** The three named seams are now wired into their
+call sites (`tests/ops/decision/test_overnight_wiring.py`, 17 cases):
+
+* **Seam 1 — auto-advance under consent.** The overnight-consumable boundaries
+  are named ONCE (`overnight.OVERNIGHT_CONSUMABLE_BLOCKS`: `submit-s3` for a run,
+  `campaign-watch`'s anomaly halt for a campaign); a boundary NOT named there
+  never auto-advances, no matter how live the consent. `overnight`
+  `consume_boundary_under_consent` is the ONE consult-and-ledger seat: it reuses
+  `standing_consent_status` for liveness (never re-derived) and records the
+  auto-advance via `record_consumption` in the SAME breath (an unrecorded
+  consumption is the laundering class), idempotently per spec identity (a re-tick
+  / gate-replay re-enters the boundary but never double-ledgers). `block_gate`
+  gains `assert_greenlit_or_consented` (the consent-aware gate `submit-s3`'s body
+  now calls, keyed on the run's sidecar `cmd_sha`); the `block_drive._chain`
+  gated-park site consults the same seat and CHAINS into `submit-s3` instead of
+  parking when live, else parks with the refusal leg (`expired` / `over-…-cap` /
+  `spec-changed` / `no-consent` / `boundary-not-consumable`) folded into the park
+  brief. `campaign_watch`'s `watching_anomaly` terminator auto-advances the
+  self-chain under a live campaign consent (identity = a `_spec_sha` over the
+  greenlit manifest fields) and discloses the consumption; otherwise it parks.
+* **Seams 2+3 — morning brief in the snapshot / disclosure outlives the consent.**
+  `status-snapshot` folds `overnight.morning_brief_if_any` into `brief["overnight"]`
+  for each digested run — journal-first, no new SSH, appears once, `[]` when
+  nothing went overnight. The section surfaces `failed_at` vs `surfaced_at`
+  latency and SURVIVES consent expiry: a lapsed consent still discloses what it
+  consumed (`consumed_count > 0`), so the disclosure never evaporates with the
+  grant.
+
+Still open: a spend METER — `consume_boundary_under_consent` passes
+`spent_budget`/`spent_walltime` = 0.0 (the record-time cap presence + the expiry
+morning-boundary are enforced now; live over-cap metering needs a spend source
+and is a follow-on seam). Campaign wake liveness: USER RULED (2026-07-09) ship-as-is, DEFER the reconcile-tick-recency liveness marker to run-#12 evidence (watch the campaign's overnight behavior live, then rule).
+The wiring added no registry verb (the two new `block_gate` / `overnight`
+functions are library seams), so there is still no `_SPEC_VERBS` / registry /
+prose / primitive-doc debt.
 
 Addendum 11: **16. Scheduler-native concurrency caps vs. afterany waves**
 (backends; saturation). The #339 wave chain bounds concurrency by chaining

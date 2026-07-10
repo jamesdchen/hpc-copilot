@@ -61,18 +61,24 @@ if TYPE_CHECKING:
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
     "CONSENT_SCOPE_KINDS",
+    "OVERNIGHT_CONSUMABLE_BLOCKS",
     "WAKE_KIND",
     "ConsentDecision",
+    "ConsumptionOutcome",
     "status_watch_armed",
     "assert_wake_armed",
     "assert_consent_hard_caps",
     "latest_standing_consent",
     "standing_consent_status",
     "assert_standing_consent",
+    "is_consumable_boundary",
+    "consume_boundary_under_consent",
     "overnight_ledger_path",
     "record_consumption",
+    "read_consumption_ledger",
     "notification_plan",
     "overnight_morning_brief",
+    "morning_brief_if_any",
 ]
 
 # The block-terminator convention for a STANDING CONSENT. Mirrors the
@@ -90,6 +96,19 @@ OVERNIGHT_CONSUMED_BLOCK = "overnight-consumed"
 # "named boundaries while the human sleeps" of item 8. (Notebook/scope/etc.
 # touchpoints are synchronous human work, never overnight-consumable.)
 CONSENT_SCOPE_KINDS = frozenset({"run", "campaign"})
+
+# The block boundaries a standing consent of each scope kind may auto-advance
+# overnight (item 8 seam 1). A boundary NOT named here is NEVER consumed under a
+# consent, no matter how live — the two designated overnight boundaries are the
+# run's main-array launch (``submit-s3``, after the S2 canary verified) and the
+# campaign's anomaly halt (``campaign-watch``'s loud-fail terminator). Every
+# other gated boundary (``submit-s2`` stage/canary, ``submit-s4`` harvest,
+# ``aggregate-run`` reduce) always parks for a live human — a pre-consent cannot
+# launch a canary the human never saw or reduce results they never reviewed.
+OVERNIGHT_CONSUMABLE_BLOCKS: dict[str, frozenset[str]] = {
+    "run": frozenset({"submit-s3"}),
+    "campaign": frozenset({"campaign-watch"}),
+}
 
 # The ONLY sanctioned cluster watch (the watch-rule amendment): a harness-tracked
 # ``status-watch`` whose terminal re-invokes the driver. A hand-rolled local log
@@ -471,6 +490,132 @@ def read_consumption_ledger(
     return out
 
 
+# ── the wiring seam: consult-and-consume a named boundary (item 8 seam 1) ─────
+
+
+@dataclass(frozen=True)
+class ConsumptionOutcome:
+    """The result of consulting a standing consent AT an auto-advanceable boundary.
+
+    ``consumed`` is True only when the boundary is an :data:`OVERNIGHT_CONSUMABLE_BLOCKS`
+    member for the scope AND a live consent covers it — in which case the auto-advance
+    was recorded to the consumption ledger in the SAME breath (``line`` is the written
+    record, or ``None`` when an equal consumption was already ledgered — the idempotent
+    re-tick / gate-replay case). ``decision`` is the underlying :class:`ConsentDecision`;
+    ``decision.reason`` names the refusal leg for the park brief when ``consumed`` is
+    False.
+    """
+
+    consumed: bool
+    decision: ConsentDecision
+    line: dict[str, Any] | None
+
+
+def is_consumable_boundary(scope_kind: str, boundary_block: str) -> bool:
+    """True when *boundary_block* is a consent-auto-advanceable boundary for the scope.
+
+    The SoT for "NEVER auto-advance a boundary whose block isn't named in the
+    consent's scope" (item 8 seam 1): the two designated overnight boundaries are
+    :data:`OVERNIGHT_CONSUMABLE_BLOCKS`. Every other boundary parks for a live human
+    regardless of any consent.
+    """
+    return boundary_block in OVERNIGHT_CONSUMABLE_BLOCKS.get(scope_kind, frozenset())
+
+
+def _already_consumed(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    boundary_block: str,
+    bound_cmd_sha: str,
+) -> bool:
+    """True when this boundary was already ledgered under the SAME consent identity.
+
+    The idempotency key is ``(consumed_block, detail.cmd_sha)``: a boundary is
+    consumed exactly once per spec identity. This keeps re-consulting the consent
+    safe — the driver's park site and the gated block's own gate both funnel here,
+    and a later re-tick / a detached-block replay re-enters the same boundary — so a
+    duplicate audit line (which would double-count in the morning brief) is never
+    written for one real auto-advance.
+    """
+    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
+        if str(line.get("consumed_block") or "") != boundary_block:
+            continue
+        if str(_as_dict(line.get("detail")).get("cmd_sha") or "") == bound_cmd_sha:
+            return True
+    return False
+
+
+def consume_boundary_under_consent(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    boundary_block: str,
+    current_cmd_sha: str,
+    event_kind: str = "auto-advance",
+    failed_at: str | None = None,
+    detail: dict[str, Any] | None = None,
+    now_iso: str | None = None,
+    spent_budget: float = 0.0,
+    spent_walltime: float = 0.0,
+) -> ConsumptionOutcome:
+    """Consult a scope's standing consent at *boundary_block*; ledger the auto-advance.
+
+    The ONE place a boundary is consumed under a standing consent (item 8 seam 1),
+    reusing the substrate's own checks — :func:`standing_consent_status` for liveness
+    (never re-derived inline, the one-definition rule) and :func:`record_consumption`
+    for the ledger. Returns a :class:`ConsumptionOutcome`:
+
+    * boundary NOT named for the scope → ``consumed=False``,
+      ``reason="boundary-not-consumable"`` — the caller PARKS (a live consent for a
+      DIFFERENT boundary never launches this one).
+    * no live consent (expired / over-cap / spec-changed / no consent) →
+      ``consumed=False`` carrying the failing leg — the caller PARKS with the reason
+      in the brief.
+    * a live consent covers the boundary → ``consumed=True``; the auto-advance is
+      recorded (``failed_at`` = when it happened, defaulting to now) with the current
+      push :func:`notification_plan` so a disclosure GAP is itself journaled. Recording
+      is idempotent per spec identity (:func:`_already_consumed`).
+
+    The caller supplies ``current_cmd_sha`` (the run sidecar fingerprint / the campaign
+    spec identity), mirroring how :func:`standing_consent_status` delegates identity
+    derivation. ``spent_budget`` / ``spent_walltime`` default to 0.0 — a spend meter is
+    a future seam; the expiry (morning boundary) + spec-identity legs are enforced now.
+    """
+    if not is_consumable_boundary(scope_kind, boundary_block):
+        return ConsumptionOutcome(
+            False, ConsentDecision(False, "boundary-not-consumable", None), None
+        )
+    decision = standing_consent_status(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        current_cmd_sha=current_cmd_sha,
+        now_iso=now_iso,
+        spent_budget=spent_budget,
+        spent_walltime=spent_walltime,
+    )
+    if not decision.live:
+        return ConsumptionOutcome(False, decision, None)
+    stamped_detail: dict[str, Any] = {"cmd_sha": current_cmd_sha, **(detail or {})}
+    if _already_consumed(experiment_dir, scope_kind, scope_id, boundary_block, current_cmd_sha):
+        # Already ledgered for this identity — a live consent still authorizes the
+        # advance, but a second audit line would double-count in the morning brief.
+        return ConsumptionOutcome(True, decision, None)
+    line = record_consumption(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        consumed_block=boundary_block,
+        event_kind=event_kind,
+        failed_at=failed_at or now_iso or utcnow_iso(),
+        detail=stamped_detail,
+        notification=notification_plan(experiment_dir),
+    )
+    return ConsumptionOutcome(True, decision, line)
+
+
 # ── the notification leg (item 8, first amendment) ────────────────────────────
 
 
@@ -580,6 +725,31 @@ def overnight_morning_brief(
         "consumed": consumed,
         "consumed_count": len(consumed),
     }
+
+
+def morning_brief_if_any(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    now_iso: str | None = None,
+) -> dict[str, Any] | None:
+    """The scope's morning brief IFF a consent OR any consumption exists, else ``None``.
+
+    The status-snapshot fold (item 8 seams 2+3): a scope earns an overnight brief
+    section when the human recorded a standing consent for it OR when anything was
+    auto-advanced under one. The consumption disclosure deliberately OUTLIVES the
+    consent — a consent that expired overnight still surfaces what it consumed
+    (``consumed_count > 0``), so the disclosure never evaporates with the grant.
+    Returns ``None`` when there is nothing overnight to disclose (the byte-unchanged
+    case for a scope that never went overnight).
+    """
+    brief = overnight_morning_brief(
+        experiment_dir, scope_kind=scope_kind, scope_id=scope_id, now_iso=now_iso
+    )
+    if brief.get("has_consent") or int(brief.get("consumed_count") or 0) > 0:
+        return brief
+    return None
 
 
 def _now() -> Any:

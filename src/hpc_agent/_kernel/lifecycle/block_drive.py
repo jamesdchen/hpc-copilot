@@ -57,6 +57,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from hpc_agent.ops.overnight import ConsumptionOutcome
+
 __all__ = [
     "plan_block_action",
     "run_tick",
@@ -761,7 +763,26 @@ def _chain(
         # a resume cursor whose ``next_verb`` is the gated block, and exit. A later
         # tick advances into it once the human's greenlight is journaled and its
         # gate finds it (design: needs_decision + gate agree, zero gate re-scoping).
+        #
+        # OVERNIGHT AUTO-ADVANCE (item 8 seam 1): before parking, consult the run's
+        # standing consent. A LIVE consent covering this named boundary consumes the
+        # greenlight — the auto-advance is recorded to the consumption ledger in the
+        # same breath (:func:`_consume_overnight`), and the driver chains into the
+        # gated block (whose own consent-aware gate re-verifies the same consent). A
+        # not-live / not-named boundary parks exactly as today, carrying the refusal
+        # reason so the park brief says WHY the overnight consent did not carry.
         if block_chain.is_gated(successor):
+            overnight = _consume_overnight(experiment_dir, run_id, successor)
+            if overnight is not None and overnight.consumed:
+                _log.info(
+                    "overnight consent for %s consumed the %s greenlight — auto-advancing",
+                    run_id,
+                    successor,
+                )
+                last_action = "chained"
+                spec = _next_spec_hint(result)
+                verb = successor
+                continue
             _park(
                 experiment_dir,
                 run_id=run_id,
@@ -772,6 +793,14 @@ def _chain(
                 spec=spec,
                 result=result,
             )
+            park_reason = result.get("reason") or (
+                f"{verb} complete; greenlight required before {successor} — parked."
+            )
+            if overnight is not None and not overnight.consumed:
+                park_reason = (
+                    f"{park_reason} (no live standing consent to auto-advance overnight: "
+                    f"{overnight.decision.reason})"
+                )
             return (
                 BlockDriveResult(
                     action="awaiting_decision",
@@ -781,10 +810,7 @@ def _chain(
                     next_verb=successor,
                     stage_reached=stage,
                     brief=result.get("brief") if isinstance(result.get("brief"), dict) else None,
-                    reason=(
-                        result.get("reason")
-                        or f"{verb} complete; greenlight required before {successor} — parked."
-                    ),
+                    reason=park_reason,
                 ),
                 0,
             )
@@ -806,6 +832,41 @@ def _chain(
             reason="no block verb to run",
         ),
         0,
+    )
+
+
+def _consume_overnight(
+    experiment_dir: Path, run_id: str, successor: str
+) -> ConsumptionOutcome | None:
+    """Consult the run's standing consent at a gated boundary (item 8 seam 1).
+
+    Returns ``None`` when there is no run to key on (a bare tick) — the caller then
+    parks as usual. Otherwise returns the substrate's :class:`ConsumptionOutcome`:
+    ``consumed=True`` means a LIVE consent covered this named boundary and the
+    auto-advance was ledgered in the same breath, so the driver may chain into
+    ``successor``; ``consumed=False`` carries the refusal leg for the park brief.
+
+    ``current_cmd_sha`` is the run's sidecar tree fingerprint — the identity a spec
+    change moves — read here so the consent's spec-identity binding is checked against
+    the SAME token the S3 gate uses. A fail-safe read: any sidecar surprise yields an
+    empty identity, which the substrate treats as a spec mismatch (not live) → parks.
+    """
+    if not run_id:
+        return None
+    from hpc_agent.ops.overnight import consume_boundary_under_consent
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+        current_cmd_sha = str((sidecar or {}).get("cmd_sha") or "")
+    except Exception:  # noqa: BLE001 — a bad sidecar must not crash the tick; park instead
+        current_cmd_sha = ""
+    return consume_boundary_under_consent(
+        experiment_dir,
+        scope_kind="run",
+        scope_id=run_id,
+        boundary_block=successor,
+        current_cmd_sha=current_cmd_sha,
     )
 
 

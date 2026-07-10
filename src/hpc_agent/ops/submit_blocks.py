@@ -44,7 +44,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.infra.cost import CostEstimate, estimate_core_hours
 from hpc_agent.ops.aggregate_flow import aggregate_flow
-from hpc_agent.ops.block_gate import assert_greenlit_target
+from hpc_agent.ops.block_gate import assert_greenlit_or_consented, assert_greenlit_target
 from hpc_agent.ops.data_manifest import render_manifest_disclosure
 from hpc_agent.ops.monitor.arm import decide_monitor_arm, summary_from_last_status
 from hpc_agent.ops.monitor_flow import monitor_flow
@@ -773,11 +773,17 @@ def submit_s3(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
 
 
 def _submit_s3_impl(experiment_dir: Path, *, spec: SubmitS3Spec) -> SubmitBlockResult:
-    assert_greenlit_target(
+    # Greenlight gate with the overnight-consent fallback (item 8 seam 1): a live
+    # standing consent for this run consumes the S2→S3 greenlight and launches the
+    # main array unattended, recording the auto-advance to the consumption ledger in
+    # the same breath. ``current_cmd_sha`` is the run's tree fingerprint — the SAME
+    # identity a spec change moves, so a regenerated grid kills the consent here too.
+    assert_greenlit_or_consented(
         experiment_dir,
         run_id=spec.submit.submit.run_id,
         verb="submit-s3",
         predecessor="S2",
+        current_cmd_sha=_current_cmd_sha(experiment_dir, spec.submit.submit.run_id),
     )
     # Idempotent re-invoke (run #7): replay a prior worker's recorded terminal for
     # the current tree BEFORE the canary-TTL re-check — the run already ran, so
