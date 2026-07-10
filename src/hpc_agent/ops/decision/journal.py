@@ -269,6 +269,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     """
     experiment_dir = Path(experiment_dir)
     resolved = _default_next_block(experiment_dir, spec)
+    resolved = _compose_overnight_consent(experiment_dir, spec, resolved)
     _assert_no_code_derived_fields(resolved)
     _assert_brief_provenance(experiment_dir, spec, resolved)
     _assert_human_authorship(experiment_dir, spec, resolved)
@@ -3201,6 +3202,36 @@ def _assert_challenge_authorship(
 
 
 # ── overnight standing-consent authorship gate (notebook-audit.md item 8) ─────
+
+
+def _compose_overnight_consent(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Poka-yoke seat: compose the wake + cap defaults for a standing consent.
+
+    The item-8 conversions (notebook-audit.md ruling, 2026-07-10) run HERE, before
+    the gates, so a composed block satisfies the caps + wake assertions rather than
+    tripping their refusals — the human is handed a complete, editable ``resolved``
+    (with every composed field disclosed in ``composed_defaults``) instead of a
+    NO-GO. A non-``overnight-consent`` record passes untouched; off a run/campaign
+    scope nothing is composed (the authorship gate raises on the bad scope). Never
+    composes ``cmd_sha`` — its absence still refuses at
+    :func:`hpc_agent.ops.overnight.assert_consent_hard_caps` (the identity binding
+    is not a default). Reached through the top-level ``hpc_agent.ops.overnight``
+    role-root sibling, exactly as the authorship gate below imports it.
+    """
+    from hpc_agent.ops import overnight as _overnight
+
+    if spec.block != _overnight.OVERNIGHT_CONSENT_BLOCK:
+        return resolved
+    if spec.scope_kind not in _overnight.CONSENT_SCOPE_KINDS:
+        return resolved
+    return _overnight.compose_overnight_consent(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        resolved=resolved if isinstance(resolved, dict) else {},
+    )
 
 
 def _assert_overnight_consent_authorship(

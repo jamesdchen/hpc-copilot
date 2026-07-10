@@ -164,6 +164,12 @@ class AuditView:
     template_module_sha: str
     view_sha: str
     payload: Mapping[str, Any]
+    #: The compose-ready DRAFT for each dropped template slug (draft-at-pass):
+    #: ``(slug, template_section_source)`` in template order. Pure presentation —
+    #: NOT part of ``view_sha`` (the roll-up already covers the dropped slugs), and
+    #: never applied to the source. Defaulted for back-compat with any positional
+    #: constructor; :func:`build_audit_view` always populates it.
+    dropped_template_drafts: tuple[tuple[str, str], ...] = ()
 
 
 # ── canonical JSON / hashing ─────────────────────────────────────────────────
@@ -394,6 +400,12 @@ def build_audit_view(
 
     source_slugs = set(source.slugs)
     dropped = tuple(s.slug for s in template.sections if s.slug not in source_slugs)
+    # Draft-at-pass: the missing section's draft is KNOWN — it is the template's
+    # own cell source verbatim. Compose it (never applied to the source), disclosed
+    # only in the markdown footer, so it never enters the ``view_sha`` payload.
+    dropped_drafts = tuple(
+        (s.slug, s.source) for s in template.sections if s.slug not in source_slugs
+    )
 
     module_payload: dict[str, Any] = {
         "source_module_sha": source.module_sha,
@@ -408,6 +420,7 @@ def build_audit_view(
         template_module_sha=template.module_sha,
         view_sha=_sha_json(module_payload),
         payload=module_payload,
+        dropped_template_drafts=dropped_drafts,
     )
 
 
@@ -482,8 +495,42 @@ def render_markdown(view: AuditView) -> str:
         lines.extend(_render_section(sv))
 
     lines.extend(_render_next_actions(view))
+    lines.extend(_render_dropped_drafts(view))
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_dropped_drafts(view: AuditView) -> list[str]:
+    """Compose-ready drafts for the sections the source DROPPED (draft-at-pass).
+
+    When the source omits a template section, the missing section's draft is
+    KNOWN — it is the template's own cell source, verbatim (marker included). The
+    poka-yoke composes it here so the human/LLM pastes a structurally-complete
+    section, rather than being merely TOLD a slug is missing and left to re-derive
+    it (the run-#10 conversion doctrine: compose what code can). Pure presentation:
+    it is NOT part of ``view_sha`` (the roll-up already covers the dropped SLUGS,
+    exactly as ``_render_next_actions`` adds nothing the sha covers), and it NEVER
+    edits the source — applying the draft stays the human's/LLM's act.
+    """
+    if not view.dropped_template_drafts:
+        return []
+    lines: list[str] = ["## compose the dropped sections", ""]
+    lines.append(
+        "These template sections are absent from the source; the graduation gate "
+        "(T9) refuses on them. Each draft below is the template's own cell source "
+        "(marker included) — paste it into the source in template order, then "
+        "re-run the loop from lint. Applying it is your act; the view never edits "
+        "the source."
+    )
+    lines.append("")
+    for slug, source in view.dropped_template_drafts:
+        lines.append(f"### {slug}")
+        lines.append("")
+        lines.append("```python")
+        lines.append(source.rstrip("\n"))
+        lines.append("```")
+        lines.append("")
+    return lines
 
 
 def _render_next_actions(view: AuditView) -> list[str]:

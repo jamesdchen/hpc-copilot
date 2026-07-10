@@ -340,6 +340,34 @@ x = 1
     assert view.dropped_template_slugs == ("model",)
 
 
+def test_dropped_section_draft_composed_at_pass() -> None:
+    # Draft-at-pass: the dropped section's draft is COMPOSED (the template's own
+    # cell source) and disclosed in the markdown footer — never applied to source.
+    source_missing_model = """\
+# %%
+# hpc-audit-section: setup
+import numpy as np
+x = 1
+"""
+    src, tmpl = _mods(source_missing_model)
+    view = build_audit_view(src, tmpl, [])
+    assert [slug for slug, _ in view.dropped_template_drafts] == ["model"]
+    draft = dict(view.dropped_template_drafts)["model"]
+    # The composed draft is the template's model-section source, marker included.
+    assert "hpc-audit-section: model" in draft
+    assert "def train():" in draft
+    md = render_markdown(view)
+    assert "## compose the dropped sections" in md
+    assert "def train():" in md
+
+
+def test_no_dropped_drafts_when_source_complete() -> None:
+    src, tmpl = _mods(SOURCE_INHERITED)
+    view = build_audit_view(src, tmpl, [])
+    assert view.dropped_template_drafts == ()
+    assert "## compose the dropped sections" not in render_markdown(view)
+
+
 # ── markdown render ──────────────────────────────────────────────────────────
 
 
