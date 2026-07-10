@@ -565,11 +565,37 @@ the tar full-copy fallback and re-shipped 8.4 GB to CARC over a ~1 MB/s VPN
 (hours) when >95% of the tree was already remote (17.8 GB from prior
 campaigns). Two parts: (a) DISCLOSURE — the fallback must say "no rsync →
 no delta → N MB will re-ship" at deploy start (the payload-size WARN exists;
-the cause line does not); (b) MANIFEST DELTA — the tar path can delta without
+the cause line does not) — **SHIPPED (part a)** as `transport._disclose_no_rsync`;
+(b) MANIFEST DELTA — the tar path can delta without
 rsync using the data-trace content-hash atoms: remote hashes its tree, local
 tars only mismatched files into the F-G stage dir. Windows rsync installs
 (MSYS/cwRsync) stay out of scope — the agent-blind-ssh / path-translation
 class killed ControlMaster here already.
+
+**SHIPPED (part b, 2026-07-09).** `rsync_push`'s no-rsync branch now runs a
+content-hash DELTA before the tar fallback. The deployed runtime hashes its own
+tree cluster-side (`transport._REMOTE_MANIFEST_SNIPPET` — stdlib-only python,
+base64-piped over ONE bounded ssh round-trip, exclude-filtered and cap-bounded
+so the returned hash manifest stays small), the local side builds the matching
+`ops/transfer/manifest.Manifest`, and the new pure `manifest_delta(local,
+remote)` splits into `missing` / `mismatched` / `extra`; the tar then archives
+EXACTLY `to_ship = missing + mismatched` (via `_tar_ssh_push(only_paths=...)`)
+and extracts ADDITIVELY. Never deletes remote files from a delta — `extra` is
+reported (in the disclosure) but never pruned; deletion stays rsync's job (an
+identical-remote push ships zero bytes). Falls back to the full tar — WITH the
+6a disclosure updated to name which mode ran and why (first deploy / pre-delta
+runtime / `HPC_NO_DEPLOY_DELTA=1` kill-switch / additive push) — whenever the
+remote can't produce a manifest. Gated to the `delete=True` user-tree push (the
+8.4 GB transfer); the small `deploy_runtime` payload keeps its own `#242`
+content-hash cache. Reused whole: the `Manifest`/`build_manifest` content-hash
+atoms and `_path_excluded`, now the single exclude-match core shared by the
+disclosure walk, the local manifest, and the remote snippet — so all three agree
+on the file set. Windows MSYS/cwRsync stayed out of scope as ruled. Tests:
+`tests/ops/transfer/test_manifest.py` (the pure delta) +
+`tests/infra/test_remote_rsync_fallback.py` (delta-tars-exactly-the-changed-set,
+identical-remote-ships-zero, manifest-unavailable-full-fallback-with-reason,
+kill-switch, and a snippet-vs-local-manifest agreement check that runs the real
+remote snippet). No schema/registry regen (transport internals only).
 
 Addendum 4 (morning after): **7. Pre-deploy local smoke of task 0** (submit).
 Run #11: a units bug (executor train_window in DAYS; 500 days = 24,000 bars >

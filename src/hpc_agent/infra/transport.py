@@ -12,7 +12,9 @@ import rsync_push``).
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import fnmatch
 import hashlib
 import json
 import os
@@ -21,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from collections.abc import Callable
@@ -314,6 +317,34 @@ _PAYLOAD_WARN_BYTES = 200 * 1024 * 1024
 _PAYLOAD_WALK_CAP = 50_000
 
 
+def _path_excluded(parts: tuple[str, ...], pats: list[str]) -> bool:
+    """Would the transfer's exclude set drop the file at *parts*?
+
+    The shared exclude-match core used by both :func:`_disclose_payload` (the
+    ship-size WARN) and :func:`_pushable_relpaths` (the delta manifest's local
+    file set), so the disclosure, the local manifest, and the remote manifest
+    snippet all agree on exactly which files ship. *pats* are patterns already
+    stripped of any trailing ``/``.
+
+    Semantics mirror tar/rsync as the codebase applies them: a bare pattern
+    matches ANY path component (match-any-depth); an anchored ``./name`` /
+    ``^name`` pattern (the F-I dialects) matches only the TOP-LEVEL component.
+    An internal-slash pattern (e.g. ``.hpc/templates/``) matches no single
+    component and is therefore inert here — the same as in the pre-existing
+    disclosure walk, which keeps the local and remote manifests consistent.
+    """
+    for i, part in enumerate(parts):
+        for pat in pats:
+            if pat.startswith("./") or pat.startswith("^"):
+                anchored = pat[2:] if pat.startswith("./") else pat[1:]
+                if i == 0 and fnmatch.fnmatch(part, anchored):
+                    return True
+                continue
+            if fnmatch.fnmatch(part, pat):
+                return True
+    return False
+
+
 def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
     """One stderr line naming what this push is about to ship (F-E).
 
@@ -329,8 +360,6 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
     second tree walk. A walk-capped total is a lower bound; the progress line's
     ``~`` prefix already reads as an estimate.
     """
-    import fnmatch
-
     try:
         pats = [p.rstrip("/") for p in exclude]
         total = 0
@@ -351,21 +380,17 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
             except ValueError:
                 continue
             parts = rel.parts
-            excluded = False
-            for i, part in enumerate(parts):
-                for pat in pats:
-                    # Anchored spellings (./x or ^x, the F-I dialects) match
-                    # the TOP-LEVEL component only in the disclosure too.
-                    if pat.startswith("./") or pat.startswith("^"):
-                        anchored = pat[2:] if pat.startswith("./") else pat[1:]
-                        if i == 0 and fnmatch.fnmatch(part, anchored):
-                            excluded = True
-                        continue
-                    if fnmatch.fnmatch(part, pat):
-                        excluded = True
-                        if "/" not in pat and "\\" not in pat:
-                            bare_hits.setdefault(pat, set()).add("/".join(parts[: i + 1]))
+            excluded = _path_excluded(parts, pats)
             if excluded:
+                # Record which bare pattern(s) hit which subtree, for the
+                # anchor-collision WARN below (only bare names alias across
+                # subtrees; anchored patterns are top-level by construction).
+                for i, part in enumerate(parts):
+                    for pat in pats:
+                        if pat.startswith("./") or pat.startswith("^"):
+                            continue
+                        if fnmatch.fnmatch(part, pat) and "/" not in pat and "\\" not in pat:
+                            bare_hits.setdefault(pat, set()).add("/".join(parts[: i + 1]))
                 continue
             if p.is_file():
                 count += 1
@@ -394,28 +419,230 @@ def _disclose_payload(local_path: str | Path, exclude: list[str]) -> int:
         return 0
 
 
-def _disclose_no_rsync(total_bytes: int) -> None:
+def _disclose_no_rsync(total_bytes: int, *, reason: str = "") -> None:
     """One WARN naming the tar full-copy fallback's cost (queue item 6a).
 
-    Fired at transfer start whenever :func:`_have_rsync` is False, alongside the
-    :func:`_disclose_payload` WARN. The run-#11 evidence: an 8.4 GB tree silently
-    re-shipped to CARC in full because no rsync was on PATH — the tar fallback
-    has NO delta, so every byte crosses the wire even when the remote is
-    byte-identical, and nothing said so. This makes the cause visible before the
-    multi-hour transfer, in the same ``[transport]`` style as the payload WARN.
-    Fail-open (ASCII arrows so a cp1252 console can't raise): disclosure never
-    blocks a push.
+    Fired at transfer start whenever the push takes the full-copy tar path,
+    alongside the :func:`_disclose_payload` WARN. The run-#11 evidence: an 8.4 GB
+    tree silently re-shipped to CARC in full because no rsync was on PATH — the
+    tar fallback has NO delta, so every byte crosses the wire even when the
+    remote is byte-identical, and nothing said so. This makes the cause visible
+    before the multi-hour transfer, in the same ``[transport]`` style as the
+    payload WARN.
+
+    *reason* (queue item 6b) names WHY the full copy ran rather than the
+    content-hash delta — a first deploy, a pre-delta cluster runtime, or the
+    kill-switch — so the disclosure says which mode ran and why. Fail-open
+    (ASCII arrows so a cp1252 console can't raise): disclosure never blocks a
+    push.
     """
     try:
         mb = total_bytes / (1024 * 1024)
+        why = f" ({reason})" if reason else ""
         print(
             f"[transport] WARN no rsync on PATH -> tar full-copy fallback -> NO DELTA "
-            f"-> the full {mb:.1f} MB re-ships even if the remote is identical "
+            f"-> the full {mb:.1f} MB re-ships even if the remote is identical{why} "
             f"(install rsync, or WSL/MSYS rsync on Windows, to ship only changed bytes).",
             file=sys.stderr,
         )
     except Exception:  # noqa: BLE001 — disclosure is never load-bearing
         pass
+
+
+def _disclose_delta_mode(
+    *, shipped_bytes: int, total_bytes: int, n_ship: int, n_local: int, n_reused: int
+) -> None:
+    """One line naming the content-hash DELTA the rsync-less push took (item 6b).
+
+    Fired when a remote hash manifest WAS available, so the tar fallback ships
+    only the changed/new files instead of the whole tree (the run-#11 8.4 GB
+    re-ship). Says which mode ran (delta) and its saving, and that the delta is
+    additive — stale remote files are not pruned (deletion is out of scope; an
+    rsync ``--delete`` is the tool for that). Fail-open like the sibling
+    disclosures.
+    """
+    try:
+        if n_ship == 0:
+            print(
+                f"[transport] no rsync on PATH -> content-hash DELTA: the remote is "
+                f"already identical for all {n_local} files; shipping 0 bytes.",
+                file=sys.stderr,
+            )
+            return
+        mb_ship = shipped_bytes / (1024 * 1024)
+        mb_total = total_bytes / (1024 * 1024)
+        print(
+            f"[transport] no rsync on PATH -> content-hash DELTA: {n_reused}/{n_local} files "
+            f"already on the remote by content-hash; shipping {n_ship} changed/new "
+            f"({mb_ship:.1f} MB of {mb_total:.1f} MB). Additive only: stale remote files are "
+            f"NOT pruned (install rsync for --delete).",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        pass
+
+
+#: Cap on the remote hash manifest's file count. A delta needs one sha per
+#: file shipped back over the (slow) link; past this the manifest stops being
+#: "bounded output" and the push falls back to the full tar (disclosed) rather
+#: than pull a pathological payload back. The pushable code/data tree is small
+#: (run output dirs are excluded), so a real push never approaches this.
+_DELTA_MANIFEST_FILE_CAP: Final[int] = 100_000
+
+#: Env kill-switch: set ``HPC_NO_DEPLOY_DELTA=1`` to force the whole-tree tar
+#: copy on rsync-less hosts even when a remote manifest is available (mirrors
+#: ``HPC_NO_DEPLOY_CACHE`` for :func:`deploy_runtime`). The full-copy disclosure
+#: then names this as the reason.
+_DELTA_ENV_KILL = "HPC_NO_DEPLOY_DELTA"
+
+#: The self-contained python the DEPLOYED runtime runs cluster-side to hash its
+#: own tree — the "remote side hashes its deployed tree, shipped back as a hash
+#: manifest" half of item 6b. Stdlib-only so it runs under any cluster ``python3``
+#: without the framework installed; base64-piped over one ssh round-trip so no
+#: quoting of the source is needed. It mirrors :func:`_path_excluded` and
+#: :class:`Manifest`'s content-hash exactly, so local and remote agree on both
+#: the file set and each file's identity. Emits ``{"files": [...]}`` (the
+#: :meth:`Manifest.from_dict` shape); prints nothing — routing the caller to the
+#: full-copy fallback — on any error, a first/absent tree, or a file count past
+#: the cap.
+_REMOTE_MANIFEST_SNIPPET = textwrap.dedent(
+    """
+    import os, sys, json, hashlib, fnmatch
+    try:
+        pats = [str(p).rstrip('/') for p in json.loads(os.environ.get('HPC_DELTA_EXCLUDES', '[]'))]
+        cap = int(os.environ.get('HPC_DELTA_CAP', '100000'))
+
+        def excluded(parts):
+            for i, part in enumerate(parts):
+                for pat in pats:
+                    if pat.startswith('./') or pat.startswith('^'):
+                        a = pat[2:] if pat.startswith('./') else pat[1:]
+                        if i == 0 and fnmatch.fnmatch(part, a):
+                            return True
+                        continue
+                    if fnmatch.fnmatch(part, pat):
+                        return True
+            return False
+
+        files = []
+        for dp, dirs, names in os.walk('.'):
+            rel = '' if dp == '.' else os.path.relpath(dp, '.').replace(os.sep, '/')
+            base = tuple(rel.split('/')) if rel else ()
+            dirs[:] = [d for d in dirs if not excluded(base + (d,))]
+            for n in names:
+                parts = base + (n,)
+                if excluded(parts):
+                    continue
+                full = os.path.join(dp, n)
+                if not os.path.isfile(full):
+                    continue
+                try:
+                    h = hashlib.sha256()
+                    with open(full, 'rb') as fh:
+                        for chunk in iter(lambda: fh.read(1048576), b''):
+                            h.update(chunk)
+                    size = os.path.getsize(full)
+                except OSError:
+                    continue
+                files.append({'path': '/'.join(parts), 'size': size, 'sha256': h.hexdigest()})
+                if len(files) > cap:
+                    sys.exit(0)  # too big -> no output -> caller ships the whole tree
+        sys.stdout.write(json.dumps({'files': files}))
+    except Exception:
+        pass
+    """
+).strip()
+
+
+def _pushable_relpaths(root: Path, exclude: list[str]) -> list[str]:
+    """POSIX relpaths of every file under *root* the push would ship.
+
+    The exclude-filtered file set that the local delta manifest is built over,
+    using the same :func:`_path_excluded` test the disclosure and the remote
+    snippet use — so the two manifests describe the same tree.
+    """
+    pats = [p.rstrip("/") for p in exclude]
+    rels: list[str] = []
+    for p in root.rglob("*"):
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            continue
+        if _path_excluded(rel.parts, pats):
+            continue
+        if p.is_file():
+            rels.append(rel.as_posix())
+    return rels
+
+
+def _local_push_manifest(local_path: str | Path, exclude: list[str]) -> Any:
+    """Content manifest of the local push tree (exclude-filtered) — item 6b.
+
+    Returns a :class:`hpc_agent.ops.transfer.manifest.Manifest`; imported lazily
+    to keep this low-level infra module import-light.
+    """
+    from hpc_agent.ops.transfer.manifest import build_manifest
+
+    root = Path(local_path)
+    return build_manifest(root, paths=_pushable_relpaths(root, exclude))
+
+
+def _parse_remote_push_manifest(stdout: str) -> Any | None:
+    """Parse the cluster-side hash manifest, or ``None`` on any problem.
+
+    An absent/empty tree (snippet printed nothing), corrupt JSON, a wrong shape,
+    or a cap breach all collapse to ``None`` — which routes the push to the
+    full-copy tar fallback (disclosed). The safe direction: never claim a remote
+    file is present unless the manifest proves it.
+    """
+    from hpc_agent.ops.transfer.manifest import Manifest
+
+    raw = (stdout or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not (isinstance(data, dict) and isinstance(data.get("files"), list)):
+        return None
+    try:
+        return Manifest.from_dict(data)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _remote_push_manifest(
+    *, ssh_target: str, remote_path: str, exclude: list[str], timeout: float | None
+) -> Any | None:
+    """One bounded ssh round-trip: the deployed runtime hashes the remote tree.
+
+    Ships :data:`_REMOTE_MANIFEST_SNIPPET` base64-piped into ``python3`` under
+    ``remote_path`` and parses the JSON manifest it prints. Returns a
+    :class:`Manifest` of the remote tree, or ``None`` when the remote can't
+    produce one — a first deploy (``cd`` fails, absent tree), a pre-delta
+    runtime, a python/base64 gap, a cap breach, or a timeout. ``None`` routes to
+    the full-copy fallback (disclosed), so this is never worse than the prior
+    whole-tree behavior. *remote_path* is ``shlex.quote``-d; the snippet is
+    base64 (no shell metacharacters) so no source quoting is needed.
+    """
+    b64 = base64.b64encode(_REMOTE_MANIFEST_SNIPPET.encode("utf-8")).decode("ascii")
+    excludes_json = json.dumps([p.rstrip("/") for p in exclude])
+    remote_cmd = (
+        f"cd {shlex.quote(remote_path)} && printf %s {shlex.quote(b64)} | base64 -d | "
+        f"HPC_DELTA_EXCLUDES={shlex.quote(excludes_json)} "
+        f"HPC_DELTA_CAP={_DELTA_MANIFEST_FILE_CAP} python3"
+    )
+    try:
+        proc = _ssh_bounded(
+            ssh_target,
+            remote_cmd,
+            timeout=timeout,
+            what=f"remote hash manifest of {remote_path}",
+        )
+    except (TimeoutError, OSError):
+        return None
+    return _parse_remote_push_manifest(getattr(proc, "stdout", "") or "")
 
 
 #: Transfer-progress heartbeat cadence (queue item 10). The tar|ssh pipe emits
@@ -530,12 +757,21 @@ def _tar_ssh_push(
     delete: bool = False,
     timeout: float | None,
     total_bytes: int = 0,
+    only_paths: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
 
     *total_bytes* is the payload estimate (from :func:`_disclose_payload`) used
     as the progress-heartbeat denominator (queue item 10); 0 means "unknown"
     and the heartbeat prints ``0%``.
+
+    *only_paths* (queue item 6b — the content-hash delta) restricts the archive
+    to an EXACT set of POSIX relpaths under *local_path* instead of the whole
+    tree (``.``). It is always the additive (``delete=False``) extract — a delta
+    never prunes the remote — so callers pass it together with ``delete=False``.
+    The paths are already the exclude-filtered delta set, so no ``--exclude`` is
+    applied on top of them. ``None`` (the default) archives the whole tree as
+    before.
 
     Used as the rsync_push fallback when rsync is absent. Respects the
     same *exclude* patterns as rsync (passed through to ``tar
@@ -571,7 +807,13 @@ def _tar_ssh_push(
         else:
             tar_excludes += [f"--exclude={pat}"]
 
-    tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
+    # Delta mode (only_paths): archive exactly the given relpaths, no excludes
+    # (the list is already the exclude-filtered delta). Otherwise archive the
+    # whole tree with the exclude flags.
+    if only_paths is not None:
+        tar_cmd = ["tar", "c", "-C", src_dir, *only_paths]
+    else:
+        tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
     quoted_remote = shlex.quote(remote_path)
 
     # delete=True: STAGE-THEN-SWAP (run-#10 finding F-G rewrote #173's order).
@@ -841,9 +1083,70 @@ def rsync_push(
     validate_remote_path(remote_path.rstrip("/"))
 
     if not _have_rsync():
-        # Name the tar full-copy fallback's NO-DELTA cost before the bytes move
-        # (queue item 6a) — the run-#11 8.4 GB silent full re-ship.
-        _disclose_no_rsync(payload_bytes)
+        # Content-hash DELTA on rsync-less hosts (queue item 6b). The tar
+        # fallback has no delta, so it re-ships the whole tree even when >95% is
+        # already remote (the run-#11 8.4 GB re-ship to CARC over a ~1 MB/s VPN).
+        # Instead, when the deployed runtime can hash its own tree (one bounded
+        # ssh round-trip), diff the two content manifests and tar ONLY the
+        # changed/new files. Gated to the ``delete=True`` user-tree push (the big
+        # transfer); the additive ``delete=False`` callers keep the simple path.
+        # Kill-switch: HPC_NO_DEPLOY_DELTA=1.
+        delta_on = delete and os.environ.get(_DELTA_ENV_KILL) != "1"
+        remote_manifest = (
+            _remote_push_manifest(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                exclude=exclude,
+                timeout=effective_timeout,
+            )
+            if delta_on
+            else None
+        )
+        if remote_manifest is not None:
+            from hpc_agent.ops.transfer.manifest import manifest_delta
+
+            local_manifest = _local_push_manifest(local_path, exclude)
+            delta = manifest_delta(local_manifest, remote_manifest)
+            ship = list(delta.to_ship)
+            sizes = {e.path: e.size for e in local_manifest.entries}
+            shipped_bytes = sum(sizes.get(p, 0) for p in ship)
+            _disclose_delta_mode(
+                shipped_bytes=shipped_bytes,
+                total_bytes=payload_bytes,
+                n_ship=len(ship),
+                n_local=len(local_manifest.entries),
+                n_reused=len(local_manifest.entries) - len(ship),
+            )
+            if not ship:
+                # Remote already content-identical: ship zero bytes. Additive —
+                # no prune — so a synthetic success is exactly the outcome.
+                return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            # Delta is ADDITIVE (delete=False): never prune remote files from a
+            # delta (deletion is out of scope; rsync --delete is the tool).
+            return guarded_call(
+                ssh_target,
+                lambda: _tar_ssh_push(
+                    ssh_target=ssh_target,
+                    remote_path=remote_path,
+                    local_path=local_path,
+                    exclude=exclude,
+                    delete=False,
+                    timeout=effective_timeout,
+                    total_bytes=shipped_bytes,
+                    only_paths=ship,
+                ),
+            )
+
+        # Full-copy fallback: no remote manifest (first deploy / pre-delta
+        # runtime), delta disabled, or an additive push. Name the NO-DELTA cost
+        # and WHY before the bytes move (queue item 6a).
+        if not delete:
+            reason = "additive push (delete=False)"
+        elif os.environ.get(_DELTA_ENV_KILL) == "1":
+            reason = f"delta disabled via {_DELTA_ENV_KILL}=1"
+        else:
+            reason = "remote content-hash manifest unavailable (first deploy or pre-delta runtime)"
+        _disclose_no_rsync(payload_bytes, reason=reason)
         # The tar|ssh fallback returns before the _with_ssh_backoff wrap
         # below, so it must consult the per-host circuit breaker itself —
         # on native Windows (no rsync) this IS the live push path.
