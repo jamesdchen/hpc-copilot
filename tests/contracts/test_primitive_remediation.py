@@ -349,6 +349,9 @@ EMPTY_SPEC_OVERRIDES: dict[str, dict] = {
     # pack-status's spec is all-optional ({} = every opted-in pack) — probe
     # with the bogus key so the wire model rejects it.
     "pack-status": _BOGUS_KEY_SPEC,
+    # pack-refresh's spec is all-optional ({} = refresh every opted-in pack) —
+    # probe with the bogus key so the wire model rejects it.
+    "pack-refresh": _BOGUS_KEY_SPEC,
     # attention-queue's spec is all-optional ({} is a valid experiment-scope
     # read) — probe with the bogus key so the wire model rejects it.
     "attention-queue": _BOGUS_KEY_SPEC,
