@@ -136,28 +136,41 @@ def test_derived_utterance_accepted_when_log_present(experiment_dir: Path) -> No
 # ── hard caps + spec identity (pins b + c) ────────────────────────────────────
 
 
-def test_missing_expires_at_refused(experiment_dir: Path) -> None:
+def test_missing_expires_at_composed(experiment_dir: Path) -> None:
+    # Poka-yoke: an omitted expires_at is COMPOSED (next-morning boundary) and
+    # DISCLOSED, not refused — the record lands.
     _arm_wake(_RUN_ID)
     resolved = _resolved()
     del resolved["expires_at"]
-    with pytest.raises(errors.SpecInvalid, match="expires_at"):
-        _append(experiment_dir, resolved=resolved)
+    result = _append(experiment_dir, resolved=resolved)
+    rec = sdj.read_decisions(experiment_dir, "run", _RUN_ID)[-1]
+    assert result.count == 1
+    assert "expires_at" in rec["resolved"]["composed_defaults"]
+    # The composed boundary is in the future (else the caps gate would refuse it).
+    composed_expiry = overnight.parse_iso_utc_or_none(rec["resolved"]["expires_at"])
+    assert composed_expiry is not None and composed_expiry > utcnow()
 
 
 def test_already_expired_at_record_time_refused(experiment_dir: Path) -> None:
+    # A human-SUPPLIED past expiry is NOT overridden — the caps gate still fires
+    # (composition fills omissions, never masks a bad value).
     _arm_wake(_RUN_ID)
     resolved = _resolved(expires_at=_iso(utcnow() - timedelta(hours=1)))
     with pytest.raises(errors.SpecInvalid, match="future"):
         _append(experiment_dir, resolved=resolved)
 
 
-def test_no_resource_cap_refused(experiment_dir: Path) -> None:
+def test_no_resource_cap_composed(experiment_dir: Path) -> None:
+    # Poka-yoke: neither cap present → a walltime_cap is COMPOSED + disclosed.
     _arm_wake(_RUN_ID)
     resolved = _resolved()
     del resolved["budget_cap"]
     del resolved["walltime_cap"]
-    with pytest.raises(errors.SpecInvalid, match="resource ceiling"):
-        _append(experiment_dir, resolved=resolved)
+    result = _append(experiment_dir, resolved=resolved)
+    rec = sdj.read_decisions(experiment_dir, "run", _RUN_ID)[-1]
+    assert result.count == 1
+    assert "walltime_cap" in rec["resolved"]["composed_defaults"]
+    assert rec["resolved"]["walltime_cap"] > 0
 
 
 def test_missing_cmd_sha_binding_refused(experiment_dir: Path) -> None:
@@ -171,18 +184,31 @@ def test_missing_cmd_sha_binding_refused(experiment_dir: Path) -> None:
 # ── the wake leg (second amendment) ───────────────────────────────────────────
 
 
-def test_wake_not_armed_refused(experiment_dir: Path) -> None:
-    # No lease created → no armed status-watch.
-    with pytest.raises(errors.SpecInvalid, match="status-watch"):
-        _append(experiment_dir)
+def test_wake_not_armed_auto_armed(experiment_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Poka-yoke: no armed watch → the write path ARMS it (composes the detach) and
+    # records, instead of refusing. The real arm spawns a detached worker; stub it
+    # to write the lease (a successful spawn) so status_watch_armed then reads True.
+    def _fake_arm(_ed: Path, run_id: str) -> bool:
+        _arm_wake(run_id)
+        return True
+
+    monkeypatch.setattr(overnight, "_arm_status_watch", _fake_arm)
+    result = _append(experiment_dir)  # no lease pre-created
+    assert result.count == 1
+    assert overnight.status_watch_armed(_RUN_ID) is True
 
 
-def test_wake_token_absent_refused(experiment_dir: Path) -> None:
+def test_wake_token_absent_composed(experiment_dir: Path) -> None:
+    # Poka-yoke: an omitted wake TOKEN is composed (the watch is already armed here)
+    # and disclosed — the record lands rather than refusing.
     _arm_wake(_RUN_ID)
     resolved = _resolved()
     del resolved["wake"]
-    with pytest.raises(errors.SpecInvalid, match="wake"):
-        _append(experiment_dir, resolved=resolved)
+    result = _append(experiment_dir, resolved=resolved)
+    rec = sdj.read_decisions(experiment_dir, "run", _RUN_ID)[-1]
+    assert result.count == 1
+    assert rec["resolved"]["wake"]["kind"] == "status-watch"
+    assert "wake" in rec["resolved"]["composed_defaults"]
 
 
 # ── block convention ──────────────────────────────────────────────────────────
@@ -303,3 +329,92 @@ def test_morning_brief_surfaces_failed_at_vs_surfaced_at(experiment_dir: Path) -
     # The missing push channel means this item's latency was baked in.
     assert item["push_available"] is False
     assert item["disclosure_gap"]
+
+
+# ── the gates behind the poka-yoke STILL FIRE (never-fires assertions) ─────────
+#
+# The conversions moved the caps/wake refusals off the append path (composition
+# satisfies them), but the underlying assertions MUST still fire when constructed
+# directly — "verify a guard can actually fire" (engineering-principles). These
+# call the gate functions with a block that skipped composition.
+
+
+def test_assert_consent_hard_caps_still_fires_missing_expires() -> None:
+    resolved = _resolved()
+    del resolved["expires_at"]
+    with pytest.raises(errors.SpecInvalid, match="expires_at"):
+        overnight.assert_consent_hard_caps(resolved)
+
+
+def test_assert_consent_hard_caps_still_fires_no_cap() -> None:
+    resolved = _resolved()
+    del resolved["budget_cap"]
+    del resolved["walltime_cap"]
+    with pytest.raises(errors.SpecInvalid, match="resource ceiling"):
+        overnight.assert_consent_hard_caps(resolved)
+
+
+def test_assert_consent_hard_caps_still_fires_missing_cmd_sha() -> None:
+    resolved = _resolved()
+    del resolved["cmd_sha"]
+    with pytest.raises(errors.SpecInvalid, match="cmd_sha"):
+        overnight.assert_consent_hard_caps(resolved)
+
+
+def test_assert_wake_armed_still_fires_missing_token(experiment_dir: Path) -> None:
+    resolved = _resolved()
+    del resolved["wake"]
+    with pytest.raises(errors.SpecInvalid, match="wake"):
+        overnight.assert_wake_armed(
+            experiment_dir, scope_kind="run", scope_id=_RUN_ID, resolved=resolved
+        )
+
+
+def test_assert_wake_armed_still_fires_unarmed_run(experiment_dir: Path) -> None:
+    # Wake token present, but no armed/live status-watch lease → the run-scope leg
+    # of the assertion fires.
+    with pytest.raises(errors.SpecInvalid, match="status-watch"):
+        overnight.assert_wake_armed(
+            experiment_dir, scope_kind="run", scope_id=_RUN_ID, resolved=_resolved()
+        )
+
+
+# ── compose unit tests (the poka-yoke helpers in isolation) ───────────────────
+
+
+def test_compose_fills_expires_and_walltime_and_discloses() -> None:
+    out = overnight.compose_consent_defaults({"cmd_sha": _CMD_SHA})
+    assert "expires_at" in out and "walltime_cap" in out
+    assert set(out["composed_defaults"]) == {"expires_at", "walltime_cap"}
+    # The walltime cap is sized to the overnight window (positive, bounded).
+    assert out["walltime_cap"] > 0
+
+
+def test_compose_never_composes_cmd_sha() -> None:
+    out = overnight.compose_consent_defaults({})
+    assert "cmd_sha" not in out  # the identity binding is never defaulted
+
+
+def test_compose_does_not_override_supplied_values() -> None:
+    supplied_expiry = _iso(utcnow() + timedelta(hours=6))
+    out = overnight.compose_consent_defaults(
+        {"expires_at": supplied_expiry, "budget_cap": 12.0, "cmd_sha": _CMD_SHA}
+    )
+    assert out["expires_at"] == supplied_expiry  # untouched
+    assert "walltime_cap" not in out  # a budget cap already satisfies the ceiling
+    assert "composed_defaults" not in out  # nothing composed → no disclosure key
+
+
+def test_compose_wake_token_for_campaign_scope_no_arm(
+    monkeypatch: pytest.MonkeyPatch, experiment_dir: Path
+) -> None:
+    # A campaign scope composes the wake TOKEN but never arms a per-run watch.
+    def _boom(_ed: Path, _rid: str) -> bool:
+        raise AssertionError("campaign scope must not arm a per-run status-watch")
+
+    monkeypatch.setattr(overnight, "_arm_status_watch", _boom)
+    out = overnight.arm_consent_wake(
+        experiment_dir, scope_kind="campaign", scope_id="widget-campaign", resolved={}
+    )
+    assert out["wake"] == {"kind": "status-watch", "campaign_id": "widget-campaign"}
+    assert "wake" in out["composed_defaults"]

@@ -986,3 +986,37 @@ possible moment.
   model to draft.
 Doctrine: compose/default/auto-remedy what code can; refuse only trust
 boundaries. Build = post-run-#12 batch item 8.
+
+**SHIPPED (2026-07-10).** All three conversions landed:
+
+- **Wake auto-arm + Cap defaults** — the consent WRITE path
+  (`ops/decision/journal.py::append_decision`) now runs a compose seat
+  (`_compose_overnight_consent` → `ops/overnight.py::compose_overnight_consent`)
+  BEFORE the gates. It composes a default `expires_at` (next local 08:00 morning
+  boundary) and, when neither cap is present, a `walltime_cap` sized to the
+  overnight window; it composes the `wake` token and — for a RUN scope — ARMS the
+  detached `status-watch` via the same `launch_submit_block_detached` path the
+  self-heal uses (single-lease guard dedups). Every composed field is disclosed
+  in `resolved["composed_defaults"]`. `assert_consent_hard_caps` /
+  `assert_wake_armed` stay behind the seat as never-fires assertions — pinned to
+  still fire by direct-construction tests
+  (`tests/ops/decision/test_overnight_consent.py`:
+  `test_assert_consent_hard_caps_still_fires_*`,
+  `test_assert_wake_armed_still_fires_*`). `cmd_sha` is NEVER composed (identity
+  binding — its absence still refuses; `test_missing_cmd_sha_binding_refused`).
+  A CAMPAIGN scope composes only the wake token (no per-run probe — the
+  documented seam).
+- **Draft-at-pass** — the audit view builder
+  (`ops/notebook/audit_view.py::build_audit_view`) now composes the DRAFT for each
+  dropped template section (`AuditView.dropped_template_drafts` = the template's
+  own cell source, verbatim, marker included) and renders it in a "compose the
+  dropped sections" markdown footer (`_render_dropped_drafts`). Pure presentation
+  — NOT part of `view_sha`, and NEVER applied to the source (the human/LLM still
+  owns pasting it). Tests: `test_dropped_section_draft_composed_at_pass`,
+  `test_no_dropped_drafts_when_source_complete`.
+
+Drift: the `_resolved()`-refuse tests for expires/cap/wake were CONVERTED to
+compose-and-record tests in the same commit (the refusals moved off the append
+path). If a future change re-adds a caps/wake REFUSAL on the append path, the
+gate-fire tests above will still pass but the compose behavior will regress
+silently — the compose-and-record tests are what pin the poka-yoke.

@@ -48,6 +48,7 @@ construction (the ``harness_capabilities.py`` precedent).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,6 +67,9 @@ __all__ = [
     "status_watch_armed",
     "assert_wake_armed",
     "assert_consent_hard_caps",
+    "compose_consent_defaults",
+    "arm_consent_wake",
+    "compose_overnight_consent",
     "latest_standing_consent",
     "standing_consent_status",
     "assert_standing_consent",
@@ -296,6 +300,177 @@ def _is_positive_number(val: Any) -> bool:
 def _as_dict(val: Any) -> dict[str, Any]:
     """*val* as a dict when it is one, else ``{}`` (the tolerant-read idiom)."""
     return val if isinstance(val, dict) else {}
+
+
+# ── the poka-yoke compose seat (item-8 conversions, 2026-07-10) ───────────────
+#
+# The consent WRITE path composes what code can — the wake (arm the sanctioned
+# ``status-watch`` detach) and the cap defaults (a morning-boundary expiry + a
+# walltime ceiling) — so the human is handed a complete, editable ``resolved``
+# block instead of a refusal. The two gates behind this
+# (:func:`assert_wake_armed` / :func:`assert_consent_hard_caps`) stay as
+# never-fires ASSERTIONS: a composed block satisfies them, but they still FIRE on
+# a directly-constructed block that skips composition (the tests pin both fire
+# paths). ``cmd_sha`` is NEVER composed — it is the identity binding, the one
+# trust boundary a default cannot stand in for, so its absence stays a refusal.
+
+#: The local morning boundary a composed consent expires at by default: 08:00
+#: local time — the "human is presumed awake" line item 8 pin (c) names.
+_DEFAULT_MORNING_HOUR = 8
+
+
+def _next_morning_boundary_utc(now_utc: datetime) -> datetime:
+    """The next local ``08:00`` as a UTC datetime (the composed morning boundary).
+
+    Computed in the machine's LOCAL timezone (the human's wall clock is what
+    "morning" means), then converted back to UTC for the canonical record. When
+    the current local time is already past today's 08:00, the boundary rolls to
+    tomorrow — a composed expiry is always in the future (the caps gate refuses a
+    past one, so composition must never hand it a stale value).
+    """
+    local_now = now_utc.astimezone()
+    boundary = local_now.replace(hour=_DEFAULT_MORNING_HOUR, minute=0, second=0, microsecond=0)
+    if boundary <= local_now:
+        boundary += timedelta(days=1)
+    return boundary.astimezone(timezone.utc)
+
+
+def _mark_composed(resolved: dict[str, Any], field: str) -> None:
+    """Append *field* to ``resolved["composed_defaults"]`` (idempotent, ordered).
+
+    A composed default MUST be visible in the journal AS composed — the disclosure
+    leg of the conversion (a value the human never typed must never masquerade as
+    their own). The list is the audit surface the human / a morning brief reads to
+    see which fields code filled.
+    """
+    existing = resolved.get("composed_defaults")
+    merged = [str(f) for f in existing] if isinstance(existing, list) else []
+    if field not in merged:
+        merged.append(field)
+    resolved["composed_defaults"] = merged
+
+
+def compose_consent_defaults(
+    resolved: dict[str, Any] | None, *, now_utc: datetime | None = None
+) -> dict[str, Any]:
+    """Compose the cap defaults a standing consent omits (``expires_at`` + a cap).
+
+    The poka-yoke for item 8 pin (c): rather than REFUSE a capless spec, the write
+    path fills a default morning-boundary ``expires_at`` (next local 08:00) and,
+    when NEITHER a ``budget_cap`` nor a ``walltime_cap`` is present, a
+    ``walltime_cap`` sized to the overnight window (seconds from now to the
+    composed expiry — a job must never outlive the morning the consent expires at).
+    Every field code fills is disclosed in ``composed_defaults``
+    (:func:`_mark_composed`).
+
+    NEVER composes ``cmd_sha`` — the spec-identity binding is a trust boundary a
+    default cannot stand in for (item 8 pin b), so its absence stays a refusal at
+    :func:`assert_consent_hard_caps`. A field the human already supplied is left
+    untouched; only genuine omissions are filled, and an already-PAST ``expires_at``
+    is NOT overridden (a real, bad value the caps gate must still catch).
+    """
+    out: dict[str, Any] = dict(resolved) if isinstance(resolved, dict) else {}
+    now = now_utc or _now()
+
+    expires_raw = out.get("expires_at")
+    if parse_iso_utc_or_none(expires_raw if isinstance(expires_raw, str) else None) is None:
+        boundary = _next_morning_boundary_utc(now)
+        out["expires_at"] = boundary.isoformat(timespec="seconds")
+        _mark_composed(out, "expires_at")
+
+    has_budget = _is_positive_number(out.get("budget_cap"))
+    has_walltime = _is_positive_number(out.get("walltime_cap"))
+    if not (has_budget or has_walltime):
+        expires = parse_iso_utc_or_none(out.get("expires_at"))
+        window = int((expires - now).total_seconds()) if expires is not None else 0
+        out["walltime_cap"] = window if window > 0 else _DEFAULT_MORNING_HOUR * 3600
+        _mark_composed(out, "walltime_cap")
+
+    return out
+
+
+def _arm_status_watch(experiment_dir: Path, run_id: str) -> bool:
+    """Arm a detached ``status-watch`` for *run_id* (the sanctioned wake), best-effort.
+
+    Reuses the EXACT machinery :func:`self_heal_campaign` re-arms a watcher with —
+    ``launch_submit_block_detached`` over a status pipeline spec — so the child
+    owns the one cold dial and the single-lease guard dedups a racing/live worker
+    (``DetachedLeaseHeld`` reads as "already armed"). Returns True when a live watch
+    is (now) armed, False on a spawn failure — in which case the wake gate behind
+    the compose seat fires as before (composition is a convenience, never a bypass).
+    """
+    from hpc_agent._kernel.lifecycle.detached import (
+        DetachedLeaseHeld,
+        DriveModeError,
+        build_status_pipeline_spec,
+        launch_submit_block_detached,
+    )
+
+    try:
+        launch_submit_block_detached(
+            verb="status-watch",
+            experiment_dir=str(experiment_dir),
+            spec=build_status_pipeline_spec({"run_id": run_id}),
+        )
+    except DetachedLeaseHeld:
+        return True  # a live watcher already owns the lease — armed
+    except (DriveModeError, OSError):
+        return False
+    return True
+
+
+def arm_consent_wake(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    resolved: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compose (and, for a run, ARM) the wake a standing consent needs.
+
+    The poka-yoke for the wake leg: rather than REFUSE a consent whose watch is
+    absent, the write path names the wake token and — for a RUN scope — arms the
+    detached ``status-watch`` in the same breath (:func:`_arm_status_watch`, the
+    ``launch_submit_block_detached`` path the self-heal already uses; the
+    single-lease guard dedups). A CAMPAIGN scope keeps its documented seam (its
+    wake is the reconcile self-chain — no per-run probe), so only the token is
+    composed. A composed wake token is disclosed in ``composed_defaults``.
+
+    :func:`assert_wake_armed` stays behind this as the never-fires assertion (a
+    composed+armed block satisfies it; a directly-constructed block that skips this
+    seat still fires it — the fire path the tests pin).
+    """
+    out: dict[str, Any] = dict(resolved) if isinstance(resolved, dict) else {}
+    wake = out.get("wake")
+    if not (isinstance(wake, dict) and wake.get("kind") == WAKE_KIND):
+        key = "run_id" if scope_kind == "run" else "campaign_id"
+        out["wake"] = {"kind": WAKE_KIND, key: scope_id}
+        _mark_composed(out, "wake")
+    if scope_kind == "run" and not status_watch_armed(scope_id):
+        _arm_status_watch(experiment_dir, scope_id)
+    return out
+
+
+def compose_overnight_consent(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    resolved: dict[str, Any] | None,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    """Compose everything code can for a standing consent, in front of the gates.
+
+    The single entry the consent write path (``ops/decision/journal.py``
+    ``append_decision``) calls BEFORE the authorship + caps + wake gates: fill the
+    cap defaults (:func:`compose_consent_defaults`) and compose/arm the wake
+    (:func:`arm_consent_wake`). Everything composed is disclosed in
+    ``composed_defaults``. ``cmd_sha`` is untouched — the one field a default cannot
+    stand in for, so a consent that omits it still refuses at the caps gate.
+    """
+    out = compose_consent_defaults(resolved, now_utc=now_utc)
+    out = arm_consent_wake(experiment_dir, scope_kind=scope_kind, scope_id=scope_id, resolved=out)
+    return out
 
 
 # ── consumption: consult the consent, then ledger the auto-advance ────────────
