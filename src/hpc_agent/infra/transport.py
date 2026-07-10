@@ -645,6 +645,258 @@ def _remote_push_manifest(
     return _parse_remote_push_manifest(getattr(proc, "stdout", "") or "")
 
 
+# ── bounded auto-prune of manifest-known remote extras (data-manifest ruling 6) ──
+#
+# The rsync-less delta push is additive: it never pruned the remote's ``extra``
+# (files present remotely, absent locally), so a file we shipped in a PRIOR push
+# and later dropped from the deploy set lingered on the cluster forever. The
+# ruling (docs/design/data-manifest.md foot, 2026-07-10) lets us auto-delete the
+# only class we can PROVE is ours — a remote extra recorded in the prior push
+# manifest — under a disclosed twin cap (count + bytes). Anything NOT
+# manifest-known is an ANOMALY: never deleted, surfaced to ask.
+#
+# This rides the SAME delete=True delta push that already holds the dial (the
+# zero-unattended-cold-SSH discipline: prune never opens a new cold connection).
+
+#: Remote-relative path of the push manifest — the record of what THIS control
+#: plane last shipped to ``remote_path``. Read at the start of the next delta
+#: push to decide which remote extras are manifest-known (ours to prune) vs
+#: anomalies (foreign, never touched). Lives under ``.hpc/`` beside the deploy
+#: cache; it is our own bookkeeping, so it is never itself treated as an extra.
+_PUSH_MANIFEST_REL: Final[str] = ".hpc/.push_manifest.json"
+
+#: Env kill-switch: ``HPC_NO_DEPLOY_PRUNE=1`` disables the auto-prune entirely
+#: (the push stays additive, as it was before the ruling). Mirrors the
+#: ``HPC_NO_DEPLOY_DELTA`` / ``HPC_NO_DEPLOY_CACHE`` opt-outs.
+_PRUNE_ENV_KILL = "HPC_NO_DEPLOY_PRUNE"
+
+
+def _prune_max_files() -> int:
+    from hpc_agent.ops.transfer.prune import DEFAULT_PRUNE_MAX_FILES
+
+    return _env_int("HPC_DEPLOY_PRUNE_MAX_FILES", DEFAULT_PRUNE_MAX_FILES)
+
+
+def _prune_max_bytes() -> int:
+    from hpc_agent.ops.transfer.prune import DEFAULT_PRUNE_MAX_BYTES
+
+    return _env_int("HPC_DEPLOY_PRUNE_MAX_BYTES", DEFAULT_PRUNE_MAX_BYTES)
+
+
+def _read_prior_push_manifest(
+    *, ssh_target: str, remote_path: str, timeout: float | None
+) -> set[str]:
+    """The set of paths our LAST push recorded at :data:`_PUSH_MANIFEST_REL`.
+
+    One bounded ssh ``cat`` (rides the push's dial). Returns an EMPTY set on any
+    problem — a first push (no manifest), a read/parse error, a wrong shape — so
+    a manifest we cannot prove routes every remote extra to the ANOMALY branch
+    (never deleted). The safe direction: only a path we can PROVE we shipped is
+    ever prunable.
+    """
+    quoted = shlex.quote(f"{remote_path.rstrip('/')}/{_PUSH_MANIFEST_REL}")
+    try:
+        proc = _ssh_bounded(
+            ssh_target,
+            f"cat {quoted} 2>/dev/null",
+            timeout=timeout,
+            what=f"read push manifest of {remote_path}",
+        )
+    except (TimeoutError, OSError):
+        return set()
+    raw = (getattr(proc, "stdout", "") or "").strip()
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    paths = data.get("paths") if isinstance(data, dict) else None
+    if not isinstance(paths, list):
+        return set()
+    return {str(p) for p in paths}
+
+
+def _write_push_manifest(
+    *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
+) -> None:
+    """Persist the current push's shipped path set at :data:`_PUSH_MANIFEST_REL`.
+
+    Base64-piped so no path needs shell quoting (mirrors the remote-manifest
+    snippet). Fail-open: a write error only loses the NEXT push's prune ability
+    (extras degrade to anomalies), never breaks this push.
+    """
+    doc = json.dumps({"paths": sorted(paths), "pkg_version": _pkg_version()})
+    b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
+    root = shlex.quote(remote_path.rstrip("/"))
+    dst = shlex.quote(_PUSH_MANIFEST_REL)
+    cmd = f"cd {root} && mkdir -p .hpc && printf %s {shlex.quote(b64)} | base64 -d > {dst}"
+    with contextlib.suppress(TimeoutError, OSError):
+        _ssh_bounded(
+            ssh_target,
+            cmd,
+            timeout=timeout,
+            what=f"write push manifest of {remote_path}",
+        )
+
+
+def _journal_deploy_prune(local_path: str | Path, record: dict[str, Any]) -> None:
+    """Append one prune record to ``<experiment>/.hpc/deploy_prune.jsonl``.
+
+    The tier-0 "what we auto-deleted from the cluster, why, and its old sha"
+    timeline (the data-manifest mint-journal pattern). Fail-open — a journal
+    write must never break a push.
+    """
+    from hpc_agent.infra.io import append_jsonl_line
+    from hpc_agent.infra.time import utcnow_iso
+
+    try:
+        path = Path(local_path) / ".hpc" / "deploy_prune.jsonl"
+        append_jsonl_line(path, {"ts": utcnow_iso(), **record})
+    except OSError:
+        pass
+
+
+def _disclose_prune(plan: Any, *, remote_path: str) -> None:
+    """One ``[transport]`` line per prune outcome (disclosure, never blocking).
+
+    Names the manifest-known deletes, the refusal (over-bound), and every
+    ANOMALY the push refuses to touch — the "surface to ask" half of the ruling.
+    Fail-open like the sibling delta disclosures.
+    """
+    try:
+        if plan.refused:
+            print(
+                f"[transport] WARN deploy prune REFUSED: {plan.refuse_reason} "
+                f"({len(plan.prunable)} manifest-known extras, {plan.prune_bytes} bytes, "
+                f"on {remote_path}). Nothing pruned — review and re-push, or raise the cap "
+                f"(HPC_DEPLOY_PRUNE_MAX_FILES / HPC_DEPLOY_PRUNE_MAX_BYTES).",
+                file=sys.stderr,
+            )
+        elif plan.to_prune:
+            print(
+                f"[transport] deploy prune: deleting {len(plan.to_prune)} manifest-known "
+                f"remote extra(s) ({plan.prune_bytes} bytes) no longer in the deploy set "
+                f"(journaled to .hpc/deploy_prune.jsonl).",
+                file=sys.stderr,
+            )
+        if plan.anomalies:
+            named = ", ".join(plan.anomalies[:5])
+            more = "" if len(plan.anomalies) <= 5 else f" (+{len(plan.anomalies) - 5} more)"
+            print(
+                f"[transport] WARN deploy prune ANOMALY: {len(plan.anomalies)} remote file(s) "
+                f"not manifest-known — NOT deleted, needs a human decision: {named}{more}.",
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: BLE001 — disclosure is never load-bearing
+        pass
+
+
+def _execute_prune(
+    *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
+) -> bool:
+    """Delete exactly *paths* under *remote_path* via one bounded ssh ``rm``.
+
+    Each path is ``shlex.quote``-d and the list is the vetted manifest-known set
+    (never anomalies, never over-bound). ``rm -f --`` is 0 even if a path already
+    vanished. Returns True on a clean delete. Fail-open on any transport error —
+    the manifest-known extra simply survives to the next push.
+    """
+    if not paths:
+        return False
+    root = shlex.quote(remote_path.rstrip("/"))
+    quoted_paths = " ".join(shlex.quote(p) for p in paths)
+    try:
+        proc = _ssh_bounded(
+            ssh_target,
+            f"cd {root} && rm -f -- {quoted_paths}",
+            timeout=timeout,
+            what=f"prune {len(paths)} manifest-known extra(s) from {remote_path}",
+        )
+    except (TimeoutError, OSError):
+        return False
+    return getattr(proc, "returncode", 1) == 0
+
+
+def _prune_manifest_known_extras(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    local_path: str | Path,
+    remote_manifest: Any,
+    extra: tuple[str, ...],
+    timeout: float | None,
+) -> None:
+    """Plan + disclose + journal + execute the bounded auto-prune (ruling 6).
+
+    Called only from the delete=True delta push (holds the dial). Fully
+    fail-open: any error leaves the remote untouched — a prune we cannot do
+    cleanly is a prune we skip, never a broken push.
+    """
+    if os.environ.get(_PRUNE_ENV_KILL) == "1":
+        return
+    try:
+        # Our own bookkeeping file is a remote extra (never shipped locally); it
+        # is neither ours-to-prune nor an anomaly — filter it out up front.
+        candidates = [p for p in extra if p != _PUSH_MANIFEST_REL]
+        if not candidates:
+            return
+
+        from hpc_agent.ops.transfer.manifest import FileEntry
+        from hpc_agent.ops.transfer.prune import plan_prune
+
+        by_path = {e.path: e for e in remote_manifest.entries}
+        extra_entries = [by_path.get(p) or FileEntry(path=p, size=0, sha256="") for p in candidates]
+        known = _read_prior_push_manifest(
+            ssh_target=ssh_target, remote_path=remote_path, timeout=timeout
+        )
+        plan = plan_prune(
+            extra_entries,
+            known,
+            max_files=_prune_max_files(),
+            max_bytes=_prune_max_bytes(),
+        )
+        _disclose_prune(plan, remote_path=remote_path)
+
+        if plan.refused:
+            _journal_deploy_prune(
+                local_path,
+                {
+                    "action": "prune-refused",
+                    "remote_path": remote_path,
+                    "reason": plan.refuse_reason,
+                    "manifest_known_count": len(plan.prunable),
+                    "manifest_known_bytes": plan.prune_bytes,
+                },
+            )
+            return
+        if not plan.to_prune:
+            return
+
+        # Journal BEFORE deleting: record what + why + the old remote sha, so the
+        # timeline survives even if the delete itself races or fails.
+        for entry in plan.prunable:
+            _journal_deploy_prune(
+                local_path,
+                {
+                    "action": "prune",
+                    "remote_path": remote_path,
+                    "path": entry.path,
+                    "reason": "manifest-known",
+                    "old_sha256": entry.sha256,
+                    "size": entry.size,
+                },
+            )
+        _execute_prune(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            paths=list(plan.to_prune),
+            timeout=timeout,
+        )
+    except Exception:  # noqa: BLE001 — the prune is never load-bearing on a push
+        pass
+
+
 #: Transfer-progress heartbeat cadence (queue item 10). The tar|ssh pipe emits
 #: nothing until it exits, so a multi-hour full re-ship looked hung; a line every
 #: ~15s to the detached-worker log makes the transfer observable. Override for
@@ -1117,25 +1369,51 @@ def rsync_push(
                 n_local=len(local_manifest.entries),
                 n_reused=len(local_manifest.entries) - len(ship),
             )
-            if not ship:
-                # Remote already content-identical: ship zero bytes. Additive —
-                # no prune — so a synthetic success is exactly the outcome.
-                return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-            # Delta is ADDITIVE (delete=False): never prune remote files from a
-            # delta (deletion is out of scope; rsync --delete is the tool).
-            return guarded_call(
-                ssh_target,
-                lambda: _tar_ssh_push(
-                    ssh_target=ssh_target,
-                    remote_path=remote_path,
-                    local_path=local_path,
-                    exclude=exclude,
-                    delete=False,
-                    timeout=effective_timeout,
-                    total_bytes=shipped_bytes,
-                    only_paths=ship,
-                ),
+            # Ship the changed/new files (the delta is content-additive — the tar
+            # extract runs delete=False and never prunes). ``ship`` may be empty
+            # when the remote is already content-identical.
+            if ship:
+                pushed = guarded_call(
+                    ssh_target,
+                    lambda: _tar_ssh_push(
+                        ssh_target=ssh_target,
+                        remote_path=remote_path,
+                        local_path=local_path,
+                        exclude=exclude,
+                        delete=False,
+                        timeout=effective_timeout,
+                        total_bytes=shipped_bytes,
+                        only_paths=ship,
+                    ),
+                )
+                if pushed.returncode != 0:
+                    # Transfer failed — leave the remote as-is (no prune, no
+                    # manifest rewrite) so the next push retries cleanly.
+                    return pushed
+            else:
+                pushed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+            # Bounded auto-prune of MANIFEST-KNOWN remote extras (ruling 6): the
+            # delta tar cannot prune, but a file WE shipped in a prior push and
+            # since dropped is safe to delete under a disclosed cap. Rides this
+            # same delete=True dial (no new cold SSH); anomalies are never
+            # touched. Then persist the push manifest so the NEXT push knows what
+            # is ours. Both fail-open — neither can break a successful transfer.
+            _prune_manifest_known_extras(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                local_path=local_path,
+                remote_manifest=remote_manifest,
+                extra=delta.extra,
+                timeout=effective_timeout,
             )
+            _write_push_manifest(
+                ssh_target=ssh_target,
+                remote_path=remote_path,
+                paths=[e.path for e in local_manifest.entries],
+                timeout=effective_timeout,
+            )
+            return pushed
 
         # Full-copy fallback: no remote manifest (first deploy / pre-delta
         # runtime), delta disabled, or an additive push. Name the NO-DELTA cost

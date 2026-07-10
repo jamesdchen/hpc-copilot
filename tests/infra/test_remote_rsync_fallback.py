@@ -926,6 +926,12 @@ def test_delta_tars_exactly_the_changed_set(
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
         patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        # Isolate the delta-tar mechanics: the post-ship prune + push-manifest
+        # write (ruling 6) are their own legs, covered by tests/infra/
+        # test_transport_prune.py — patch them out so run_mock's last call is
+        # the tar extract this test pins.
+        patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
+        patch("hpc_agent.infra.transport._write_push_manifest"),
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
@@ -969,6 +975,12 @@ def test_delta_identical_remote_ships_zero_bytes(
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
         patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_manifest),
+        # The post-ship prune + push-manifest write (ruling 6) still ride even a
+        # zero-byte ship (a drop with nothing new to send can still leave a
+        # manifest-known extra to prune) — patch them out so this test pins the
+        # empty-SHIP guard: no tar, no transfer.
+        patch("hpc_agent.infra.transport._prune_manifest_known_extras"),
+        patch("hpc_agent.infra.transport._write_push_manifest"),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         result = transport.rsync_push(
