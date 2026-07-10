@@ -583,3 +583,18 @@ form to follow.)
   (which upstream version+sha it forked); the lab-bindings home; which
   setup verb owns materialization (interview / new-experiment on-ramp is
   the natural seat). Build: post-run-#12.
+
+- **RULED refinement (2026-07-10, user, same session): program-pack templates
+  are DERIVATIVES of the domain-pack template skeletons.** The skeleton
+  states the contracts; the program template instantiates them; the domain
+  check attests conformance (already live: `check_quant.py` verifies the
+  section inventory over the ACTIVE program template — the quant-audit
+  receipt IS the derivative-conformance attestation, and drift-revocation
+  already fires in both directions across the layer boundary). This settles
+  the lineage sub-ruling at TEMPLATE granularity: the derivative records
+  `derived_from: {pack, seam, version, sha}` naming the skeleton it
+  instantiated, so a skeleton upgrade can mechanically report how far behind
+  a derivative is and diff the contract set to re-conform against. The
+  12-slug swap (post-signature) is the lifecycle precedent: skeleton
+  contract-set grows → derivative re-conforms → both packs rebuild →
+  receipt re-earned.
