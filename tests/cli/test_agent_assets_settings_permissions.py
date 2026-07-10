@@ -21,11 +21,13 @@ from hpc_agent.agent_assets import install_agent_assets
 
 
 def _settings(claude_dir: Path) -> dict:
-    return json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    data: dict = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    return data
 
 
 def _allow(settings: dict) -> list:
-    return settings.get("permissions", {}).get("allow", [])
+    allow: list = settings.get("permissions", {}).get("allow", [])
+    return allow
 
 
 # ─── fresh install: no settings.json yet ────────────────────────────────────
@@ -121,7 +123,11 @@ def test_preserves_unrelated_permission_keys(tmp_path: Path) -> None:
 
     settings = _settings(tmp_path)
     assert settings["theme"] == "dark"
-    assert settings["permissions"]["deny"] == ["Bash(rm -rf:*)"]
+    # Pre-existing deny entry preserved; the raw-ssh/scp deny rules are appended
+    # additively (see test_agent_assets_settings_deny.py).
+    deny = settings["permissions"]["deny"]
+    assert "Bash(rm -rf:*)" in deny
+    assert "Bash(ssh:*)" in deny
     # Pre-existing allow entry preserved
     assert "Bash(echo:*)" in settings["permissions"]["allow"]
 
