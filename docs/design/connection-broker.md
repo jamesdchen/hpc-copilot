@@ -260,3 +260,45 @@ Success on every transport op = an AFFIRMATIVE token (the per-command sentinel
 pattern above, promoted to a rule): silence, an empty read, or a timeout is
 NEVER success — timeouts report UNKNOWN, not pass (positive-evidence verdicts).
 Kills the silence-as-success class. Spec + build = post-run-#12 batch item 5.
+
+### Build (2026-07-10): inventory + what shipped
+
+The live transport/remote-op paths were inventoried and classified. Success on
+a query already required an affirmative token in most seams; the two genuine
+`… || true` violators — where silence read as a *terminal* verdict — were
+converted, and the sentinel-clean seams recorded (untouched).
+
+| Seam (symbol) | Prior semantics | New semantics |
+|---|---|---|
+| **Scheduler liveness / state query** — `ProfileBackend.build_alive_check_cmd` / `build_scheduler_state_cmd`; consumers `reconcile._ssh_alive_job_ids`, `cluster_status.ssh_batch_scheduler_states`, `verify_submitted` | `<qstat/squeue> 2>/dev/null \|\| true` → a FAILED scheduler binary (missing / server down) returned rc 0 + empty, indistinguishable from an empty queue; consumers read absence as "all jobs left the queue → terminal" (reconcile→abandoned, batch-status/verify-submitted→gone). **VIOLATOR.** | Command ends `; echo "__HPC_SCHED_ACK__=$?"`; `scheduler_query_ran(stdout)→(clean, ran_ok)`. Ack ABSENT = UNKNOWN (all families); SGE/PBS also require rc 0 (they exit 0 on empty); SLURM accepts any rc (squeue exits non-zero once ids leave — leans on ack presence, defers completed-vs-failed to the reporter). UNKNOWN → each consumer's EXISTING conservative branch (`RemoteCommandFailed`→`alive_check_failed`→`unable_to_verify`; `SshUnreachable`). |
+| **Combined-wave listing** — `reconcile._ssh_list_combined_waves` | `cd <path> && ls _combiner/wave_*.json 2>/dev/null \|\| true` → a silently-failed `cd` short-circuited the `&&`, hit `\|\| true`, returned rc 0 + empty = "zero waves", which OVERWRITES the journal's `combined_waves` with `[]`. **VIOLATOR.** | Echoes `__HPC_WAVE_ACK__` after a successful `cd`; absence (failed cd / truncated read) raises `RemoteCommandFailed` → reconcile's existing wave-fallback PRESERVES the journal `combined_waves`. |
+
+Seams left sentinel-clean (recorded, NOT touched — absence/silence already
+routes conservative, never to success):
+
+- **`cluster_status.ssh_marker_scan`** (`ls … \| grep … \|\| true`) — its own
+  docstring pins it: `count == 0` proves ABSENCE of a failure marker, NEVER
+  success; the caller keeps the never-pass-unverified posture (absent →
+  `reporter_unreachable`). A silent empty read routes conservative already.
+- **`cluster_status.ssh_status_report`** — rc≠0 raises `RemoteCommandFailed`;
+  rc 0 requires a valid JSON envelope (`parse_remote_json`), the affirmative
+  token. An empty rc-0 read fails the parse and raises. Positive-evidence.
+- **`_remote_base.preflight_executor_exists`** — `test -f` is a positive check
+  (rc 0 ⇔ file exists); any non-zero / silent read → `RemoteCommandFailed`
+  (fails the submit closed). Conservative.
+- **`transport._remote_push_manifest` / `_parse_remote_push_manifest`** — an
+  absent/empty/corrupt manifest returns `None` → full-copy tar fallback ("never
+  claim a remote file is present unless the manifest proves it"). Absence never
+  reads as "already deployed".
+- **`_tar_ssh_push`** — folds a pump-side truncation into a non-zero rc even if
+  ssh + tar both reported 0, so a truncated transfer never reports success.
+- **`monitor.watcher_install`** — install/uninstall verify via an explicit
+  `grep -Fq <marker> && echo YES || echo NO` affirmative token, not exit code.
+- **`ssh_circuit` / `probe_cache`** — the tri-state idiom the ruling reuses:
+  `effective_state → closed/open/half_open_eligible`, and the cache's
+  SUCCESS-only + breaker-invalidated posture. UNKNOWN outcomes above route into
+  these existing conservative states rather than inventing a new one.
+
+`build_cancel_cmd` was deliberately left as-is: its contract already says
+gone-ness is confirmed by a follow-up alive-check (now ack-gated), never by the
+cancel command's own exit code.
