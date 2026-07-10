@@ -452,7 +452,20 @@ contract that pretends everything is portable is dishonest:
   DENY rule — the agent-facing environment gains a deny on raw `ssh`/`scp`
   invocation against cluster hosts (the sanctioned verbs are the only dial
   path; the improvisation class dies at the permission layer, not in conduct
-  prose); (b) the MCP elicitation display-receipt gap is to be FILED UPSTREAM
+  prose). **SHIPPED (2026-07-10):** `agent_assets.py::_merge_deny_rules` writes
+  `Bash(ssh:*)` + `Bash(scp:*)` into `~/.claude/settings.json`'s
+  `permissions.deny` — the exact additive + idempotent + skip-unparseable +
+  dry-run contract of the sibling `_merge_skill_permissions` (allow-grant)
+  merge, wired into `install_agent_assets` as the `settings_deny` result key.
+  A raw ssh/scp the model authors AT RUN TIME dies at the permission layer; the
+  sanctioned hpc-agent verbs dial ssh inside their OWN subprocesses (never via
+  the agent's Bash tool) and are unaffected — as are `ssh-keygen` / `ssh-add`
+  (distinct command tokens) and the `ssh_run` / `ssh_target` identifier forms.
+  Complements `scripts/lint_no_raw_ssh.py` (which removes the raw-ssh affordance
+  from agent-facing PROSE); this closes the runtime side. Tests:
+  `tests/cli/test_agent_assets_settings_deny.py` (6); two sibling
+  permission/hook tests updated for the now-additive `deny` list. (b) the MCP
+  elicitation display-receipt gap is to be FILED UPSTREAM
   (spec issue: a client-side receipt that the elicitation was actually
   displayed), per this doc's honest-trust-limit note. Both = post-run-#12
   batch item 8 riders.

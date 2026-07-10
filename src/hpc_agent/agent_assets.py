@@ -635,6 +635,107 @@ def _merge_skill_permissions(
     }
 
 
+# Raw-ssh / raw-scp DENY rules (anti-vendor-lockout ruling (a), 2026-07-10).
+# The improvisation class — an agent hand-rolling ``ssh <cluster> "<cmd>"`` /
+# ``scp`` instead of a sanctioned verb — bypasses the #346 connection-storm
+# guards (ConnectTimeout / IdentitiesOnly / the per-host safe_interval throttle
+# in infra/ssh_throttle) that only protect the cluster when ALL SSH flows
+# through infra.remote.ssh_run. The lint (scripts/lint_no_raw_ssh.py) already
+# removes the affordance from agent-facing PROSE; this closes the runtime side:
+# a DENY on the agent's Bash tool so a raw ssh/scp the model authors AT RUN TIME
+# dies at the permission layer, not in honor-system conduct prose. The
+# sanctioned hpc-agent verbs dial ssh INSIDE their own subprocesses (never via
+# the agent's Bash tool), so they are wholly unaffected. ``Bash(ssh:*)`` matches
+# the ``ssh`` COMMAND token — ``ssh-keygen`` / ``ssh-add`` (distinct tokens) and
+# the identifier forms ``ssh_run`` / ``ssh_target`` are not raw invocations and
+# are not denied.
+_RAW_SSH_DENY_RULES: list[str] = ["Bash(ssh:*)", "Bash(scp:*)"]
+
+
+def _merge_deny_rules(claude_dir: Path, deny_rules: list[str], *, dry_run: bool) -> dict[str, Any]:
+    """Idempotently add raw-ssh/scp ``Bash(...)`` DENY rules to ``permissions.deny``.
+
+    Sibling of :func:`_merge_skill_permissions`: same additive + idempotent +
+    skip-unparseable + dry-run contract, but targets ``permissions.deny`` and
+    the fixed :data:`_RAW_SSH_DENY_RULES` set rather than a per-skill allow
+    grant. Every other permission key and entry (``allow``, other ``deny``
+    rules) is preserved verbatim — the merge only ever *adds* our rules.
+
+    Returns ``{settings_path, action, added, wrote}`` where ``action`` is:
+
+    * ``"added"`` — at least one new deny rule appended
+    * ``"already-present"`` — every rule already in ``permissions.deny``
+    * ``"skipped-unparseable"`` — existing settings.json is not a JSON object
+    * ``"dry-run-would-add"`` — would have added rules but ``dry_run=True``
+
+    ``added`` lists the rule strings actually appended (empty on
+    ``"already-present"``); on dry-run, the strings that *would* have been.
+    """
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict[str, Any]
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "wrote": False,
+            }
+        if not isinstance(loaded, dict):
+            return {
+                "settings_path": str(settings_path),
+                "action": "skipped-unparseable",
+                "added": [],
+                "wrote": False,
+            }
+        settings = loaded
+    else:
+        settings = {}
+
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = {}
+    deny = permissions.get("deny")
+    if not isinstance(deny, list):
+        deny = []
+
+    missing = [rule for rule in deny_rules if rule not in deny]
+
+    if not missing:
+        return {
+            "settings_path": str(settings_path),
+            "action": "already-present",
+            "added": [],
+            "wrote": False,
+        }
+
+    if dry_run:
+        return {
+            "settings_path": str(settings_path),
+            "action": "dry-run-would-add",
+            "added": missing,
+            "wrote": False,
+        }
+
+    deny = list(deny) + missing
+    permissions["deny"] = deny
+    settings["permissions"] = permissions
+
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
+    return {
+        "settings_path": str(settings_path),
+        "action": "added",
+        "added": missing,
+        "wrote": True,
+    }
+
+
 def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> str | None:
     """Resolve a pre-existing non-directory at *target* before mkdir.
 
@@ -784,9 +885,17 @@ def install_agent_assets(
                                           "wrote": <bool>},
             "settings_permissions": {"settings_path": "...", "action": "added",
                                      "added": ["Skill(hpc-submit)", ...], "wrote": <bool>},
+            "settings_deny": {"settings_path": "...", "action": "added",
+                              "added": ["Bash(ssh:*)", "Bash(scp:*)"], "wrote": <bool>},
             "mcp_server": {"config_path": "...", "action": "added", "wrote": <bool>},
             "wrote": <bool>,
         }
+
+    ``settings_deny`` reports the additive, idempotent merge of the raw-ssh /
+    raw-scp ``Bash(...)`` DENY rules into ``permissions.deny`` — see
+    :func:`_merge_deny_rules`. The improvisation class (an agent hand-rolling
+    raw ssh/scp) dies at the permission layer; the sanctioned verbs dial inside
+    hpc-agent's own processes and are unaffected.
 
     ``mcp_server`` reports the additive, idempotent registration of the
     ``hpc-agent`` MCP server into ``.claude.json``'s ``mcpServers`` — see
@@ -946,6 +1055,13 @@ def install_agent_assets(
     # merge above.
     settings_permissions = _merge_skill_permissions(target, sorted(skills), dry_run=dry_run)
 
+    # DENY raw ssh/scp from the agent's Bash tool (anti-vendor-lockout ruling
+    # (a)): the improvisation class dies at the permission layer, while the
+    # sanctioned verbs — which dial ssh inside hpc-agent's own processes, not via
+    # agent Bash — stay unaffected. Same additive + idempotent + skip-unparseable
+    # contract as the allow-grant merge above.
+    settings_deny = _merge_deny_rules(target, _RAW_SSH_DENY_RULES, dry_run=dry_run)
+
     return {
         "claude_dir": str(target),
         "commands_installed": sorted(commands),
@@ -962,6 +1078,7 @@ def install_agent_assets(
         "settings_answer_capture_hook": settings_answer_capture_hook,
         "settings_relay_audit_hook": settings_relay_audit_hook,
         "settings_permissions": settings_permissions,
+        "settings_deny": settings_deny,
         "mcp_server": mcp_server,
         "wrote": not dry_run,
     }
