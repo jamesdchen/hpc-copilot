@@ -85,12 +85,15 @@ Audit-scope violations (`verify_notebook_relay` findings) ALWAYS take the
 append path: there is no per-audit brief store, so no poisoned-decision
 test applies to them (the sign-off boundary has its own gates).
 
-**Sign-off echo** (`_sign_off_echo_findings`, laundered authorship) is
-proposed as violation-class: the correction is a code-appended disclosure
-("this sign-off wording echoes a model-drafted line"), with bounce when the
-laundered attestation gates a pending downstream decision (e.g. the T9
-graduation seats). *Proposed, not ruled — the 2026-07-10 ruling did not name
-it; confirm at build time.*
+**Sign-off echo** (`_sign_off_echo_findings`, laundered authorship) —
+RULED (2026-07-10, user: "the completer just does its job"): violation
+class, append-only. The correction is a code-appended disclosure under the
+attestation ("this sign-off wording echoes a model-drafted line — the
+attestation stands only if the human re-affirms in their own words"), and
+the completer NEVER bounces for an echo — the model cannot repair
+authorship, so a forced model turn produces nothing the disclosure doesn't.
+The disclosure itself carries the re-attestation request when the sign-off
+is load-bearing.
 
 ### 3. Judgment class → BOUNCE (unchanged)
 
@@ -212,8 +215,8 @@ degrades to the token-level floor plus a file reference.
 * Whether `systemMessage` renders in ALL Claude Code surfaces this project
   drives (CLI, VS Code, web) — the conformance probe answers per-harness,
   but the v1 gate should be verified on the primary CLI surface first.
-* Echo-class placement (violation vs judgment) — flagged in §2, needs the
-  user's call.
+* ~~Echo-class placement~~ — RULED 2026-07-10 (violation class, append-only,
+  never bounces; see §2).
 
 ## Drift log
 

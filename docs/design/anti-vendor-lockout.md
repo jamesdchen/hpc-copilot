@@ -456,3 +456,10 @@ contract that pretends everything is portable is dishonest:
   (spec issue: a client-side receipt that the elicitation was actually
   displayed), per this doc's honest-trust-limit note. Both = post-run-#12
   batch item 8 riders.
+- **T6 REFRAMED (2026-07-10, user):** the install-surface question was a
+  proxy — the actual want is a fleshed-out EXTERNAL-HARNESS READINESS plan
+  (how a non-Claude harness drives the stack end-to-end: the lockout
+  inventory turned into dispatch-ready work items, with the harness
+  contract / second-harness plugin / conformance kit as the existing
+  skeleton). T6's install-surface answer folds into that plan rather than
+  standing alone. Plan doc = the Fable-endgame handoff bank.

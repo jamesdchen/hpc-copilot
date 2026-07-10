@@ -51,3 +51,17 @@ sweep-docs-at-build · data-manifest 0a/0b + attention contract ·
 attention-queue D8 · onboard-by-reproduction 6a/6b/6c · scope doctrine
 (observe/judge/route, never actuate) · data-trace consolidated ruling +
 Amendment 14 (G-a) · hyper-palatable sign-off (notebook-audit amendment).
+
+## 2026-07-10 late-session dispositions (user)
+- Verification-at-scale synthesis: a TOY idea — banked for the very end,
+  after everything else; not a Day-3 gating item.
+- AVL T6 → reframed into the external-harness readiness plan (see
+  `anti-vendor-lockout.md` drift log).
+- Completer echo-class: RULED violation/append-only, never bounces (see
+  `stop-hook-completer.md` §2).
+- TRADING-REPO SPLIT (new direction, supersedes "sign audit_template_rv.py
+  now"): harxhar-clean gets a COPY for building actual trades from the
+  research; the 12-slug template lives in that copy, and the trading
+  threads (stochastic control / P(pass) work) move with it; the pipeline-v2
+  doc + its three signature slots govern the trading side and travel too.
+  Signing is deferred to the split repo. NOT during run #12.
