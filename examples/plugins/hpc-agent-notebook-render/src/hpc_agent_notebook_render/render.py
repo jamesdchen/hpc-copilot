@@ -30,7 +30,7 @@ from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.decision_journal import read_decisions
 from hpc_agent.state.notebook_audit import audit_section
 
-from . import _annotate
+from . import _annotate, _observe
 from ._models import (
     NotebookRenderResult,
     NotebookRenderSpec,
@@ -216,6 +216,24 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
                 by_slug.setdefault(slug, []).append(cell)
         per_section = {slug: _annotate.section_output_sha(cells) for slug, cells in by_slug.items()}
 
+    # T-R — the between-cell observation loop (A10/A12/A14). Runs ONLY on an
+    # executed render whose SIGNED audit config declares an observation plan
+    # (``observables``); absent, the loop never runs and the render is unchanged
+    # (D7). The runner execs the source cell-by-cell in-process (the only lane
+    # that reaches a namespace as a dict), measures each declared observable via
+    # core's stdlib measurer (the pack injects a frame-aware measurer when bound),
+    # and ingests runner-tier records into the audit scope. No measurer is wired
+    # here yet: core's stdlib fallback is the v1 measurement.
+    trace_stages: int | None = None
+    if spec.execute and recorded_cfg.observables:
+        summary = _observe.observe_source(
+            experiment_dir,
+            audit_id=spec.audit_id,
+            source_text=source_text,
+            observables=recorded_cfg.observables,
+        )
+        trace_stages = summary["stage_count"] if summary is not None else 0
+
     _assemble(nb, views, statuses)
     _annotate.normalize_notebook(nb)
 
@@ -254,4 +272,5 @@ def notebook_render(*, experiment_dir: Path, spec: NotebookRenderSpec) -> Notebo
         receipts_skipped=skipped,
         canonicalizer=canonicalizer,
         canonicalizer_version=canonicalizer_version,
+        trace_stages=trace_stages,
     )

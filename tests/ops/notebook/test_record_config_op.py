@@ -66,6 +66,30 @@ def test_record_then_read_falls_back_to_journal(tmp_path: Path) -> None:
     assert cfg.attention_order == ["report", "load"]
 
 
+def test_observables_round_trip_through_journal(tmp_path: Path) -> None:
+    """The A14 observation plan rides the config seat: record-config persists
+    ``observables`` and read_recorded_config returns them (the runner reads here)."""
+    result = _record(tmp_path, observables=["frame", "totals"])
+    assert result.observables == ["frame", "totals"]
+    cfg = read_recorded_config(tmp_path, "aud-1")
+    assert cfg.observables == ["frame", "totals"]
+
+
+def test_observables_absent_reads_none(tmp_path: Path) -> None:
+    """No observation plan → the loop is OFF (None, not []) — the D7 byte-identity
+    posture mirrored on the read side."""
+    _record(tmp_path)
+    assert read_recorded_config(tmp_path, "aud-1").observables is None
+
+
+def test_observables_empty_string_is_refused(tmp_path: Path) -> None:
+    """Observable names are opaque but must be NON-EMPTY (a blank binds nothing)."""
+    with pytest.raises(ValueError, match="non-empty"):
+        NotebookRecordConfigSpec.model_validate(
+            {"audit_id": "aud-1", "input_roots": [], "source_roots": [], "observables": ["ok", ""]}
+        )
+
+
 def test_refuses_when_interview_audited_source_owns_the_config(tmp_path: Path) -> None:
     (tmp_path / "interview.json").write_text(
         json.dumps({"audited_source": {"audit_id": "aud-1", "source": "s.py", "template": "t.py"}}),

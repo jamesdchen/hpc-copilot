@@ -155,6 +155,7 @@ def notebook_record_config(
         source_roots=spec.source_roots,
         attention_order=spec.attention_order,
         output_roots=spec.output_roots,
+        observables=spec.observables,
     )
 
     return NotebookRecordConfigResult(
@@ -163,5 +164,6 @@ def notebook_record_config(
         source_roots=list(spec.source_roots),
         attention_order=list(spec.attention_order) if spec.attention_order is not None else None,
         output_roots=list(spec.output_roots),
+        observables=list(spec.observables) if spec.observables is not None else None,
         warning=warning,
     )

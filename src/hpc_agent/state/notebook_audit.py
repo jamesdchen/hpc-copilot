@@ -750,14 +750,16 @@ def record_audit_config(
     source_roots: Sequence[str],
     attention_order: Sequence[str] | None = None,
     output_roots: Sequence[str] = (),
+    observables: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Journal the audit configuration for a STANDALONE audit.
 
-    Appends the ``notebook-audit-config`` record —
-    ``resolved={audit_id, input_roots, source_roots, attention_order, output_roots}``,
+    Appends the ``notebook-audit-config`` record — ``resolved={audit_id,
+    input_roots, source_roots, attention_order, output_roots, observables}``,
     ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots are
-    OPAQUE relpath strings (core attaches no meaning). This writer does NOT
-    check for a prior config record or an interview ``audited_source`` block —
+    OPAQUE relpath strings and ``observables`` are opaque declared-observable
+    names (the A14 observation plan) — core attaches no meaning. This writer does
+    NOT check for a prior config record or an interview ``audited_source`` block —
     the ``notebook-record-config`` verb owns those refusals (one source of
     truth; immutable-per-audit).
 
@@ -770,6 +772,7 @@ def record_audit_config(
         "source_roots": list(source_roots),
         "attention_order": list(attention_order) if attention_order is not None else None,
         "output_roots": list(output_roots),
+        "observables": list(observables) if observables is not None else None,
     }
     return append_decision(
         experiment_dir,

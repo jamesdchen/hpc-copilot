@@ -1772,8 +1772,48 @@ def test_audited_source_config_absent_is_byte_identical(tmp_path: Path) -> None:
     assert "source_roots" not in raw
     assert "attention_order" not in raw
     assert "output_roots" not in raw
+    assert "observables" not in raw
     persisted = json.loads(raw)
     assert persisted["audited_source"] == audited
+
+
+def test_audited_source_observables_round_trips_and_reads(tmp_path: Path) -> None:
+    """A14: the observation plan (``observables``) rides the signed audited_source
+    block verbatim, and read_recorded_config surfaces it (the runner's read seam)."""
+    from hpc_agent.ops.notebook.canonical import read_recorded_config
+
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    audited = {
+        "source": "src/experiment.py",
+        "audit_id": "pi-audit-7f3a",
+        "template": ".hpc/templates/monte_carlo.py",
+        "observables": ["frame", "totals"],
+    }
+    intent = _minimal_intent(3, audited_source=audited)
+
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    persisted = json.loads((tmp_path / "interview.json").read_text())
+    assert persisted["audited_source"] == audited
+    cfg = read_recorded_config(tmp_path, "pi-audit-7f3a")
+    assert cfg.observables == ["frame", "totals"]
+
+
+def test_audited_source_observables_empty_string_refused(tmp_path: Path) -> None:
+    """Opaque names, but non-empty strings (a blank observable binds nothing)."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        3,
+        audited_source={
+            "source": "s.py",
+            "audit_id": "x",
+            "template": "t.py",
+            "observables": ["ok", ""],
+        },
+    )
+    with pytest.raises(ValidationError):
+        InterviewSpec.model_validate(intent)
 
 
 # ─── domain-pack opt-in (bind-as-data, T8a) ────────────────────────────────
