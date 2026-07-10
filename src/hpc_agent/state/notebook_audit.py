@@ -119,6 +119,7 @@ __all__ = [
     "read_draft_author",
     "record_audit_config",
     "read_audit_config",
+    "read_audit_intent",
     "RELAY_DUE_BLOCK",
     "RELAY_DUE_RESPONSE",
     "RELAY_DUE_RECORD_KIND",
@@ -750,16 +751,31 @@ def record_audit_config(
     source_roots: Sequence[str],
     attention_order: Sequence[str] | None = None,
     output_roots: Sequence[str] = (),
+    goal: str | None = None,
+    task_axes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Journal the audit configuration for a STANDALONE audit.
+    """Journal the audit-OPEN seat for a STANDALONE audit: config + intent.
 
     Appends the ``notebook-audit-config`` record —
-    ``resolved={audit_id, input_roots, source_roots, attention_order, output_roots}``,
-    ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots are
-    OPAQUE relpath strings (core attaches no meaning). This writer does NOT
-    check for a prior config record or an interview ``audited_source`` block —
-    the ``notebook-record-config`` verb owns those refusals (one source of
-    truth; immutable-per-audit).
+    ``resolved={audit_id, input_roots, source_roots, attention_order,
+    output_roots, goal?, task_axes?}``, ``response="config_recorded"`` — to
+    *audit_id*'s notebook journal. Roots are OPAQUE relpath strings (core
+    attaches no meaning). This writer does NOT check for a prior config record
+    or an interview ``audited_source`` block — the ``notebook-record-config``
+    verb owns those refusals (one source of truth; immutable-per-audit).
+
+    ``goal`` and ``task_axes`` are the audit-OPEN INTENT utterances the human
+    typed (the free-text campaign goal and the free-text names of what varies
+    across tasks — e.g. ``["bucket", "chunk"]``). They are the durable seat the
+    ``audit-handoff`` projection reads to draft an ``InterviewSpec`` — the
+    prerequisite the ``docs/design/notebook-audit.md`` audit-handoff note names
+    (before this, the intent lived only in chat). They ride the SAME config
+    record (one audit-open seat, immutable-per-audit) and are recorded VERBATIM
+    — never interpreted, never invented (an omitted answer stays omitted, the
+    projection discloses the gap and emits a placeholder). Both are appended
+    ONLY when supplied, so a config record written WITHOUT them is byte-identical
+    to a pre-intent record (the D7 fail-safe: an audit that never opts into the
+    handoff seat is unchanged).
 
     Returns the appended record. Raises :class:`errors.SpecInvalid` (via
     ``append_decision``) on a bad ``audit_id`` scope.
@@ -771,6 +787,13 @@ def record_audit_config(
         "attention_order": list(attention_order) if attention_order is not None else None,
         "output_roots": list(output_roots),
     }
+    # Intent utterances ride the same audit-open seat, appended only when the
+    # human supplied them — an omitted field stays absent so a config-only record
+    # is byte-identical to a pre-intent one (never a fabricated empty goal).
+    if goal is not None:
+        resolved["goal"] = goal
+    if task_axes is not None:
+        resolved["task_axes"] = list(task_axes)
     return append_decision(
         experiment_dir,
         scope_kind="notebook",
@@ -779,6 +802,27 @@ def record_audit_config(
         response=AUDIT_CONFIG_RESPONSE,
         resolved=resolved,
     )
+
+
+def read_audit_intent(experiment_dir: Path, audit_id: str) -> tuple[str | None, list[str]]:
+    """The audit-OPEN intent utterances ``(goal, task_axes)`` for *audit_id*.
+
+    Reads the FIRST valid ``notebook-audit-config`` record (the immutable seat
+    :func:`read_audit_config` reads) and projects its intent fields: ``goal``
+    (the free-text campaign goal, or ``None`` when the audit-open seat recorded
+    no goal) and ``task_axes`` (the free-text compute-shape axis names, ``[]``
+    when none were recorded). Both are OPAQUE — never interpreted by core. A
+    record with no intent fields, or no config record at all, reads ``(None,
+    [])`` — the projection discloses the gap rather than guessing.
+    """
+    resolved = read_audit_config(experiment_dir, audit_id)
+    if resolved is None:
+        return None, []
+    goal = resolved.get("goal")
+    goal = goal if isinstance(goal, str) and goal else None
+    raw_axes = resolved.get("task_axes")
+    task_axes = [str(a) for a in raw_axes if str(a)] if isinstance(raw_axes, list) else []
+    return goal, task_axes
 
 
 def read_audit_config(experiment_dir: Path, audit_id: str) -> dict[str, Any] | None:

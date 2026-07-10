@@ -220,6 +220,15 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # remediation probes ({} is invalid — slugs/output_path are required —
         # so the probe refuses at model validation, before any file write).
         "notebook-scaffold-template",
+        # audit-handoff (run-#11 audit->interview bridge): the read-only projection
+        # of the durable audit records into a DRAFT InterviewSpec. Spec-taking
+        # query; failure_features attaches at the shared dispatch seam (so it stays
+        # OUT of XFAIL_NO_FAILURE_FEATURES). Its input schema
+        # (audit_handoff.input.json) is baked by the orchestrator AFTER this wave —
+        # until then it is absent, so the verb does not appear in the
+        # schema-file-parametrized remediation tests (_verb_targets), only in this
+        # inventory-vs-CLI drift check.
+        "audit-handoff",
         "verify-relay",
         "wait-detached",
         "submit-s1",

@@ -11,7 +11,7 @@
    - the template `.py`, if one exists;
    - **the compute shape**, if cluster fan-out is intended — what varies across tasks (the task axes, e.g. bucket × chunk) and roughly how many of each. One question now; it becomes the `task_generator` at handoff.
 3. **Invoke the skill** with the resolved fields. It runs the preflight, drafts, and drives the audit loop; relay each of its code renders VERBATIM and translate the user's `y` / `sign <slug> ...` / nudge. Refusal remedies, auto-clear, and receipts are the skill's business — do not re-derive them here.
-4. **Hand off to compute — pass what this flow already elicited, re-elicit nothing.** On `passed`, invoke the `hpc-wrap-entry-point` skill with the spec resolved from this flow's own record (the idea, the audited source, the compute shape, the audit_id). The interview verb still runs and still materializes `tasks.py` + `interview.json` — NEVER hand-edit tasks.py to "add" the new tasks. Then `/submit-hpc` (single run) or `/campaign-hpc` (sweep).
+4. **Hand off to compute.** On `passed`, run `audit-handoff`, confirm its draft, and pass it to the interview (via the `hpc-wrap-entry-point` skill). `audit-handoff` projects the durable audit records — the journaled goal + task-axes intent, the config, and an AST scan of the source (entry point, `$HPC_RESULT_DIR` writes) — into a DRAFT `InterviewSpec` with explicit placeholders for anything it will not guess; you fill the placeholders and confirm, never re-derive the mapping by hand. The interview verb materializes `tasks.py` + `interview.json` — NEVER hand-edit tasks.py. Then `/submit-hpc` (single run) or `/campaign-hpc` (sweep).
 
 ## Invocation
 
