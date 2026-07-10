@@ -28,7 +28,7 @@ behavior, never a silent re-key.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class NotebookRecordConfigSpec(BaseModel):
@@ -103,6 +103,22 @@ class NotebookRecordConfigSpec(BaseModel):
             "a pre-intent record."
         ),
     )
+    observables: list[str] | None = Field(
+        default=None,
+        description=(
+            "The OBSERVATION PLAN (A14): opaque declared-observable names the "
+            "sanctioned runner (the notebook-render between-cell loop, T-R) looks "
+            "up in the exec namespace and measures into runner-tier trace records. "
+            "null = no plan (the loop is OFF; execution byte-identical)."
+        ),
+    )
+
+    @field_validator("observables")
+    @classmethod
+    def _observables_nonempty(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and any(not name.strip() for name in value):
+            raise ValueError("observables entries must be non-empty strings")
+        return value
 
 
 class NotebookRecordConfigResult(BaseModel):
@@ -128,6 +144,7 @@ class NotebookRecordConfigResult(BaseModel):
         default=None,
         description="Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
     )
+    observables: list[str] | None = None
     warning: str | None = Field(
         default=None,
         description=(

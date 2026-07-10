@@ -32,9 +32,13 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, runtime_checkable
 
 from hpc_agent import errors
+from hpc_agent.execution.mapreduce.data_trace_contract import (
+    TRACE_SOURCE_FIELD,
+    TRACE_SOURCE_TIERS,
+)
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state.decision_journal import append_decision
@@ -51,6 +55,8 @@ __all__ = [
     "AtomSchema",
     "ATOM_REGISTRY",
     "ATOM_NAMES",
+    "Measurer",
+    "stdlib_measure",
     "atom_schema",
     "comparison_for",
     "make_flag",
@@ -221,6 +227,55 @@ def comparison_for(name: str) -> str:
     return atom_schema(name).comparison
 
 
+# --- the measurement-impl seam (A10/A12 T-R) ---------------------------------
+#
+# The observer is the RUNNER: it looks up a declared observable in the namespace
+# and MEASURES it into atoms. Core ships only the PROTOCOL a runner invokes and a
+# STDLIB fallback for plain values — the pack ships the frame-aware measurers and
+# registers them with the RUNNER (never core; DP2/DP3 — core never imports pack
+# code). A measurer returns ``{atom_name: value}`` (fed straight to
+# :func:`make_record`) or ``None`` for "nothing I can measure here".
+
+
+@runtime_checkable
+class Measurer(Protocol):
+    """The measurement callable a runner invokes on a declared observable.
+
+    ``measure(obj) -> {atom_name: value} | None``. The returned mapping is the
+    ``atoms`` of a T1 record (validated by :func:`make_record`); ``None`` means
+    "this object is not measurable by me" (the runner then tries the stdlib
+    fallback). The pack's pandas-aware impls satisfy this Protocol and are
+    injected caller-side — core never imports them (the receipts seam: caller
+    measures, core binds).
+    """
+
+    def __call__(self, obj: Any) -> dict[str, Any] | None: ...
+
+
+def stdlib_measure(obj: Any) -> dict[str, Any] | None:
+    """The core fallback measurer: ``len()`` of a sized value → ``row_count``.
+
+    STDLIB-ONLY and frame-BLIND by construction (the library-boundary guard):
+    core measures nothing pandas-shaped — it takes the one generic measurement a
+    sized object affords, its length, as a ``row_count`` atom (``dropped=0`` — a
+    point observation names no predecessor to have dropped from). Text is NOT
+    row-shaped (a string's length is characters, not rows), so ``str``/``bytes``/
+    ``bytearray`` measure to ``None``; anything without a non-negative ``len()``
+    measures to ``None`` (the honest "I cannot measure this" the runner skips).
+    The pack's injected measurer is what yields ``col_set`` / ``null_count`` /
+    ``value_sketch`` for a real frame — those need frame knowledge core refuses.
+    """
+    if isinstance(obj, (str, bytes, bytearray)):
+        return None
+    try:
+        n = len(obj)
+    except TypeError:
+        return None
+    if not _is_int(n) or n < 0:
+        return None
+    return {"row_count": {"rows": n, "dropped": 0}}
+
+
 # --- the flag shape (A12 G-c: the notebook-lint finding, reused system-wide) --
 
 
@@ -371,15 +426,21 @@ def make_record(
     atoms: dict[str, Any],
     *,
     section: str | None = None,
+    source: str | None = None,
     flags: list[dict[str, Any]] | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
     """Build one validated trace record dict.
 
     ``stage`` is the fine-grained emit; ``section`` optionally names the audit
-    slug housing it (one section : many stages; both opaque to core). ``created_at``
-    auto-stamps UTC ISO-8601 when omitted. Raises :class:`errors.SpecInvalid` on
-    any shape violation (unknown atom, malformed value, bad flag).
+    slug housing it (one section : many stages; both opaque to core). ``source``
+    optionally stamps the emission's TRUST TIER (A10 — the T2-contract closed set
+    :data:`TRACE_SOURCE_TIERS`: ``runner``/``engine``/``draft``); the sanctioned
+    runner stamps ``runner`` so a receipt/sign-off consumer can filter to
+    receipt-grade records. Absent → no tier claimed (byte-identical for a legacy
+    or scope-emitted record). ``created_at`` auto-stamps UTC ISO-8601 when omitted.
+    Raises :class:`errors.SpecInvalid` on any shape violation (unknown atom,
+    malformed value, bad flag, or a ``source`` outside the closed tier set).
     """
     record: dict[str, Any] = {
         "stage": stage,
@@ -391,6 +452,8 @@ def make_record(
     }
     if section is not None:
         record["section"] = section
+    if source is not None:
+        record[TRACE_SOURCE_FIELD] = source
     errs = validate_record(record)
     if errs:
         raise errors.SpecInvalid("invalid trace record: " + "; ".join(errs))
@@ -401,8 +464,11 @@ def validate_record(record: Any) -> list[str]:
     """Return a list of shape errors for *record* (empty = valid). PURE.
 
     Validates the container shape, that every atom name is in the closed
-    registry set, each atom value matches its registry shape, and each flag is
-    the ``{rule, detail, evidence}`` finding shape.
+    registry set, each atom value matches its registry shape, each flag is
+    the ``{rule, detail, evidence}`` finding shape, and — when a ``source``
+    tier is present — that it is one of the closed T2-contract tiers
+    (:data:`TRACE_SOURCE_TIERS`; A10). A record with no ``source`` is valid
+    (absent = no tier claimed).
     """
     if not isinstance(record, dict):
         return ["record must be an object"]
@@ -414,6 +480,11 @@ def validate_record(record: Any) -> list[str]:
     section = record.get("section")
     if section is not None and not isinstance(section, str):
         errs.append("section must be a string when present")
+    if TRACE_SOURCE_FIELD in record and record[TRACE_SOURCE_FIELD] not in TRACE_SOURCE_TIERS:
+        errs.append(
+            f"{TRACE_SOURCE_FIELD} must be one of {list(TRACE_SOURCE_TIERS)} when present; "
+            f"got {record[TRACE_SOURCE_FIELD]!r}"
+        )
     if record.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
         errs.append(f"trace_schema_version must be {TRACE_SCHEMA_VERSION}")
     if not isinstance(record.get("created_at"), str) or not record.get("created_at"):

@@ -161,6 +161,7 @@ def notebook_record_config(
         output_roots=spec.output_roots,
         goal=spec.goal,
         task_axes=spec.task_axes,
+        observables=spec.observables,
     )
 
     return NotebookRecordConfigResult(
@@ -171,5 +172,6 @@ def notebook_record_config(
         output_roots=list(spec.output_roots),
         goal=spec.goal,
         task_axes=list(spec.task_axes) if spec.task_axes is not None else None,
+        observables=list(spec.observables) if spec.observables is not None else None,
         warning=warning,
     )

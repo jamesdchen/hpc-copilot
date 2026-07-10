@@ -753,16 +753,19 @@ def record_audit_config(
     output_roots: Sequence[str] = (),
     goal: str | None = None,
     task_axes: Sequence[str] | None = None,
+    observables: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Journal the audit-OPEN seat for a STANDALONE audit: config + intent.
 
     Appends the ``notebook-audit-config`` record —
     ``resolved={audit_id, input_roots, source_roots, attention_order,
-    output_roots, goal?, task_axes?}``, ``response="config_recorded"`` — to
-    *audit_id*'s notebook journal. Roots are OPAQUE relpath strings (core
-    attaches no meaning). This writer does NOT check for a prior config record
-    or an interview ``audited_source`` block — the ``notebook-record-config``
-    verb owns those refusals (one source of truth; immutable-per-audit).
+    output_roots, observables, goal?, task_axes?}``,
+    ``response="config_recorded"`` — to *audit_id*'s notebook journal. Roots
+    are OPAQUE relpath strings and ``observables`` are opaque
+    declared-observable names (the A14 observation plan) — core attaches no
+    meaning. This writer does NOT check for a prior config record or an
+    interview ``audited_source`` block — the ``notebook-record-config`` verb
+    owns those refusals (one source of truth; immutable-per-audit).
 
     ``goal`` and ``task_axes`` are the audit-OPEN INTENT utterances the human
     typed (the free-text campaign goal and the free-text names of what varies
@@ -786,6 +789,7 @@ def record_audit_config(
         "source_roots": list(source_roots),
         "attention_order": list(attention_order) if attention_order is not None else None,
         "output_roots": list(output_roots),
+        "observables": list(observables) if observables is not None else None,
     }
     # Intent utterances ride the same audit-open seat, appended only when the
     # human supplied them — an omitted field stays absent so a config-only record

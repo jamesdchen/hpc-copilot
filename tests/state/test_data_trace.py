@@ -339,6 +339,72 @@ def test_data_trace_block_absent_from_notebook_attestation():
     assert na._project_receipt(fake) is None
 
 
+# --- the measurement-impl seam (T-R: stdlib fallback measurer) ---------------
+
+
+def test_stdlib_measure_sizes_a_collection_to_row_count():
+    # len() of a sized non-text value -> a row_count atom (dropped=0). The atoms
+    # it returns feed make_record unchanged.
+    atoms = dt.stdlib_measure([{"id": 1}, {"id": 2}, {"id": 3}])
+    assert atoms == {"row_count": {"rows": 3, "dropped": 0}}
+    rec = dt.make_record("load", 0, atoms)
+    assert dt.validate_record(rec) == []
+
+
+def test_stdlib_measure_is_frame_blind_on_text_and_unsized():
+    # Text is NOT row-shaped (chars, not rows); an object with no len() is not
+    # measurable. Both read as an honest None the runner skips.
+    assert dt.stdlib_measure("a string of many chars") is None
+    assert dt.stdlib_measure(b"bytes too") is None
+    assert dt.stdlib_measure(42) is None
+    assert dt.stdlib_measure(object()) is None
+
+
+def test_stdlib_measure_empty_collection_is_zero_rows():
+    assert dt.stdlib_measure([]) == {"row_count": {"rows": 0, "dropped": 0}}
+
+
+def test_measurer_protocol_accepts_stdlib_measure():
+    assert isinstance(dt.stdlib_measure, dt.Measurer)
+
+
+# --- the source tier rides the record model (A10 / B2 closure) ---------------
+
+
+def test_make_record_stamps_and_validates_the_source_tier():
+    # The runner's ``source`` rides the record model — make_record stamps it and
+    # validate_record accepts the closed T2-contract tier (A10 B2 closure).
+    from hpc_agent.execution.mapreduce.data_trace_contract import (
+        TRACE_SOURCE_FIELD,
+        TRACE_SOURCE_RUNNER,
+    )
+
+    rec = dt.make_record(
+        "frame", 0, {"row_count": {"rows": 2, "dropped": 0}}, source=TRACE_SOURCE_RUNNER
+    )
+    assert rec[TRACE_SOURCE_FIELD] == TRACE_SOURCE_RUNNER
+    assert dt.validate_record(rec) == []
+
+
+def test_make_record_rejects_a_source_outside_the_closed_tier_set():
+    # A tier vocabulary is CLOSED (TRACE_SOURCE_TIERS) — an off-vocabulary source
+    # never enters the trust chain (make_record raises, validate_record flags).
+    with pytest.raises(errors.SpecInvalid):
+        dt.make_record("frame", 0, {"row_count": {"rows": 1, "dropped": 0}}, source="banana")
+    bad = dt.make_record("frame", 0, {"row_count": {"rows": 1, "dropped": 0}})
+    bad["source"] = "banana"
+    errs = dt.validate_record(bad)
+    assert any("source" in e for e in errs)
+
+
+def test_source_absent_is_valid_and_unstamped():
+    # No tier claimed (a legacy / scope-emitted record) is valid and carries no
+    # ``source`` key — absence stays absent (byte-identity of pre-tier records).
+    rec = dt.make_record("frame", 0, {"row_count": {"rows": 1, "dropped": 0}})
+    assert "source" not in rec
+    assert dt.validate_record(rec) == []
+
+
 # --- the stdlib-only import pin (AST) ----------------------------------------
 
 
