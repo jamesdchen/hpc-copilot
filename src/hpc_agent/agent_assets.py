@@ -531,8 +531,7 @@ def _skill_allow_rule(skill_name: str) -> str:
     """Return the canonical ``permissions.allow`` entry for a Skill grant.
 
     Mirrors the ``Bash(<prefix>:*)`` parameterised matcher format Claude Code
-    uses for the existing precedent in ``ops/memory/interview.py``'s
-    ``_maybe_write_claude_permissions`` (which grants ``Bash(hpc-agent:*)``).
+    uses (the ``Bash(hpc-agent:*)`` grant this installer writes user-globally).
     For Skill, the natural matcher is the skill name, so the entry is
     ``Skill(<name>)`` — narrowest grant per bundled skill rather than a
     blanket ``"Skill"``.

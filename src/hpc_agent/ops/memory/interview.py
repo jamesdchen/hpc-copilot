@@ -108,9 +108,7 @@ def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
 @primitive(
     name="interview",
     verb="scaffold",
-    side_effects=[
-        SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json,.claude/settings.json}")
-    ],
+    side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
     idempotency_key="campaign_dir",
     cli=CliShape(
@@ -403,12 +401,6 @@ def record_interview(
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
         artifacts.append("meta.json")
 
-    # Grant the experiment dir the Bash(hpc-agent:*) allow rule so a spawned
-    # bare worker can drive the CLI headlessly (#190). Idempotent merge — only
-    # reported as an artifact when the rule was newly added.
-    if _maybe_write_claude_permissions(campaign_dir):
-        artifacts.append(".claude/settings.json")
-
     return {
         "campaign_dir": str(campaign_dir.resolve()),
         "artifacts": artifacts,
@@ -451,50 +443,6 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     # window loses updates (a parallel agent + driver scenario).
     atomic_locked_update(meta_path, _mutate)
     return True
-
-
-# The permission rule the spawned `claude -p --bare` worker needs to call the
-# `hpc-agent` CLI headlessly. A bare worker has no human to approve prompts, so
-# without an allow rule Claude Code's auto-mode classifier blocks its first
-# `hpc-agent ...` Bash call and the default worker path silently degrades (#190).
-# Project-scoped `<campaign_dir>/.claude/settings.json` merges on top of the
-# user-global config, so anyone launching `claude` from the experiment dir gets
-# the grant with zero manual config and no global mutation.
-_HPC_AGENT_ALLOW_RULE = "Bash(hpc-agent:*)"
-
-
-def _maybe_write_claude_permissions(campaign_dir: Path) -> bool:
-    """Idempotently grant the experiment dir the `Bash(hpc-agent:*)` allow rule.
-
-    Writes/merges ``<campaign_dir>/.claude/settings.json`` so a spawned bare
-    worker (or any `claude` launched from here) can call the `hpc-agent` CLI
-    without a permission prompt it cannot answer (#190). Returns True iff the
-    file was created or the rule was newly added; a no-op (rule already present)
-    returns False so the artifacts list doesn't churn on re-runs.
-
-    Merge, never overwrite: an existing settings.json keeps every other key and
-    every other allow entry; we only ensure our one rule is present (deduped).
-    """
-    settings_path = campaign_dir / ".claude" / "settings.json"
-    added = False
-
-    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
-        nonlocal added
-        merged = dict(existing or {})
-        permissions = dict(merged.get("permissions") or {})
-        allow = list(permissions.get("allow") or [])
-        if _HPC_AGENT_ALLOW_RULE not in allow:
-            allow.append(_HPC_AGENT_ALLOW_RULE)
-            added = True
-        permissions["allow"] = allow
-        merged["permissions"] = permissions
-        return merged
-
-    # Serialize against a concurrent interview/driver touching the same file —
-    # same rationale as the meta.json write above. ``atomic_locked_update``
-    # creates parent dirs and the file on first write.
-    atomic_locked_update(settings_path, _mutate)
-    return added
 
 
 # ─── task_generator: typed recipes that materialize tasks.py ───────────────

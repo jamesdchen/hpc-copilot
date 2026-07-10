@@ -151,12 +151,7 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
 
 
 def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: Path) -> None:
-    """No cluster_target and no budget → no meta.json update.
-
-    (``.claude/settings.json`` IS always written for the bare-worker allow rule
-    — #190 — so assert meta.json's absence specifically rather than pin the
-    whole artifacts list.)
-    """
+    """No cluster_target and no budget → no meta.json update."""
     _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
     assert "meta.json" not in data["artifacts"]
@@ -1257,67 +1252,20 @@ def test_python_module_entry_still_rejects_genuinely_absent(tmp_path: Path) -> N
         _validate_python_module_entry({"module": "executors.nope", "function": "main"}, tmp_path)
 
 
-# ─── #190: project-scoped Claude permissions for the bare worker ────────────
+# ─── AVL T9 (2026-07-09, user-ruled REMOVE): the #190 bare-worker allow-rule
+# writer and its three tests were excised with `_maybe_write_claude_permissions`
+# — the spawned `claude -p` worker transport it served was deleted, and writing
+# harness-specific config from a core primitive is the vendor-lockout class
+# (docs/design/anti-vendor-lockout.md T9).
 
 
-def _read_settings(campaign_dir: Path) -> dict:
-    doc = json.loads((campaign_dir / ".claude" / "settings.json").read_text(encoding="utf-8"))
-    assert isinstance(doc, dict)
-    return doc
-
-
-def test_interview_writes_claude_allow_rule(tmp_path: Path) -> None:
-    """Onboarding grants the experiment dir the Bash(hpc-agent:*) allow rule so
-    a spawned bare worker can drive the CLI headlessly (#190)."""
+def test_interview_does_not_write_claude_settings(tmp_path: Path) -> None:
+    """Onboarding writes NO harness-specific config: the experiment dir gets no
+    .claude/settings.json and the artifacts list never names one (AVL T9)."""
     _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-
-    settings = _read_settings(tmp_path)
-    assert settings["permissions"]["allow"] == ["Bash(hpc-agent:*)"]
-    # The new artifact is reported the first time it's written.
-    assert ".claude/settings.json" in data["artifacts"]
-
-
-def test_interview_merges_into_existing_settings_without_clobber(tmp_path: Path) -> None:
-    """An existing .claude/settings.json is preserved — other keys and other
-    allow entries survive; our rule is appended (deduped), never overwriting."""
-    claude_dir = tmp_path / ".claude"
-    claude_dir.mkdir()
-    (claude_dir / "settings.json").write_text(
-        json.dumps(
-            {
-                "model": "opus",
-                "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm:*)"]},
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
-    record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-
-    settings = _read_settings(tmp_path)
-    # Pre-existing keys/entries survive.
-    assert settings["model"] == "opus"
-    assert settings["permissions"]["deny"] == ["Bash(rm:*)"]
-    assert "Bash(ls:*)" in settings["permissions"]["allow"]
-    # Our rule is appended.
-    assert "Bash(hpc-agent:*)" in settings["permissions"]["allow"]
-
-
-def test_interview_permissions_write_is_idempotent(tmp_path: Path) -> None:
-    """Re-running onboarding does not duplicate the rule, and a no-op re-run
-    does not re-report the settings file as a fresh artifact."""
-    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
-    record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
-    data2 = record_interview(
-        InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path
-    )
-
-    settings = _read_settings(tmp_path)
-    # Exactly one occurrence — no dupes on the second pass.
-    assert settings["permissions"]["allow"].count("Bash(hpc-agent:*)") == 1
-    # Second run was a no-op for the allow rule → not re-listed as an artifact.
-    assert ".claude/settings.json" not in data2["artifacts"]
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert ".claude/settings.json" not in data["artifacts"]
 
 
 # ─── entry_point.solver: PETSc checkpoint-instrumented wrapper ─────────────
