@@ -170,6 +170,28 @@ def _try_run(argv: list[str]) -> bool:
     return proc.returncode == 0
 
 
+def raise_alert_notification(text: str, *, experiment_dir: Path) -> dict[str, Any]:
+    """Surface a free-form *text* alert the same way as a stall proposal.
+
+    The delivery floor for any overnight/watchdog event that is not a stalled-run
+    proposal — most sharply the overnight self-heal FAIL-LOUD (a campaign reconcile
+    chain that could not be revived within its heal cap). Always writes the loud
+    fallback log (the durable floor the human reads on waking), then fires the
+    platform notifier when one is available. Returns the same
+    ``{mechanism, delivered, text, log_path}`` delivery record as
+    :func:`raise_stall_notification`. Best-effort, never acts on the cluster.
+    """
+    log_path = _append_alert_log(text, experiment_dir=experiment_dir)
+    mechanism = "logfile"
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or "*"
+        if _try_run(["msg", user, text]):
+            mechanism = "msg"
+    elif shutil.which("notify-send") and _try_run(["notify-send", "hpc-agent doctor", text]):
+        mechanism = "notify-send"
+    return {"mechanism": mechanism, "delivered": True, "text": text, "log_path": log_path}
+
+
 def raise_stall_notification(
     proposals: list[dict[str, Any]], *, experiment_dir: Path
 ) -> dict[str, Any]:

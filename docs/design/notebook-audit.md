@@ -864,10 +864,48 @@ call sites (`tests/ops/decision/test_overnight_wiring.py`, 17 cases):
 Still open: a spend METER — `consume_boundary_under_consent` passes
 `spent_budget`/`spent_walltime` = 0.0 (the record-time cap presence + the expiry
 morning-boundary are enforced now; live over-cap metering needs a spend source
-and is a follow-on seam). Campaign wake liveness: USER RULED (2026-07-09) ship-as-is, DEFER the reconcile-tick-recency liveness marker to run-#12 evidence (watch the campaign's overnight behavior live, then rule).
-The wiring added no registry verb (the two new `block_gate` / `overnight`
-functions are library seams), so there is still no `_SPEC_VERBS` / registry /
-prose / primitive-doc debt.
+and is a follow-on seam).
+
+~~Campaign wake liveness: USER RULED (2026-07-09) ship-as-is, DEFER the
+reconcile-tick-recency liveness marker to run-#12 evidence.~~ **SUPERSEDED by a
+later USER RULING (2026-07-09): overnight self-heal.** The defer left a gap the
+ruling closes: "when humans are asleep overnight they can't give consent, so it
+needs to self-heal with trusted robustness attempts, then fail loudly so the
+human is notified on waking." SHIPPED (`ops/overnight.py`, seat = the
+OS-scheduled `doctor`):
+
+* **Liveness marker** — `campaign_chain_status` reads a campaign's reconcile
+  chain from LOCAL state only (a live detached `campaign-run` lease ⇒ live; else
+  the freshest real tick — cursor `updated_at` or a boundary-consumption ledger
+  line, NOT the consent grant or heal activity — aged against `N ×
+  expected_tick_seconds`, both overridable on the consent). `dead-chain` past the
+  threshold. This replaces the SKIP: `standing_consent_status` for campaign scope
+  now refuses a consent whose chain the self-heal declared unrecoverable.
+* **Bounded self-heal** — under a LIVE consent a dead chain earns a journaled,
+  capped (`heal_attempts_cap`, default 3) respawn of the sanctioned WATCHER (a
+  detached `status-watch` via the SAME `launch_submit_block_detached` machinery —
+  never `campaign-run`, so no scheduler actuation). Idempotent: the single-lease
+  guard turns a respawn against an actually-live watcher into a disclosed no-op,
+  and a chain that reads live is never spawned against. Every attempt is a
+  `heal-attempt` ledger line (an unrecorded heal is the laundering class).
+* **Fail loud on exhaustion** — cap reached / heal structurally impossible flips
+  the consent DEAD (a `heal-failed` ledger line that OUTLIVES consent expiry;
+  `standing_consent_status` refuses from then on), fires the push where
+  `harness-capabilities` declares the alert-delivery hook (reusing
+  `notification_plan` + `notify.raise_alert_notification`) or records the gap
+  when absent, and the morning brief LEADS with a `heal_failure` section (what
+  died, each attempt + outcome, `failed_at` vs `surfaced_at` latency).
+* **Zero unattended cold-SSH / observe-only** — the healer process reads local
+  state and SPAWNS the detached watcher (the child owns the one cold dial, exactly
+  as the detach-by-contract path); it never dials inline and never touches the
+  scheduler.
+
+The self-heal added ONE opt-in `DoctorSpec.self_heal` field (mirroring the
+existing `notify` opt-in side effect) → a `doctor` input-schema regen; the
+`overnight` self-heal functions are library seams (no new registry verb). The
+2026-07-09 ship-as-is prose above added no registry verb (the two `block_gate` /
+`overnight` functions were library seams), so there is still no `_SPEC_VERBS` /
+registry / prose / primitive-doc debt beyond the one `doctor` schema.
 
 Addendum 11: **16. Scheduler-native concurrency caps vs. afterany waves**
 (backends; saturation). The #339 wave chain bounds concurrency by chaining

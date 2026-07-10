@@ -391,9 +391,12 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
         # morning brief discloses it. A not-live / absent consent parks for a y/nudge
         # exactly as today, carrying the refusal leg. (Recording an audit-disclosure
         # line is the ONLY write this otherwise-read-only block makes; it never
-        # actuates the campaign.) The campaign wake-liveness probe is a KNOWN OPEN
-        # RULING — the substrate requires the wake token's presence but skips the
-        # per-run lease check for a campaign scope.
+        # actuates the campaign.) The record-time wake gate requires the wake
+        # token's presence but skips the per-run lease check for a campaign scope
+        # (a campaign has no per-run watch key); the RUNTIME reconcile-chain
+        # liveness that the record-time skip left open is now closed by the
+        # overnight self-heal (`overnight.campaign_chain_status` / the doctor
+        # `self_heal` seat — see notebook-audit.md item 8).
         from hpc_agent.ops.overnight import consume_boundary_under_consent
 
         outcome = consume_boundary_under_consent(
