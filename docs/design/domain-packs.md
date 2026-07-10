@@ -598,3 +598,27 @@ form to follow.)
   12-slug swap (post-signature) is the lifecycle precedent: skeleton
   contract-set grows → derivative re-conforms → both packs rebuild →
   receipt re-earned.
+
+- **RULED corrections (2026-07-10, user, later same session — supersede the
+  wording of the two entries above where they conflict):**
+  (1) **`rv` is NOT "the lab's fork of the domain pack" — it is a specific,
+  CONSUMED INSTANCE in one of the lab's programs.** The flow: a lab installs
+  hpc-agent (which ships the domain packs); at PROGRAM creation, building
+  out the `.hpc/` dir CONSUMES the domain pack's template skeleton to
+  CREATE the program template (here: rv_template) for experiments run in
+  that program, stamping `derived_from` mechanically at generation. The
+  program carries the pinned copy; **each experiment modifies only the
+  VARIABLE sections** of it (the pinned sections stay pinned — the
+  per-experiment copy is the experiment's audit source, the existing
+  scaffold/draft path). There is no standalone "lab fork" artifact.
+  (2) **The pack gate MAY auto-remedy — latency is to be OBLITERATED.**
+  "The seal is more for the archive than it is for humans trying to build
+  fast": the archive's integrity is the JOURNAL (old shas, the drift event,
+  the new bind — all recorded), not friction. On a drift/missing-receipt
+  refusal the remedy chain runs mechanically: minimal-rebuild (only the
+  manifests actually stale — knowable mechanically, so mechanized),
+  re-seal + rebind journaled with old→new shas, and the caller-side domain
+  check re-run agent-side with zero human turns (DP2 stands: core still
+  never executes pack CHECK logic; manifest re-sealing is generic hashing
+  over the declarative sweep recipe, which is data, not domain logic).
+  Supersedes the "disclosure-first, explicitly invoked" hedge.

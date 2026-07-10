@@ -65,3 +65,14 @@ Amendment 14 (G-a) · hyper-palatable sign-off (notebook-audit amendment).
   threads (stochastic control / P(pass) work) move with it; the pipeline-v2
   doc + its three signature slots govern the trading side and travel too.
   Signing is deferred to the split repo. NOT during run #12.
+
+## 2026-07-10 mechanize-now rulings (user)
+- Pack remedy loop: mechanize NOW (not post-run-#12) — minimal rebuild +
+  gate auto-remedy; latency obliterated; seal serves the archive (journal),
+  not friction → `domain-packs.md` drift log corrections entry.
+- Architecture correction: program templates are CREATED at program init by
+  consuming the domain skeleton; programs carry the pinned copy; experiments
+  modify variable sections only → same entry.
+- The post-run-#12 batch is SPLIT: items that affect future runs move to
+  BUILD NOW; only evidence-gated / user-gated / external items stay deferred
+  (the split table lives in the session relay + battle plan).
