@@ -564,3 +564,22 @@ maintainers mistake for core knowledge).
 (Populate per further deviation, each with its recorded reason, when
 implementation lands. The `docs/design/notebook-audit.md` drift log is the
 form to follow.)
+
+- **RULED (2026-07-10, user, recorded from session): the three-tier pack
+  distribution model — supersedes the v0.2.0 sibling layout (and the never-
+  adopted "quant graduates to its own repo" proposal).** (1) UPSTREAM: domain
+  packs (starting with `quant`) SHIP IN THE HPC-AGENT REPO as distributed
+  CONTENT — the trust lane stays bind-as-data (DP1-DP4 unchanged: core never
+  imports pack code; travelling in core's repo is distribution, not a
+  capability plugin). (2) LAB: every lab's distro of hpc-agent carries its
+  own LAB BINDINGS — the downloaded+modified domain pack (harxhar-clean's
+  `rv` is the working precedent) lives in the lab's repo as the lab's fork
+  of the skeleton. (3) EXPERIMENT: experiment setup creates `.hpc/` and
+  MATERIALIZES the lab pack into it, pinning the audit skeleton's sections
+  at setup — each experiment binds against its OWN pinned copy (relpath+sha
+  within the experiment; drift-revocation local by construction). OPEN
+  sub-rulings (deliberately not invented): pinned content tracked vs
+  gitignored-with-sealed-shas; an upstream-lineage field on the lab pack
+  (which upstream version+sha it forked); the lab-bindings home; which
+  setup verb owns materialization (interview / new-experiment on-ramp is
+  the natural seat). Build: post-run-#12.
