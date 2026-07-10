@@ -759,6 +759,19 @@ class ReceiptBinding(BaseModel):
             "Need not equal the enclosing entry's pack — a slot may bind cross-pack."
         ),
     )
+    check: str | None = Field(
+        default=None,
+        description=(
+            "OPTIONAL caller-authored check command that RE-EARNS this slot's "
+            "receipt — the caller-side domain check (run entirely outside core, "
+            "DP2) whose run emits a `pack-record-receipt` for the slot. Core "
+            "echoes it VERBATIM as the remedy when the slot drifts (the pack-refresh "
+            "report / the gate's auto-remedy refusal envelope) and NEVER runs or "
+            "interprets it — an opaque string, the receipt/check association the "
+            "caller records alongside the obligation (DP4). Absent → the generic "
+            "`pack-record-receipt` guidance applies."
+        ),
+    )
 
 
 class PackOptIn(BaseModel):

@@ -287,6 +287,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent pack-refresh --spec <path> [--experiment-dir <dir>]",
+    "idempotent": false,
+    "input_schema": "pack_refresh.input.json",
+    "name": "pack-refresh",
+    "output_schema": "pack_refresh.output.json",
+    "python": "hpc_agent.ops.pack.refresh_op.pack_refresh",
+    "side_effects": [
+      "file_write"
+    ],
+    "summary": "Re-seal every opted-in domain pack whose manifest is STALE against on-disk bytes (the minimal set — a stale pack never forces another's rebuild) from its declarative sweep.json recipe (pure hashing; core never runs a pack build/check script), rebind each via the pack-bind path (journaling old→new shas — the drift event is the archive record), and report which caller-authored receipt slots must be re-earned plus each one's caller-side check command (core never runs the check). Not opted in → empty and silent. Pure local read + manifest write + journal append, no SSH.",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent provenance-manifest --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "provenance_manifest.input.json",

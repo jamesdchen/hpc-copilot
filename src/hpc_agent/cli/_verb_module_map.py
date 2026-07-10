@@ -89,6 +89,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'notebook-status': ('notebook-status', 'hpc_agent.ops.notebook.status_op'),
     'pack-bind': ('pack-bind', 'hpc_agent.ops.pack.bind_op'),
     'pack-record-receipt': ('pack-record-receipt', 'hpc_agent.ops.pack.record_receipt_op'),
+    'pack-refresh': ('pack-refresh', 'hpc_agent.ops.pack.refresh_op'),
     'pack-status': ('pack-status', 'hpc_agent.ops.pack.status_op'),
     'plan-throughput': ('plan-throughput', 'hpc_agent.ops.submit.plan_throughput'),
     'preflight': ('check-preflight', 'hpc_agent.ops.preflight.check'),
