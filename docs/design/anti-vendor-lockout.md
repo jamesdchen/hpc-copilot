@@ -437,5 +437,14 @@ contract that pretends everything is portable is dishonest:
 
 ## Drift log
 
+- **Same-day rulings + Phase 0 execution (2026-07-09):** T1 (conformance-kit
+  status flip + 7 more stale docs — the sweep found the class was wider than
+  the one doc) and T2 (contract addendum: detection asymmetry + auth boundary,
+  one doc-prose pin each) landed the same session this plan merged. USER RULED:
+  ⚑T9 = REMOVE (excised same session — interview no longer writes
+  `.claude/settings.json`; the three tests replaced by a does-not-write pin;
+  `side_effects` narrowed); ⚑T3/⚑T5 and ⚑T4 = DEFERRED until after run #12
+  (revisit with campaign evidence); ⚑T6 stays open (the plan's doc-only lean
+  stands until an external harness asks).
 - (Populate per deviation, each with its recorded reason, when implementation
   lands. The `docs/design/notebook-audit.md` drift log is the form to follow.)

@@ -833,7 +833,9 @@ CALL `standing_consent_status` to auto-advance overnight and `record_consumption
 on each auto-advance, and the morning brief is a library function not yet folded
 into the `status-snapshot` brief — both are wiring, not new substrate. A campaign
 scope's wake liveness probe is skipped (per-run lease key does not apply); the
-token presence + kind is still required. NO new registry verb was added (the
+token presence + kind is still required — USER RULED (2026-07-09): ship as-is,
+DEFER the reconcile-tick-recency liveness marker to run-#12 evidence (watch the
+campaign's overnight behavior live, then rule). NO new registry verb was added (the
 consent rides `append-decision`, the gate/brief are library functions), so there
 is no `_SPEC_VERBS` / registry-count / prose-count / primitive-doc debt.
 
