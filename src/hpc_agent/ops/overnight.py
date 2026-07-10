@@ -48,15 +48,13 @@ construction (the ``harness_capabilities.py`` precedent).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import Any, cast
 
 from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.decision_journal import read_decisions
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 __all__ = [
     "OVERNIGHT_CONSENT_BLOCK",
@@ -79,6 +77,15 @@ __all__ = [
     "notification_plan",
     "overnight_morning_brief",
     "morning_brief_if_any",
+    "HEAL_ATTEMPT_KIND",
+    "HEAL_FAILED_KIND",
+    "ChainStatus",
+    "HealOutcome",
+    "campaign_chain_last_tick",
+    "campaign_chain_status",
+    "consent_marked_dead",
+    "self_heal_campaign",
+    "self_heal_scan",
 ]
 
 # The block-terminator convention for a STANDING CONSENT. Mirrors the
@@ -343,6 +350,16 @@ def standing_consent_status(
     consent = latest_standing_consent(experiment_dir, scope_kind, scope_id)
     if consent is None:
         return ConsentDecision(False, "no-consent", None)
+
+    # Overnight self-heal (item 8, 2026-07-09): once a campaign's reconcile chain
+    # has been declared unrecoverable (the self-heal cap exhausted / heal was
+    # structurally impossible), the standing consent is DEAD — it refuses every
+    # further auto-advance so the campaign cannot keep self-chaining on a chain
+    # nobody is watching. The flip lives in the consumption ledger, so it survives
+    # the consent's own expiry. Run scope is unaffected (no reconcile chain).
+    if scope_kind == "campaign" and consent_marked_dead(experiment_dir, scope_kind, scope_id):
+        return ConsentDecision(False, "heal-exhausted", consent)
+
     resolved = _as_dict(consent.get("resolved"))
 
     now = parse_iso_utc_or_none(now_iso) or _now()
@@ -659,6 +676,596 @@ def notification_plan(experiment_dir: Path) -> dict[str, Any]:
     }
 
 
+# ── campaign self-heal (item 8 overnight self-heal ruling, 2026-07-09) ─────────
+#
+# SUPERSEDES the "defer the reconcile-tick-recency liveness marker to run #12"
+# note recorded in docs/design/notebook-audit.md item 8. USER RULING: when the
+# human is asleep overnight they cannot give consent, so a live standing consent
+# must SELF-HEAL a dead reconcile chain with a BOUNDED number of trusted
+# robustness attempts, then FAIL LOUD so the human is notified on waking.
+#
+# Two hard rules bound this substrate:
+#   * ZERO unattended cold-SSH — the heal check reads only LOCAL state (the
+#     cursor / consumption ledger / decision journal / detached-worker leases);
+#     it NEVER opens SSH. A heal RESTORES the watcher by spawning a detached
+#     `status-watch` worker (the sanctioned wake — the child owns the one cold
+#     dial, exactly as the detach-by-contract path does), so the healer process
+#     itself never dials.
+#   * OBSERVE / JUDGE / ROUTE, never ACTUATE — the heal re-arms the WATCHER only.
+#     It spawns `status-watch` (a pure monitor poll whose terminal re-invokes the
+#     driver), NEVER `campaign-run` (which could re-submit) or any qdel/qsub. No
+#     cluster action of any kind rides the heal path.
+
+#: The reconcile-chain tick cadence the liveness marker measures recency against
+#: when the consent names none — the driver default tick cadence (drive.py
+#: `_DEFAULT_DRIVER_TICK_CADENCE_SECONDS`), duplicated as a plain literal to avoid
+#: importing the lifecycle layer into this ops role-root at module load.
+_DEFAULT_CHAIN_TICK_SECONDS = 900.0
+
+#: N — a chain is DEAD when its last tick is older than N × the expected tick
+#: interval. Sane default: three missed ticks (a single slow iteration gets slack;
+#: three in a row means the self-chain stopped). Overridable per consent.
+_DEFAULT_DEAD_CHAIN_MULTIPLE = 3
+
+#: How many trusted respawn attempts a standing consent authorises before the
+#: chain is declared unrecoverable and the consent flips DEAD. Overridable per
+#: consent via ``resolved.heal_attempts_cap``.
+_DEFAULT_HEAL_ATTEMPTS_CAP = 3
+
+#: Ledger ``event_kind`` for one journaled heal attempt (the audit trail — an
+#: unrecorded heal is the laundering class). ``detail.outcome`` is one of
+#: ``respawned`` / ``noop-lease-held`` / ``spawn-failed`` / ``structurally-impossible``.
+HEAL_ATTEMPT_KIND = "heal-attempt"
+
+#: Ledger ``event_kind`` for the terminal FAIL-LOUD flip: the chain could not be
+#: revived within the cap (or heal was structurally impossible). Its presence is
+#: what makes :func:`standing_consent_status` refuse the campaign consent from
+#: then on. Survives consent expiry (it lives in the ledger, not the consent).
+HEAL_FAILED_KIND = "heal-failed"
+
+
+@dataclass(frozen=True)
+class ChainStatus:
+    """The liveness verdict for a campaign's reconcile self-chain (local read).
+
+    ``live`` is True when a detached reconcile worker is alive OR the last tick is
+    recent enough. ``reason`` is one of ``live-worker`` / ``recent-tick`` /
+    ``dead-chain`` / ``no-tick-record``. ``last_tick_at`` is the freshest local
+    recency signal (or ``None``); ``age_seconds`` is now − that (or ``None`` when
+    no tick was ever recorded); ``threshold_seconds`` is N × the expected tick
+    interval — the age past which the chain reads dead.
+    """
+
+    live: bool
+    reason: str
+    last_tick_at: str | None
+    age_seconds: float | None
+    threshold_seconds: float
+
+
+@dataclass(frozen=True)
+class HealOutcome:
+    """The result of one self-heal consultation for a campaign scope.
+
+    ``status`` names what happened: ``respawned`` (a watcher was re-armed),
+    ``chain-live-noop`` (the chain read live — a disclosed no-op, no spawn),
+    ``exhausted`` / ``structurally-impossible`` (the FAIL-LOUD flip fired),
+    ``already-dead`` (the consent was already flipped — idempotent no-op),
+    ``no-consent`` / ``consent-not-live`` (nothing to heal under). ``chain`` is
+    the :class:`ChainStatus` consulted; ``attempt_line`` is the journaled ledger
+    line (or ``None``); ``notification`` is the delivery record when a FAIL-LOUD
+    push fired.
+    """
+
+    status: str
+    reason: str
+    chain: ChainStatus | None = None
+    attempt_line: dict[str, Any] | None = None
+    notification: dict[str, Any] | None = None
+
+
+def _argv_flag_value(argv: Any, flag: str) -> str | None:
+    """The value following *flag* in a detached lease's stamped ``argv``, or ``None``."""
+    if not isinstance(argv, list):
+        return None
+    for name, value in zip(argv, argv[1:], strict=False):
+        if name == flag and isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    """Symlink/relative-tolerant path equality (``resolve()`` both sides, fail-safe)."""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def _iter_campaign_run_leases(
+    experiment_dir: Path, campaign_id: str
+) -> list[tuple[dict[str, Any], str, float]]:
+    """``(lease, run_id, mtime)`` for THIS campaign+experiment's ``campaign-run`` leases.
+
+    Purely local, fail-open per lease: the detached ``campaign-run`` worker (the
+    reconcile iteration worker) stamps ``_detached/campaign-run-<run_id>.lease.json``
+    with ``run_id``/``pid``/``argv``; the argv carries ``--experiment-dir`` (scope)
+    and ``--spec <path>`` (whose CampaignRunSpec carries ``campaign_id``). A lease
+    is included only when both match — the ``_detached/`` dir is GLOBAL across
+    experiments and campaigns, so an unscoped read would cross wires. Any unreadable
+    / torn / foreign lease is skipped, never raised.
+    """
+    from hpc_agent.state.run_record import _current_homedir
+
+    detached_dir = _current_homedir() / "_detached"
+    out: list[tuple[dict[str, Any], str, float]] = []
+    if not detached_dir.is_dir():
+        return out
+    import json as _json
+
+    for lease_path in sorted(detached_dir.glob("campaign-run-*.lease.json")):
+        try:
+            lease = _json.loads(lease_path.read_text(encoding="utf-8"))
+            run_id = lease["run_id"]
+            argv = lease.get("argv")
+        except (OSError, ValueError, TypeError, KeyError, _json.JSONDecodeError):
+            continue
+        if not (isinstance(run_id, str) and run_id):
+            continue
+        exp = _argv_flag_value(argv, "--experiment-dir")
+        if exp is None or not _same_path(Path(exp), experiment_dir):
+            continue
+        spec_path = _argv_flag_value(argv, "--spec")
+        if spec_path is None:
+            continue
+        try:
+            spec = _json.loads(Path(spec_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, _json.JSONDecodeError):
+            continue
+        if str((spec or {}).get("campaign_id") or "") != campaign_id:
+            continue
+        try:
+            mtime = lease_path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        out.append((lease, run_id, mtime))
+    return out
+
+
+def _campaign_live_detached_worker(experiment_dir: Path, campaign_id: str) -> bool:
+    """True when a live detached ``campaign-run`` worker owns THIS campaign's chain.
+
+    The "ticking right now" signal: a long single iteration bumps no cursor, so a
+    live worker must count as a live chain (else the recency read would falsely
+    declare a slow-but-healthy iteration dead). Pure local: reads the lease pid and
+    checks it is alive (the SAME probe the single-lease guard uses).
+    """
+    from hpc_agent._kernel.lifecycle.detached import _pid_alive
+
+    for lease, _run_id, _mtime in _iter_campaign_run_leases(experiment_dir, campaign_id):
+        try:
+            pid = int(lease.get("pid", -1))
+        except (TypeError, ValueError):
+            continue
+        if pid > 0 and _pid_alive(pid):
+            return True
+    return False
+
+
+def _campaign_inflight_run_id(experiment_dir: Path, campaign_id: str) -> str | None:
+    """The run id of the campaign's most recent iteration (freshest lease), or ``None``.
+
+    The watcher target for a heal: re-arm ``status-watch`` on the current
+    iteration's run. Read purely from local leases (no cluster probe). ``None``
+    when the chain has spawned no detached iteration worker yet — heal is then
+    structurally impossible (there is no in-flight run to watch).
+    """
+    best: str | None = None
+    best_mtime = float("-inf")
+    for _lease, run_id, mtime in _iter_campaign_run_leases(experiment_dir, campaign_id):
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best = run_id
+    return best
+
+
+def campaign_chain_last_tick(experiment_dir: Path, campaign_id: str) -> str | None:
+    """The freshest LOCAL recency signal for a campaign's reconcile chain, or ``None``.
+
+    Reads only local state — never the cluster — and returns the newest ISO-8601
+    timestamp among the signals a healthy self-chain refreshes as it WORKS:
+
+    * the campaign cursor's ``updated_at`` (bumped on each iteration advance);
+    * the newest consumption-ledger ``recorded_at`` for a real BOUNDARY advance
+      (an overnight anomaly auto-advance is chain activity).
+
+    Deliberately EXCLUDED: the standing-consent grant record (that is the human
+    granting consent at bedtime, NOT the chain ticking — counting it would make a
+    dead chain read live all night) and the heal-attempt / heal-failed ledger
+    lines (those are the healer acting, not the chain — counting them would make
+    each heal falsely revive the recency and starve the cap).
+
+    ``None`` only when NO real tick exists — a campaign that never advanced at all.
+    """
+    candidates: list[Any] = []
+
+    try:
+        from hpc_agent.meta.campaign.cursor import read_cursor
+
+        cursor = read_cursor(experiment_dir, campaign_id)
+        if isinstance(cursor, dict):
+            candidates.append(cursor.get("updated_at"))
+    except Exception:  # noqa: BLE001 — a bad cursor must not blind the liveness read
+        pass
+
+    for line in read_consumption_ledger(experiment_dir, "campaign", campaign_id):
+        if str(line.get("event_kind") or "") in {HEAL_ATTEMPT_KIND, HEAL_FAILED_KIND}:
+            continue  # healer activity is not a chain tick
+        candidates.append(line.get("recorded_at"))
+
+    best_raw: str | None = None
+    best_dt = None
+    for raw in candidates:
+        if not isinstance(raw, str) or not raw:
+            continue
+        dt = parse_iso_utc_or_none(raw)
+        if dt is None:
+            continue
+        if best_dt is None or dt > best_dt:
+            best_dt = dt
+            best_raw = raw
+    return best_raw
+
+
+def campaign_chain_status(
+    experiment_dir: Path,
+    *,
+    campaign_id: str,
+    now_iso: str | None = None,
+    expected_tick_seconds: float | None = None,
+    dead_after_multiple: int | None = None,
+) -> ChainStatus:
+    """Liveness of a campaign's reconcile self-chain, read from LOCAL state only.
+
+    The item-8 self-heal liveness marker (this ruling closes the gap where the
+    campaign wake probe was SKIPPED). A live detached iteration worker reads live
+    unconditionally (``live-worker``). Otherwise the freshest local tick
+    (:func:`campaign_chain_last_tick`) is aged against ``threshold =
+    expected_tick_seconds × dead_after_multiple``: newer ⇒ ``recent-tick`` (live),
+    older ⇒ ``dead-chain`` (dead). No tick ever recorded ⇒ ``no-tick-record``
+    (dead — the chain never started). Never opens SSH.
+    """
+    tick = expected_tick_seconds if (expected_tick_seconds and expected_tick_seconds > 0) else None
+    tick_s = tick if tick is not None else _DEFAULT_CHAIN_TICK_SECONDS
+    mult = dead_after_multiple if (dead_after_multiple and dead_after_multiple > 0) else None
+    mult_n = mult if mult is not None else _DEFAULT_DEAD_CHAIN_MULTIPLE
+    threshold = tick_s * mult_n
+
+    if _campaign_live_detached_worker(experiment_dir, campaign_id):
+        return ChainStatus(True, "live-worker", None, 0.0, threshold)
+
+    last = campaign_chain_last_tick(experiment_dir, campaign_id)
+    if last is None:
+        return ChainStatus(False, "no-tick-record", None, None, threshold)
+
+    now = parse_iso_utc_or_none(now_iso) or _now()
+    last_dt = parse_iso_utc_or_none(last)
+    if last_dt is None:
+        return ChainStatus(False, "no-tick-record", last, None, threshold)
+    age = (now - last_dt).total_seconds()
+    if age > threshold:
+        return ChainStatus(False, "dead-chain", last, age, threshold)
+    return ChainStatus(True, "recent-tick", last, age, threshold)
+
+
+def consent_marked_dead(experiment_dir: Path, scope_kind: str, scope_id: str) -> bool:
+    """True when a scope's consent has been flipped DEAD by an exhausted self-heal.
+
+    Reads the consumption ledger for a terminal :data:`HEAL_FAILED_KIND` line. Its
+    presence makes :func:`standing_consent_status` refuse the consent from then on,
+    and it OUTLIVES the consent (the ledger is separate from the decision journal),
+    so the fail-loud disclosure never evaporates when the grant expires.
+    """
+    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
+        if str(line.get("event_kind") or "") == HEAL_FAILED_KIND:
+            return True
+    return False
+
+
+def _heal_respawn_count(experiment_dir: Path, campaign_id: str) -> int:
+    """How many REAL respawn attempts have been journaled against the cap.
+
+    Only ``outcome=respawned`` heal-attempt lines count toward the cap — a
+    disclosed no-op (a live-lease-held attempt) is not a spent attempt.
+    """
+    n = 0
+    for line in read_consumption_ledger(experiment_dir, "campaign", campaign_id):
+        if str(line.get("event_kind") or "") != HEAL_ATTEMPT_KIND:
+            continue
+        if str(_as_dict(line.get("detail")).get("outcome") or "") == "respawned":
+            n += 1
+    return n
+
+
+def _record_heal_attempt(
+    experiment_dir: Path,
+    *,
+    campaign_id: str,
+    outcome: str,
+    now_iso: str,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Journal one heal attempt to the consumption ledger (the audit trail)."""
+    return record_consumption(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=campaign_id,
+        consumed_block="campaign-watch",
+        event_kind=HEAL_ATTEMPT_KIND,
+        failed_at=now_iso,
+        detail={"outcome": outcome, **(detail or {})},
+        notification=notification_plan(experiment_dir),
+    )
+
+
+def _mark_consent_dead(
+    experiment_dir: Path,
+    *,
+    campaign_id: str,
+    failed_at: str,
+    reason: str,
+    attempts: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Flip a campaign consent DEAD and FIRE the fail-loud notification.
+
+    Journals the terminal :data:`HEAL_FAILED_KIND` line (so the consent refuses
+    from then on and the morning brief leads with the failure) and delivers a push
+    where ``harness-capabilities`` declares the alert-delivery hook
+    (:func:`notification_plan`); when no hook is present the disclosure GAP is
+    recorded on the line and surfaces in the morning brief instead. Returns
+    ``(ledger_line, delivery_record)``.
+    """
+    plan = notification_plan(experiment_dir)
+    text = (
+        f"hpc-agent overnight self-heal FAILED for campaign {campaign_id!r}: the "
+        f"reconcile chain could not be revived ({reason}) after {attempts} attempt(s); "
+        "the standing consent is now DEAD — no further auto-advance. Review the "
+        "morning brief."
+    )
+    delivery: dict[str, Any] = {"push_available": bool(plan.get("push_available")), "fired": False}
+    if plan.get("push_available"):
+        try:
+            from hpc_agent.ops.recover.notify import raise_alert_notification
+
+            record = raise_alert_notification(text, experiment_dir=experiment_dir)
+            delivery = {"push_available": True, "fired": True, **record}
+        except Exception:  # noqa: BLE001 — a delivery failure must not wedge the flip
+            delivery = {"push_available": True, "fired": False}
+    line = record_consumption(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=campaign_id,
+        consumed_block="campaign-watch",
+        event_kind=HEAL_FAILED_KIND,
+        failed_at=failed_at,
+        detail={"reason": reason, "attempts": attempts, "text": text},
+        notification={**plan, "delivery": delivery},
+    )
+    return line, delivery
+
+
+def self_heal_campaign(
+    experiment_dir: Path,
+    *,
+    campaign_id: str,
+    now_iso: str | None = None,
+) -> HealOutcome:
+    """Consult a campaign's standing consent and self-heal a dead reconcile chain.
+
+    The item-8 overnight self-heal (2026-07-09). Under a LIVE campaign standing
+    consent, a dead chain earns a BOUNDED, journaled respawn of the sanctioned
+    WATCHER; the cap exhausted (or heal structurally impossible) flips the consent
+    DEAD and fails loud. The full decision, in order:
+
+    * no consent / consent already expired / spec changed → nothing to heal under
+      (``no-consent`` / ``consent-not-live``): the human is presumed reachable, or
+      the spec moved (consent already dies on that leg);
+    * consent already flipped DEAD → ``already-dead`` (idempotent no-op);
+    * chain reads LIVE → ``chain-live-noop`` (a disclosed no-op — NO spawn, so a
+      healthy or slow-but-live iteration is never disturbed and never
+      double-spawned);
+    * chain DEAD, respawn cap already reached → FAIL LOUD (``exhausted``): flip the
+      consent dead, record ``failed_at``, fire the push / record the gap;
+    * chain DEAD, no in-flight run to watch → FAIL LOUD
+      (``structurally-impossible``);
+    * chain DEAD, under cap → respawn a detached ``status-watch`` on the current
+      iteration's run (reusing ``launch_submit_block_detached`` — the SAME machinery
+      that started the chain's watchers; the single-lease guard makes a respawn
+      against an actually-live worker a disclosed ``noop-lease-held``, never a
+      duplicate) and journal the attempt (``respawned``).
+
+    Zero SSH in this process: the healer only reads local state, journals, and
+    SPAWNS the detached watcher (whose child owns the one cold dial). It re-arms the
+    watcher only — never ``campaign-run``, never any scheduler action.
+    """
+    now = now_iso or utcnow_iso()
+
+    consent = latest_standing_consent(experiment_dir, "campaign", campaign_id)
+    if consent is None:
+        return HealOutcome("no-consent", "no standing consent for this campaign")
+
+    if consent_marked_dead(experiment_dir, "campaign", campaign_id):
+        return HealOutcome("already-dead", "consent already flipped dead by a prior heal")
+
+    resolved = _as_dict(consent.get("resolved"))
+
+    # Consent liveness (expiry / spec-identity) — reuse the substrate's own check
+    # against the campaign's greenlit-spec identity. An expired / spec-changed
+    # consent is NOT healed: the morning boundary passed (human reachable) or the
+    # spec moved (the consent already died on that leg).
+    identity = ""
+    try:
+        from hpc_agent.meta.campaign.blocks import _campaign_spec_identity
+        from hpc_agent.meta.campaign.manifest import read_manifest
+
+        identity = _campaign_spec_identity(read_manifest(experiment_dir, campaign_id=campaign_id))
+    except Exception:  # noqa: BLE001 — a manifest read failure must not crash the heal
+        identity = ""
+    decision = standing_consent_status(
+        experiment_dir,
+        scope_kind="campaign",
+        scope_id=campaign_id,
+        current_cmd_sha=identity,
+        now_iso=now,
+    )
+    if not decision.live:
+        return HealOutcome("consent-not-live", decision.reason)
+
+    tick_s = resolved.get("chain_tick_seconds")
+    mult = resolved.get("dead_chain_multiple")
+    chain = campaign_chain_status(
+        experiment_dir,
+        campaign_id=campaign_id,
+        now_iso=now,
+        expected_tick_seconds=tick_s if isinstance(tick_s, (int, float)) else None,
+        dead_after_multiple=mult if isinstance(mult, int) and not isinstance(mult, bool) else None,
+    )
+    if chain.live:
+        return HealOutcome("chain-live-noop", chain.reason, chain=chain)
+
+    cap_raw = resolved.get("heal_attempts_cap")
+    cap = (
+        cap_raw
+        if isinstance(cap_raw, int) and not isinstance(cap_raw, bool) and cap_raw > 0
+        else _DEFAULT_HEAL_ATTEMPTS_CAP
+    )
+    attempts = _heal_respawn_count(experiment_dir, campaign_id)
+    if attempts >= cap:
+        line, delivery = _mark_consent_dead(
+            experiment_dir,
+            campaign_id=campaign_id,
+            failed_at=now,
+            reason=f"heal cap reached ({attempts}/{cap} respawns did not revive the chain)",
+            attempts=attempts,
+        )
+        return HealOutcome(
+            "exhausted", chain.reason, chain=chain, attempt_line=line, notification=delivery
+        )
+
+    run_id = _campaign_inflight_run_id(experiment_dir, campaign_id)
+    if run_id is None:
+        _record_heal_attempt(
+            experiment_dir,
+            campaign_id=campaign_id,
+            outcome="structurally-impossible",
+            now_iso=now,
+            detail={"reason": "no in-flight iteration run to re-arm a watcher on"},
+        )
+        line, delivery = _mark_consent_dead(
+            experiment_dir,
+            campaign_id=campaign_id,
+            failed_at=now,
+            reason="no in-flight iteration run to watch (heal structurally impossible)",
+            attempts=attempts,
+        )
+        return HealOutcome(
+            "structurally-impossible",
+            chain.reason,
+            chain=chain,
+            attempt_line=line,
+            notification=delivery,
+        )
+
+    # Re-arm the WATCHER — a detached `status-watch` on the current iteration's run.
+    # Pure observe: monitor-flow polls the scheduler and its terminal re-invokes the
+    # driver; it NEVER submits or kills. Reuses the exact machinery that started the
+    # chain's watchers, so the single-lease guard dedups a racing/live worker.
+    from hpc_agent._kernel.lifecycle.detached import (
+        DetachedLeaseHeld,
+        DriveModeError,
+        build_status_pipeline_spec,
+        launch_submit_block_detached,
+    )
+
+    try:
+        launch = launch_submit_block_detached(
+            verb="status-watch",
+            experiment_dir=str(experiment_dir),
+            spec=build_status_pipeline_spec({"run_id": run_id}),
+        )
+    except DetachedLeaseHeld:
+        # A live watcher already owns the lease — the chain was live after all.
+        # A disclosed no-op (does NOT count against the cap), never a duplicate.
+        line = _record_heal_attempt(
+            experiment_dir,
+            campaign_id=campaign_id,
+            outcome="noop-lease-held",
+            now_iso=now,
+            detail={"run_id": run_id},
+        )
+        return HealOutcome(
+            "chain-live-noop",
+            "status-watch lease held by a live worker",
+            chain=chain,
+            attempt_line=line,
+        )
+    except (DriveModeError, OSError) as exc:
+        line = _record_heal_attempt(
+            experiment_dir,
+            campaign_id=campaign_id,
+            outcome="spawn-failed",
+            now_iso=now,
+            detail={"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"},
+        )
+        return HealOutcome(
+            "spawn-failed", f"{type(exc).__name__}: {exc}", chain=chain, attempt_line=line
+        )
+
+    line = _record_heal_attempt(
+        experiment_dir,
+        campaign_id=campaign_id,
+        outcome="respawned",
+        now_iso=now,
+        detail={"run_id": run_id, "watcher": "status-watch", "pid": launch.pid},
+    )
+    return HealOutcome(
+        "respawned", f"re-armed status-watch on {run_id}", chain=chain, attempt_line=line
+    )
+
+
+def self_heal_scan(
+    experiment_dir: Path,
+    *,
+    now_iso: str | None = None,
+) -> list[HealOutcome]:
+    """Run :func:`self_heal_campaign` for every campaign in *experiment_dir*.
+
+    The seat's fan-out (see the doctor wiring): enumerate campaigns with at least
+    one iteration and self-heal each under its own standing consent. Fail-open per
+    campaign — one campaign's bad state never blocks another's heal. Returns only
+    the outcomes that DID something (a spawn, a fail-loud flip, or a disclosed
+    no-op) — a campaign with no consent is silently skipped.
+    """
+    outcomes: list[HealOutcome] = []
+    try:
+        from hpc_agent.meta.campaign.atoms.list_campaigns import campaign_list
+
+        listed = campaign_list(experiment_dir=experiment_dir)
+    except Exception:  # noqa: BLE001 — enumeration must never crash the watchdog scan
+        return outcomes
+    for entry in listed.get("campaigns", []):
+        cid = entry.get("campaign_id") if isinstance(entry, dict) else None
+        if not (isinstance(cid, str) and cid):
+            continue
+        try:
+            outcome = self_heal_campaign(experiment_dir, campaign_id=cid, now_iso=now_iso)
+        except Exception:  # noqa: BLE001 — one campaign's failure must not block the rest
+            continue
+        if outcome.status not in {"no-consent", "consent-not-live"}:
+            outcomes.append(outcome)
+    return outcomes
+
+
 # ── the morning brief (item 8 pin d + amendment b) ────────────────────────────
 
 
@@ -679,36 +1286,73 @@ def overnight_morning_brief(
     (amendment b). A ``push_available=False`` note on any consumed item flags an
     item whose latency was BAKED IN by the missing push channel.
 
+    When the scope's reconcile chain died overnight and the self-heal exhausted
+    its attempts (a :data:`HEAL_FAILED_KIND` line), the brief LEADS with a
+    ``heal_failure`` section (item 8 self-heal ruling, 2026-07-09): what died,
+    when, each respawn attempt + its outcome, and the ``failed_at`` vs
+    ``surfaced_at`` latency — the human wakes to a loud, structured failure. That
+    section survives consent expiry exactly as the consumption disclosure does.
+
     Pure read — never mutates the ledger or the consent. Returns an opaque dict
     the caller relays verbatim (the code-digested-evidence posture).
     """
     surfaced_at = now_iso or utcnow_iso()
     surfaced_dt = parse_iso_utc_or_none(surfaced_at)
     consent = latest_standing_consent(experiment_dir, scope_kind, scope_id)
-    consumed: list[dict[str, Any]] = []
-    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
-        failed_at = line.get("failed_at") if isinstance(line.get("failed_at"), str) else None
+
+    def _latency(failed_at: str | None) -> float | None:
         failed_dt = parse_iso_utc_or_none(failed_at)
-        latency = (
-            (surfaced_dt - failed_dt).total_seconds()
-            if (surfaced_dt is not None and failed_dt is not None)
-            else None
-        )
+        if surfaced_dt is None or failed_dt is None:
+            return None
+        return (surfaced_dt - failed_dt).total_seconds()
+
+    consumed: list[dict[str, Any]] = []
+    heal_attempts: list[dict[str, Any]] = []
+    heal_failed: dict[str, Any] | None = None
+    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
+        event_kind = str(line.get("event_kind") or "")
+        failed_at = line.get("failed_at") if isinstance(line.get("failed_at"), str) else None
+        detail = _as_dict(line.get("detail"))
         notification = _as_dict(line.get("notification"))
+        if event_kind == HEAL_ATTEMPT_KIND:
+            heal_attempts.append(
+                {
+                    "outcome": detail.get("outcome"),
+                    "at": failed_at,
+                    "detail": detail,
+                }
+            )
+            continue
+        if event_kind == HEAL_FAILED_KIND:
+            heal_failed = {
+                "reason": detail.get("reason"),
+                "attempts": detail.get("attempts"),
+                "failed_at": failed_at,
+                "surfaced_at": surfaced_at,
+                "latency_seconds": _latency(failed_at),
+                "push_available": bool(notification.get("push_available")),
+                "disclosure_gap": notification.get("gap"),
+                "text": detail.get("text"),
+            }
+            continue
         consumed.append(
             {
                 "consumed_block": line.get("consumed_block"),
-                "event_kind": line.get("event_kind"),
+                "event_kind": event_kind,
                 "failed_at": failed_at,
                 "surfaced_at": surfaced_at,
-                "latency_seconds": latency,
+                "latency_seconds": _latency(failed_at),
                 "push_available": bool(notification.get("push_available")),
                 "disclosure_gap": notification.get("gap"),
-                "detail": _as_dict(line.get("detail")),
+                "detail": detail,
             }
         )
+    if heal_failed is not None:
+        heal_failed["attempts_detail"] = heal_attempts
     consent_resolved = _as_dict(consent.get("resolved")) if consent is not None else {}
     return {
+        # LEADS with the fail-loud disclosure when the chain died unrecoverably.
+        "heal_failure": heal_failed,
         "scope_kind": scope_kind,
         "scope_id": scope_id,
         "surfaced_at": surfaced_at,
@@ -747,7 +1391,11 @@ def morning_brief_if_any(
     brief = overnight_morning_brief(
         experiment_dir, scope_kind=scope_kind, scope_id=scope_id, now_iso=now_iso
     )
-    if brief.get("has_consent") or int(brief.get("consumed_count") or 0) > 0:
+    if (
+        brief.get("has_consent")
+        or int(brief.get("consumed_count") or 0) > 0
+        or brief.get("heal_failure") is not None
+    ):
         return brief
     return None
 

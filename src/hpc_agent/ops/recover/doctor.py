@@ -474,11 +474,34 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     dead_worker_findings = scan_dead_detached_workers(experiment_dir, now=now)
     dead_worker_alerts = [AlertRecord(ts=now, message=f["proposal"]) for f in dead_worker_findings]
 
+    # Overnight self-heal (item 8 ruling, 2026-07-09): the OS-scheduled scan is the
+    # ONE failure domain that survives when every in-session process died, so it is
+    # the seat that can revive a campaign reconcile chain nobody is left to re-arm.
+    # Opt-in (spec.self_heal, mirroring spec.notify's opt-in side effect) so the
+    # plain in-session detection verb is byte-unchanged. Under a LIVE standing
+    # consent it respawns the sanctioned WATCHER (never the scheduler) and, on
+    # exhaustion, flips the consent dead + fires the fail-loud alert. Reads only
+    # local state — no SSH. Fail-open: a heal-scan error never breaks detection.
+    heal_alerts: list[AlertRecord] = []
+    if spec.self_heal:
+        try:
+            from hpc_agent.ops.overnight import self_heal_scan
+
+            for outcome in self_heal_scan(experiment_dir, now_iso=now):
+                if outcome.status in {"exhausted", "structurally-impossible"}:
+                    line = outcome.attempt_line if isinstance(outcome.attempt_line, dict) else {}
+                    raw_detail = line.get("detail")
+                    detail: dict[str, Any] = raw_detail if isinstance(raw_detail, dict) else {}
+                    msg = detail.get("text") or f"overnight self-heal failed: {outcome.reason}"
+                    heal_alerts.append(AlertRecord(ts=now, message=str(msg)))
+        except Exception:  # noqa: BLE001 — self-heal must never break the watchdog scan
+            heal_alerts = []
+
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the
     # "in doctor.alerts.log" suffix (the dead-worker drafts are live-scan output,
     # not log lines), while the dead workers get their own attention part.
-    alerts = log_alerts + dead_worker_alerts
+    alerts = log_alerts + dead_worker_alerts + heal_alerts
 
     # Open ssh circuits (2026-07-05 incident): a breaker-dark host must be
     # visible on the surface the agent already reads — read-only, fail-open,
