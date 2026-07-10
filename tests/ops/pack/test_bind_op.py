@@ -233,7 +233,7 @@ _requires_git = pytest.mark.skipif(_GIT is None, reason="git binary not on PATH"
 def _git_init(root: Path) -> None:
     assert _GIT is not None  # guarded by _requires_git
     for args in (["init"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
-        subprocess.run([_GIT, *args], cwd=str(root), check=True, capture_output=True)
+        subprocess.run([_GIT, *args], cwd=str(root), check=True, capture_output=True, timeout=30)
 
 
 @_requires_git
