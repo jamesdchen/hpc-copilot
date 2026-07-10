@@ -293,10 +293,14 @@ def test_is_gated_matches_live_gate_callers() -> None:
             src += inspect.getsource(impl)
         return src
 
+    # Both spellings ARE the gate: ``assert_greenlit_or_consented`` is the
+    # consent-aware form (overnight item 8) — a live standing consent is a
+    # journaled pre-y consumed through the same machinery, never a bypass.
+    _GATE_CALLS = ("assert_greenlit_target(", "assert_greenlit_or_consented(")
     derived = {
         verb
         for verb, module, fn in candidates
-        if "assert_greenlit_target(" in _op_source(module, fn)
+        if any(needle in _op_source(module, fn) for needle in _GATE_CALLS)
     }
     assert derived == {"submit-s2", "submit-s3", "submit-s4", "aggregate-run"}
     assert set(block_chain.GATED_BLOCKS) == derived
