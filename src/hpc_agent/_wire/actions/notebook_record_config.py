@@ -80,6 +80,29 @@ class NotebookRecordConfigSpec(BaseModel):
             "declared_outputs, never flagged)."
         ),
     )
+    goal: str | None = Field(
+        default=None,
+        description=(
+            "Optional audit-OPEN intent: the free-text campaign goal the human "
+            "typed (~one sentence). Recorded VERBATIM as a durable seat the "
+            "audit-handoff projection reads to draft the interview goal — never "
+            "interpreted, never invented. Absent (the default) → no goal seat; "
+            "the config record is byte-identical to a pre-intent one and "
+            "audit-handoff emits a goal placeholder the caller must fill."
+        ),
+    )
+    task_axes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional audit-OPEN intent: the human's free-text names for what "
+            "varies across tasks (the compute shape, e.g. ['bucket', 'chunk']). "
+            "Recorded VERBATIM — OPAQUE to core, never a search-space encoding. "
+            "audit-handoff surfaces these as guidance for the caller's "
+            "task_generator (which stays a placeholder — the axis names are not a "
+            "materializer). Absent (the default) → no axes seat; byte-identical to "
+            "a pre-intent record."
+        ),
+    )
 
 
 class NotebookRecordConfigResult(BaseModel):
@@ -97,6 +120,14 @@ class NotebookRecordConfigResult(BaseModel):
     source_roots: list[str] = Field(default_factory=list)
     attention_order: list[str] | None = None
     output_roots: list[str] = Field(default_factory=list)
+    goal: str | None = Field(
+        default=None,
+        description="Echo of the recorded audit-open goal utterance (null when none was recorded).",
+    )
+    task_axes: list[str] | None = Field(
+        default=None,
+        description="Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
+    )
     warning: str | None = Field(
         default=None,
         description=(

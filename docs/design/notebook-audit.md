@@ -399,6 +399,15 @@ Deviations from the plan above, each with its recorded reason:
   canonical view** (was `build_audit_view(..., lint_findings=())`) so their
   recomputed view_shas are not refused by the upgraded gate whenever a lint
   flag fires.
+- **audit-handoff intent rides the config seat, not a new store (2026-07-09).**
+  The audit→interview bridge needed the audit-open goal/compute-shape durable,
+  but a fifth journal block for "intent" would be a parallel store beside the
+  four the notebook journal already carries. Instead `notebook-record-config`'s
+  `notebook-audit-config` record grew two OPTIONAL fields (`goal`, `task_axes`),
+  read by `read_audit_intent` and projected by `audit-handoff`. Absent → the
+  record is byte-identical to a pre-intent one, so a standalone audit that never
+  hands off is unchanged. `_config_from_record` (the canonical-view reader)
+  ignores the two fields — the intent enters no `view_sha`.
 
 ## Related, planned separately
 
@@ -490,6 +499,31 @@ the task axes from journaled elicitations — which requires the audit OPEN to
 journal the intent/compute-shape utterances it already elicits (today they
 live only in chat). The slash then says one non-load-bearing line: "run
 audit-handoff, confirm its draft, pass it to the interview."
+
+**SHIPPED.** The audit-open seat and the projection both landed. The
+prerequisite is `notebook-record-config`'s two new OPTIONAL fields — `goal`
+and `task_axes` (the free-text campaign goal and the human's names for what
+varies across tasks) — journaled VERBATIM on the SAME immutable
+`notebook-audit-config` record the roots ride (one audit-open seat, no
+parallel store; absent → byte-identical, the D7 fail-safe). The projection is
+`audit-handoff` (a new read-only `query` primitive, NOT a `notebook-status`
+extension: it has distinct inputs and a distinct DRAFT-InterviewSpec output —
+overloading `notebook-status` would conflate the per-section audit state with
+the handoff draft and change its output contract). It reads the intent
+(`read_audit_intent`) + the recorded config roots (`read_recorded_config`) and
+AST-scans the source, emitting a draft whose every field is DERIVED-and-disclosed
+or an explicit PLACEHOLDER — it NEVER guesses (a guessed field becomes a
+journaled fact through the interview, the `halo_expr` class). `entry_point` is
+the single `@register_run` function found (zero/several → disclosed placeholder,
+never picked); `summary_artifact_candidates` are writes under `$HPC_RESULT_DIR`
+found by a scanner honest about its coverage (`os.path.join` / `Path` `/` /
+f-string forms over an `os.environ["HPC_RESULT_DIR"]` / `getenv` base with one
+alias hop; computed tails disclosed in `unverifiable_result_writes`;
+`str.format`/`%`/`+` uncovered — a safe miss); `task_generator` / `task_count` /
+`produced_by` are ALWAYS placeholders. The scan reads every path built on the
+result dir as a candidate (no write-function vocabulary — the Q1 boundary). The
+`/new-experiment-hpc` step-4 prose mapping collapsed to one line and the
+`hpc-notebook-audit` skill records the intent seat at audit open.
 
 ## Future work — run #11 mechanization queue (NOTED 2026-07-09, post-deadline)
 

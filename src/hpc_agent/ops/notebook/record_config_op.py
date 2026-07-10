@@ -97,7 +97,11 @@ _LATE_RECORD_WARNING = (
             "already exists (immutable-per-audit - supersede with a NEW "
             "audit_id). Recording into an audit that already has journal "
             "entries succeeds with a LOUD warning: every view_sha moves, prior "
-            "sign-offs read stale. Pure local read + journal append, no SSH."
+            "sign-offs read stale. Optionally carries the audit-OPEN intent "
+            "(goal + task_axes - the free-text campaign goal and the names of "
+            "what varies across tasks) on the same immutable seat, the durable "
+            "record audit-handoff reads (absent = byte-identical). Pure local "
+            "read + journal append, no SSH."
         ),
         spec_arg=True,
         experiment_dir_arg=True,
@@ -155,6 +159,8 @@ def notebook_record_config(
         source_roots=spec.source_roots,
         attention_order=spec.attention_order,
         output_roots=spec.output_roots,
+        goal=spec.goal,
+        task_axes=spec.task_axes,
     )
 
     return NotebookRecordConfigResult(
@@ -163,5 +169,7 @@ def notebook_record_config(
         source_roots=list(spec.source_roots),
         attention_order=list(spec.attention_order) if spec.attention_order is not None else None,
         output_roots=list(spec.output_roots),
+        goal=spec.goal,
+        task_axes=list(spec.task_axes) if spec.task_axes is not None else None,
         warning=warning,
     )
