@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent._build_info import git_output
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.pack_bind import (
     PackBindResult,
@@ -110,6 +111,90 @@ def _read_pack_records(experiment_dir: Path, pack_name: str) -> list[dict[str, A
     # T8: route through the ONE decision-journal reader (scope kind "pack"),
     # which tolerates a not-yet-created journal (returns []).
     return read_decisions(experiment_dir, PACK_SUBJECT_KIND, pack_name)
+
+
+# --- CRLF-vs-sha-seal disclosure --------------------------------------------
+#
+# The seal hashes RAW BYTES (``state/pack.py``). On a Windows checkout git's
+# text/eol translation silently rewrites those bytes (CRLF<->LF) UNDER the seal,
+# so a re-checkout of the same commit re-hashes to a different sha and revokes
+# every clearance — a lab hit exactly this and had to pin ``* -text`` by hand.
+# This leg DISCLOSES that exposure at bind time. It is NEVER a blocker: the seal
+# binds the bytes as they are NOW; the warning is about FUTURE-checkout drift.
+#
+# Library-knowledge boundary: this is the ONE git-attr query (``git check-attr
+# text eol``), reusing the fail-open ``git_output`` helper — no deeper git
+# knowledge enters core. ``git_output`` returns the raw stdout when git ran in a
+# repo (``check-attr`` always emits a line per file+attr), or ``None`` on a
+# missing git binary / non-repo / failure — the exact split we need between "a
+# real answer" and "translation-exposure unknown" (disclosed, never silent).
+
+#: The exact remedy pattern to disclose — pins a file to raw bytes (no eol xlate).
+_GITATTRIBUTES_REMEDY = "<pattern> -text"
+
+
+def _translation_exposed_files(pack_root: Path, relpaths: list[str]) -> list[str] | None:
+    """Files git would apply text/eol translation to, or ``None`` if undeterminable.
+
+    Runs ``git check-attr text eol -- <files>`` in *pack_root*. A file is EXPOSED
+    unless its ``text`` attribute is explicitly ``unset`` (the ``-text`` pin that
+    forces raw bytes) — ``set`` / ``auto`` / ``unspecified`` all leave git free to
+    rewrite line endings on checkout. Returns the exposed relpaths in *relpaths*
+    order (possibly empty = all pinned), or ``None`` when git is absent / the pack
+    is not in a git repo (the caller discloses that as 'unknown', never silence).
+    """
+    if not relpaths:
+        return []
+    out = git_output(["check-attr", "text", "eol", "--", *relpaths], cwd=pack_root)
+    if out is None:
+        return None  # git absent / not-a-repo / failed → undeterminable
+    # ``git check-attr`` prints one "%s: %s: %s" line per (path, attr): the value
+    # is the last field, the attr the second-last, the path everything before —
+    # rsplit keeps paths that themselves contain ": " intact.
+    text_value: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.rsplit(": ", 2)
+        if len(parts) != 3:
+            continue
+        path, attr, value = parts
+        if attr == "text":
+            text_value[path] = value
+    # Preserve manifest order; a file with no parsed ``text`` line degrades to
+    # 'unspecified' (i.e. exposed) rather than being silently dropped.
+    exposed: list[str] = []
+    for rel in relpaths:
+        if text_value.get(rel, "unspecified") != "unset":
+            exposed.append(rel)
+    return exposed
+
+
+def _translation_disclosure(exposed: list[str] | None) -> str | None:
+    """Build the NEVER-blocking disclosure line from :func:`_translation_exposed_files`.
+
+    * ``None`` (undeterminable) → a disclosed 'translation-exposure unknown' line.
+    * a non-empty list → a WARNING naming the files + the ``.gitattributes`` remedy.
+    * an empty list (all pinned / nothing to check) → ``None`` (a clean check, not
+      silence).
+    """
+    if exposed is None:
+        return (
+            "translation-exposure unknown: git is unavailable or the pack is not in "
+            "a git repository, so whether a future checkout's line-ending translation "
+            "would alter the sealed raw bytes could not be verified. If this pack "
+            f"lives in a git repo, pin every sealed file with `{_GITATTRIBUTES_REMEDY}` "
+            "in .gitattributes to be safe."
+        )
+    if not exposed:
+        return None
+    return (
+        f"WARNING: {len(exposed)} sealed file(s) are exposed to git text/eol "
+        "translation — a future checkout (notably on Windows) may rewrite CRLF/LF "
+        "and change the raw bytes UNDER the sha seal, silently revoking every "
+        f"clearance signed under this bind. Exposed: {', '.join(exposed)}. Remedy: "
+        f"pin them raw with `{_GITATTRIBUTES_REMEDY}` (e.g. `* -text`) in the pack's "
+        ".gitattributes. (The bind itself is unaffected — it sealed the bytes as they "
+        "are now.)"
+    )
 
 
 def _bind_resolved(manifest: PackManifest, manifest_sha: str) -> dict[str, Any]:
@@ -212,10 +297,20 @@ def pack_bind(*, experiment_dir: Path, spec: PackBindSpec) -> PackBindResult:
         resolved=resolved,
     )
 
+    # NEVER-blocking disclosure: would a future checkout's eol translation move
+    # the sealed bytes? Checked over the listed files in the pack's repo. Kept
+    # OFF the journal record (its ``resolved`` shape is pinned byte-identical);
+    # it rides the result only, as a disclosure the caller relays.
+    exposed = _translation_exposed_files(
+        manifest_path.parent, [f.path for f in manifest.files]
+    )
+
     return PackBindResult(
         pack=manifest.name,
         version=manifest.version,
         manifest_sha=manifest_sha,
         files=[PackFileEntry(path=f.path, sha256=f.sha256) for f in manifest.files],
         seams=sorted(manifest.seams),
+        translation_exposed_files=list(exposed or []),
+        translation_disclosure=_translation_disclosure(exposed),
     )

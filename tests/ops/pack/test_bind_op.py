@@ -19,6 +19,8 @@ real domain's, per the fixture rule.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -215,3 +217,70 @@ def test_rebind_at_new_sha_is_a_newer_record(tmp_path: Path) -> None:
     assert cur is not None
     assert cur.manifest_sha == second_sha
     assert cur.version == "2.0.0"
+
+
+# --- CRLF-vs-sha-seal translation disclosure --------------------------------
+#
+# The seal hashes raw bytes; git eol translation on a future checkout would
+# silently move those bytes and revoke every clearance. ``pack-bind`` discloses
+# the exposure — NEVER blocks (the bytes are sealed as they are now).
+
+
+_GIT = shutil.which("git")
+_requires_git = pytest.mark.skipif(_GIT is None, reason="git binary not on PATH")
+
+
+def _git_init(root: Path) -> None:
+    assert _GIT is not None  # guarded by _requires_git
+    for args in (["init"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        subprocess.run([_GIT, *args], cwd=str(root), check=True, capture_output=True)
+
+
+@_requires_git
+def test_disclosure_warns_when_file_exposed_to_translation(tmp_path: Path) -> None:
+    """A sealed file git would eol-translate (text attr not pinned `-text`)
+    surfaces a NEVER-blocking WARNING naming the file + the `.gitattributes`
+    remedy — but the bind still succeeds and journals."""
+    _git_init(tmp_path)
+    # Force text=set so the file is unambiguously exposed regardless of the
+    # host's global git config.
+    (tmp_path / ".gitattributes").write_text("* text\n", encoding="utf-8")
+    _write_pack(tmp_path)
+
+    result = _bind(tmp_path)
+
+    # The bind still succeeded and journaled (disclosure is never a blocker).
+    assert result.pack == _PACK_NAME
+    assert len(_records(tmp_path)) == 1
+
+    assert result.translation_exposed_files == ["vocab/readers.json"]
+    assert result.translation_disclosure is not None
+    assert "vocab/readers.json" in result.translation_disclosure
+    assert "-text" in result.translation_disclosure
+
+
+@_requires_git
+def test_disclosure_silent_when_file_pinned(tmp_path: Path) -> None:
+    """A file pinned `-text` (raw bytes, no translation) yields no warning."""
+    _git_init(tmp_path)
+    (tmp_path / ".gitattributes").write_text("* -text\n", encoding="utf-8")
+    _write_pack(tmp_path)
+
+    result = _bind(tmp_path)
+
+    assert result.translation_exposed_files == []
+    assert result.translation_disclosure is None
+
+
+def test_disclosure_unknown_when_no_git_repo(tmp_path: Path) -> None:
+    """No git repo (or no git binary) → a DISCLOSED 'unknown' line, never
+    silence (disclosure-or-refusal). tmp_path is not a git repo."""
+    _write_pack(tmp_path)
+
+    result = _bind(tmp_path)
+
+    # Bind succeeds regardless.
+    assert result.pack == _PACK_NAME
+    assert result.translation_exposed_files == []
+    assert result.translation_disclosure is not None
+    assert "unknown" in result.translation_disclosure.lower()

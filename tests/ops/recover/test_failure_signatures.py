@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from hpc_agent.infra.failure_signatures import CATALOG, classify
+from hpc_agent.infra.failure_signatures import (
+    CATALOG,
+    CONDA_RUN_BLIND_CLASS,
+    classify,
+    classify_conda_run_blind,
+)
 
 
 def test_catalog_size() -> None:
@@ -293,3 +298,65 @@ def test_cluster_env_init_never_fires_on_exit_code_alone() -> None:
     ``cluster_env_init`` — only the message shape does."""
     assert classify("", 1)["error_class"] != "cluster_env_init"
     assert classify("", 271)["error_class"] != "cluster_env_init"
+
+
+# ── conda-run blindness (silent-success signature; separate seam) ────────────
+
+
+def test_conda_run_blind_fires_on_empty_stdout_rc0() -> None:
+    """`conda run` + empty stdout + rc 0 = the silent-blindness class. The
+    remediation names the DIRECT env-python path and is NOT retry-worthy."""
+    out = classify_conda_run_blind(
+        command="conda run -n rlin_tune python -m analysis.summarize",
+        stdout="",
+        exit_code=0,
+    )
+    assert out is not None
+    assert out["error_class"] == CONDA_RUN_BLIND_CLASS
+    assert out["suggested_fix"]["retry_worthy"] is False
+    # The remediation names the direct env-python invocation.
+    hint = out["suggested_fix"]["hint"]
+    assert "~/.conda/envs/<env>/bin/python" in hint
+    assert out["suggested_fix"]["action"] == "use-direct-env-python"
+
+
+def test_conda_run_blind_ignores_whitespace_only_stdout() -> None:
+    """Whitespace-only stdout is still 'empty' — the wrapper produced nothing."""
+    out = classify_conda_run_blind(
+        command="conda run -n env printf ''", stdout="  \n\t ", exit_code=0
+    )
+    assert out is not None
+    assert out["error_class"] == CONDA_RUN_BLIND_CLASS
+
+
+def test_conda_run_blind_does_not_fire_on_non_conda_empty_command() -> None:
+    """A legitimately-empty NON-conda command must never be tagged blind."""
+    assert (
+        classify_conda_run_blind(
+            command="python -m analysis.summarize", stdout="", exit_code=0
+        )
+        is None
+    )
+    # A bare `true` / no-op that legitimately prints nothing.
+    assert classify_conda_run_blind(command="true", stdout="", exit_code=0) is None
+
+
+def test_conda_run_blind_does_not_fire_when_stdout_present() -> None:
+    """Real output from `conda run` means conda WAS initialized — not blind."""
+    assert (
+        classify_conda_run_blind(
+            command="conda run -n env python -c 'print(1)'", stdout="1\n", exit_code=0
+        )
+        is None
+    )
+
+
+def test_conda_run_blind_does_not_fire_on_nonzero_rc() -> None:
+    """A `conda run` that failed loudly (rc != 0) is a normal failure, not the
+    silent-success blindness class."""
+    assert (
+        classify_conda_run_blind(
+            command="conda run -n env python -m foo", stdout="", exit_code=1
+        )
+        is None
+    )

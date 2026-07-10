@@ -96,3 +96,24 @@ class PackBindResult(BaseModel):
         default_factory=list,
         description="Declared seam names (drawn from the closed SEAM_NAMES vocabulary).",
     )
+    translation_exposed_files: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Sealed files that git would apply line-ending/text translation to on a "
+            "future checkout (per `git check-attr text` in the pack's repo), which "
+            "would silently change the bytes under the sha seal. Empty when every "
+            "file is pinned (`-text`) or when exposure could not be determined."
+        ),
+    )
+    translation_disclosure: str | None = Field(
+        default=None,
+        description=(
+            "NEVER-blocking disclosure about future-checkout byte drift (the seal "
+            "still binds the bytes as they are NOW). A WARNING naming the exposed "
+            "files + the exact `.gitattributes` remedy when any sealed file is "
+            "exposed to git text/eol translation; a disclosed "
+            "'translation-exposure unknown' line when git is absent or the pack is "
+            "not in a git repo (disclosure-or-refusal — never silence); None when "
+            "every sealed file was checked and is pinned safe."
+        ),
+    )

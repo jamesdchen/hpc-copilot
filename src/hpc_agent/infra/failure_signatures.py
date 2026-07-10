@@ -30,7 +30,14 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["FailureSignature", "classify", "CATALOG", "CLASSIFIER_CATEGORIES"]
+__all__ = [
+    "FailureSignature",
+    "classify",
+    "CATALOG",
+    "CLASSIFIER_CATEGORIES",
+    "CONDA_RUN_BLIND_CLASS",
+    "classify_conda_run_blind",
+]
 
 
 @dataclass(frozen=True)
@@ -403,6 +410,90 @@ CATALOG: list[FailureSignature] = [
         priority=90,
     ),
 ]
+
+
+# ── conda-run blindness: a SILENT-SUCCESS signature (NOT a CATALOG row) ──────
+# Documented in the demo-env lore, prose-only until now: on some clusters
+# ``conda run -n <env> ...`` under NON-INTERACTIVE SSH produces SILENTLY EMPTY
+# stdout — conda was never initialized, so the wrapper exits 0 having run
+# nothing. Indistinguishable from a working no-op, so stale/absent results get
+# misread as success (cost: a whole harvest of "nothing changed" read as done).
+#
+# SEAM NOTE — why this deliberately does NOT ride ``classify()`` / ``CATALOG``:
+# ``classify(stderr, exit_code)`` sees ONLY stderr and the exit code. This class
+# has EMPTY stderr and ``exit_code == 0`` (a "success"); its entire
+# discriminating signal is the COMBINATION {the command was ``conda run``-shaped,
+# stdout was empty, rc was 0} — none of which the failure seam can observe.
+# Forcing a ``stderr_pattern``/``exit_code`` catalog row would either never fire
+# (empty stderr, rc 0) or fire on every clean no-op. So the signature lives at
+# the closest seam that CAN see all three features: a dedicated matcher a caller
+# invokes with the command text + stdout + rc it just observed. Keeping it out of
+# ``CATALOG`` also keeps ``CLASSIFIER_CATEGORIES`` / ``FailureCategory`` /
+# ``FailureCategoryResubmittable`` untouched — this is not a resubmittable
+# scheduler failure class, and ``retry_worthy`` is False by construction.
+#
+# GAP disclosed honestly: no EXISTING failure-exit seam carries a rc=0
+# empty-stdout "success" to classify (the failure path only runs on non-success),
+# so wiring a live consumer is a caller's future concern. This module supplies
+# the classifier so the detection lives in ONE place the day a caller (a
+# ``conda run`` ssh op that got empty output) wants to ask "was this blindness?".
+CONDA_RUN_BLIND_CLASS = "conda_run_blind"
+
+_CONDA_RUN_RE = re.compile(r"\bconda\s+run\b", re.I)
+
+
+def classify_conda_run_blind(
+    *,
+    command: str | None,
+    stdout: str | None,
+    exit_code: int | None,
+) -> dict[str, Any] | None:
+    """Detect the conda-run-blindness silent-success signature.
+
+    Returns the ``{error_class, suggested_fix, matched_pattern}`` triple (the
+    same shape :func:`classify` returns) ONLY when ALL three hold:
+
+    * *command* is ``conda run``-shaped (``conda run ...``),
+    * *stdout* is empty or whitespace-only,
+    * *exit_code* is 0 or ``None`` (the wrapper "succeeded" having produced
+      nothing; an unknown rc is not treated as a non-zero failure).
+
+    Returns ``None`` otherwise — a legitimately-empty NON-conda command, or a
+    real ``conda run`` that failed with a non-zero rc, is never mis-tagged.
+
+    ``retry_worthy=False``: re-running the same non-interactive ``conda run``
+    reproduces the blindness. The remediation names, in priority order, the
+    DIRECT env-python invocation (``~/.conda/envs/<env>/bin/python -m ...``),
+    which needs no conda init at all.
+    """
+    if not _CONDA_RUN_RE.search(command or ""):
+        return None
+    if (stdout or "").strip():
+        return None
+    if exit_code is not None and int(exit_code) != 0:
+        return None
+    return {
+        "error_class": CONDA_RUN_BLIND_CLASS,
+        "suggested_fix": {
+            "action": "use-direct-env-python",
+            "retry_worthy": False,
+            "hint": (
+                "`conda run -n <env> ...` produced EMPTY stdout with exit 0 under "
+                "non-interactive SSH — conda was never initialized, so the wrapper "
+                "ran NOTHING and still 'succeeded'. This is indistinguishable from a "
+                "working no-op, so absent/stale results get misread as done. Do NOT "
+                "retry (a non-interactive `conda run` reproduces it). In priority "
+                "order: (1) invoke the env's python DIRECTLY — "
+                "`~/.conda/envs/<env>/bin/python -m <module> ...` (also "
+                "`~/.conda/envs/<env>/bin/<tool>`) — which needs no conda init; "
+                "(2) if a conda wrapper is unavoidable, SOURCE conda first "
+                "(`source <conda_source> && conda activate <env>`) in the same "
+                "non-interactive shell before the command; (3) verify the env name "
+                "and that `~/.conda/envs/<env>/bin/python` actually exists."
+            ),
+        },
+        "matched_pattern": _CONDA_RUN_RE.pattern,
+    }
 
 
 # Every ``error_class`` the catalog (and thus ``classify()``) can emit — the
