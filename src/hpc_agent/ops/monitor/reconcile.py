@@ -61,6 +61,16 @@ class OrphanedReconcile:
     run_id: str
 
 
+# Sentinel-ack for the combined-wave listing (docs/design/connection-broker.md,
+# 2026-07-10). The listing is a POSITIVE success-marker scan: an empty result
+# must mean "the shell reached the remote dir and found no wave files", never
+# "the cd silently failed / the channel returned nothing". Echoed right after a
+# successful ``cd`` so its PRESENCE proves the query ran; its ABSENCE (a failed
+# cd, or a truncated read) is UNKNOWN → reconcile keeps the journal's
+# combined_waves rather than blanking them.
+_WAVE_ACK = "__HPC_WAVE_ACK__"
+
+
 def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
@@ -68,18 +78,35 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     (see ``hpc_agent/execution/mapreduce/combiner.py``). We use the
     presence of that file as the success marker.
     """
-    cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"
+    # cd (&&) → ack echo, THEN the listing (a bare ``;`` so an empty glob's
+    # non-zero ``ls`` never masks the ack); trailing ``true`` keeps the remote
+    # rc 0 so the ``rc != 0`` guard stays a pure SSH-transport (rc 255) check.
+    cmd = (
+        f"cd {shlex.quote(remote_path)} && printf '%s\\n' {shlex.quote(_WAVE_ACK)}; "
+        f"ls _combiner/wave_*.json 2>/dev/null; true"
+    )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        # SSH transport failure (rc 255) — not "no waves combined yet",
-        # which returns rc 0 thanks to the trailing ``|| true``. Raise so
-        # reconcile keeps the journal's combined_waves instead of
-        # overwriting it with an empty list on a connectivity blip.
+        # SSH transport failure (rc 255) — not "no waves combined yet". Raise so
+        # reconcile keeps the journal's combined_waves instead of overwriting it
+        # with an empty list on a connectivity blip.
         raise errors.RemoteCommandFailed(
             f"combined-wave list failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
+    lines = proc.stdout.splitlines()
+    if _WAVE_ACK not in {ln.strip() for ln in lines}:
+        # Positive-evidence transport verdict: no affirmative ack means the
+        # ``cd`` into remote_path failed (bad path / not yet deployed) or the
+        # read was silently truncated — UNKNOWN, not "zero waves combined".
+        # Raise so reconcile preserves the journal's combined_waves rather than
+        # blanking a run's combine history on a silent blip.
+        raise errors.RemoteCommandFailed(
+            "combined-wave list returned no positive-evidence ack (cd into "
+            f"{remote_path!r} failed, or a silent/truncated read); refusing to "
+            "read absence as 'zero waves combined'."
+        )
     waves: set[int] = set()
-    for line in proc.stdout.splitlines():
+    for line in lines:
         name = Path(line.strip()).name  # wave_<N>.json
         if not (name.startswith("wave_") and name.endswith(".json")):
             continue
