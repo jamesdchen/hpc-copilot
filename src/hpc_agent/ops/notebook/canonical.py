@@ -39,6 +39,7 @@ from hpc_agent.ops.notebook.audit_view import AuditView, build_audit_view
 from hpc_agent.ops.notebook.lint import notebook_lint
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.data_trace import read_trace
 
 __all__ = [
     "AuditConfig",
@@ -226,10 +227,18 @@ def build_canonical_view(
     )
     receipt = {slug: entry for slug, entry in journaled.items() if entry["fresh"]}
 
+    # The section join (A16 B3-LEAN): the audit-scope runner-observed trace is
+    # part of what the sign-off view shows and its view_sha binds. Read here so
+    # the gate, the view verb, and the render plugin all recompute the SAME
+    # runtime summary (the one-definition guarantee). A tolerant read — absent
+    # trace → [] → no summary → byte-identical to a pre-join view.
+    audit_traces = read_trace(experiment_dir, "audit", audit_id, 0)
+
     return build_audit_view(
         source,
         template,
         findings,
         receipt=receipt,
         attention_order=cfg.attention_order,
+        audit_traces=audit_traces,
     )

@@ -35,12 +35,13 @@ from hpc_agent.execution.mapreduce.data_trace_contract import (
     TRACE_TRANSPORT_FILENAME,
 )
 from hpc_agent.infra.io import append_jsonl_line
+from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.data_trace import ingest_trace, make_record, stdlib_measure
 
 from . import _annotate
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 __all__ = [
     "Measurer",
@@ -79,16 +80,20 @@ def observe_cell(
     *,
     section: str | None,
     seq: int,
+    section_sha: str | None = None,
     measurer: Measurer | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """The pure between-cell seam: measure every DECLARED-AND-PRESENT observable.
 
     For each name in *observables* PRESENT in *namespace*, measure it (via the
     injected *measurer*, else the stdlib fallback) and build ONE runner-tier T1
-    record (``source="runner"``) tagged with the current audit *section*. A
-    declared-but-ABSENT name is skipped silently (the disclosure is its absence
-    downstream); an object nothing can measure is skipped too. ``seq`` advances by
-    one per emitted record (monotone across cells). Returns ``(records, next_seq)``.
+    record (``source="runner"``) tagged with the current audit *section* and, when
+    known, its *section_sha* — the B3-LEAN freshness binding (A16): the sign-off
+    section join elides a section whose latest trace was NOT stamped with the
+    current code sha. A declared-but-ABSENT name is skipped silently (the
+    disclosure is its absence downstream); an object nothing can measure is
+    skipped too. ``seq`` advances by one per emitted record (monotone across
+    cells). Returns ``(records, next_seq)``.
     """
     records: list[dict[str, Any]] = []
     for name in observables:
@@ -100,9 +105,15 @@ def observe_cell(
         # The runner stamps its OWN trust tier (A10): it is the trust-bearing
         # observer, so the record is receipt-grade ``runner`` by construction.
         # ``source`` rides the record model — make_record validates it against
-        # the closed T2-contract tier set (no external post-stamp).
+        # the closed T2-contract tier set (no external post-stamp). ``section_sha``
+        # binds the section-level freshness the sign-off join checks (A16).
         record = make_record(
-            stage=name, seq=seq, atoms=atoms, section=section, source=TRACE_SOURCE_RUNNER
+            stage=name,
+            seq=seq,
+            atoms=atoms,
+            section=section,
+            section_sha=section_sha,
+            source=TRACE_SOURCE_RUNNER,
         )
         records.append(record)
         seq += 1
@@ -113,6 +124,7 @@ def run_observation(
     cells: Sequence[tuple[str | None, str]],
     observables: Sequence[str],
     *,
+    section_shas: Mapping[str, str] | None = None,
     measurer: Measurer | None = None,
     namespace: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -121,12 +133,17 @@ def run_observation(
     *cells* is an ordered sequence of ``(section_slug, code_source)`` (markdown /
     preamble cells carry ``section=None``). Each cell's source is ``exec``'d into a
     single shared *namespace*; after each, :func:`observe_cell` measures the
-    declared observables now present. A cell that RAISES stops the run (later
-    cells depend on it; their observables read as absent — a disclosure), but the
-    records collected up to the failure are returned. Pass *namespace* to seed /
-    inspect the exec dict (tests drive a stub namespace this way).
+    declared observables now present. *section_shas* maps a section slug to its
+    current ``section_sha`` (from :func:`parse_percent_source`); the record for a
+    cell in that section is stamped with it (A16 B3-LEAN freshness). A slug absent
+    from the map stamps ``None`` (the reader then stale-elides — an honest
+    degradation). A cell that RAISES stops the run (later cells depend on it; their
+    observables read as absent — a disclosure), but the records collected up to the
+    failure are returned. Pass *namespace* to seed / inspect the exec dict (tests
+    drive a stub namespace this way).
     """
     ns = namespace if namespace is not None else {}
+    shas = section_shas or {}
     records: list[dict[str, Any]] = []
     seq = 0
     for section, code in cells:
@@ -135,7 +152,12 @@ def run_observation(
         except Exception:  # noqa: BLE001 — a raising cell ends observation, never the render
             break
         cell_records, seq = observe_cell(
-            ns, observables, section=section, seq=seq, measurer=measurer
+            ns,
+            observables,
+            section=section,
+            seq=seq,
+            section_sha=shas.get(section) if section is not None else None,
+            measurer=measurer,
         )
         records.extend(cell_records)
     return records
@@ -170,13 +192,23 @@ def observe_source(
     Parses *source_text*'s percent cells, runs the between-cell observation loop,
     appends the runner-tier records to a T2 transport file, then ingests them into
     the audit scope (``traces/audit/<audit_id>/task-0.jsonl``, journaled under the
-    notebook scope — T1's audit→notebook mapping). Returns the ingest summary, or
-    ``None`` when nothing was observed (no observables, or none present/measurable)
-    so no empty trace is journaled.
+    notebook scope — T1's audit→notebook mapping). Each record is stamped with its
+    section's current ``section_sha`` (A16 B3-LEAN freshness) — the SAME
+    normalized-section hash the audit view computes, so the sign-off join treats a
+    record as fresh iff the code has not drifted since it was observed. Returns the
+    ingest summary, or ``None`` when nothing was observed (no observables, or none
+    present/measurable) so no empty trace is journaled.
     """
     if not observables:
         return None
-    records = run_observation(_percent_code_cells(source_text), observables, measurer=measurer)
+    parsed = parse_percent_source(source_text)
+    section_shas = {sect.slug: sect.section_sha for sect in parsed.sections}
+    records = run_observation(
+        _percent_code_cells(source_text),
+        observables,
+        section_shas=section_shas,
+        measurer=measurer,
+    )
     if not records:
         return None
 

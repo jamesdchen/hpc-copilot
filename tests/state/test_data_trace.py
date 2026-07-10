@@ -405,6 +405,38 @@ def test_source_absent_is_valid_and_unstamped():
     assert dt.validate_record(rec) == []
 
 
+# --- the B3-LEAN section_sha freshness binding (A16) --------------------------
+
+
+def test_make_record_stamps_and_validates_section_sha():
+    # The runner stamps the section's current section_sha (A16 freshness); a
+    # non-empty string is accepted.
+    rec = dt.make_record(
+        "df", 0, {"row_count": {"rows": 2, "dropped": 0}}, section="model", section_sha="a" * 64
+    )
+    assert rec["section_sha"] == "a" * 64
+    assert dt.validate_record(rec) == []
+
+
+def test_section_sha_absent_is_valid_and_unstamped():
+    # A runner that does not stamp leaves the key absent (byte-identity); the
+    # reader then stale-elides — honest degradation, never a hard error.
+    rec = dt.make_record("df", 0, {"row_count": {"rows": 1, "dropped": 0}}, section="model")
+    assert "section_sha" not in rec
+    assert dt.validate_record(rec) == []
+
+
+def test_section_sha_must_be_non_empty_string_when_present():
+    with pytest.raises(errors.SpecInvalid):
+        dt.make_record(
+            "df", 0, {"row_count": {"rows": 1, "dropped": 0}}, section="model", section_sha=""
+        )
+    bad = dt.make_record("df", 0, {"row_count": {"rows": 1, "dropped": 0}}, section="model")
+    bad["section_sha"] = 123
+    errs = dt.validate_record(bad)
+    assert any("section_sha" in e for e in errs)
+
+
 # --- the stdlib-only import pin (AST) ----------------------------------------
 
 

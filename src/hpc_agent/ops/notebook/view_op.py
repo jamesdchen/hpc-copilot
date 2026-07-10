@@ -69,6 +69,7 @@ from hpc_agent.ops.notebook.canonical import (
 )
 from hpc_agent.ops.notebook.render_store import _VIEW_SHA_ADDRESS_LEN, write_render
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.data_trace import read_trace
 from hpc_agent.state.notebook_audit import (
     RENDER_RELAY_DUE_RECORD_KIND,
     record_scope_relay_due,
@@ -260,6 +261,10 @@ def notebook_audit_view(
             spec.lint_findings,
             receipt=spec.receipt,
             attention_order=effective.attention_order,
+            # The section join reads the SAME on-disk audit trace in the preview
+            # path so the runtime-evidence summary is not silently dropped when a
+            # caller overrides lint/receipt (A16 B3-LEAN). Tolerant read → [].
+            audit_traces=read_trace(experiment_dir, "audit", spec.audit_id, 0),
         )
         canonical = False
     else:
