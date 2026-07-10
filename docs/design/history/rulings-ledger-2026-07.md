@@ -76,3 +76,28 @@ Amendment 14 (G-a) · hyper-palatable sign-off (notebook-audit amendment).
 - The post-run-#12 batch is SPLIT: items that affect future runs move to
   BUILD NOW; only evidence-gated / user-gated / external items stay deferred
   (the split table lives in the session relay + battle plan).
+
+## 2026-07-10 evening rulings + reprioritizations (user)
+- PROSE CANNOT BE LOAD-BEARING (standing conduct rule, reapplied): wave-1's
+  two prose seats convert to CODE seats — (a) the gate auto-remedy RUNS the
+  caller-authored check command itself (subprocess, the executor precedent;
+  DP2 = never import/interpret pack logic, subprocessing caller-declared
+  commands is already core's executor posture), zero agent turns; (b) the
+  on-ramp template default is composed IN CODE and NOT brought to human
+  attention at all (silent, disclosed in the record — supersedes
+  "confirm-default").
+- Unified render: BUILD PARKED pending MCP-documentation research + the
+  per-chunk-header deliberation (see mcp-elicitation.md).
+- Overnight-repair standing-rules deliberation PARKED (nice-to-have).
+- Echo/laundering RE-OPENED at the philosophy level: LLM suggestions are
+  DESIRED (human amplification — the helping hand in decisions); the hazard
+  is Y-ACK EASE (low-engagement attestation), not model-drafted wording per
+  se. Resolution direction to rule: move the guard from wording-originality
+  to ENGAGEMENT EVIDENCE at attestation time. OPEN.
+- Slots 3.1/3.2/3.3: deferred INTO the trading-repo split as that repo's
+  design decisions.
+- Trading-repo split data call: vendor parquets COPY + GITIGNORE (local data
+  fine; an upstream copy exists with the professor).
+- Run #12 NOT yet kicked off → envs SAFE TO REINSTALL; plan: land the
+  mechanize-now waves, CI green, fresh wheel + three-env refresh, THEN
+  kickoff.

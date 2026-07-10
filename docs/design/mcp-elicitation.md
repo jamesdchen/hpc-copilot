@@ -696,3 +696,15 @@ guards that pin the byte-for-byte fallback).
   ever get different PROJECTIONS of the render; digest-only fast paths;
   per-client sizing. Build: post-run-#12 batch (touches the live sign-off
   path).
+
+- **DELIBERATION OPEN (2026-07-10, user) — chunked popups: per-chunk headers,
+  whole-render summary questioned; BUILD PARKED pending MCP research.**
+  Chunking may be a FEATURE (forcing per-chunk engagement instead of one
+  scroll-past), but across-whole-code properties are hard to catch from
+  chunks — the design needs deliberation before build. User direction: a
+  whole-render summary header is of doubtful value; instead EVERY CHUNK gets
+  its own header explaining what that chunk does and how the experiment data
+  passes through it (synergistic with chunked reading). Prerequisite: pin
+  down MCP elicitation's actual capabilities from the spec/documentation
+  (content types, size limits, multi-part semantics, display receipts,
+  client rendering) — research pass ordered 2026-07-10.

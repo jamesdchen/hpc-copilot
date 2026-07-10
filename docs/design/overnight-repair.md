@@ -222,3 +222,11 @@ survives the code-derived-field and brief-provenance gates.)
 ## Drift log
 
 *(empty — no implementation yet)*
+
+## PARKED (2026-07-10, user)
+
+The standing rules (path zones as first filter, two-zone consent identity,
+every-fix-committed, mechanical-retry rung) need further fleshing out —
+deliberation PARKED to later in the 3-day Fable sprint: overnight operation
+is a nice-to-have, not necessary. The taxonomy above stands as banked design;
+no build before the deliberation.
