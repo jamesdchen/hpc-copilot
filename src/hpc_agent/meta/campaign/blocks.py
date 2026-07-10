@@ -54,6 +54,34 @@ _WATCH_ANOMALY: frozenset[str] = frozenset(
     {"stop_circuit_breaker", "stop_resubmit_cap", "stop_over_budget"}
 )
 
+# The manifest fields whose change kills a campaign standing consent — the greenlit
+# spec (goal / budget / strategy / stop_criteria / anomaly_policy). A campaign has no
+# per-run tree ``cmd_sha``, so its consent binds to THIS identity: the analog the
+# substrate's spec-identity leg compares (a re-greenlit campaign ⇒ a new identity ⇒
+# consent dies, exactly like a regenerated grid moves a run's cmd_sha).
+_CAMPAIGN_IDENTITY_FIELDS: tuple[str, ...] = (
+    "goal",
+    "budget",
+    "strategy",
+    "stop_criteria",
+    "anomaly_policy",
+)
+
+
+def _campaign_spec_identity(manifest: dict[str, Any] | None) -> str:
+    """The greenlit-spec identity a campaign standing consent binds to.
+
+    Reuses ``block_drive._spec_sha`` — the ONE definition of an input-spec identity
+    the substrate names — over the greenlit manifest fields, so the campaign case
+    computes the same kind of token the run case reads from the sidecar. An absent
+    manifest yields the sha of ``{}`` (a stable non-empty identity), which a real
+    consent's bound ``cmd_sha`` will not match ⇒ not live ⇒ parks.
+    """
+    from hpc_agent._kernel.lifecycle.block_drive import _spec_sha
+
+    spec = {k: (manifest or {}).get(k) for k in _CAMPAIGN_IDENTITY_FIELDS}
+    return _spec_sha(spec)
+
 
 def _next_block(
     current_verb: str, stage_reached: str, why: str, **spec_hint: Any
@@ -356,13 +384,54 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
         )
 
     if decision in _WATCH_ANOMALY:
+        # OVERNIGHT AUTO-ADVANCE (item 8 seam 1): a LIVE campaign-scope standing
+        # consent lets the anomaly halt be consumed unattended — the campaign keeps
+        # self-chaining up to the consent's caps until the morning boundary — and the
+        # auto-advance is recorded to the consumption ledger in the same breath so the
+        # morning brief discloses it. A not-live / absent consent parks for a y/nudge
+        # exactly as today, carrying the refusal leg. (Recording an audit-disclosure
+        # line is the ONLY write this otherwise-read-only block makes; it never
+        # actuates the campaign.) The campaign wake-liveness probe is a KNOWN OPEN
+        # RULING — the substrate requires the wake token's presence but skips the
+        # per-run lease check for a campaign scope.
+        from hpc_agent.ops.overnight import consume_boundary_under_consent
+
+        outcome = consume_boundary_under_consent(
+            experiment_dir,
+            scope_kind="campaign",
+            scope_id=cid,
+            boundary_block="campaign-watch",
+            current_cmd_sha=_campaign_spec_identity(manifest),
+            event_kind="anomaly",
+            detail={"anomaly": decision, "reason": adv.get("reason")},
+        )
+        if outcome.consumed:
+            brief["overnight_auto_advanced"] = {
+                "anomaly": decision,
+                "reason": adv.get("reason"),
+                "ledger_line": outcome.line,
+            }
+            return CampaignBlockResult(
+                block="watch",
+                stage_reached="watching_healthy",
+                needs_decision=False,
+                reason=(
+                    f"campaign {cid!r} anomaly {decision} ({adv.get('reason')}) "
+                    "auto-advanced under a live standing consent — self-chaining "
+                    "continues; the morning brief discloses the consumption."
+                ),
+                campaign_id=cid,
+                brief=brief,
+            )
+        brief["overnight_refusal"] = outcome.decision.reason
         return CampaignBlockResult(
             block="watch",
             stage_reached="watching_anomaly",
             needs_decision=True,
             reason=(
                 f"campaign {cid!r} anomaly: {decision} ({adv.get('reason')}); "
-                "surface for a y/nudge decision."
+                f"surface for a y/nudge decision (no live standing consent to "
+                f"auto-advance: {outcome.decision.reason})."
             ),
             campaign_id=cid,
             brief=brief,
