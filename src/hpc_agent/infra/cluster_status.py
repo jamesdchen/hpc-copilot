@@ -230,8 +230,11 @@ def ssh_batch_scheduler_states(
     runs ``backend_cls.batch_status`` to fold tokens into ``TaskStatus``
     values. Job ids absent from the scheduler output are omitted (they have
     left the queue — terminal). Raises :class:`SshUnreachable` on an SSH
-    transport failure (the state commands append ``|| true`` so a reachable
-    cluster always returns rc 0; a non-zero rc is transport, not "no jobs").
+    transport failure (non-zero rc) AND on a MISSING sentinel-ack: the
+    positive-evidence rule (docs/design/connection-broker.md) — an empty read
+    that does not carry the query's affirmative ack token is a silently
+    truncated / never-run channel (UNKNOWN), and reading it as "every job left
+    the queue" would flip a fleet of live runs to terminal on one silent blip.
     """
     if not job_ids:
         return {}
@@ -242,4 +245,12 @@ def ssh_batch_scheduler_states(
             f"batch scheduler-state query failed (rc={proc.returncode}): "
             f"{proc.stderr.strip()[:200]}"
         )
-    return backend_cls.parse_scheduler_states(proc.stdout, job_ids)
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        raise SshUnreachable(
+            "batch scheduler-state query returned no positive-evidence ack "
+            "(silent/empty read — the query did not run to completion, or the "
+            "scheduler binary itself failed); refusing to read absence as "
+            "'all jobs terminal'."
+        )
+    return backend_cls.parse_scheduler_states(clean, job_ids)

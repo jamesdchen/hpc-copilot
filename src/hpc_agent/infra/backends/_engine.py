@@ -41,6 +41,32 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+# Sentinel-ack transport verdict (docs/design/connection-broker.md, 2026-07-10).
+# Every scheduler-liveness / -state query (:meth:`ProfileBackend.build_alive_check_cmd`
+# / :meth:`~ProfileBackend.build_scheduler_state_cmd`) ends by echoing this token
+# with the scheduler command's own exit code. Its PRESENCE is the affirmative
+# proof that the remote shell ran the query to completion; an empty read that
+# does NOT carry it is a silently-truncated / never-executed channel — UNKNOWN,
+# never "no jobs left the queue". This kills the silence-as-terminal class the
+# old ``… || true`` masking created: a scheduler binary that failed (qstat
+# missing, slurmctld down) returned rc 0 + empty stdout, indistinguishable from
+# an empty queue, so every job read as terminal. See
+# :meth:`ProfileBackend.scheduler_query_ran`.
+_SCHED_ACK_PREFIX = "__HPC_SCHED_ACK__="
+
+
+def _with_ack(cmd: str) -> str:
+    """Suffix *cmd* with the sentinel-ack echo (see :data:`_SCHED_ACK_PREFIX`).
+
+    The echo is ``;``-sequenced (not ``&&``) so it fires regardless of the
+    scheduler command's exit status, carrying that status as the ack value —
+    the affirmative token proving the remote shell reached the end of the
+    query. Replaces the old ``… || true`` masking, which made a failed
+    scheduler binary look identical to an empty queue.
+    """
+    return f'{cmd}; echo "{_SCHED_ACK_PREFIX}$?"'
+
+
 def _fmt_hms(total_seconds: int) -> str:
     """Format *total_seconds* as ``HH:MM:SS`` for SGE ``-l h_rt``.
 
@@ -550,7 +576,7 @@ class ProfileBackend(HPCBackend):
             # squeue (active states only) so completed/failed jobs don't
             # leak history and make abandoned-run detection useless.
             csv = ",".join(job_ids)
-            return f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
+            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # PBS: query the explicit ids (NOT ``qstat -u``). ``-u`` triggers PBS's
             # *wide* alternate listing where the state column is no longer index 4
@@ -559,10 +585,10 @@ class ProfileBackend(HPCBackend):
             # ``-t`` expands array parents into subjobs; ids that have left the
             # queue print to stderr (discarded) and are simply absent from stdout.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return f"qstat -t {ids} 2>/dev/null || true"
+            return _with_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: one ``qstat -u $USER`` call regardless of N; filtering happens
         # in parse_alive_output. $USER expands cluster-side.
-        return 'qstat -u "$USER" 2>/dev/null || true'
+        return _with_ack('qstat -u "$USER" 2>/dev/null')
 
     @classmethod
     def parse_alive_output(cls, stdout: str, job_ids: list[str]) -> set[str]:
@@ -624,14 +650,63 @@ class ProfileBackend(HPCBackend):
             return "true"
         if cls.profile.family == "slurm":
             csv = ",".join(job_ids)
-            return f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null || true"
+            return _with_ack(f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null")
         if cls.profile.family in ("pbspro", "torque"):
             # See build_alive_check_cmd: explicit ids (+ ``-t`` for arrays) keep
             # PBS in its brief format so the state token stays at column 4.
             ids = " ".join(shlex.quote(str(j)) for j in job_ids)
-            return f"qstat -t {ids} 2>/dev/null || true"
+            return _with_ack(f"qstat -t {ids} 2>/dev/null")
         # sge: qstat -u output already carries the state column.
-        return 'qstat -u "$USER" 2>/dev/null || true'
+        return _with_ack('qstat -u "$USER" 2>/dev/null')
+
+    @classmethod
+    def scheduler_query_ran(cls, stdout: str) -> tuple[str, bool]:
+        """Split the sentinel-ack line off *stdout*; return ``(clean_stdout, ran_ok)``.
+
+        The positive-evidence transport verdict for a liveness / state query
+        (sentinel-ack ruling, docs/design/connection-broker.md). ``ran_ok`` is a
+        claim about whether the QUERY executed — never about the remote command
+        succeeding — so a caller can distinguish "the scheduler answered (its
+        answer may be an empty queue)" from "the channel returned nothing / was
+        truncated" (UNKNOWN) instead of reading silence as "all jobs terminal".
+
+        Rules:
+
+        * **Ack absent** → ``ran_ok=False`` for every family: the remote shell
+          never reached the trailing echo (empty / silently-truncated read).
+          This is the class the ruling exists to kill.
+        * **Ack present, SGE / PBS** → ``ran_ok`` iff the recorded rc is ``0``.
+          ``qstat`` exits 0 on an empty queue, so a non-zero rc is the scheduler
+          binary ITSELF failing (missing / server down) — exactly the case the
+          old ``|| true`` masked into a spurious "no jobs".
+        * **Ack present, SLURM** → ``ran_ok=True`` regardless of rc. ``squeue
+          -j`` exits non-zero once every queried id has left the queue ("invalid
+          job id"), indistinguishable from a squeue failure by rc alone, so
+          SLURM leans on ack PRESENCE (the channel-silence guard) and defers the
+          completed-vs-failed decision to the reporter's positive task evidence
+          (``ops/monitor/classify.settle``), never to this query's emptiness.
+
+        The ack line is stripped from the returned stdout so the family parsers
+        see only real scheduler rows (they already skip a non-digit-led line,
+        but stripping keeps the contract explicit).
+        """
+        kept: list[str] = []
+        rc: int | None = None
+        for line in stdout.splitlines():
+            if line.startswith(_SCHED_ACK_PREFIX):
+                raw = line[len(_SCHED_ACK_PREFIX) :].strip()
+                try:
+                    rc = int(raw)
+                except ValueError:
+                    rc = -1
+                continue
+            kept.append(line)
+        clean = "\n".join(kept)
+        if rc is None:
+            return clean, False
+        if cls.profile.family == "slurm":
+            return clean, True
+        return clean, rc == 0
 
     @classmethod
     def parse_scheduler_states(cls, stdout: str, job_ids: list[str]) -> dict[str, str]:
