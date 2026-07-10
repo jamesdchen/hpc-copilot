@@ -122,6 +122,23 @@ def test_observe_source_ingests_under_the_audit_scope(tmp_path: Path) -> None:
     assert not transport.exists()
 
 
+def test_observe_source_stamps_section_sha_matching_the_audit_view(tmp_path: Path) -> None:
+    # A16 B3-LEAN: the runner stamps each record with its section's CURRENT
+    # section_sha (the same normalized-section hash the audit view computes), so
+    # the sign-off section join treats the trace as fresh iff the code has not
+    # drifted. End-to-end: stamped shas equal parse_percent_source's shas.
+    from hpc_agent.state.audit_source import parse_percent_source
+
+    _observe.observe_source(
+        tmp_path, audit_id="aud-1", source_text=_SOURCE, observables=["frame", "totals"]
+    )
+    stored = dt.read_trace(tmp_path, "audit", "aud-1", 0)
+    shas = {s.slug: s.section_sha for s in parse_percent_source(_SOURCE).sections}
+    assert stored, "records must have been ingested"
+    for rec in stored:
+        assert rec["section_sha"] == shas[rec["section"]]
+
+
 def test_no_observables_is_off_no_probes(tmp_path: Path) -> None:
     # The loop is OFF: no observation plan -> None, and no trace store written.
     summary = _observe.observe_source(
