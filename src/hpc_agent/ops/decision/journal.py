@@ -278,6 +278,7 @@ def append_decision(*, experiment_dir: Path, spec: AppendDecisionInput) -> Appen
     _assert_reproduction_verdict_authorship(experiment_dir, spec, resolved)
     _assert_conclusion_authorship(experiment_dir, spec, resolved)
     _assert_challenge_authorship(experiment_dir, spec, resolved)
+    _assert_overnight_consent_authorship(experiment_dir, spec, resolved)
     # Multi-human (docs/design/multi-human.md MH4/MH8): resolve the session actor
     # server-side (NEVER a caller-suppliable spec field — the model must not choose
     # its identity), enforce the MH8 delegation policy for this block, and stamp the
@@ -3197,6 +3198,96 @@ def _assert_challenge_authorship(
         return
     # block ∈ {challenge-verdict, challenge-withdraw} — the resolution floor.
     _assert_challenge_verdict_authorship(experiment_dir, spec, resolved)
+
+
+# ── overnight standing-consent authorship gate (notebook-audit.md item 8) ─────
+
+
+def _assert_overnight_consent_authorship(
+    experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
+) -> None:
+    """Overnight standing-consent gate — the human's typed acceptance of fallout.
+
+    A STANDING CONSENT (``docs/design/notebook-audit.md`` item 8) lets named
+    boundaries auto-advance while the human sleeps. It is journaled as an
+    ``append-decision`` under the distinct block
+    :data:`hpc_agent.ops.overnight.OVERNIGHT_CONSENT_BLOCK` (there is no consent
+    verb — this gate is the only choke point), so it cannot be laundered around.
+    Four legs, mirroring the ``scope-unlock`` gate's structure:
+
+    * **block convention** — the ``overnight-consent`` block is valid only for a
+      ``run`` / ``campaign`` scope (a boundary the human sleeps through), refused
+      for any other ``scope_kind``.
+    * **authorship** (item 8 pin a) — the ``response`` is the human's OWN typed
+      utterance accepting the fallout; a bare ack (:func:`_is_bare_ack`) cannot
+      grant it, and with the harness utterance log installed the utterance's word
+      tokens must derive from a logged human prompt (the shared lock tier — the
+      model never composes a consent). These carry the E2 authorship-missing
+      marker (a fresh utterance resolves them, so an MCP retry-after-elicit fits).
+    * **hard caps + spec identity** (pins b + c) —
+      :func:`hpc_agent.ops.overnight.assert_consent_hard_caps`: an ``expires_at``
+      morning boundary, a ``budget_cap`` / ``walltime_cap`` ceiling, and the
+      ``cmd_sha`` spec-identity binding consumption dies on.
+    * **the wake** (second amendment) —
+      :func:`hpc_agent.ops.overnight.assert_wake_armed`: a harness-tracked
+      ``status-watch`` armed for the same scope, else the consent is refused (a
+      pre-y no watch can consume is theater). Caps / wake are STRUCTURAL refusals
+      (a fresh utterance cannot fix a missing cap or an unarmed watch), so they
+      are deliberately NOT marked with the authorship-missing marker.
+
+    Every non-``overnight-consent`` record passes untouched. Reached through the
+    top-level ``hpc_agent.ops.overnight`` module (a role-root sibling, allowed
+    from inside the ``decision`` subject exactly like the ``field_ownership``
+    facade import).
+    """
+    from hpc_agent.ops import overnight as _overnight
+
+    if spec.block != _overnight.OVERNIGHT_CONSENT_BLOCK:
+        return  # not a standing consent — nothing to gate
+    if spec.scope_kind not in _overnight.CONSENT_SCOPE_KINDS:
+        raise errors.SpecInvalid(
+            f"block {_overnight.OVERNIGHT_CONSENT_BLOCK!r} is a standing consent, only "
+            f"valid for scope_kind in {sorted(_overnight.CONSENT_SCOPE_KINDS)} (a run "
+            f"or campaign boundary the human sleeps through); got "
+            f"scope_kind={spec.scope_kind!r}."
+        )
+
+    # Leg 1 — authorship: the consent is the human's OWN typed utterance (pin a).
+    response = str(spec.response or "")
+    if _is_bare_ack(response):
+        _refuse_missing_authorship(
+            "overnight-consent authorship gate: a standing consent accepts the "
+            "fallout of unattended overnight advances and is the human's OWN typed "
+            f"act — a bare {spec.response!r} (a 'y' / click) cannot grant it. The "
+            "human must type the consent, naming the boundaries and the caps they "
+            "accept."
+        )
+    _actor_ids, _ = _read_interview_actors(experiment_dir)
+    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
+    if harness_texts is not None:
+        human_words: set[str] = set()
+        for text in harness_texts:
+            human_words |= _ha_word_tokens(text)
+        consent_words = _ha_word_tokens(response)
+        if consent_words and not (consent_words & human_words):
+            _refuse_missing_authorship(
+                "overnight-consent authorship gate: with the harness utterance log "
+                "installed, the consent must derive from a logged human utterance "
+                f"(harness-captured), not the agent-relayed response {spec.response!r}. "
+                "The model must never compose a standing consent — have the human "
+                "type it in a prompt. (Under >1 declared actors the pool is the "
+                "SESSION ACTOR'S log only — MH4.)"
+            )
+
+    # Legs 2 + 3 — structural (never the authorship marker): hard caps + spec
+    # identity, then the armed wake.
+    _overnight.assert_consent_hard_caps(resolved)
+    _overnight.assert_wake_armed(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        resolved=resolved,
+    )
 
 
 def _chain_successor(block: str) -> str | None:

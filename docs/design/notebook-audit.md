@@ -708,6 +708,45 @@ driver. The skills must pair every pre-consent with arming the wake in the
 same breath; a pre-y without an armed watch is consent nobody can consume —
 true for failure (the overnight canary death) and success (this) alike.
 
+**Item 8 SHIPPED (2026-07-09).** The substrate is `ops/overnight.py` (role
+root) plus the authorship gate
+`ops/decision/journal.py::_assert_overnight_consent_authorship`. The CONSENT is
+NOT a new store: it is an `append-decision` record under the distinct block
+`overnight-consent` (`ops.overnight.OVERNIGHT_CONSENT_BLOCK`, run/campaign
+scope), so it rides the same utterance-authorship locks as `scope-unlock` /
+`notebook-sign-off` — a bare ack or a model-composed utterance is refused; with
+the harness log installed the consent must derive from a logged human prompt.
+`assert_consent_hard_caps` enforces pins (b)+(c): `expires_at` (future morning
+boundary), `budget_cap`/`walltime_cap` (≥1 ceiling), and the `cmd_sha`
+spec-identity binding. Consumption (`standing_consent_status` /
+`assert_standing_consent`) refuses on expiry, an over-cap spend, or a `cmd_sha`
+mismatch — the SAME identity mechanism block-drive uses to refuse carrying a
+pre-y across a spec change (`_kernel/lifecycle/block_drive._spec_sha` /
+`_changed_fields`); the caller supplies the current identity, mirroring
+`block_gate.assert_greenlit_target`. The WAKE leg (`assert_wake_armed`) refuses
+a consent whose `resolved.wake` does not name `status-watch` and — for a run
+scope — whose detached `status-watch` lease is not live (the same lease
+`status_blocks._live_watch_handle` reads). The notification leg
+(`notification_plan`) consults `harness-capabilities` for the watchdog
+alert-delivery hook (the push seat) and records the disclosure GAP when it is
+absent. The morning brief (`overnight_morning_brief`) reads a SEPARATE per-scope
+consumption ledger (`<scope>.overnight.jsonl`, the canonical `append_jsonl_line`
+seam — NOT the y/nudge journal, so a code-authored audit line never flips
+`is_latest_committed_greenlight`) and surfaces `failed_at` vs `surfaced_at` +
+latency. Skills prose: hpc-submit / hpc-campaign name `status-watch` as the ONLY
+sanctioned cluster watch and pair every pre-consent with arming the wake.
+Tested in `tests/ops/decision/test_overnight_consent.py` (18 cases: bare-ack /
+model-composed refusal, each cap, spec-change kills consent, expired/over-cap,
+wake-not-armed, morning-brief latency). SEAMS LEFT FOR INTEGRATION (noted for
+the orchestrator): the block bodies (submit-s3 / campaign anomaly) do not yet
+CALL `standing_consent_status` to auto-advance overnight and `record_consumption`
+on each auto-advance, and the morning brief is a library function not yet folded
+into the `status-snapshot` brief — both are wiring, not new substrate. A campaign
+scope's wake liveness probe is skipped (per-run lease key does not apply); the
+token presence + kind is still required. NO new registry verb was added (the
+consent rides `append-decision`, the gate/brief are library functions), so there
+is no `_SPEC_VERBS` / registry-count / prose-count / primitive-doc debt.
+
 Addendum 11: **16. Scheduler-native concurrency caps vs. afterany waves**
 (backends; saturation). The #339 wave chain bounds concurrency by chaining
 full array jobs behind `afterany` — correct for failure isolation and
