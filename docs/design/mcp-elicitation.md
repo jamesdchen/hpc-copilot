@@ -678,3 +678,21 @@ non-notebook unchanged), `tests/test_mcp_elicitation_firing.py`
 (`test_primary_popup_fires_before_any_refusal_for_notebook_signoff`,
 `test_valid_utterance_append_never_pops`, plus the standing dark/timeout/undeclared
 guards that pin the byte-for-byte fallback).
+
+- **RULED (2026-07-10, user): the popup is THE default read-and-sign surface —
+  ONE render mechanism, no mode-switching.** Supersedes both the same-day
+  digest-vs-full framing AND the (never-built) capability-keyed "digest mode vs
+  carrier mode" proposal: the MCP elicitation channel is the harness-agnostic
+  model-untouched surface, so it is the DEFAULT for every harness, Claude Code
+  included — the Read pane demotes to an optional convenience view of the SAME
+  on-disk artifact, never a parallel projection. Unification rule: the popup
+  embeds the content-addressed render file's own bytes (one composer, one
+  artifact — nothing to drift against); if a summary layer survives it becomes
+  the render's OWN header section, computed inside the one composer (the digest
+  v2 three-jobs work folds in there rather than living as a derived-second
+  artifact). Oversized renders chunk into sequential elicitation parts,
+  disclosed, never truncated. NOTES (ergonomics/UX, deliberately NOT design
+  commitments, to be answered later per the user): whether different surfaces
+  ever get different PROJECTIONS of the render; digest-only fast paths;
+  per-client sizing. Build: post-run-#12 batch (touches the live sign-off
+  path).
