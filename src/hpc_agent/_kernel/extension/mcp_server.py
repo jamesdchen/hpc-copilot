@@ -370,18 +370,44 @@ def _render_elicitation_prompt(
     return "\n".join(lines)
 
 
+# The digest is a SIGNING surface, not a reading surface (RULING 2): a byte budget
+# on the render-derived block keeps the terminal dialog from scrolling. When the
+# HONEST digest exceeds it (pathologically many hunks/flags), the composer does NOT
+# compress harder — it emits an honest-refusal block (identity + counts + the
+# pointer), because a digest that could silently drop a judgment-critical item to
+# fit a cap is the misleading-summary class. The budget is generous for the normal
+# case (the per-item caps in ``render_store`` bound that); it is the last-ditch
+# guard against a render whose sheer item count would blow the popup.
+_DIGEST_BLOCK_MAX_BYTES: int = 1400
+
+
 def _render_digest_block(
     experiment_dir: Path | None, *, audit_id: str, section: str, view_sha: str
 ) -> list[str]:
-    """The E-render digest lines for a notebook sign-off, or a disclosed fallback.
+    """The E-render DIGEST v2 lines for a notebook sign-off, or a disclosed fallback.
 
-    Reads the content-addressed render off disk and returns a BOUNDED digest block
-    (diff stats, assert table excerpt, lint-flag count + ``view_sha12``). Every
-    non-embeddable condition — no experiment context, no bound ``view_sha`` yet, no
-    render on disk for that view, or a header that disagrees with the signed view —
+    Reads the content-addressed render off disk and returns a BOUNDED, three-JOB
+    signing digest (RULING 2, ``docs/design/mcp-elicitation.md``):
+
+    * **BIND** — audit id, section slug, ``view_sha12``, freshness. A STALE render
+      (the signed ``view_sha`` no longer addresses the on-disk render) says
+      STALE — do NOT sign and shows nothing but the pointer (Job 1).
+    * **WHY YOUR JUDGMENT** — the tier-trigger headline (which of diff / lint /
+      assertions fired, with counts), the declared-assertion table (marked
+      unverified — the trusted render is STATIC, no execution, so there is no
+      computed value to show and none is fabricated), the lint-flag NAMES +
+      locations, and per-hunk one-liners (line range + first changed line) — never
+      the diff body (Job 2).
+    * **ROUTE** — the on-disk render path, stated plainly (Job 3).
+
+    Every non-embeddable condition — no experiment context, no bound ``view_sha``
+    yet, no render on disk, or a header that disagrees with the signed view —
     returns a single reason-disclosing line instead (never a crash, never an
-    unmarked silent omission). The digest is code-authored throughout: no notebook
-    source, no model text, ever enters it.
+    unmarked silent omission). THE HONESTY RULE: when the honest digest exceeds
+    :data:`_DIGEST_BLOCK_MAX_BYTES`, the composer emits an honest-refusal block
+    ("too large to digest honestly: N hunks, M flags — read the render") rather than
+    compressing until a judgment-critical item silently drops. The digest is
+    code-authored throughout: no notebook source, no model text, ever enters it.
     """
     view_sha12 = view_sha[:12]
 
@@ -402,26 +428,99 @@ def _render_digest_block(
     path = notebook_view.render_path(
         experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
     )
+
+    def _do_not_sign() -> list[str]:
+        # Job 1 freshness failure: the render is content-addressed by the SIGNED
+        # view_sha, so an absent/unreadable render for it means the source drifted
+        # (the view_sha moved) or the section was never rendered at this view — the
+        # STALE case. Never summarize it as current; say do-not-sign and show only
+        # the pointer.
+        return [
+            "",
+            f"STALE or missing render — do NOT sign: no current code-written render "
+            f"on disk for the view_sha you are signing ({view_sha12}).",
+            f"Re-render and open the section render in your Read pane before signing: {path}",
+        ]
+
     digest = notebook_view.read_render_digest(path)
     if digest is None:
-        return _fallback(f"no code-written render on disk for view_sha {view_sha12}")
+        return _do_not_sign()
     if digest.view_sha != view_sha or digest.section != section:
-        return _fallback(f"the on-disk render is stale (view_sha {view_sha12} no longer matches)")
+        return _do_not_sign()
 
+    # Job 1 — BIND.
     lines = [
         "",
-        f"Reviewed render digest (view_sha {view_sha12}):",
-        f"- classification: {digest.classification or 'unknown'}",
-        f"- diff from template: +{digest.diff_added} / -{digest.diff_removed} lines",
-        f"- assertions declared: {digest.assertion_count}",
+        f"Reviewed render digest — view_sha {view_sha12} (fresh):",
+        f"- audit {digest.audit_id} / section {digest.section}",
     ]
-    for entry in digest.assertions:
-        lines.append(f"  · {entry}")
-    elided = digest.assertion_count - len(digest.assertions)
-    if elided > 0:
-        lines.append(f"  · … ({elided} more)")
-    lines.append(f"- lint flags: {digest.lint_flag_count}")
+    # Job 2 — WHY YOUR JUDGMENT.
+    lines.append(f"- {_tier_trigger_headline(digest)}")
+    if digest.assertion_count:
+        lines.append(
+            f"- assertions (declared, unverified — static audit, no execution): "
+            f"{digest.assertion_count}"
+        )
+        for entry in digest.assertions:
+            lines.append(f"    · {entry}")
+        elided = digest.assertion_count - len(digest.assertions)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    if digest.lint_flag_count:
+        lines.append(f"- lint flags ({digest.lint_flag_count}):")
+        for name in digest.lint_flags:
+            lines.append(f"    · {name}")
+        elided = digest.lint_flag_count - len(digest.lint_flags)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    if digest.diff_hunk_count:
+        lines.append(
+            f"- diff from template: +{digest.diff_added} / -{digest.diff_removed} "
+            f"lines across {digest.diff_hunk_count} hunk(s):"
+        )
+        for hunk in digest.diff_hunks:
+            lines.append(f"    · {hunk}")
+        elided = digest.diff_hunk_count - len(digest.diff_hunks)
+        if elided > 0:
+            lines.append(f"    · … ({elided} more — read the render)")
+    # Job 3 — ROUTE.
+    lines.append(f"- full render on disk: {path}")
+
+    # THE HONESTY RULE: if the honest digest overruns the budget, do not compress
+    # harder — refuse to digest and point at the render, disclosing the counts.
+    if len("\n".join(lines).encode("utf-8")) > _DIGEST_BLOCK_MAX_BYTES:
+        return [
+            "",
+            f"Reviewed render digest — view_sha {view_sha12} (fresh):",
+            f"- audit {digest.audit_id} / section {digest.section}",
+            f"- too large to digest honestly: {digest.diff_hunk_count} diff hunks, "
+            f"{digest.lint_flag_count} lint flags, {digest.assertion_count} assertions "
+            "— read the render.",
+            f"- full render on disk: {path}",
+        ]
     return lines
+
+
+def _tier_trigger_headline(digest: Any) -> str:
+    """The one-line "why your judgment is required" headline for a render digest.
+
+    Names which of the three D-attention tier legs FIRED, with counts — derived from
+    the render's own fields (``classification`` for the diff leg, ``lint_flag_count``
+    for the flags leg, ``assertion_count`` for the assertions leg; in the static
+    audit any declared assertion is unverified and so a judgment trigger). An
+    ``auto_cleared`` render (a redundant/voluntary sign-off) has no trigger and says
+    so — the human is signing something the tiering deemed already clear.
+    """
+    triggers: list[str] = []
+    if digest.classification and digest.classification != "inherited":
+        triggers.append(f"diff: {digest.classification}")
+    if digest.lint_flag_count:
+        triggers.append(f"lint: {digest.lint_flag_count} flag(s)")
+    if digest.assertion_count:
+        triggers.append(f"assertions: {digest.assertion_count} unverified")
+    if not triggers:
+        return "requires your judgment: no tier trigger (auto-cleared — a voluntary review)"
+    return "requires your judgment — " + "; ".join(triggers)
 
 
 def _accepted_utterance(response: dict[str, Any] | None) -> str | None:
@@ -1124,11 +1223,19 @@ class McpServer:
         assert isinstance(shape, CliShape)
 
         result = self._invoke_cli(name, shape, arguments)
-        # E4 firing site (D4): the ``append-decision`` sign-off retry-once wrap.
-        # Fires ONLY on an authorship-evidence refusal, with a client that
-        # negotiated elicitation, a live transport, and no elicitation already in
-        # flight (nested/suppressed dispatch never reaches here). Every other tool
-        # and every other refusal returns unchanged.
+        # The elicitation firing site (D4 + the D6 amendment, user-ruled 2026-07-09):
+        # the ``append-decision`` sign-off popup is the PRIMARY read-and-sign channel,
+        # not a retry-only fallback. When the authorship gate would refuse (no
+        # matching human utterance) the server ELICITS FIRST and the append proceeds
+        # with the typed utterance — the model NEVER sees the interim refusal (this
+        # `call_tool` is atomic; the CLI runs, the popup collects the sign-off, the
+        # invocation re-runs, and only the final verdict returns). An utterance that
+        # ALREADY passes the gate (ok:true) returns straight through — no popup on a
+        # valid append. The FALLBACK (the plain refusal → hook path) is taken exactly
+        # when elicitation is unavailable: an undeclared or declared-but-dark client,
+        # no transport, or a suppressed nested dispatch — :meth:`_elicitation_applies`
+        # gates all of it, so a client without the channel behaves byte-for-byte as
+        # before this promotion.
         if self._elicitation_applies(name, result):
             return self._elicit_then_retry(name, shape, arguments, result)
         return result
@@ -1204,7 +1311,12 @@ class McpServer:
         arguments: Mapping[str, Any],
         refusal: dict[str, Any],
     ) -> dict[str, Any]:
-        """Elicit a typed sign-off, append it, and re-run the invocation once (D4).
+        """Elicit a typed sign-off (the PRIMARY channel), append it, re-run once (D4 + D6).
+
+        This is the promoted primary read-and-sign path (D6 amendment, 2026-07-09):
+        the popup fires BEFORE any refusal reaches the model, collects the human's
+        typed sign-off, and the append proceeds with it — the re-run is the mechanism
+        that lands the now-present utterance, not a second user-visible attempt.
 
         Sends ``elicitation/create`` with the code-rendered prompt (D5) and the
         free-text-only schema (D3), filters the response
