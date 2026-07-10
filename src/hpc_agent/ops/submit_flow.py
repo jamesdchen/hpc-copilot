@@ -93,6 +93,10 @@ class SubmitFlowResult:
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
     main_launched: bool = True
+    # Fallback-inventory S1/S2: a skipped canary must SAY why — canary_done=False
+    # alone cannot distinguish an opt-out, a tiny-batch skip, and the #249
+    # cache-hit (whose key excludes env state). None when a canary ran.
+    canary_skip_reason: str | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         """Render to the shape pinned by ``schemas/submit_flow.output.json``."""
@@ -105,6 +109,7 @@ class SubmitFlowResult:
             "canary_run_id": self.canary_run_id,
             "canary_job_ids": list(self.canary_job_ids) if self.canary_job_ids else None,
             "main_launched": self.main_launched,
+            "canary_skip_reason": self.canary_skip_reason,
         }
 
 
@@ -237,8 +242,14 @@ def _always_canary() -> bool:
     return env_flag(_ALWAYS_CANARY_ENV)
 
 
-def _should_run_canary(spec: SubmitFlowSpec) -> bool:
-    """Decide whether to fire a canary for *spec* (#263 + #249).
+def _canary_decision(spec: SubmitFlowSpec) -> tuple[bool, str | None]:
+    """Decide whether to fire a canary for *spec* (#263 + #249) — with the reason.
+
+    Returns ``(run_canary, skip_reason)``. ``skip_reason`` is a code-rendered
+    disclosure line naming WHY no canary fires (fallback-inventory S1/S2: a
+    skipped canary must be distinguishable from an opted-out one, and the
+    cache-hit skip must name its blind spot — the key excludes env state, so
+    env drift inside the TTL is NOT re-proven). ``None`` when a canary runs.
 
     Order:
 
@@ -257,14 +268,18 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
     Otherwise → canary.
     """
     if _always_canary():
-        return True
+        return True, None
     if not spec.canary:
-        return False
+        return False, "canary skipped: explicit opt-out (spec canary=false)"
     if spec.canary_only or getattr(spec, "force_canary", False):
-        return True
+        return True, None
     # #263: tiny-batch auto-skip.
-    if spec.total_tasks <= _canary_skip_threshold(spec):
-        return False
+    threshold = _canary_skip_threshold(spec)
+    if spec.total_tasks <= threshold:
+        return False, (
+            f"canary skipped (#263 tiny-batch): total_tasks {spec.total_tasks} <= "
+            f"threshold {threshold} — the main array's first tasks are the probe"
+        )
     # #249: skip when this cmd_sha was canary-validated within the TTL.
     from hpc_agent import __version__ as _pkg_version
     from hpc_agent.state import canary_cache
@@ -275,8 +290,19 @@ def _should_run_canary(spec: SubmitFlowSpec) -> bool:
             cmd_sha=cmd_sha, version=_pkg_version or "", cluster=spec.cluster
         )
         if canary_cache.is_canary_validated_fresh(key):
-            return False
-    return True
+            return False, (
+                f"canary skipped (#249 cache-hit): cmd_sha {cmd_sha[:12]} was "
+                f"canary-validated on {spec.cluster} within the TTL "
+                f"({canary_cache._ttl_sec()}s) — CAUTION: the cache key excludes "
+                "env state, so cluster-env drift inside the TTL is NOT re-proven; "
+                "set HPC_AGENT_ALWAYS_CANARY=1 or HPC_NO_CANARY_SKIP=1 to force"
+            )
+    return True, None
+
+
+def _should_run_canary(spec: SubmitFlowSpec) -> bool:
+    """Bool view of :func:`_canary_decision` (the one definition of the order)."""
+    return _canary_decision(spec)[0]
 
 
 def _run_uv_preflight_for_batch(
@@ -2317,8 +2343,10 @@ def _submit_one_spec(
     canary_done = False
     # #263/#249: a tiny batch (total_tasks <= threshold) or a cmd_sha already
     # canary-validated within the TTL skips the canary and goes straight to
-    # main; canary_only / force_canary always canary. See _should_run_canary.
-    if _should_run_canary(spec):
+    # main; canary_only / force_canary always canary. The skip REASON rides the
+    # result (fallback-inventory S1/S2 — a silent skip is the zombie class).
+    run_canary, canary_skip_reason = _canary_decision(spec)
+    if run_canary:
         canary_run_id = f"{spec.run_id}-canary"
         existing_canary = load_run(experiment_dir, canary_run_id)
         if existing_canary is not None and not is_resubmittable_terminal(existing_canary):
@@ -2362,6 +2390,7 @@ def _submit_one_spec(
             canary_run_id=canary_run_id,
             canary_job_ids=canary_job_ids,
             main_launched=False,
+            canary_skip_reason=canary_skip_reason,
         )
 
     # #250: gate the main array on the canary SUCCEEDING via a scheduler-level
@@ -2531,6 +2560,7 @@ def _submit_one_spec(
         canary_done=canary_done,
         canary_run_id=canary_run_id,
         canary_job_ids=canary_job_ids,
+        canary_skip_reason=canary_skip_reason,
     )
 
 

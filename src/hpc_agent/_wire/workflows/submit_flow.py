@@ -631,3 +631,13 @@ class SubmitFlowResult(BaseModel):
             "caller must verify it and re-invoke to launch the main array."
         ),
     )
+    canary_skip_reason: str | None = Field(
+        default=None,
+        description=(
+            "Code-rendered disclosure naming WHY no canary fired (explicit "
+            "opt-out / #263 tiny-batch / #249 cache-hit — the cache-hit line "
+            "names its blind spot: the key excludes env state, so env drift "
+            "inside the TTL is not re-proven). Null when a canary ran. A "
+            "skipped canary is never silent (fallback-inventory S1/S2)."
+        ),
+    )
