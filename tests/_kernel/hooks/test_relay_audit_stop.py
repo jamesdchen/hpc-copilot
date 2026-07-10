@@ -778,3 +778,253 @@ def test_state_claim_ignores_verb_on_a_different_line(tmp_path: Path) -> None:
         "Separately, the stale API token was revoked by the admin.",
     )
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
+# ─── the COMPLETER (D1–D4): capability-gated append instead of bounce ─────────
+#
+# Dark by default: with no capability declared, every test ABOVE exercises the
+# REJECTOR verbatim. Activating HPC_STOP_HOOK_APPEND flips the completer on — code
+# APPENDS what it holds via `systemMessage` and the stop PROCEEDS, bouncing only
+# on a poisoned decision. `..._ON_BLOCK` confirms the harness displays a
+# systemMessage on a BLOCKED stop (D2's discharge-gating).
+
+
+def _activate_completer(monkeypatch: pytest.MonkeyPatch, *, on_block: bool = False) -> None:
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+    if on_block:
+        monkeypatch.setenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", "1")
+    else:
+        monkeypatch.delenv("HPC_STOP_HOOK_APPEND_ON_BLOCK", raising=False)
+
+
+def _pending_brief(exp: Path, *, content: str, ts: str = "2099-01-01T00:00:00+00:00") -> None:
+    """A run brief with NO subsequent committed y (ts far-future) → still pending."""
+    from hpc_agent.state.decision_briefs import append_brief
+
+    append_brief(exp, run_id=RUN_ID, block="s2", ts=ts, brief={"proposal": content})
+
+
+# --- omission class → append the owed verdict, no bounce (D3/D4) --------------
+
+
+def test_completer_appends_owed_terminal_verdict_no_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _activate_completer(monkeypatch)
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, "All wrapped up here; ending the turn.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out  # the omission bounce is KILLED
+    msg = out["systemMessage"]
+    assert "passed" in msg and _SHA12 in msg
+    assert "model-untouched" in msg
+    # completer-discharged (D3): provenance is "completer", not "relay".
+    discharges = _discharges(tmp_path)
+    assert len(discharges) == 1
+    assert discharges[0]["resolved"]["discharged_by"] == "completer"
+    # the obligation is closed — a later token-absent stop is silent.
+    later = _transcript(tmp_path, "Nothing new to report.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, later)) is None
+    assert len(_discharges(tmp_path)) == 1
+
+
+def test_completer_found_token_still_discharges_as_relay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token the MODEL relayed discharges as `relay` even in completer mode —
+    the provenance split (D3) is honest about who the human saw the verdict from."""
+    _activate_completer(monkeypatch)
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, f"Audit {_NB_AUDIT}: the module PASSED.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+    discharges = _discharges(tmp_path)
+    assert len(discharges) == 1
+    assert discharges[0]["resolved"]["discharged_by"] == "relay"
+
+
+def test_completer_appends_render_by_view_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D4: a render view-marker's owed artifact is the trusted render file's own
+    content, selected BY view_sha12 in its filename — verbatim by construction."""
+    _activate_completer(monkeypatch)
+    _seed_render(tmp_path, _NB_AUDIT, "feature-construction", _VIEW_SHA12, _RENDER_BODY)
+    _seed_render_relay_due(tmp_path)  # marker key_tokens=[_VIEW_SHA12]
+    transcript = _transcript(tmp_path, "Sent the render files along; wrapping up.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out
+    msg = out["systemMessage"]
+    assert "code-appended render" in msg
+    assert "kept = [r for r in rows if float(r[1]) > threshold]" in msg  # render body, verbatim
+    assert _discharges(tmp_path)[0]["resolved"]["discharged_by"] == "completer"
+
+
+def test_completer_render_over_cap_degrades_to_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D4 cap: an over-cap render degrades to the token floor + a file reference,
+    never inlining the whole body."""
+    _activate_completer(monkeypatch)
+    big = "# section\n" + ("x" * 9000)
+    _seed_render(tmp_path, _NB_AUDIT, "feature-construction", _VIEW_SHA12, big)
+    _seed_render_relay_due(tmp_path)
+    transcript = _transcript(tmp_path, "wrapping up.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None and "decision" not in out
+    msg = out["systemMessage"]
+    assert "exceeds the append cap" in msg
+    assert _VIEW_SHA12 in msg
+    assert "xxxxxxxx" not in msg  # the body was NOT inlined
+
+
+# --- violation class → append correction (no pending decision) ---------------
+
+
+def test_completer_appends_correction_no_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rule-10 contradiction with NO pending brief → the correction is appended
+    UNDER the claim (journal value authoritative); the stop proceeds."""
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="failed")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} is running; it used 999 core-hours.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out  # no pending decision → no bounce
+    msg = out["systemMessage"]
+    assert "relay correction" in msg
+    assert RUN_ID in msg
+    assert "running" in msg  # the model's claim is quoted
+
+
+def test_completer_appends_echo_disclosure_no_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Echo class (RULED append-only): the disclosure is appended, NEVER bounced —
+    the model cannot repair authorship, so a forced turn produces nothing new."""
+    _activate_completer(monkeypatch)
+    _seed_signoff(tmp_path, "I reviewed the load-data section and the parse looks correct.")
+    transcript = _two_turn_transcript(
+        tmp_path,
+        "You could sign off with: I reviewed the load-data section and the parse looks correct.",
+        "The section is signed off. Ending the turn.",
+    )
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out
+    msg = out["systemMessage"]
+    assert "echo disclosure" in msg
+    assert "re-affirms in their own words" in msg
+
+
+# --- the poisoned-decision test (the surviving bounce) -----------------------
+
+
+def test_completer_bounces_on_poisoned_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A contradicted claim that feeds a still-PENDING brief (claim tokens
+    intersect the brief content) bounces — a footnote is not enough under a
+    pending proposal."""
+    _activate_completer(monkeypatch, on_block=True)
+    _seed_run(tmp_path, status="failed")
+    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "poisoned decision" in out["reason"]
+    assert RUN_ID in out["reason"]
+    assert "999" in out["reason"]
+
+
+def test_completer_not_poisoned_when_brief_greenlit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brief with a SUBSEQUENT committed y (the initial submit-s1 y, ts after
+    the brief) is greenlit, not pending → the finding appends, never bounces."""
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="failed")  # submit-s1 y stands at a 2026 ts
+    _pending_brief(tmp_path, content="resume at 999 core-hours", ts="2000-01-01T00:00:00+00:00")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert "decision" not in out  # greenlit brief → not poisoned → correction append
+    assert "relay correction" in out["systemMessage"]
+
+
+# --- D2 composition + discharge-gated-on-confirmed-display --------------------
+
+
+def test_completer_composes_block_and_append_when_block_display_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mixed class with confirmed blocked-display: ONE output carries the poisoned
+    bounce AND the completions' systemMessage; the completed omission is
+    discharged and NOT re-stated in the block reason."""
+    _activate_completer(monkeypatch, on_block=True)
+    _seed_run(tmp_path, status="failed")
+    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    _seed_relay_due(tmp_path, state="passed")  # an omission on the notebook journal
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "poisoned decision" in out["reason"]
+    assert "systemMessage" in out
+    assert "passed" in out["systemMessage"]  # the omission rode along, code-appended
+    assert "unrelayed" not in out["reason"]  # completed findings not re-stated
+    # the omission was completer-discharged (confirmed display).
+    discharges = _discharges(tmp_path)
+    assert len(discharges) == 1
+    assert discharges[0]["resolved"]["discharged_by"] == "completer"
+
+
+def test_completer_defers_completions_when_block_display_unconfirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mixed class with UNCONFIRMED blocked-display: completions DEFER to the
+    post-continuation stop — the block fires alone, the marker stays owed (not
+    discharged on a possibly-swallowed systemMessage)."""
+    _activate_completer(monkeypatch, on_block=False)
+    _seed_run(tmp_path, status="failed")
+    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "systemMessage" not in out  # completions deferred
+    assert _discharges(tmp_path) == []  # the marker is NOT discharged — still owed
+
+
+def test_completer_forced_stop_appends_and_never_bounces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop_hook_active forced continuation runs completions (they never block)
+    and a poisoned finding does NOT bounce (loop-safe: block-once)."""
+    _activate_completer(monkeypatch)
+    _seed_run(tmp_path, status="failed")
+    _pending_brief(tmp_path, content="resume at 999 core-hours")
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} used 999 core-hours; ending.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript, stop_hook_active=True))
+    assert out is not None
+    assert "decision" not in out  # forced → poisoned does not re-bounce
+    assert "relay correction" in out["systemMessage"]
+
+
+def test_completer_dark_default_is_rejector_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With NO capability declared (the default landing) the same omission that
+    the completer would append instead BOUNCES — rejector-identical."""
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    _seed_relay_due(tmp_path, state="passed")
+    transcript = _transcript(tmp_path, "All wrapped up here; ending the turn.")
+    out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "systemMessage" not in out
+    assert _discharges(tmp_path) == []  # a rejector bounce discharges nothing

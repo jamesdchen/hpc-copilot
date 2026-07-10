@@ -126,6 +126,8 @@ __all__ = [
     "RENDER_RELAY_DUE_RECORD_KIND",
     "RELAY_DISCHARGE_BLOCK",
     "RELAY_DISCHARGE_RESPONSE",
+    "DISCHARGED_BY_RELAY",
+    "DISCHARGED_BY_COMPLETER",
     "record_relay_due",
     "record_relay_discharge",
     "read_undischarged_relay_markers",
@@ -1037,6 +1039,17 @@ def read_undischarged_relay_markers(
     return [m for m in markers if _marker_key(m) not in discharged]
 
 
+#: The two discharge provenances (D3, ``docs/design/stop-hook-completer.md``).
+#: ``"relay"`` — the model's final text carried the marker's key token, so the
+#: human saw a MODEL relay. ``"completer"`` — the Stop-hook COMPLETER appended
+#: the owed artifact itself (a code-untouched render/verdict), so the human saw
+#: CODE-AUTHORED text. The journal-derived count of ``completer`` vs ``relay``
+#: discharges is the automatability metric: how much extra-model-turn latency the
+#: completer killed. Records written before D3 carry no field and read ``"relay"``.
+DISCHARGED_BY_RELAY = "relay"
+DISCHARGED_BY_COMPLETER = "completer"
+
+
 def record_relay_discharge(
     experiment_dir: Path,
     *,
@@ -1044,12 +1057,18 @@ def record_relay_discharge(
     marker: Mapping[str, Any],
     discharged_at: str | None = None,
     scope_kind: str = "notebook",
+    discharged_by: str = DISCHARGED_BY_RELAY,
 ) -> dict[str, Any]:
     """Journal the discharge of one relay-due *marker* (append-only, no mutate).
 
     ``resolved`` echoes the marker's identity fields verbatim (``record_kind``,
     ``audit_id``, ``key_tokens``, ``created_at``) plus ``discharged_at`` — the
-    marker key + the discharge stamp, exactly. Raises
+    marker key + the discharge stamp, exactly — and ``discharged_by`` (D3): the
+    provenance of the discharge, ``"relay"`` (the model relayed the token) or
+    ``"completer"`` (the Stop-hook completer code-appended the owed artifact).
+    The field is additive; a discharge written before D3 reads ``"relay"``, and
+    ``discharged_by`` is NOT part of the marker identity (``_marker_key``), so it
+    never changes which marker a discharge closes. Raises
     :class:`~hpc_agent.errors.SpecInvalid` on a malformed *marker* (a discharge
     must name a real marker identity, never a hand-rolled shape).
     """
@@ -1067,6 +1086,7 @@ def record_relay_discharge(
         "key_tokens": list(marker["key_tokens"]),
         "created_at": marker["created_at"],
         "discharged_at": discharged_at or _utcnow_iso(),
+        "discharged_by": discharged_by,
     }
     return append_decision(
         experiment_dir,
