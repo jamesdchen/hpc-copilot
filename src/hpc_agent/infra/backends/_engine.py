@@ -328,6 +328,7 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         """Assemble the submit command.
 
@@ -335,17 +336,44 @@ class ProfileBackend(HPCBackend):
         elements). A single multi-rank MPI job (#293) is submitted with
         ``array=False`` and ``task_range=None`` — one job whose internal
         parallelism is the rank count, not a scheduler array.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit — how many array TASKS may run at once — spelled
+        per-family (SLURM ``--array=<range>%N``, SGE ``qsub -tc N``, PBS
+        ``-J/-t <range>%N``). It is emitted ONLY for an array submission
+        (``array`` True) with a positive cap; a ``None`` / non-positive cap or a
+        non-array (single MPI) job leaves the command byte-identical to the
+        pre-item-16 output. The native cap gives perfect back-fill inside ONE
+        array (no ``afterany`` wave boundary that drains to ~zero while
+        stragglers finish), so it is the concurrency-bounding mechanism for a
+        single-array sweep; the wave chain is kept only where waves carry
+        semantics (per-wave combine checkpoints, staged canary gates).
         """
         if self.profile.family == "slurm":
             return self._build_slurm_command(
-                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                array=array,
+                concurrency_cap=concurrency_cap,
             )
         if self.profile.family in ("pbspro", "torque"):
             return self._build_pbs_command(
-                task_range, job_name, job_env, extra_flags=extra_flags, array=array
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                array=array,
+                concurrency_cap=concurrency_cap,
             )
         return self._build_sge_command(
-            task_range, job_name, job_env, extra_flags=extra_flags, array=array
+            task_range,
+            job_name,
+            job_env,
+            extra_flags=extra_flags,
+            array=array,
+            concurrency_cap=concurrency_cap,
         )
 
     def _build_pbs_command(
@@ -356,6 +384,7 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         # PBS Pro array flag is ``-J``; TORQUE uses ``-t`` (like SGE). Streams
         # joined with ``-j oe`` (PBS) cf. SGE's ``-j y``. Otherwise the qsub
@@ -363,7 +392,15 @@ class ProfileBackend(HPCBackend):
         array_flag = "-J" if self.profile.family == "pbspro" else "-t"
         cmd = [self.profile.submit_bin]
         if array:
-            cmd += [array_flag, str(task_range)]
+            # PBS in-array concurrency cap (#339 item 16): both PBS Pro (``-J``)
+            # and TORQUE (``-t``) accept the ``%N`` slot-limit suffix on the
+            # array range, back-filling as tasks finish. Only meaningful for an
+            # array; a None/non-positive cap leaves the range bare, so the
+            # command is byte-identical to the pre-item-16 output.
+            array_spec = str(task_range)
+            if concurrency_cap and concurrency_cap > 0:
+                array_spec = f"{array_spec}%{int(concurrency_cap)}"
+            cmd += [array_flag, array_spec]
         cmd += [
             "-N",
             job_name,
@@ -401,12 +438,21 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if getattr(self, "cluster", ""):
             cmd.append(f"--clusters={self.cluster}")
         if array:
-            cmd += ["--array", str(task_range)]
+            # SLURM in-array concurrency cap (#339 item 16): the ``%N`` suffix on
+            # the array range (``--array=1-100%20``) limits simultaneously
+            # running tasks, back-filling as they finish. Only meaningful for an
+            # array; a None/non-positive cap leaves the range bare, so the
+            # command is byte-identical to the pre-item-16 output.
+            array_spec = str(task_range)
+            if concurrency_cap and concurrency_cap > 0:
+                array_spec = f"{array_spec}%{int(concurrency_cap)}"
+            cmd += ["--array", array_spec]
         cmd += ["--job-name", job_name]
         if getattr(self, "account", ""):
             cmd += ["--account", self.account]
@@ -450,10 +496,17 @@ class ProfileBackend(HPCBackend):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if array:
             cmd += ["-t", str(task_range)]
+            # UGE/SGE in-array concurrency cap (#339 item 16): ``-tc N`` limits
+            # how many array tasks run at once, back-filling as they finish. Only
+            # meaningful for an array; a None/non-positive cap emits nothing so
+            # the command is byte-identical to the pre-item-16 output.
+            if concurrency_cap and concurrency_cap > 0:
+                cmd += ["-tc", str(int(concurrency_cap))]
         cmd += [
             "-N",
             job_name,

@@ -409,11 +409,20 @@ class HPCBackend(abc.ABC):
         *,
         extra_flags: list[str] | None = None,
         array: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[str]:
         """Return the scheduler command for the given task range.
 
         *array* selects the array shape (``task_range`` elements); a single
         multi-rank MPI job (#293) passes ``array=False`` with ``task_range=None``.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit (SLURM ``%N``, SGE ``-tc N``); the profile engine
+        emits it only for an array submission with a positive cap and is
+        byte-identical otherwise. ``submit_one`` passes it through only when a
+        cap is actually set, so a backend override that predates item 16 (and
+        every stub in the wave tests) is called with the historic keyword set
+        unchanged.
         """
         ...
 
@@ -499,6 +508,7 @@ class HPCBackend(abc.ABC):
         cwd: Path | None = None,
         array: bool = True,
         setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
     ) -> str:
         """Submit ONE scheduler array (or one non-array job) and return its id.
 
@@ -526,9 +536,14 @@ class HPCBackend(abc.ABC):
         cwd = cwd or Path.cwd()
         if setup_log_dir:
             self._setup_log_dir()
-        cmd = self._build_command(
-            task_range, job_name, job_env, extra_flags=extra_flags, array=array
-        )
+        # #339 item 16: pass the native concurrency cap ONLY when one is set, so
+        # a backend override predating item 16 (every wave-test stub) is called
+        # with exactly the historic keyword set — the no-cap edge stays
+        # byte-identical and no stub signature has to grow the keyword.
+        build_kwargs: dict[str, Any] = {"extra_flags": extra_flags, "array": array}
+        if concurrency_cap is not None:
+            build_kwargs["concurrency_cap"] = concurrency_cap
+        cmd = self._build_command(task_range, job_name, job_env, **build_kwargs)
         result = self._execute_command(cmd, job_env, cwd)
         if result.returncode != 0:
             stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
@@ -553,6 +568,7 @@ class HPCBackend(abc.ABC):
         per_wave_extra_flags: list[str] | None = None,
         gate_job_ids: list[str] | None = None,
         setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
     ) -> list[tuple[int, str, str]]:
         """Submit a :class:`SubmissionPlan` as wave-sequenced array jobs (#339).
 
@@ -582,6 +598,15 @@ class HPCBackend(abc.ABC):
         a single scheduler dependency flag by
         :meth:`_build_wave_dependency_flag`. *per_wave_extra_flags* (resource
         flags) are applied to every wave.
+
+        *concurrency_cap* (#339 item 16) is the scheduler-native in-array
+        concurrency limit (SLURM ``%N`` / SGE ``-tc N``) applied to EACH array
+        this plan submits. On the single-array plan (``concurrency_mode ==
+        "native-cap"``) it is the sole concurrency bound — one array, no
+        ``afterany`` boundary, perfect back-fill. On a genuinely multi-wave plan
+        (waves carry semantics) it caps concurrency WITHIN each wave's arrays
+        while the ``afterany`` chain still bounds cross-wave concurrency. ``None``
+        (the default) emits no cap, byte-identical to the pre-item-16 submit.
 
         Returns ``(wave, task_range, job_id)`` tuples in submission order.
 
@@ -661,6 +686,7 @@ class HPCBackend(abc.ABC):
                         extra_flags=dep_flags,
                         cwd=cwd,
                         setup_log_dir=False,
+                        concurrency_cap=concurrency_cap,
                     )
                 except RuntimeError as exc:
                     # Partial accounting on mid-plan failure (#339 inc 4),

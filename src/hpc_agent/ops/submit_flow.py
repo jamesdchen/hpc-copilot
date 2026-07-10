@@ -1502,6 +1502,7 @@ def _make_single_array_submission(
     resources: object = None,
     extra_flags: list[str] | None = None,
     setup_log_dir: bool = True,
+    concurrency_cap: int | None = None,
 ) -> list[str]:
     """Submit a ``<=cap`` sweep and return the job IDs (#339 increment 3).
 
@@ -1530,6 +1531,13 @@ def _make_single_array_submission(
     ``SubmissionPlan`` — it stays on the shared per-batch primitive
     (:meth:`HPCBackend.submit_one`) with ``array=False``, byte-identical to
     before.
+
+    *concurrency_cap* (#339 item 16) is the scheduler-native in-array cap
+    (SLURM ``%N`` / UGE ``-tc N``) applied to the single array. It reaches the
+    submit only when the cluster declares ``constraints.max_concurrent_tasks``
+    and it is below the sweep size — the pure-concurrency case the disclosed
+    ``concurrency_mode == "native-cap"`` names. ``None`` (the default, and every
+    cluster that has not opted in) is byte-identical to the pre-item-16 array.
     """
     from hpc_agent.infra.throughput import JobBatch, SubmissionPlan
 
@@ -1573,6 +1581,8 @@ def _make_single_array_submission(
             max_concurrent=1,
             est_total_wall_s=None,
             strategy="single array (<=cap)",
+            concurrency_mode="native-cap" if concurrency_cap else "single-array",
+            concurrency_cap=concurrency_cap,
         )
         submissions = backend.submit_plan(
             plan,
@@ -1581,6 +1591,7 @@ def _make_single_array_submission(
             cwd=cwd,
             per_wave_extra_flags=flags,
             setup_log_dir=setup_log_dir,
+            concurrency_cap=concurrency_cap,
         )
     except RuntimeError as exc:
         # Map the backend submitter's RuntimeError (non-zero exit / unparseable
@@ -1746,6 +1757,26 @@ def _effective_cap_for_backend_name(backend_name: str, cluster: str | None) -> i
     return min(caps) if caps else None
 
 
+def _single_array_concurrency_cap(cluster: str | None, total_tasks: int) -> int | None:
+    """The scheduler-native in-array concurrency cap for a ≤cap single array (#339 item 16).
+
+    Returns ``constraints.max_concurrent_tasks`` only when the cluster declares
+    it AND it bounds below *total_tasks* (a cap ≥ the sweep size would not
+    restrict anything, so emitting ``%N`` / ``-tc N`` there would only diverge
+    from today's byte-identical uncapped array for no effect). A cluster that
+    has not opted in — the default — returns ``None``, leaving the single array
+    exactly as before. This is the code path that realises the item-16 ruling:
+    for pure concurrency bounding of a sweep that fits in one array, cap the
+    array natively instead of chaining ``afterany`` waves that drain to ~zero at
+    each boundary.
+    """
+    constraints = _load_cluster_constraints(cluster)
+    cap = getattr(constraints, "max_concurrent_tasks", None)
+    if cap is not None and 0 < int(cap) < int(total_tasks):
+        return int(cap)
+    return None
+
+
 def _is_multiwave_sweep(*, backend_name: str, total_tasks: int, cluster: str | None) -> bool:
     """Whether *total_tasks* exceeds the effective cap → a multi-wave sweep.
 
@@ -1876,6 +1907,12 @@ def _submit_main_array(
             if gate_job_ids
             else []
         )
+        # #339 item 16: a ≤cap sweep is exactly the single-array (n_batches == 1)
+        # case, so this is where the scheduler-native concurrency cap replaces
+        # any wave chain. The cap is emitted ONLY when the cluster declares
+        # ``constraints.max_concurrent_tasks`` AND it bounds below the sweep size
+        # — otherwise ``None`` keeps the array byte-identical to before.
+        native_cap = _single_array_concurrency_cap(cluster, total_tasks)
         return (
             _make_single_array_submission(
                 backend,
@@ -1886,6 +1923,7 @@ def _submit_main_array(
                 resources=resources,
                 extra_flags=afterok_flags,
                 setup_log_dir=setup_log_dir,
+                concurrency_cap=native_cap,
             ),
             None,
         )
@@ -1905,6 +1943,11 @@ def _submit_main_array(
             per_wave_extra_flags=backend.resource_flags(resources),
             gate_job_ids=gate_job_ids,
             setup_log_dir=setup_log_dir,
+            # #339 item 16: a multi-array (semantic/ceiling-forced) plan keeps its
+            # afterany wave chain; the native cap (when the cluster opted in via
+            # ``max_concurrent_tasks``) additionally bounds concurrency WITHIN each
+            # wave's arrays. ``None`` when unset — byte-identical to before.
+            concurrency_cap=getattr(plan, "concurrency_cap", None),
         )
     except RuntimeError as exc:
         # Carry submit_plan's partial accounting (the wave ids that DID land

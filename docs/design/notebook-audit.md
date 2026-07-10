@@ -409,6 +409,36 @@ Deviations from the plan above, each with its recorded reason:
   hands off is unchanged. `_config_from_record` (the canonical-view reader)
   ignores the two fields — the intent enters no `view_sha`.
 
+### Item 16 drift (run #11, 2026-07-09) — scheduler-native concurrency caps
+
+- **The native cap only ever replaces a wave chain for a sweep that fits in ONE
+  array.** In this codebase a wave split is FORCED by the array-size ceiling
+  (`total_tasks > max_array_size`), so a single native-capped array cannot hold
+  a `>ceiling` sweep — the ruling's "one array, scheduler saturates" applies
+  precisely to the `n_batches == 1` case. That case is the submit-flow ≤cap
+  path, which is exactly where run #11 wanted concurrency bounded without a
+  drain. For the `>ceiling` case the `afterany` chain is KEPT and the cap is
+  applied WITHIN each array — never as a replacement.
+- **Opt-in knob, off by default.** `ClusterConstraints.max_concurrent_tasks`
+  (`None` = off) follows the `max_estimated_core_hours` precedent: a cluster
+  that has not declared it submits byte-identically to before. A declared cap
+  `>=` the sweep size is treated as no cap (it cannot restrict), so `%N`/`-tc`
+  is emitted only when it actually bounds.
+- **Stub-safety via conditional keyword forwarding.** `submit_one` passes
+  `concurrency_cap` to `_build_command` ONLY when it is set, so the many
+  wave-test `_build_command` stubs (which never opt into a cap) are called with
+  the historic keyword set and stay green without signature churn.
+- **Four disclosed modes, not two.** The spec named native-cap vs afterany-waves;
+  precision required splitting the multi-array case on `n_waves` —
+  `concurrent-arrays` (>1 array, one wave, no chain) vs `afterany-waves` (>1
+  wave, the draining chain) — so the disclosed `concurrency_mode` never labels a
+  chain-less concurrent submission as an afterany chain.
+- **Regen debt for the orchestrator:** none for `operations.json` (no
+  `@primitive` signature changed) and no JSON schema exists for `plan-throughput`
+  output, so the three new envelope keys (`concurrency_mode` / `concurrency_cap`
+  / `concurrency_rationale`) add no schema regen. Re-run the standard regen +
+  full suite to confirm.
+
 ## Related, planned separately
 
 The palatability projections the same review surfaced: the **run story** (a
@@ -820,6 +850,24 @@ canary gates). Related: #362 async-refill RFC (campaign-side). ALSO from the
 same exchange: the demo NARRATED a manual "push wave 2 below 20 threshold"
 mechanism that does not exist — mechanism claims are relay-audit material
 (item 5's class extended from decision-state to MECHANISM-state).
+
+> **SHIPPED (run #11 item 16, 2026-07-09).** The ruling is implemented: use
+> the in-array cap for pure concurrency bounding of a sweep that fits in ONE
+> array; keep the `afterany` wave chain where the array-size ceiling forces a
+> multi-array split (or waves carry per-wave combine/canary semantics), where
+> the cap can only apply WITHIN each array. Concretely: (1) the profile engine
+> emits the family-native cap on an array submission — SLURM
+> `--array=<range>%N`, UGE/SGE `qsub -tc N`, PBS Pro/TORQUE `-J/-t <range>%N` —
+> only for an array with a positive cap, byte-identical otherwise
+> (`submit_one` forwards the keyword ONLY when a cap is set, so every wave-test
+> stub is untouched); (2) `ClusterConstraints.max_concurrent_tasks` (opt-in,
+> `None` = off = no behavior change) is the knob; (3) `SubmissionPlan` carries
+> the code-legible decision as three disclosed fields — `concurrency_mode`
+> (`single-array` / `native-cap` / `concurrent-arrays` / `afterany-waves`),
+> `concurrency_cap`, `concurrency_rationale` — surfaced in the `plan-throughput`
+> envelope; the submit-flow ≤cap path derives the cap and threads it to the
+> single array, the >cap path passes `plan.concurrency_cap` to `submit_plan`.
+> The deeper async-refill (#362) is deliberately NOT built (campaign-side).
 
 Addendum 12: run-#11 late findings, both conduct-class extensions.
 (a) **Off-pipeline submit produced the textbook duplicate**: the linear
