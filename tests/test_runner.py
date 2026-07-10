@@ -491,7 +491,7 @@ def test_sge_alive_check_empty_queue_with_ack_returns_empty():
     assert "qstat -j" not in sent_cmd
     # Positive-evidence ack replaces the old ``|| true`` masking.
     assert "|| true" not in sent_cmd
-    assert '__HPC_SCHED_ACK__=$?' in sent_cmd
+    assert "__HPC_SCHED_ACK__=$?" in sent_cmd
 
 
 def test_sge_alive_check_silent_ackless_read_raises():

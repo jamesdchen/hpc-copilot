@@ -20,7 +20,7 @@ def test_sge_build_scheduler_state_cmd() -> None:
     # Sentinel-ack (positive-evidence rule): the query ends by echoing an
     # affirmative token with the scheduler command's rc, replacing ``|| true``.
     assert "qstat -u" in cmd and "|| true" not in cmd
-    assert '__HPC_SCHED_ACK__=$?' in cmd
+    assert "__HPC_SCHED_ACK__=$?" in cmd
 
 
 def test_sge_parse_scheduler_states_picks_state_column() -> None:
@@ -49,7 +49,7 @@ def test_slurm_build_scheduler_state_cmd() -> None:
     assert SLURM.build_scheduler_state_cmd([]) == "true"
     cmd = SLURM.build_scheduler_state_cmd(["12345", "12346"])
     assert "squeue" in cmd and "%T" in cmd and "|| true" not in cmd
-    assert '__HPC_SCHED_ACK__=$?' in cmd
+    assert "__HPC_SCHED_ACK__=$?" in cmd
 
 
 def test_scheduler_query_ran_positive_evidence() -> None:
