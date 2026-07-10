@@ -48,6 +48,12 @@ On any connection failure (an SSH timeout, `ssh_unreachable`, `ssh_circuit_open`
 
 Campaign execution is asynchronous by design — after the greenlight there is **no** per-iteration wait. `campaign-watch` is a cheap read; poll it on a schedule (`/loop <interval> /campaign-hpc`, or a cron-scheduled tick) rather than blocking. Anomaly and completion briefs arrive as notifications from the async driver.
 
+## Overnight mode — standing consent (notebook-audit.md item 8)
+
+**`status-watch` (or the campaign's own async reconcile self-chain) is the ONLY sanctioned watch for cluster state — never a hand-rolled local-log tail on a cluster job (structurally blind: wrong machine).** For an overnight anomaly boundary, arm the wake so its terminal re-invokes the driver; a poll loop that scrapes a remote log is the improvisation class run #11 demonstrated.
+
+**When the human authorizes the campaign to keep advancing across an anomaly boundary while they sleep, that is a STANDING CONSENT — their OWN typed utterance accepting the fallout, journaled once via `append-decision` under `block: overnight-consent` (scope `campaign`).** Never compose it (a bare `y` or a synthesized utterance is refused). Its `resolved` MUST carry the hard caps (`expires_at` morning boundary + `budget_cap` and/or `walltime_cap`) and the spec-identity binding (`cmd_sha`); consent dies on a spec change. Pair it with an armed wake (`resolved.wake = {"kind": "status-watch", ...}`) in the same breath — a pre-consent no watch can consume is theater. In the morning, surface the overnight brief: everything the consent consumed, with `failed_at` vs `surfaced_at` so the disclosure latency of any overnight anomaly is visible; where the harness declares no push channel that latency is part of the accepted fallout.
+
 ## Strategy authoring (path B — before greenlight)
 
 A closed-loop campaign's `.hpc/tasks.py` **is** the strategy. Scaffold it with `hpc-agent scaffold-strategy --name {optuna,pbt} --output-dir <experiment_dir>` — never hand-roll a controller, and never `Read` the framework's `optuna_strategy.py` / `pbt_strategy.py` from site-packages to learn the contract. The load-bearing invariants the template already wires (you customize only the search space):
