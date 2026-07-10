@@ -22,6 +22,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'apply-safe-defaults': ('apply-safe-defaults', 'hpc_agent.ops.submit.apply_safe_defaults'),
     'archive-dossier': ('archive-dossier', 'hpc_agent.ops.archive_dossier'),
     'attention-queue': ('attention-queue', 'hpc_agent.ops.attention_op'),
+    'audit-handoff': ('audit-handoff', 'hpc_agent.ops.notebook.audit_handoff_op'),
     'audit-preflight': ('audit-preflight', 'hpc_agent.ops.audit_preflight'),
     'axes-init': ('axes-init', 'hpc_agent.incorporation.axes_init'),
     'batch-status': ('batch-status', 'hpc_agent.ops.monitor.batch_status'),

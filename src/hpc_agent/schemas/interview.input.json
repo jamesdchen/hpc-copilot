@@ -437,6 +437,22 @@
           "default": null,
           "description": "Opaque WRITE-target roots: a path literal under one is a declared output, exempt from the executes-live not-exists flag (reported in declared_outputs, never flagged — the run-#10 output-literal noise fix). Absent → [].",
           "title": "Output Roots"
+        },
+        "observables": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The OBSERVATION PLAN (A14, G-a ruled): opaque declared-observable names the sanctioned runner (the notebook-render plugin's between-cell loop, T-R) looks up in the exec namespace and measures into runner-tier trace records. Rides the signed audit surface, so the human's sign-off covers the observation plan; versioned with the roots. Absent → no plan (the loop is OFF; execution byte-identical).",
+          "title": "Observables"
         }
       },
       "required": [

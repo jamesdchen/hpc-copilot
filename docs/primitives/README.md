@@ -87,6 +87,7 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [apply-safe-defaults](apply-safe-defaults.md) | yes | _none_ | `hpc-agent apply-safe-defaults --spec <path>` |
 | [attention-queue](attention-queue.md) | yes | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` |
+| [audit-handoff](audit-handoff.md) | yes | _none_ | `hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]` |
 | [audit-preflight](audit-preflight.md) | yes | _none_ | `hpc-agent audit-preflight --spec <path> [--experiment-dir <dir>]` |
 | [batch-status](batch-status.md) | yes | ssh: `<cluster>` | `hpc-agent batch-status [--experiment-dir <dir>]` |
 | [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill] [--max-in-flight <max_in_flight>]` |
@@ -236,7 +237,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [classify-axis-auto](classify-axis-auto.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `hpc-agent classify-axis-auto [--spec <path>] [--experiment-dir <dir>]` |
 | [export-package](export-package.md) | yes | writes-sidecar: `<experiment>/src/*.py`; writes-sidecar: `<experiment>/.hpc/.build-cache.json` | `hpc-agent export-package [--experiment-dir <dir>] [--force]` |
 | [install-commands](install-commands.md) | yes | filesystem: `~/.claude/` | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` |
-| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json,.claude/settings.json}` | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` |
+| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` |
 | [prepare-followup-specs](prepare-followup-specs.md) | yes | writes-followup-specs: `<experiment_dir>/monitor_spec.json` | `hpc-agent prepare-followup-specs --experiment-dir <experiment_dir> --run-id <run_id> [--cmd-sha <cmd_sha>] [--profile <profile>]` |
 | [scaffold-strategy](scaffold-strategy.md) | yes | writes-file: `<output_dir>/.hpc/tasks.py` | `hpc-agent scaffold-strategy [--shape <shape>] [--name <name>] [--arms <arms>] [--output-dir <output_dir>] [--force] [--async-refill]` |
 | [setup](setup.md) | yes | filesystem: `~/.claude/`; ssh: `<cluster>` | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` |

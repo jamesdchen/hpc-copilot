@@ -56,6 +56,51 @@
       },
       "title": "Output Roots",
       "type": "array"
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional audit-OPEN intent: the free-text campaign goal the human typed (~one sentence). Recorded VERBATIM as a durable seat the audit-handoff projection reads to draft the interview goal — never interpreted, never invented. Absent (the default) → no goal seat; the config record is byte-identical to a pre-intent one and audit-handoff emits a goal placeholder the caller must fill.",
+      "title": "Goal"
+    },
+    "task_axes": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional audit-OPEN intent: the human's free-text names for what varies across tasks (the compute shape, e.g. ['bucket', 'chunk']). Recorded VERBATIM — OPAQUE to core, never a search-space encoding. audit-handoff surfaces these as guidance for the caller's task_generator (which stays a placeholder — the axis names are not a materializer). Absent (the default) → no axes seat; byte-identical to a pre-intent record.",
+      "title": "Task Axes"
+    },
+    "observables": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The OBSERVATION PLAN (A14): opaque declared-observable names the sanctioned runner (the notebook-render between-cell loop, T-R) looks up in the exec namespace and measures into runner-tier trace records. null = no plan (the loop is OFF; execution byte-identical).",
+      "title": "Observables"
     }
   }
 }

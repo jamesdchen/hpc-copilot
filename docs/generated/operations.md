@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**162 operations total**: 135 primitive atoms + 27 workflow atoms.
+**163 operations total**: 136 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (73)
+## `query` (74)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -22,6 +22,7 @@ Read-only, no side effects. Freely composable; cacheable.
 |---|---|---|---|---|---|---|
 | [`apply-safe-defaults`](../primitives/apply-safe-defaults.md) | ✓ | _none_ | `hpc-agent apply-safe-defaults --spec <path>` | `_(none)_` | — | — |
 | [`attention-queue`](../primitives/attention-queue.md) | ✓ | _none_ | `hpc-agent attention-queue --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`audit-handoff`](../primitives/audit-handoff.md) | ✓ | _none_ | `hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`audit-preflight`](../primitives/audit-preflight.md) | ✓ | _none_ | `hpc-agent audit-preflight --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`batch-status`](../primitives/batch-status.md) | ✓ | ssh | `hpc-agent batch-status [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`campaign-advance`](../primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--max-core-hours <max_core_hours>] [--circuit-breaker-failures <circuit_breaker_failures>] [--max-task-resubmits <max_task_resubmits>] [--async-refill] [--max-in-flight <max_in_flight>]` | `_(none)_` | — | — |

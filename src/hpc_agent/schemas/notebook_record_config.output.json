@@ -49,6 +49,50 @@
       "title": "Output Roots",
       "type": "array"
     },
+    "goal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Echo of the recorded audit-open goal utterance (null when none was recorded).",
+      "title": "Goal"
+    },
+    "task_axes": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Echo of the recorded audit-open task-axis utterances (null when none were recorded).",
+      "title": "Task Axes"
+    },
+    "observables": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Observables"
+    },
     "warning": {
       "anyOf": [
         {

@@ -226,7 +226,7 @@
     "side_effects": [
       "file_write"
     ],
-    "summary": "Record the audit configuration (input_roots / source_roots / attention_order / output_roots - opaque relpath lists) for a STANDALONE notebook audit, as a journaled record in the audit's own decision journal. Without it a standalone audit (no interview.json audited_source opt-in) runs ROOTLESS-canonical: the lint recomputes with empty roots and the template-mandated source_roots engine-drift binding is silently inactive (run #10). The canonical view reads the interview block FIRST when present (the opt-in path owns the config), else this journaled record. Refuses when interview.json already carries audited_source for this audit_id (one source of truth) and when a config record already exists (immutable-per-audit - supersede with a NEW audit_id). Recording into an audit that already has journal entries succeeds with a LOUD warning: every view_sha moves, prior sign-offs read stale. Pure local read + journal append, no SSH.",
+    "summary": "Record the audit configuration (input_roots / source_roots / attention_order / output_roots - opaque relpath lists) for a STANDALONE notebook audit, as a journaled record in the audit's own decision journal. Without it a standalone audit (no interview.json audited_source opt-in) runs ROOTLESS-canonical: the lint recomputes with empty roots and the template-mandated source_roots engine-drift binding is silently inactive (run #10). The canonical view reads the interview block FIRST when present (the opt-in path owns the config), else this journaled record. Refuses when interview.json already carries audited_source for this audit_id (one source of truth) and when a config record already exists (immutable-per-audit - supersede with a NEW audit_id). Recording into an audit that already has journal entries succeeds with a LOUD warning: every view_sha moves, prior sign-offs read stale. Optionally carries the audit-OPEN intent (goal + task_axes - the free-text campaign goal and the names of what varies across tasks) on the same immutable seat, the durable record audit-handoff reads (absent = byte-identical). Pure local read + journal append, no SSH.",
     "verb": "mutate"
   },
   {
@@ -437,6 +437,18 @@
     "python": "hpc_agent.ops.attention_op.attention_queue",
     "side_effects": [],
     "summary": "The attention queue: the fleet-wide digest ordered by needs-your-verdict-first. Collects every place a human action is the blocking edge (pending greenlights, committed-but-unadvanced decisions, anomaly briefs, campaign completion briefs, unsigned/stale audit sections, dead workers, alerts, open ssh circuits) across one experiment or the whole fleet (fleet=True), orders by leverage (unblock fan-out) then class then oldest, and renders a deterministic markdown digest relayed verbatim. Read-only, no SSH, watermark-neutral (moves no state); recomputed on every read (no cache).",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent audit-handoff --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "audit_handoff.input.json",
+    "name": "audit-handoff",
+    "output_schema": "audit_handoff.output.json",
+    "python": "hpc_agent.ops.notebook.audit_handoff_op.audit_handoff",
+    "side_effects": [],
+    "summary": "Project the durable audit records into a DRAFT InterviewSpec (the audit->interview bridge). Reads the audit-open intent (goal + task_axes) and config roots off the notebook-audit-config seat, and AST-scans the source for @register_run entry points and $HPC_RESULT_DIR write candidates. Every field is DERIVED-and-disclosed or an explicit PLACEHOLDER the caller must fill - the verb never guesses (a guessed field becomes a journaled fact via the interview). summary_artifact and entry-point candidates are detected-and-disclosed (multiple = listed, caller confirms). Deterministic: same records -> byte-identical draft. No SSH.",
     "verb": "query"
   },
   {
