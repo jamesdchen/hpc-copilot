@@ -305,6 +305,20 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement parse_scheduler_states")
 
     @staticmethod
+    def scheduler_query_ran(stdout: str) -> tuple[str, bool]:
+        """Split the sentinel-ack line off a liveness / state query's *stdout*.
+
+        Returns ``(clean_stdout, ran_ok)`` — the positive-evidence transport
+        verdict (docs/design/connection-broker.md, sentinel-ack ruling). A
+        liveness/state query proves it RAN by echoing an affirmative token; a
+        caller must treat ``ran_ok=False`` (an empty / silently-truncated read
+        that carries no token) as UNKNOWN, never as "no jobs left the queue".
+        Default raises so an unmigrated backend is loud, matching the other
+        query hooks.
+        """
+        raise NotImplementedError("backend does not implement scheduler_query_ran")
+
+    @staticmethod
     def classify_scheduler_state(state: str) -> str:
         """Bucket a raw scheduler state token into ``alive`` / ``error`` / ``held``."""
         raise NotImplementedError("backend does not implement classify_scheduler_state")

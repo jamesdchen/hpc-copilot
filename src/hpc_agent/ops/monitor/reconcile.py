@@ -112,15 +112,28 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
     cmd = backend_cls.build_alive_check_cmd(job_ids)
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        # SSH transport failure (rc 255), not "scheduler ran, found
-        # nothing alive" — the alive-check commands append ``|| true``
-        # so a reachable cluster always returns rc 0. Raise so
-        # reconcile's guard sets alive_check_failed and does NOT mark a
-        # healthy run abandoned on a connectivity blip.
+        # SSH transport failure (rc 255), not "scheduler ran, found nothing
+        # alive". Raise so reconcile's guard sets alive_check_failed and does
+        # NOT mark a healthy run abandoned on a connectivity blip.
         raise errors.RemoteCommandFailed(
             f"alive check failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
-    return backend_cls.parse_alive_output(proc.stdout, job_ids)
+    # Positive-evidence transport verdict (docs/design/connection-broker.md,
+    # sentinel-ack ruling): the alive query proves it RAN by echoing an
+    # affirmative ack token. An empty read WITHOUT it is a silently truncated /
+    # never-run channel (or, on SGE/PBS, the scheduler binary itself failed) —
+    # UNKNOWN, not "no jobs alive". Reading absence as "not alive" is exactly
+    # what routes a healthy run to `abandoned`; raise so the guard sets
+    # alive_check_failed → unable_to_verify instead. (A genuinely empty queue
+    # still carries the ack, so it returns an empty set as before.)
+    clean, ran_ok = backend_cls.scheduler_query_ran(proc.stdout)
+    if not ran_ok:
+        raise errors.RemoteCommandFailed(
+            "alive check returned no positive-evidence ack (silent/empty read — "
+            "the query did not run to completion, or the scheduler binary itself "
+            "failed); refusing to read absence as 'no jobs alive'."
+        )
+    return backend_cls.parse_alive_output(clean, job_ids)
 
 
 # The settle-path completion/failure predicates and their precedence now live

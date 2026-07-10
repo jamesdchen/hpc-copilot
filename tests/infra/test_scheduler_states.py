@@ -17,7 +17,10 @@ SLURM = get_backend_class("slurm")
 def test_sge_build_scheduler_state_cmd() -> None:
     assert SGE.build_scheduler_state_cmd([]) == "true"
     cmd = SGE.build_scheduler_state_cmd(["123"])
-    assert "qstat -u" in cmd and "|| true" in cmd
+    # Sentinel-ack (positive-evidence rule): the query ends by echoing an
+    # affirmative token with the scheduler command's rc, replacing ``|| true``.
+    assert "qstat -u" in cmd and "|| true" not in cmd
+    assert '__HPC_SCHED_ACK__=$?' in cmd
 
 
 def test_sge_parse_scheduler_states_picks_state_column() -> None:
@@ -45,7 +48,29 @@ def test_sge_classify_scheduler_state() -> None:
 def test_slurm_build_scheduler_state_cmd() -> None:
     assert SLURM.build_scheduler_state_cmd([]) == "true"
     cmd = SLURM.build_scheduler_state_cmd(["12345", "12346"])
-    assert "squeue" in cmd and "%T" in cmd and "|| true" in cmd
+    assert "squeue" in cmd and "%T" in cmd and "|| true" not in cmd
+    assert '__HPC_SCHED_ACK__=$?' in cmd
+
+
+def test_scheduler_query_ran_positive_evidence() -> None:
+    """The sentinel-ack transport verdict: presence of the ack proves the query
+    RAN; absence is UNKNOWN, never 'no jobs'. SGE/PBS additionally require rc 0
+    (qstat exits 0 on an empty queue); SLURM accepts any rc (squeue exits
+    non-zero once queried ids have left the queue)."""
+    # Ack present, rc 0: ran, and the ack line is stripped from the body.
+    clean, ok = SGE.scheduler_query_ran("12345 r\n__HPC_SCHED_ACK__=0\n")
+    assert ok is True and "__HPC_SCHED_ACK__" not in clean and clean == "12345 r"
+    # SGE with a non-zero ack = qstat itself failed → UNKNOWN.
+    _, ok = SGE.scheduler_query_ran("__HPC_SCHED_ACK__=1\n")
+    assert ok is False
+    # No ack at all (silent/truncated read) = UNKNOWN for every family.
+    _, ok = SGE.scheduler_query_ran("")
+    assert ok is False
+    _, ok = SLURM.scheduler_query_ran("")
+    assert ok is False
+    # SLURM: ack present but non-zero rc (all jobs left the queue) still ran.
+    clean, ok = SLURM.scheduler_query_ran("__HPC_SCHED_ACK__=1\n")
+    assert ok is True and clean == ""
 
 
 def test_slurm_parse_scheduler_states() -> None:

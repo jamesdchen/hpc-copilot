@@ -394,7 +394,10 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout="")
-        return _completed(stdout="")
+        # Acked-but-empty squeue: the alive query RAN and found no live jobs
+        # (genuinely empty active set), so reconcile settles → abandoned. An
+        # ack-LESS empty read would instead be UNKNOWN → unable_to_verify.
+        return _completed(stdout=_SLURM_ACK_GONE)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
         record = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
@@ -451,9 +454,17 @@ def test_validate_ssh_target_rejects_empty_and_shell_chars():
 # ─── Bug 4: SGE alive-check actually checks qstat exit codes ───────────────
 
 
-def test_sge_alive_check_returns_empty_when_qstat_silent():
-    """Empty ``qstat -u $USER`` output means no live jobs — the alive set
-    must be empty so ``reconcile`` can flag abandoned runs.
+# The sentinel-ack line a real scheduler query echoes (positive-evidence rule,
+# docs/design/connection-broker.md): its PRESENCE proves the query ran, so an
+# empty-but-acked read is a genuinely empty queue, while an ack-LESS empty read
+# is a silent/truncated channel (UNKNOWN).
+_SGE_ACK = "__HPC_SCHED_ACK__=0\n"
+_SLURM_ACK_GONE = "__HPC_SCHED_ACK__=1\n"  # squeue exits non-zero once ids leave
+
+
+def test_sge_alive_check_empty_queue_with_ack_returns_empty():
+    """An acked empty ``qstat -u $USER`` output means the query RAN and found no
+    live jobs — the alive set is empty so ``reconcile`` can flag abandoned runs.
 
     Hot-path perf: a single batched ``qstat -u $USER`` call replaces the
     previous per-job ``qstat -j <jid>`` loop (which spawned N subprocesses
@@ -461,7 +472,7 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     """
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout=""),
+        return_value=_completed(stdout=_SGE_ACK),
     ) as m:
         alive = _ssh_alive_job_ids(
             ssh_target="user@host",
@@ -474,9 +485,28 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     assert sent_cmd.count("qstat") == 1
     assert "-u" in sent_cmd
     assert "qstat -j" not in sent_cmd
-    # Still falls back to rc 0 so the SSH transport guard isn't tripped
-    # by an empty queue.
-    assert "|| true" in sent_cmd
+    # Positive-evidence ack replaces the old ``|| true`` masking.
+    assert "|| true" not in sent_cmd
+    assert '__HPC_SCHED_ACK__=$?' in sent_cmd
+
+
+def test_sge_alive_check_silent_ackless_read_raises():
+    """Sentinel-ack ruling: an rc-0 empty read with NO ack is a silent/truncated
+    channel (or qstat itself failed on SGE) — UNKNOWN, not "no jobs alive".
+    Reading absence as not-alive is exactly what routes a healthy run to
+    abandoned, so the alive check must raise → reconcile sets unable_to_verify.
+    """
+    from hpc_agent import errors
+
+    with (
+        patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(stdout="")),
+        pytest.raises(errors.RemoteCommandFailed),
+    ):
+        _ssh_alive_job_ids(
+            ssh_target="user@host",
+            job_ids=["123", "456"],
+            scheduler="sge",
+        )
 
 
 def test_sge_alive_check_filters_qstat_output_to_requested_ids():
@@ -493,7 +523,7 @@ def test_sge_alive_check_filters_qstat_output_to_requested_ids():
     )
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout=qstat_out),
+        return_value=_completed(stdout=qstat_out + _SGE_ACK),
     ):
         alive = _ssh_alive_job_ids(
             ssh_target="user@host",
@@ -515,7 +545,10 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
     """
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout=""),  # squeue: no active jobs
+        # squeue exits non-zero once every queried id has left the queue, but
+        # the ack still fires (the query RAN) — SLURM accepts any rc, so an
+        # acked-but-empty read is a genuinely empty active set, not silence.
+        return_value=_completed(stdout=_SLURM_ACK_GONE),
     ) as m:
         alive = _ssh_alive_job_ids(
             ssh_target="user@host",
@@ -534,7 +567,7 @@ def test_slurm_alive_check_accepts_squeue_output():
     """
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout="123_4\n123_5\n"),
+        return_value=_completed(stdout="123_4\n123_5\n" + _SGE_ACK),
     ):
         alive = _ssh_alive_job_ids(
             ssh_target="user@host",
