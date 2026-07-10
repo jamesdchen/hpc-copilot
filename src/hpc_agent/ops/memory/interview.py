@@ -32,6 +32,7 @@ overwrites interview.json with byte-equivalent content modulo the
 from __future__ import annotations
 
 import itertools
+import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -103,6 +104,93 @@ def _assert_derived_executor_runnable(executor_cmd: str, *, kind: str) -> None:
 def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
     """Resolve --campaign-dir to an absolute Path for record_interview."""
     return {"campaign_dir": Path(ns.campaign_dir).resolve()}
+
+
+def _compose_audit_template_default(
+    intent: Mapping[str, Any], campaign_dir: Path
+) -> dict[str, str] | None:
+    """Compose the audit-template default from a bound pack's ``audit_template`` seam.
+
+    The CODE seat that replaces the on-ramp's ``confirm-default`` prose (2026-07-10
+    evening ruling, CONVERSION 2 — "prose cannot be load-bearing"): when a pack is
+    bound and the caller supplied NO template, the interview DEFAULTS it silently
+    from the pack's audit-facing ``audit_template`` seam and DISCLOSES the composed
+    default in the persisted record — the template is never brought to human
+    attention (supersedes the pack-status confirm-default).
+
+    Returns a disclosure dict ``{field, value, pack, source}`` (``value`` is the
+    experiment-dir-relative template relpath) or ``None`` when there is nothing to
+    compose:
+
+    * ``audited_source`` present → the caller committed a ``template`` → UNTOUCHED.
+    * no ``packs`` opt-in → today's behavior → ``None``.
+    * no opted-in pack declares an ``audit_template`` seam → ``None``.
+
+    Preference (the rv-over-quant precedent — the pack whose seam the audits
+    reference): among candidate packs, the FIRST that is the target of a
+    ``receipt_bindings`` slot (the program pack) wins over the domain skeleton;
+    absent any referenced candidate, the first in opt-in order. Manifest reads are
+    best-effort — a missing/unreadable/malformed manifest is skipped here (the
+    submit gate refuses a genuine broken setup loudly), never a crash at intake.
+    """
+    # The caller committed a template (via audited_source) → never override it.
+    if "audited_source" in intent:
+        return None
+    packs = intent.get("packs")
+    if not isinstance(packs, list) or not packs:
+        return None
+
+    from hpc_agent.state.pack import load_manifest
+
+    # Packs the audits reference (a receipt_bindings slot's target) — the program
+    # pack (rv), preferred over the domain skeleton (quant).
+    referenced: set[str] = set()
+    for entry in packs:
+        if not isinstance(entry, dict):
+            continue
+        for binding in entry.get("receipt_bindings") or []:
+            if not isinstance(binding, dict):
+                continue
+            target = binding.get("pack")
+            enclosing = entry.get("pack")
+            name = target if isinstance(target, str) and target else enclosing
+            if isinstance(name, str) and name:
+                referenced.add(name)
+
+    candidates: list[dict[str, str]] = []  # in opt-in order
+    for entry in packs:
+        if not isinstance(entry, dict):
+            continue
+        pack_name = entry.get("pack")
+        manifest_rel = entry.get("manifest")
+        if not (isinstance(pack_name, str) and pack_name):
+            continue
+        if not (isinstance(manifest_rel, str) and manifest_rel):
+            continue
+        manifest_path = campaign_dir / manifest_rel
+        try:
+            manifest = load_manifest(manifest_path)
+        except errors.SpecInvalid:
+            continue  # best-effort — the gate surfaces a broken setup loudly
+        seam_rel = manifest.seams.get("audit_template")
+        if not (isinstance(seam_rel, str) and seam_rel):
+            continue
+        template_path = manifest_path.parent / seam_rel
+        try:
+            rel = os.path.relpath(template_path, campaign_dir).replace(os.sep, "/")
+        except ValueError:
+            continue  # cross-drive (Windows) — no relative path
+        candidates.append({"pack": pack_name, "value": rel})
+
+    if not candidates:
+        return None
+    chosen = next((c for c in candidates if c["pack"] in referenced), candidates[0])
+    return {
+        "field": "audit_template",
+        "value": chosen["value"],
+        "pack": chosen["pack"],
+        "source": "pack_audit_template_seam",
+    }
 
 
 @primitive(
@@ -388,6 +476,13 @@ def record_interview(
     }
     if entry_point_materialized is not None:
         materialized["entry_point"] = entry_point_materialized
+    # CONVERSION 2 (2026-07-10 evening ruling): when a pack is bound and the caller
+    # supplied no template, COMPOSE the audit-template default from the pack's
+    # ``audit_template`` seam IN CODE — silently, disclosed here, never brought to
+    # human attention (supersedes the on-ramp's pack-status confirm-default).
+    composed_default = _compose_audit_template_default(intent, campaign_dir)
+    if composed_default is not None:
+        materialized["composed_defaults"] = [composed_default]
     interview_doc = {
         **dict(intent),
         "_materialized": materialized,

@@ -2022,3 +2022,101 @@ def test_actors_rejects_extra_keys(tmp_path: Path) -> None:
     intent = _minimal_intent(3, actors={"ids": ["alice"], "roles": {"alice": "pi"}})
     with pytest.raises(ValidationError):
         InterviewSpec.model_validate(intent)
+
+
+# ─── CONVERSION 2: composed audit-template default from the bound pack seam ──
+#
+# 2026-07-10 evening ruling ("prose cannot be load-bearing"): when a pack is
+# bound and the caller supplied no template, the interview COMPOSES the
+# audit-template default from the pack's ``audit_template`` seam IN CODE —
+# silently, disclosed in the persisted record, never brought to human attention
+# (supersedes the on-ramp's pack-status confirm-default).
+
+
+def _seal_pack_with_seam(campaign_dir, name: str) -> str:
+    """Seal a minimal pack manifest (an ``audit_template`` seam); return manifest rel."""
+    from hpc_agent.state.pack_sweep import reseal_manifest
+
+    pack_root = campaign_dir / "packs" / name
+    (pack_root / "templates").mkdir(parents=True, exist_ok=True)
+    (pack_root / "templates" / "audit.py").write_text(f"# %% {name} audit\n", encoding="utf-8")
+    recipe = {
+        "name": name,
+        "version": "1.0.0",
+        "seams": {"audit_template": "templates/audit.py"},
+        "fills_slots": [f"{name}-audit"],
+        "pack_files": ["templates/audit.py"],
+        "sweep": [],
+    }
+    (pack_root / "sweep.json").write_text(json.dumps(recipe), encoding="utf-8")
+    manifest_rel = f"packs/{name}/manifest.json"
+    reseal_manifest(campaign_dir / manifest_rel, pack_root / "sweep.json")
+    return manifest_rel
+
+
+def _generator_intent(**overrides) -> dict:
+    intent = _minimal_intent(1, task_generator={"kind": "enumerated", "params": {"items": [{}]}})
+    intent.update(overrides)
+    return intent
+
+
+def _composed_defaults(campaign_dir) -> list:
+    doc = json.loads((campaign_dir / "interview.json").read_text(encoding="utf-8"))
+    return doc.get("_materialized", {}).get("composed_defaults", [])
+
+
+def test_composes_audit_template_default_when_pack_bound_no_template(tmp_path: Path) -> None:
+    manifest_rel = _seal_pack_with_seam(tmp_path, "toy")
+    intent = _generator_intent(
+        packs=[{"pack": "toy", "manifest": manifest_rel, "receipt_bindings": []}]
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    defaults = _composed_defaults(tmp_path)
+    assert len(defaults) == 1
+    d = defaults[0]
+    assert d["field"] == "audit_template"
+    assert d["value"] == "packs/toy/templates/audit.py"
+    assert d["pack"] == "toy"
+    assert d["source"] == "pack_audit_template_seam"
+
+
+def test_prefers_program_pack_seam_over_domain_skeleton(tmp_path: Path) -> None:
+    """rv-over-quant: the pack a receipt_binding references wins over the skeleton."""
+    quant_rel = _seal_pack_with_seam(tmp_path, "quant")
+    rv_rel = _seal_pack_with_seam(tmp_path, "rv")
+    intent = _generator_intent(
+        packs=[
+            {"pack": "quant", "manifest": quant_rel, "receipt_bindings": []},
+            {
+                "pack": "rv",
+                "manifest": rv_rel,
+                "receipt_bindings": [{"slot": "rv-audit", "pack": "rv"}],
+            },
+        ]
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    defaults = _composed_defaults(tmp_path)
+    assert len(defaults) == 1
+    assert defaults[0]["pack"] == "rv"
+    assert defaults[0]["value"] == "packs/rv/templates/audit.py"
+
+
+def test_template_explicitly_supplied_leaves_record_untouched(tmp_path: Path) -> None:
+    manifest_rel = _seal_pack_with_seam(tmp_path, "toy")
+    intent = _generator_intent(
+        packs=[{"pack": "toy", "manifest": manifest_rel, "receipt_bindings": []}],
+        audited_source={
+            "source": "analysis.py",
+            "audit_id": "my-audit",
+            "template": "my/own/template.py",
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert _composed_defaults(tmp_path) == []
+
+
+def test_no_pack_no_composed_default(tmp_path: Path) -> None:
+    record_interview(InterviewSpec.model_validate(_generator_intent()), campaign_dir=tmp_path)
+    assert _composed_defaults(tmp_path) == []

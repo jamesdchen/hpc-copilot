@@ -46,6 +46,7 @@ from hpc_agent.state.pack_receipts import current_bind, slot_status
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent.ops.pack.refresh_op import CheckRun
     from hpc_agent.state.pack import PackManifest
     from hpc_agent.state.pack_receipts import PackBind
 
@@ -181,51 +182,31 @@ def _resolve_current_packs(
     return binds_by_pack, records_by_pack
 
 
-def assert_pack_receipts_current(experiment_dir: Path) -> None:
-    """Refuse a submit whose opted-in domain-pack receipts are not signed-current.
+def _compute_slot_failures(
+    experiment_dir: Path,
+    optin: list[dict[str, Any]],
+    binds_by_pack: dict[str, PackBind],
+    records_by_pack: dict[str, list[dict[str, Any]]],
+    checks_by_key: dict[tuple[str, str], str | None],
+) -> tuple[list[tuple[str, str]], dict[str, str | None], dict[tuple[str, str], str]]:
+    """Reduce every receipt slot to a failure list + its check + the run targets.
 
-    Loads ``interview.json``'s ``packs`` opt-in block. ABSENT (not opted in) →
-    RETURN silently, byte-identically (D7 fail-safe — no further filesystem
-    probes). PRESENT → verify every opted-in pack is CURRENT (a dangling/drifted
-    manifest or an unbound pack is a LOUD :class:`errors.SpecInvalid`), then for
-    every caller-authored ``receipt_bindings`` slot require the ONE currency
-    reduction (:func:`hpc_agent.state.pack_receipts.slot_status`) to be CURRENT
-    **and** ``passed=true``. Any uncleared slot (missing / stale / failed) raises
-    :class:`errors.PackReceiptsMissing` NAMING every offending slot and its status.
+    Returns ``(failures, checks_by_slot, run_targets)``:
 
-    Pure local reads — no SSH. The two submit seats call this ONE definition.
+    * ``failures`` — ``(slot, status-or-reason)`` for every slot NOT current+passed.
+    * ``checks_by_slot`` — ``slot -> caller check command (or None)``, for the
+      refusal envelope.
+    * ``run_targets`` — ``(target_pack, slot) -> check command`` for the FAILING
+      slots that declare a check (what the auto-remedy runs; DP2-safe caller-side
+      execution).
+
+    A slot bound to a pack that is not opted-in/current is a dangling reference —
+    LOUD :class:`errors.SpecInvalid` (a silent pass on a dangling reference is the
+    uninstall-softens-gates laundering channel).
     """
-    optin = _read_packs_optin(experiment_dir)
-    if not optin:
-        return  # D7 fail-safe: not opted in → byte-identical no-op
-
-    # AUTO-REMEDY (2026-07-10 ruling: "the pack gate MAY auto-remedy; latency is to
-    # be OBLITERATED"). Before refusing, run the pack-refresh core mechanically:
-    # re-seal + rebind any manifest that is merely STALE against on-disk bytes (from
-    # its sweep.json recipe, pure hashing — DP2 holds, no pack code runs), journaling
-    # old→new shas (the drift event IS the archive record, which is why this is
-    # sound). Best-effort: a pack with no recipe, or a genuine broken setup, is left
-    # for the assert below to refuse loudly. A re-seal is a NO-OP when nothing is
-    # stale, so a clean gate stays byte-identical. The only step this CANNOT do is
-    # re-run the caller-side domain CHECK (DP2) — so after re-binding, a covered
-    # receipt reads stale and the refusal below carries the exact check command(s).
-    from hpc_agent.ops.pack.refresh_op import refresh_opted_in_packs, slot_check_commands
-
-    refresh_opted_in_packs(experiment_dir, optin)
-
-    # Pass 1: every opted-in pack must be CURRENT (broken setup → SpecInvalid),
-    # building the per-pack bind + records index cross-pack slots resolve through.
-    binds_by_pack, records_by_pack = _resolve_current_packs(experiment_dir, optin)
-
-    # Pass 2: every receipt_bindings slot must reduce to CURRENT + passed. A slot
-    # bound to a pack that is not opted-in/current is a dangling reference (loud);
-    # an opted-in slot that is not current+passed is an uncleared receipt (the
-    # PackReceiptsMissing precondition), named with its status. The caller-authored
-    # check command for each slot rides the refusal so the driving skill re-earns
-    # it UNPROMPTED (the auto-remedy already re-sealed + re-bound any stale manifest).
-    checks_by_key = slot_check_commands(optin)
     failures: list[tuple[str, str]] = []
     checks_by_slot: dict[str, str | None] = {}
+    run_targets: dict[tuple[str, str], str] = {}
     for entry in optin:
         for binding in _receipt_bindings(entry):
             slot = binding.get("slot")
@@ -247,7 +228,97 @@ def assert_pack_receipts_current(experiment_dir: Path) -> None:
             )
             if not status.passing:
                 failures.append((slot, status.reason or status.status))
-                checks_by_slot[slot] = checks_by_key.get((str(target_name), slot))
+                check = checks_by_key.get((str(target_name), slot))
+                checks_by_slot[slot] = check
+                if check:
+                    run_targets[(str(target_name), slot)] = check
+    return failures, checks_by_slot, run_targets
 
-    if failures:
-        raise errors.PackReceiptsMissing.for_slots(failures, checks=checks_by_slot)
+
+def _check_outcome(run: CheckRun) -> str:
+    """A one-line human summary of a surviving check run for the refusal envelope."""
+    if run.spawn_error is not None:
+        return f"check could not run ({run.spawn_error})"
+    if run.timed_out:
+        return f"check timed out; tail: {run.stderr_tail or run.stdout_tail}".strip()
+    if run.exit_code != 0:
+        return f"check exited {run.exit_code}; tail: {run.stderr_tail or run.stdout_tail}".strip()
+    # Ran clean but the slot is still not current+passed (e.g. the check recorded
+    # passed=false, or receipted a different slot than the one still failing).
+    return (
+        f"check exited 0 but the slot is still not current+passed; tail: {run.stdout_tail}"
+    ).strip()
+
+
+def assert_pack_receipts_current(experiment_dir: Path) -> None:
+    """Refuse a submit whose opted-in domain-pack receipts are not signed-current.
+
+    Loads ``interview.json``'s ``packs`` opt-in block. ABSENT (not opted in) →
+    RETURN silently, byte-identically (D7 fail-safe — no further filesystem
+    probes). PRESENT → verify every opted-in pack is CURRENT (a dangling/drifted
+    manifest or an unbound pack is a LOUD :class:`errors.SpecInvalid`), then for
+    every caller-authored ``receipt_bindings`` slot require the ONE currency
+    reduction (:func:`hpc_agent.state.pack_receipts.slot_status`) to be CURRENT
+    **and** ``passed=true``. Any uncleared slot (missing / stale / failed) raises
+    :class:`errors.PackReceiptsMissing` NAMING every offending slot and its status.
+
+    Local reads + the auto-remedy's subprocessed caller checks — no SSH, no pack
+    code imported. The two submit seats call this ONE definition.
+    """
+    optin = _read_packs_optin(experiment_dir)
+    if not optin:
+        return  # D7 fail-safe: not opted in → byte-identical no-op
+
+    # AUTO-REMEDY step 1 (2026-07-10 ruling: "the pack gate MAY auto-remedy; latency
+    # is to be OBLITERATED"). Re-seal + rebind any manifest that is merely STALE
+    # against on-disk bytes (from its sweep.json recipe, pure hashing — DP2 holds,
+    # no pack code runs), journaling old→new shas (the drift event IS the archive
+    # record). Best-effort: a pack with no recipe, or a genuine broken setup, is left
+    # for the assert below to refuse loudly. A re-seal is a NO-OP when nothing is
+    # stale, so a clean gate stays byte-identical.
+    from hpc_agent.ops.pack.refresh_op import (
+        refresh_opted_in_packs,
+        run_slot_checks,
+        slot_check_commands,
+    )
+
+    refresh_opted_in_packs(experiment_dir, optin)
+    checks_by_key = slot_check_commands(optin)
+
+    # Every opted-in pack must be CURRENT (broken setup → SpecInvalid), building the
+    # per-pack bind + records index cross-pack slots resolve through; then reduce
+    # every receipt slot to current+passed.
+    binds_by_pack, records_by_pack = _resolve_current_packs(experiment_dir, optin)
+    failures, checks_by_slot, run_targets = _compute_slot_failures(
+        experiment_dir, optin, binds_by_pack, records_by_pack, checks_by_key
+    )
+    if not failures:
+        return
+
+    # AUTO-REMEDY step 2 (2026-07-10 evening ruling, CONVERSION 1 — "prose cannot be
+    # load-bearing"): the caller-authored check command re-earns a drifted receipt.
+    # Instead of RELYING ON SKILL PROSE to run it, the gate EXECUTES it itself — a
+    # subprocess in the experiment dir (the executor precedent; DP2 bans importing
+    # pack logic, not orchestrating caller-side execution), captured + journaled —
+    # then re-evaluates. A passing check appended a fresh receipt at the now-current
+    # bind, so the slot clears with ZERO refusals and zero human turns.
+    check_runs: dict[tuple[str, str], CheckRun] = {}
+    if run_targets:
+        check_runs = run_slot_checks(experiment_dir, run_targets)
+        # Re-read journals FRESH (a passing check appended a receipt) and re-evaluate.
+        binds_by_pack, records_by_pack = _resolve_current_packs(experiment_dir, optin)
+        failures, checks_by_slot, _ = _compute_slot_failures(
+            experiment_dir, optin, binds_by_pack, records_by_pack, checks_by_key
+        )
+        if not failures:
+            return  # every uncleared slot re-earned by its check — gate clears
+
+    # The refusal SURVIVES — only when a slot declared no check, its check
+    # failed/timed out, or it still isn't current+passed after the check ran. Name
+    # each surviving slot, its check command, and (when a check ran) its outcome.
+    outcomes_by_slot = {
+        slot: _check_outcome(run) for (_pack, slot), run in check_runs.items() if not run.ok
+    }
+    raise errors.PackReceiptsMissing.for_slots(
+        failures, checks=checks_by_slot, check_runs=outcomes_by_slot
+    )
