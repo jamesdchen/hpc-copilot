@@ -82,5 +82,30 @@ missing their siblings' upgrades.
 
 ## Sweep log
 
-(Empty — filled per axis on Day 2. Verdicts land here with citations;
-enforcement-row proposals land in the principles doc's maps.)
+### B4 — authorship-gate tier parity (swept 2026-07-11, ahead of Day 2;
+### triggered by findings 9/10)
+
+Every utterance-log consumer in `ops/decision/journal.py` audited for the
+standing-prompt class (evidence text that pre-dates what it supposedly
+attests). The whole-log read is `_registration_authored_text` /
+`_actor_scoped_human_texts` — NO consumer except the fixed T8 gate bounds
+it temporally.
+
+| Gate | Evidence legs | Verdict |
+|---|---|---|
+| T8 notebook sign-off | naming + engagement + TEMPORAL (render mtime) | **FIXED** (`3d8b40e0`) |
+| scope-unlock (`_assert_unlock_authorship`) | word-OVERLAP of rationale vs the WHOLE log — the weakest leg in the file; no anchor | **DRIFTED/EXPOSED** — any composed rationale sharing one `_ha_word_tokens` word with any prior prompt passes. Anchor exists: the scope's newest LOCK record ts (an unlock rationale must post-date the lock it re-opens) |
+| registration sign-off / review / conformance-verdict / reproduction-verdict / conclusion-file / challenge-file | naming over the whole log (exposed) **+ sha-prefix leg** — an 8-hex prefix cannot pre-exist the artifact it fingerprints | **ALIGNED** — the sha leg is temporal binding by vocabulary impossibility (the strongest form; note for bound-capture: this is the third design lever). Naming-leg exposure is moot behind it |
+| registration-REVOKE / conclusion-REVOKE / challenge-verdict + withdraw | **naming ONLY** over the whole log; no sha leg | **DRIFTED/EXPOSED — the destructive direction**: the human named every id when CREATING it, so the naming leg is permanently satisfied and an agent-composed revoke/verdict rides through. Anchor exists: the TARGET record's ts (a revoke must post-date what it revokes — the gates already load the target record to verify existence, so its ts is at hand) |
+| overnight-consent (leg 1) | word-overlap vs the whole log; hard-caps + wake legs are structural | **EXPOSED, anchor OPEN** — no natural artifact to anchor to (a standing consent precedes the boundary it covers). Candidate: recency window or bound capture only. USER RULING needed |
+| field-ownership (`_assert_human_authorship`) | value/number derivation from the whole log | **ALIGNED as-is** — derivation semantics, not attestation: the kickoff prompt stating the goal IS the intended evidence; standing text is the point |
+
+Fix-wave shape (dispatch-ready): one shared helper — filter utterance
+records to `ts >= anchor` (the finding-10 pattern generalized, anchor
+caller-supplied) — applied at scope-unlock (anchor = newest lock record)
+and the four naming-only revoke/verdict gates (anchor = target record ts).
+Registration-family filing gates unchanged (sha leg suffices).
+Overnight-consent parks on the ruling. Bound capture
+(`docs/design/bound-capture.md`) supersedes the forensic tier at popup-
+capable seats when it lands; these anchors harden the fallback tier that
+remains.
