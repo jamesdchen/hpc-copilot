@@ -169,6 +169,28 @@ what the client actually renders and the budget should follow the evidence;
 harness-capability ladder gains a rung: render-file SEND (side-panel
 render) sits ABOVE the Read-pane relay when the harness supports it.
 
+## 12. Audit-view responses dump ~11k tokens into the agent per pass — the
+## model-as-display-channel payload is vestigial under popup-primary
+Live (user: "there's a lot of things being dumped in context. is this
+normal?"): every loop pass returns the FULL audit view through the model —
+and the diff ships TWICE per response (inside `markdown` AND as the
+structured `sections[].diff` arrays). The design predates popup-primary:
+when the model relay WAS the display channel, the full markdown had to
+transit the agent. Now the render files are content-addressed on disk, the
+POPUP carries the diff to the human, and the gate recomputes server-side —
+the agent needs slugs / tiers / shas / render_paths / next-actions only.
+Every diff byte in the agent's context is cost plus the re-summarization
+temptation the relay doctrine spends effort suppressing. FIX SHAPE (post-
+run-#12, pairs with unified-render): (a) quick win — drop the
+`sections[].diff` duplication (halves the payload, zero flow change);
+(b) the real cut — a compact-by-default view response (metadata + digest +
+render_paths; full markdown behind an explicit `full: true` for harnesses
+that still model-relay), same treatment for draft-context. Adjacent: the
+agent hand-read the 2218-line interview.json hunting pack seams — finding
+5's compose-at-every-verb gap, same session. ALSO RECORD (user, positive):
+the nudge → re-draft → hash-move → fresh-view cycle "synergizes well with
+the workflow" — the auto-revoke rendezvous is validated UX, keep its shape.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
