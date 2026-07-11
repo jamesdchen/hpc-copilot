@@ -314,6 +314,32 @@ MILESTONE, same brief: **canary GREEN end-to-end on the fixed transport**
 validated), output contract passed on-cluster (finding 15 confirmed
 false-positive), est. 32,400 core-hours disclosed, next_block submit-s3.
 
+## 19. The S3 watch read ssh TIMEOUTS as run death (cause=abnormal-exit)
+## and fired a terminal harvest at a 10-minute-old LIVE array
+Live (S3 worker 2d2a9d6d): three consecutive 60s ssh connection timeouts
+→ breaker opened (correct) → but the watch classified the run
+`abnormal-exit` and ran the TERMINAL HARVEST while 27 jobs sat healthy in
+the queue. The positive-evidence doctrine (timeouts = UNKNOWN, never
+terminal) was applied to scheduler-query silence in the sentinel-ack wave
+— but the abnormal-exit classifier path still treats CONNECTION-level
+failure as a terminal cause. FIX SEAT: a terminal cause requires
+POSITIVE scheduler evidence (a sacct/squeue answer saying the jobs are
+gone); transport failure is UNKNOWN and re-polls after the breaker.
+SECOND LEG: the terminal harvest scp-pulled the WHOLE `results/` root
+(prior runs' outputs included → 1800s timeout); harvest must scope to
+the run's own result_dir_template subtree. MITIGATION that held: the
+premature harvest wrote NO terminal state into the run record — the
+journal stayed honest, and the demo agent re-armed the sanctioned
+status-watch (alive, polling). ALSO NOTED: the relay-audit hook forced
+two journal-true corrections this leg (working as designed) but flagged
+"27" as an unsupported numeric claim when it is len(job_ids) — the hook's
+number pool should include derivable COUNTS of journal lists (minor).
+CONDUCT (mine, the dev session): two env breakages tonight were MY
+reinstalls racing live workers (uv tool mid-exe-use; demo venv mid-run →
+the ops.pack ModuleNotFoundError the demo had to repair). STANDING RULE:
+never reinstall an env that has live workers — ship the wheel, let the
+next idle boundary pick it up.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
