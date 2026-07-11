@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**164 operations total**: 137 primitive atoms + 27 workflow atoms.
+**165 operations total**: 138 primitive atoms + 27 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (74)
+## `query` (75)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -81,6 +81,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`run-story`](../primitives/run-story.md) | ✓ | _none_ | `hpc-agent run-story --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`scaffold-spec`](../primitives/scaffold-spec.md) | ✓ | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` | `_(none)_` | — | — |
 | [`scope-status`](../primitives/scope-status.md) | ✓ | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` | `_(none)_` | — | — |
+| [`stray-sweep`](../primitives/stray-sweep.md) | ✓ | ssh | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` | `_(none)_` | — | — |
 | [`suggest-setup-action`](../primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `_(none)_` | — | — |
 | [`summarize-submit-plan`](../primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `_(none)_` | — | — |
 | [`trace`](../primitives/trace.md) | ✓ | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` | `_(none)_` | — | — |

@@ -121,6 +121,10 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "doctor-install",
         "kill",
         "net-triage",
+        # stray-sweep (run-12 finding 20 LAYER 2): the login-node process-hygiene
+        # probe. Spec-taking query with a REQUIRED ssh_target, so {} is invalid and
+        # it appears in the schema-file-parametrized remediation probes.
+        "stray-sweep",
         # notebook-lint (notebook-audit substrate, T4): a read-only validate verb
         # over an audit source .py. Gains a --spec CLI surface, so the inventory
         # tracks it here. Its input schema (notebook_lint.input.json) is baked by
@@ -388,6 +392,7 @@ XFAIL_NEEDS_FIXTURE: set[str] = set()
 NEEDS_EXTRA_CLI_ARGS: set[str] = {
     "interview",  # --campaign-dir
     "resubmit",  # --run-id + --task-ids
+    "stray-sweep",  # --ssh-target (required; argparse rejects before the spec gate)
 }
 
 

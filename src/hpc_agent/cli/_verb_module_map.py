@@ -116,6 +116,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'status-preflight': ('status-preflight', 'hpc_agent.ops.status_preflight'),
     'status-snapshot': ('status-snapshot', 'hpc_agent.ops.status_blocks'),
     'status-watch': ('status-watch', 'hpc_agent.ops.status_blocks'),
+    'stray-sweep': ('stray-sweep', 'hpc_agent.ops.recover.stray_sweep'),
     'submit-and-verify': ('submit-and-verify', 'hpc_agent.ops.submit_and_verify'),
     'submit-pipeline': ('submit-pipeline', 'hpc_agent.ops.submit_pipeline'),
     'submit-preflight': ('submit-preflight', 'hpc_agent.ops.submit_preflight'),

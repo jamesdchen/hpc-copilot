@@ -146,6 +146,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [run-story](run-story.md) | yes | _none_ | `hpc-agent run-story --spec <path> [--experiment-dir <dir>]` |
 | [scaffold-spec](scaffold-spec.md) | yes | _none_ | `hpc-agent scaffold-spec [--experiment-dir <dir>] --verb <verb> [--cluster <cluster>] [--run-name <run_name>] [--from-context]` |
 | [scope-status](scope-status.md) | yes | _none_ | `hpc-agent scope-status --spec <path> [--experiment-dir <dir>]` |
+| [stray-sweep](stray-sweep.md) | yes | ssh: `<login-node>` | `hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [trace](trace.md) | yes | _none_ | `hpc-agent trace [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--run-id <run_id>] [--format <trace_format>]` |

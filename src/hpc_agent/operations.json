@@ -1182,6 +1182,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent stray-sweep --spec <path> --ssh-target <ssh_target> [--reap] [--max-age-sec <max_age_sec>] [--warn-threshold <warn_threshold>]",
+    "idempotent": true,
+    "input_schema": "stray_sweep.input.json",
+    "name": "stray-sweep",
+    "output_schema": "stray_sweep.output.json",
+    "python": "hpc_agent.ops.recover.stray_sweep.stray_sweep",
+    "side_effects": [
+      "ssh"
+    ],
+    "summary": "Login-node process-hygiene probe (run-12 finding 20). One fork-minimal `ps -u $USER` over ssh: counts total processes, identifies MARKED framework processes (HPC_AGENT_OP) older than the max legitimate deadline as strays, and — only with --reap — kills exactly those PIDs (never an unmarked process). Surfaces the stray count the quota-wedge incident lacked.",
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent suggest-setup-action [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,

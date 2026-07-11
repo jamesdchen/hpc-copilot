@@ -27,15 +27,25 @@ from __future__ import annotations
 __all__ = [
     "SSH_TIMEOUT_SEC",
     "RSYNC_TIMEOUT_SEC",
+    "REMOTE_DEADLINE_MARGIN_SEC",
+    "REMOTE_DEADLINE_DEFAULT_SEC",
+    "OP_MARKER_PREFIX",
+    "build_remote_command",
+    "remote_op",
+    "current_remote_op",
     "ssh_run",
 ]
 
 import contextlib
+import contextvars
 import os
+import re
 import select
+import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 from hpc_agent.infra import ssh_circuit
@@ -90,6 +100,149 @@ RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 # long-running streaming SSH commands).  ``object()`` gives us a unique
 # identity that no caller can accidentally collide with.
 _DEFAULT: Final[Any] = object()
+
+
+# ---------------------------------------------------------------------------
+# Server-side self-destruct + self-identification (run-12 finding 20)
+# ---------------------------------------------------------------------------
+#
+# The connection storm's REMOTE cost: an ssh command the client killed leaves
+# an orphaned remote half (a bash+python pair per poll). Enough of them exhaust
+# the login node's per-user process quota until sshd itself cannot fork a shell
+# — a state self-service recovery cannot clear (the ``kill`` builtin needs a
+# shell to run IN). Two structural defences, both applied at the ONE
+# ssh-command-construction seam (:func:`ssh_run`), so every framework remote
+# command inherits them regardless of the call site:
+#
+#   LAYER 1 — a server-side deadline. Wrap the command in ``timeout`` derived
+#   from the SAME budget the client already enforces (plus a margin, so the
+#   client timeout normally fires first and the remote wrapper is purely the
+#   orphan bound). An orphaned remote half self-destructs by construction, no
+#   matter how the client died.
+#
+#   LAYER 2 — a self-identifying marker. Prefix an inert ``HPC_AGENT_OP=<op>:
+#   <epoch>`` token, landing it BOTH in the process environ (an env-assignment
+#   prefix) AND — critically — in the process ARGV (passed as bash's ``$0``, so
+#   it shows in ``ps -o args`` / matches ``pgrep -f``). The hygiene sweep
+#   (:mod:`hpc_agent.ops.recover.stray_sweep`) can then count framework strays
+#   and reap ONLY marked, over-age ones — never an unmarked user process.
+
+#: Seconds added to the client timeout to derive the remote self-destruct bound.
+#: The client timeout normally fires first; the remote ``timeout`` is the pure
+#: orphan bound for the case where the client vanished (crash, kill -9, network
+#: drop). Tunable via ``HPC_SSH_REMOTE_DEADLINE_MARGIN_SEC``.
+REMOTE_DEADLINE_MARGIN_SEC: Final[int] = _env_int("HPC_SSH_REMOTE_DEADLINE_MARGIN_SEC", 60)
+
+#: Remote self-destruct bound for a command the client runs with NO timeout
+#: (``timeout=None`` — the streaming / long-running escape hatch). Never
+#: unbounded: an orphan of even a long command must still eventually die.
+#: Tunable via ``HPC_SSH_REMOTE_DEADLINE_DEFAULT_SEC`` (default 1h).
+REMOTE_DEADLINE_DEFAULT_SEC: Final[int] = _env_int("HPC_SSH_REMOTE_DEADLINE_DEFAULT_SEC", 3600)
+
+#: Grace (seconds) after the ``timeout`` SIGTERM before ``timeout`` escalates to
+#: SIGKILL (``timeout -k``), so a child that traps/ignores TERM is still reaped.
+_REMOTE_DEADLINE_KILL_GRACE_SEC: Final[int] = 10
+
+#: Env escape hatch (documented on :func:`build_remote_command`): set to ``1`` to
+#: emit the remote command completely UNWRAPPED — no ``timeout``, no marker — for
+#: debugging a command whose behaviour the wrapper obscures.
+_NO_REMOTE_DEADLINE_ENV: Final[str] = "HPC_SSH_NO_REMOTE_DEADLINE"
+
+#: The marker key. ``pgrep -f`` / ``ps`` matching keys on this literal.
+OP_MARKER_PREFIX: Final[str] = "HPC_AGENT_OP"
+
+# The op label a wrapped command carries when no call site set one. A generic
+# constant still makes the process framework-identifiable; the epoch keeps each
+# marker distinct.
+_DEFAULT_OP: Final[str] = "ssh"
+
+# Ambient op label, set by the (optional) :func:`remote_op` context manager so a
+# verb can tag the commands it issues without threading ``op=`` through every
+# call. ``ssh_run``'s explicit ``op=`` argument still wins over this.
+_CURRENT_OP: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "hpc_agent_remote_op", default=None
+)
+
+
+def current_remote_op() -> str | None:
+    """The ambient remote-op label, or ``None`` when no :func:`remote_op` is active."""
+    return _CURRENT_OP.get()
+
+
+@contextlib.contextmanager
+def remote_op(op: str) -> Iterator[None]:
+    """Tag every :func:`ssh_run` issued in this context with *op* (LAYER-2 marker).
+
+    Optional convenience so a verb (submit-s2, verify-canary, a poll loop) can
+    label the marker its remote commands carry without passing ``op=`` down every
+    layer. Nestable and contextvar-scoped (safe under threads / async). An
+    explicit ``op=`` on :func:`ssh_run` overrides the ambient value.
+    """
+    token = _CURRENT_OP.set(op)
+    try:
+        yield
+    finally:
+        _CURRENT_OP.reset(token)
+
+
+def _remote_deadline_seconds(timeout: float | None) -> int:
+    """The server-side ``timeout`` bound (whole seconds) for a client *timeout*.
+
+    ``None`` (client enforces no timeout) → :data:`REMOTE_DEADLINE_DEFAULT_SEC`
+    (never unbounded). Otherwise the client budget + :data:`REMOTE_DEADLINE_MARGIN_SEC`
+    so the client's own timeout normally fires first and the remote wrapper is
+    only the orphan bound. Floored at 1s so a sub-second budget still wraps.
+    """
+    if timeout is None:
+        return REMOTE_DEADLINE_DEFAULT_SEC
+    return max(1, int(timeout) + REMOTE_DEADLINE_MARGIN_SEC)
+
+
+def _op_marker(op: str | None) -> str:
+    """The inert ``HPC_AGENT_OP=<op>:<epoch>`` token for LAYER-2 identification.
+
+    *op* is sanitised to ``[A-Za-z0-9._-]`` (argv/pgrep-safe, no shell
+    metacharacters) so the token can ride argv unquoted and match ``pgrep -f``.
+    """
+    token = op or current_remote_op() or _DEFAULT_OP
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", token) or _DEFAULT_OP
+    return f"{OP_MARKER_PREFIX}={token}:{int(time.time())}"
+
+
+def build_remote_command(cmd: str, *, timeout: float | None, op: str | None = None) -> str:
+    """Wrap *cmd* for server-side self-destruct (LAYER 1) + self-identification (LAYER 2).
+
+    Returns the string handed to ``ssh`` as the remote command. The shape is::
+
+        HPC_AGENT_OP=<op>:<epoch> timeout -k <grace> <deadline>s bash -c '<cmd>' <same-marker>
+
+    * ``timeout`` bounds the remote command's lifetime at
+      :func:`_remote_deadline_seconds` (client budget + margin, or the generous
+      default when the client set none), so an orphaned remote half — the run-12
+      finding-20 login-node fork-exhaustion class — self-destructs on its own.
+      ``bash -c '<cmd>'`` preserves *cmd*'s exact shell semantics (it is
+      ``shlex.quote``-d, so a compound ``a && b | c`` command survives byte-for-
+      byte); ``timeout`` exits with *cmd*'s own status normally, and ``124`` only
+      when it fires — callers classify ``124`` as transient, never as a broken-env
+      (126/127) or success signal.
+    * The ``HPC_AGENT_OP`` marker rides both the process environ (the leading
+      env-assignment) and the process argv (bash's ``$0``, the trailing token —
+      what makes it visible to ``ps -o args`` / ``pgrep -f`` for the hygiene
+      sweep). It is inert: the wrapped script never references ``$0``.
+
+    Escape hatch: with ``HPC_SSH_NO_REMOTE_DEADLINE=1`` in the environment, *cmd*
+    is returned completely unwrapped (no ``timeout``, no marker) — for debugging a
+    command whose behaviour the wrapper obscures. Layers 1 and 2 are then off.
+    """
+    if os.environ.get(_NO_REMOTE_DEADLINE_ENV) == "1":
+        return cmd
+    marker = _op_marker(op)
+    deadline = _remote_deadline_seconds(timeout)
+    return (
+        f"{marker} timeout -k {_REMOTE_DEADLINE_KILL_GRACE_SEC} {deadline}s "
+        f"bash -c {shlex.quote(cmd)} {marker}"
+    )
+
 
 # ``DEFAULT_RSYNC_EXCLUDES`` and the file-transport helpers
 # (``rsync_push`` / ``rsync_pull`` / ``deploy_runtime`` / ``run_combiner``
@@ -499,8 +652,16 @@ def ssh_run(
     ssh_target: str,
     capture: bool = True,
     timeout: float | None = _DEFAULT,
+    op: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run *cmd* on a remote host via SSH.
+
+    Every remote command is wrapped by :func:`build_remote_command` before it is
+    handed to ``ssh`` — a server-side ``timeout`` self-destruct bound (LAYER 1)
+    plus an inert ``HPC_AGENT_OP`` marker (LAYER 2) so an orphaned remote half
+    cannot outlive its budget and the hygiene sweep can identify framework strays
+    (run-12 finding 20). Set ``HPC_SSH_NO_REMOTE_DEADLINE=1`` to disable both for
+    debugging.
 
     Parameters
     ----------
@@ -512,6 +673,10 @@ def ssh_run(
         If True (default), capture stdout/stderr and return them.
         If False, inherit the parent process's stdout/stderr (useful for
         streaming long-running output).
+    op:
+        Optional LAYER-2 marker label (the ``<op>`` in ``HPC_AGENT_OP=<op>:
+        <epoch>``). Defaults to the ambient :func:`remote_op` value, else
+        ``"ssh"``. Sanitised to argv-safe characters.
     timeout:
         Per-call subprocess timeout in seconds.  When omitted, the module
         default :data:`SSH_TIMEOUT_SEC` is applied.  Pass ``timeout=None``
@@ -532,6 +697,13 @@ def ssh_run(
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
+    # LAYER 1 + LAYER 2 (run-12 finding 20): wrap the remote command with a
+    # server-side self-destruct deadline (derived from the client budget the
+    # engine and one-shot paths both enforce) + the self-identifying marker. Done
+    # ONCE here so both the asyncssh engine and the one-shot path ship the wrapped
+    # form; the original ``cmd`` is kept for the human-readable timeout message.
+    remote_cmd = build_remote_command(cmd, timeout=effective_timeout, op=op)
+
     # Command-channel outsourcing fast path (opt-in, HPC_SSH_ENGINE=asyncssh):
     # run the command over a held asyncssh connection (library channel, typed
     # errors) instead of a fresh cold handshake per call. Capture-mode only
@@ -549,7 +721,7 @@ def ssh_run(
         if ssh_engine.engine_enabled():
             try:
                 return ssh_engine.engine_ssh_run(
-                    cmd, ssh_target=ssh_target, timeout=effective_timeout
+                    remote_cmd, ssh_target=ssh_target, timeout=effective_timeout
                 )
             except ssh_engine.EngineUnavailable:
                 pass  # fall through to the one-shot path below
@@ -569,7 +741,7 @@ def ssh_run(
         # unknown host or missing key surfaces as an immediate auth failure
         # rather than blocking until the timeout. _tar_ssh_push and
         # _scp_pull already use this flag.
-        argv = [*ssh_argv("ssh"), ssh_target, cmd]
+        argv = [*ssh_argv("ssh"), ssh_target, remote_cmd]
         try:
             if capture:
                 # POSIX: close-pipes-on-exit reader so a remote command that
