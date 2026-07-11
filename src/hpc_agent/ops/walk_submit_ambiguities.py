@@ -44,6 +44,34 @@ from hpc_agent.ops.submit.field_partition import Ambiguity
 __all__ = ["walk_submit_ambiguities"]
 
 
+def _materialized_data_axis(experiment_dir: str | None) -> dict[str, Any] | None:
+    """The interview's persisted data-axis classification, or ``None``.
+
+    Run-#12 finding 14: the interview writes the caller-declared hint to
+    ``interview.json._materialized.entry_point.data_axis`` PRECISELY so no
+    consumer re-asks — yet this walk recommended the ``sequential`` fail-safe
+    over a recorded ``bounded_halo`` (a ``y`` would have shipped 2700
+    BoundedHalo tasks as sequential). Tolerant read: any missing/malformed
+    layer returns ``None`` and the fail-safe stands.
+    """
+    if not experiment_dir:
+        return None
+    import json
+    from pathlib import Path
+
+    try:
+        doc = json.loads(
+            (Path(experiment_dir) / "interview.json").read_text(encoding="utf-8")
+        )
+        entry = (doc.get("_materialized") or {}).get("entry_point") or {}
+        axis = entry.get("data_axis")
+    except Exception:  # noqa: BLE001 — the hint is an optimization, never a gate
+        return None
+    if isinstance(axis, dict) and isinstance(axis.get("kind"), str):
+        return axis
+    return None
+
+
 def _walk_submit_ambiguities_result_post(
     result: WalkSubmitAmbiguitiesResult,
 ) -> dict[str, Any]:
@@ -177,14 +205,32 @@ def walk_submit_ambiguities(
     if spec.data_axis_resolved:
         provenance["data_axis"] = "resolved_on_disk"
     else:
-        ambiguities.append(
-            Ambiguity(
-                field="data_axis",
-                candidates=None,
-                depends_on=("entry_point",),
-                safe_default={"kind": "sequential"},
+        # The interview's recorded hint outranks the fail-safe (finding 14):
+        # the human already declared the classification; recommending
+        # ``sequential`` over it invites re-derivation of a settled fact.
+        hint = _materialized_data_axis(spec.experiment_dir)
+        if hint is not None:
+            provenance["data_axis"] = "interview_hint"
+            ambiguities.append(
+                Ambiguity(
+                    field="data_axis",
+                    candidates=None,
+                    depends_on=("entry_point",),
+                    safe_default=hint,
+                    context={
+                        "source": "interview.json _materialized.entry_point.data_axis"
+                    },
+                )
             )
-        )
+        else:
+            ambiguities.append(
+                Ambiguity(
+                    field="data_axis",
+                    candidates=None,
+                    depends_on=("entry_point",),
+                    safe_default={"kind": "sequential"},
+                )
+            )
 
     # ── Step 5: homogeneous axes (cold-start only).
     if spec.homogeneous_axes_resolved:

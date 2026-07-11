@@ -212,6 +212,12 @@ def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) ->
             _collect_source_numbers(v, strings, floats)
         return
     if isinstance(obj, (list, tuple)):
+        # A list's LENGTH is a derivable fact of the record (run-#12: "27
+        # SLURM jobs" — len(job_ids) — was struck as an unsupported numeric
+        # claim, forcing a relay to enumerate all 27 ids instead of counting
+        # them). Contribute the count alongside the members.
+        strings.add(_normalize_num(str(len(obj))))
+        floats.append(float(len(obj)))
         for v in obj:
             _collect_source_numbers(v, strings, floats)
 

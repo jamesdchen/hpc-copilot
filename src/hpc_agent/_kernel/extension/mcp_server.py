@@ -1316,7 +1316,24 @@ class McpServer:
                     json.dump(spec, fh)
             argv = _build_invocation(name, shape, arguments, spec_path)
             started = time.perf_counter()
-            exit_code, stdout, stderr = self._runner(argv)
+            # Mid-call liveness (run-#12 finding 3): a long verb showed the
+            # human NOTHING between dispatch and result — three separate
+            # "is it hung?" investigations in one night. One stderr line every
+            # ~15s on the same tail-able surface as the per-call telemetry;
+            # the daemon timer dies with the call.
+            _hb_stop = threading.Event()
+
+            def _heartbeat() -> None:
+                while not _hb_stop.wait(15.0):
+                    sys.stderr.write(
+                        f"[mcp] {name} still running ({int(time.perf_counter() - started)}s)\n"
+                    )
+
+            threading.Thread(target=_heartbeat, daemon=True).start()
+            try:
+                exit_code, stdout, stderr = self._runner(argv)
+            finally:
+                _hb_stop.set()
             # Per-call telemetry (2026-07-04): "why is MCP slow" must be a
             # measurement, not a mystery. One stderr line per tools/call —
             # stderr rides the harness's MCP log, never the JSON-RPC channel.

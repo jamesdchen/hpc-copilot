@@ -584,7 +584,23 @@ def _local_push_manifest(local_path: str | Path, exclude: list[str]) -> Any:
     from hpc_agent.ops.transfer.manifest import build_manifest
 
     root = Path(local_path)
-    return build_manifest(root, paths=_pushable_relpaths(root, exclude))
+    paths = _pushable_relpaths(root, exclude)
+    # Phase disclosure (run-#12 finding 3): hashing a multi-GB tree is
+    # MINUTES of silence otherwise — the 8.7GB scan read as a hang twice in
+    # one night. One line in, one line out, same stderr surface as the
+    # transfer heartbeat.
+    print(
+        f"[transport] content-hash scan: hashing {len(paths)} local file(s) "
+        "for the push delta (minutes on a large tree; transfer follows)",
+        file=sys.stderr,
+    )
+    manifest = build_manifest(root, paths=paths)
+    print(
+        f"[transport] content-hash scan done ({len(paths)} file(s)); "
+        "comparing against the remote manifest",
+        file=sys.stderr,
+    )
+    return manifest
 
 
 def _parse_remote_push_manifest(stdout: str) -> Any | None:
@@ -792,6 +808,25 @@ def _disclose_prune(plan: Any, *, remote_path: str) -> None:
         pass
 
 
+def _is_runtime_placed(relpath: str) -> bool:
+    """True when *relpath* is a ``deploy_runtime``-placed framework file.
+
+    Those files ride their own deploy leg OUTSIDE the repo push, so the push
+    manifest never knows them — they are the framework's own, never prune
+    candidates and never anomalies to nag a human about (run-#12: six eternal
+    "needs a human decision" lines for the dispatcher + templates the
+    framework itself deployed). Matches the same :data:`PROTECTED_RUNTIME_FILES`
+    set every push's exclude union protects.
+    """
+    for prot in PROTECTED_RUNTIME_FILES:
+        if prot.endswith("/"):
+            if relpath == prot.rstrip("/") or relpath.startswith(prot):
+                return True
+        elif relpath == prot:
+            return True
+    return False
+
+
 def _execute_prune(
     *, ssh_target: str, remote_path: str, paths: list[str], timeout: float | None
 ) -> bool:
@@ -838,7 +873,8 @@ def _prune_manifest_known_extras(
     try:
         # Our own bookkeeping file is a remote extra (never shipped locally); it
         # is neither ours-to-prune nor an anomaly — filter it out up front.
-        candidates = [p for p in extra if p != _PUSH_MANIFEST_REL]
+        # Same for deploy_runtime's own placed files (:func:`_is_runtime_placed`).
+        candidates = [p for p in extra if p != _PUSH_MANIFEST_REL and not _is_runtime_placed(p)]
         if not candidates:
             return
 

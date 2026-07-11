@@ -1310,6 +1310,15 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         # so it shares the main run's ancestry and composed identity.
         parent_run_ids=main.get("parent_run_ids") or None,
         node_sha=main.get("node_sha") or None,
+        # The canary IS task 0 — carry ITS resolved params (run-#12 finding-18
+        # follow-up: the canary metrics pull renders result_dir_template from
+        # sidecar trial_params, which was null here, so the determinism-
+        # fingerprint sample never minted for sweep-templated runs).
+        trial_params=(
+            [dict(main["trial_params"][0])]
+            if isinstance(main.get("trial_params"), list) and main["trial_params"]
+            else None
+        ),
     )
 
 

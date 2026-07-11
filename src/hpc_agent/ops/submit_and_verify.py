@@ -117,7 +117,11 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
     # NEVER a bare KeyError, which escapes the callers' best-effort catch and
     # killed the whole S2 worker post-submit (run-#12 finding 18).
     trial_params = sidecar.get("trial_params")
-    fields: dict[str, object] = dict(trial_params) if isinstance(trial_params, dict) else {}
+    fields: dict[str, object] = {}
+    if isinstance(trial_params, list) and trial_params and isinstance(trial_params[0], dict):
+        fields = dict(trial_params[0])  # the sidecar shape: list[dict], task 0 first
+    elif isinstance(trial_params, dict):
+        fields = dict(trial_params)
     fields.update(task_id=0, run_id=canary_run_id)
     try:
         result_subdir = template.format(**fields)

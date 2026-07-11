@@ -156,3 +156,38 @@ def test_resources_deferred_when_no_cluster() -> None:
     assert "cluster" in _amb_fields(out)
     assert out["provenance"]["resources"] == "deferred_no_cluster"
     assert "walltime_sec" not in out["resolved"]
+
+
+def test_data_axis_recommends_interview_hint_over_fail_safe(tmp_path) -> None:
+    """Run-#12 finding 14: with the interview's materialized data_axis on disk,
+    the walk recommends THAT (provenance interview_hint), not the sequential
+    fail-safe — a y on the brief must not reclassify a declared BoundedHalo."""
+    import json as _json
+
+    hint = {"kind": "bounded_halo", "halo": {"expr": "halo"}}
+    (tmp_path / "interview.json").write_text(
+        _json.dumps({"_materialized": {"entry_point": {"data_axis": hint}}}),
+        encoding="utf-8",
+    )
+    out = _walk(
+        cluster="hoffman2",
+        goal="g",
+        tasks_py_present=True,
+        entry_point_resolved=True,
+        experiment_dir=str(tmp_path),
+    )
+    da = _amb(out, "data_axis")
+    assert da["safe_default"] == hint
+    assert out["provenance"]["data_axis"] == "interview_hint"
+    assert "interview.json" in (da.get("context") or {}).get("source", "")
+
+
+def test_data_axis_fail_safe_stands_without_a_hint(tmp_path) -> None:
+    out = _walk(
+        cluster="hoffman2",
+        goal="g",
+        tasks_py_present=True,
+        entry_point_resolved=True,
+        experiment_dir=str(tmp_path),
+    )
+    assert _amb(out, "data_axis")["safe_default"] == {"kind": "sequential"}
