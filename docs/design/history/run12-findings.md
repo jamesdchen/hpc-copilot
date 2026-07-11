@@ -25,3 +25,21 @@ another compose-silently-and-disclose seat, same class as finding 1 (the
 template default). Fix: default experiment_dir = the invoking repo root;
 disclose in the record; ask ONLY when the cwd carries no experiment
 markers at all.
+
+## 3. The MCP client-server link has no human-visible liveness surface
+Two wedged-server episodes cost ~10 min of human attention each with zero
+mechanical disclosure — "Generating…" is not a liveness signal (the
+no-black-box rule applied to the transport itself). The >10s-progress-file
+discipline needs an MCP-link analogue (the client logs "still running (Ns)"
+to a cache file nobody surfaces).
+
+## 4. FIXED LIVE: subprocess in the server context wedged the whole server
+`audit-preflight` hung the MCP server on its FIRST live call:
+`_build_info.py::git_output` ran bare `subprocess.run(git ...)` — the child
+inherited the server's stdin (the live JSON-RPC pipe), and on timeout the
+post-kill drain waited on a git grandchild holding the pipes (the run-#7
+orphaned-ssh class). Offline probes CANNOT reproduce it (piped stdin hits
+EOF). Fix: `stdin=DEVNULL` + `run_capture_bounded` tree-kill (`git -C`
+replaces the cwd kwarg). ENFORCEMENT CANDIDATE for
+engineering-principles: no bare `subprocess.run` in code reachable from
+`mcp-serve` — stdin isolation + tree-kill bounded, or the bounded runner.
