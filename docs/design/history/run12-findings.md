@@ -498,6 +498,37 @@ fast-empty, so a SECOND severing mechanism lives inside the framework
 client; prime suspect the asyncssh engine's idle reaper (severs any
 connection with no COMPLETED command in 120s — bug-sweep #8, fixed this
 repo same day, absent from the demo wheel), else an internal per-exec
-timeout HPC_SSH_TIMEOUT_SEC does not govern in 0.11.0. Discrimination
-pending the demo env's HPC_SSH_ENGINE value + the detached nohup reporter
-control run.
+timeout HPC_SSH_TIMEOUT_SEC does not govern in 0.11.0. DISCRIMINATED
+(same night): the demo env carried HPC_SSH_ENGINE='asyncssh' — every
+framework ssh ran through the engine whose idle reaper severs any
+connection with no COMPLETED command in 120s (bug-sweep #8; fixed this
+repo, absent from the demo wheel). The env var was a run-11-era interim
+that memory recorded as RETIRED but the live env still exported —
+env-vs-record drift is its own small lesson (a doctor env-echo seat would
+have caught it days earlier). Demo remediation: HPC_SSH_ENGINE= cleared →
+native OpenSSH + user keepalives + 1800s budget. FIX STACK for the class,
+all landed this repo today: #8 inflight-counter (no mid-command reaping),
+finding-24 keepalives (no NAT sever), remote deadline (orphans
+self-destruct), frozen-manifest reporter (the silent window shrinks from
+~25 min to seconds), cluster-announces Phase 1 (the question stops being
+asked over a channel at all — in build).
+MEASURED (control run, RC=0): real 40m26s vs user 42s + sys 1m6s — the
+reporter spends <2 CPU-minutes in 40 wall-minutes; the walk is ~38 min of
+scratch METADATA LATENCY (2700 scattered dir stats + CSV reads), NOT
+resolve() compute. Honest correction: the frozen-manifest fix barely dents
+THIS campaign shape; the announce kernel (2700 markers in ONE directory,
+one readdir) is the fix that carries the weight. Every reporter invocation
+today died before its true 40-min runtime except this one.
+LIBRARY-BOUNDARY LESSON (user, same night): the engine ALREADY outsourced
+keepalives to asyncssh (keepalive_interval=15 at connect) — the library's
+native lifecycle was correct; the ONE hand-rolled piece layered on top
+(idle-by-last-completion reaping) is where the sever lived. Steady-state
+follow-up (post-run-13): shrink hand-rolled connection lifecycle to what
+no library can know — the ban-risk breaker (a cluster-social constraint)
+and connection-RATE courtesy — and delete/outsource what asyncssh owns
+(idle management, multiplexing, transport keepalives). Same class as the
+filelock/psutil outsourcing precedent. Per the scope-by-constraint rule:
+the earlier native-binary-first verdict was a SHIP-TIME call (Windows
+named-pipe agent, engine maturity); the steady-state verdict is
+engine-first with library-native lifecycle — the trigger that flips it is
+the #8 inflight fix + this lesson landing in a released wheel.

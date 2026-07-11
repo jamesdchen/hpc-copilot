@@ -282,3 +282,16 @@ class DoctorResult(BaseModel):
             "unresolvable (no git, no embedded sha, not that repo — fail-open)."
         ),
     )
+    active_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every framework-relevant HPC_* environment variable currently "
+            "exported in THIS process's environment, verbatim. Pure disclosure "
+            "— doctor never judges the values. Run-12 finding 24 addendum: "
+            "HPC_SSH_ENGINE='asyncssh' sat exported for days while the session "
+            "record said it was retired, and no surface ever echoed it; the "
+            "resulting env-vs-record drift cost hours of misattribution. An "
+            "override that shows up here unexpectedly IS the finding. Empty "
+            "when no HPC_* variable is set."
+        ),
+    )
