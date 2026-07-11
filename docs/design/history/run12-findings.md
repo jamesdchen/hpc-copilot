@@ -370,3 +370,49 @@ pattern validated this night); the human path is the OnDemand WEB portal —
 plan's one-gateway + cluster-announces design removes both the client storm
 AND its remote residue; nearer-term, the reporter command should be
 fork-minimal (one exec, no module/conda for a pure sacct/squeue read).
+
+## 21. Stop-guard livelock: a CONSUMED greenlight is indistinguishable from
+## a fresh one — every turn-end forces a tick against a parked-on-external
+## rendezvous
+Live (aggregate chain, causal_tune_linear-de448128): the human's earlier
+`y` for aggregate-check was consumed by a tick that ran the block, got
+`not_ready` (login node can't fork — finding 20), and RE-PARKED. `_park`
+writes the new pending marker but appends NOTHING to the decision journal,
+so the journal's latest record is still that already-consumed `y`. The stop
+guard's whole test is marker-present + latest-record-is-y
+(`decision_rendezvous_stop_guard.py` `find_committed_unadvanced`), so it
+blocked EVERY turn end — "invoke block-drive … (do not end the turn)" —
+and each forced tick re-ran aggregate-check, i.e. another SSH volley at the
+exhausted login node. The guard's own docstring calls the condition
+"self-healing"; it heals only until the next park, after which the stale
+`y` re-arms it forever. `stop_hook_active` caps it at one forced tick per
+turn, so it's a per-turn tax + SSH amplifier (compounding finding 20), not
+an in-turn spin. `plan_block_action` shares the blindness: the forced
+tick's routing consumes the same stale `resolved` again. FIX CLASS: record
+CONSUMPTION — `_park` stamps the consumed decision's identity (journal
+length or record sha) into the marker; guard + planner treat a latest-`y`
+at-or-before that stamp as spent (park is "waiting for the human" →
+silent). The 2026-06-10 stall class stays closed: a genuinely unconsumed
+`y` is always NEWER than the marker it answers. CROSS-REF: independently
+confirmed as bug-sweep 2026-07-11 #1 (HIGH, 2 skeptic votes,
+docs/internals/bug-sweep-2026-07-11.md) — the sweep adds the driver-side
+consequence (forced advance into the gated successor, whose gate refuses →
+spurious "block failed" instead of "awaiting the human") and a fix sketch:
+scope the resume-path approval to the parked boundary via
+resolved["next_block"] == cursor next_verb. One fix, both entries.
+
+## 22. Registry-name vs CLI-verb skew: guidance strings say
+## "reconcile-journal", the CLI only knows `reconcile`
+Live: framework prose told the relay agent to run reconcile-journal
+(campaign_run.py, status_pipeline.py, status_blocks.py all name it);
+`describe reconcile-journal --schema` FOUND the primitive (registry name)
+but errored "declares no input schema", while `dispatch reconcile-journal`
+said unknown command — the verb map (`_verb_module_map.py`) binds the CLI
+name `reconcile` to primitive `reconcile-journal`. Two contradictory
+error surfaces for one name, two burned round-trips; the did-you-mean
+suggester was the only thing that recovered it. This is the CLI-verbs-over-
+Python-internals doctrine's (#200) unfinished edge: agent-facing guidance
+must speak CLI names, or describe/dispatch must both resolve BOTH names.
+FIX CLASS: (a) make `describe` and `dispatch` resolve registry aliases
+(one alias map, shared), and (b) lint guidance strings against the CLI
+verb list so a non-verb primitive name in user-facing prose fails CI.
