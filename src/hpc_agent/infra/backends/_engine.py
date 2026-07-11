@@ -35,6 +35,7 @@ from hpc_agent._kernel.contract.task_id import HpcTaskId, to_array_index
 from hpc_agent.infra.backends import _TASK_OFFSET_ENV, HPCBackend
 from hpc_agent.infra.backends.profile import SchedulerProfile
 from hpc_agent.infra.backends.profile import render_script as _render_script
+from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
 
 if TYPE_CHECKING:
     import subprocess
@@ -66,15 +67,13 @@ _COMMA_ARRAY_FAMILIES: frozenset[str] = frozenset({"slurm", "torque"})
 
 
 def _with_ack(cmd: str) -> str:
-    """Suffix *cmd* with the sentinel-ack echo (see :data:`_SCHED_ACK_PREFIX`).
+    """Suffix *cmd* with the scheduler sentinel-ack echo (see :data:`_SCHED_ACK_PREFIX`).
 
-    The echo is ``;``-sequenced (not ``&&``) so it fires regardless of the
-    scheduler command's exit status, carrying that status as the ack value —
-    the affirmative token proving the remote shell reached the end of the
-    query. Replaces the old ``… || true`` masking, which made a failed
-    scheduler binary look identical to an empty queue.
+    Thin alias for the shared :func:`hpc_agent.infra.ssh_validation.wrap_with_ack`
+    primitive (the ONE definition of the ack-wrap mechanism); this keeps the
+    scheduler prefix as the call-site default.
     """
-    return f'{cmd}; echo "{_SCHED_ACK_PREFIX}$?"'
+    return wrap_with_ack(cmd, _SCHED_ACK_PREFIX)
 
 
 def _fmt_hms(total_seconds: int) -> str:
@@ -805,18 +804,7 @@ class ProfileBackend(HPCBackend):
         see only real scheduler rows (they already skip a non-digit-led line,
         but stripping keeps the contract explicit).
         """
-        kept: list[str] = []
-        rc: int | None = None
-        for line in stdout.splitlines():
-            if line.startswith(_SCHED_ACK_PREFIX):
-                raw = line[len(_SCHED_ACK_PREFIX) :].strip()
-                try:
-                    rc = int(raw)
-                except ValueError:
-                    rc = -1
-                continue
-            kept.append(line)
-        clean = "\n".join(kept)
+        clean, rc = split_ack(stdout, _SCHED_ACK_PREFIX)
         if rc is None:
             return clean, False
         if cls.profile.family == "slurm":

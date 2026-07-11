@@ -57,9 +57,11 @@ def test_scheduler_query_ran_positive_evidence() -> None:
     RAN; absence is UNKNOWN, never 'no jobs'. SGE/PBS additionally require rc 0
     (qstat exits 0 on an empty queue); SLURM accepts any rc (squeue exits
     non-zero once queried ids have left the queue)."""
-    # Ack present, rc 0: ran, and the ack line is stripped from the body.
+    # Ack present, rc 0: ran, and the ack line is stripped from the body (the
+    # surrounding line structure — incl. the row's own trailing newline — is
+    # preserved, since parse_scheduler_states/parse_alive_output splitline it).
     clean, ok = SGE.scheduler_query_ran("12345 r\n__HPC_SCHED_ACK__=0\n")
-    assert ok is True and "__HPC_SCHED_ACK__" not in clean and clean == "12345 r"
+    assert ok is True and "__HPC_SCHED_ACK__" not in clean and clean == "12345 r\n"
     # SGE with a non-zero ack = qstat itself failed → UNKNOWN.
     _, ok = SGE.scheduler_query_ran("__HPC_SCHED_ACK__=1\n")
     assert ok is False

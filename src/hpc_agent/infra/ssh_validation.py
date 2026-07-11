@@ -20,9 +20,11 @@ from hpc_agent.errors import RemoteCommandFailed
 
 __all__ = [
     "parse_remote_json",
+    "split_ack",
     "validate_remote_path",
     "validate_remote_path_under_scratch",
     "validate_ssh_target",
+    "wrap_with_ack",
 ]
 
 # Characters that should never appear in an ssh_target. We intentionally
@@ -135,6 +137,56 @@ def validate_ssh_target(ssh_target: str) -> str:
             f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}"
         )
     return ssh_target
+
+
+def wrap_with_ack(cmd: str, ack_prefix: str) -> str:
+    """Suffix *cmd* with a sentinel-ack echo carrying its exit code.
+
+    The affirmative-token half of the positive-evidence transport rule
+    (docs/design/connection-broker.md, sentinel-ack ruling). The echo is
+    ``;``-sequenced (not ``&&``) so it fires regardless of *cmd*'s exit status,
+    carrying that status as the ack value — the token proves the remote shell
+    reached the end of the command. It replaces the ``… || true`` masking that
+    made a failed remote binary look identical to an empty result. *ack_prefix*
+    includes its trailing ``=`` (e.g. ``"__HPC_SCHED_ACK__="``); parse it back
+    with :func:`split_ack`.
+
+    Because ``ssh_run`` wraps every command in ``timeout … bash -c '<cmd>'``
+    (remote-deadline, run-12 finding 20), an expired deadline (rc 124) or a
+    severed channel kills the shell before this echo — so the ack's ABSENCE is
+    the positive proof the command did not run to completion (UNKNOWN), never a
+    settled "empty" verdict.
+    """
+    return f'{cmd}; echo "{ack_prefix}$?"'
+
+
+def split_ack(stdout: str, ack_prefix: str) -> tuple[str, int | None]:
+    """Strip :func:`wrap_with_ack`'s sentinel line off *stdout*.
+
+    Returns ``(clean_stdout, rc)`` where *rc* is the exit code the ack carried
+    (``int``; a non-numeric payload → ``-1``) or ``None`` when NO ack line is
+    present — the channel-silence signal: the remote shell never reached the
+    trailing echo, so the read is silently truncated / never-run (UNKNOWN). The
+    caller decides what a present-ack rc means (a scheduler query keys success on
+    the family's rc convention; a JSON reporter keys on ack presence + its own
+    process rc).
+
+    Line newlines are preserved (``keepends``) so a caller that further
+    partitions *clean_stdout* on an embedded sentinel (the watcher-ALARM
+    trailer) still sees the original byte structure.
+    """
+    kept: list[str] = []
+    rc: int | None = None
+    for line in stdout.splitlines(keepends=True):
+        if line.startswith(ack_prefix):
+            raw = line[len(ack_prefix) :].strip()
+            try:
+                rc = int(raw)
+            except ValueError:
+                rc = -1
+            continue
+        kept.append(line)
+    return "".join(kept), rc
 
 
 def parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:

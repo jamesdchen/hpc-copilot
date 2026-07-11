@@ -115,6 +115,7 @@ def _reap_cmd(pids: list[int]) -> str:
         spec_arg=True,
         spec_model=StraySweepSpec,
         schema_ref=SchemaRef(input="stray_sweep"),
+        requires_ssh=True,
         args=(
             CliArg(
                 "--ssh-target",

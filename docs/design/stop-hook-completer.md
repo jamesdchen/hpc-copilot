@@ -27,6 +27,46 @@ This is the poka-yoke doctrine applied to the hook itself: compose/default/
 auto-remedy what code can; refuse only at trust boundaries; a converted
 refusal becomes a never-fires assertion.
 
+## Tonight's evidence (run #12, 2026-07-10/11)
+
+Three live episodes ground the design — one for each side of the boundary.
+
+* **The rendezvous livelock (finding 21).** In the aggregate chain for
+  `causal_tune_linear-de448128`, `decision_rendezvous_stop_guard` REJECTED
+  *every* turn-end for hours — "invoke `block-drive` … (do not end the turn)"
+  — while the login node was fork-exhausted (finding 20) and could not
+  advance the driver. Each forced continuation re-ran `aggregate-check`, i.e.
+  fired another SSH volley at the starved node: the rejector became an SSH
+  amplifier. `stop_hook_active` capped it at one forced tick per turn, so it
+  was a per-turn tax, not an in-turn spin — but ~15 block-drive ticks were
+  spent bouncing the turn back to the LLM to do what code was already trying
+  to do. The obligation here — "advance the driver" — is *mechanical*: code
+  can run the tick (it is `block-drive`), so the bounce buys nothing. This is
+  the omission class hiding inside a Stop guard the completer inventory had
+  not yet reached. (The NARROW half of finding 21 — a *consumed* greenlight
+  re-arming the guard forever — is fixed independently via the boundary-scoped
+  `greenlight_targets_boundary` predicate; see the migration table. The
+  completer question is the DEEPER half: even a legitimately-unconsumed park
+  should not bounce a mechanical advance.)
+
+* **The rule-10 false positives (findings 19, tonight).** The relay-audit
+  rejector forced the agent to *reword true statements* three ways this run:
+  it flagged `27` as an unsupported numeric claim when it was exactly
+  `len(job_ids)` (finding 19); it read the prose token `5-minute-enumeration`
+  as a run-id-shaped mention; and it flagged the words `timeout` / `failure`
+  as state contradictions against a journal whose run was legitimately
+  `in_flight` (a transport timeout and a task failure are both true and both
+  compatible with an in-flight array). Every one was a TRUE statement the
+  hook made the model launder into different words — the opposite of the
+  distortion it exists to catch. These are the evidence that a detector's
+  precision is a PRECONDITION for completion (see "The false-positive tax").
+
+* **The precedents that already complete (skill-return, brief, alert).**
+  `skill_return_autofetch`, `decision_rendezvous_autofetch`, and
+  `alert_count` already discharge their obligation IN CODE — they inject the
+  envelope / brief / alert count and never bounce. The completer is not a new
+  shape; it is the generalization of these three to the Stop rejectors.
+
 ## The three classes (the ruling)
 
 ### 1. Omission class → COMPLETE (no bounce)
@@ -100,10 +140,129 @@ marker/discharge blocks.
 ### 3. Judgment class → BOUNCE (unchanged)
 
 The finding requires the model to produce something code cannot: an
-unanswered direct question from the human, a driver continuation the agent
-abandoned mid-chain (ending the turn with work parked that only the model
-can resume). These keep today's block-once seam verbatim
-(`stop_hook_active`, never loops, never hard-blocks).
+unanswered direct question from the human, or a driver continuation the agent
+abandoned mid-chain whose next step ONLY THE MODEL can resume (it must render
+a proposal, choose a nudge, or answer a human). These keep today's block-once
+seam verbatim (`stop_hook_active`, never loops, never hard-blocks).
+
+**The finding-21 boundary inside "driver continuation."** Not every abandoned
+continuation is judgment. When the parked driver's next step is a *mechanical
+tick* — `block-drive` advancing a deterministic span — code can RUN it; that
+is the omission class ("advance the driver" is content code holds), not
+judgment. Tonight's rendezvous livelock is exactly this: the guard bounced
+"invoke `block-drive` … (do not end the turn)" ~15 times when the tick was
+code's to run. The narrow half of finding 21 (a *consumed* greenlight
+re-arming the guard) is already fixed by the boundary-scoped
+`greenlight_targets_boundary` predicate, which prevents the FALSE bounce. The
+open half: when a bounce is TRUE (a genuinely-unconsumed park whose successor
+is mechanical), should the guard COMPLETE by running the tick itself rather
+than bouncing to the LLM? **RULING-NEEDED** — running a tick opens an SSH
+volley, so a completer here must gate on readiness (never re-fire against a
+tripped breaker / a not-ready block); until ruled, the guard stays a
+bounce and only its false-bounce fix ships. See "The decision-rendezvous
+guard" below for the full analysis.
+
+## Per-hook migration table
+
+Every harness hook `hpc-agent` ships (`_kernel/hooks/`), with its class and
+completer target. "Completer-shaped already" = the hook discharges its
+obligation in code today and never bounces — the pattern this design
+generalizes. Cite `module::symbol`, never line numbers.
+
+| Hook | Event | Today | Class | Target |
+|---|---|---|---|---|
+| `skill_return_autofetch` | PostToolUse(Bash `emit-skill-return`) | injects the envelope as `additionalContext`, never blocks | omission | **Completer-shaped already — THE precedent.** No change. |
+| `decision_rendezvous_autofetch` | PostToolUse(Bash `block-drive`) | injects the parked `brief`, never blocks | omission | Completer-shaped already (sibling precedent). No change. |
+| `alert_count` | SessionStart | prints the unacked watchdog count into context, never blocks | omission | Completer-shaped already (delivery-in-code). No change. |
+| `utterance_capture` | UserPromptSubmit | writes the human prompt to the utterance log, silent | observer | Not a gate — never blocks, never completes an obligation. It is the AUTHORSHIP trust anchor (§ laundering). No change. |
+| `answer_capture` | PostToolUse(AskUserQuestion) | writes TYPED answers to the utterance log, silent | observer | Same as above; a CLICK on an agent-authored label is deliberately never captured — the laundering line a completer must respect. No change. |
+| `scheduler_write_fence` | PreToolUse(Bash) | exit-2 blocks `qsub`/`sbatch`/`qdel`/… | **stays rejector** | Trust/actuation boundary (conduct rule 7). A completer that "completes" a scheduler mutation would ACTUATE without a journaled greenlight — forbidden. Rejection is the whole point. |
+| `skill_return_stop_guard` | Stop | blocks over an unfetched sub-skill envelope | omission (fetch) + judgment (continue) | **Hybrid completer candidate.** The fetch is code's (the autofetch sibling already reads the same envelope); the "continue the parent skill's next step" is judgment. Target: inject the envelope (complete the fetch); keep the bounce only for the continuation the model must author. **RULING-NEEDED.** |
+| `decision_rendezvous_stop_guard` | Stop | blocks "invoke `block-drive` to advance" | omission (mechanical tick) vs judgment (model-only resume) | **Completer candidate (finding 21).** Narrow false-bounce fix LANDED (boundary-scoped `greenlight_targets_boundary`); the mechanical-advance completer is **RULING-NEEDED** (SSH-readiness gate). See below. |
+| `relay_audit_stop` | Stop | rejector → completer, capability-gated dark | omission / violation / judgment | **BUILT (the flagship).** §1–§2 + D1–D4. |
+
+## The decision-rendezvous guard — the second completer candidate
+
+`decision_rendezvous_stop_guard::build_hook_output` is a pure REJECTOR: on a
+committed-but-unadvanced decision it returns
+`{"decision": "block", "reason": "… invoke block-drive … (do not end the
+turn)."}`. Finding 21 split this into two distinct defects:
+
+1. **The false bounce (FIXED, not a completer change).** A *consumed*
+   greenlight is byte-indistinguishable from a fresh one to a marker-present +
+   latest-record-is-`y` test, so a re-park after a `not_ready` tick left the
+   stale `y` re-arming the guard forever. The fix is the ONE shared predicate
+   `block_drive::greenlight_targets_boundary` — a greenlight fires only when
+   its `resolved["next_block"]` names the parked `next_verb` AND its `ts` is
+   at/after the marker's `awaiting_since`. A prior boundary's consumed `y` or a
+   same-boundary re-park's stale `y` no longer targets the boundary, so the
+   guard stays silent (still "waiting for the human"). This is a rejector
+   PRECISION fix, and it belongs regardless of the completer ruling — it is
+   the same class as the relay-audit false positives below: a bad detector
+   must be tightened before completion is even on the table.
+
+2. **The true bounce (RULING-NEEDED — the completer question).** When the
+   park is genuinely unconsumed and the next verb is a *mechanical* tick, the
+   bounce spends a full model turn to make the LLM type a command code can run
+   itself. The completer target: the guard runs `block_drive.run_tick` in
+   code and either advances (marker clears — self-heals, nothing to block) or
+   re-parks with a fresh brief that `decision_rendezvous_autofetch` already
+   injects. That collapses the ~15-bounce livelock to zero model turns.
+
+   The safety gate that keeps this RULING-NEEDED: a tick opens an SSH volley.
+   Finding 20/21 is the counter-example — completing blindly would have
+   *amplified* the fork-exhaustion storm, not relieved it. A rendezvous
+   completer must therefore refuse to fire when the run's transport breaker is
+   open or the block reports `not_ready`, degrading to today's bounce (or, at a
+   fork-exhausted node, to silence + a scheduled-`doctor` backstop). This is
+   strictly harder than the relay-audit completer, whose append touches only
+   local files. Ship order: the false-bounce fix now (done); the mechanical
+   completer only after the crash-only-monitoring plan removes the SSH-storm
+   hazard the completer would otherwise feed.
+
+## The false-positive tax — completion raises the stakes of a bad detector
+
+Tonight's rule-10 false positives (findings 19 + the `27` / `5-minute-
+enumeration` / `timeout`/`failure` cases) are not completer bugs — the
+completer was dark. They are REJECTOR precision bugs. But they carry a
+load-bearing lesson for the completer: **a false positive is cheap under a
+rejector and expensive under a completer.**
+
+* Under the rejector, a false flag bounces the turn; the model reads the
+  reason, sees the flag is wrong, and re-relays (annoying, a wasted turn, but
+  the model gets to PUSH BACK, and the human still reads the model's true
+  statement).
+* Under the completer, a false "violation" appends a code-authored CORRECTION
+  under a TRUE human-facing claim — `journal: <value>` asserted as
+  authoritative beneath a statement that was already correct. The model never
+  mediates it, so nothing pushes back, and the human reads code confidently
+  contradicting a true statement. That is misinformation with the completer's
+  own trust stamp on it — the model-untouched property (§ Why now) working
+  in reverse.
+
+Therefore: **a violation-class finding is only eligible for the append path
+once its detector is precise enough that a code-authored correction is
+trustworthy.** The three tonight failures each name a precision debt the
+detector must clear BEFORE its findings may be completed rather than bounced:
+
+* **Derivable counts.** `27 = len(job_ids)` must be in the number pool
+  (finding 19) — the verify-relay number set should admit counts of journaled
+  lists, not just stored scalars.
+* **Token shape.** `5-minute-enumeration` is prose, not a run id — the mention
+  scan's substring match (`mentioned_run_ids`) needs a token-boundary / id-
+  shape guard so a hyphenated English phrase cannot masquerade as a run
+  mention.
+* **State compatibility.** `timeout` and `failure` are compatible with an
+  `in_flight` run (a transport timeout, a single task's failure) — the
+  decision-state / state passes must not read a lifecycle-neutral English word
+  as a terminal-state contradiction.
+
+Until a given detector clears its precision debt, its findings stay on the
+BOUNCE path even when the completer is active — a rejector's false positive is
+recoverable, a completer's is not. This is why §2 already routes paraphrase /
+audit-scope findings (which carry no per-claim value token) to append-only and
+reserves the bounce for the poisoned-decision case: the append path is earned
+by attribution precision, never assumed.
 
 ## Settled decisions
 
@@ -190,6 +349,75 @@ final text back except to label the claim being corrected. Caps ride along
 (the `_MAX_*` posture): total appended bytes bounded; over-cap content
 degrades to the token-level floor plus a file reference.
 
+## Loop-safety invariants
+
+Every completer must hold these five, byte-checkable at build time. They are
+the generalization of the block-once seam every existing Stop guard already
+obeys.
+
+1. **`stop_hook_active` never bounces.** A hook-forced continuation that
+   re-enters the same Stop must never emit a `block` decision — that is the
+   loop. Completions (appends) MAY still run on a forced continuation (they do
+   not block, so they cannot loop); the poisoned-decision bounce and every
+   sibling-guard bounce are suppressed under `forced`
+   (`relay_audit_stop::_completer_output` gates the poison on `not forced`).
+2. **At-most-once bounce per stop.** A given Stop is blocked at most once
+   across its whole forced-continuation chain — the second entry carries
+   `stop_hook_active` and passes through. Unchanged from today.
+3. **Idempotent discharge.** A completion records its discharge keyed to the
+   APPEND EVENT (D3, `discharged_by="completer"`), never re-derived from
+   transcript text (a `systemMessage` is display, not transcript — D1). A
+   marker discharged once is absent from the next stop's undischarged scan, so
+   a completed obligation can never re-fire. The discharge record is
+   append-only and NOT part of `_marker_key`, so it never changes which marker
+   it closes.
+4. **Completion failure degrades to the rejector, then to silence.** If a
+   completer cannot record its discharge, it must NOT append the artifact and
+   claim it (the owed obligation stays owed —
+   `_completer_output` `continue`s past a failed `record_relay_discharge`). If
+   the capability is absent/unknown, or reading it raises, the whole hook
+   degrades to `_rejector_output` byte-for-byte. If the rejector itself
+   raises, `main` swallows it and exits 0 (the stop proceeds; the scheduled
+   `doctor` tick is the out-of-session backstop). Never a wedge.
+5. **Display-gated discharge on a mixed output (D2).** A completion whose
+   `systemMessage` rides a BLOCKED output discharges ONLY where the harness
+   has confirmed it displays `systemMessage` on a blocked stop
+   (`detect_stop_hook_append_on_block`); otherwise the completion DEFERS to
+   the never-blocked post-continuation stop. A swallowed message plus a
+   recorded discharge would silently and permanently lose the owed verdict —
+   the exact failure the marker exists to prevent.
+
+## Failure modes & the laundering hazard
+
+* **The laundering hazard (the hard invariant).** A completer appends
+  CODE-AUTHORED text sourced from FILES (D4) — a render selected by
+  `view_sha12`, a journal value, a marker's `key_tokens`. It MUST NEVER author
+  content attributed to a human, and MUST NEVER quote the model's own text
+  back except to label the claim being corrected. The trust boundary the
+  completer must not cross is the same one the authorship gate polices:
+  `ops/decision/journal.py::_assert_human_authorship` /
+  `_assert_signoff_authorship` require attestations to derive from the
+  out-of-band utterance log that `utterance_capture` (UserPromptSubmit) and
+  `answer_capture` (typed AskUserQuestion answers, never a click) write. A
+  completer that composed a sign-off, or appended text a human then pastes as
+  their attestation, would reopen exactly the laundering channel those hooks
+  close. This is why the sign-off echo detection is JOURNAL-ONLY provenance
+  (§2, re-ruled 2026-07-10): it records that model wording was echoed, but it
+  NEVER appends, never completes, never blocks — a completer must not touch
+  the authorship surface at all. Authorship / trust boundaries are the one
+  place rejection is not a latency cost to be optimized away; it is the
+  invariant.
+* **Swallowed `systemMessage`.** `systemMessage` has zero evidence in this
+  repo (D1): where the capability probe cannot confirm display, the completer
+  degrades to the rejector, never to silent loss (invariant 4/5).
+* **Detector false positives.** A completer inherits its detector's precision
+  debt (§ false-positive tax): a false append is unrecoverable, so an
+  imprecise detector's findings stay on the bounce path until the debt clears.
+* **SSH-amplifying completion (the rendezvous case).** A completer that runs a
+  tick can feed a connection storm (finding 20/21). Such a completer must gate
+  on transport readiness and degrade to the bounce, never fire blindly — the
+  reason its ruling is deferred behind crash-only monitoring.
+
 ## What this kills / what it keeps
 
 * Kills: the extra model turn per omission (the most common bounce), the
@@ -199,6 +427,40 @@ degrades to the token-level floor plus a file reference.
   wraps like today's passes — a completer crash degrades to the rejector,
   then to silence, never a wedge), the no-scaffold discovery probe, and the
   verb-level `unverifiable` policy (still not a hook concern).
+
+## Implementation sequencing
+
+Ordered by trust cost — local-file appends first, SSH-touching completers
+last. Each step ships its own tests and is independently revertible.
+
+1. **`relay_audit_stop` completer — DONE (dark).** Built capability-gated
+   (`_completer_output`, D1–D4); degrades to `_rejector_output` byte-for-byte
+   with no capability. Tests: class routing per finding kind, poisoned-decision
+   (pending brief + token intersection), D2 composition, D3 provenance, D4
+   render-sourced append + cap degradation, the forced-continuation discharge.
+2. **The `stop-hook-append` conformance probe.** Replace the two env markers
+   (`HPC_STOP_HOOK_APPEND`, `HPC_STOP_HOOK_APPEND_ON_BLOCK`) with a real
+   `conformance/` probe that verifies the primary CLI surface actually
+   DISPLAYS `systemMessage` in both output shapes (proceeding, and combined
+   with `decision:"block"`). Until this passes on the primary surface, the
+   completer stays dark. Tests: the relay-triples suite gains the completer
+   leg; probe present/absent → completer/rejector.
+3. **Detector precision debts (§ false-positive tax).** Derivable counts in
+   the number pool, id-shape guard on `mentioned_run_ids`, state-word
+   compatibility for `in_flight`. These are rejector fixes that ALSO unlock
+   the corresponding violation findings for the append path. Tests: each
+   tonight false positive becomes a regression that must NOT flag.
+4. **`skill_return_stop_guard` hybrid.** Inject the envelope (complete the
+   fetch) via the same read the autofetch sibling uses; keep the bounce for
+   the parent-continuation the model must author. Gated by the same
+   `stop-hook-append` capability. Tests: fetch-completed vs continuation-
+   bounced; forced-continuation no-loop.
+5. **`decision_rendezvous_stop_guard` mechanical completer — DEFERRED
+   (RULING-NEEDED).** Only after crash-only monitoring removes the SSH-storm
+   hazard. Must gate on transport readiness (breaker-closed, block ready) and
+   degrade to today's bounce otherwise. Ship the false-bounce precision fix
+   (`greenlight_targets_boundary`) independently and FIRST — it is already
+   landed.
 
 ## Test plan (sketch)
 
@@ -219,6 +481,16 @@ degrades to the token-level floor plus a file reference.
   but the v1 gate should be verified on the primary CLI surface first.
 * ~~Echo-class placement~~ — RULED 2026-07-10 (violation class, append-only,
   never bounces; see §2).
+* **RULING-NEEDED — the rendezvous mechanical completer.** Should
+  `decision_rendezvous_stop_guard` run the parked `block-drive` tick in code
+  (omission) instead of bouncing, once crash-only monitoring removes the
+  SSH-storm hazard? The false-bounce fix (`greenlight_targets_boundary`) is
+  landed and independent; the mechanical completer awaits a ruling on the
+  readiness gate (§ The decision-rendezvous guard, migration table, sequencing
+  step 5).
+* **RULING-NEEDED — the `skill_return_stop_guard` split.** Confirm the fetch
+  is completable (inject the envelope) while the parent-skill continuation
+  stays a judgment bounce.
 
 ## Drift log
 
@@ -268,3 +540,42 @@ degrades to the token-level floor plus a file reference.
     never poisons — no per-claim value token to intersect a brief; the sign-off
     boundary has its own gates), matching §2's "audit-scope violations ALWAYS take
     the append path."
+
+* **2026-07-11 — SCOPE WIDENED to the full hook inventory (run-#12 findings
+  19/21).** The doc was relay-audit-only; tonight's evidence pulled two more
+  Stop rejectors into the class map and named the observers/precedents that
+  already complete.
+  * **Per-hook migration table added** — all ten `_kernel/hooks/` modules
+    classified. `skill_return_autofetch`, `decision_rendezvous_autofetch`,
+    `alert_count` named as the completer-shaped PRECEDENTS (inject-in-code,
+    never bounce); `scheduler_write_fence` named as the permanent rejector
+    (actuation boundary — completing a scheduler mutation would submit without
+    a greenlight); `utterance_capture` / `answer_capture` named as the
+    authorship trust anchor a completer must never launder into.
+  * **Finding 21 (rendezvous livelock) docketed as the second completer
+    candidate.** Split into (a) the false bounce — a CONSUMED greenlight
+    re-arming the guard — FIXED independently via the boundary-scoped
+    `block_drive::greenlight_targets_boundary` predicate (a rejector-precision
+    fix, already landed; the guard + planner now treat a stale/prior-boundary
+    `y` as spent), and (b) the true bounce — a mechanical advance code could
+    run — left **RULING-NEEDED** behind an SSH-readiness gate, because
+    completing blindly would amplify the finding-20 fork-exhaustion storm.
+    §3's "driver continuation keeps the bounce" sharpened: only a MODEL-ONLY
+    resume is judgment; a mechanical tick is omission.
+  * **The false-positive tax section added (findings 19 + tonight).** The
+    rule-10 rejector forced the model to reword TRUE statements — `27`
+    (`len(job_ids)`) read as unsupported, `5-minute-enumeration` read as a
+    run-id mention, `timeout`/`failure` read as state contradictions against an
+    `in_flight` run. Load-bearing consequence: a false positive is cheap under
+    a rejector (the model pushes back) and UNRECOVERABLE under a completer (a
+    code-authored correction under a true claim is misinformation with the
+    completer's trust stamp). Ruling: a violation finding earns the append path
+    only once its detector clears its precision debt (derivable counts, id-shape
+    guard, state-word compatibility); until then it stays a bounce even with the
+    capability active.
+  * **Loop-safety invariants + Failure-modes/laundering + Implementation
+    sequencing** promoted to standalone sections (were implicit in D2/§2). The
+    laundering invariant now cross-references the authorship gate
+    (`ops/decision/journal.py::_assert_human_authorship` /
+    `_assert_signoff_authorship`) and the two capture hooks explicitly: a
+    completer NEVER touches the authorship surface.
