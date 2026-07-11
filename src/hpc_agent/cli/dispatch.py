@@ -215,7 +215,65 @@ def _invoke_parsed(args: argparse.Namespace) -> int:
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 
+def _record_detached_failure_terminal(exit_code: int) -> None:
+    """A detached worker that exits non-zero leaves a terminal record.
+
+    Run-#12 finding 17 leg 3: six workers died on a local refusal with NO
+    recorded terminal — the driver saw silence, the doctor could only alert,
+    and diagnosis took an hour. The spawn env self-identifies the worker
+    (``HPC_DETACHED_RUN_ID``/``_BLOCK``, set by ``_spawn_detached``; the
+    worker's cwd is the experiment dir by the same contract). Best-effort:
+    fires only in a marked worker, never overwrites a terminal the block
+    already recorded (that one carries the real result), never raises.
+    """
+    import os
+
+    run_id = os.environ.get("HPC_DETACHED_RUN_ID")
+    block = os.environ.get("HPC_DETACHED_BLOCK")
+    if not run_id or not block:
+        return
+    try:
+        from pathlib import Path
+
+        from hpc_agent.state.block_terminal import read_terminal, record_terminal
+
+        experiment_dir = Path.cwd()
+        if read_terminal(experiment_dir, run_id, block) is not None:
+            return
+        record_terminal(
+            experiment_dir,
+            run_id=run_id,
+            block=block,
+            cmd_sha="",
+            result_dump={
+                "ok": False,
+                "detached_failure": True,
+                "error_code": "detached_worker_exit",
+                "exit_code": exit_code,
+                "message": (
+                    f"detached {block} worker for run {run_id} exited "
+                    f"{exit_code} before recording a terminal — the worker "
+                    "log carries the disclosed failure; re-invoke the block "
+                    "(recorded-terminal replay keeps it idempotent)"
+                ),
+            },
+        )
+    except Exception:  # noqa: BLE001 — the exit path must never gain a new crash
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        rc = _dispatch_main(argv)
+    except Exception:
+        _record_detached_failure_terminal(3)
+        raise
+    if rc != 0:
+        _record_detached_failure_terminal(rc)
+    return rc
+
+
+def _dispatch_main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page (cp1252) whose codec
     # cannot encode the ``→`` and box-drawing characters in our --help
     # text and catalog tables, raising UnicodeEncodeError on print_help().

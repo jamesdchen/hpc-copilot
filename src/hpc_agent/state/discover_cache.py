@@ -211,7 +211,7 @@ def store(experiment_dir: str | Path, infos: list[RunInfo]) -> None:
         # ``preflight_cache`` carry on their shared global files. A
         # lock-acquire or write failure degrades to "not cached" (the caller
         # still returns the live result).
-        with advisory_flock(_lock_path(path)):
+        with advisory_flock(_lock_path(path), timeout_sec=120.0):
             cache: dict[str, Any] = {}
             if path.is_file():
                 with open(path, encoding="utf-8") as fh:

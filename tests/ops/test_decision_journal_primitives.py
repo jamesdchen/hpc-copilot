@@ -1248,7 +1248,7 @@ def test_signoff_unresolvable_source_refused(tmp_path: Path) -> None:
     """No interview.json audited_source and no resolved['source'] → the source
     cannot be recomputed → REFUSED loudly (never silently skipped)."""
     section_sha, view_sha = _nb_shas("model-fit")  # a sha the gate can never confirm
-    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited"):
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
         _signoff(
             tmp_path,
             section="model-fit",
@@ -1282,7 +1282,7 @@ def test_signoff_no_template_refused(tmp_path: Path) -> None:
     template."""
     (tmp_path / "s.py").write_text(_NB_SOURCE, encoding="utf-8")
     section_sha, view_sha = _nb_shas("load-data")
-    with pytest.raises(errors.SpecInvalid, match="could not resolve the audited .py TEMPLATE"):
+    with pytest.raises(errors.SpecInvalid, match="could not resolve"):
         _signoff(
             tmp_path,
             section="load-data",

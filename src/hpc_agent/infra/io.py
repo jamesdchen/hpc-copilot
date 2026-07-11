@@ -167,7 +167,7 @@ def append_jsonl_line(path: Path, record: dict[str, Any], *, sort_keys: bool = T
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, sort_keys=sort_keys, default=str) + "\n"
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with advisory_flock(lock_path), path.open("a", encoding="utf-8") as fh:
+    with advisory_flock(lock_path, timeout_sec=120.0), path.open("a", encoding="utf-8") as fh:
         fh.write(line)
         fh.flush()
         with contextlib.suppress(OSError):
@@ -233,7 +233,7 @@ def atomic_locked_update(
     # lock (filelock: fcntl.flock on POSIX, msvcrt byte-range on win32).
     # Blocking, so it always yields True; the read-modify-write happens
     # inside the hold.
-    with advisory_flock(lock_path):
+    with advisory_flock(lock_path, timeout_sec=120.0):
         existing = _read_json_doc(path)
         new_doc = mutate(existing)
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
@@ -275,6 +275,7 @@ def advisory_flock(
     lock_path: Path,
     *,
     blocking: bool = True,
+    timeout_sec: float | None = None,
 ) -> Iterator[bool]:
     """Per-process advisory exclusive lock around a code block.
 
@@ -341,9 +342,22 @@ def advisory_flock(
     lock = FileLock(str(lock_path))
     # timeout=-1 blocks forever; timeout=0 tries exactly once. Using the
     # numeric timeouts (not the newer ``blocking=`` kwarg) keeps us on the
-    # >=3.13 floor's API.
+    # >=3.13 floor's API. ``timeout_sec`` bounds the BLOCKING wait for
+    # short-critical-section callers (run-#12 finding 16: a worker sat 15
+    # minutes at 0 CPU behind a wedged holder's lock, invisible) — expiry is
+    # a LOUD, path-naming TimeoutError, never a silent forever-wait. ``None``
+    # keeps the historical infinite wait for legitimately-long holds (the
+    # cross-shell .submit_lock spans a whole staging).
     if blocking:
-        lock.acquire(timeout=-1)
+        try:
+            lock.acquire(timeout=-1 if timeout_sec is None else timeout_sec)
+        except Timeout as exc:
+            raise TimeoutError(
+                f"advisory lock {lock_path} not acquired within {timeout_sec}s — "
+                "the holder is likely wedged or leaked; inspect the sibling "
+                ".lease.json for a holder pid, and delete the stale lock only "
+                "after confirming that pid is dead"
+            ) from exc
     else:
         try:
             lock.acquire(timeout=0)

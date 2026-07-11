@@ -157,7 +157,7 @@ def record_preflight(key: str, *, checks: list[str] | None = None) -> None:
         # carries, same lock idiom every other state read-modify-write uses. A
         # lock-acquire or write failure degrades gracefully — the cache is an
         # optimisation, never a correctness gate.
-        with advisory_flock(_lock_path(path)):
+        with advisory_flock(_lock_path(path), timeout_sec=120.0):
             cache = _read_cache()
             cache[key] = {
                 "validated_at": utcnow_iso(),

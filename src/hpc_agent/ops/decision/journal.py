@@ -1279,21 +1279,26 @@ def _resolve_signoff_audit_config(
         if block is not None:
             src_rel = src_rel or block.get("source")
             tmpl_rel = tmpl_rel or block.get("template")
-    if not isinstance(src_rel, str) or not src_rel:
+    # ONE-SHOT refusal (run-#12 latency exhibit: agents discovered source and
+    # template one bounce at a time, three appends per sign-off): name EVERY
+    # unresolvable ingredient in a single refusal, with the complete resolved
+    # skeleton the retry needs.
+    unresolved = [
+        name
+        for name, value in (("source", src_rel), ("template", tmpl_rel))
+        if not isinstance(value, str) or not value
+    ]
+    if unresolved:
         raise errors.SpecInvalid(
-            "notebook sign-off gate: could not resolve the audited .py source for "
-            f"audit_id={audit_id!r} — no resolved['source'] and no matching "
-            "interview.json audited_source block. A sign-off must recompute the "
-            "section hash from the source on disk; an unresolvable source is refused."
+            f"notebook sign-off gate: could not resolve {' + '.join(unresolved)} for "
+            f"audit_id={audit_id!r} — not in resolved{{...}} and no matching "
+            "interview.json audited_source block. The gate recomputes the section "
+            "hash from the source and rebuilds the canonical view against the "
+            "template, so both are required. Retry with the COMPLETE resolved "
+            "skeleton: {audit_id, section, section_sha, view_sha, "
+            "source: <audited .py relpath>, template: <template .py relpath>}."
         )
-    if not isinstance(tmpl_rel, str) or not tmpl_rel:
-        raise errors.SpecInvalid(
-            "notebook sign-off gate: could not resolve the audited .py TEMPLATE for "
-            f"audit_id={audit_id!r} — no resolved['template'] and no matching "
-            "interview.json audited_source block. The full-view recompute rebuilds "
-            "the canonical view_sha (a diff-from-template projection), so the "
-            "template is a required ingredient; an unresolvable template is refused."
-        )
+    assert isinstance(src_rel, str) and isinstance(tmpl_rel, str)  # narrowed above
     cfg = _notebook_view.read_recorded_config(experiment_dir, audit_id)
     return src_rel, tmpl_rel, cfg
 

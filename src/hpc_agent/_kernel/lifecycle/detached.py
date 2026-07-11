@@ -350,7 +350,7 @@ def _spawn_detached(
 
     detached_dir = log_path.parent
     lock_path = detached_dir / f"{block}-{run_id}.lease.lock"
-    with io.advisory_flock(lock_path):
+    with io.advisory_flock(lock_path, timeout_sec=60.0):
         lease_path = _guard_single_lease(detached_dir, block, run_id)
 
         log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
@@ -361,7 +361,16 @@ def _spawn_detached(
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 cwd=cwd,
-                env={**os.environ},
+                # The worker self-identifies (run-#12 finding 17 leg 3): on ANY
+                # non-zero exit — refusals included — the CLI records a failure
+                # terminal for (run_id, block), so a dead worker is never
+                # silent (six refusal-deaths with no terminal manufactured the
+                # run-#12 dead-worker hunt).
+                env={
+                    **os.environ,
+                    "HPC_DETACHED_RUN_ID": run_id,
+                    "HPC_DETACHED_BLOCK": block,
+                },
             )
         finally:
             # The child inherits its own dup'd fd; this process closes its copy
