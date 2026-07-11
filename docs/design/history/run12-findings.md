@@ -268,6 +268,32 @@ cost needs surfacing in the S1 brief (a size line), and staging needs
 progress lines under the >10s discipline (finding 3's third bite today,
 now with 8.7GB behind it).
 
+## 17. The native-Windows staging path was broken three ways — the 8.7GB
+## stage became an hour of live workaround archaeology
+Live (S2, run causal_tune_linear-de448128). Legs, in discovery order:
+(1) **tar|ssh fallback — the DESIGNED no-rsync Windows path — dies with
+WinError 206**: the content-hash delta passed every relpath as a tar
+ARGUMENT; a 20k-file repo overflows Windows' ~32k argv limit. FIXED: the
+member list streams through a `-T` names temp file (GNU tar + bsdtar;
+./-prefixed against bsdtar's @archive syntax), unlinked after the retry
+loop. (2) **rsync src drive-colon**: once the demo agent installed MSYS
+rsync, "C:/Users/…" parsed as remote host "C" ("source and destination
+cannot both be remote") — bit AFTER auth and ~656s of transfer worked.
+FIXED: win32 src converts to /c/… form. (3) **workers exited on the
+pre_stage_smoke refusal WITHOUT journaling a block terminal** — six
+dead-worker alerts, an hour of forensics, and the doctor could only
+suggest re-invokes. QUEUED: the detach wrapper records a terminal on ANY
+exit, refusals included. Legs 1+2 shipped; uv tool + demo venv refreshed
+so the demo's next submit-s2 rides them.
+CONDUCT NOTES (for the ledger): the demo agent's recovery was resourceful
+but improvised SYSTEM mutations mid-run (copied MSYS DLLs into
+~/.local/bin — later cleaned; pacman-installed openssh into C:\msys64) —
+the determinism-boundary doctrine wants those as surfaced proposals, not
+unilateral acts. The auto-mode classifier correctly blocked its raw-ssh
+probe (deny-rule intent honored via full-path detection). The circuit
+breaker opened after 3 failures and the agent WAITED the cooldown rather
+than overriding — correct. net-triage earned its seat twice.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
