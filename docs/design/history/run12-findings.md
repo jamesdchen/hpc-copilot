@@ -155,6 +155,20 @@ honesty budget is untouched, and the honest-refusal oversize path carries
 the bounded body too (review material with disclosed truncation is
 additive, never a silent drop).
 
+ADDENDUM (same session): the Read-pane fallback is NOT a review surface
+either — the user reports the expanded Read result does not usably show the
+diffs (long renders truncate/collapse). The skill's step-4 claim ("the
+result pane displays the true disk bytes") holds for FIDELITY but not for
+REVIEWABILITY; a 323-line render with a 285-line fenced diff is unreadable
+there. Interim relay for run #12: the dev session sends the render FILES
+(SendUserFile, rendered in the side panel) for review before the popup
+sign-off. Consequences: (a) the popup diff-embed budget (6 KB) still
+truncates a diff this size — the O3+ rendering-probe item should establish
+what the client actually renders and the budget should follow the evidence;
+(b) unified-render O3+ chunked popups remain the endgame; (c) the skill's
+harness-capability ladder gains a rung: render-file SEND (side-panel
+render) sits ABOVE the Read-pane relay when the harness supports it.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
