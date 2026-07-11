@@ -244,6 +244,30 @@ per-task exported HPC_RESULT_DIR while result_dir_template already encodes
 est/bucket/chunk — a doubled layout worth checking in the canary's actual
 result tree before 2700 tasks bake it in.
 
+## 16. S2 detached worker froze at birth (0.015s CPU / 14min) — stale
+## detach lease suspected; CLI-vs-MCP env skew (uv tool had no asyncssh);
+## staging has ZERO liveness (finding 3 at scale)
+Live: the respawned S2 worker (pid 27124, uv-tool python via the CLI
+fallback) sat 14+ min with 0.015s CPU, 4MB RSS, zero network (451 B/s
+box-wide), zero log growth after the payload-enumeration WARNs (which
+belonged to the PRIOR attempt) — kernel-blocked at startup, before any
+transport work. Prime suspects: (a) the run's detach `lease.lock` left by
+the previous killed worker — a blocking, timeout-less acquire freezes every
+successor (fix: lease acquire gets a deadline + names the holder pid; a
+dead-pid lease self-reaps at acquire, not only in doctor's scan); (b) the
+finding-4 inherited-handle class at the detach spawn. COMPOUNDING: the uv
+tool env (freshly repaired with the bare wheel) had NO asyncssh while the
+MCP path's demo venv did — the two sanctioned drive paths ran different
+ssh engines (fix: the transport must REFUSE LOUDLY at startup when the
+configured engine's module is missing, never wait; and the repair playbook
+installs the ssh extra). ALSO: net-triage exonerated the network in one
+call (both clusters reachable, breakers closed) — the verb earned its
+seat. ALSO: deploy payload enumerated at 8,688 MB / 20,426 files (data/
+parquets ride the repo push) with bare-exclude WARNs — first-time staging
+cost needs surfacing in the S1 brief (a size line), and staging needs
+progress lines under the >10s discipline (finding 3's third bite today,
+now with 8.7GB behind it).
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
