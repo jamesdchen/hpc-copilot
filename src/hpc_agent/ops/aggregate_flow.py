@@ -287,6 +287,38 @@ def _combine_missing(
     return combined_now, failures
 
 
+def _run_scoped_results_subdir(
+    experiment_dir: Path, run_id: str, record: Any, results_subdir: str
+) -> str:
+    """The run's OWN results subtree — the static prefix of its result_dir_template.
+
+    Finding 19 (run #12): pulling the whole ``results/`` root drags every
+    prior run's outputs through the transfer — the scp fallback cannot
+    include-filter — turning a small metrics pull into an 1800s timeout. The
+    template's static prefix (``results/causal_tune_linear/{estimator}/…`` →
+    ``results/causal_tune_linear``) scopes the pull to this run. Falls back
+    to *results_subdir* when the template is absent, carries no directory,
+    or would escape the configured root. Canary siblings render under the
+    same prefix, so the downstream canary exclusion is unchanged.
+    """
+    template = getattr(record, "result_dir_template", None)
+    if not (isinstance(template, str) and template):
+        try:
+            from hpc_agent.state.runs import read_run_sidecar
+
+            template = read_run_sidecar(experiment_dir, run_id).get("result_dir_template")
+        except Exception:  # noqa: BLE001 — scoping is an optimization, never a gate
+            template = None
+    if not (isinstance(template, str) and template):
+        return results_subdir
+    head = template.split("{", 1)[0]
+    scoped = head.rsplit("/", 1)[0] if "{" in template else head.rstrip("/")
+    root = results_subdir.rstrip("/")
+    if scoped and (scoped == root or scoped.startswith(root + "/")):
+        return scoped
+    return results_subdir
+
+
 def _per_task_metrics_reduce(
     experiment_dir: Path,
     run_id: str,
@@ -328,10 +360,11 @@ def _per_task_metrics_reduce(
     failure mode being closed.
     """
     results_local = out / "_per_task_results"
+    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     pull = rsync_pull(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        remote_subdir=results_subdir,
+        remote_subdir=scoped_subdir,
         local_dir=str(results_local),
         include=[summary_name],
     )
@@ -462,11 +495,12 @@ def _ingest_task_traces(
     counts = {"pulled": 0, "ingested": 0, "skipped_existing": 0, "skipped_invalid": 0}
 
     traces_local = out / "_per_task_traces"
+    scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     try:
         pull = rsync_pull(
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
-            remote_subdir=results_subdir,
+            remote_subdir=scoped_subdir,
             local_dir=str(traces_local),
             include=[TRACE_TRANSPORT_FILENAME],
         )

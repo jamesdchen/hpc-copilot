@@ -377,6 +377,83 @@ def test_write_marker_routes_through_canonical_append_seam() -> None:
     assert "open(" not in src  # no bare append path bypassing the seam
 
 
+def test_abnormal_exit_skips_harvest_when_run_not_terminal(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run-#12 finding 19: the abnormal-exit sentinel means the WATCH died,
+    not the run — with the journal recording a NON-terminal status, the guard
+    records a clean skip and never touches the aggregate (no ssh, no pull of
+    a live run's results)."""
+    from hpc_agent._kernel.contract.vocabulary import JournalStatus
+    from hpc_agent.state import journal as journal_module
+
+    monkeypatch.setattr(
+        journal_module,
+        "load_run",
+        lambda exp, rid: SimpleNamespace(status=JournalStatus.IN_FLIGHT),
+    )
+    calls: list[str] = []
+
+    def _agg(experiment_dir: Path, run_id: str) -> Any:
+        calls.append(run_id)
+        return SimpleNamespace(aggregated_metrics={}, escalation_reason=None)
+
+    marker = harvest_on_terminal(
+        experiment, _RUN_ID, terminal_cause="abnormal-exit", _aggregate=_agg
+    )
+    assert marker["harvest_skipped_reason"] == "run_not_terminal"
+    assert marker["metrics_harvested"] is False
+    assert calls == []  # positive-evidence gate: nothing pulled
+    on_disk = _read_markers(experiment, _RUN_ID)
+    assert on_disk[-1]["harvest_skipped_reason"] == "run_not_terminal"
+
+
+def test_abnormal_exit_harvests_when_journal_records_terminal(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With POSITIVE terminal evidence in the journal, the sentinel harvests."""
+    from hpc_agent._kernel.contract.vocabulary import JournalStatus
+    from hpc_agent.state import journal as journal_module
+
+    monkeypatch.setattr(
+        journal_module,
+        "load_run",
+        lambda exp, rid: SimpleNamespace(status=JournalStatus.COMPLETE),
+    )
+    marker = harvest_on_terminal(
+        experiment,
+        _RUN_ID,
+        terminal_cause="abnormal-exit",
+        _aggregate=_ok_aggregate({"r": {"acc": 1.0}}),
+        _sweep=lambda d: {},
+    )
+    assert marker["metrics_harvested"] is True
+    assert marker["harvest_skipped_reason"] is None
+
+
+def test_named_terminal_cause_never_gated_on_status(
+    journal_home: Path, experiment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NAMED cause (the clean terminal branches) harvests regardless of the
+    record's status — the gate binds ONLY the abnormal-exit sentinel."""
+    from hpc_agent._kernel.contract.vocabulary import JournalStatus
+    from hpc_agent.state import journal as journal_module
+
+    monkeypatch.setattr(
+        journal_module,
+        "load_run",
+        lambda exp, rid: SimpleNamespace(status=JournalStatus.IN_FLIGHT),
+    )
+    marker = harvest_on_terminal(
+        experiment,
+        _RUN_ID,
+        terminal_cause="complete",
+        _aggregate=_ok_aggregate({"r": {"acc": 1.0}}),
+        _sweep=lambda d: {},
+    )
+    assert marker["metrics_harvested"] is True
+
+
 def test_terminal_causes_vocabulary_covers_design_terms() -> None:
     """The named §5 terminal causes are all present in the vocabulary."""
     assert {
