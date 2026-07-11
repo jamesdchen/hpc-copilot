@@ -304,7 +304,7 @@ def test_record_status_sets_checked_at(journal_home, experiment):
     payload = {"summary": {"complete": 7, "running": 3, "pending": 0, "failed": 1, "unknown": 0}}
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout=json.dumps(payload)),
+        return_value=_completed(stdout=json.dumps(payload) + _STATUS_ACK),
     ):
         record = record_status(
             experiment,
@@ -326,7 +326,7 @@ def test_record_status_threads_min_rows_to_cluster_cmd(journal_home, experiment)
 
     def fake_ssh(cmd, *, ssh_target, **_kw):
         seen_cmds.append(cmd)
-        return _completed(stdout=json.dumps(payload))
+        return _completed(stdout=json.dumps(payload) + _STATUS_ACK)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
         record_status(
@@ -350,7 +350,7 @@ def test_record_status_min_rows_defaults_to_zero(journal_home, experiment):
 
     def fake_ssh(cmd, *, ssh_target, **_kw):
         seen_cmds.append(cmd)
-        return _completed(stdout=json.dumps(payload))
+        return _completed(stdout=json.dumps(payload) + _STATUS_ACK)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
         record_status(
@@ -372,7 +372,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive_squeue)
@@ -391,7 +391,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=_WAVE_ACK)  # acked, no wave files
         # Acked-but-empty squeue: the alive query RAN and found no live jobs
@@ -413,7 +413,7 @@ def test_reconcile_idempotent(journal_home, experiment):
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive)
@@ -464,6 +464,11 @@ _SLURM_ACK_GONE = "__HPC_SCHED_ACK__=1\n"  # squeue exits non-zero once ids leav
 # after a successful ``cd`` so its presence proves the listing ran (an empty
 # result then means "no waves", not a silent cd failure).
 _WAVE_ACK = "__HPC_WAVE_ACK__\n"
+# The status reporter's positive-evidence ack (cluster_status._STATUS_ACK_PREFIX,
+# run-12 finding 24): a complete reporter read echoes it LAST, carrying the
+# reporter's rc; an ack-LESS rc-0 read is a severed / truncated channel (UNKNOWN),
+# which raises RemoteCommandFailed rather than being parsed as an empty report.
+_STATUS_ACK = "\n__HPC_STATUS_ACK__=0"
 
 
 def test_sge_alive_check_empty_queue_with_ack_returns_empty():
@@ -595,7 +600,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             raise OSError("ssh: connection reset by peer")
         return _completed(stdout=alive_squeue)
@@ -619,7 +624,7 @@ def test_reconcile_keeps_waves_on_silent_ackless_wave_listing(journal_home, expe
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout="")  # rc 0, no ack: silence
         return _completed(stdout="12345678\n" + _SGE_ACK)
@@ -642,7 +647,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
 
     def fake_ssh(cmd, *, ssh_target):
         if "python -m hpc_agent.execution.mapreduce.reduce.status" in cmd:
-            return _completed(stdout=status_payload)
+            return _completed(stdout=status_payload + _STATUS_ACK)
         if "_combiner/wave_*.json" in cmd:
             return _completed(stdout=_WAVE_ACK)  # acked, no wave files
         raise OSError("alive check ssh failed")
@@ -667,7 +672,7 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout=json.dumps(payload)),
+        return_value=_completed(stdout=json.dumps(payload) + _STATUS_ACK),
     ):
         record_status(
             experiment,
@@ -719,7 +724,7 @@ def test_record_status_cache_write_skips_fsync(journal_home, experiment):
     with (
         patch(
             "hpc_agent.infra.remote.ssh_run",
-            return_value=_completed(stdout=json.dumps(payload)),
+            return_value=_completed(stdout=json.dumps(payload) + _STATUS_ACK),
         ),
         patch("os.fsync", side_effect=tracking_fsync),
     ):

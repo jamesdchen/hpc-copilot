@@ -266,12 +266,21 @@ Kills the silence-as-success class. Spec + build = post-run-#12 batch item 5.
 The live transport/remote-op paths were inventoried and classified. Success on
 a query already required an affirmative token in most seams; the two genuine
 `… || true` violators — where silence read as a *terminal* verdict — were
-converted, and the sentinel-clean seams recorded (untouched).
+converted, and the sentinel-clean seams recorded (untouched). A third seam (the
+status reporter read) was reclassified from sentinel-clean to VIOLATOR on
+2026-07-11 after run-12 finding 24 caught it live — see its table row below.
 
 | Seam (symbol) | Prior semantics | New semantics |
 |---|---|---|
 | **Scheduler liveness / state query** — `ProfileBackend.build_alive_check_cmd` / `build_scheduler_state_cmd`; consumers `reconcile._ssh_alive_job_ids`, `cluster_status.ssh_batch_scheduler_states`, `verify_submitted` | `<qstat/squeue> 2>/dev/null \|\| true` → a FAILED scheduler binary (missing / server down) returned rc 0 + empty, indistinguishable from an empty queue; consumers read absence as "all jobs left the queue → terminal" (reconcile→abandoned, batch-status/verify-submitted→gone). **VIOLATOR.** | Command ends `; echo "__HPC_SCHED_ACK__=$?"`; `scheduler_query_ran(stdout)→(clean, ran_ok)`. Ack ABSENT = UNKNOWN (all families); SGE/PBS also require rc 0 (they exit 0 on empty); SLURM accepts any rc (squeue exits non-zero once ids leave — leans on ack presence, defers completed-vs-failed to the reporter). UNKNOWN → each consumer's EXISTING conservative branch (`RemoteCommandFailed`→`alive_check_failed`→`unable_to_verify`; `SshUnreachable`). |
 | **Combined-wave listing** — `reconcile._ssh_list_combined_waves` | `cd <path> && ls _combiner/wave_*.json 2>/dev/null \|\| true` → a silently-failed `cd` short-circuited the `&&`, hit `\|\| true`, returned rc 0 + empty = "zero waves", which OVERWRITES the journal's `combined_waves` with `[]`. **VIOLATOR.** | Echoes `__HPC_WAVE_ACK__` after a successful `cd`; absence (failed cd / truncated read) raises `RemoteCommandFailed` → reconcile's existing wave-fallback PRESERVES the journal `combined_waves`. |
+| **Status reporter read** — `cluster_status.ssh_status_report`; consumers `record_status`/`reconcile`/`verify_canary`/`failures_atom`/`logs_atom`/`aggregate_flow` | Originally recorded sentinel-clean on the theory that "an empty rc-0 read fails `parse_remote_json` and raises." Run-12 **finding 24 DISPROVED that**: three channel-severing mechanisms (NAT idle-drop ~100s, the asyncssh idle reaper, an expired remote deadline) delivered rc 0 with truncated/empty stdout that *masqueraded as "the reporter emitted nothing"* — a misdiagnosis, and a truncation to coincidentally-valid JSON would parse-and-trust. **VIOLATOR (reclassified, batch item 5 build 2026-07-11).** | The command captures the reporter's rc, runs the optional watcher probe, then echoes `__HPC_STATUS_ACK__=$rc` LAST and `exit $rc` (rc preserved as the ssh returncode). Client: `split_ack` strips the ack; `rc≠0` surfaces the real rc as before (incl. import-guard 127 / remote-deadline 124); a **rc-0 read with NO ack** raises `RemoteCommandFailed` ("channel severed / output truncated") — UNKNOWN, routed to each consumer's existing `unable_to_verify`/`reporter_unreachable` branch, never a settled "empty report". Rides INSIDE `ssh_run`'s `timeout … bash -c` wrapper so an expired deadline kills the shell before the echo (no false ack). |
+
+The ack-wrap + ack-split mechanism was extracted to ONE definition —
+`ssh_validation.wrap_with_ack` / `split_ack` (the scheduler `_with_ack` /
+`scheduler_query_ran` and the status reporter both compose it; the status site
+adds its own rc-preserving `exit $rc` because, unlike the scheduler read, its
+process rc IS the reporter's verdict, not the ssh-transport rc).
 
 Seams left sentinel-clean (recorded, NOT touched — absence/silence already
 routes conservative, never to success):
@@ -280,9 +289,6 @@ routes conservative, never to success):
   docstring pins it: `count == 0` proves ABSENCE of a failure marker, NEVER
   success; the caller keeps the never-pass-unverified posture (absent →
   `reporter_unreachable`). A silent empty read routes conservative already.
-- **`cluster_status.ssh_status_report`** — rc≠0 raises `RemoteCommandFailed`;
-  rc 0 requires a valid JSON envelope (`parse_remote_json`), the affirmative
-  token. An empty rc-0 read fails the parse and raises. Positive-evidence.
 - **`_remote_base.preflight_executor_exists`** — `test -f` is a positive check
   (rc 0 ⇔ file exists); any non-zero / silent read → `RemoteCommandFailed`
   (fails the submit closed). Conservative.
