@@ -334,6 +334,23 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     """
     experiment_dir = Path(experiment_dir)
 
+    # Template omitted → compose from the bound pack's audit_template seam
+    # (run-#12 finding 5: the compose seat existed only at interview, so the
+    # audit path spent five greps re-deriving the pack's template). The
+    # composed default is DISCLOSED; nothing composable is a loud refusal.
+    template_rel = spec.template
+    if not template_rel:
+        from hpc_agent.state.pack_declarations import compose_audit_template_from_repo
+
+        composed = compose_audit_template_from_repo(experiment_dir)
+        if composed is None:
+            raise errors.SpecInvalid(
+                "audit-preflight: no template given and no bound pack declares an "
+                "audit_template seam — pass template explicitly, or opt in a pack "
+                "whose manifest declares seams.audit_template."
+            )
+        template_rel = composed["value"]
+
     cfg = read_recorded_config(experiment_dir, spec.audit_id)
     source_roots = (
         list(spec.source_roots) if spec.source_roots is not None else list(cfg.source_roots)
@@ -341,7 +358,7 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     input_roots = list(spec.input_roots) if spec.input_roots is not None else list(cfg.input_roots)
 
     blockers: list[PreflightBlocker] = []
-    template_state, template_blocker = _check_template(experiment_dir, spec.template)
+    template_state, template_blocker = _check_template(experiment_dir, template_rel)
     if template_blocker is not None:
         blockers.append(template_blocker)
     skew_blocker = _check_version_skew(experiment_dir)
@@ -362,7 +379,7 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     brief = _render_brief(
         verdict=verdict,
         audit_id=spec.audit_id,
-        template=spec.template,
+        template=template_rel,
         template_state=template_state,
         resuming=resuming,
         journal_records=journal_records,
@@ -375,7 +392,7 @@ def audit_preflight(*, experiment_dir: Path, spec: AuditPreflightSpec) -> AuditP
     return AuditPreflightResult(
         verdict=verdict,
         audit_id=spec.audit_id,
-        template=spec.template,
+        template=template_rel,
         template_state=template_state,
         resuming=resuming,
         journal_records=journal_records,

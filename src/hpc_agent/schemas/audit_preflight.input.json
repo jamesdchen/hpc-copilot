@@ -4,15 +4,20 @@
   "title": "audit-preflight input spec",
   "description": "Input spec for the ``audit-preflight`` verb.",
   "type": "object",
-  "required": [
-    "template"
-  ],
   "additionalProperties": false,
   "properties": {
     "template": {
-      "description": "Path (experiment-relative, or absolute) to the audit TEMPLATE .py — the percent-format module whose section slugs are the required inventory. Checked for: present, parses via parse_percent_source, and git-committed-clean at that path (an uncommitted/dirty template is an 'unsigned template' NO-GO — the commit IS the signature).",
-      "title": "Template",
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path (experiment-relative, or absolute) to the audit TEMPLATE .py — the percent-format module whose section slugs are the required inventory. Checked for: present, parses via parse_percent_source, and git-committed-clean at that path (an uncommitted/dirty template is an 'unsigned template' NO-GO — the commit IS the signature). OMITTED => composed from the bound pack's audit_template seam (the interview's own selection, one definition — run-#12 finding 5); the composed path is echoed on the result, and nothing composable is a loud refusal, never a guess.",
+      "title": "Template"
     },
     "source_roots": {
       "anyOf": [

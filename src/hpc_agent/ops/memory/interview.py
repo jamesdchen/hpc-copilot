@@ -32,7 +32,6 @@ overwrites interview.json with byte-equivalent content modulo the
 from __future__ import annotations
 
 import itertools
-import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -140,57 +139,12 @@ def _compose_audit_template_default(
     if not isinstance(packs, list) or not packs:
         return None
 
-    from hpc_agent.state.pack import load_manifest
+    # The ONE selection definition (run-#12 finding 5 extracted it so
+    # audit-preflight composes from the SAME seam over the persisted block):
+    # referenced-pack-first, opt-in order, best-effort manifest reads.
+    from hpc_agent.state.pack_declarations import compose_audit_template
 
-    # Packs the audits reference (a receipt_bindings slot's target) — the program
-    # pack (rv), preferred over the domain skeleton (quant).
-    referenced: set[str] = set()
-    for entry in packs:
-        if not isinstance(entry, dict):
-            continue
-        for binding in entry.get("receipt_bindings") or []:
-            if not isinstance(binding, dict):
-                continue
-            target = binding.get("pack")
-            enclosing = entry.get("pack")
-            name = target if isinstance(target, str) and target else enclosing
-            if isinstance(name, str) and name:
-                referenced.add(name)
-
-    candidates: list[dict[str, str]] = []  # in opt-in order
-    for entry in packs:
-        if not isinstance(entry, dict):
-            continue
-        pack_name = entry.get("pack")
-        manifest_rel = entry.get("manifest")
-        if not (isinstance(pack_name, str) and pack_name):
-            continue
-        if not (isinstance(manifest_rel, str) and manifest_rel):
-            continue
-        manifest_path = campaign_dir / manifest_rel
-        try:
-            manifest = load_manifest(manifest_path)
-        except errors.SpecInvalid:
-            continue  # best-effort — the gate surfaces a broken setup loudly
-        seam_rel = manifest.seams.get("audit_template")
-        if not (isinstance(seam_rel, str) and seam_rel):
-            continue
-        template_path = manifest_path.parent / seam_rel
-        try:
-            rel = os.path.relpath(template_path, campaign_dir).replace(os.sep, "/")
-        except ValueError:
-            continue  # cross-drive (Windows) — no relative path
-        candidates.append({"pack": pack_name, "value": rel})
-
-    if not candidates:
-        return None
-    chosen = next((c for c in candidates if c["pack"] in referenced), candidates[0])
-    return {
-        "field": "audit_template",
-        "value": chosen["value"],
-        "pack": chosen["pack"],
-        "source": "pack_audit_template_seam",
-    }
+    return compose_audit_template(packs, campaign_dir)
 
 
 @primitive(
