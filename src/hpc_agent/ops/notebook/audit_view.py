@@ -710,9 +710,7 @@ def render_summary_markdown(view: AuditView) -> str:
     lines.append("")
     lines.extend(_render_next_actions(view))
     lines.extend(_render_dropped_drafts(view))
-    return "
-".join(lines).rstrip() + "
-"
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_dropped_drafts(view: AuditView) -> list[str]:
