@@ -502,6 +502,25 @@ x = helper.helper()
     assert link.module_sha == sha256_normalized(helper_text)
 
 
+def test_linked_sources_resolves_root_prefixed_module(tmp_path: Path) -> None:
+    # Run-#12 finding 6a: repo-root-relative import style — `src.data.loading`
+    # under source_root `src` must resolve to src/data/loading.py, not the
+    # double-prefixed src/src/data/loading.py.
+    pkg = tmp_path / "src" / "data"
+    pkg.mkdir(parents=True)
+    engine = pkg / "loading.py"
+    engine.write_text("SUBGROUPS = []\n", encoding="utf-8")
+    source = """\
+# %%
+# hpc-audit-section: load-data
+from src.data.loading import SUBGROUPS
+"""
+    result = _run(tmp_path, source, _TEMPLATE, source_roots=["src"])
+    files = [ls.file.replace("\\", "/") for ls in result.linked_sources]
+    assert files == ["src/data/loading.py"]
+    assert result.linked_sources[0].module_sha == sha256_normalized("SUBGROUPS = []\n")
+
+
 def test_linked_sources_ignores_non_resolvable_import(tmp_path: Path) -> None:
     source = """\
 # %%

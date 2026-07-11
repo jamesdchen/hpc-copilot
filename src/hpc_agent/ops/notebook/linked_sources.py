@@ -35,10 +35,26 @@ def resolve_module_file(module: str, root_dirs: list[Path]) -> Path | None:
     ``foo.bar`` → ``foo/bar.py`` or ``foo/bar/__init__.py`` under each root; the
     first hit (roots in declared order) wins. ``None`` when nothing resolves —
     an unresolvable import is stdlib / site-packages, never a link.
+
+    When the module's FIRST component names the root itself (``src.data.loading``
+    under root ``src`` — the repo-root-relative import style), the root-prefixed
+    probe would double the prefix (``src/src/data/loading.py``); the leading
+    component is also tried stripped. Every candidate stays under a declared
+    root, so the lint boundary (links resolve UNDER a source_root) is unchanged.
     """
-    rel = Path(*module.split("."))
+    parts = module.split(".")
+    rel = Path(*parts)
     for root in root_dirs:
-        for candidate in (root / rel.with_suffix(".py"), root / rel / "__init__.py"):
+        candidates = [root / rel.with_suffix(".py"), root / rel / "__init__.py"]
+        if parts[0] == root.name:
+            if len(parts) == 1:
+                candidates.append(root / "__init__.py")
+            else:
+                stripped = Path(*parts[1:])
+                candidates.extend(
+                    (root / stripped.with_suffix(".py"), root / stripped / "__init__.py")
+                )
+        for candidate in candidates:
             if candidate.is_file():
                 return candidate
     return None
