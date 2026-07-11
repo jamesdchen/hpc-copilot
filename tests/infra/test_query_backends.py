@@ -169,6 +169,70 @@ class TestSacctNonArrayJob:
         assert out["tasks"][0]["job_id"] == "222"
 
 
+class TestSacctPendingAggregate:
+    """sacct collapses not-yet-started array elements into a single
+    ``<jobid>_[<spec>]`` PENDING row (#7). These must expand to per-index
+    pending tasks, never a dropped ``malformed_row``.
+    """
+
+    def test_pending_aggregate_expands_to_all_indices(self, monkeypatch):
+        # 1-based ArrayIndex [1-10] -> 0-based HpcTaskId 0..9, all PENDING.
+        stdout = "999_[1-10]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert set(out["tasks"]) == set(range(10))  # 0-based keys 0..9
+        t0 = out["tasks"][0]
+        assert t0["state"] == "PENDING"
+        assert t0["job_id"] == "999"
+        assert t0["elapsed_s"] == 0
+        assert t0["cpu_s"] == 0
+        assert t0["gpu_s"] == 0
+
+    def test_throttled_pending_aggregate_strips_percent_limit(self, monkeypatch):
+        # The ``%2`` concurrency throttle must be stripped, not parsed as an id.
+        stdout = "999_[1-10%2]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert set(out["tasks"]) == set(range(10))
+
+    def test_comma_and_step_bracket_spec_expands(self, monkeypatch):
+        # Mixed comma list + stepped range inside the bracket.
+        stdout = "999_[1,5,7-9:2]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        # 1,5,7,9 (1-based) -> 0,4,6,8 (0-based)
+        assert set(out["tasks"]) == {0, 4, 6, 8}
+
+    def test_mixed_running_and_pending_aggregate(self, monkeypatch):
+        # Some tasks started (999_1 RUNNING) while the remainder is aggregated
+        # pending (999_[2-4]) — disjoint sets, no malformed_row, correct keys.
+        stdout = "999_1|RUNNING|0:0|10|4|\n999_[2-4]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["errors"] == []
+        assert out["tasks"][0]["state"] == "RUNNING"  # ArrayIndex 1 -> tid 0
+        assert out["tasks"][1]["state"] == "PENDING"  # ArrayIndex 2 -> tid 1
+        assert out["tasks"][3]["state"] == "PENDING"  # ArrayIndex 4 -> tid 3
+        assert set(out["tasks"]) == {0, 1, 2, 3}
+
+    def test_genuinely_malformed_bracket_still_reports_error(self, monkeypatch):
+        # A bracket with a non-numeric token is neither an int nor a valid
+        # spec — it must still fall through to malformed_row.
+        stdout = "999_[abc]|PENDING|0:0|0|4|\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["tasks"] == {}
+        assert [e["code"] for e in out["errors"]] == ["malformed_row"]
+
+
 # ---------------------------------------------------------------------------
 # query_sge
 # ---------------------------------------------------------------------------

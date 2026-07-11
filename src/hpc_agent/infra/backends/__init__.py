@@ -572,6 +572,44 @@ class HPCBackend(abc.ABC):
             raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
         return match.group(1)
 
+    def submit_non_contiguous(
+        self,
+        task_range: str | None,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+        cwd: Path | None = None,
+        array: bool = True,
+        setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
+    ) -> list[str]:
+        """Submit a possibly non-contiguous array expression; return ALL job ids.
+
+        Base default: one :meth:`submit_one` call, one-element id list — correct
+        for every backend whose scheduler grammar accepts the expression
+        verbatim, and for stub/test backends that never see comma-bearing
+        ranges. :class:`ProfileBackend` overrides this with the family-aware
+        split (bug-sweep #6): SGE/PBS Pro ``qsub`` accept only a single
+        ``n[-m[:s]]`` range, so a scattered resubmit fans out into one array per
+        contiguous run and every resulting id must be threaded to the caller —
+        dropping the tail would leave live arrays untracked (silent orphans).
+        recover-flow's ``_submit_one_batch`` routes through THIS method so the
+        family decision lives with the backend, not the resubmit loop.
+        """
+        return [
+            self.submit_one(
+                task_range,
+                job_name,
+                job_env,
+                extra_flags=extra_flags,
+                cwd=cwd,
+                array=array,
+                setup_log_dir=setup_log_dir,
+                concurrency_cap=concurrency_cap,
+            )
+        ]
+
     def submit_plan(
         self,
         plan: SubmissionPlan,

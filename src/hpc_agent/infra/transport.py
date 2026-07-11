@@ -135,6 +135,14 @@ PROTECTED_RUNTIME_FILES: list[str] = [
     ".hpc/_hpc_dispatch.py",
     ".hpc/_hpc_combiner.py",
     ".hpc/templates/",
+    # deploy_runtime-placed bookkeeping (never in the local push tree): the
+    # deploy-cache manifest (:data:`_DEPLOY_MANIFEST_REL`) and the push manifest
+    # (:data:`_PUSH_MANIFEST_REL`). A push's ``--delete`` / tar pre-clean would
+    # wipe them on every standard push-then-deploy cycle, so the #242 content-
+    # hash deploy cache would ALWAYS miss (re-ship every file) and the ruling-6
+    # manifest prune would lose its record of what we shipped (#66).
+    ".hpc/.deploy_state.json",
+    ".hpc/.push_manifest.json",
 ]
 
 # The remote ``--delete`` pre-clean (tar fallback) gets its OWN timeout,
@@ -170,6 +178,25 @@ def _have_rsync() -> bool:
     fallback when False (typically Windows hosts without WSL/MSYS rsync).
     """
     return shutil.which("rsync") is not None
+
+
+def _msys_local(p: str) -> str:
+    """Translate a native-Windows local path into the ``/c/...`` form MSYS rsync
+    parses as a LOCAL operand.
+
+    On win32 an MSYS/cygwin rsync parses a drive colon (``C:/x``) as a REMOTE
+    host spec (host ``C``) and dies with "source and destination cannot both be
+    remote" (run-#12 finding 17). Every Windows rsync build accepts the
+    ``/c/...`` form. The trailing slash (and any other structure) is preserved;
+    off win32, or for a path without a drive colon, *p* is returned unchanged.
+
+    Shared by :func:`rsync_push` (src), :func:`_rsync_deploy` (local staging),
+    and :func:`rsync_pull` (dst) so all three local operands get the fix (#10,
+    #11) — the translation used to live inline in ``rsync_push`` only.
+    """
+    if sys.platform == "win32" and len(p) > 1 and p[1] == ":":
+        return ("/" + p[0].lower() + "/" + p[3:]).replace("\\", "/")
+    return p
 
 
 def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
@@ -1177,10 +1204,41 @@ def _tar_ssh_push(
 
         pump_thread = threading.Thread(target=_pump, daemon=True)
         pump_thread.start()
+
+        pump_r_open = True
+
+        def _close_pump_r() -> None:
+            # Idempotent close of OUR copy of the pipe read end, with a sentinel
+            # so a second call (the finally) is a no-op instead of closing a
+            # possibly-reused fd.
+            nonlocal pump_r_open
+            if pump_r_open:
+                pump_r_open = False
+                with contextlib.suppress(OSError):
+                    os.close(pump_r)
+
         try:
             assert tar_proc.stdout is not None
             ssh_proc = run_capture_bounded(ssh_cmd, timeout_sec=timeout, stdin=pump_r)
-            pump_thread.join()
+            # ssh has EXITED — rc 0, or non-zero (auth refused under
+            # BatchMode=yes, host unreachable, remote `mkdir && tar x` failed on
+            # permissions/disk). Close our read end NOW, BEFORE joining the pump.
+            # ssh dup'd its own copy of pump_r (Popen does not close the parent
+            # copy), so while a multi-GB tar is still pumping, the parent's open
+            # pump_r keeps the pipe from ever EPIPE-ing and an unbounded
+            # pump_thread.join() would wedge forever past every transport
+            # deadline (#9). With the last reader gone, the pump's next os.write
+            # raises BrokenPipeError, which _pump catches into pump_error and
+            # closes pump_w, so the join below completes promptly.
+            _close_pump_r()
+            # Defense-in-depth: bound the join (never unbounded) and, if the pump
+            # somehow still hasn't observed the broken pipe, kill tar so its
+            # stdout EOFs — mirroring the TimeoutExpired branch below.
+            join_timeout = 30.0 if timeout is None else timeout
+            pump_thread.join(timeout=join_timeout)
+            if pump_thread.is_alive():
+                tar_proc.kill()
+                pump_thread.join(timeout=5)
             tar_proc.stdout.close()
             tar_proc.wait(timeout=timeout)
             tar_stderr_file.seek(0)
@@ -1203,9 +1261,9 @@ def _tar_ssh_push(
             ) from exc
         finally:
             # Close our copy of the read end (ssh dup'd its own); the pump owns
-            # and closes the write end.
-            with contextlib.suppress(OSError):
-                os.close(pump_r)
+            # and closes the write end. Idempotent — the happy path already
+            # closed it right after ssh exited (#9).
+            _close_pump_r()
             tar_stderr_file.close()
 
         tar_stderr = tar_stderr_bytes.decode(errors="replace")
@@ -1499,13 +1557,7 @@ def rsync_push(
     for pattern in exclude:
         exclude_flags += ["--exclude", pattern]
 
-    src = str(local_path).rstrip("/\\") + "/"
-    if sys.platform == "win32" and len(src) > 1 and src[1] == ":":
-        # An MSYS/cygwin rsync parses the drive colon as a REMOTE host spec
-        # ("C:/x" → host "C") and dies with "source and destination cannot
-        # both be remote" (run-#12 finding 17). Every Windows rsync build
-        # accepts the /c/... form instead.
-        src = ("/" + src[0].lower() + "/" + src[3:]).replace("\\", "/")
+    src = _msys_local(str(local_path).rstrip("/\\") + "/")
     dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
 
     flags = ["rsync", "-az"]
@@ -1744,7 +1796,7 @@ def _rsync_deploy(*, ssh_target: str, remote_path: str, staging: Path) -> None:
     # Per-host connection-rate guard (ban-driver); no-op unless
     # HPC_SSH_SAFE_INTERVAL>0. See infra.ssh_throttle.
     throttle_connection(ssh_target)
-    src = str(staging).rstrip("/\\") + "/"
+    src = _msys_local(str(staging).rstrip("/\\") + "/")
     dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
     rsync_env = {**os.environ, **ssh_env()}
 
@@ -2123,7 +2175,7 @@ def rsync_pull(
 
     dst_path = Path(local_dir)
     dst_path.mkdir(parents=True, exist_ok=True)
-    dst = str(dst_path).rstrip("/\\") + "/"
+    dst = _msys_local(str(dst_path).rstrip("/\\") + "/")
 
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 

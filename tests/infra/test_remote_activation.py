@@ -81,6 +81,31 @@ def test_prefix_full_chain() -> None:
     assert p == "module load python/3.10 && source /c/conda.sh && conda activate hpc-pi && "
 
 
+def test_prefix_module_provided_conda_activates_without_source() -> None:
+    # Module-conda configuration (#33 / Activation finding-24): conda comes from a
+    # `module load`, not a `source <conda_source>`. The `conda activate` must
+    # still fire — gating it on conda_source left every control-plane command on
+    # such a cluster under the login node's bare python (rc 127).
+    p = remote_activation_prefix(
+        {"modules": ["anaconda3"], "conda_envs": ["hpc-pi"]},  # no conda_source
+    )
+    assert p == "module load anaconda3 && conda activate hpc-pi && "
+
+
+def test_prefix_module_provided_conda_honors_per_run_env_override() -> None:
+    p = remote_activation_prefix(
+        {"modules": ["anaconda3"], "conda_envs": ["default"]},
+        conda_env="per-run",
+    )
+    assert p == "module load anaconda3 && conda activate per-run && "
+
+
+def test_prefix_source_conda_config_still_activates() -> None:
+    # The source-conda configuration is unchanged: source then activate.
+    p = remote_activation_prefix({"conda_source": "/c/conda.sh", "conda_envs": ["envA"]})
+    assert p == "source /c/conda.sh && conda activate envA && "
+
+
 def test_for_sidecar_no_cluster_is_empty() -> None:
     assert remote_activation_for_sidecar({}) == ""
     assert remote_activation_for_sidecar({"env": {"conda_env": "x"}}) == ""

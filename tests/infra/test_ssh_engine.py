@@ -22,6 +22,7 @@ fatal-vs-throttle connect path is observably distinct.
 from __future__ import annotations
 
 import subprocess
+import threading
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -496,6 +497,76 @@ def test_sweep_idle_leaves_an_active_connection(
     engine._sweep_idle()
     assert "h" in engine._conns  # not idle → untouched
     assert released == []
+
+
+class _BlockingConn(_StubConn):
+    """A fake connection whose ``run`` blocks (in flight) until the test releases
+    it — models a long remote leg (>IDLE_CLOSE_SEC) still executing when the idle
+    reaper runs (bug-sweep #8)."""
+
+    def __init__(self, started: threading.Event, release: threading.Event) -> None:
+        super().__init__()
+        self._started = started
+        self._release = release
+
+    async def run(  # type: ignore[override]
+        self, cmd: str, *, check: bool = False, timeout: float | None = None
+    ) -> _StubResult:
+        import asyncio
+
+        self.run_calls.append(cmd)
+        self._started.set()  # signal the command is in flight
+        while not self._release.is_set():
+            await asyncio.sleep(0.01)  # yield the loop; poll the cross-thread gate
+        return _StubResult(returncode=0, stdout="done")
+
+
+def test_sweep_idle_does_not_sever_an_inflight_command(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-sweep #8: idleness is measured from last COMPLETION, so a remote leg
+    longer than IDLE_CLOSE_SEC would be reaped mid-command — the in-flight
+    command then fails and the seam silently re-runs it over one-shot ssh
+    (duplicate execution of a possibly non-idempotent command). The inflight
+    counter must protect an active connection: a mid-flight sweep (even with
+    IDLE_CLOSE_SEC forced to -1, so idleness alone would reap) leaves the
+    connection intact and the command completes over the engine — no
+    EngineUnavailable, no one-shot fallback."""
+    monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)  # everything looks "idle"
+    started = threading.Event()
+    release = threading.Event()
+    conn = _BlockingConn(started, release)
+    _install_connect(monkeypatch, lambda _t: conn)
+
+    box: dict[str, object] = {}
+
+    def _worker() -> None:
+        try:
+            box["cp"] = engine.run("slow-remote-leg", ssh_target="u@h", timeout=30)
+        except BaseException as exc:  # noqa: BLE001 — record for the assertion
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    try:
+        assert started.wait(5.0), "the command never reached the in-flight state"
+        # Mid-flight sweep: idleness alone (IDLE_CLOSE_SEC=-1) would discard the
+        # connection; the inflight counter must veto that.
+        engine._sweep_idle()
+        assert "h" in engine._conns, "an in-flight connection was severed by the sweep"
+        assert engine._conns["h"].inflight == 1
+        release.set()
+        worker.join(5.0)
+    finally:
+        release.set()
+        worker.join(5.0)
+    assert "exc" not in box, f"the command fell back / failed: {box.get('exc')!r}"
+    cp = box["cp"]
+    assert isinstance(cp, subprocess.CompletedProcess)
+    assert cp.returncode == 0 and cp.stdout == "done"
+    assert conn.closed is False  # connection never torn down
+    assert engine._conns["h"].inflight == 0  # counter restored after completion
 
 
 def test_background_sweeper_reaps_without_a_triggering_run(

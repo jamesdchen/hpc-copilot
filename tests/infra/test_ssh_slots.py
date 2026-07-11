@@ -133,7 +133,7 @@ class TestCap:
             slept.append(seconds)
             clock.advance(seconds)
             if len(slept) == 2:  # a holder finishes while we wait
-                release_slot(tokens[0])
+                release_slot(tokens[0], pid=100)  # slot0 was claimed by pid 100
 
         tok = acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=pid, pid_alive=_ALIVE)
         assert tok is not None and tok.exists()
@@ -352,6 +352,43 @@ class TestRelease:
 
     def test_release_none_is_noop(self):
         release_slot(None)
+
+    def test_release_of_own_live_claim_unlinks(self):
+        """The ordinary path still frees the slot for the next waiter."""
+        clock = FakeClock()
+        (token,) = _claim_n(1, clock, first_pid=100)
+        assert token.exists()
+        release_slot(token, pid=100)
+        assert not token.exists()
+
+    def test_release_after_ttl_reclaim_does_not_delete_successors_claim(self):
+        """bug-sweep #35: A's over-long hold is TTL-reclaimed by B, which now
+        holds slot0. When A finally releases its (reclaimed) token, the unlink
+        must be a NO-OP — deleting the path would evict B's LIVE claim and
+        over-admit a third concurrent connection to the host the limiter
+        exists to protect."""
+        clock = FakeClock()
+        tokens = _claim_n(2, clock, first_pid=100)  # A=pid100 on slot0, pid101 on slot1
+        slot0 = tokens[0]
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 100
+        # A's pid stays alive, but the hold outruns the TTL; B (pid 200)
+        # reclaims — _try_claim reclaims the first stale slot, slot0.
+        clock.advance(SLOT_TTL_SEC + 1)
+        tok_b = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=200, pid_alive=_ALIVE)
+        assert tok_b == slot0  # B reclaimed slot0
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 200
+        # A releases its now-reclaimed token: must NOT delete B's live claim.
+        release_slot(slot0, pid=100)
+        assert slot0.exists()
+        assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 200
+
+    def test_release_missing_doc_is_noop_and_never_raises(self):
+        """A token whose file is already gone (or unreadable) releases as a
+        silent no-op — nothing verifiable to unlink, fail-safe."""
+        clock = FakeClock()
+        (token,) = _claim_n(1, clock, first_pid=100)
+        token.unlink()  # simulate the file having vanished
+        release_slot(token, pid=100)  # must not raise
 
 
 # ---------------------------------------------------------------------------

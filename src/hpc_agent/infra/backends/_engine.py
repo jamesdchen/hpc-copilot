@@ -39,6 +39,7 @@ from hpc_agent.infra.backends.profile import render_script as _render_script
 if TYPE_CHECKING:
     import subprocess
     from collections.abc import Callable
+    from pathlib import Path
 
 
 # Sentinel-ack transport verdict (docs/design/connection-broker.md, 2026-07-10).
@@ -53,6 +54,15 @@ if TYPE_CHECKING:
 # an empty queue, so every job read as terminal. See
 # :meth:`ProfileBackend.scheduler_query_ran`.
 _SCHED_ACK_PREFIX = "__HPC_SCHED_ACK__="
+
+# Scheduler families whose array flag accepts a comma-separated index LIST
+# (``--array=4,8,13-15`` / TORQUE ``-t 4,8,13-15``). SGE/UGE ``qsub -t`` and
+# PBS Pro ``qsub -J`` accept only a SINGLE ``n[-m[:s]]`` range, so a
+# non-contiguous resubmit expression must be split into one array per
+# contiguous run before submission (#6). Membership is what
+# :meth:`ProfileBackend.submit_non_contiguous` and the ``_build_*_command``
+# comma backstops key on.
+_COMMA_ARRAY_FAMILIES: frozenset[str] = frozenset({"slurm", "torque"})
 
 
 def _with_ack(cmd: str) -> str:
@@ -402,6 +412,78 @@ class ProfileBackend(HPCBackend):
             concurrency_cap=concurrency_cap,
         )
 
+    def submit_non_contiguous(
+        self,
+        task_range: str | None,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+        cwd: Path | None = None,
+        array: bool = True,
+        setup_log_dir: bool = True,
+        concurrency_cap: int | None = None,
+    ) -> list[str]:
+        """Submit a possibly non-contiguous array expression, family-aware (#6).
+
+        recover-flow's :func:`compact_task_ids` packs the exact failed ids into
+        a comma-bearing expression (``"4,8,13-15"``). SLURM ``--array`` and
+        TORQUE ``-t`` accept that verbatim — one submission, one job id. SGE/UGE
+        ``qsub -t`` and PBS Pro ``qsub -J`` accept only a SINGLE ``n[-m[:s]]``
+        range, so for those families this splits the expression on commas
+        (:func:`compact_task_ids`'s output is already one contiguous run per
+        comma-delimited segment) and submits ONE array job per run via
+        :meth:`submit_one`, accumulating every resulting job id.
+
+        Returning the full id list — rather than the single-id
+        :meth:`submit_one` contract — is deliberate: a scattered resubmit that
+        fans out into N arrays produces N job ids, and dropping the tail would
+        leave those arrays untracked by monitor/kill (silent orphans). Callers
+        that thread resubmit ids (recover-flow's submit loop) extend their
+        ``submitted_ids`` with the whole list so partial-resume semantics hold.
+
+        The log dir is created once here (``setup_log_dir=True``) and each
+        per-run :meth:`submit_one` skips its own idempotent ``mkdir``.
+        """
+        one_shot = (
+            not array
+            or task_range is None
+            or "," not in str(task_range)
+            or self.profile.family in _COMMA_ARRAY_FAMILIES
+        )
+        if one_shot:
+            return [
+                self.submit_one(
+                    task_range,
+                    job_name,
+                    job_env,
+                    extra_flags=extra_flags,
+                    cwd=cwd,
+                    array=array,
+                    setup_log_dir=setup_log_dir,
+                    concurrency_cap=concurrency_cap,
+                )
+            ]
+
+        runs = [seg.strip() for seg in str(task_range).split(",") if seg.strip()]
+        if setup_log_dir:
+            self._setup_log_dir()
+        job_ids: list[str] = []
+        for run in runs:
+            job_ids.append(
+                self.submit_one(
+                    run,
+                    job_name,
+                    job_env,
+                    extra_flags=extra_flags,
+                    cwd=cwd,
+                    array=array,
+                    setup_log_dir=False,
+                    concurrency_cap=concurrency_cap,
+                )
+            )
+        return job_ids
+
     def _build_pbs_command(
         self,
         task_range: str | None,
@@ -418,6 +500,24 @@ class ProfileBackend(HPCBackend):
         array_flag = "-J" if self.profile.family == "pbspro" else "-t"
         cmd = [self.profile.submit_bin]
         if array:
+            if (
+                self.profile.family not in _COMMA_ARRAY_FAMILIES
+                and task_range is not None
+                and "," in str(task_range)
+            ):
+                # PBS Pro ``qsub -J`` accepts only a single ``X-Y[:Z]`` range —
+                # no comma lists (TORQUE's ``-t`` does, and is in
+                # _COMMA_ARRAY_FAMILIES). A non-contiguous resubmit expression
+                # must be split into one array per contiguous run via
+                # :meth:`submit_non_contiguous`; a comma reaching the builder
+                # would emit an invalid qsub, so fail loudly here instead (#6).
+                raise errors.SpecInvalid(
+                    f"PBS Pro qsub {array_flag} accepts only a single "
+                    f"'X-Y[:Z]' range, not a comma list ({str(task_range)!r}). "
+                    "Route non-contiguous task ranges through "
+                    "submit_non_contiguous, which splits them into one array "
+                    "job per contiguous run."
+                )
             # PBS in-array concurrency cap (#339 item 16): both PBS Pro (``-J``)
             # and TORQUE (``-t``) accept the ``%N`` slot-limit suffix on the
             # array range, back-filling as tasks finish. Only meaningful for an
@@ -526,6 +626,21 @@ class ProfileBackend(HPCBackend):
     ) -> list[str]:
         cmd = [self.profile.submit_bin]
         if array:
+            if task_range is not None and "," in str(task_range):
+                # SGE/UGE ``qsub -t`` grammar is a SINGLE ``n[-m[:s]]`` range —
+                # no comma lists (only SLURM/TORQUE accept those). A
+                # non-contiguous resubmit expression ("4,8,13-15") must be split
+                # into one array per contiguous run via
+                # :meth:`submit_non_contiguous`; reaching the builder with a
+                # comma still present would emit an invalid qsub that the
+                # scheduler rejects with an opaque error, so fail loudly and
+                # diagnosably here instead (#6).
+                raise errors.SpecInvalid(
+                    "SGE qsub -t accepts only a single 'n[-m[:s]]' range, not a "
+                    f"comma list ({str(task_range)!r}). Route non-contiguous "
+                    "task ranges through submit_non_contiguous, which splits "
+                    "them into one array job per contiguous run."
+                )
             cmd += ["-t", str(task_range)]
             # UGE/SGE in-array concurrency cap (#339 item 16): ``-tc N`` limits
             # how many array tasks run at once, back-filling as they finish. Only

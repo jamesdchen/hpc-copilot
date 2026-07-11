@@ -389,6 +389,31 @@ class TestInspectClusterEntry:
         assert snap.nodes == []
         assert snap.errors and snap.errors[0]["code"] == "qhost_failed"
 
+    def test_sge_fqdn_qhost_joins_short_qstat_co_tenants(self) -> None:
+        # #63: qhost reports FQDN node names while qstat's queue@host view is
+        # short. The co-tenant join must normalize BOTH sides through the same
+        # helper, or the FQDN node misses its co-tenants entirely.
+        qhost_out = (
+            "HOSTNAME                     ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "-------------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "compute-001.hpc.example.com  lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"  # noqa: E501
+        )
+        qstat_out = (
+            "all.q@compute-001                  BIP   1/4/16         3.50\n"
+            "  54321 0.50 trainjob  alice  r  07/11/2026 10:00:00     4\n"
+        )
+        runner = _FakeRunner(
+            {"echo __HPC_QHOST__": (0, _sge_combined(qhost_out, 0, qstat_out, 0), "")}
+        )
+        snap = ins._sge_inspect(
+            "c", {}, stress_alloc_mem_pct=0.8, stress_cpu_load_frac=0.8, runner=runner
+        )
+        # The node keeps its FQDN display name...
+        assert {n.name for n in snap.nodes} == {"compute-001.hpc.example.com"}
+        # ...but its short-name co-tenants still attach through the join.
+        assert [t["user"] for t in snap.nodes[0].co_tenants] == ["alice"]
+        assert snap.errors == []
+
     def test_split_section_extracts_rc_and_body(self) -> None:
         from hpc_agent.infra.inspect.sge import _split_section
 

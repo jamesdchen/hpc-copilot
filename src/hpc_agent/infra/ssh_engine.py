@@ -444,8 +444,12 @@ class _HostConn:
     """One persistent connection plus the bookkeeping the calling thread owns.
 
     ``conn`` and ``sem`` are only ever touched on the engine loop; ``last_used``
-    / ``alive`` / ``slot_token`` are managed by the calling thread under the
-    engine's registry guard.
+    / ``alive`` / ``slot_token`` / ``inflight`` are managed by the calling thread
+    under the engine's registry guard.
+
+    ``inflight`` counts commands currently dispatched on this connection. The
+    idle reaper skips any connection with ``inflight > 0`` so a long remote leg
+    is never severed mid-command (bug-sweep #8).
     """
 
     def __init__(self, ssh_target: str, conn: Any, slot_token: Any, sem: Any) -> None:
@@ -455,6 +459,7 @@ class _HostConn:
         self.sem = sem
         self.last_used = time.monotonic()
         self.alive = True
+        self.inflight = 0
 
     def idle_for(self) -> float:
         return time.monotonic() - self.last_used
@@ -496,6 +501,16 @@ class _Engine:
         self._reap_if_idle(host)
         hc = self._get_live(host) or self._open(ssh_target, host)
         outer = None if timeout is None else timeout + _RESULT_MARGIN
+        # Mark the connection BUSY before dispatch (and stamp last_used at the
+        # command's START, not only its completion) so the idle reaper — the
+        # background sweep AND the next-run() check — cannot sever it while a
+        # command is in flight. A remote leg longer than IDLE_CLOSE_SEC would
+        # otherwise be discarded under the live conn.run(): the in-flight command
+        # fails, the seam falls back to one-shot ssh, and a non-idempotent remote
+        # command executes twice (bug-sweep #8).
+        with self._guard:
+            hc.inflight += 1
+            hc.last_used = time.monotonic()
         try:
             result = _submit(_do_run(hc, cmd, timeout), deadline=outer)
         except EngineUnavailable:
@@ -515,6 +530,9 @@ class _Engine:
             raise EngineUnavailable(
                 f"engine command on {host} failed: {type(exc).__name__}: {exc}{partial}"
             ) from exc
+        finally:
+            with self._guard:
+                hc.inflight -= 1
         hc.last_used = time.monotonic()
         # One-shot parity: every successful guarded_call RESETS the host's
         # consecutive-failure counter, so a healthy engine session must too —
@@ -591,7 +609,9 @@ class _Engine:
     def _reap_if_idle(self, host: str) -> None:
         with self._guard:
             hc = self._conns.get(host)
-            stale = hc is not None and (not hc.alive or hc.idle_for() > IDLE_CLOSE_SEC)
+            stale = hc is not None and (
+                not hc.alive or (hc.inflight == 0 and hc.idle_for() > IDLE_CLOSE_SEC)
+            )
         if stale and hc is not None:
             self._discard(host, hc)
 
@@ -623,12 +643,14 @@ class _Engine:
         quick verb and then sat idle has no such trigger, so without this sweep
         its per-host ssh slot stays claimed (slot is released only at connection
         close) until process exit. The sweep frees it ~IDLE_CLOSE_SEC after last
-        use. An ACTIVE connection (idle ≤ threshold) is never touched."""
+        use. An ACTIVE connection (idle ≤ threshold, OR a command in flight) is
+        never touched — a long remote leg must not be severed mid-command
+        (bug-sweep #8)."""
         with self._guard:
             stale = [
                 (host, hc)
                 for host, hc in self._conns.items()
-                if not hc.alive or hc.idle_for() > IDLE_CLOSE_SEC
+                if not hc.alive or (hc.inflight == 0 and hc.idle_for() > IDLE_CLOSE_SEC)
             ]
         for host, hc in stale:
             self._discard(host, hc)  # unregisters, closes on the loop, frees slot

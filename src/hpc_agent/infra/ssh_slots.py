@@ -424,10 +424,32 @@ def acquire_slot(
         interval = min(interval * 2.0, SLOT_POLL_MAX_SEC)
 
 
-def release_slot(token: Path | None) -> None:
-    """Release a slot claimed by :func:`acquire_slot` (``None`` is a no-op)."""
+def release_slot(token: Path | None, *, pid: int | None = None) -> None:
+    """Release a slot claimed by :func:`acquire_slot` (``None`` is a no-op).
+
+    Ownership-verified (bug-sweep #35): re-read the slot doc and unlink ONLY
+    when it still records THIS releaser's pid. If our hold outran
+    :data:`SLOT_TTL_SEC` and a waiter TTL-reclaimed the slot while we held it,
+    the file at *token* now carries the SUCCESSOR's claim — unlinking it would
+    evict a live claimant and over-admit a connection to the very host the
+    limiter protects. On a pid mismatch the release is a no-op. A missing or
+    unreadable doc is also left alone (nothing verifiable to release; a corrupt
+    leftover is handled by the staleness reclaim path). *pid* defaults to the
+    current process (the acquirer's default), and is injectable to mirror
+    :func:`acquire_slot`'s test seam.
+    """
     if token is None:
         return
+    releaser = os.getpid() if pid is None else pid
+    try:
+        doc = json.loads(token.read_text(encoding="utf-8"))
+        owner = int(doc["pid"])  # type: ignore[index]
+    except (OSError, ValueError, TypeError, KeyError):
+        # Unverifiable ownership — leave the file for the TTL/pid-liveness
+        # reclaim rather than risk deleting a successor's live claim.
+        return
+    if owner != releaser:
+        return  # our claim was reclaimed; the path belongs to another holder now
     with contextlib.suppress(OSError):
         token.unlink()
 
@@ -450,4 +472,6 @@ def connection_slot(
     try:
         yield token
     finally:
-        release_slot(token)
+        # Release under the SAME pid the acquire claimed with (both default to
+        # os.getpid()), so ownership verification recognises our own claim.
+        release_slot(token, pid=pid)

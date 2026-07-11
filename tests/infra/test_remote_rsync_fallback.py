@@ -28,6 +28,76 @@ def _ok(stdout: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
+def test_msys_local_translates_drive_colon_on_win32(monkeypatch) -> None:
+    # MSYS/cygwin rsync parses a drive colon as a remote host spec, so the
+    # local operand must become the /c/... form (#10, #11). Push src shape
+    # (trailing backslash), pull dst shape (forward slashes), and a temp-dir
+    # deploy-staging shape are all translated.
+    monkeypatch.setattr(transport.sys, "platform", "win32")
+    assert transport._msys_local("C:\\Users\\me\\exp\\") == "/c/Users/me/exp/"
+    assert transport._msys_local("C:/Users/me/out/") == "/c/Users/me/out/"
+    assert transport._msys_local("D:\\Temp\\tmpABC/") == "/d/Temp/tmpABC/"
+
+
+def test_msys_local_noop_off_win32(monkeypatch) -> None:
+    # POSIX rsync needs the native path untouched; the translation is win32-only.
+    monkeypatch.setattr(transport.sys, "platform", "linux")
+    assert transport._msys_local("C:\\Users\\me\\") == "C:\\Users\\me\\"
+    assert transport._msys_local("/home/me/exp/") == "/home/me/exp/"
+
+
+def test_msys_local_noop_for_colonless_path_on_win32(monkeypatch) -> None:
+    # A relative / colon-less path has no drive letter to remap.
+    monkeypatch.setattr(transport.sys, "platform", "win32")
+    assert transport._msys_local("relative/path/") == "relative/path/"
+
+
+def test_rsync_push_translates_win32_local_src(monkeypatch) -> None:
+    # rsync_push must pass its local src through the /c/... translation on
+    # win32, or MSYS rsync dies "source and destination cannot both be remote"
+    # (#10). _disclose_payload is stubbed so the synthetic C:\ path is never
+    # walked; rsync is "present" so the plain-rsync path builds the argv.
+    monkeypatch.setattr(transport.sys, "platform", "win32")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.transport._disclose_payload", return_value=0),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+    ):
+        transport.rsync_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path="C:\\Users\\me\\proj",
+            exclude=[],
+        )
+    cmd = run_mock.call_args[0][0]
+    assert cmd[0] == "rsync"
+    # argv = [*flags, *exclude_flags, src, dst] → src is second-to-last.
+    assert cmd[-2] == "/c/Users/me/proj/"
+    assert cmd[-1] == "u@h:/r/"
+
+
+def test_rsync_pull_translates_win32_local_dst(monkeypatch) -> None:
+    # rsync_pull's local dst is the operand MSYS rsync mis-parses as remote
+    # host "C" (#11); on win32 it must be the /c/... form. Path.mkdir is
+    # stubbed so the synthetic C:\ dir is not materialized on the test host.
+    monkeypatch.setattr(transport.sys, "platform", "win32")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.transport.Path.mkdir"),
+        patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
+    ):
+        transport.rsync_pull(
+            ssh_target="u@h",
+            remote_path="/r",
+            remote_subdir="_combiner",
+            local_dir="C:\\Users\\me\\exp\\_combiner",
+        )
+    cmd = run_mock.call_args[0][0]
+    assert cmd[0] == "rsync"
+    # argv = ["rsync", "-az", *filter_flags, src, dst] → dst is last.
+    assert cmd[-1] == "/c/Users/me/exp/_combiner/"
+
+
 def test_have_rsync_reports_truthy_when_present() -> None:
     with patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"):
         assert transport._have_rsync() is True
@@ -183,6 +253,8 @@ def test_effective_excludes_always_protects_runtime_files() -> None:
         ".hpc/_hpc_dispatch.py",
         ".hpc/_hpc_combiner.py",
         ".hpc/templates/",
+        ".hpc/.deploy_state.json",
+        ".hpc/.push_manifest.json",
     ]
     # A custom exclude that names none of them still carries them all.
     eff = transport._effective_excludes(["only_this/"])
@@ -601,6 +673,27 @@ def test_remote_clean_cmd_protects_framework_files() -> None:
     assert cmd.endswith("sort -rz | xargs -0 -r rmdir --ignore-fail-on-non-empty --")
 
 
+def test_delete_push_preserves_deploy_bookkeeping_files() -> None:
+    """A delete=True push must NOT wipe the deploy_runtime-placed bookkeeping
+    files (#66): the deploy-cache manifest (.hpc/.deploy_state.json) and the
+    push manifest (.hpc/.push_manifest.json) never live in the local push tree,
+    so without protection every standard push-then-deploy cycle deletes them —
+    the #242 content-hash deploy cache would always miss. Both must ride the
+    always-protected exclude set and land in the tar-fallback pre-clean prunes."""
+    eff = transport._effective_excludes(None)
+    assert ".hpc/.deploy_state.json" in eff
+    assert ".hpc/.push_manifest.json" in eff
+    # A caller-supplied exclude that names neither still carries both.
+    eff_custom = transport._effective_excludes(["only_this/"])
+    assert ".hpc/.deploy_state.json" in eff_custom
+    assert ".hpc/.push_manifest.json" in eff_custom
+    # And the tar-fallback --delete pre-clean anchors them as prunes, so the
+    # destructive pass preserves them.
+    cmd = transport._remote_clean_cmd("/r", eff)
+    assert "-path /r/.hpc/.deploy_state.json" in cmd
+    assert "-path /r/.hpc/.push_manifest.json" in cmd
+
+
 def test_remote_clean_cmd_empty_exclude_deletes_whole_subtree() -> None:
     """With no excludes the pre-clean removes everything under remote_path
     (but never remote_path itself — guarded by -mindepth 1)."""
@@ -888,6 +981,60 @@ def test_pump_emits_progress_on_forced_short_interval(
     assert "[transport] progress:" in err
     assert "MB / ~" in err and "elapsed" in err
     assert err.count("[transport] progress:") >= 2  # multiple chunks -> multiple beats
+
+
+def test_tar_push_ssh_exits_early_does_not_deadlock(tmp_path: Path) -> None:
+    """#9 regression: when ssh exits (rc!=0) BEFORE draining tar's stream and
+    tar's output exceeds the OS pipe buffer, the parent must close its pump
+    read-end and unwind promptly — never block forever in an unbounded
+    pump_thread.join() past every transport deadline. Here ssh (mocked)
+    returns rc=1 without reading pump_r while a >1 MB tar stdout is still
+    pumping; the pre-fix code deadlocked in join() (finally's pump_r close
+    ran only AFTER the join)."""
+    import io
+    import os
+    import threading
+
+    payload = os.urandom(1_000_000)  # far exceeds the ~64 KB pipe buffer
+
+    def _ssh_rc1(argv, *_a, **_kw):
+        # ssh exits non-zero WITHOUT reading its stdin (pump_r), leaving the
+        # pump blocked on a full pipe — the deadlock trigger.
+        return subprocess.CompletedProcess(
+            args=list(argv), returncode=1, stdout="", stderr="remote tar x failed"
+        )
+
+    with (
+        patch("hpc_agent.infra.transport.run_capture_bounded", side_effect=_ssh_rc1),
+        # Absorb the lazy `ssh -V` probe: the Popen patch is GLOBAL.
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = io.BytesIO(payload)
+        tar_proc.returncode = 0
+
+        result_box: dict[str, subprocess.CompletedProcess[str]] = {}
+
+        def _call() -> None:
+            result_box["r"] = transport._tar_ssh_push(
+                ssh_target="u@h",
+                remote_path="/r",
+                local_path=tmp_path,
+                exclude=[],
+                delete=False,
+                timeout=10,
+                total_bytes=len(payload),
+            )
+
+        worker = threading.Thread(target=_call)
+        worker.start()
+        worker.join(timeout=30)
+        assert not worker.is_alive(), "_tar_ssh_push deadlocked (unbounded pump join)"
+
+    assert "r" in result_box
+    # The truncated transfer surfaces as a non-zero result, not a hang.
+    assert result_box["r"].returncode != 0
 
 
 # --- queue item 6b: content-hash DELTA on rsync-less hosts ---------------------
