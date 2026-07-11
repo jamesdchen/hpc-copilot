@@ -137,6 +137,22 @@ def _probe_result_dir_contract(executor: str, exp_dir: Path) -> str | None:
         text = script.read_text(encoding="utf-8", errors="replace")
         if "RESULT_DIR" in text:
             return None
+        # One hop through a materialized wrapper (run-#12 finding 15): a
+        # shell_command wrapper subprocess-invokes the real script with env
+        # INHERITED, so the contract lives in the TARGET — the audited source
+        # read HPC_RESULT_DIR all along while the wrapper drew the warning.
+        # Scan every .py the wrapper's text references that exists under the
+        # experiment dir; any of them honoring the contract silences it.
+        import re as _re
+
+        for ref in _re.findall(r"[A-Za-z0-9_./\\-]+\.py", text):
+            cand = (exp_dir / ref).resolve()
+            if cand != script and cand.is_file():
+                try:
+                    if "RESULT_DIR" in cand.read_text(encoding="utf-8", errors="replace"):
+                        return None
+                except OSError:
+                    continue
         return (
             "WARNING (output contract): the executor script "
             f"{script.name!r} never references $HPC_RESULT_DIR — under the "
