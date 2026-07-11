@@ -16,6 +16,7 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import settle
 from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
 from hpc_agent.ops.monitor.status import _ssh_status_report
@@ -296,6 +297,82 @@ def _gather_failure_features(
         "job_id": failed_job_id,
         "node": None,
     }
+
+
+def _settle_from_announcements(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    scheduler: str,
+    record: RunRecord,
+    announce: dict[str, int],
+    pre_reconcile_status: str,
+) -> RunRecord | None:
+    """Settle a run terminal from a FULL per-task announcement, or return None.
+
+    Crash-only-monitoring Phase-1 fast path (``docs/design/crash-only-monitoring.md``).
+    When every task has announced its terminal state
+    (``announce["announced"] == record.total_tasks``), build the canonical
+    5-key count summary the shared :func:`settle` classifier consumes and route
+    the verdict through the SAME ``mark_run`` + transition-gated
+    ``harvest_on_terminal`` the reporter-backed settle arm uses — so the same
+    counts settle to the same lifecycle state whether the evidence came from the
+    dispatcher's announcements or the status reporter's walk. The announcements
+    replace the reporter walk for the LIFECYCLE verdict ONLY; the aggregate
+    integrity gate still verifies every output independently.
+
+    Returns the reconciled record on a terminal settle; returns ``None`` for a
+    PARTIAL announcement (caller keeps probing) or a zero-task run — a partial
+    announcement must NEVER settle terminal.
+    """
+    total = record.total_tasks
+    if total <= 0 or int(announce["announced"]) != total:
+        return None
+    summary: dict[str, Any] = {
+        "complete": int(announce["complete"]),
+        "failed": int(announce["failed"]),
+        "running": 0,
+        "pending": 0,
+        "unknown": 0,
+        "checked_at": utcnow_iso(),
+        "verdict_source": "task_announcements",
+    }
+    decision = settle(summary, total)
+    recorded = {**summary, "verdict_reason": decision.reason}
+    if decision.verdict == LifecycleState.FAILED:
+        # Positive failure evidence — attach the classified error like the
+        # reporter-backed arm. Without a reporter report to name the failed
+        # task, tail the lowest-id task's log (the ``_failed_evidence_task_ids``
+        # fallback); the fetch is best-effort and never gates the verdict.
+        from hpc_agent.state.runs import read_job_task_spans
+
+        features = _gather_failure_features(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            job_name=record.job_name,
+            job_ids=list(record.job_ids),
+            scheduler=scheduler,
+            task_ids=[0],
+            job_task_spans=read_job_task_spans(experiment_dir, run_id),
+        )
+        update_run_status(
+            experiment_dir, run_id, last_status={**recorded, "failure_features": features}
+        )
+        updated = mark_run(experiment_dir, run_id, status="failed")
+    else:
+        update_run_status(experiment_dir, run_id, last_status=recorded)
+        updated = mark_run(experiment_dir, run_id, status=str(decision.verdict))
+    # Guaranteed harvest (§5), gated on a verdict TRANSITION — identical to the
+    # reporter-backed settle arm: an idempotent re-reconcile of an already-terminal
+    # run does NOT re-fire (each fire pays an rsync pull + reduce + a ledger append).
+    if str(decision.verdict) != pre_reconcile_status:
+        harvest_on_terminal(
+            experiment_dir,
+            run_id,
+            terminal_cause=str(decision.verdict),
+            record=updated,
+        )
+    return updated
 
 
 def _reconcile_envelope(record: RunRecord | OrphanedReconcile) -> dict[str, Any]:
@@ -628,6 +705,10 @@ def _reconcile_one(
     report: dict[str, Any] = {}
     summary: dict[str, Any]
     alive: list[str] | set[str]
+    # Crash-only Phase-1 progress evidence from a PARTIAL announcement (set in
+    # the ssh branch below); threaded into the persisted ``last_status`` after
+    # the probe builds ``summary`` so it survives the probe's own write.
+    announce_progress: dict[str, int] | None = None
     if not backend_requires_ssh(scheduler):
         # Pure-API path (#337 Increment 4): no login node, no shared
         # ``_combiner/`` dir. Liveness comes from the backend's ``alive_job_ids``
@@ -647,6 +728,49 @@ def _reconcile_one(
             warnings.append(f"alive check: {exc}")
             alive_check_failed = True
     else:
+        # --- Crash-only Phase-1 announce fast path (docs/design/crash-only-monitoring.md) ---
+        # The dispatcher writes ONE per-task marker file on its terminal
+        # bookkeeping; read them in a SINGLE bounded ssh exec BEFORE the heavy
+        # 3-way probe. Presence of ANY marker is the capability signal — zero
+        # markers (a pre-announce wheel/run) falls through to the probe path
+        # BYTE-IDENTICALLY. A FULL announcement (announced == total_tasks)
+        # settles the lifecycle exactly as the reporter-backed settle arm does
+        # for the same counts, WITHOUT the 20-25 min reporter walk (run-12
+        # findings 20/24); a PARTIAL one is progress evidence only and NEVER
+        # settles terminal. A kill-confirmed run is left to the
+        # reporter-independent kill arm below (a deliberate kill's verdict does
+        # not come from task announcements). Best-effort: any failure (ssh blip,
+        # truncated read) falls through to the probes unchanged.
+        if not is_kill_confirmed(record):
+            try:
+                _announce = read_announcements(
+                    ssh_target=record.ssh_target,
+                    remote_path=record.remote_path,
+                    run_id=run_id,
+                    task_count=record.total_tasks,
+                )
+            except Exception:  # noqa: BLE001 — fast path is best-effort; fall through to probes
+                _announce = None
+            if _announce is not None and _announce["announced"] > 0:
+                terminal = _settle_from_announcements(
+                    experiment_dir,
+                    run_id,
+                    scheduler=scheduler,
+                    record=record,
+                    announce=_announce,
+                    pre_reconcile_status=pre_reconcile_status,
+                )
+                if terminal is not None:
+                    # Full announcement settled the run terminal — done, no probe.
+                    return terminal, False
+                # Partial announcement: surface the counts as progress evidence
+                # and continue to the existing probes (never settle from partial).
+                announce_progress = {
+                    "announced": int(_announce["announced"]),
+                    "complete": int(_announce["complete"]),
+                    "failed": int(_announce["failed"]),
+                    "missing": int(_announce["missing"]),
+                }
         with ThreadPoolExecutor(max_workers=3) as pool:
             fut_status = pool.submit(
                 _ssh_status_report,
@@ -704,6 +828,13 @@ def _reconcile_one(
                 alive = list(record.job_ids)  # treat as still alive on error
                 warnings.append(f"alive check: {exc}")
                 alive_check_failed = True
+
+    # Crash-only Phase-1: a PARTIAL announcement is progress evidence. Threaded
+    # in here (after the probe built ``summary``) so it rides the SAME persisted
+    # ``last_status`` — the ``{**summary, ...}`` spreads in the settle/kill arms
+    # and the main ``update_run_status`` below all carry it out to the envelope.
+    if announce_progress is not None:
+        summary["task_announcements"] = announce_progress
 
     if warnings:
         summary["warnings"] = warnings

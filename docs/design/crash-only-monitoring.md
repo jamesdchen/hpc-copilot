@@ -54,3 +54,31 @@ POSITIVE terminal (the sentinel manifest IS the positive evidence finding
   tick-recorded state instead of arming workers.
 - W4: ssh gateway unification (throttle slots as the sole door).
 Run-#12 evidence file: findings 3/16/17.3/19 in run12-findings.md.
+
+## Drift log — what has landed
+
+- **Phase 1 (task-side announcements), implemented 2026-07-11.** A cheap,
+  self-contained slice of inversion #1 that needs no sentinel job: the
+  cluster-side dispatcher announces its OWN per-task terminal state, and the
+  client settles the run's lifecycle by reading those announcements first —
+  the concrete answer to run-12 findings 20/24 (a 20-25 min silent
+  status-reporter walk over a NAT'd link, severed mid-flight, left a finished
+  run unverifiable). Files:
+  - `execution/mapreduce/dispatch.py` — on its terminal bookkeeping (success
+    AND failure) the dispatcher writes ONE marker per task,
+    `.hpc/announce/<run_id>/task_<id>.complete|.failed` (filename encodes the
+    verdict; atomic tmp+rename; best-effort — a write failure never fails the
+    task). The state MIRRORS the promote/failure decision (the finding-16
+    empty-output guard's verdict, not the raw executor rc).
+  - `ops/monitor/announce.py` — `read_announcements` counts per-state markers
+    with a pure `ls | wc -l` in ONE bounded ssh exec (positive-evidence ack;
+    filename-encoding means no `cat`, no shared-file append).
+  - `ops/monitor/reconcile.py` — before the heavy 3-way probe, a FULL
+    announcement (`announced == task_count`) settles via the SAME `settle` +
+    `mark_run` + transition-gated `harvest_on_terminal` the reporter-backed arm
+    uses; a PARTIAL announcement is progress evidence only and never settles;
+    zero markers fall through byte-identically (old runs unchanged).
+  TRUST BOUNDARY (stated in both module docstrings): markers settle LIFECYCLE
+  only — the aggregate integrity gate still independently verifies outputs.
+  Still banked, NOT yet built: the sentinel job (W1), the stateless watchdog
+  poll leg (W2), status-watch re-labeling (W3), ssh-gateway unification (W4).

@@ -158,6 +158,71 @@ def _atomic_write_json(path, data):
         raise
 
 
+# Per-task terminal announcement (crash-only-monitoring Phase 1,
+# docs/design/crash-only-monitoring.md). On its terminal bookkeeping the
+# dispatcher writes ONE small marker file per task under
+# ``.hpc/announce/<run_id>/`` whose FILENAME encodes the verdict —
+# ``task_<id>.complete`` or ``task_<id>.failed`` — so the client counts
+# per-state outcomes with a pure ``ls`` (no shared-file append → no Lustre/NFS
+# contention, no per-file ``cat``). The state MIRRORS the promote/failure
+# decision this dispatcher just committed (the finding-16 empty-output guard's
+# remapped ``returncode``, NOT the raw executor rc), so a marker can never
+# disagree with what the task actually did.
+#
+# TRUST BOUNDARY: a marker settles run LIFECYCLE only; it is NOT an integrity
+# claim about the task's OUTPUT — the aggregate integrity gate still verifies
+# every result independently. Best-effort throughout: a marker write failure
+# NEVER changes the dispatcher's exit code (the task stands on its own merits).
+#
+# Kept in LOCK-STEP with the client reader
+# ``hpc_agent.ops.monitor.announce`` (``ANNOUNCE_SUBPATH`` / the two state
+# names): that module rides the installed-package import surface while this
+# dispatcher is scp'd to the compute node without ``hpc_agent`` on the path, so
+# the vocabulary is deliberately duplicated (the standalone-boundary carve-out
+# in docs/internals/engineering-principles.md). Pinned equal by
+# tests/ops/monitor/test_announce.py.
+_ANNOUNCE_DIRNAME = "announce"
+_ANNOUNCE_STATE_COMPLETE = "complete"
+_ANNOUNCE_STATE_FAILED = "failed"
+
+
+def _write_announcement(announce_root, run_id, task_id, *, state, exit_code, finished_at):
+    """Best-effort per-task terminal marker under ``<announce_root>/<run_id>/``.
+
+    Writes ``task_<task_id>.<state>`` atomically (tmp + rename) with a compact
+    JSON body ``{task_id, state, exit_code, finished_at}``, and removes the
+    opposite-state marker from a prior attempt if present — a resubmit that
+    flips ``failed`` -> ``complete`` (or vice versa) must leave exactly ONE file
+    per task so the client's pure-``ls`` per-state count stays exact.
+
+    Never raises: a failure here is logged to stderr and swallowed so the
+    task's own exit code is never disturbed by the announcement.
+    """
+    try:
+        run_dir = Path(announce_root) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "task_id": int(task_id),
+            "state": state,
+            "exit_code": int(exit_code),
+            "finished_at": finished_at,
+        }
+        _atomic_write_json(run_dir / f"task_{task_id}.{state}", payload)
+        # Drop a stale opposite-state marker so the per-state count stays exact.
+        other = (
+            _ANNOUNCE_STATE_FAILED
+            if state == _ANNOUNCE_STATE_COMPLETE
+            else _ANNOUNCE_STATE_COMPLETE
+        )
+        with contextlib.suppress(OSError):
+            (run_dir / f"task_{task_id}.{other}").unlink()
+    except Exception as exc:  # noqa: BLE001 — announcement is best-effort
+        print(
+            f"[dispatch] WARN: failed to write terminal announcement for task {task_id}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
     """Write ``preempt: {at, grace_sec}`` to the per-task sidecar entry.
 
@@ -1252,6 +1317,22 @@ def main() -> None:
             f"[dispatch] WARN: failed to write _runtime.json for task {task_id}: {exc}",
             file=sys.stderr,
         )
+
+    # --- Announce terminal state (crash-only-monitoring Phase 1) ---
+    # ONE marker per task under ``.hpc/announce/<run_id>/`` whose filename
+    # encodes the FINAL verdict (``returncode`` here is already the finding-16
+    # empty-output guard's remapped code, not the raw executor rc), so the
+    # client settles the run's lifecycle from a pure ``ls`` without the
+    # 20-25 min status-reporter walk (run-12 findings 20/24). Best-effort:
+    # a write failure NEVER changes the task's exit code.
+    _write_announcement(
+        here / _ANNOUNCE_DIRNAME,
+        run_id,
+        task_id,
+        state=(_ANNOUNCE_STATE_COMPLETE if returncode == 0 else _ANNOUNCE_STATE_FAILED),
+        exit_code=returncode,
+        finished_at=ended_at_iso,
+    )
 
     sys.exit(returncode)
 

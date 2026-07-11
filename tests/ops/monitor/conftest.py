@@ -42,3 +42,30 @@ def _cluster_free_harvest(monkeypatch: pytest.MonkeyPatch) -> None:
         "_default_sweep",
         lambda combiner_dir: {},
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_announcements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the crash-only announce fast path to "no markers" package-wide.
+
+    ``reconcile._reconcile_one`` now reads the cluster's per-task announcement
+    markers in one ssh exec BEFORE the heavy 3-way probe
+    (``docs/design/crash-only-monitoring.md``). Left un-stubbed, every existing
+    reconcile/flow test would hit a real ``read_announcements`` ssh call. This
+    autouse fixture stubs it to report ZERO announcements, so the legacy probe
+    path runs byte-identically (zero markers == fall through). Tests that
+    exercise the fast path override ``reconcile.read_announcements`` (with counts)
+    in their own body; a per-test ``monkeypatch.setattr`` runs after this and wins.
+    """
+    from hpc_agent.ops.monitor import reconcile
+
+    monkeypatch.setattr(
+        reconcile,
+        "read_announcements",
+        lambda *, ssh_target, remote_path, run_id, task_count: {
+            "announced": 0,
+            "complete": 0,
+            "failed": 0,
+            "missing": max(0, int(task_count)),
+        },
+    )

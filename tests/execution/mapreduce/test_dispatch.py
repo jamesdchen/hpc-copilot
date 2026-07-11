@@ -121,6 +121,127 @@ class TestDispatchAtomicOutput:
 
 
 @_posix_shell_executor
+class TestTerminalAnnouncement:
+    """Crash-only Phase 1: the dispatcher announces its own per-task verdict.
+
+    ONE filename-state-encoded marker per task under ``.hpc/announce/<run_id>/``,
+    written on BOTH the success and failure terminal paths, atomically, and
+    best-effort (a raising marker write never changes the task's exit code).
+    """
+
+    def test_success_writes_complete_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        announce_dir = hpc / "announce" / "test_run"
+        complete_marker = announce_dir / "task_1.complete"
+        assert complete_marker.exists()
+        assert not (announce_dir / "task_1.failed").exists()
+        payload = json.loads(complete_marker.read_text())
+        assert payload["task_id"] == 1
+        assert payload["state"] == "complete"
+        assert payload["exit_code"] == 0
+        assert payload["finished_at"]
+
+    def test_failure_writes_failed_marker(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo partial > "$RESULT_DIR/out.csv" && exit 1',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 1
+        announce_dir = hpc / "announce" / "test_run"
+        failed_marker = announce_dir / "task_0.failed"
+        assert failed_marker.exists()
+        assert not (announce_dir / "task_0.complete").exists()
+        payload = json.loads(failed_marker.read_text())
+        assert payload["state"] == "failed"
+        assert payload["exit_code"] == 1
+
+    def test_empty_output_verdict_reflected_in_marker(self, tmp_path, monkeypatch):
+        # finding-16: exit 0 but no output is REMAPPED to a failure. The marker
+        # must mirror the promote/failure VERDICT, not the raw executor rc 0.
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="true",  # exits 0, writes nothing
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == dispatch._EXIT_NO_OUTPUT
+        announce_dir = hpc / "announce" / "test_run"
+        assert (announce_dir / "task_0.failed").exists()
+        assert not (announce_dir / "task_0.complete").exists()
+        payload = json.loads((announce_dir / "task_0.failed").read_text())
+        assert payload["state"] == "failed"
+        assert payload["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    def test_marker_write_failure_never_fails_task(self, tmp_path, monkeypatch):
+        # Best-effort: a raising atomic-write must be swallowed — the task keeps
+        # its own exit code, the announcement is merely lost.
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo hello > "$RESULT_DIR/metrics.json"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        real_atomic = dispatch._atomic_write_json
+
+        def _boom(path, data):
+            # Only sabotage the announcement write (under announce/), never the
+            # runtime/cmd_sha writes the success path also does.
+            if "announce" in str(path):
+                raise OSError("simulated marker write failure")
+            return real_atomic(path, data)
+
+        monkeypatch.setattr(dispatch, "_atomic_write_json", _boom)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        # Task still succeeds; marker simply absent.
+        assert exc_info.value.code == 0
+        assert not (hpc / "announce" / "test_run" / "task_0.complete").exists()
+
+
+@_posix_shell_executor
 class TestDispatchStaleWipRetry:
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
