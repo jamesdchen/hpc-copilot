@@ -120,4 +120,14 @@ byte-identical today-path.
 
 ## Drift log
 
-*(empty — no implementation yet)*
+- **2026-07-11 (run #12, PRIORITY PROMOTION — user-flagged): on Claude Code
+  the chunked popup is the SOLE review channel, not a UX improvement.** The
+  live popup exercise established that Claude Code has NO out-of-band render
+  review surface: terminal `[file]` links are not a relay (run #11), and the
+  expanded Read result pane truncates long renders — fidelity, not
+  reviewability (run #12 finding 11 addendum). Every fallback rung below the
+  popup is either dead or the untrusted model-retyped copy. Interim shipped:
+  the popup embeds the bounded diff body (6 KB, disclosed truncation —
+  `1bd16c33`); this plan's chunking is what removes the bound. The rendering
+  probe (wave 4) should run EARLY to size real client limits — the 6 KB
+  budget is a guess.
