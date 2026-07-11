@@ -218,10 +218,38 @@ def _is_path_shaped(experiment_dir: Path, root_dirs: list[Path], literal: str) -
     a declared ``input_root`` (a bare filename that exists under a root). The
     second clause only ever fires on an EXISTING file, so it can never manufacture
     a missing-path finding — it just widens what counts as a checked path.
+
+    A literal spanning lines is never a path: no filesystem path carries a
+    newline, and multi-line prose routinely carries ``/`` (``"qlike / mse"`` —
+    the run-#12 docstring false-positive class).
     """
+    if "\n" in literal:
+        return False
     if any(sep in literal for sep in _PATH_SEPARATORS):
         return True
     return any((root / literal).exists() for root in root_dirs)
+
+
+def _docstring_const_ids(tree: ast.Module) -> set[int]:
+    """``id``s of every docstring Constant — statement-position prose, never a path.
+
+    A docstring is the string Expr opening a module/class/function body; its
+    content is documentation, so it is exempt from the path-shape check no matter
+    what separators it carries (run-#12: an executor docstring full of
+    ``a / b`` prose was flagged as a missing path literal).
+    """
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                ids.add(id(body[0].value))
+    return ids
 
 
 def _joinedstr_has_separator(node: ast.JoinedStr) -> bool:
@@ -371,7 +399,8 @@ def _check_executes_live(
     findings: list[NotebookLintFinding] = []
     unverifiable: list[str] = []
     declared: list[DeclaredOutput] = []
-    consumed_const_ids: set[int] = set()
+    # Docstrings start consumed: statement-position prose, never a path operand.
+    consumed_const_ids: set[int] = _docstring_const_ids(tree)
     reader_surfaced = False
 
     # Reader-call pass (S1): NAME-IDENTITY match over ``ast.Call`` targets. Runs

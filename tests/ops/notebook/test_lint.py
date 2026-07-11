@@ -185,6 +185,42 @@ LABEL = "hello world"
     assert result.unverifiable_paths == []
 
 
+def test_executes_live_docstring_prose_not_flagged(tmp_path: Path) -> None:
+    # Run-#12 false-positive class: module + class docstrings whose PROSE carries
+    # separators ("qlike / mse") are documentation, never path literals — and a
+    # multi-line string is never a path regardless of position.
+    source = '''\
+"""causal_tune — metrics: qlike / mse / rmse / mae spread.
+
+MACHINERY: src.backtest.executor.run_executor with per-bucket guards.
+"""
+
+# %%
+# hpc-audit-section: load-data
+class Roller:
+    """Rolling model / winablate_r1 machinery (single-line docstring)."""
+
+    def solve(self):
+        """fit / predict per bar."""
+        return 1
+'''
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
+    assert _rules(result, "executes_live") == []
+    assert result.unverifiable_paths == []
+
+
+def test_executes_live_multiline_non_docstring_literal_not_flagged(tmp_path: Path) -> None:
+    # A multi-line string ANYWHERE is prose (no path carries a newline).
+    source = '''\
+# %%
+# hpc-audit-section: load-data
+BANNER = """spread: a / b / c
+over two lines"""
+'''
+    result = _run(tmp_path, source, _TEMPLATE, input_roots=["inputs"])
+    assert _rules(result, "executes_live") == []
+
+
 def test_executes_live_computed_fstring_is_unverifiable(tmp_path: Path) -> None:
     source = """\
 # %%

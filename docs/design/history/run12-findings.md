@@ -68,3 +68,30 @@ spec grows `engines: [...]`; and axis vocab (SUBGROUPS bucket inventory) is
 pack-vocab class (the readers.json seam) — sealed data, not a grep. Honest
 residue: reading the prior program spec for the new sweep axes is real
 drafting research, not mechanizable.
+
+## 7. FIXED: executes-live flags docstring prose as missing path literals
+Live (causal_tune_linear lint): the module docstring (line 1) and the
+`RollingTunedLinear` class docstring were flagged `executes_live` — "path
+literal … does not exist under the declared input_roots" — because prose
+like "qlike / mse / rmse" carries `/` and every string Constant was
+path-shape tested. Two-part fix in `lint.py`: (a) docstrings (statement-
+position string Expr opening a module/class/function body) start consumed —
+documentation is never a path operand; (b) a literal containing a newline is
+never path-shaped (no filesystem path spans lines). The `f"{estimator}/
+{bucket}: …"` print in `unverifiable_paths` remains — an honest disclosed
+gap, not a finding. Regression tests mirror the live source shape.
+
+## 8. WATCH: elicitation bubble absent at audit-view is EXPECTED — the
+## firing site is append-decision
+The relay asked why no MCP elicitation bubble appeared at the sign-off
+brief. By design (D6, mcp-elicitation.md) the ONE firing site is
+`append-decision`: the popup opens only when the sign-off append hits the
+authorship gate with no matching human utterance (E-render primary — the
+popup carries the render digest, collects the typed utterance, and the
+append re-runs atomically). `notebook-audit-view` never elicits. What to
+watch when the demo agent reaches the sign-off: (a) popup appears → sign in
+the popup; (b) tool call stalls ~300 s then returns a plain refusal → the
+client declared elicitation but rendered nothing (declared-but-dark;
+Addendum 7 marks the channel dark for the session) — THAT is a finding;
+(c) instant plain refusal → the client never declared elicitation at
+initialize (hook-path degrade, also worth recording).
