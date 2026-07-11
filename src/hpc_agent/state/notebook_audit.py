@@ -131,6 +131,9 @@ __all__ = [
     "record_relay_due",
     "record_relay_discharge",
     "read_undischarged_relay_markers",
+    "ECHO_PROVENANCE_BLOCK",
+    "ECHO_PROVENANCE_RESPONSE",
+    "record_echo_provenance",
 ]
 
 #: The human sign-off block (D3). A ``notebook-sign-off`` append-decision record
@@ -1095,6 +1098,58 @@ def record_relay_discharge(
         block=RELAY_DISCHARGE_BLOCK,
         response=RELAY_DISCHARGE_RESPONSE,
         resolved=resolved,
+    )
+
+
+#: Sign-off echo PROVENANCE (2026-07-10 user ruling: the surfaced nag is
+#: REMOVED — "the LLM suggesting stuff is helpful for human amplification";
+#: the hazard is y-ack ease, guarded by the digest-read/tiered sign-off gates,
+#: not wording originality). Echo detection survives as a JOURNAL-ONLY record:
+#: honest provenance that a sign-off's wording matched a prior model-drafted
+#: line — never surfaced to the human, never blocking. Like the marker /
+#: discharge pair, deliberately ABSENT from :data:`_BLOCK_ATTESTOR` and
+#: :func:`_project_receipt` — provenance never enters the attestation
+#: reduction. Written by the relay-audit Stop hook, never by hand.
+ECHO_PROVENANCE_BLOCK = "notebook-echo-provenance"
+
+#: The honest, mechanical ``response`` an echo-provenance record carries.
+ECHO_PROVENANCE_RESPONSE = "echo_provenance"
+
+
+def record_echo_provenance(
+    experiment_dir: Path,
+    *,
+    audit_id: str,
+    response_sha12: str,
+    detail: str,
+    scope_kind: str = "notebook",
+) -> dict[str, Any] | None:
+    """Journal echo provenance for ONE sign-off response (append-only, deduped).
+
+    Idempotent per ``(audit_id, response_sha12)``: the hook re-runs at every
+    stop, so a second identical provenance line would be noise — an existing
+    record for the same normalized-response sha returns ``None`` and writes
+    nothing. ``detail`` carries the human-readable finding text (the
+    matched-prefix summary) for the archive.
+    """
+    for rec in read_decisions(experiment_dir, scope_kind, audit_id):
+        if str(rec.get("block") or "") != ECHO_PROVENANCE_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("response_sha12") == response_sha12:
+            return None
+    return append_decision(
+        experiment_dir,
+        scope_kind=scope_kind,
+        scope_id=audit_id,
+        block=ECHO_PROVENANCE_BLOCK,
+        response=ECHO_PROVENANCE_RESPONSE,
+        resolved={
+            "audit_id": audit_id,
+            "response_sha12": response_sha12,
+            "detail": detail,
+            "recorded_at": _utcnow_iso(),
+        },
     )
 
 

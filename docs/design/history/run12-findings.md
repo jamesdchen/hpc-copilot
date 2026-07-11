@@ -14,3 +14,14 @@ three-tier distribution ruling (`domain-packs.md` drift log 2026-07-10) —
 setup pins the lab pack into `.hpc/` and the template default falls out of
 the pin. (User, run #12: "it should be assumed that the 5-slug template is
 what is prepared for us to build a specific experiment off of.")
+
+## 2. The on-ramp interviews for experiment_dir — mechanizable from context
+The interview asked "experiment_dir — absolute path (this repo, or a
+separate dir?)". User: "is there a way to mechanize this? there should be
+enough context." There is: the session's cwd git root, when it carries an
+`interview.json` / `.hpc` tree (or is where /new-experiment-hpc was
+invoked), IS the experiment dir in the standard flow — the question is
+another compose-silently-and-disclose seat, same class as finding 1 (the
+template default). Fix: default experiment_dir = the invoking repo root;
+disclose in the record; ask ONLY when the cwd carries no experiment
+markers at all.

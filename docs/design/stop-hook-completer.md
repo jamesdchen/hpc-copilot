@@ -85,15 +85,17 @@ Audit-scope violations (`verify_notebook_relay` findings) ALWAYS take the
 append path: there is no per-audit brief store, so no poisoned-decision
 test applies to them (the sign-off boundary has its own gates).
 
-**Sign-off echo** (`_sign_off_echo_findings`, laundered authorship) —
-RULED (2026-07-10, user: "the completer just does its job"): violation
-class, append-only. The correction is a code-appended disclosure under the
-attestation ("this sign-off wording echoes a model-drafted line — the
-attestation stands only if the human re-affirms in their own words"), and
-the completer NEVER bounces for an echo — the model cannot repair
-authorship, so a forced model turn produces nothing the disclosure doesn't.
-The disclosure itself carries the re-attestation request when the sign-off
-is load-bearing.
+**Sign-off echo** (`_sign_off_echo_findings`) — RE-RULED (2026-07-10 night,
+user; supersedes the same-day append-only ruling): **journal-only
+provenance, in BOTH modes.** "The LLM suggesting stuff is helpful for human
+amplification — the human should be given a helping hand; the only thing
+that makes it too easy is to y-ack." Model-drafted wording is sanctioned;
+the y-ack-ease hazard is guarded by the digest-read / tiered sign-off
+gates, not wording originality. The detection survives as archive honesty:
+each finding becomes one deduped `notebook-echo-provenance` record
+(`state/notebook_audit.py::record_echo_provenance`) — never surfaced, never
+appended, never blocking, absent from the attestation reduction like the
+marker/discharge blocks.
 
 ### 3. Judgment class → BOUNCE (unchanged)
 

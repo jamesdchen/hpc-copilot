@@ -681,8 +681,20 @@ def _two_turn_transcript(tmp_path: Path, prior_assistant: str, final_text: str) 
     return path
 
 
-def test_echo_fires_on_pasted_assistant_drafted_signoff(tmp_path: Path) -> None:
-    """The model drafted the exact attestation the human pasted — flag it."""
+def _echo_provenance_records(exp: Path, audit_id: str = _NB_AUDIT) -> list[dict]:
+    from hpc_agent.state import notebook_audit as nb
+    from hpc_agent.state.decision_journal import read_decisions
+
+    return [
+        r
+        for r in read_decisions(exp, "notebook", audit_id)
+        if r.get("block") == nb.ECHO_PROVENANCE_BLOCK
+    ]
+
+
+def test_echo_is_journal_only_provenance_never_blocks(tmp_path: Path) -> None:
+    """RE-RULED 2026-07-10: a model-drafted attestation the human pasted is
+    JOURNAL-ONLY provenance — no block, no surfaced nag, one deduped record."""
     _seed_signoff(tmp_path, "I reviewed the load-data section and the parse looks correct.")
     transcript = _two_turn_transcript(
         tmp_path,
@@ -690,10 +702,16 @@ def test_echo_fires_on_pasted_assistant_drafted_signoff(tmp_path: Path) -> None:
         "The section is signed off. Ending the turn.",
     )
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
-    assert out is not None
-    assert out["decision"] == "block"
-    assert "laundered authorship" in out["reason"]
-    assert _NB_AUDIT in out["reason"]
+    assert out is None  # never blocks, never appends
+    records = _echo_provenance_records(tmp_path)
+    assert len(records) == 1
+    resolved = records[0]["resolved"]
+    assert resolved["audit_id"] == _NB_AUDIT
+    assert "model-composed wording" in resolved["detail"]
+
+    # Idempotent: a second stop over the same state writes NO duplicate.
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+    assert len(_echo_provenance_records(tmp_path)) == 1
 
 
 def test_echo_passes_on_original_human_utterance(tmp_path: Path) -> None:
@@ -706,6 +724,7 @@ def test_echo_passes_on_original_human_utterance(tmp_path: Path) -> None:
         "Recorded your sign-off. Ending the turn.",
     )
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+    assert _echo_provenance_records(tmp_path) == []
 
 
 def test_echo_ignores_final_message_quoting_the_response(tmp_path: Path) -> None:
@@ -720,6 +739,7 @@ def test_echo_ignores_final_message_quoting_the_response(tmp_path: Path) -> None
         "parse looks correct.' Ending the turn.",
     )
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+    assert _echo_provenance_records(tmp_path) == []
 
 
 def test_echo_ignores_short_response(tmp_path: Path) -> None:
@@ -899,11 +919,11 @@ def test_completer_appends_correction_no_block(
     assert "running" in msg  # the model's claim is quoted
 
 
-def test_completer_appends_echo_disclosure_no_block(
+def test_completer_mode_echo_is_journal_only_no_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Echo class (RULED append-only): the disclosure is appended, NEVER bounced —
-    the model cannot repair authorship, so a forced turn produces nothing new."""
+    """RE-RULED 2026-07-10: echo is journal-only provenance in the COMPLETER
+    mode too — no systemMessage, no bounce, one deduped provenance record."""
     _activate_completer(monkeypatch)
     _seed_signoff(tmp_path, "I reviewed the load-data section and the parse looks correct.")
     transcript = _two_turn_transcript(
@@ -912,11 +932,8 @@ def test_completer_appends_echo_disclosure_no_block(
         "The section is signed off. Ending the turn.",
     )
     out = relay_audit_stop.build_hook_output(_payload(tmp_path, transcript))
-    assert out is not None
-    assert "decision" not in out
-    msg = out["systemMessage"]
-    assert "echo disclosure" in msg
-    assert "re-affirms in their own words" in msg
+    assert out is None  # nothing surfaced in either mode
+    assert len(_echo_provenance_records(tmp_path)) == 1
 
 
 # --- the poisoned-decision test (the surviving bounce) -----------------------

@@ -592,8 +592,13 @@ def _prior_assistant_texts(transcript_path: Path) -> list[str]:
 
 def _sign_off_echo_findings(
     experiment_dir: Path, notebooks_dir: Path, prior_texts: list[str]
-) -> list[str]:
-    """Flag journaled sign-offs whose response echoes a prior assistant line.
+) -> list[tuple[str, str, str]]:
+    """Detect sign-offs whose response echoes a prior assistant line.
+
+    Returns ``(audit_id, response_sha12, detail_text)`` triples — JOURNAL-ONLY
+    provenance input (2026-07-10 user ruling: the surfaced nag is REMOVED; echo
+    detection never blocks and never appends — see
+    ``state/notebook_audit.py::record_echo_provenance``).
 
     For each discoverable audit (capped), the LATEST ``notebook-sign-off``
     record's ``response`` is compared against the prior-assistant corpus:
@@ -627,7 +632,7 @@ def _sign_off_echo_findings(
     from hpc_agent.state import notebook_audit as nb
     from hpc_agent.state.decision_journal import read_decisions
 
-    findings: list[str] = []
+    findings: list[tuple[str, str, str]] = []
     for audit_id in audit_ids[:_MAX_ECHO_AUDITS]:
         if len(findings) >= _MAX_ECHO_FINDINGS:
             break
@@ -665,13 +670,44 @@ def _sign_off_echo_findings(
         resolved = record.get("resolved")
         section = resolved.get("section") if isinstance(resolved, dict) else None
         where = f" section {section}" if section else ""
+        import hashlib
+
+        response_sha12 = hashlib.sha256(norm_resp.encode("utf-8")).hexdigest()[:12]
         findings.append(
-            f"[{audit_id}]{where}: the journaled sign-off response {response[:80]!r} "
-            f"echoes a prior assistant-authored line ({matched[:80]!r}) — laundered "
-            "authorship (the model drafted the words the human pasted as their "
-            "attestation). Disclose that the sign-off wording was model-composed."
+            (
+                audit_id,
+                response_sha12,
+                f"[{audit_id}]{where}: the journaled sign-off response {response[:80]!r} "
+                f"matches a prior assistant-authored line ({matched[:80]!r}) — "
+                "model-composed wording (provenance record; drafting help is "
+                "sanctioned, this is the archive's honesty about authorship).",
+            )
         )
     return findings
+
+
+def _journal_echo_provenance(experiment_dir: Path, echoes: list[tuple[str, str, str]]) -> None:
+    """Journal echo provenance (JOURNAL-ONLY — never surfaced, never blocks).
+
+    The 2026-07-10 user ruling: LLM drafting help is desired human
+    amplification; the y-ack-ease hazard is guarded by the digest-read /
+    tiered sign-off gates, not by wording originality. Each detection becomes
+    one deduped ``notebook-echo-provenance`` record
+    (:func:`hpc_agent.state.notebook_audit.record_echo_provenance`). Fail-open
+    per record — provenance must never wedge a stop.
+    """
+    from hpc_agent.state.notebook_audit import record_echo_provenance
+
+    for audit_id, response_sha12, detail in echoes:
+        try:
+            record_echo_provenance(
+                experiment_dir,
+                audit_id=audit_id,
+                response_sha12=response_sha12,
+                detail=detail,
+            )
+        except Exception:
+            continue
 
 
 def _decision_state_findings(
@@ -846,18 +882,20 @@ def _gather_violations(
 
 
 def _rejector_output(
-    violations: list[_Violation], echoes: list[str], absent_markers: list[_AbsentMarker]
+    violations: list[_Violation], absent_markers: list[_AbsentMarker]
 ) -> dict[str, Any] | None:
     """Today's REJECTOR shape — the capability-absent (dark) default (D1).
 
-    Byte-for-byte the pre-completer behavior: violation-class findings + echoes +
-    omission findings are itemized into ONE block reason, or ``None`` when there
-    is nothing to say. This is what the completer degrades to wherever the
-    ``stop-hook-append`` capability is absent/unknown.
+    The pre-completer behavior minus the echo segment (RE-RULED 2026-07-10:
+    echo is journal-only provenance, never surfaced in EITHER mode):
+    violation-class findings + omission findings are itemized into ONE block
+    reason, or ``None`` when there is nothing to say. This is what the
+    completer degrades to wherever the ``stop-hook-append`` capability is
+    absent/unknown.
     """
     findings = [v.text for v in violations]
     omissions = [am.omission_text for am in absent_markers]
-    if not findings and not omissions and not echoes:
+    if not findings and not omissions:
         return None
 
     segments: list[str] = []
@@ -869,12 +907,6 @@ def _rejector_output(
             + ". Correct the relay to match the journal (verify with "
             "`hpc-agent verify-relay`) before ending the turn — never relay "
             "numbers or state the journal does not support."
-        )
-    if echoes:
-        segments.append(
-            "hpc-agent sign-off echo (laundered authorship): "
-            + "; ".join(echoes)
-            + " Never compose the human's sign-off utterance."
         )
     if omissions:
         segments.append("hpc-agent relay-due discharge (the omission gate): " + " ".join(omissions))
@@ -963,20 +995,6 @@ def _compose_correction(v: _Violation) -> str:
     )
 
 
-def _compose_echo_disclosure(echo: str) -> str:
-    """A code-appended sign-off-echo disclosure (§2 echo class, RULED append-only).
-
-    The completer NEVER bounces for an echo — the model cannot repair authorship,
-    so a forced turn produces nothing the disclosure does not. The disclosure
-    carries the re-attestation request for a load-bearing sign-off.
-    """
-    return (
-        "hpc-agent sign-off echo disclosure — code-appended (laundered authorship): "
-        + echo
-        + " The attestation stands only if the human re-affirms in their own words."
-    )
-
-
 def _is_poisoned_decision(experiment_dir: Path, v: _Violation) -> bool:
     """The poisoned-decision test (§2): does *v* contradict a PENDING proposal?
 
@@ -1034,7 +1052,6 @@ def _completer_output(
     forced: bool,
     append_on_block_ok: bool,
     violations: list[_Violation],
-    echoes: list[str],
     absent_markers: list[_AbsentMarker],
 ) -> dict[str, Any] | None:
     """The COMPLETER shape (D1–D4): APPEND what code holds, bounce only on poison.
@@ -1043,7 +1060,8 @@ def _completer_output(
       (D3, ``discharged_by="completer"``); no bounce.
     * Violations → append a code-authored correction UNDER the claim, EXCEPT a
       poisoned-decision violation, which BOUNCES (the surviving block).
-    * Echoes → append the disclosure; NEVER bounce.
+    * Echoes are NOT handled here (RE-RULED 2026-07-10): journal-only
+      provenance, recorded upstream in ``build_hook_output`` in both modes.
 
     Composition (D2): completions/corrections ride ONE ``systemMessage``; a
     poisoned bounce ALSO carries ``{"decision":"block","reason":...}`` for those
@@ -1092,7 +1110,6 @@ def _completer_output(
                 continue  # cannot record the discharge → do not claim it; leave owed
             append_parts.append(artifact)
         append_parts.extend(_compose_correction(v) for v in corrections)
-        append_parts.extend(_compose_echo_disclosure(e) for e in echoes)
 
     out: dict[str, Any] = {}
     if append_parts:
@@ -1173,17 +1190,19 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     run_ids = mentioned_run_ids(relay_text, runs_dir) if runs_dir.is_dir() else []
     audit_ids = mentioned_audit_ids(relay_text, notebooks_dir) if notebooks_dir.is_dir() else []
 
-    # Sign-off echo detection (queue item 2): a laundered attestation names
-    # nothing in the final text, so this scans the audit journals directly.
-    # Fail-open in full.
-    echoes: list[str] = []
+    # Sign-off echo detection (queue item 2, RE-RULED 2026-07-10): JOURNAL-ONLY
+    # provenance — never surfaced, never blocks (drafting help is sanctioned
+    # amplification; the y-ack-ease hazard lives at the sign-off gates). The
+    # detection scans the audit journals directly and each finding becomes one
+    # deduped notebook-echo-provenance record. Fail-open in full.
     if notebooks_dir.is_dir():
-        try:
-            echoes = _sign_off_echo_findings(
-                cwd_dir, notebooks_dir, _prior_assistant_texts(Path(transcript))
+        with contextlib.suppress(Exception):
+            _journal_echo_provenance(
+                cwd_dir,
+                _sign_off_echo_findings(
+                    cwd_dir, notebooks_dir, _prior_assistant_texts(Path(transcript))
+                ),
             )
-        except Exception:
-            echoes = []
 
     # Violation-class findings (rule-10 + paraphrase + decision-state). Fail-open.
     try:
@@ -1191,14 +1210,12 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     except Exception:
         violations = []
 
-    if not run_ids and not audit_ids and not absent_markers and not echoes and not violations:
+    if not run_ids and not audit_ids and not absent_markers and not violations:
         return None  # nothing attributable to audit — the run path stays untouched
 
     if not completer_active:
-        return _rejector_output(violations, echoes, absent_markers)
-    return _completer_output(
-        cwd_dir, forced, append_on_block_ok, violations, echoes, absent_markers
-    )
+        return _rejector_output(violations, absent_markers)
+    return _completer_output(cwd_dir, forced, append_on_block_ok, violations, absent_markers)
 
 
 def main(argv: list[str] | None = None) -> int:
