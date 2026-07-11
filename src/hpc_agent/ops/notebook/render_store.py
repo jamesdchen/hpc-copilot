@@ -106,12 +106,21 @@ def write_render(experiment_dir: Path, *, audit_id: str, view: SectionView) -> P
     Creates the ``.hpc/renders/<audit_id>/`` parent lazily (the ``RepoLayout``
     idiom) and writes the header + markdown at the ``view_sha``-addressed path.
     The write is idempotent by construction: the bytes are deterministic and the
-    path is content-addressed, so re-rendering the same section view rewrites the
-    same file with the same content.
+    path is content-addressed — and a file already carrying the identical bytes
+    is left UNTOUCHED, never rewritten. The skip is load-bearing, not an
+    optimization: the file's mtime is the sign-off gate's temporal anchor (a
+    candidate utterance must post-date the render the human saw — run-#12
+    finding 10), so a re-view of an unchanged section must not move it.
     """
     path = render_path(experiment_dir, audit_id=audit_id, section=view.slug, view_sha=view.view_sha)
+    content = _render_bytes(audit_id=audit_id, view=view)
+    try:
+        if path.is_file() and path.read_text(encoding="utf-8") == content:
+            return path
+    except OSError:
+        pass  # unreadable existing file → fall through to the rewrite
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_render_bytes(audit_id=audit_id, view=view), encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
     return path
 
 

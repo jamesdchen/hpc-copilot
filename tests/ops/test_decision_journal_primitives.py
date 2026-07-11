@@ -1134,8 +1134,10 @@ def test_signoff_logged_utterance_lands_when_response_is_mechanical(tmp_path: Pa
     """The tiered evidence leg (run-#12 finding 9): with the capture hook / popup
     log present, a logged human utterance that names the slug and engages the
     diff lands the sign-off — the agent-relayed response is only the record.
-    This is the leg that lets the E4 elicitation retry succeed."""
+    This is the leg that lets the E4 elicitation retry succeed. Render written
+    FIRST: only an utterance that post-dates the render counts (finding 10)."""
     _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
     _log_utterance(
         tmp_path, "sign model-fit — the regularization=0.5 term is intentional, converged asserted"
     )
@@ -1155,6 +1157,7 @@ def test_signoff_composed_response_refused_when_log_lacks_signoff(tmp_path: Path
     response that would pass every token check attests nothing — the human never
     typed a sign-off."""
     _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
     _log_utterance(tmp_path, "hello, please check the cluster status")
     section_sha, view_sha = _nb_shas("model-fit")
     with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
@@ -1171,9 +1174,37 @@ def test_signoff_logged_generic_praise_still_refused(tmp_path: Path) -> None:
     """The raised HUMAN_REQUIRED bar applies to the logged utterance too — naming
     the slug with generic praise engages nothing."""
     _write_notebook_fixture(tmp_path)
+    _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
     _log_utterance(tmp_path, "model-fit looks great, nice work")
     section_sha, view_sha = _nb_shas("model-fit")
     with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_stale_utterance_refused_temporal_binding(tmp_path: Path) -> None:
+    """Run-#12 finding 10 (the live false-pass): a prior prompt that happens to
+    name the slug + diff identifiers is NOT attestation — candidates must
+    post-date the render the human signs. The render's mtime is pushed forward
+    to make the pre-existing utterance unambiguously stale."""
+    import os as _os
+    import time as _time
+
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(
+        tmp_path,
+        "resume the run: model-fit uses regularization=0.5, converged asserted — popup expected",
+    )
+    render = _write_section_render(tmp_path, section="model-fit", audit_id="audit-x")
+    future = _time.time() + 300
+    _os.utime(render, times=(future, future))
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
         _signoff(
             tmp_path,
             section="model-fit",

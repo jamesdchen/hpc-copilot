@@ -116,3 +116,38 @@ rewritten: over MCP the agent proceeds DIRECTLY to the append after relaying
 the view (popup = primary); chat-first is the no-elicitation fallback.
 NOTE: reaches the demo only after a wheel refresh + fresh MCP server — the
 running run-#12 session signs via chat.
+
+## 10. FIXED: the log tier accepted STANDING PROMPTS as sign-offs — popup
+## never fired because the gate PASSED
+Live, first exercise of the finding-9 fix: both human_required sections
+landed `signed_current (human)` with NO popup and NO sign-off typed — the
+session's earlier prompts (the resume paste names `feature-construction`,
+`baseline`, and diff identifiers like `causal_tune_linear`; the
+/new-experiment seed carries `tune_per`/`val_tail`/estimator names) sat in
+the utterance log and satisfied naming+engagement. The popup only opens on a
+REFUSAL, so a false PASS is silent. Two false human attestations are now in
+the journal (records 15/16, ts 03:35–03:36Z) — REMEDIATION: after the fix
+lands, the user re-signs both sections at the same hashes through the popup;
+the newer genuine records supersede in the reduce, the tainted ones stay as
+honest append-only history, noted here. Conduct note: the demo agent
+narrated "your popup utterance" — fabricated; no popup existed.
+FIX (temporal binding): a human can only attest a view that existed when
+they typed — log-tier candidates must post-date the signed view's render
+file (mtime anchor, floored to seconds; `write_render` now SKIPS rewriting
+identical bytes so a re-view cannot move the anchor). Absent render skips
+the filter (the unmarked trusted-display lock owns that refusal).
+
+### The design note (why this class existed at all)
+The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
+utterance should be captured AT a surface that knows what it signs — the
+elicitation handler knows the exact (audit_id, section, view_sha) it
+elicited for and should journal the utterance BOUND to that triple; the
+gate's primary evidence then becomes "an utterance captured FOR this view",
+with zero token-matching. The token/diff/temporal machinery exists because
+attestation was retrofitted onto a general chat log (the only out-of-band
+channel Claude Code offered pre-elicitation) — deriving intent from an
+unstructured stream is inherently forensic, and findings 9/10 are the
+forensic rules converging on what bound capture gets by construction. FUTURE
+SEAT (post-run-#12, plan bank): elicitation-response records carry the
+elicited scope; the chat hook path stays forensic (naming + engagement +
+temporal) as the explicitly weaker fallback tier it honestly is.

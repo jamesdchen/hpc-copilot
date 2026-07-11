@@ -1097,6 +1097,72 @@ def _names_slug(response: str, slug: str) -> bool:
     return bool(pattern.search(response or ""))
 
 
+def _signoff_fresh_human_texts(
+    experiment_dir: Path,
+    *,
+    actor_ids: list[str],
+    audit_id: str,
+    section: str,
+    view_sha: str,
+) -> list[str] | None:
+    """The utterance-log evidence pool for ONE sign-off, TEMPORALLY BOUND.
+
+    The actor-scoped log read (:func:`_actor_scoped_human_texts` semantics)
+    plus the run-#12 finding-10 filter: a human can only attest a view that
+    existed when they typed, so a candidate utterance must be logged at or
+    after the signed view's render file was written (its mtime, floored to
+    whole seconds — utterance ``ts`` is seconds-resolution). This kills the
+    standing-sign-off class: a kickoff / resume prompt that happened to name
+    the slug and a diff identifier minutes before the render existed is not
+    attestation, and letting it pass is what kept the sign-off popup from
+    ever firing (the gate passed instead of refusing).
+
+    ``None`` — no log at all, or an unattributed >1-actor session — falls to
+    the friction tier exactly like the unscoped read. An EMPTY list is
+    different: the log exists but nothing fresh names this sign-off, so the
+    gate refuses with the authorship marker (the popup's cue). An absent /
+    unstatable render SKIPS the filter (returns the unfiltered pool): the
+    missing-render refusal belongs to the UNMARKED trusted-display lock,
+    where re-eliciting an utterance cannot fix it. A record with no
+    parseable ``ts`` is excluded — conservative; the popup remedies.
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+    from hpc_agent.state.utterances import read_utterances
+
+    if len(actor_ids) > 1:
+        actor = _session_actor(experiment_dir, actor_ids)
+        if actor is None:
+            return None
+        records = read_utterances(experiment_dir, actor=actor)
+    else:
+        records = read_utterances(experiment_dir)
+    if not records:
+        return None
+
+    from hpc_agent.ops import notebook_view as _notebook_view
+
+    render = _notebook_view.render_path(
+        experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
+    )
+    try:
+        anchor = int(render.stat().st_mtime)
+    except OSError:
+        return [str(r.get("text") or "") for r in records]
+
+    fresh: list[str] = []
+    for rec in records:
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if when >= anchor:
+            fresh.append(str(rec.get("text") or ""))
+    return fresh
+
+
 def _section_specific_tokens(section_view: Any) -> set[str]:
     """The identifier pool the raised human-required bar checks a sign-off against.
 
@@ -1397,7 +1463,10 @@ def _assert_signoff_authorship(
     elicitation handler appends to the same log, which is what lets the MCP
     retry-once land) — and the agent-relayed ``response`` carries no authorship
     weight; absent a log the non-bare ``response`` is the friction tier
-    (byte-identical v1). The tier is RECOMPUTED here over the CANONICAL view
+    (byte-identical v1). Log-tier candidates are TEMPORALLY BOUND (finding 10):
+    only utterances logged after the signed view's render was written count —
+    a prior prompt that happened to name the slug is not attestation
+    (:func:`_signoff_fresh_human_texts`). The tier is RECOMPUTED here over the CANONICAL view
     (:func:`~hpc_agent.ops.notebook.canonical.build_canonical_view`) — with the
     REAL lint findings (recomputed server-side from the recorded roots), the
     journaled fresh receipts, and the recorded attention order. The v1 "statically
@@ -1504,7 +1573,13 @@ def _assert_signoff_authorship(
     # an unattributed session falls to the friction tier, never the union.
     response = str(spec.response or "")
     _signoff_actor_ids, _signoff_policy = _read_interview_actors(experiment_dir)
-    _signoff_harness_texts = _actor_scoped_human_texts(experiment_dir, _signoff_actor_ids)
+    _signoff_harness_texts = _signoff_fresh_human_texts(
+        experiment_dir,
+        actor_ids=_signoff_actor_ids,
+        audit_id=audit_id,
+        section=section,
+        view_sha=view_sha,
+    )
     if _signoff_harness_texts is None:
         if _is_bare_ack(response):
             _refuse_missing_authorship(
