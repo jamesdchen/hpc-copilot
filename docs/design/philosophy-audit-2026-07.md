@@ -72,6 +72,7 @@ missing their siblings' upgrades.
 | B11 | CLI verbs over Python internals; MCP-first; no version strings (verify by import/source) | agent-facing surfaces are verbs; docs never instruct source-reading; env checks inspect source | worker prompts + skills sweep |
 | B12 | Journal as truth: state claims must match a journal record at utterance time | no surface invites unjournaled state claims | item-5 hook landed; sweep prose |
 | B13 | No bare `subprocess.run` reachable from `mcp-serve` (finding 4's enforcement candidate — promote to a lint) | stdin isolation + tree-kill bounded everywhere under the server | NEW ROW to write |
+| B14 | Trust the channel, not the inference: attestation is CAPTURED BOUND at a scope-aware surface, never reconstructed forensically from a general stream (findings 9/10 — the treadmill class) | every evidence tier is honestly ranked; bound capture ahead of forensic ahead of friction; no new gate starts at the forensic tier when a binding surface exists | `docs/design/bound-capture.md` is the banked plan; sweep other gates for the same retrofit smell |
 
 ### C. Skill/prose surfaces (rot fastest — full re-read against current rulings)
 
