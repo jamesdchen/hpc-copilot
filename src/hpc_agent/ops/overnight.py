@@ -1148,16 +1148,20 @@ def consent_marked_dead(experiment_dir: Path, scope_kind: str, scope_id: str) ->
 
 
 def _heal_respawn_count(experiment_dir: Path, campaign_id: str) -> int:
-    """How many REAL respawn attempts have been journaled against the cap.
+    """How many REAL heal attempts have been journaled against the cap.
 
-    Only ``outcome=respawned`` heal-attempt lines count toward the cap — a
-    disclosed no-op (a live-lease-held attempt) is not a spent attempt.
+    An ``outcome=respawned`` (a watcher was launched) OR an
+    ``outcome=spawn-failed`` (the launch itself failed) heal-attempt line counts
+    toward the cap: a deterministically-failing spawn (persistent OSError /
+    DriveModeError) must exhaust the bounded budget and flip the consent DEAD,
+    not retry forever. Only a disclosed no-op (``outcome=noop-lease-held``, a
+    live-lease-held attempt) is exempt — it is not a spent attempt.
     """
     n = 0
     for line in read_consumption_ledger(experiment_dir, "campaign", campaign_id):
         if str(line.get("event_kind") or "") != HEAL_ATTEMPT_KIND:
             continue
-        if str(_as_dict(line.get("detail")).get("outcome") or "") == "respawned":
+        if str(_as_dict(line.get("detail")).get("outcome") or "") in ("respawned", "spawn-failed"):
             n += 1
     return n
 
@@ -1320,7 +1324,7 @@ def self_heal_campaign(
             experiment_dir,
             campaign_id=campaign_id,
             failed_at=now,
-            reason=f"heal cap reached ({attempts}/{cap} respawns did not revive the chain)",
+            reason=f"heal cap reached ({attempts}/{cap} heal attempts did not revive the chain)",
             attempts=attempts,
         )
         return HealOutcome(

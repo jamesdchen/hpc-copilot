@@ -350,6 +350,62 @@ def test_cap_exhaustion_flips_consent_dead_and_refuses(
     )
 
 
+def test_spawn_failed_counts_toward_cap(
+    experiment_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deterministically-failing watcher spawn is a SPENT attempt (bug-sweep #46).
+
+    Otherwise a persistent OSError/DriveModeError retries forever, the fail-loud
+    DEAD flip never fires, and the attempts are invisible in the morning brief.
+    """
+    _seed_campaign_consent(experiment_dir)
+    _seed_dead_chain(experiment_dir)
+    from hpc_agent._kernel.lifecycle import detached as detached_mod
+
+    def _boom(**_k: Any) -> Any:
+        raise OSError("persistent spawn failure (EMFILE)")
+
+    monkeypatch.setattr(detached_mod, "launch_submit_block_detached", _boom)
+    outcome = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    assert outcome.status == "spawn-failed"
+    ledger = overnight.read_consumption_ledger(experiment_dir, "campaign", _CAMPAIGN_ID)
+    attempts = [ln for ln in ledger if ln["event_kind"] == overnight.HEAL_ATTEMPT_KIND]
+    assert len(attempts) == 1 and attempts[0]["detail"]["outcome"] == "spawn-failed"
+    # The spawn-failure DID spend an attempt against the cap.
+    assert overnight._heal_respawn_count(experiment_dir, _CAMPAIGN_ID) == 1
+
+
+def test_cap_consecutive_spawn_failures_flip_dead_and_fail_loud(
+    experiment_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cap` consecutive spawn failures exhaust the budget and fail loud, with the
+    spawn-failed attempts disclosed under the fail-loud line (bug-sweep #46)."""
+    _seed_campaign_consent(experiment_dir, resolved=_resolved(heal_attempts_cap=2))
+    _seed_dead_chain(experiment_dir)
+    from hpc_agent._kernel.lifecycle import detached as detached_mod
+
+    def _boom(**_k: Any) -> Any:
+        raise OSError("persistent spawn failure (ENOSPC)")
+
+    monkeypatch.setattr(detached_mod, "launch_submit_block_detached", _boom)
+    first = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    second = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    third = overnight.self_heal_campaign(experiment_dir, campaign_id=_CAMPAIGN_ID)
+    assert first.status == "spawn-failed"
+    assert second.status == "spawn-failed"
+    assert third.status == "exhausted"
+    assert overnight.consent_marked_dead(experiment_dir, "campaign", _CAMPAIGN_ID) is True
+    # The morning brief now leads with a heal_failure attaching the spawn-failed
+    # attempts (a HEAL_FAILED line now exists once the cap fires).
+    brief = overnight.overnight_morning_brief(
+        experiment_dir, scope_kind="campaign", scope_id=_CAMPAIGN_ID
+    )
+    heal_failure = brief.get("heal_failure")
+    assert heal_failure is not None, brief
+    detail = heal_failure.get("attempts_detail") or []
+    assert any(d.get("outcome") == "spawn-failed" for d in detail), heal_failure
+
+
 def test_structurally_impossible_when_no_inflight_run_fails_loud(
     experiment_dir: Path, spawn_recorder: list[dict[str, Any]]
 ) -> None:

@@ -890,7 +890,21 @@ def verify_canary(
                 file_glob=file_glob,
                 remote_activation=remote_activation,
             )
-        except (errors.RemoteCommandFailed, OSError) as exc:
+        except (
+            errors.RemoteCommandFailed,
+            errors.SshCircuitOpen,
+            errors.SshUnreachable,
+            OSError,
+        ) as exc:
+            # SshCircuitOpen (an HpcError, NOT an OSError) is raised when a
+            # transient blip trips the per-host breaker; without it here the
+            # canary gate crashes with an undeclared exception instead of riding
+            # the wait budget. _classify_poll_failure returns "transient" for
+            # everything that is not RemoteCommandFailed rc 126/127, so an
+            # open-circuit poll is recorded as last_poll_error and the loop rides
+            # the budget until the breaker heals or the budget elapses (then the
+            # got_report/last_poll_error arm returns reporter_unreachable). This
+            # also makes the docstring's "SshUnreachable is transient" limb live.
             last_poll_error = exc
             failure_class = _classify_poll_failure(exc)
             rc = exc.returncode if isinstance(exc, errors.RemoteCommandFailed) else None

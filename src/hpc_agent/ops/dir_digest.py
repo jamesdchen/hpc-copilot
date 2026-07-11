@@ -497,7 +497,15 @@ def _digest_remote(*, cluster: str, path: str, newest_n: int, marker_scan: bool)
         )
 
     stdout = proc.stdout
-    if stdout.splitlines()[:1] == [_MISSING_SENTINEL]:
+    # Presence-match the sentinel anywhere in stdout: the probe runs under
+    # ``bash -lc`` (a login shell) whose profile/module chatter routinely
+    # precedes our output, so a positional first-line check misreports a
+    # missing tree as an existing empty dir. The missing-directory branch emits
+    # ONLY the sentinel (no section headers) and a legitimate digest never
+    # contains the literal sentinel string, so presence-matching is safe and
+    # robust to interleaved login-shell chatter (the same rationale
+    # preflight/check.py::_cluster_combined_probe already relies on).
+    if _MISSING_SENTINEL in stdout.splitlines():
         error = f"no such directory: {path}"
         return DirDigestResult(
             path=path,

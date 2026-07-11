@@ -302,6 +302,26 @@ def test_spec_arg_unreadable_path_is_user_error_not_internal(
     assert env["category"] == "user"
 
 
+def test_spec_arg_utf16_file_is_user_error_not_internal(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """A UTF-16 spec file (the classic PowerShell ``... > spec.json`` redirection
+    on Windows writes UTF-16LE with a BOM) is a user file-encoding error, so it
+    maps to ``spec_invalid`` with an encoding hint — never an ``internal``
+    envelope from an uncaught UnicodeDecodeError."""
+    _register_syn_inline()
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps({"run_id": "pi-estimation"}), encoding="utf-16")
+    ns = argparse.Namespace(spec=spec_file)
+    rc = dispatch_primitive("syn-inline", ns)
+    assert rc == 1  # EXIT_USER_ERROR, never EXIT_INTERNAL
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["ok"] is False
+    assert env["error_code"] == "spec_invalid"
+    assert env["category"] == "user"
+    assert "UTF-8" in env["message"]
+
+
 def test_spec_arg_rejects_invalid_model(capsys: pytest.CaptureFixture[str], tmp_path) -> None:
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({"name": "alpha", "count": 0}), encoding="utf-8")

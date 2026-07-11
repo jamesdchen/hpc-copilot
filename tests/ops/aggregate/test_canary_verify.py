@@ -237,6 +237,27 @@ def test_reporter_unreachable_when_every_poll_fails(
     assert "reporter never returned" in result["details"]
 
 
+def test_open_circuit_rides_budget_to_reporter_unreachable(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ``SshCircuitOpen`` (an HpcError, NOT an OSError) tripped by a transient
+    breaker must be classified transient and ride the wait budget to
+    ``reporter_unreachable`` — never crash the canary gate with an undeclared
+    exception (bug-sweep #50)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    ticks = iter([0.0, 1.0, 1e9, 1e9, 1e9])
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(ticks))
+    with mock.patch(
+        "hpc_agent.infra.cluster_status.ssh_status_report",
+        side_effect=errors.SshCircuitOpen("breaker open for user@h until deadline"),
+    ):
+        result = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=30)
+    assert result["ok"] is False
+    assert result["failure_kind"] == "reporter_unreachable"
+
+
 def test_vanished_canary_resolves_completed_unknown_fast(
     tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

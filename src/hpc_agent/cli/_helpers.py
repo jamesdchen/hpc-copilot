@@ -321,6 +321,16 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
         loaded = json.loads(spec_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
+    except UnicodeDecodeError as exc:
+        # A UTF-16 (or otherwise non-UTF-8) spec file — the classic offender is
+        # PowerShell redirection (``... > spec.json``) which writes UTF-16LE
+        # with a BOM. That is a user file-encoding error, not an ``internal``
+        # envelope; classify it as spec_invalid with a fix hint.
+        raise errors.SpecInvalid(
+            f"--spec file is not valid UTF-8 ({spec_path}): {exc}. "
+            "Re-save it as UTF-8 (PowerShell ``>`` redirection writes UTF-16 — "
+            "use ``Set-Content -Encoding utf8`` or ``Out-File -Encoding utf8``)."
+        ) from exc
     except OSError as exc:
         # Not-a-readable-file for any other reason (invalid characters in the
         # path on Windows, a directory, permissions). Same user-error class as

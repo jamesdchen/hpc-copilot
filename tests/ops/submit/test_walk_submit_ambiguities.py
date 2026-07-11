@@ -182,6 +182,38 @@ def test_data_axis_recommends_interview_hint_over_fail_safe(tmp_path) -> None:
     assert "interview.json" in (da.get("context") or {}).get("source", "")
 
 
+def test_tasks_py_interview_materialized_provenance(tmp_path) -> None:
+    """Run-#12 finding 14: a tasks.py the interview materialized from a typed
+    recipe is labeled ``interview_materialized``, never ``hand_written_tasks_py``
+    — the walk reads the interview's recorded origin."""
+    import json as _json
+
+    (tmp_path / "interview.json").write_text(
+        _json.dumps({"_materialized": {"tasks_py_origin": "interview_materialized"}}),
+        encoding="utf-8",
+    )
+    out = _walk(
+        cluster="hoffman2",
+        goal="g",
+        tasks_py_present=True,
+        experiment_dir=str(tmp_path),
+    )
+    assert out["provenance"]["task_generator"] == "interview_materialized"
+    assert "task_generator" not in _amb_fields(out)
+
+
+def test_tasks_py_hand_written_provenance_without_interview(tmp_path) -> None:
+    """No interview record (or a hand_written origin) → the hand-written label
+    stands, byte-identical to prior behavior."""
+    out = _walk(
+        cluster="hoffman2",
+        goal="g",
+        tasks_py_present=True,
+        experiment_dir=str(tmp_path),
+    )
+    assert out["provenance"]["task_generator"] == "hand_written_tasks_py"
+
+
 def test_data_axis_fail_safe_stands_without_a_hint(tmp_path) -> None:
     out = _walk(
         cluster="hoffman2",

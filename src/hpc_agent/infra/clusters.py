@@ -581,6 +581,15 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     bare-python behaviour. *conda_env* (the per-run resolved env from the
     run sidecar) overrides; otherwise the first ``conda_envs`` entry is used.
     The ``<your_env>`` placeholder is treated as unset.
+
+    The ``conda activate`` is emitted whenever a conda env is configured AND
+    conda can be reached — via an explicit ``source <conda_source>`` OR a
+    ``module load`` (the module-provided-conda configuration). Gating the
+    activate on ``conda_source`` alone left every control-plane command on a
+    module-conda cluster running under the login node's bare ``python`` (``No
+    module named ...`` / rc 127); Activation finding-24 requires the activate in
+    that case too. A cluster with neither a source nor any module has no way to
+    reach conda, so it still emits no (doomed) ``conda activate``.
     """
     parts: list[str] = []
     for mod in cluster_cfg.get("modules") or []:
@@ -588,6 +597,10 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     conda_source = cluster_cfg.get("conda_source")
     if conda_source:
         parts.append(f"source {shlex.quote(str(conda_source))}")
+    # ``parts`` is non-empty iff a ``module load`` or a ``source`` was emitted —
+    # exactly the "conda is reachable" condition. Activate the configured env in
+    # both the source-conda and module-conda configurations.
+    if parts:
         env = conda_env or next(iter(cluster_cfg.get("conda_envs") or []), None)
         if env and env != "<your_env>":
             parts.append(f"conda activate {shlex.quote(str(env))}")

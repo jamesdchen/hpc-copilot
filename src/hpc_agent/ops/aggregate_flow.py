@@ -1579,6 +1579,7 @@ def _aggregate_flow_impl(
 
     # Optionally pull summaries.
     summaries_local: str | None = None
+    summary_pull_error: str | None = None
     if pull_summaries:
         sl = out / "summaries"
         sp = rsync_pull(
@@ -1589,12 +1590,16 @@ def _aggregate_flow_impl(
             include=[summary_glob] if summary_glob else None,
         )
         if sp.returncode != 0:
-            # Non-fatal — caller may have asked for a glob that matches
-            # nothing yet. Surface via escalation_reason so they see it.
-            combiner_failures.append(
-                (-1, f"summary rsync failed: {(sp.stderr or '').strip()[:300]}")
-            )
-        summaries_local = str(sl)
+            # Non-fatal — an unreachable host / wrong results_subdir / permission
+            # error (a glob matching nothing exits 0, so this is a genuine
+            # transport failure). Carry the real stderr in its OWN escalation
+            # token — never overload combiner_failures with a sentinel wave -1
+            # that both renders "combiner exhausted retries on wave -1" AND drops
+            # the stderr on the floor. Leave summaries_local None so the column
+            # check below does not silently validate an empty/partial dir.
+            summary_pull_error = (sp.stderr or "").strip()[:300]
+        else:
+            summaries_local = str(sl)
 
     # Check 1 — non-empty rows. `aggregate-flow` returning ok only means
     # every task wrote *a file*; it does not mean the file has real data.
@@ -1669,6 +1674,8 @@ def _aggregate_flow_impl(
         )
     if column_violations:
         escalation_parts.append(f"column_violations:files={len(column_violations)}")
+    if summary_pull_error is not None:
+        escalation_parts.append(f"summary_rsync_failed:{summary_pull_error}")
     escalation: str | None = "; ".join(escalation_parts) if escalation_parts else None
 
     return AggregateFlowResult(

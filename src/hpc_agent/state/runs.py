@@ -920,8 +920,39 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
       pre-existing v2 sidecars that predate the post-qsub finalize hook;
       we trust the journal and treat the sidecar as committed.
 
+    Two-phase canary gate (#17): during the S2→S3 greenlight window the main
+    run is INTENTIONALLY jobless + journal-less — Phase 1 (``canary_only``)
+    stamps ``job_ids`` only on the ``<run_id>-canary`` sibling and defers the
+    main run's ``submit_and_record`` to Phase 2. That sibling being committed is
+    the exact signature of a live gate mid-review (distinct from a genuinely
+    failed batch's orphan), so a main run whose ``<run_id>-canary`` sibling is
+    committed is itself treated as committed — otherwise a sibling batch's
+    ``prune_orphan_sidecars`` would delete the greenlit main run's sidecar out
+    from under the pending launch.
+
     Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
+    """
+    if _run_committed(experiment_dir, run_id):
+        return False
+    # Canary-gate-pending main run: jobless + journal-less itself, but its
+    # committed canary sibling marks a two-phase gate mid-review, not an
+    # orphan. Guard against recursing on a canary run (never has its own
+    # ``<id>-canary-canary`` sibling).
+    canary_gate_pending = not run_id.endswith("-canary") and _run_committed(
+        experiment_dir, f"{run_id}-canary"
+    )
+    return not canary_gate_pending
+
+
+def _run_committed(experiment_dir: Path, run_id: str) -> bool:
+    """True when *run_id* landed a cluster job (sidecar or journal job_ids).
+
+    The committed signal underneath :func:`is_orphan_sidecar`: a sidecar whose
+    ``finalize_run_sidecar_job_ids`` stamped ``job_ids`` (post-qsub), or a live
+    journal record carrying ``job_ids``. Never raises — a corrupt/unreadable
+    journal record reads as not-committed (the prior fail-loud narrowing is
+    preserved by only catching the routine cases).
     """
     from hpc_agent.state.journal import load_run
 
@@ -933,14 +964,17 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
         raw = sidecar_data.get("job_ids")
         if isinstance(raw, list):
             sidecar_job_ids = [str(j) for j in raw]
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # A non-UTF-8 sidecar (e.g. UTF-16 from a Windows redirect) reads as
+        # no sidecar_job_ids, consistent with the corrupt/torn-file tolerance —
+        # prune-orphan-sidecars must step past a damaged file, not crash on it.
         sidecar_job_ids = None
 
     # Journal-side signal: did submit_and_record run to completion?
     try:
         record = load_run(experiment_dir, run_id)
     except (OSError, errors.JournalCorrupt):
-        # Corrupt/unreadable journal record == treat as orphan. load_run
+        # Corrupt/unreadable journal record == treat as not committed. load_run
         # already returns None for the routine missing/torn-file cases, so
         # narrowing here means a *programming* error propagates (fail loud)
         # rather than silently flipping a live run to "orphan" — which the
@@ -949,7 +983,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
 
     sidecar_committed = bool(sidecar_job_ids)
     journal_committed = record is not None and bool(record.job_ids)
-    return not (sidecar_committed or journal_committed)
+    return sidecar_committed or journal_committed
 
 
 def update_run_sidecar_job_ids(

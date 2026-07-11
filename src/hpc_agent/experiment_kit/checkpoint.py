@@ -410,9 +410,15 @@ def run_iterations(
         return _run_checkpoint_canary(step, init=init, result_dir=result_dir)
 
     state, resume_point = read_latest_checkpoint(result_dir=result_dir)
-    if state is None:
+    # Seed ``init`` only on a genuinely fresh run — NOT whenever ``state is
+    # None``. A checkpoint may legitimately pickle ``None`` as its state; that
+    # must resume at the recorded iteration, not silently restart from 0.
+    # ``read_latest_checkpoint`` returns ``resume_point == 0`` iff nothing
+    # loaded (fresh run, or every checkpoint was corrupt): a successfully loaded
+    # checkpoint at iteration ``it >= 0`` always yields ``resume_point = it + 1
+    # >= 1``. So the resume index — not the state value — is the fresh signal.
+    if resume_point == 0:
         state = init() if callable(init) else init
-        resume_point = 0
 
     total = int(n)
     start = int(resume_point)

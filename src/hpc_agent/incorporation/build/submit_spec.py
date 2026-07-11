@@ -377,18 +377,17 @@ def build_submit_spec(
     # A Path-B strategy tasks.py reads its knobs from os.environ["HPC_KW_*"];
     # the manifest stores them under strategy.params but nothing wired them
     # together, so the LOCAL enumeration (which imports tasks.py to compute the
-    # task list / cmd_sha) and the CLUSTER job ran under default knobs. Export
-    # them into BOTH (a) the PROCESS env now — BEFORE the local enumeration's
-    # load_tasks_module runs (_resolve_kwargs_keys, below) — AND (b) the job_env
-    # (assembled below), so the cluster job carries them too. The cluster
+    # task list / cmd_sha) and the CLUSTER job ran under default knobs. Carry
+    # them into BOTH (a) the PROCESS env — but only TRANSIENTLY, around the local
+    # enumeration that reads them (``_resolve_kwargs_keys``, below), restored in
+    # a ``finally`` — AND (b) the job_env (assembled below), so the cluster job
+    # carries them too. A previous version mutated ``os.environ`` permanently
+    # here, leaking one campaign's knobs into every LATER enumeration in the same
+    # process; the mutation is now scoped to its sole consumer. The cluster
     # dispatcher already exports resolve()-kwargs as HPC_KW_* (dispatch.py:815);
     # this is the symmetric missing half for STRATEGY params. No-op for a
     # non-campaign submit (empty dict → no env writes, no job_env additions).
     _campaign_kw_env = _campaign_strategy_kw_env(experiment_dir, campaign_id)
-    if _campaign_kw_env:
-        import os as _os
-
-        _os.environ.update(_campaign_kw_env)
     canary = bool(spec.canary) if spec.canary is not None else True
     partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
     # #275: ``skip_preflight`` is no longer emitted onto the submit_flow spec —
@@ -624,10 +623,27 @@ def build_submit_spec(
     # command has no braces, so the common path no-ops).
     _check_executor_format_placeholders(_effective_executor)
     if "$" in _effective_executor:
+        # ``_resolve_kwargs_keys`` imports the user's tasks.py and calls
+        # resolve(0), which — for a Path-B strategy — reads its knobs from
+        # os.environ["HPC_KW_*"]. Set the campaign's strategy params on the
+        # process env ONLY for the duration of that enumeration, then restore, so
+        # a campaign's knobs never leak into a later build in the same process.
+        import os as _os
+
+        _saved_env = {k: _os.environ.get(k) for k in _campaign_kw_env}
+        _os.environ.update(_campaign_kw_env)
+        try:
+            _kwargs_keys = _resolve_kwargs_keys(experiment_dir)
+        finally:
+            for _k, _v in _saved_env.items():
+                if _v is None:
+                    _os.environ.pop(_k, None)
+                else:
+                    _os.environ[_k] = _v
         _check_executor_var_references(
             _effective_executor,
             job_env_keys=set(job_env),
-            kwargs_keys=_resolve_kwargs_keys(experiment_dir),
+            kwargs_keys=_kwargs_keys,
         )
 
     out: dict[str, Any] = {

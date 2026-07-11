@@ -1234,6 +1234,56 @@ _CANARY_MIRROR_ESSENTIALS: tuple[str, ...] = (
 )
 
 
+def _canary_task0_trial_params(
+    experiment_dir: Path, main: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    """One-element frozen manifest of task 0's kwargs for a canary sidecar.
+
+    The canary IS the main run's task 0, so its sidecar must carry task 0's REAL
+    resolved kwargs in ``trial_params`` — otherwise a sweep-axis
+    ``result_dir_template`` (``{estimator}/chunk_{chunk_start}/…``) cannot render
+    downstream and the determinism-fingerprint sample never mints (run-#12
+    finding 18: ``causal_tune_linear`` canary sidecar carried ``trial_params:
+    null``, so the sample never minted for ANY sweep-templated run).
+
+    Two sources, in order:
+
+    * The main sidecar's already-frozen manifest (``trial_params[0]``) — copy it
+      verbatim when present (an ordinary submit through compute-run-id).
+    * A local MINT via ``tasks.resolve(0)`` when the main sidecar carries no
+      manifest (a synthesized / manifest-less main sidecar) — this is the
+      frozen-manifest doctrine applied at its source: freeze the manifest ONCE
+      on the control plane so the cluster never re-executes ``tasks.py``
+      (the ``dispatch.py`` / ``combiner.py`` precedent, one directory up).
+
+    Best-effort: an unimportable / mis-shaped ``tasks.py`` yields ``None`` (the
+    prior behaviour), so a repo without a resolvable task list is never a hard
+    failure of the mirror.
+    """
+    main_tp = main.get("trial_params")
+    if isinstance(main_tp, list) and main_tp and isinstance(main_tp[0], dict):
+        return [dict(main_tp[0])]
+    try:
+        from hpc_agent import load_tasks_module
+        from hpc_agent._kernel.contract.layout import RepoLayout
+
+        tasks = load_tasks_module(RepoLayout(experiment_dir).tasks)
+        resolved = tasks.resolve(0)
+    except (
+        FileNotFoundError,
+        AttributeError,
+        TypeError,
+        ValueError,
+        ImportError,
+        SyntaxError,
+        OSError,
+    ):
+        return None
+    if isinstance(resolved, dict) and resolved:
+        return [dict(resolved)]
+    return None
+
+
 def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
     """Ensure the canary's per-run sidecar exists AND matches the main run's.
 
@@ -1313,12 +1363,11 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         # The canary IS task 0 — carry ITS resolved params (run-#12 finding-18
         # follow-up: the canary metrics pull renders result_dir_template from
         # sidecar trial_params, which was null here, so the determinism-
-        # fingerprint sample never minted for sweep-templated runs).
-        trial_params=(
-            [dict(main["trial_params"][0])]
-            if isinstance(main.get("trial_params"), list) and main["trial_params"]
-            else None
-        ),
+        # fingerprint sample never minted for sweep-templated runs). Copy the
+        # main manifest's task 0 when frozen; otherwise MINT it locally from
+        # tasks.resolve(0) so a manifest-less main sidecar still yields real
+        # kwargs (the sidecar-writer follow-up seat the finding named).
+        trial_params=_canary_task0_trial_params(experiment_dir, main),
     )
 
 
@@ -2741,6 +2790,14 @@ def _submit_flow_batch_locked(
     # lock). The default min_age_seconds guard is for ad-hoc invocations
     # that don't hold the lock and could race a concurrent submit.
     #
+    # NB (#17): a PRIOR batch can also leave a two-phase canary gate mid-
+    # review — a ``canary_only`` Phase 1 completes its batch while
+    # INTENTIONALLY leaving the main run jobless + journal-less (job_ids land
+    # only on the canary sibling; the main run's submit_and_record is Phase 2).
+    # is_orphan_sidecar recognises that pairing (a committed ``<id>-canary``
+    # sibling ⇒ the main run is committed) so the prune never eats the
+    # greenlit main run's sidecar out from under the pending S3 launch.
+    #
     # ``exclude`` protects the run_ids in THIS batch: the slash flow
     # writes each run's sidecar jobless at Step 6d *before* calling
     # submit_flow_batch, so those sidecars are present inside the lock
@@ -2842,8 +2899,13 @@ def _submit_flow_batch_locked(
         # rsync as the main sidecar. ``_submit_one_spec`` keeps its own
         # ``_mirror_canary_sidecar`` call as an idempotent guard — that one
         # runs post-rsync (too late to reach the cluster) and early-returns
-        # once this sidecar exists. (``canary_only`` requires ``canary``.)
-        if specs[i].canary:
+        # once this sidecar exists. Gate on the canary DECISION, not the raw
+        # ``spec.canary`` field (#18): an HPC_AGENT_ALWAYS_CANARY-forced canary
+        # over an agent ``canary=false`` opt-out still fires in _submit_one_spec,
+        # so the pre-rsync mirror must fire in exactly the cases the canary runs
+        # — otherwise the forced-canary sidecar never ships and dies
+        # ``sidecar_not_found`` on the cluster.
+        if _should_run_canary(specs[i]):
             _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
 
     # notebook-audit Addendum 4 item 7: bounded LOCAL task-0 dry-run BEFORE any

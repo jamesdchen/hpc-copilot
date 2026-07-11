@@ -284,6 +284,20 @@ def test_remote_missing_target_fails_open(monkeypatch, tmp_path: Path) -> None:
     assert result.error is not None and "no such directory" in result.error
 
 
+def test_remote_missing_target_with_login_chatter_fails_open(monkeypatch, tmp_path: Path) -> None:
+    """Login-shell (`bash -lc`) profile/module chatter can precede the sentinel;
+    a missing tree must still read exists=False, not a phantom empty dir
+    (bug-sweep #40)."""
+    chatter = "Loading module foo/1.2\nconda activate base\n"
+    _wire(monkeypatch, ssh_handler=lambda c, **k: _cp(chatter + _MISSING_SENTINEL + "\n"))
+    result = dir_digest(
+        experiment_dir=tmp_path,
+        spec=DirDigestSpec(path="/scratch1/jc/gone", cluster="disc"),
+    )
+    assert result.exists is False and result.readable is False
+    assert result.error is not None and "no such directory" in result.error
+
+
 def test_remote_transport_failure_raises(monkeypatch, tmp_path: Path) -> None:
     _wire(monkeypatch, ssh_handler=lambda c, **k: _cp("", rc=255, stderr="conn refused"))
     with pytest.raises(errors.RemoteCommandFailed):

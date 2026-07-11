@@ -336,7 +336,24 @@ def run_registered(argv: list[str] | None = None) -> int:
             "re-run the interview so the executor_cmd matches the module."
         )
 
-    compute = getattr(module, "compute", None)
+    # When a run name is supplied and the module registered it, dispatch the
+    # NAMED run — never the module-level ``compute``, which ``register_run``
+    # overwrites on every decoration so it always points at the LAST
+    # ``@register_run`` in the file. Naming an earlier run and then executing
+    # ``compute`` silently runs the wrong function (the guard above only proves
+    # the name EXISTS). Build the same wrapper ``make_compute`` produces for the
+    # named spec so coercion + result-writing stay identical to run-module.
+    if args.run_name is not None and isinstance(runs, dict) and args.run_name in runs:
+        spec = runs[args.run_name]
+        # Function-local: module RESOLUTION above is stdlib-only, but the shared
+        # coercion seam lives in experiment_kit — the same dependency
+        # run-registered already requires cluster-side (the user's module
+        # imports register_run to be decorated at all).
+        from hpc_agent.experiment_kit._runtime import make_compute
+
+        compute: Any = make_compute(spec.func, gpu=spec.gpu, mpi=spec.mpi)
+    else:
+        compute = getattr(module, "compute", None)
     if compute is None:
         raise SystemExit(
             f"[run-registered] module {args.module_rel!r} exports no compute(); "
