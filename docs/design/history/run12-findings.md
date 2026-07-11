@@ -389,6 +389,17 @@ logins could not fork a shell — self-service recovery IMPOSSIBLE (the
 kill -9 -1 builtin needs a shell to run IN); only a CARC admin ticket or
 stray decay clears it. Bounded-lifetime strays (layer 1) are therefore
 also the guard against the UNRECOVERABLE version of this failure.
+BUILT (2026-07-11): both layers at the `infra/remote.py` `ssh_run` seam via
+`build_remote_command` — LAYER 1 `timeout -k 10 <client_budget+60>s bash -c`
+(client-timeout=None → 3600s default; HPC_SSH_NO_REMOTE_DEADLINE=1 escape
+hatch; rc 124 classified transient, never broken-env) + LAYER 2 the
+`HPC_AGENT_OP=<op>:<epoch>` marker riding argv (bash `$0`) AND environ. The
+hygiene probe is the NEW `stray-sweep` verb (`ops/recover/stray_sweep.py`) —
+NOT doctor (its contract is no-SSH) nor net-triage (opens no ssh by design):
+one fork-minimal `ps -u $USER`, counts total + marked, flags marked-and-over-age
+strays, reaps ONLY those PIDs and ONLY under `reap: true`, warns at count > 40.
+Scoped to ssh_run (finding-20's poll/reporter root path); transport transfers
+keep their existing client-side tree-kill bound.
 
 ## 21. Stop-guard livelock: a CONSUMED greenlight is indistinguishable from
 ## a fresh one — every turn-end forces a tick against a parked-on-external

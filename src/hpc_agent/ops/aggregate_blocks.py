@@ -93,6 +93,7 @@ _INTEGRITY_REPORT_KEYS = (
     "unexpected_tasks",
     "unexpected_aggregated_keys",
     "provenance_present",
+    "wave_map_present",
     "columns_checked",
     "column_violations",
 )

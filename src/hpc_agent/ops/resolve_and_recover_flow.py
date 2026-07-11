@@ -97,7 +97,10 @@ class ClusterOutcome:
       cap/opt-out blocked from acting) was parked via ``mark_pending_verdict``.
     * ``"verdict_only"`` — opt-in OFF: the verdict was computed and surfaced but
       no side effect was taken (no resubmit, no park).
-    * ``"skipped"`` — a ``preempted`` cluster left to the auto-resume path.
+    * ``"skipped"`` — a ``preempted`` cluster left to the auto-resume path, or
+      a cluster whose ``error_class`` the wire ``FailureFeatures`` model cannot
+      validate (vocabulary gap — left for human triage rather than crashing
+      the monitor tick; the reason names the contract test to extend).
 
     ``decided_by`` mirrors the resolver verdict (``"code"`` | ``"judgement"``)
     for clusters that were resolved; ``None`` for a skipped cluster.
@@ -399,9 +402,34 @@ def maybe_resolve_and_recover(
             )
             continue
 
-        features = build_failure_features(
-            cluster, record=record, sidecar=sidecar, failure_patterns=failure_patterns
-        )
+        # Defense-in-depth under the widened wire FailureCategory (bug-sweep #2):
+        # a cluster whose error_class the wire model STILL cannot validate (a
+        # future catalog row, a leaked sentinel) must degrade to a per-cluster
+        # skipped outcome — never propagate and kill the whole monitor
+        # terminal-FAILED tick, which fires exactly when the operator needs it.
+        from pydantic import ValidationError
+
+        try:
+            features = build_failure_features(
+                cluster, record=record, sidecar=sidecar, failure_patterns=failure_patterns
+            )
+        except ValidationError as exc:
+            outcomes.append(
+                ClusterOutcome(
+                    fingerprint=fingerprint,
+                    error_class=error_class,
+                    task_ids=task_ids,
+                    disposition="skipped",
+                    reason=(
+                        f"failure-features vocabulary gap: {exc.error_count()} validation "
+                        f"error(s) building features for error_class={error_class!r} — "
+                        "widen the wire FailureCategory (contract test: "
+                        "test_failure_category_covers_classifier); cluster left for "
+                        "human triage"
+                    ),
+                )
+            )
+            continue
         esc_cluster = build_escalation_cluster(cluster, run_id=run_id)
         resolution = _resolve(features, cluster=esc_cluster, max_code_attempts=max_code_attempts)
 
