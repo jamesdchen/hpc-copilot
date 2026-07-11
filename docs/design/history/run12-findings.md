@@ -95,3 +95,24 @@ client declared elicitation but rendered nothing (declared-but-dark;
 Addendum 7 marks the channel dark for the session) — THAT is a finding;
 (c) instant plain refusal → the client never declared elicitation at
 initialize (hook-path degrade, also worth recording).
+
+## 9. FIXED: the sign-off popup could never land — the T8 gate had no
+## utterance-log tier
+Live (the sign-off boundary): the demo agent CORRECTLY refused to attempt
+`append-decision` without a chat-typed utterance ("if I author the response
+and you approve in the popup, that's a click"), and it was righter than it
+knew: the T8 gate checked all three legs (non-bare, names-slug, diff-token)
+against the agent-relayed `response` ONLY, so the E4 elicit-then-retry —
+which re-runs the IDENTICAL argv after appending the popup text to the
+utterance LOG — could never pass for a notebook sign-off. E-render-primary
+was structurally dead at its flagship site. Fix (the queued run-#11
+"sign-off echo detection" item, same seam): the gate now tiers evidence like
+scope-unlock — with a harness utterance log present, the naming/engagement
+legs run over LOGGED HUMAN UTTERANCES (chat capture hook OR the popup
+handler, one log) and the response carries no authorship weight (the
+composed-response laundering hole closes as a corollary); absent a log, the
+non-bare response is the friction tier, byte-identical. Skill step 5
+rewritten: over MCP the agent proceeds DIRECTLY to the append after relaying
+the view (popup = primary); chat-first is the no-elicitation fallback.
+NOTE: reaches the demo only after a wheel refresh + fresh MCP server — the
+running run-#12 session signs via chat.

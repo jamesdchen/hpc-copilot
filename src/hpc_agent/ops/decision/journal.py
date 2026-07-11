@@ -1389,8 +1389,15 @@ def _assert_signoff_authorship(
     REFUSED loudly, never skipped.
 
     **Lock 3 (authorship bar, D-attention tiered)** — bare acks are refused
-    (:func:`_is_bare_ack`); the response must NAME the section slug (token-exact,
-    the #26 precedent). The tier is RECOMPUTED here over the CANONICAL view
+    (:func:`_is_bare_ack`); the sign-off must NAME the section slug (token-exact,
+    the #26 precedent). EVIDENCE IS TIERED like the unlock gate (run-#12
+    finding 9, closing the run-#11 composed-response laundering hole): with a
+    harness utterance log present the naming/engagement legs run over LOGGED
+    HUMAN UTTERANCES — chat (capture hook) or the sign-off popup (the E4
+    elicitation handler appends to the same log, which is what lets the MCP
+    retry-once land) — and the agent-relayed ``response`` carries no authorship
+    weight; absent a log the non-bare ``response`` is the friction tier
+    (byte-identical v1). The tier is RECOMPUTED here over the CANONICAL view
     (:func:`~hpc_agent.ops.notebook.canonical.build_canonical_view`) — with the
     REAL lint findings (recomputed server-side from the recorded roots), the
     journaled fresh receipts, and the recorded attention order. The v1 "statically
@@ -1483,20 +1490,49 @@ def _assert_signoff_authorship(
     assert isinstance(section, str) and isinstance(section_sha, str)
     assert isinstance(audit_id, str) and isinstance(view_sha, str)
 
-    # Base authorship floor (applies to every tier).
+    # Base authorship floor — TIERED exactly like the unlock gate (the shared
+    # lock tier, extended to T8): with a harness utterance log present the legs
+    # run over LOGGED HUMAN UTTERANCES — text a human verifiably typed, in chat
+    # (the UserPromptSubmit capture hook) or in the sign-off POPUP (the E4
+    # elicitation handler appends to the SAME log, which is what lets the
+    # retry-once land on the human's words) — and the agent-relayed ``response``
+    # carries no authorship weight (the run-#11 laundering finding: a composed
+    # response passes the token checks mechanically but attests nothing).
+    # Absent a log (older harness / no capture hook), the non-bare ``response``
+    # is the human's typed sign-off — the v1 friction tier, byte-identical.
+    # MH4: >1 declared actors scope the read to the session actor's log only;
+    # an unattributed session falls to the friction tier, never the union.
     response = str(spec.response or "")
-    if _is_bare_ack(response):
-        _refuse_missing_authorship(
-            "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
-            f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
-            f"({section!r}) and state what you reviewed."
-        )
-    if not _names_slug(response, section):
-        _refuse_missing_authorship(
-            "notebook sign-off gate: the sign-off response must NAME the section "
-            f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
-            "cannot attest a specific section. Restate, naming the section."
-        )
+    _signoff_actor_ids, _signoff_policy = _read_interview_actors(experiment_dir)
+    _signoff_harness_texts = _actor_scoped_human_texts(experiment_dir, _signoff_actor_ids)
+    if _signoff_harness_texts is None:
+        if _is_bare_ack(response):
+            _refuse_missing_authorship(
+                "notebook sign-off gate: signing off a section is a HUMAN act — a bare "
+                f"{spec.response!r} (a 'y' / click) cannot sign off. Name the section "
+                f"({section!r}) and state what you reviewed."
+            )
+        if not _names_slug(response, section):
+            _refuse_missing_authorship(
+                "notebook sign-off gate: the sign-off response must NAME the section "
+                f"slug {section!r} (token-exact, the #26 precedent) — a generic ack "
+                "cannot attest a specific section. Restate, naming the section."
+            )
+        signoff_candidates = [response]
+    else:
+        signoff_candidates = [
+            text
+            for text in _signoff_harness_texts
+            if not _is_bare_ack(text) and _names_slug(text, section)
+        ]
+        if not signoff_candidates:
+            _refuse_missing_authorship(
+                "notebook sign-off gate: signing off a section is a HUMAN act — no "
+                f"logged human utterance NAMES the section slug {section!r} "
+                "(token-exact, the #26 precedent). The human types the sign-off in "
+                "their own words (in chat, or in the sign-off popup when it opens); "
+                "an agent-relayed response carries no authorship weight here."
+            )
 
     # Lazy, subject-lint-safe imports (state.* is allowed substrate; the ops
     # notebook subject is reached through the top-level ``notebook_view`` facade).
@@ -1607,7 +1643,12 @@ def _assert_signoff_authorship(
     slug_tokens = _signoff_token_names(section)
     raw_specifics = _section_specific_tokens(section_view) if section_view is not None else set()
     specifics = raw_specifics - slug_tokens
-    engaged = (_signoff_token_names(response) - slug_tokens) & specifics
+    # The engaging text must be one that ALSO names the slug (the tiered
+    # candidates): a slug-naming utterance and a separate token-dropping one
+    # cannot combine into an attestation neither made alone.
+    engaged = any(
+        (_signoff_token_names(text) - slug_tokens) & specifics for text in signoff_candidates
+    )
     if specifics and not engaged:
         _refuse_missing_authorship(
             f"notebook sign-off gate: section {section!r} is HUMAN-REQUIRED "

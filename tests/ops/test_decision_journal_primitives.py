@@ -1130,6 +1130,59 @@ def test_signoff_human_required_generic_praise_refused(tmp_path: Path) -> None:
         )
 
 
+def test_signoff_logged_utterance_lands_when_response_is_mechanical(tmp_path: Path) -> None:
+    """The tiered evidence leg (run-#12 finding 9): with the capture hook / popup
+    log present, a logged human utterance that names the slug and engages the
+    diff lands the sign-off — the agent-relayed response is only the record.
+    This is the leg that lets the E4 elicitation retry succeed."""
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(
+        tmp_path, "sign model-fit — the regularization=0.5 term is intentional, converged asserted"
+    )
+    section_sha, view_sha = _nb_shas("model-fit")
+    out = _signoff(
+        tmp_path,
+        section="model-fit",
+        response="sign-off requested: model-fit",
+        section_sha=section_sha,
+        view_sha=view_sha,
+    )
+    assert out.count == 1
+
+
+def test_signoff_composed_response_refused_when_log_lacks_signoff(tmp_path: Path) -> None:
+    """The run-#11 laundering closure: with a live utterance log, an agent-composed
+    response that would pass every token check attests nothing — the human never
+    typed a sign-off."""
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(tmp_path, "hello, please check the cluster status")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="no.*logged human utterance NAMES"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="model-fit: the regularization=0.5 term is intentional, converged asserted",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
+def test_signoff_logged_generic_praise_still_refused(tmp_path: Path) -> None:
+    """The raised HUMAN_REQUIRED bar applies to the logged utterance too — naming
+    the slug with generic praise engages nothing."""
+    _write_notebook_fixture(tmp_path)
+    _log_utterance(tmp_path, "model-fit looks great, nice work")
+    section_sha, view_sha = _nb_shas("model-fit")
+    with pytest.raises(errors.SpecInvalid, match="must ENGAGE the change"):
+        _signoff(
+            tmp_path,
+            section="model-fit",
+            response="sign-off requested: model-fit",
+            section_sha=section_sha,
+            view_sha=view_sha,
+        )
+
+
 def test_signoff_auto_cleared_accepted_and_marked_redundant(tmp_path: Path) -> None:
     """An AUTO_CLEARED section accepts a voluntary human sign-off but marks it
     redundant (the recorded accept-vs-refuse decision)."""
