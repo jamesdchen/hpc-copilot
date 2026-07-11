@@ -101,3 +101,28 @@ Amendment 14 (G-a) · hyper-palatable sign-off (notebook-audit amendment).
 - Run #12 NOT yet kicked off → envs SAFE TO REINSTALL; plan: land the
   mechanize-now waves, CI green, fresh wheel + three-env refresh, THEN
   kickoff.
+
+## 2026-07-10 night rulings (user)
+- **O3+ ADOPTED as unified-render v1** ("sounds lit as a version 1; update it
+  when users start using it"): chunked popups with per-chunk headers +
+  terminal SYNTHESIS chunk (code-computed whole-view evidence + final
+  sign-off), one composer embedding render bytes, chunk-never-truncate,
+  Elicitation-hook display receipts, empirical rendering probe. BUILD NOW.
+- **Echo nag-line: REMOVED.** The code-appended "re-affirm in your own
+  words" disclosure does NOT survive; echo detection demotes to journal-only
+  provenance (no surfaced nag, no bounce). Engagement rides the existing
+  digest-read/tiered sign-off gates.
+- **Raw-ssh deny: cluster-hosts-only CONFIRMED** + new direction: the deny
+  seat should TRANSLATE — when the agent reaches for raw ssh, the
+  deny/guard should hint the sanctioned verb for the detected intent
+  (ls→dir-digest, tail/watch→status-watch, connectivity→net-triage), "the
+  code should translate and invoke what the agent wants to do."
+- **B3 gaps: parked for problem understanding** — no cosmetic patches (the
+  unchanged-count line withdrawn); the unchanged-observable/composition
+  gaps are upstream questions; solve B3 fully when run evidence shows what
+  the problem actually is.
+- **MCP display-receipt upstream filing: DROPPED** (local Elicitation-hook
+  receipts suffice).
+- **Trading-repo split: the SPLIT ITSELF IS NOT DEFERRED** (correction of my
+  earlier recording) — only the build-out of the trading content is
+  post-split; the copy can be created now (copy + gitignore parquets).
