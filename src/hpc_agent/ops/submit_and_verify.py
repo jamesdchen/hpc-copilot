@@ -110,9 +110,22 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
         raise errors.SpecInvalid(
             f"canary {canary_run_id!r} sidecar carries no result_dir_template to render task 0"
         )
-    # Task 0 result dir (relative to remote_path). A template that references a
-    # per-task kwarg cannot render locally — treated as "cannot pull" (raises).
-    result_subdir = template.format(task_id=0, run_id=canary_run_id)
+    # Task 0 result dir (relative to remote_path), rendered with task 0's REAL
+    # kwargs when the sidecar recorded them (``trial_params`` — the canary IS
+    # task 0), so a sweep-axis template ({estimator}/{chunk_start}/…) renders.
+    # A field the record cannot supply is the documented "cannot pull" raise —
+    # NEVER a bare KeyError, which escapes the callers' best-effort catch and
+    # killed the whole S2 worker post-submit (run-#12 finding 18).
+    trial_params = sidecar.get("trial_params")
+    fields: dict[str, object] = dict(trial_params) if isinstance(trial_params, dict) else {}
+    fields.update(task_id=0, run_id=canary_run_id)
+    try:
+        result_subdir = template.format(**fields)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise errors.SpecInvalid(
+            f"canary {canary_run_id!r} result_dir_template {template!r} references "
+            f"a field the sidecar cannot supply ({exc!r}) — cannot render task 0 locally"
+        ) from exc
     local = pulls_dir(experiment_dir, canary_run_id)
     pull = rsync_pull(
         ssh_target=record.ssh_target,

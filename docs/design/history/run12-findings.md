@@ -294,6 +294,26 @@ probe (deny-rule intent honored via full-path detection). The circuit
 breaker opened after 3 failures and the agent WAITED the cooldown rather
 than overriding — correct. net-triage earned its seat twice.
 
+## 18. Canary task-0 metrics pull KeyErrors on sweep-axis templates —
+## swallowed by the best-effort mint, but the sample never mints
+Live (S2 terminal, run causal_tune_linear-de448128): `_pull_canary_task0_
+metrics` rendered `result_dir_template` with only `{task_id, run_id}`;
+a sweep-axis template (`{estimator}/{exog_bucket}/chunk_{chunk_start}`)
+raised a bare KeyError — line 115's own comment documents "cannot render
+→ raises", but a builtin KeyError is not the documented raise-class. The
+double-canary evidence mint swallowed it (correct posture: the submit was
+unaffected and the canary VERIFIED — job 10161700 green on CARC), so the
+cost was silent: the determinism-fingerprint sample never mints for ANY
+sweep-templated run. FIXED: render with task 0's REAL kwargs when the
+sidecar records them (`trial_params`), and convert any residual miss to
+the documented SpecInvalid. NOTE this canary's sidecar carries
+`trial_params: null` — the sidecar writer should record task-0 kwargs for
+canaries (follow-up seat) so the sample can mint at all here.
+MILESTONE, same brief: **canary GREEN end-to-end on the fixed transport**
+— stage completed via the -T delta path (finding 17 legs 1+2 live-
+validated), output contract passed on-cluster (finding 15 confirmed
+false-positive), est. 32,400 core-hours disclosed, next_block submit-s3.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
