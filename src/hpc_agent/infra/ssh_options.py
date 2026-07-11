@@ -648,6 +648,50 @@ def _ssh_connect_opts() -> list[str]:
     return ["-o", f"ConnectTimeout={raw}"]
 
 
+# --- Keepalives (run-12 finding 24: NAT idle-drop on long-silent legs) --------
+#
+# Several framework remote legs are COMPLETELY silent on the wire for many
+# minutes (the status reporter's 2700-task walk, a combiner reduce, a long
+# stage). A NAT'd client (home router / VPN / campus border) drops an idle TCP
+# flow at its idle threshold — observed live 2026-07-11 at ~100s: the channel
+# died mid-reporter with rc 0 and empty stdout while the remote half ground on
+# as an orphan (finding 20's population source), and the manual control run
+# died exit 255 the same way. Protocol-level keepalives every 30s keep the NAT
+# state alive regardless of application silence; CountMax 60 tolerates a
+# 30-minute unresponsive server before ssh gives up (the client-side timeout
+# budget remains the real bound). Framework-owned: depending on the USER's
+# ssh_config for this guarantee is exactly how the live failure happened.
+_DEFAULT_SSH_KEEPALIVE_INTERVAL = "30"
+_DEFAULT_SSH_KEEPALIVE_COUNT_MAX = "60"
+
+
+def _ssh_keepalive_opts() -> list[str]:
+    """SSH ``-o ServerAliveInterval/CountMax`` keeping long-silent channels alive.
+
+    Spliced into the ssh and scp argvs by :func:`ssh_argv`. Tunable via
+    ``HPC_SSH_KEEPALIVE_INTERVAL`` (positive integer seconds; the literal
+    ``default`` drops both overrides and defers to ssh_config). A bad value
+    warns to stderr and falls back — a typo must not break every ssh call.
+    """
+    raw = (os.environ.get("HPC_SSH_KEEPALIVE_INTERVAL") or _DEFAULT_SSH_KEEPALIVE_INTERVAL).strip()
+    if raw.lower() == "default":
+        return []
+    if not raw.isdigit() or int(raw) <= 0:
+        print(
+            f"hpc-agent: ignoring HPC_SSH_KEEPALIVE_INTERVAL={raw!r} "
+            f"(want a positive integer of seconds, or 'default'); using "
+            f"{_DEFAULT_SSH_KEEPALIVE_INTERVAL!r}",
+            file=sys.stderr,
+        )
+        raw = _DEFAULT_SSH_KEEPALIVE_INTERVAL
+    return [
+        "-o",
+        f"ServerAliveInterval={raw}",
+        "-o",
+        f"ServerAliveCountMax={_DEFAULT_SSH_KEEPALIVE_COUNT_MAX}",
+    ]
+
+
 # --- Cipher / MAC / compression tuning (#256) --------------------------------
 #
 # OpenSSH's portable defaults favour broad compatibility: the
@@ -766,6 +810,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             "-o",
             "BatchMode=yes",
             *_ssh_connect_opts(),
+            *_ssh_keepalive_opts(),
             *_ssh_crypto_opts(),
             *_ssh_multiplex_opts(),
             *extra_opts,
@@ -776,6 +821,7 @@ def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
             "-o",
             "BatchMode=yes",
             *_ssh_connect_opts(),
+            *_ssh_keepalive_opts(),
             *_ssh_crypto_opts(),
             *_ssh_config_override_opts(),
             *extra_opts,

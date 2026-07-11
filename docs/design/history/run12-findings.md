@@ -468,3 +468,36 @@ records. ALSO OBSERVED: the breaker UX held up well under the failover
 (net-triage breaker_open_cooling verdict + the sanctioned
 HPC_SSH_CIRCUIT_OVERRIDE worked as designed), and DNS shows
 discovery.usc.edu == discovery1's IP — the bare alias already IS node 1.
+
+## 24. NAT idle-drop severs every long-SILENT remote leg at ~100s — the
+## "empty reporter output" mystery AND finding 20's orphan population source
+Live chain of evidence (2026-07-11): the framework's reconcile with an
+1800s budget "returned empty, rc 0" at ~1m43s while ps on discovery1 showed
+its remote python STILL RUNNING 35 minutes later (channel severed, remote
+half orphaned); the manual control run of the same reporter died exit 255
+(ssh's own connection-death code) ~20+ min in; the reporter is COMPLETELY
+silent on the wire for its whole 20-25 min walk (2700 tasks × resolve +
+scratch stats). Cause: the NAT'd home client's idle TCP flow is dropped by
+a middlebox at its idle threshold (~100s observed); no keepalives were
+configured. The demo session's workaround (user ssh_config
+ServerAliveInterval 30) held the channel and is correct — but the
+framework must not depend on the user's ssh_config for a liveness
+guarantee it needs everywhere. FIXED (this repo): ssh_argv splices
+-o ServerAliveInterval=30 -o ServerAliveCountMax=60 into every framework
+ssh/scp (HPC_SSH_KEEPALIVE_INTERVAL tunable; 'default' defers to
+ssh_config). CLASS NOTE: this was misattributed twice before the evidence
+converged (first to login-node fork exhaustion — real but separate — then
+to the stale wheel — also real, also separate); the tell that finally
+discriminated was ps showing the remote half OUTLIVING its channel. The
+remote-deadline wrapper (finding 20 layer 1) bounds exactly this orphan
+class; keepalives prevent the sever; the fast frozen-manifest reporter
+(bug-sweep #3) shrinks the silent window. All three ship together.
+ADDENDUM (same night): keepalives are NECESSARY but NOT SUFFICIENT — a
+reconcile run WITH user-ssh_config keepalives active still returned
+fast-empty, so a SECOND severing mechanism lives inside the framework
+client; prime suspect the asyncssh engine's idle reaper (severs any
+connection with no COMPLETED command in 120s — bug-sweep #8, fixed this
+repo same day, absent from the demo wheel), else an internal per-exec
+timeout HPC_SSH_TIMEOUT_SEC does not govern in 0.11.0. Discrimination
+pending the demo env's HPC_SSH_ENGINE value + the detached nohup reporter
+control run.
