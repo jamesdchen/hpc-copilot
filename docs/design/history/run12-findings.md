@@ -207,6 +207,24 @@ the reconfigure loop. The already-journaled goal keeps its mojibake
 draft — at confirm, restore the human's actual `—` bytes in the resolved
 spec (that IS the verbatim text; the mojibake never was).
 
+## 14. submit-s1 ignores the interview's recorded data_axis_hint — the seat
+## exists, the consumer never wired
+Live (the S1 brief): the interview persisted `data_axis_hint: bounded_halo
+(halo expr "halo" = 24000)` to `interview.json._materialized.entry_point.
+data_axis` — the seat built EXPLICITLY so classify-axis/submit never
+re-asks — yet S1's ambiguity walk recommended `{kind: sequential}` (the
+fail-safe) with `depends_on: [entry_point]`, and its provenance labels the
+interview-materialized tasks.py `hand_written_tasks_py`. A `y` on that
+brief would have submitted 2700 BoundedHalo tasks under a sequential
+classification. Same class as findings 2/5 (compose-from-recorded-config
+missing at a consumer). FIX: S1's data_axis resolver reads the
+materialized hint (provenance `interview_hint`, disclosed); tasks.py
+materialized BY the interview is labeled `interview_materialized`, never
+`hand_written`. ALSO surfaced by the same brief: `gpu_type: a100` injected
+via `cluster_default` for a pure-CPU workload — cluster resource defaults
+deserve a workload-shaped sanity line in the brief (disclosure, not a
+guess). And: 8m56s turn time — the latency program's exhibit.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
