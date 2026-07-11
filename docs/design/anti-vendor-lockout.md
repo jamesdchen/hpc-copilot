@@ -494,3 +494,21 @@ contract that pretends everything is portable is dishonest:
   contract / second-harness plugin / conformance kit as the existing
   skeleton). T6's install-surface answer folds into that plan rather than
   standing alone. Plan doc = the Fable-endgame handoff bank.
+- **Readiness refresh (2026-07-10 night — the T6-reframe delta; this IS the
+  "external-harness readiness plan," the phases above stay the machinery):**
+  (a) NEW Claude-specific seams to add to the §"What stays Claude-specific"
+  inventory: the `stop-hook-append` capability (contract 1.1.0; a second
+  harness conforms by displaying hook systemMessage — the completer degrades
+  to rejector where undeclared, which IS the honest posture) and the
+  Elicitation/ElicitationResult display-receipt hooks (Claude Code ≥2.1.76;
+  harness-local by design now that the upstream spec filing is DROPPED —
+  other harnesses either declare an equivalent display-receipt seam or the
+  timeout-undisplayed degradation carries the risk). (b) Phase 2's
+  second-client elicitation proof now targets the O3+ chunked walk
+  (`docs/design/unified-render.md`): the conformance leg = a second client
+  completing a 3-chunk walk + terminal sign-off with acks journaled.
+  (c) Phase 3 (install-surface abstraction) inherits T6's reframe: doc-only
+  lean STANDS until an external harness asks; the phase stays banked, not
+  scheduled. (d) The raw-ssh deny narrowing (tool-not-takeover, 2978a380)
+  is the model for every install-time footprint item in Phase 3: hpc-agent
+  configures only what its own verbs need, host-scoped, migration-healing.
