@@ -225,6 +225,25 @@ via `cluster_default` for a pure-CPU workload — cluster resource defaults
 deserve a workload-shaped sanity line in the brief (disclosure, not a
 guess). And: 8m56s turn time — the latency program's exhibit.
 
+## 15. Output-contract detector scans the WRAPPER, not the wrapped script —
+## false WARNING on every shell_command entry point that passes env through
+Live (S1 resolve, run causal_tune_linear-de448128): "the executor script
+'causal_tune_linear.py' never references $HPC_RESULT_DIR … outputs
+DISCARDED by write-isolation" — but the AUDITED source reads
+`os.environ.get("HPC_RESULT_DIR", ...)` in its signed section; the scanned
+file was the materialized WRAPPER (same basename), which subprocess-invokes
+the real script with env inherited. The static scan cannot see through the
+subprocess boundary, so every shell_command wrapper earns this warning
+regardless of the target's actual contract. FIX: for a shell_command entry
+point, the detector also scans the argv's script target(s) (the interview
+knows the argv verbatim); better, the audit's `output_roots`/declared
+outputs seat feeds the contract check (the audited source already stated
+its write target honestly). SECONDARY (canary will adjudicate): the script
+nests its own `causal_tune_linear/<est>/<bucket>` subtree under the
+per-task exported HPC_RESULT_DIR while result_dir_template already encodes
+est/bucket/chunk — a doubled layout worth checking in the canary's actual
+result tree before 2700 tasks bake it in.
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the
