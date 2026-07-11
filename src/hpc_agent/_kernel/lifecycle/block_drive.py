@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._wire.workflows.block_drive import BlockDriveResult
 from hpc_agent.infra import block_chain
+from hpc_agent.infra.time import parse_iso_utc_or_none
 from hpc_agent.ops import field_ownership
 from hpc_agent.state.journal import (
     clear_pending_decision,
@@ -63,6 +64,7 @@ __all__ = [
     "plan_block_action",
     "run_tick",
     "block_drive_once",
+    "greenlight_targets_boundary",
     "main",
 ]
 
@@ -493,13 +495,35 @@ def run_tick(
     committed_resolved: dict[str, Any] | None = None
     last_run_inputs: dict[str, Any] | None = None
     if run_id:
-        # Read the latest committed greenlight even with NO pending marker: an
-        # interview-driven chain starts by direct invocation (nothing ever
-        # parked), so the committed ``resolved`` is the only durable cursor the
-        # planner has for its journal-derived resume (run #9).
         scope_wf = (pending.get("workflow") if pending else None) or workflow
         scope_kind = "campaign" if scope_wf == "campaign" else "run"
-        committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
+        if pending:
+            # RESUME path — BOUNDARY-SCOPED (bug-sweep #1 / run-12 finding 21).
+            # The approval of a parked boundary is ONLY the greenlight that targets
+            # THIS boundary. A prior boundary's already-consumed ``y`` (its
+            # ``resolved`` names an earlier verb) or a same-boundary re-park's stale
+            # ``y`` (older than the new ``awaiting_since``) must NOT be replayed as
+            # this decision's approval: doing so either re-runs the block every tick
+            # or force-advances into the gated successor whose gate then refuses —
+            # a spurious "block failed" masking the true "awaiting the human" state.
+            # When nothing targets the boundary the reader returns ``None`` →
+            # :func:`plan_block_action` returns ``awaiting_decision`` (exit 0).
+            cursor = pending.get("resume_cursor") or {}
+            next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+            committed_resolved = _boundary_scoped_committed_resolved(
+                experiment_dir,
+                scope_kind,
+                run_id,
+                next_verb=next_verb,
+                awaiting_since=pending.get("awaiting_since"),
+            )
+        else:
+            # NO-MARKER journal-derived resume (run #9): an interview-driven chain
+            # starts by direct invocation (nothing ever parked), so the latest
+            # committed greenlight's own ``next_block`` is the only durable cursor.
+            # There is no parked boundary to scope to → the UNSCOPED latest-``y``
+            # scan is correct here (that path must not regress).
+            committed_resolved = _latest_committed_resolved(experiment_dir, scope_kind, run_id)
     if pending:
         cursor = pending.get("resume_cursor", {})
         last_run_inputs = cursor.get("input_spec") if isinstance(cursor, dict) else None
@@ -993,6 +1017,89 @@ def _latest_committed_resolved(
         return None
     for record in reversed(records):
         if record.get("response") == "y":
+            resolved = record.get("resolved")
+            return dict(resolved) if isinstance(resolved, dict) else {}
+    return None
+
+
+def greenlight_targets_boundary(
+    record: dict[str, Any],
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True iff a committed decision *record* is the greenlight for THIS parked boundary.
+
+    The SINGLE predicate the driver (:func:`run_tick` via
+    :func:`_boundary_scoped_committed_resolved`) and the ``block-drive`` Stop guard
+    (:func:`hpc_agent._kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced`)
+    both key on, so a CONSUMED greenlight can never masquerade as a fresh one and
+    the two surfaces cannot drift. A committed ``y`` counts as the approval of the
+    boundary a marker is parked at only when it:
+
+    * is a greenlight (``response == "y"`` — never a nudge), AND
+    * NAMES the parked successor — ``resolved["next_block"]`` (block_gate
+      ``_journaled_target`` semantics: the verb string or the ``{"verb": ...}``
+      hint) equals the marker's ``resume_cursor["next_verb"]``. This rejects a
+      PREVIOUS boundary's already-consumed greenlight, whose target names an
+      earlier verb: nothing is appended when a ``y`` is consumed, so a shared run
+      journal's latest ``y`` may belong to a prior boundary (the exact pitfall
+      ``ops/block_gate.py`` documents), AND
+    * was journaled AT OR AFTER the marker was (re-)parked
+      (``ts >= awaiting_since``). This rejects a SAME-boundary re-park's stale
+      ``y`` — a greenlight that DID name this boundary but was already consumed by
+      a tick that ran the block and re-parked, stamping a newer ``awaiting_since``
+      (run-12 finding 21). The 2026-06-10 stall class stays closed: a genuinely
+      unconsumed ``y`` is always newer than the marker it answers, so it passes.
+
+    The timestamp leg only REFUSES when both stamps parse and ``ts`` is strictly
+    older than ``awaiting_since``; a missing/unparseable stamp falls back to the
+    boundary-name test alone (fail toward the pre-fix behavior rather than
+    over-refusing a live greenlight).
+    """
+    from hpc_agent.ops.block_gate import _journaled_target
+
+    if str(record.get("response") or "") != "y":
+        return False
+    if _journaled_target(record.get("resolved")) != next_verb:
+        return False
+    parked_at = parse_iso_utc_or_none(awaiting_since)
+    ts = record.get("ts")
+    recorded_at = parse_iso_utc_or_none(ts if isinstance(ts, str) else None)
+    consumed_before_park = (
+        parked_at is not None and recorded_at is not None and recorded_at < parked_at
+    )
+    return not consumed_before_park
+
+
+def _boundary_scoped_committed_resolved(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> dict[str, Any] | None:
+    """The ``resolved`` of the latest greenlight that TARGETS the parked boundary.
+
+    The boundary-scoped counterpart of :func:`_latest_committed_resolved`, used on
+    the RESUME path (a pending marker exists). Scans the decision journal
+    newest-first — exactly as ``block_gate.assert_greenlit_target`` does — and
+    returns the ``resolved`` of the first record for which
+    :func:`greenlight_targets_boundary` holds, else ``None``. ``None`` means no
+    committed greenlight answers THIS boundary yet: the tick is still awaiting the
+    human (a valid parked stop, exit 0), never a spurious advance/rerun.
+    """
+    from hpc_agent.state.decision_journal import read_decisions
+
+    if not scope_id:
+        return None
+    try:
+        records = read_decisions(experiment_dir, scope_kind, scope_id)
+    except Exception:  # noqa: BLE001 — a bad scope must not crash the tick
+        return None
+    for record in reversed(records):
+        if greenlight_targets_boundary(record, next_verb=next_verb, awaiting_since=awaiting_since):
             resolved = record.get("resolved")
             return dict(resolved) if isinstance(resolved, dict) else {}
     return None

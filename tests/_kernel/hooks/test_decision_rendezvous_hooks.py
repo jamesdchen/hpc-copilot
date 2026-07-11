@@ -76,13 +76,16 @@ def _park(exp: Path, run_id: str = _RUN_ID) -> None:
 
 
 def _commit_y(exp: Path, run_id: str = _RUN_ID) -> None:
+    # A real greenlight names the parked boundary's successor in ``resolved``
+    # (block_gate ``next_block``); the marker parked by ``_park`` has next_verb
+    # "s3", and the auto-stamped ``ts`` (now) is after ``awaiting_since``.
     append_decision(
         exp,
         scope_kind="run",
         scope_id=run_id,
         block=_BLOCK,
         response="y",
-        resolved={"approved": True},
+        resolved={"approved": True, "next_block": "s3"},
     )
 
 
@@ -156,6 +159,63 @@ def test_committed_y_but_no_marker_is_silent(tmp_path: Path) -> None:
     assert guard.build_hook_output(_stop_payload(tmp_path)) is None
 
 
+# ─── boundary scoping: a consumed greenlight is not THIS boundary's ──────────
+# (bug-sweep 2026-07-11 #23 / run-12 finding 21)
+
+
+def test_prior_boundary_consumed_y_is_silent(tmp_path: Path) -> None:
+    """bug-sweep #23: parked at s2→s3, but the journal's latest `y` names the
+    PREVIOUS boundary (s2 — already consumed, nothing appended on consumption).
+    The run is still awaiting the human, so the guard stays silent instead of
+    force-continuing into a void on every turn end."""
+    _park(tmp_path)  # marker next_verb == "s3"
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        block=_BLOCK,
+        response="y",
+        resolved={"approved": True, "next_block": "s2"},
+    )
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+    assert guard.find_committed_unadvanced(tmp_path) is None
+
+
+def test_reparked_stale_same_boundary_y_is_silent(tmp_path: Path) -> None:
+    """run-12 finding 21: the `y` DID name this boundary (s3) but predates the
+    (re-)park's awaiting_since (a tick consumed it, ran the block, re-parked) →
+    a consumed greenlight, so the guard stays silent."""
+    _park(tmp_path)  # awaiting_since == 2026-07-03T00:30:00+00:00
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        block=_BLOCK,
+        response="y",
+        resolved={"approved": True, "next_block": "s3"},
+        ts="2026-07-03T00:00:00+00:00",  # BEFORE the park → already consumed
+    )
+    assert guard.build_hook_output(_stop_payload(tmp_path)) is None
+
+
+def test_fresh_boundary_targeting_y_forces_continue(tmp_path: Path) -> None:
+    """The 2026-06-10 stall class stays closed: a fresh `y` naming this boundary
+    (s3), journaled after the park, still forces continuation."""
+    _park(tmp_path)
+    append_decision(
+        tmp_path,
+        scope_kind="run",
+        scope_id=_RUN_ID,
+        block=_BLOCK,
+        response="y",
+        resolved={"approved": True, "next_block": "s3"},
+        ts="2026-07-03T01:00:00+00:00",  # AFTER the park → live greenlight
+    )
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None
+    assert out["decision"] == "block"
+
+
 # ─── campaign scope: greenlights are journaled under scope "campaign" ────────
 
 _CAMPAIGN_ID = "camp-1"
@@ -192,7 +252,7 @@ def test_campaign_scoped_committed_y_forces_continue(tmp_path: Path) -> None:
         scope_id=_CAMPAIGN_ID,
         block="campaign-greenlight",
         response="y",
-        resolved={"approved": True},
+        resolved={"approved": True, "next_block": "campaign-watch"},
     )
 
     out = guard.build_hook_output(_stop_payload(tmp_path))

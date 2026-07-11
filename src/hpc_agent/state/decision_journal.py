@@ -56,6 +56,7 @@ __all__ = [
     "append_decision",
     "read_decisions",
     "latest_decision",
+    "is_committed_greenlight_for_boundary",
     "is_latest_committed_greenlight",
     "decisions_path",
 ]
@@ -305,17 +306,52 @@ def latest_decision(experiment_dir: Path, scope_kind: str, scope_id: str) -> dic
 def is_latest_committed_greenlight(experiment_dir: Path, scope_kind: str, scope_id: str) -> bool:
     """True iff a scope's most recent decision is a committed ``y`` greenlight.
 
-    This is the decision-journal half of the §5 "committed-but-unadvanced"
-    predicate — the other half being a still-set ``pending_decision`` marker
-    (``state.journal.is_awaiting_decision``). It is the single canonical
-    encoding of the rule the ``block-drive`` Stop guard
-    (``_kernel.hooks.decision_rendezvous_stop_guard.find_committed_unadvanced``)
-    and the out-of-session ``doctor`` both key their advance detection on: the
-    LATEST record has ``response == "y"``. A trailing nudge (or no decision
-    yet) is not a greenlight, so the two surfaces agree on when a parked driver
-    holds an approved-but-unconsumed decision that must be advanced.
+    UNSCOPED latest-record read: true whenever the LATEST record has
+    ``response == "y"``, with no regard for WHICH boundary that ``y`` targeted.
+    Correct for touchpoint-level questions — "is the human's newest word on
+    this scope an approval?" (the campaign-pending queue collector, the
+    relay-audit standing check). NOT sufficient for the §5
+    "committed-but-unadvanced" advance detection: a consumed ``y`` is never
+    removed from the journal, so after a driver consumes it and re-parks, the
+    latest record is a STALE greenlight (bug-sweep #1/#23, run-12 finding 21).
+    Advance detection must use :func:`is_committed_greenlight_for_boundary`,
+    which the Stop guard, ``doctor``, and the attention queue's
+    greenlight-unadvanced split all route through.
 
     Raises :class:`errors.SpecInvalid` on a bad scope.
     """
     latest = latest_decision(experiment_dir, scope_kind, scope_id)
     return latest is not None and latest.get("response") == "y"
+
+
+def is_committed_greenlight_for_boundary(
+    experiment_dir: Path,
+    scope_kind: str,
+    scope_id: str,
+    *,
+    next_verb: str | None,
+    awaiting_since: str | None,
+) -> bool:
+    """True iff the scope's latest decision is the greenlight for THIS parked boundary.
+
+    The decision-journal half of the §5 "committed-but-unadvanced" predicate,
+    BOUNDARY-SCOPED (bug-sweep #1/#23, run-12 finding 21): the latest record
+    must be a ``y`` that NAMES the parked marker's ``next_verb`` and was
+    journaled at-or-after the marker's ``awaiting_since`` — the single shared
+    rule (:func:`hpc_agent._kernel.lifecycle.block_drive.greenlight_targets_boundary`)
+    the ``block-drive`` Stop guard, the out-of-session ``doctor``, and the
+    attention queue's greenlight-unadvanced split all key on, so no surface can
+    read a consumed greenlight as a fresh one. *next_verb*/*awaiting_since*
+    come from the run's ``pending_decision`` marker (its ``resume_cursor``).
+
+    Raises :class:`errors.SpecInvalid` on a bad scope.
+    """
+    latest = latest_decision(experiment_dir, scope_kind, scope_id)
+    if latest is None:
+        return False
+    # Lazy import: block_drive imports this module at top level; the shared
+    # predicate is pure (no journal I/O), so the one-way runtime import here
+    # keeps the single definition without an import cycle.
+    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
+
+    return greenlight_targets_boundary(latest, next_verb=next_verb, awaiting_since=awaiting_since)

@@ -52,6 +52,12 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr(bd, "read_pending_decision", lambda run_id, **_k: dict(state["pending"]))
     monkeypatch.setattr(bd, "_latest_committed_resolved", lambda *_a, **_k: state["committed"])
+    # The RESUME path (pending marker present) now reads through the
+    # boundary-scoped reader; fake it to serve the same ``committed`` so these
+    # spec-materialization tests stay focused on the acting-spec shape.
+    monkeypatch.setattr(
+        bd, "_boundary_scoped_committed_resolved", lambda *_a, **_k: state["committed"]
+    )
 
     def _clear(run_id: str, **_k: Any) -> None:
         state["cleared"].append(run_id)

@@ -39,10 +39,11 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.block_terminal import read_terminal_with_fallback
 from hpc_agent.state.decision_journal import (
-    is_latest_committed_greenlight,
+    is_committed_greenlight_for_boundary,
     latest_decision,
 )
 from hpc_agent.state.index import find_parked_runs, find_stalled_runs
+from hpc_agent.state.journal import read_pending_decision
 from hpc_agent.state.run_record import _current_homedir
 
 __all__ = ["doctor", "scan_dead_detached_workers"]
@@ -440,10 +441,14 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     # them, so a parked run can never appear in the stalled list.
     #
     # But a parked run splits into two sub-states (§5 Phase-5): a run is only
-    # genuinely *awaiting the human* while its latest committed decision is NOT a
-    # `y` greenlight. Once the human commits `y` (marker still set, driver dead —
-    # no OS scheduler consumed it), it is a STALLED driver that must be re-armed.
-    # is_latest_committed_greenlight is the same rule the in-session Stop guard
+    # genuinely *awaiting the human* while its latest committed decision is NOT
+    # the greenlight for THIS parked boundary. Once the human commits that `y`
+    # (marker still set, driver dead — no OS scheduler consumed it), it is a
+    # STALLED driver that must be re-armed. BOUNDARY-SCOPED (bug-sweep #1/#23,
+    # run-12 finding 21): a consumed `y` stays the journal's latest record after
+    # the driver re-parks, so the bare latest-is-y read would re-arm a driver
+    # that is genuinely waiting — is_committed_greenlight_for_boundary is the
+    # same shared rule the in-session Stop guard
     # (decision_rendezvous_stop_guard.find_committed_unadvanced) keys on, so the
     # hook and the doctor agree on "committed-but-unadvanced".
     parked_hits = find_parked_runs(now, experiment_dir=experiment_dir)
@@ -451,7 +456,16 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
     advance_proposals: list[AdvanceRunProposal] = []
     for hit in parked_hits:
         run_id = hit["run_id"]
-        if is_latest_committed_greenlight(experiment_dir, "run", run_id):
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
+        cursor = marker.get("resume_cursor") or {}
+        next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+        if is_committed_greenlight_for_boundary(
+            experiment_dir,
+            "run",
+            run_id,
+            next_verb=next_verb,
+            awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+        ):
             decision = latest_decision(experiment_dir, "run", run_id)
             advance_proposals.append(_draft_advance_proposal(hit, decision=decision, now=now))
         else:

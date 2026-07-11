@@ -294,21 +294,34 @@ def collect_greenlight_and_parked(experiment_dir: Path, *, now: str) -> list[Att
     """The ``find_parked_runs`` split (D5 rows 1-2), the SAME split ``doctor`` and
     the Stop guard key on.
 
-    A parked run whose latest committed decision IS a ``y`` greenlight is
-    ``greenlight-unadvanced`` (blocked — the human already decided; a dead driver
-    must be re-armed); otherwise it is ``run-parked`` (verdict — still genuinely
-    awaiting the human). The greenlight test routes through the ONE predicate
-    ``is_latest_committed_greenlight``; the queue never re-inlines it.
+    A parked run whose latest committed decision IS the greenlight for its
+    parked boundary is ``greenlight-unadvanced`` (blocked — the human already
+    decided; a dead driver must be re-armed); otherwise it is ``run-parked``
+    (verdict — still genuinely awaiting the human). BOUNDARY-SCOPED (bug-sweep
+    #1/#23, run-12 finding 21): a consumed ``y`` stays the journal's latest
+    record after a re-park, so the bare latest-is-y read would mint a false
+    ``greenlight-unadvanced`` item on every scan. The greenlight test routes
+    through the ONE predicate ``is_committed_greenlight_for_boundary`` (the
+    Stop guard's and doctor's rule); the queue never re-inlines it.
     """
-    from hpc_agent.state.decision_journal import is_latest_committed_greenlight
+    from hpc_agent.state.decision_journal import is_committed_greenlight_for_boundary
     from hpc_agent.state.index import find_parked_runs
+    from hpc_agent.state.journal import read_pending_decision
 
     exp = _exp(experiment_dir)
     items: list[AttentionItem] = []
     for hit in find_parked_runs(now, experiment_dir=experiment_dir):
         run_id = hit["run_id"]
         block = hit.get("block")
-        greenlit = is_latest_committed_greenlight(experiment_dir, "run", run_id)
+        marker = read_pending_decision(run_id, experiment_dir=experiment_dir) or {}
+        cursor = marker.get("resume_cursor") or {}
+        greenlit = is_committed_greenlight_for_boundary(
+            experiment_dir,
+            "run",
+            run_id,
+            next_verb=cursor.get("next_verb") if isinstance(cursor, dict) else None,
+            awaiting_since=marker.get("awaiting_since") or hit.get("awaiting_since"),
+        )
         kind = GREENLIGHT_UNADVANCED if greenlit else RUN_PARKED
         items.append(
             AttentionItem(

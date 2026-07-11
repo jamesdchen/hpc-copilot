@@ -26,10 +26,14 @@ harness into a void with nothing to advance. The commit-is-the-approval design
 is what lets a single filesystem read distinguish the two states with no
 heuristic about turn content:
 
-* pending_decision marker set **and** the latest decision record is a ``y`` →
+* pending_decision marker set **and** the latest decision record is a ``y`` that
+  TARGETS this boundary (``resolved["next_block"]`` names the parked
+  ``next_verb`` and its ``ts`` is at/after the marker's ``awaiting_since``) →
   approval committed but driver unconsumed → **force continue**.
 * pending_decision marker set but the latest decision is a *nudge* (or there is
-  no decision yet) → still waiting for the human → **silent**.
+  no decision yet), OR the latest ``y`` is a prior boundary's already-consumed
+  greenlight / a same-boundary re-park's stale one that does NOT target this
+  boundary → still waiting for the human → **silent**.
 * no pending_decision marker → not parked → **silent**.
 
 The condition is **self-healing**: the next ``block-drive`` tick consumes the
@@ -72,9 +76,14 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
 
     "Committed but unadvanced" = the run still carries a ``pending_decision``
     marker (:func:`hpc_agent.state.journal.is_awaiting_decision`) **and** the
-    latest record in its decision journal has ``response == "y"``. A marker with
-    a trailing nudge (or no decision yet) is the valid "waiting for the human"
-    stop and yields ``None``.
+    latest decision record is a greenlight that TARGETS this parked boundary —
+    ``response == "y"`` whose ``resolved["next_block"]`` names the marker's
+    ``resume_cursor["next_verb"]`` and whose ``ts`` is at/after the marker's
+    ``awaiting_since`` (the shared :func:`block_drive.greenlight_targets_boundary`
+    predicate). A marker with a trailing nudge, no decision yet, a PREVIOUS
+    boundary's already-consumed ``y`` (bug-sweep #23), or a same-boundary re-park's
+    stale ``y`` (run-12 finding 21) is the valid "waiting for the human" stop and
+    yields ``None`` — the guard never forces a tick into a void (§5).
 
     The decision journal is read under the SCOPE the marker's workflow selects
     — mirroring how ``block_drive.run_tick`` locates the committed greenlight:
@@ -89,6 +98,7 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
     run we cannot read is treated as not-pending.
     """
     from hpc_agent import errors
+    from hpc_agent._kernel.lifecycle.block_drive import greenlight_targets_boundary
     from hpc_agent.state.decision_journal import read_decisions
     from hpc_agent.state.index import find_in_flight_runs
     from hpc_agent.state.journal import read_pending_decision
@@ -110,8 +120,22 @@ def find_committed_unadvanced(experiment_dir: Path) -> dict[str, Any] | None:
             continue
         if not decisions:
             continue
-        if decisions[-1].get("response") != "y":
-            # Latest touchpoint is a nudge / not an approval — still waiting.
+        # BOUNDARY-SCOPED (bug-sweep #23 / run-12 finding 21): fire only when the
+        # latest committed decision is a greenlight that actually TARGETS this
+        # parked boundary — mirroring the driver + ``ops/block_gate.py`` via the
+        # ONE shared predicate ``block_drive.greenlight_targets_boundary``. A prior
+        # boundary's already-consumed ``y`` (its ``resolved`` names an earlier
+        # verb) or a same-boundary re-park's stale ``y`` (older than the marker's
+        # ``awaiting_since``) is NOT this decision: the run is still legitimately
+        # waiting for the human, so stay silent rather than force a tick into a
+        # void (§5). A trailing nudge is likewise still-waiting (not a greenlight).
+        cursor = marker.get("resume_cursor") or {}
+        next_verb = cursor.get("next_verb") if isinstance(cursor, dict) else None
+        if not greenlight_targets_boundary(
+            decisions[-1],
+            next_verb=next_verb,
+            awaiting_since=marker.get("awaiting_since"),
+        ):
             continue
         return {
             "run_id": run_id,
