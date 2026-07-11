@@ -157,19 +157,62 @@ ErrorCode = Literal[
 
 # ── failure categories ───────────────────────────────────────────────────────
 
-# Values returned by ``hpc_agent.execution.mapreduce.reduce.classify.classify_failure``.
-# Order mirrors the classifier's specificity ranking (first-match-wins).
-# Re-exported from ``classify.py`` so that module's public ``CATEGORIES``
-# tuple stays in sync with this Literal automatically.
+# Canonical failure-class vocabulary for the ``failure_features`` evidence
+# block's ``error_class`` field and the ``/status`` coarse classifier's public
+# ``CATEGORIES`` tuple (``classify.py`` derives it via ``typing.get_args``).
+#
+# This must cover every ``error_class`` the fingerprint classifier can stamp on
+# a failure cluster, because ``ops.recover.features_glue`` feeds that raw value
+# straight into ``FailureFeatures.error_class`` at the monitor's terminal-FAILED
+# resolve-and-recover tick. Before this pass the Literal held only the 8 coarse
+# ``classify_failure`` outputs while ``infra.failure_signatures.CATALOG`` emits
+# 19 fine-grained classes — so an ordinary failure (``import_error``,
+# ``python_traceback``, ``mpi_*``, ...) raised a pydantic ``ValidationError``
+# here and killed the whole monitor tick (bug-sweep 2026-07-11 #2).
+#
+# The set is now the union of (a) ``CLASSIFIER_CATEGORIES`` — every catalog
+# ``error_class`` — and (b) the three coarse-only outputs ``classify_failure``
+# synthesizes without a catalog row (``segv``, ``queue_stall``, ``code_bug``)
+# plus the ``unknown`` escape hatch. It is kept a strict subset of the kernel
+# ``FailureCategory`` StrEnum (``_kernel/contract/vocabulary.py``), which is the
+# canonical Python home; ``test_failure_category_covers_classifier.py`` pins
+# ``CLASSIFIER_CATEGORIES ⊆ get_args(FailureCategory) ⊆ StrEnum`` so the next
+# catalog row cannot silently re-introduce the crash.
+#
+# The ssh_unreachable / log_missing sentinels
+# (``cluster_failures_by_fingerprint``) deliberately do NOT appear: those
+# buckets carry only a ``category`` key and no ``error_class``, so
+# ``features_glue``'s ``cluster.get("error_class")`` reads ``None`` for them —
+# they never reach this field.
 FailureCategory = Literal[
+    # Catalog-emitted resource errors (also coarse ``classify_failure`` outputs).
     "gpu_oom",
     "system_oom",
-    "segv",
     "walltime",
     "node_failure",
+    # Coarse ``classify_failure`` outputs with no catalog row (local regex /
+    # escape hatch), retained from the original narrow Literal.
+    "segv",
     "queue_stall",
     "code_bug",
     "unknown",
+    # Catalog-emitted user/config errors — the fingerprint classifier stamps
+    # these verbatim on the failure cluster (they previously crashed this seam).
+    "preempted",
+    "import_error",
+    "file_not_found",
+    "permission_denied",
+    "disk_full",
+    "python_traceback",
+    "uv_not_on_path",
+    "conda_command_not_found",
+    "output_file_required",
+    "module_not_found_hpc_agent",
+    "undefined_var_expansion",
+    "mpi_launcher_missing",
+    "mpi_pe_invalid",
+    "mpi_init_failed",
+    "cluster_env_init",
 ]
 
 # Values accepted by the ``resubmit`` primitive's ``--spec.category``.

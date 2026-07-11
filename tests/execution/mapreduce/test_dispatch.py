@@ -463,6 +463,63 @@ class TestDispatchEmptyOutputIsFailure:
         assert runtime["exit_code"] == dispatch._EXIT_NO_OUTPUT
 
     @_posix_shell_executor
+    def test_trace_only_output_is_failure(self, tmp_path, monkeypatch):
+        """#28: an executor that emits ONLY the framework data-trace transport
+        file (``_trace.jsonl``) but no real result must be treated as
+        empty-output — the trace is telemetry, not a produced result, so
+        promoting it would be the same FALSE GREEN #16 guards against."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo \'{"trace": 1}\' > "$RESULT_DIR/_trace.jsonl"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == dispatch._EXIT_NO_OUTPUT
+        result_dir = result_root / "0"
+        # Not promoted: no trace file lands at the top level, no success marker.
+        assert not (result_dir / "_trace.jsonl").exists()
+        assert not (result_dir / ".hpc_cmd_sha").exists()
+        runtime = json.loads((result_dir / "_runtime.json").read_text())
+        assert runtime["exit_code"] == dispatch._EXIT_NO_OUTPUT
+
+    @_posix_shell_executor
+    def test_trace_beside_real_output_still_completes(self, tmp_path, monkeypatch):
+        """When a real result exists, the trace is promoted alongside it — the
+        guard only rejects a trace-ONLY (output-less) dir."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor=(
+                'echo \'{"value": 1, "n_samples": 1}\' > "$RESULT_DIR/metrics.json"; '
+                'echo \'{"trace": 1}\' > "$RESULT_DIR/_trace.jsonl"'
+            ),
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+
+        assert exc_info.value.code == 0
+        result_dir = result_root / "0"
+        assert (result_dir / "metrics.json").is_file()
+        assert (result_dir / "_trace.jsonl").is_file()  # promoted alongside output
+        assert not (result_dir / "_wip_0").exists()
+
+    @_posix_shell_executor
     def test_real_metrics_json_still_completes(self, tmp_path, monkeypatch):
         """A task that writes metrics.json to $RESULT_DIR is promoted, exit 0
         (the empty-output guard must not touch a real result)."""

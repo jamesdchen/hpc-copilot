@@ -54,6 +54,17 @@ class FailureSignature:
     exit_code: int | None
     suggested_fix: dict[str, Any]
     priority: int = 50
+    #: True only when ``exit_code`` is genuinely DISCRIMINATING — i.e. a
+    #: scheduler/signal-specific code that names this failure on its own
+    #: (130 = SIGTERM-trap preemption, 137 = 128+SIGKILL OOM, 271 = SGE h_rt
+    #: walltime). ``classify()``'s pattern-less fallback fires ONLY on rows
+    #: with this flag set. Rows carrying a GENERIC exit code that many
+    #: unrelated failures share (2 = argparse/usage error, 127 = command not
+    #: found, 1 = any Python error) leave this False, so their exit code is a
+    #: tiebreaker for a pattern match but never a standalone diagnosis — a
+    #: bare rc=2 must not be misread as ``uv_not_on_path`` nor rc=127 as
+    #: ``mpi_launcher_missing`` (bug-sweep 2026-07-11 #34).
+    exit_code_sufficient: bool = False
 
 
 CATALOG: list[FailureSignature] = [
@@ -66,6 +77,8 @@ CATALOG: list[FailureSignature] = [
         # the campus user got bumped by higher-priority work, not
         # failed. The harness should resubmit cleanly.
         exit_code=130,
+        # 130 = the dispatcher's SIGTERM trap; nothing else exits 130 here.
+        exit_code_sufficient=True,
         suggested_fix={"action": "resubmit-preempted"},
         priority=100,
     ),
@@ -86,6 +99,8 @@ CATALOG: list[FailureSignature] = [
             r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I
         ),
         exit_code=137,
+        # 137 = 128 + SIGKILL(9), the kernel OOM-killer's signature.
+        exit_code_sufficient=True,
         suggested_fix={"action": "increase-mem", "factor": 1.5},
         priority=100,
     ),
@@ -109,6 +124,9 @@ CATALOG: list[FailureSignature] = [
             re.I,
         ),
         exit_code=271,
+        # 271 = SGE's h_rt walltime-kill exit code (128 + 143-ish qmaster
+        # enforcement); a scheduler-specific walltime signature.
+        exit_code_sufficient=True,
         suggested_fix={"action": "increase-walltime", "factor": 1.5},
         priority=100,
     ),
@@ -514,9 +532,14 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
     *exit_code* is only used as a tiebreaker --- a ``stderr_pattern``
     match alone is sufficient, since exit codes are noisy on schedulers
     that wrap them (qsub returns 0 even when the inner job dies). The
-    exit-code-alone path only fires for priority>=90 entries (resource
-    errors) to avoid mis-classifying a generic exit=1 as a python
-    traceback.
+    exit-code-alone path fires ONLY for rows flagged
+    ``exit_code_sufficient`` — the three whose code is genuinely
+    discriminating (130 preempted, 137 system_oom, 271 walltime). Rows
+    carrying a GENERIC code that many unrelated failures share (the
+    priority-95 empirical-config signatures on rc=2 / rc=127) are
+    excluded, so a pattern-less rc=2 is NOT misdiagnosed ``uv_not_on_path``
+    and a bare rc=127 is NOT misdiagnosed ``mpi_launcher_missing``
+    (bug-sweep 2026-07-11 #34).
     """
     text = stderr or ""
     sorted_catalog = sorted(CATALOG, key=lambda s: -s.priority)
@@ -537,7 +560,7 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
             and exit_code is not None
             and int(exit_code) == int(sig.exit_code)
         )
-        if exit_hit and sig.priority >= 90:
+        if exit_hit and sig.exit_code_sufficient:
             return {
                 "error_class": sig.error_class,
                 "suggested_fix": dict(sig.suggested_fix),

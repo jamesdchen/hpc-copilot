@@ -692,7 +692,7 @@
     "output_schema": null,
     "python": "hpc_agent.meta.campaign.atoms.decide_concurrency.decide_concurrency",
     "side_effects": [],
-    "summary": "Decide campaign iteration concurrency from observable evidence: the strategy's async support (classify-campaign-path's supports_async_concurrency) and budget headroom (campaign-budget's remaining minus in-flight). Resolves sequential deterministically (decided_by=code) when async is unsupported or there's no headroom; otherwise escalates the how-aggressive choice (decided_by=judgement) carrying the computed safe max_in_flight bound.",
+    "summary": "Decide campaign iteration concurrency from observable evidence: the strategy's async support (classify-campaign-path's supports_async_concurrency) and budget headroom (campaign-budget's remaining, which already nets in-flight). Resolves sequential deterministically (decided_by=code) when async is unsupported or there's no headroom; otherwise escalates the how-aggressive choice (decided_by=judgement) carrying the computed safe max_in_flight bound.",
     "verb": "query"
   },
   {
@@ -978,7 +978,7 @@
     "output_schema": "monitor_summary.output.json",
     "python": "hpc_agent.ops.monitor.summary.monitor_summary",
     "side_effects": [],
-    "summary": "Render the canonical user-facing tick summary for a run. Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal and returns {lifecycle_state, headline, body, armed_hint}. Slash command prints these verbatim.",
+    "summary": "Render the canonical user-facing tick summary for a run. Reads the journal runs dir's <run_id>.monitor.jsonl (the tick writers' path) + the run journal and returns {lifecycle_state, headline, body, armed_hint}. Slash command prints these verbatim.",
     "verb": "query"
   },
   {

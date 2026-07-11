@@ -59,6 +59,19 @@ def test_none_error_class_passes_through_as_none() -> None:
     assert f.error_class is None
 
 
+def test_fine_grained_catalog_classes_do_not_crash_the_seam() -> None:
+    """bug-sweep #2: the fingerprint classifier stamps fine-grained catalog
+    classes (import_error, python_traceback, mpi_*, ...) that the narrow wire
+    Literal used to reject — build_failure_features -> FailureFeatures
+    validation raised and killed the monitor's terminal-FAILED tick. Every
+    class the catalog emits must now pass through unchanged."""
+    from hpc_agent.infra.failure_signatures import CLASSIFIER_CATEGORIES
+
+    for cls in sorted(CLASSIFIER_CATEGORIES):
+        f = build_failure_features(_cluster(error_class=cls), record=_record(), sidecar=None)
+        assert f.error_class == cls
+
+
 # ── resource_spec sourcing ───────────────────────────────────────────────────
 
 

@@ -85,6 +85,7 @@ _FRAMEWORK_ARTIFACT_NAMES = frozenset(
         ".hpc_cmd_sha",  # idempotency marker stamped on a successful promote
         ".hpc_failed",  # terminal failure-marker dir (hpc_preamble.sh)
         "_hpc_dispatch_error.log",  # failure capture (normally inside _wip_*)
+        "_trace.jsonl",  # data-trace transport file (T2) — telemetry, not a result
     }
 )
 
@@ -1129,25 +1130,42 @@ def _template_needs_resolve_kwargs(template: str) -> bool:
     return bool(names - _SIDECAR_ONLY_PLACEHOLDERS)
 
 
-def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
+def _build_per_task_dict_from_sidecar(
+    sidecar: dict,
+    tasks_module,
+    *,
+    trial_params: list | None = None,
+    errors_out: list | None = None,
+) -> dict:
     """Build a per-task dict from sidecar (+ optional ``.hpc/tasks.py``).
 
     Adapter that lets the existing reporting code
     (``report_status_from_tasks``, ``rollup_by_grid_point``,
     ``rollup_by_wave``) operate unchanged against the new model. Each
     task's ``result_dir`` is computed by formatting the sidecar's
-    ``result_dir_template`` against ``task_id`` + ``run_id`` + the
-    kwargs returned by ``tasks_module.resolve(task_id)``.
+    ``result_dir_template`` against ``task_id`` + ``run_id`` + the per-task
+    kwargs.
 
-    ``tasks_module`` may be ``None`` — the *degraded* path used when the
-    template references no ``resolve()`` kwargs (so the import was skipped)
-    or when the import failed for a foreign ``tasks.py``. In that mode each
-    task's kwargs are empty: result dirs synthesize from ``run_id``/``task_id``
-    only, and ``params`` is ``{}`` (so the grid rollup falls under the ``"_"``
-    key rather than crashing the whole report). A template that *does* need
-    kwargs but ran in degraded mode formats with an empty context and yields
-    an empty ``result_dir`` for the missing fields — surfaced as "incomplete"
-    downstream, never an exception.
+    Per-task kwargs come from the sidecar's frozen ``trial_params`` manifest
+    when supplied (the ground-truth pre-image serialized at submit time —
+    mirrors dispatch.py/combiner.py). ``tasks.py`` is then NEVER re-executed:
+    a state-dependent ``resolve()`` (the shipped optuna_strategy/pbt_strategy
+    scaffolds) would return the NEXT iteration's kwargs, yielding result dirs
+    the dispatcher never wrote and minting a phantom optimizer trial on the
+    login node each poll tick. A manifest entry that is missing or not a dict
+    degrades that task to empty kwargs and appends a note to ``errors_out``
+    (when given) rather than crashing the whole report.
+
+    When ``trial_params`` is ``None`` the legacy path is used: kwargs come from
+    ``tasks_module.resolve(task_id)``. ``tasks_module`` may itself be ``None``
+    — the *degraded* path used when the template references no ``resolve()``
+    kwargs (so the import was skipped) or when the import failed for a foreign
+    ``tasks.py``. In that mode each task's kwargs are empty: result dirs
+    synthesize from ``run_id``/``task_id`` only, and ``params`` is ``{}`` (so
+    the grid rollup falls under the ``"_"`` key rather than crashing the whole
+    report). A template that *does* need kwargs but ran in degraded mode
+    formats with an empty context and yields an empty ``result_dir`` for the
+    missing fields — surfaced as "incomplete" downstream, never an exception.
     """
     n = int(sidecar["task_count"])
     template = sidecar["result_dir_template"]
@@ -1155,7 +1173,34 @@ def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
     tasks: dict[str, dict] = {}
     for i in range(n):
         kwargs: dict = {}
-        if tasks_module is not None:
+        if trial_params is not None:
+            # Frozen-manifest fast path: per-task kwargs are the ground truth
+            # the run was dispatched (and cmd_sha-hashed) with. Degrade a
+            # missing / non-dict entry to empty kwargs + a recorded error,
+            # never crash the poll.
+            if not 0 <= i < len(trial_params):
+                if errors_out is not None:
+                    errors_out.append(
+                        {
+                            "code": "trial_params_mismatch",
+                            "detail": (
+                                f"task {i}: out of range of sidecar trial_params "
+                                f"({len(trial_params)} entries)"
+                            ),
+                        }
+                    )
+            else:
+                entry = trial_params[i]
+                if isinstance(entry, dict):
+                    kwargs = entry
+                elif errors_out is not None:
+                    errors_out.append(
+                        {
+                            "code": "trial_params_mismatch",
+                            "detail": f"task {i}: trial_params[{i}] is not a dict",
+                        }
+                    )
+        elif tasks_module is not None:
             resolved = tasks_module.resolve(i)
             if isinstance(resolved, dict):
                 kwargs = resolved
@@ -1257,45 +1302,61 @@ def _main() -> int:
         sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 
-    # Decide whether reporting THIS run actually needs ``tasks.py``. The
-    # per-task result dirs come from ``result_dir_template``; only templates
-    # that reference a placeholder beyond ``run_id``/``task_id`` need the
-    # per-task ``resolve(i)`` kwargs (and thus the import). For the common
-    # ``results/{run_id}/task_{task_id}`` shape the import is pure cost — and
-    # a foreign campaign's ``tasks.py`` (heavy imports / import-time side
-    # effects / missing campaign env vars) would otherwise wedge status for an
-    # unrelated run. So import LAZILY, and only when the template needs it.
+    # Frozen-manifest fast path (mirrors dispatch.py/combiner.py): when the
+    # sidecar carries ``trial_params`` — the exact per-task kwargs pre-image
+    # serialized at submit time — that list is the ground truth, and ``tasks.py``
+    # must NEVER be re-executed cluster-side. A state-dependent ``resolve()``
+    # (the shipped optuna_strategy/pbt_strategy scaffolds) would return the NEXT
+    # iteration's kwargs, so every poll tick would point at result dirs the
+    # dispatcher never wrote (the run never settles complete) and could mint a
+    # phantom optimizer trial on the login node. Skip the import entirely.
     template = sidecar.get("result_dir_template", "") or ""
+    frozen_trial_params = sidecar.get("trial_params")
+    if not isinstance(frozen_trial_params, list):
+        frozen_trial_params = None
     tasks_module = None
     _degraded_import_detail: str | None = None
-    # A genuinely MISSING ``.hpc/tasks.py`` is a malformed run regardless of the
-    # template — keep the documented ``tasks_py_not_found`` contract. But only
-    # IMPORT it (the wedge cost: a foreign campaign's heavy / env-dependent
-    # tasks.py would otherwise block an unrelated run) when ``result_dir_template``
-    # actually needs per-task ``resolve()`` kwargs; for the common
-    # ``results/{run_id}/task_{task_id}`` shape the import is pure cost.
-    tasks_py_path = Path(".hpc") / "tasks.py"
-    if not tasks_py_path.is_file():
-        return _emit_err("tasks_py_not_found", str(tasks_py_path))
-    if _template_needs_resolve_kwargs(template):
-        try:
-            from hpc_agent import load_tasks_module
+    _manifest_errors: list[dict] = []
 
-            tasks_module = load_tasks_module(tasks_py_path)
-        except Exception as exc:
-            # DEGRADE rather than fail the whole report: a foreign tasks.py
-            # that won't import (present, but heavy / env-dependent) must not
-            # block reconciliation of THIS run. Fall back to task_id-only result
-            # dirs (tasks_module=None) + a non-fatal note in the errors list.
-            print(
-                f"tasks.py import failed ({tasks_py_path}: {exc}); "
-                "degrading to task_id-only result dirs",
-                file=sys.stderr,
-            )
-            _degraded_import_detail = f"{tasks_py_path}: {exc}"
+    if frozen_trial_params is None:
+        # Legacy path (old sidecars written before trial_params existed): the
+        # per-task result dirs come from ``result_dir_template``; only templates
+        # that reference a placeholder beyond ``run_id``/``task_id`` need the
+        # per-task ``resolve(i)`` kwargs (and thus the import). For the common
+        # ``results/{run_id}/task_{task_id}`` shape the import is pure cost — and
+        # a foreign campaign's ``tasks.py`` (heavy imports / import-time side
+        # effects / missing campaign env vars) would otherwise wedge status for
+        # an unrelated run. So import LAZILY, and only when the template needs it.
+        #
+        # A genuinely MISSING ``.hpc/tasks.py`` is a malformed run regardless of
+        # the template — keep the documented ``tasks_py_not_found`` contract.
+        tasks_py_path = Path(".hpc") / "tasks.py"
+        if not tasks_py_path.is_file():
+            return _emit_err("tasks_py_not_found", str(tasks_py_path))
+        if _template_needs_resolve_kwargs(template):
+            try:
+                from hpc_agent import load_tasks_module
+
+                tasks_module = load_tasks_module(tasks_py_path)
+            except Exception as exc:
+                # DEGRADE rather than fail the whole report: a foreign tasks.py
+                # that won't import (present, but heavy / env-dependent) must not
+                # block reconciliation of THIS run. Fall back to task_id-only
+                # result dirs (tasks_module=None) + a non-fatal note.
+                print(
+                    f"tasks.py import failed ({tasks_py_path}: {exc}); "
+                    "degrading to task_id-only result dirs",
+                    file=sys.stderr,
+                )
+                _degraded_import_detail = f"{tasks_py_path}: {exc}"
 
     try:
-        tasks_data = _build_per_task_dict_from_sidecar(sidecar, tasks_module)
+        tasks_data = _build_per_task_dict_from_sidecar(
+            sidecar,
+            tasks_module,
+            trial_params=frozen_trial_params,
+            errors_out=_manifest_errors,
+        )
     except Exception as exc:
         return _emit_err("synthetic_dict_error", str(exc))
 
@@ -1330,6 +1391,11 @@ def _main() -> int:
         report["errors"].append(
             {"code": "tasks_py_import_degraded", "detail": _degraded_import_detail}
         )
+
+    # A frozen-manifest entry that was missing or malformed degraded that task
+    # to empty kwargs (non-fatal); surface the reason alongside the standing
+    # report so the operator can tell it apart from a genuinely-empty run.
+    report["errors"].extend(_manifest_errors)
 
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

@@ -88,6 +88,19 @@ _EXIT_NO_OUTPUT = 4
 _TRACE_TRANSPORT_FILENAME = "_trace.jsonl"
 _TRACE_DIGEST_ENV_VAR = "HPC_TRACE_DIGESTS"
 
+# Framework-written files an executor may drop into ``$RESULT_DIR`` that do NOT
+# by themselves constitute a produced result. The data-trace transport file
+# ``_trace.jsonl`` is emitted beside outputs (T2), so a trace-emitting but
+# output-less executor would otherwise make ``promote_pairs`` non-empty and
+# sail past the finding-16 empty-output guard — the exact FALSE GREEN the guard
+# exists to prevent. Kept in LOCK-STEP with the status reporter's
+# ``_FRAMEWORK_ARTIFACT_NAMES`` (``reduce/status.py``): that module rides the
+# installed-package import surface, while this standalone dispatcher is scp'd to
+# the compute node without ``hpc_agent`` on the path, so the two sets are
+# deliberately duplicated — the standalone-boundary carve-out in
+# ``docs/internals/engineering-principles.md``.
+_FRAMEWORK_ARTIFACT_NAMES = frozenset({_TRACE_TRANSPORT_FILENAME})
+
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
@@ -1091,7 +1104,17 @@ def main() -> None:
         # Sort: the declared per-task summary file at the top level last (it's
         # the idempotency marker); everything else alphabetically.
         promote_pairs.sort(key=lambda pair: (pair[1] == summary_name, pair[1]))
-        if not promote_pairs:
+        # Framework transport/telemetry files (currently just ``_trace.jsonl``)
+        # are NOT a produced result: an executor that emits a trace but writes
+        # no real output must still be caught by the empty-output guard below,
+        # not promoted green. They are still promoted alongside real outputs
+        # when any exist (the ``else`` branch moves every pair, trace included).
+        real_output_pairs = [
+            pair
+            for pair in promote_pairs
+            if os.path.basename(pair[1]) not in _FRAMEWORK_ARTIFACT_NAMES
+        ]
+        if not real_output_pairs:
             # #16 (proving run #5): exit 0 but the WIP result dir is EMPTY —
             # the executor produced NO files. Under WIP/atomic-promote
             # semantics "produced a result" == "wrote at least one file to

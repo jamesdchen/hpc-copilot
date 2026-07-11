@@ -129,6 +129,55 @@ def test_exit_code_alone_low_priority_does_not_match() -> None:
     assert out["error_class"] == "unknown"
 
 
+def test_exit_code_alone_system_oom() -> None:
+    """Exit 137 (128 + SIGKILL) alone still surfaces system_oom — a
+    genuinely discriminating scheduler/signal code (flagged
+    exit_code_sufficient)."""
+    assert classify("", 137)["error_class"] == "system_oom"
+
+
+def test_pattern_less_rc2_is_not_misdiagnosed_uv_missing() -> None:
+    """bug-sweep #34: exit code 2 is a GENERIC argparse/usage code shared by
+    several priority-95 empirical-config signatures (uv_not_on_path,
+    output_file_required). A pattern-less rc=2 must NOT be misread as any of
+    them — it is not discriminating, so the exit-code-alone fallback skips it
+    and the result is ``unknown``."""
+    out = classify("", 2)
+    assert out["error_class"] == "unknown"
+    assert out["error_class"] not in {"uv_not_on_path", "output_file_required"}
+
+
+def test_pattern_less_rc127_is_not_misdiagnosed_mpi_launcher_missing() -> None:
+    """bug-sweep #34: exit code 127 (command-not-found) is generic; a
+    pattern-less rc=127 must NOT be misread as ``mpi_launcher_missing``."""
+    out = classify("", 127)
+    assert out["error_class"] == "unknown"
+    assert out["error_class"] != "mpi_launcher_missing"
+
+
+def test_generic_exit_code_rows_are_not_exit_code_sufficient() -> None:
+    """The generic rc=2 / rc=127 rows must stay flagged non-sufficient, while
+    the three genuinely-discriminating codes (130/137/271) stay sufficient —
+    the structural guard behind the two tests above."""
+    sufficient = {sig.error_class for sig in CATALOG if sig.exit_code_sufficient}
+    assert sufficient == {"preempted", "system_oom", "walltime"}
+    generic = {
+        sig.error_class for sig in CATALOG if sig.exit_code in (2, 127) and sig.exit_code_sufficient
+    }
+    assert not generic
+
+
+def test_exit_code_keyed_rows_still_pattern_match() -> None:
+    """Excluding the generic rows from the exit-code-alone fallback must not
+    weaken their PATTERN path: the rc=2 / rc=127 empirical rows still classify
+    when their stderr marker is present (exit code as tiebreaker)."""
+    assert (
+        classify("[template] HPC_RUNTIME=uv but 'uv' not on PATH", 2)["error_class"]
+        == "uv_not_on_path"
+    )
+    assert classify("srun: command not found", 127)["error_class"] == "mpi_launcher_missing"
+
+
 def test_classify_returns_a_fresh_dict() -> None:
     """suggested_fix must be a copy, not a reference to CATALOG state."""
     a = classify("CUDA out of memory", None)["suggested_fix"]

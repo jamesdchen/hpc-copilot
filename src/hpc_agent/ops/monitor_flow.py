@@ -57,7 +57,7 @@ from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.classify import unresolved_unknown
-from hpc_agent.ops.monitor.harvest_guard import harvest_on_terminal
+from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.monitor.terminal import (
@@ -452,6 +452,79 @@ def monitor_flow(
                 # dead poller is still doctor-visible, then back off and retry.
                 _stamp_watchdog(experiment_dir, run_id, effective_interval)
                 _sleep(effective_interval)
+                continue
+            except (
+                errors.SshCircuitOpen,
+                errors.SshUnreachable,
+                errors.SshSlotWaitTimeout,
+            ) as exc:
+                # A NETWORK fault, not a RemoteCommandFailed/OSError: the per-host
+                # SSH circuit breaker opened (SshCircuitOpen), the host went
+                # transiently unreachable, or our own per-host slot wait timed out.
+                # None is an HpcError caught above, so without this clause a single
+                # blip that opens the breaker would kill the detached multi-hour
+                # watch (run #7: a 3×60s hoffman2 latency spike). Classify it
+                # transient: reset the deterministic-env counter, tick a poll_error,
+                # re-check the wall-clock budget, and — for a breaker-open — sleep
+                # out the remaining cooldown (never below the floor) before the next
+                # poll rather than hammering an open circuit (retry_safe=False). The
+                # loop stays bounded by the budget → TIMEOUT with the guaranteed
+                # harvest if the fault never clears. Cooldown wait mirrors
+                # harvest_guard._circuit_wait_sec.
+                consecutive_env_polls = 0
+                over_budget = (_now() - started) >= wall_clock_budget_seconds
+                logging.getLogger(__name__).warning(
+                    "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s",
+                    run_id,
+                    state.ticks,
+                    exc,
+                    (
+                        "over budget — escalating to TIMEOUT"
+                        if over_budget
+                        else "waiting out the breaker cooldown, then retrying"
+                    ),
+                )
+                _append_tick(
+                    experiment_dir,
+                    run_id,
+                    summary=dict(record.last_status or {}),
+                    diff_from_prev={
+                        "newly_complete": [],
+                        "newly_failed": [],
+                        "newly_combined_waves": [],
+                    },
+                    actions=[{"kind": "poll_error", "error": str(exc)}],
+                    lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
+                    next_tick_seconds=None if over_budget else effective_interval,
+                )
+                if over_budget:
+                    _ingest_runtime_at_terminal(experiment_dir, record=record)
+                    terminal_cause = "cap-overrun"
+                    return MonitorFlowResult(
+                        run_id=run_id,
+                        lifecycle_state=LifecycleState.TIMEOUT,
+                        last_status=dict(record.last_status or {}),
+                        combined_waves=state.last_combined_waves,
+                        failed_waves=state.last_failed_waves,
+                        ticks=state.ticks,
+                        elapsed_seconds=_now() - started,
+                        escalation_reason=None,
+                    )
+                # Wait out the breaker cooldown before the next poll, floored at
+                # effective_interval. SshUnreachable / SshSlotWaitTimeout carry no
+                # deadline → _circuit_wait_sec returns None → the floor interval.
+                circuit_wait = (
+                    _circuit_wait_sec(exc, now=time.time())
+                    if isinstance(exc, errors.SshCircuitOpen)
+                    else None
+                )
+                sleep_for = (
+                    max(effective_interval, circuit_wait)
+                    if circuit_wait is not None
+                    else effective_interval
+                )
+                _stamp_watchdog(experiment_dir, run_id, sleep_for)
+                _sleep(sleep_for)
                 continue
             last_status = dict(record.last_status or {})
             # Progress legibility (run #7: a silent healthy watch reads as "stuck"
