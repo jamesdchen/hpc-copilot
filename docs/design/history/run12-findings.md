@@ -43,3 +43,14 @@ EOF). Fix: `stdin=DEVNULL` + `run_capture_bounded` tree-kill (`git -C`
 replaces the cwd kwarg). ENFORCEMENT CANDIDATE for
 engineering-principles: no bare `subprocess.run` in code reachable from
 `mcp-serve` — stdin isolation + tree-kill bounded, or the bounded runner.
+
+## 5. Template-compose must exist at EVERY consuming verb (5-grep archaeology)
+Live: the audit path cost five grep/bash calls re-deriving the pack's
+audit_template because the silent-compose seat exists only at interview, and
+interview.json carried a STALE run-#11 audited_source the agent rightly
+distrusted. Fix: (a) audit-preflight + notebook-record-config accept
+template-omitted → compose from the bound pack seam, disclosed in the
+result; (b) pack-seam vs stale audited_source disagreement resolves to the
+SEAM with a disclosure (the pack is the sealed standard). Also validated
+live here: finding-4's fix (preflight GO instantly on the wheel that hung
+twice before).
