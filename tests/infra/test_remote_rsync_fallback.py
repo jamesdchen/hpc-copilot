@@ -922,6 +922,11 @@ def test_delta_tars_exactly_the_changed_set(
     (tmp_path / "new.txt").write_text("brand new")
     remote_manifest = _remote_manifest_like(tmp_path, drop={"new.txt"}, flip={"changed.txt"})
 
+    # The delta rides a -T names FILE (run-#12 finding 17: per-path argv
+    # overflows Windows' ~32k limit) that is unlinked after the push — capture
+    # its content at Popen time, the only moment it exists.
+    names_seen: list[str] = []
+
     with (
         patch("hpc_agent.infra.transport.shutil.which", return_value=None),
         patch("hpc_agent.infra.transport.run_capture_bounded", return_value=_ok()) as run_mock,
@@ -935,6 +940,15 @@ def test_delta_tars_exactly_the_changed_set(
         patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
         patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
+
+        def _capture_names(cmd, **_kwargs):
+            if "-T" in cmd:
+                # open(), not Path: the module's Path import is TYPE_CHECKING-only.
+                with open(cmd[cmd.index("-T") + 1], encoding="utf-8") as fh:
+                    names_seen.append(fh.read())
+            return popen_mock.return_value
+
+        popen_mock.side_effect = _capture_names
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
         tar_proc.stdout.read.return_value = b""
@@ -947,10 +961,11 @@ def test_delta_tars_exactly_the_changed_set(
         )
     assert result.returncode == 0
     tar_cmd = popen_mock.call_args[0][0]
-    # tar c -C <src> changed.txt new.txt  — exactly the sorted changed set, no ".".
+    # tar c -C <src> -T <names-file>  — exactly the sorted changed set, no ".".
     assert tar_cmd[:3] == ["tar", "c", "-C"]
-    assert tar_cmd[4:] == ["changed.txt", "new.txt"]
-    assert "." not in tar_cmd[4:]
+    assert tar_cmd[4] == "-T"
+    assert names_seen == ["./changed.txt\n./new.txt\n"]
+    assert "." not in tar_cmd[5:]
     assert "same.txt" not in tar_cmd  # identical file is never shipped
     # ADDITIVE extract: no pre-clean, no stage-swap (delta never prunes remote).
     remote_cmd = str(run_mock.call_args[0][0][-1])

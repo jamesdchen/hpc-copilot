@@ -1062,8 +1062,20 @@ def _tar_ssh_push(
     # Delta mode (only_paths): archive exactly the given relpaths, no excludes
     # (the list is already the exclude-filtered delta). Otherwise archive the
     # whole tree with the exclude flags.
+    names_file_path: str | None = None
     if only_paths is not None:
-        tar_cmd = ["tar", "c", "-C", src_dir, *only_paths]
+        # Windows caps a process command line at ~32k chars, so a large delta
+        # as per-path ARGUMENTS dies with WinError 206 exactly when this
+        # fallback IS the native-Windows live path (run-#12 finding 17).
+        # Stream the member list through a temp file instead — GNU tar and
+        # bsdtar both accept ``-T <file>``. Each name rides ``./``-prefixed:
+        # members extract identically, and a literal name can never collide
+        # with bsdtar's special ``@archive`` -T syntax.
+        fd, names_file_path = tempfile.mkstemp(prefix="hpc-tar-names-", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            for rel in only_paths:
+                fh.write(f"./{rel}\n")
+        tar_cmd = ["tar", "c", "-C", src_dir, "-T", names_file_path]
     else:
         tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
     quoted_remote = shlex.quote(remote_path)
@@ -1189,7 +1201,13 @@ def _tar_ssh_push(
     # run_with_named_pipe_retry can detect the getsockname marker. The
     # retry restarts the WHOLE tar | ssh pipeline (tar can be re-spawned
     # cheaply; its inputs are filesystem paths, not stream state).
-    transfer = run_with_named_pipe_retry(_attempt)
+    try:
+        transfer = run_with_named_pipe_retry(_attempt)
+    finally:
+        # The -T names file must survive every retry's tar re-spawn; gone now.
+        if names_file_path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(names_file_path)
     if not delete or transfer.returncode != 0:
         return transfer
 
@@ -1446,6 +1464,12 @@ def rsync_push(
         exclude_flags += ["--exclude", pattern]
 
     src = str(local_path).rstrip("/\\") + "/"
+    if sys.platform == "win32" and len(src) > 1 and src[1] == ":":
+        # An MSYS/cygwin rsync parses the drive colon as a REMOTE host spec
+        # ("C:/x" → host "C") and dies with "source and destination cannot
+        # both be remote" (run-#12 finding 17). Every Windows rsync build
+        # accepts the /c/... form instead.
+        src = ("/" + src[0].lower() + "/" + src[3:]).replace("\\", "/")
     dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
 
     flags = ["rsync", "-az"]
