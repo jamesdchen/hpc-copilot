@@ -210,13 +210,15 @@ def test_preserves_existing_settings_and_hooks(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
 
     # Unrelated keys preserved verbatim. ``permissions.deny`` keeps its
-    # pre-existing entry and gains the raw-ssh/scp deny rules
-    # (_merge_deny_rules); ``permissions.allow`` is augmented with Skill(<name>)
-    # entries by the sibling _merge_skill_permissions step (see the dedicated
-    # modules test_agent_assets_settings_deny.py /
-    # test_agent_assets_settings_permissions.py for those contracts).
+    # pre-existing entry; the host-scoped raw-ssh/scp deny rules
+    # (_merge_deny_rules) are exercised in the dedicated
+    # test_agent_assets_settings_deny.py module (they depend on the resolved
+    # cluster hosts, so they are pinned there hermetically, not here).
+    # ``permissions.allow`` is augmented with Skill(<name>) entries by the
+    # sibling _merge_skill_permissions step.
     assert "Bash(rm -rf:*)" in settings["permissions"]["deny"]
-    assert "Bash(ssh:*)" in settings["permissions"]["deny"]
+    # The over-broad blanket rule is NEVER written (narrowed 2026-07-10).
+    assert "Bash(ssh:*)" not in settings["permissions"]["deny"]
     assert settings["customKey"] == {"nested": [1, 2, 3]}
     # The pre-existing PreToolUse entry survives; the scheduler write-fence
     # (conduct rule 7) is appended after it.

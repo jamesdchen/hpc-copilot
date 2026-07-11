@@ -123,11 +123,12 @@ def test_preserves_unrelated_permission_keys(tmp_path: Path) -> None:
 
     settings = _settings(tmp_path)
     assert settings["theme"] == "dark"
-    # Pre-existing deny entry preserved; the raw-ssh/scp deny rules are appended
-    # additively (see test_agent_assets_settings_deny.py).
+    # Pre-existing deny entry preserved; the host-scoped raw-ssh/scp deny rules
+    # are covered in test_agent_assets_settings_deny.py. The over-broad blanket
+    # rule is NEVER written (narrowed 2026-07-10 — tool, not takeover).
     deny = settings["permissions"]["deny"]
     assert "Bash(rm -rf:*)" in deny
-    assert "Bash(ssh:*)" in deny
+    assert "Bash(ssh:*)" not in deny
     # Pre-existing allow entry preserved
     assert "Bash(echo:*)" in settings["permissions"]["allow"]
 

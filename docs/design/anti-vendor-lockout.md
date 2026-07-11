@@ -453,18 +453,36 @@ contract that pretends everything is portable is dishonest:
   invocation against cluster hosts (the sanctioned verbs are the only dial
   path; the improvisation class dies at the permission layer, not in conduct
   prose). **SHIPPED (2026-07-10):** `agent_assets.py::_merge_deny_rules` writes
-  `Bash(ssh:*)` + `Bash(scp:*)` into `~/.claude/settings.json`'s
-  `permissions.deny` — the exact additive + idempotent + skip-unparseable +
-  dry-run contract of the sibling `_merge_skill_permissions` (allow-grant)
-  merge, wired into `install_agent_assets` as the `settings_deny` result key.
-  A raw ssh/scp the model authors AT RUN TIME dies at the permission layer; the
+  the deny into `~/.claude/settings.json`'s `permissions.deny`, wired into
+  `install_agent_assets` as the `settings_deny` result key.
+  **NARROWED (2026-07-10, same day, user):** the first cut wrote a BLANKET
+  `Bash(ssh:*)` + `Bash(scp:*)` into the user-GLOBAL settings, blocking ALL
+  ssh/scp in EVERY project on the box — over-broad. User ruling: *"hpc-agent
+  should be a TOOL and not something that takes over the user's entire
+  workspace,"* and the original ruling text already said *"against cluster
+  hosts."* So the deny is now HOST-SCOPED: at install time
+  `_configured_cluster_hosts()` derives the host list from the clusters config
+  the install can see (`load_clusters_config`: packaged default + user
+  overrides, skipping `<...>` placeholders) and `_raw_ssh_deny_rules()` emits
+  `Bash(ssh *<host>*)` + `Bash(scp *<host>*)` per host. Rule form uses the
+  `Bash(<pat>)` `*`-glob-anywhere matcher (Claude Code settings docs; their own
+  deny example is `Bash(curl *)`). Only cluster ssh is denied; ssh to any other
+  host (a colleague's box, a git remote) is untouched. No resolvable hosts →
+  NO deny rules installed (the user-side cluster-ssh confirm-guard hook is the
+  backstop). MIGRATION: `_merge_deny_rules` also REMOVES the two blanket rules
+  (`_BLANKET_SSH_DENY_RULES`, exact-string match — never any other `deny`
+  entry) on every run, so an upgrade self-heals the over-reach. A raw ssh/scp to
+  a cluster the model authors AT RUN TIME dies at the permission layer; the
   sanctioned hpc-agent verbs dial ssh inside their OWN subprocesses (never via
   the agent's Bash tool) and are unaffected — as are `ssh-keygen` / `ssh-add`
-  (distinct command tokens) and the `ssh_run` / `ssh_target` identifier forms.
-  Complements `scripts/lint_no_raw_ssh.py` (which removes the raw-ssh affordance
-  from agent-facing PROSE); this closes the runtime side. Tests:
-  `tests/cli/test_agent_assets_settings_deny.py` (6); two sibling
-  permission/hook tests updated for the now-additive `deny` list. (b) the MCP
+  (distinct command tokens with no cluster host) and the `ssh_run` /
+  `ssh_target` identifier forms. Complements `scripts/lint_no_raw_ssh.py` (which
+  removes the raw-ssh affordance from agent-facing PROSE); this closes the
+  runtime side. Tests: `tests/cli/test_agent_assets_settings_deny.py` (host-
+  scoped rules written + placeholder skipped, blanket removed on reinstall,
+  no-hosts → no add, no-hosts still removes stale blanket, idempotent, partial
+  overlap, other entries preserved, unparseable skip, dry-run); two sibling
+  permission/hook tests updated (blanket rule asserted ABSENT). (b) the MCP
   elicitation display-receipt gap is to be FILED UPSTREAM
   (spec issue: a client-side receipt that the elicitation was actually
   displayed), per this doc's honest-trust-limit note. Both = post-run-#12
