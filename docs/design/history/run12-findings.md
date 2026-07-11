@@ -314,7 +314,7 @@ MILESTONE, same brief: **canary GREEN end-to-end on the fixed transport**
 validated), output contract passed on-cluster (finding 15 confirmed
 false-positive), est. 32,400 core-hours disclosed, next_block submit-s3.
 
-## 19. The S3 watch read ssh TIMEOUTS as run death (cause=abnormal-exit)
+## 19. FIXED: The S3 watch read ssh TIMEOUTS as run death (cause=abnormal-exit)
 ## and fired a terminal harvest at a 10-minute-old LIVE array
 Live (S3 worker 2d2a9d6d): three consecutive 60s ssh connection timeouts
 → breaker opened (correct) → but the watch classified the run
@@ -322,7 +322,7 @@ Live (S3 worker 2d2a9d6d): three consecutive 60s ssh connection timeouts
 the queue. The positive-evidence doctrine (timeouts = UNKNOWN, never
 terminal) was applied to scheduler-query silence in the sentinel-ack wave
 — but the abnormal-exit classifier path still treats CONNECTION-level
-failure as a terminal cause. FIX SEAT: a terminal cause requires
+failure as a terminal cause. FIXED (e8bfefa1, 304 tests): a terminal cause requires
 POSITIVE scheduler evidence (a sacct/squeue answer saying the jobs are
 gone); transport failure is UNKNOWN and re-polls after the breaker.
 SECOND LEG: the terminal harvest scp-pulled the WHOLE `results/` root
