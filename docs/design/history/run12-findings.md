@@ -354,3 +354,19 @@ forensic rules converging on what bound capture gets by construction. FUTURE
 SEAT (post-run-#12, plan bank): elicitation-response records carry the
 elicited scope; the chat hook path stays forensic (naming + engagement +
 temporal) as the explicitly weaker fallback tier it honestly is.
+
+## 20. CARC login-node fork exhaustion for jc_905 — the connection storm's
+## REMOTE cost (the run-#7 orphaned-ssh class, server side)
+Live: the one monitor tick that landed carried the login node's own words —
+`/home1/jc_905/.bashrc: fork: retry: Resource temporarily unavailable`
+(rc=127). Connections LAND; the SHELL starves: the user's login-node
+process quota is exhausted, most plausibly by orphaned remote halves of the
+night's many failed/killed ssh sessions. Every heavy poll (cd && module
+load && conda && reporter = many forks) dies at startup; retries add
+processes to an exhausted pool. RESPONSES: stop re-arm pressure; a
+single-fork probe (squeue -h) may pass where the reporter starves (probe
+pattern validated this night); the human path is the OnDemand WEB portal —
+`ps -u jc_905 | wc -l`, pkill strays. FIX CLASS: the crash-only-monitoring
+plan's one-gateway + cluster-announces design removes both the client storm
+AND its remote residue; nearer-term, the reporter command should be
+fork-minimal (one exec, no module/conda for a pure sacct/squeue read).

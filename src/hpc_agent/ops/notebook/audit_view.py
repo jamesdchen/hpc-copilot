@@ -669,6 +669,52 @@ def render_markdown(view: AuditView) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_summary_markdown(view: AuditView) -> str:
+    """The bodies-OMITTED render (run-#12 finding 12; user-ruled: OMIT at the
+    source, never compact downstream).
+
+    Under popup-primary the model is no longer the display channel: the diff /
+    assertion / flag BODIES live in the per-section render files and the
+    sign-off popup, so shipping ~11k tokens of them through the agent every
+    loop pass is pure cost plus a re-summarization temptation. This render
+    carries the header, ONE metadata line per section (slug, tier,
+    classification, sha12s, counts), and the SAME next-actions footer +
+    compose-ready dropped drafts. Nothing here summarizes a body — it is the
+    metadata BESIDE the bodies, deterministic and code-authored like its
+    sibling.
+    """
+    lines: list[str] = []
+    lines.append("# Notebook audit view (metadata; bodies live in the render files + popup)")
+    lines.append("")
+    lines.append(f"- view_sha: {view.view_sha}")
+    lines.append(f"- source module_sha: {view.source_module_sha}")
+    lines.append(f"- template module_sha: {view.template_module_sha}")
+    if view.dropped_template_slugs:
+        dropped = ", ".join(view.dropped_template_slugs)
+        lines.append(
+            f"- dropped template sections (present in template, absent in source): {dropped}"
+        )
+    lines.append("")
+    if not view.sections:
+        lines.append("(no sections)")
+        lines.append("")
+    for sv in view.sections:
+        added = sum(1 for ln in sv.diff if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in sv.diff if ln.startswith("-") and not ln.startswith("---"))
+        lines.append(
+            f"- {sv.slug}  [{sv.tier}] {sv.classification} — "
+            f"section_sha {sv.section_sha[:12]}, view_sha {sv.view_sha[:12]}, "
+            f"diff +{added}/-{removed}, {len(sv.assertions)} assertion(s), "
+            f"{len(sv.lint_flags)} lint flag(s)"
+        )
+    lines.append("")
+    lines.extend(_render_next_actions(view))
+    lines.extend(_render_dropped_drafts(view))
+    return "
+".join(lines).rstrip() + "
+"
+
+
 def _render_dropped_drafts(view: AuditView) -> list[str]:
     """Compose-ready drafts for the sections the source DROPPED (draft-at-pass).
 
