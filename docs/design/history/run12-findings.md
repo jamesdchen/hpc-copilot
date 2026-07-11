@@ -137,6 +137,24 @@ file (mtime anchor, floored to seconds; `write_render` now SKIPS rewriting
 identical bytes so a re-view cannot move the anchor). Absent render skips
 the filter (the unmarked trusted-display lock owns that refusal).
 
+## 11. THE POPUP FIRED (finding-8 outcome a) — and its digest under-supplies
+## review; RULING 2's never-the-diff-body clause reversed
+Live, fresh-session clean-slate run: the whole day's stack fired in
+sequence — lint zero findings (7), draft-context with `engines:[...]`
+supplying signatures (6a/6b), the agent went straight to the append (9),
+the gate refused the standing prompts (10), and the ELICITATION POPUP
+RENDERED in Claude Code (outcome a — the client declares and renders).
+User at the popup: "there's not enough diff showed for me to properly
+review" — digest v2 deliberately carried per-hunk one-liners, never the
+diff body (RULING 2), which leaves a +285-line section reviewable only via
+the session's Read panes. That defeats read-and-sign-in-one-place. FIX
+(interim until unified-render O3+ chunked popups): the popup embeds the
+render's fenced diff body in its OWN bounded block (6 KB budget, line-
+boundary cut, elision count disclosed, code-read bytes only); the digest's
+honesty budget is untouched, and the honest-refusal oversize path carries
+the bounded body too (review material with disclosed truncation is
+additive, never a silent drop).
+
 ### The design note (why this class existed at all)
 The clean design is BOUND CAPTURE, not forensic reconstruction: a sign-off
 utterance should be captured AT a surface that knows what it signs — the

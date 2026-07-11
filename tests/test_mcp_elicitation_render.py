@@ -8,7 +8,8 @@ embeds a CODE-COMPUTED digest of the on-disk trusted render for a NOTEBOOK sign-
 * Job 2 — WHY YOUR JUDGMENT: the tier-trigger headline (which of diff/lint/asserts
   fired, with counts), the declared-assertion table (marked unverified — the trusted
   render is STATIC, no execution value to show), the lint-flag NAMES + locations, and
-  per-hunk one-liners — never the diff body.
+  per-hunk one-liners, plus the diff BODY in its own bounded block (run-#12
+  finding 11 reversed the never-the-diff-body clause; truncation disclosed).
 * Job 3 — ROUTE: the on-disk render path.
 
 Plus the HONESTY RULE (oversize → an honest-refusal block, never a silent drop) and
@@ -97,16 +98,27 @@ def test_prompt_embeds_digest_v2_three_jobs(tmp_path: Path) -> None:
     assert "do NOT sign" not in prompt
 
 
-def test_prompt_surfaces_diff_hunk_one_liners_never_the_body(tmp_path: Path) -> None:
+def test_prompt_surfaces_diff_hunks_and_bounded_body(tmp_path: Path) -> None:
     sv = _write_render(tmp_path)
     prompt = M._render_elicitation_prompt(_notebook_args(sv.view_sha), tmp_path)
     # A per-hunk one-liner (line range + first changed line) is present …
     assert "diff from template:" in prompt
     assert "hunk(s):" in prompt
     assert "L" in prompt  # a source line range like L1 / L1–4
-    # … but the raw diff FENCE / body never enters the message (bounded).
-    assert "```diff" not in prompt
-    assert "--- template" not in prompt
+    # … AND the diff body rides in its own bounded block (run-#12 finding 11
+    # reversed RULING 2's never-the-diff-body clause: a signing surface must
+    # carry enough of the change to review).
+    assert "Diff from template (code-read from the render):" in prompt
+    assert "```diff" in prompt
+
+
+def test_prompt_diff_body_truncation_is_disclosed(tmp_path: Path, monkeypatch) -> None:
+    # Squeeze the embed budget so the fixture's diff overruns it — the cut is
+    # on a line boundary and the elision count is DISCLOSED, never silent.
+    monkeypatch.setattr(M, "_DIFF_EMBED_MAX_BYTES", 20)
+    sv = _write_render(tmp_path)
+    prompt = M._render_elicitation_prompt(_notebook_args(sv.view_sha), tmp_path)
+    assert "more diff lines — the full render on disk carries them" in prompt
 
 
 def test_prompt_surfaces_lint_flag_names_and_locations(tmp_path: Path) -> None:
@@ -127,9 +139,9 @@ def test_prompt_surfaces_lint_flag_names_and_locations(tmp_path: Path) -> None:
 def test_prompt_is_bounded(tmp_path: Path) -> None:
     sv = _write_render(tmp_path)
     prompt = M._render_elicitation_prompt(_notebook_args(sv.view_sha), tmp_path)
-    # A digest is a small signing dialog, not a full render dump.
-    assert len(prompt) < 2000
-    assert "```diff" not in prompt
+    # A signing dialog stays bounded: digest budget + the disclosed-truncation
+    # diff-body budget, plus the fixed instructional text.
+    assert len(prompt) < 2000 + M._DIFF_EMBED_MAX_BYTES
 
 
 # ─── the HONESTY RULE: oversize → honest-refusal, never a silent drop ────────

@@ -380,6 +380,55 @@ def _render_elicitation_prompt(
 # guard against a render whose sheer item count would blow the popup.
 _DIGEST_BLOCK_MAX_BYTES: int = 1400
 
+#: Budget for the popup's embedded DIFF BODY (run-#12 finding 11). RULING 2's
+#: "per-hunk one-liners — never the diff body" was REVERSED by live run-#12
+#: feedback at the first popup ("there's not enough diff showed for me to
+#: properly review"): a signing surface must carry enough of the change to
+#: review, not just count it. The body rides in its OWN bounded block so the
+#: digest's honesty budget above is untouched; truncation is always DISCLOSED
+#: with the on-disk remainder pointed at. Interim until unified-render O3+
+#: (chunked popups carrying the full render) supersedes.
+_DIFF_EMBED_MAX_BYTES: int = 6000
+
+
+def _render_diff_body_lines(path: Path) -> list[str]:
+    """The render's fenced diff-from-template body, embedded BOUNDED.
+
+    Extracts the FIRST ```diff fence from the code-written render file —
+    code-read bytes, nothing recomputed, no model text — capped at
+    :data:`_DIFF_EMBED_MAX_BYTES` on a line boundary with the elision count
+    disclosed. Empty when the render has no diff fence (an inherited section)
+    or cannot be read — the digest already routes to the on-disk render.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    marker = "\n```diff\n"
+    start = text.find(marker)
+    if start < 0:
+        return []
+    body_start = start + len(marker)
+    end = text.find("\n```", body_start)
+    if end < 0:
+        return []
+    diff_lines = text[body_start:end].splitlines()
+    out = ["", "Diff from template (code-read from the render):", "```diff"]
+    used = 0
+    shown = 0
+    for line in diff_lines:
+        used += len(line.encode("utf-8")) + 1
+        if used > _DIFF_EMBED_MAX_BYTES:
+            break
+        out.append(line)
+        shown += 1
+    out.append("```")
+    if shown < len(diff_lines):
+        out.append(
+            f"… (+{len(diff_lines) - shown} more diff lines — the full render on disk carries them)"
+        )
+    return out
+
 
 def _render_digest_block(
     experiment_dir: Path | None, *, audit_id: str, section: str, view_sha: str
@@ -396,8 +445,11 @@ def _render_digest_block(
       assertions fired, with counts), the declared-assertion table (marked
       unverified — the trusted render is STATIC, no execution, so there is no
       computed value to show and none is fabricated), the lint-flag NAMES +
-      locations, and per-hunk one-liners (line range + first changed line) — never
-      the diff body (Job 2).
+      locations, and per-hunk one-liners (line range + first changed line)
+      (Job 2). The DIFF BODY additionally rides in its own bounded block
+      (:func:`_render_diff_body_lines` — run-#12 finding 11 reversed RULING 2's
+      never-the-diff-body clause: a signing surface must carry enough of the
+      change to review).
     * **ROUTE** — the on-disk render path, stated plainly (Job 3).
 
     Every non-embeddable condition — no experiment context, no bound ``view_sha``
@@ -497,8 +549,12 @@ def _render_digest_block(
             f"{digest.lint_flag_count} lint flags, {digest.assertion_count} assertions "
             "— read the render.",
             f"- full render on disk: {path}",
+            # The bounded diff body still rides (finding 11): the digest refused
+            # to COMPRESS, but review material with disclosed truncation is
+            # additive, not a silent drop.
+            *_render_diff_body_lines(path),
         ]
-    return lines
+    return lines + _render_diff_body_lines(path)
 
 
 def _tier_trigger_headline(digest: Any) -> str:
