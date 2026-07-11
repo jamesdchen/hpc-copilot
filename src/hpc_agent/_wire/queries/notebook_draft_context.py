@@ -82,6 +82,18 @@ class NotebookDraftContextSpec(BaseModel):
             "(interview.json audited_source, else the journaled record)."
         ),
     )
+    engines: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional dotted engine names to resolve beyond the template's "
+            "own imports (run-#12 finding 6b: the variable sections' planned "
+            "callables are not template imports). Each entry is tried as a "
+            "whole module first, then as module.symbol. Resolved identically "
+            "to template imports and listed with a [declared] tag; an entry "
+            "resolving nowhere under source_roots is listed unresolved, never "
+            "dropped."
+        ),
+    )
 
 
 class TemplateSection(BaseModel):
@@ -117,6 +129,9 @@ class ResolvedEngine(BaseModel):
     signature: str | None = None
     doc: str | None = None
     module_sha: str | None = None
+    # Provenance: True when the engine came from the spec's ``engines`` list
+    # rather than a template import (finding 6b) — never a resolution change.
+    declared: bool = False
 
 
 class EngineCallSites(BaseModel):

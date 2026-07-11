@@ -242,6 +242,11 @@
           ],
           "default": null,
           "title": "Module Sha"
+        },
+        "declared": {
+          "default": false,
+          "title": "Declared",
+          "type": "boolean"
         }
       },
       "required": [
