@@ -54,3 +54,17 @@ result; (b) pack-seam vs stale audited_source disagreement resolves to the
 SEAM with a disclosure (the pack is the sealed standard). Also validated
 live here: finding-4's fix (preflight GO instantly on the wheel that hung
 twice before).
+
+## 6. draft-context under-supplies: resolver root-bug + template-only engines
+Live: ALL engines returned resolved:false ("unresolved under source_roots")
+for symbols that ARE under src/ — the resolver appears to double-prefix
+(module `src.data.loading` under root `src` → src/src/...), so signatures/
+docs/shas were absent and the agent hand-read metrics.py/diebold_mariano.py/
+loading.py (~6 commands). Fix (a): resolver tries <experiment_dir>/<module
+path> as well as <root>/<module path>. Fix (b): the engine set is template-
+imports-only (incl. sys/os noise); the variable sections' planned callables
+(dm_test, MultiStageBacktest, get_bucket, enet_online) weren't in context —
+spec grows `engines: [...]`; and axis vocab (SUBGROUPS bucket inventory) is
+pack-vocab class (the readers.json seam) — sealed data, not a grep. Honest
+residue: reading the prior program spec for the new sweep axes is real
+drafting research, not mechanizable.
