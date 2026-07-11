@@ -230,3 +230,8 @@ every-fix-committed, mechanical-retry rung) need further fleshing out —
 deliberation PARKED to later in the 3-day Fable sprint: overnight operation
 is a nice-to-have, not necessary. The taxonomy above stands as banked design;
 no build before the deliberation.
+
+**Amendment (2026-07-10, user):** version upgrades are DISCLOSURE-SUFFICIENT,
+not a C2 tripwire — an env-version change may proceed when prominently
+disclosed (results marked as produced under the new version), rather than
+being categorically report-only. The rest of the C2 set stands.
