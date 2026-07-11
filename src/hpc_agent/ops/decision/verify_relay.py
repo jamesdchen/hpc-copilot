@@ -45,8 +45,10 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   spans of every id token are then excluded from number extraction, so the
   digits inside a run-id never masquerade as a numeric claim.
 
-* **Numbers.** ``\\d[\\d,]*(?:\\.\\d+)?%?`` — ints, floats, percentages,
-  comma-grouped values (commas normalized away, ``%`` stripped). A claim passes
+* **Numbers.** ``(?<![\\w.])-?\\d[\\d,]*(?:\\.\\d+)?%?`` — ints, floats,
+  percentages, comma-grouped values, and an OPTIONAL leading minus so a verbatim
+  relay of a negative source metric passes (the lookbehind keeps the ``-`` off
+  identifier/range hyphens; commas normalized away, ``%`` stripped). A claim passes
   on an exact normalized-string match, on float equality (so ``95`` == ``95.0``),
   or — for a DECIMAL claim only — when it is a string-prefix of a longer source
   value (pure truncation like ``3.14`` of ``3.1411``). A rounding that changes a
@@ -76,10 +78,16 @@ Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
   the run's recorded state (``RunRecord.status``, falling back to a sidecar
   ``status`` field). A lifecycle claim whose family differs from the recorded
   family → ``state`` mismatch carrying the recorded state. A verification claim
-  (``verified`` / ``canary green``) passes only when its literal token is
-  evidenced in some source (e.g. ``evidence_digest={"canary": "green"}``), else
-  it is flagged. A state claim with no recorded state to check against at all →
-  ``unverifiable``. A state word preceded by a count quantifier (``0 failed``,
+  (``verified`` / ``canary green``) passes only when its needle is evidenced
+  value-semantically — never by a serialized JSON KEY (bug-sweep #12: the
+  key ``"verified"`` in a persisted S2 brief is present regardless of its
+  boolean value, so a raw substring test over the serialized text passed a
+  ``verified`` relay after a FAILED canary). The needle counts only when some
+  string VALUE contains it (``evidence_digest={"canary": "green"}``) or a KEY
+  containing it maps to ``True`` (``verified: true`` — ``verified: false`` must
+  NOT evidence it); else it is flagged. A state claim with no recorded state to
+  check against at all → ``unverifiable``. A state word preceded by a count
+  quantifier (``0 failed``,
   ``no failed waves``) is a COUNT claim, not a state claim (proving run #3
   false positive): a numeric quantifier's digits are audited by the number
   pass, and a zero-word quantifier (``no``/``none``/``zero``) is audited
@@ -168,8 +176,14 @@ if TYPE_CHECKING:
 
 # ── number extraction ─────────────────────────────────────────────────────────
 
-# Ints, floats, comma-grouped values, and trailing-``%`` percentages.
-_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
+# Ints, floats, comma-grouped values, trailing-``%`` percentages, and an
+# OPTIONAL leading minus so a verbatim relay of a negative source metric
+# (log-likelihoods, deltas, losses — bug-sweep #39) is not flagged as a
+# contradiction. The ``(?<![\w.])`` lookbehind keeps the ``-`` from being
+# stolen from an identifier or a range: it fires only when the char before the
+# ``-`` is neither a word char nor a ``.`` (so ``run-1`` / ``a-1`` / ``1-2`` /
+# ``3.14`` never read a hyphen or a fractional tail as a signed number).
+_NUM_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?%?")
 
 
 def _normalize_num(raw: str) -> str:
@@ -183,8 +197,20 @@ def _is_identifier_like(s: str) -> bool:
     Such strings carry digits that are NOT numeric claims (``run-1``,
     ``20260703-141500-ab``), so their embedded numbers are excluded from the
     source-number pool to avoid a relay number spuriously "matching" them.
+
+    A string that fully parses as a signed numeric literal is NOT an identifier,
+    though (bug-sweep #39): a negative metric stored as a STRING (``"-3.5"``) has
+    a ``-`` and a digit, so the naive test excluded it from the pool entirely and
+    a verbatim relay of it was flagged as unverifiable. Such tokens belong in the
+    number pool; only genuine ids (``run-1``, ``20260703-141500-ab``) stay out.
     """
-    return "-" in s and bool(re.search(r"\d", s))
+    if "-" not in s or not re.search(r"\d", s):
+        return False
+    try:
+        float(_normalize_num(s))
+    except ValueError:
+        return True
+    return False
 
 
 def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) -> None:
@@ -555,18 +581,58 @@ _STATE_RE = re.compile(
 )
 
 
+# A verification family → the needle a source must EVIDENCE (value-semantically,
+# not as a serialized JSON key — bug-sweep #12).
+_VERIFICATION_NEEDLE: dict[str, str] = {"verified": "verified", "canary_green": "green"}
+
+
+def _collect_verification_evidence(obj: Any, out: set[str]) -> None:
+    """Gather the verification needles a durable record actually EVIDENCES.
+
+    The raw substring test this replaces (``needle in json.dumps(source)``) was
+    dead once any S2 brief existed: a persisted brief serializes the KEY
+    ``"verified"`` regardless of its boolean value, so ``'run-1 is verified'``
+    audited clean even after a FAILED canary (bug-sweep #12). A needle counts
+    only value-semantically:
+
+    * some STRING value contains it (``evidence_digest={"canary": "green"}``
+      evidences ``green``); or
+    * a KEY containing it maps to boolean ``True`` (``verified: true`` evidences
+      ``verified``; ``verified: false`` must NOT).
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and v is True:
+                kl = k.lower()
+                for needle in _VERIFICATION_NEEDLE.values():
+                    if needle in kl:
+                        out.add(needle)
+            _collect_verification_evidence(v, out)
+        return
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_verification_evidence(v, out)
+        return
+    if isinstance(obj, str):
+        s = obj.lower()
+        for needle in _VERIFICATION_NEEDLE.values():
+            if needle in s:
+                out.add(needle)
+
+
 def _classify_state(
     family: str,
     run_status_raw: str | None,
     run_status_family: str | None,
-    source_text: str,
+    verification_evidence: set[str],
+    has_sources: bool,
 ) -> tuple[str, str | None] | None:
     """Return ``(kind, nearest)`` for a state claim, or None when it passes."""
     if family in ("verified", "canary_green"):
-        needle = "verified" if family == "verified" else "green"
-        if needle in source_text:
+        needle = _VERIFICATION_NEEDLE[family]
+        if needle in verification_evidence:
             return None
-        if run_status_family is None and not source_text:
+        if run_status_family is None and not has_sources:
             return ("unverifiable", None)
         return ("state", run_status_raw)
     # Lifecycle claim.
@@ -812,7 +878,12 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         _collect_source_numbers(obj, source_num_strings, source_num_floats)
     has_source_numbers = bool(source_num_strings)
 
-    source_text = " ".join(json.dumps(o, default=str) for o in source_objs).lower()
+    # Verification evidence (``verified`` / ``canary green``) is value-semantic,
+    # NOT a substring of the serialized record — a persisted brief's KEY
+    # "verified" must not vouch for a failed canary (bug-sweep #12).
+    verification_evidence: set[str] = set()
+    for obj in source_objs:
+        _collect_verification_evidence(obj, verification_evidence)
 
     # Status lives on the journal RunRecord only — the run sidecar never
     # carries a "status" key (write_run_sidecar's field set), so there is
@@ -1079,7 +1150,9 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
             continue
         seen_state.add(phrase)
         claims_checked += 1
-        verdict = _classify_state(family, run_status_raw, run_status_family, source_text)
+        verdict = _classify_state(
+            family, run_status_raw, run_status_family, verification_evidence, bool(source_objs)
+        )
         if verdict is None:
             continue
         kind, nearest = verdict

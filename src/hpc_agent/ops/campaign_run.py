@@ -336,7 +336,8 @@ def _campaign_run_impl(experiment_dir: Path, *, spec: CampaignRunSpec) -> Campai
             reason=(
                 f"run reached a terminal failed state: {st.reason} "
                 "Classify the failed tasks (recoverable vs not) and decide "
-                "resubmit-failed / reconcile-journal before re-invoking."
+                "resubmit-failed / `reconcile --run-id <id> --scheduler <backend>` "
+                "before re-invoking."
             ),
             campaign_id=cid,
             run_id=st.run_id,
@@ -349,7 +350,8 @@ def _campaign_run_impl(experiment_dir: Path, *, spec: CampaignRunSpec) -> Campai
             needs_decision=True,
             reason=(
                 f"recorded jobs are no longer known to the scheduler: {st.reason} "
-                "Run reconcile-journal to confirm before re-submitting this iteration."
+                "Run `reconcile --run-id <id> --scheduler <backend>` to confirm "
+                "before re-submitting this iteration."
             ),
             campaign_id=cid,
             run_id=st.run_id,

@@ -69,14 +69,38 @@ def _is_clicked(answer: str, labels: set[str]) -> bool:
     """True when *answer* is composed entirely of offered option labels.
 
     A single-select click IS a label; a multi-select click is the selected
-    labels joined by commas. Any residue beyond offered labels means the
-    human typed something — the whole answer then counts as typed.
+    labels joined by ``", "``. Recognising that join by naive comma-splitting
+    breaks the moment a label itself contains a comma (finding #22): the split
+    fragments no longer match any offered label, so a clicked, agent-authored
+    option would be mis-read as human-typed and laundered into the authorship
+    gate's trust anchor. Match structurally instead — the answer is a click iff
+    it decomposes left-to-right into offered labels separated by the ``", "``
+    join delimiter, trying the LONGEST offered label first so a label that
+    itself contains ``", "`` is consumed before its fragments. Any residue that
+    is not an offered label means the human typed something — the whole answer
+    then counts as typed.
     """
     text = answer.strip()
     if text in labels:
         return True
-    parts = [p.strip() for p in text.split(",")]
-    return len(parts) > 1 and all(p in labels for p in parts if p)
+    if not labels:
+        return False
+    ordered = sorted((lbl for lbl in labels if lbl), key=len, reverse=True)
+    remaining = text
+    matched_any = False
+    while remaining:
+        for label in ordered:
+            if remaining == label:
+                remaining = ""
+                matched_any = True
+                break
+            if remaining.startswith(label + ", "):
+                remaining = remaining[len(label) + 2 :]
+                matched_any = True
+                break
+        else:  # no offered label consumes the head → typed residue
+            return False
+    return matched_any
 
 
 def _typed_texts(payload: dict[str, Any]) -> list[str]:

@@ -330,6 +330,89 @@ def test_collect_retro_indexes_untagged_run(tmp_path: Path) -> None:
     assert any(m.startswith("retro:") for m in run_items[0].matched_by)
 
 
+# --- block-terminal co-tenant must not clobber the sidecar (#20) -------------
+
+
+def test_collect_skips_block_terminal_cotenant(tmp_path: Path) -> None:
+    from hpc_agent.state import block_terminal
+
+    # A real sidecar declaring a scope tag + submitted_at ...
+    _write_sidecar(
+        tmp_path,
+        "widget-run-t",
+        cmd_sha="cmd-t",
+        submitted_at="2025-05-01T00:00:00Z",
+        scopes=["widget"],
+    )
+    # ... plus its detached-flow block-terminal co-tenant(s), written by the
+    # real writer so the test pins the actual on-disk name/shape. The terminal
+    # record carries a top-level run_id and its path sorts AFTER '<id>.json'.
+    for block in ("submit-s2", "submit-s3"):
+        block_terminal.record_terminal(
+            tmp_path,
+            run_id="widget-run-t",
+            block=block,
+            cmd_sha="cmd-t",
+            result_dump={"run_id": "widget-run-t", "block": block},
+        )
+
+    # Tag-selected: the run still surfaces with its scope tag preserved.
+    got = evidence.collect_evidence(tmp_path, tags=["widget"])
+    run_items = [a for a in got.activity if a.kind == "run"]
+    assert [r.subject_id for r in run_items] == ["widget-run-t"]
+    detail = run_items[0].detail
+    assert detail is not None and detail["tags"] == ["widget"]
+
+    # Unkeyed walk: submitted_at (ts) survives — not clobbered to None.
+    unkeyed = evidence.collect_evidence(tmp_path)
+    run_items = [a for a in unkeyed.activity if a.kind == "run"]
+    assert [r.subject_id for r in run_items] == ["widget-run-t"]
+    assert run_items[0].ts == "2025-05-01T00:00:00Z"
+
+    # as_of before submission excludes it (submitted_at was preserved, not lost).
+    older = evidence.collect_evidence(tmp_path, as_of="2025-01-01T00:00:00Z")
+    assert [a for a in older.activity if a.kind == "run"] == []
+
+
+# --- _decision_journal_path routes every SCOPE_KIND (#21) --------------------
+
+
+def test_decision_journal_path_matches_canonical_for_all_scope_kinds(tmp_path: Path) -> None:
+    from hpc_agent.state import decision_journal
+
+    for kind in decision_journal.SCOPE_KINDS:
+        sid = "camp-1" if kind == "campaign" else f"{kind}-id"
+        assert evidence._decision_journal_path(
+            tmp_path, kind, sid
+        ) == decision_journal.decisions_path(tmp_path, kind, sid), kind
+
+
+@pytest.mark.parametrize("kind", ["registration", "pack", "challenge"])
+def test_resolve_attestation_resolves_advertised_scope_kinds(tmp_path: Path, kind: str) -> None:
+    # A genuine attestation record under each advertised scope kind's real
+    # journal path must resolve — the campaign fallthrough made these UNRESOLVABLE.
+    from hpc_agent.state import decision_journal
+
+    subject = f"{kind}-x"
+    sha = "c" * 64
+    journal = decision_journal.decisions_path(tmp_path, kind, subject)
+    _append_jsonl(
+        journal,
+        {
+            "ts": "2025-05-01T00:00:00Z",
+            "scope_kind": kind,
+            "scope_id": subject,
+            "block": kind,
+            "response": "y",
+            "resolved": {"content_sha": sha},
+        },
+    )
+    res = evidence.resolve_citation(
+        tmp_path, evidence.Citation(kind="attestation", ref=f"{kind}:{subject}", sha=sha)
+    )
+    assert res.resolved is True
+
+
 # --- the unconcluded join ----------------------------------------------------
 
 

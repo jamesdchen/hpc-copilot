@@ -427,6 +427,14 @@ def record_interview(
         "at": utcnow().isoformat(),
         "cmd_sha": cmd_sha,
         "total_tasks": total_tasks,
+        # Run-#12 finding 14: record the REAL origin of tasks.py so a downstream
+        # consumer (walk-submit-ambiguities) never mislabels an interview-
+        # materialized sweep as ``hand_written``. Generator mode → the interview
+        # wrote it from the typed recipe; validate mode → the interview agent
+        # authored it by hand.
+        "tasks_py_origin": (
+            "interview_materialized" if "task_generator" in intent else "hand_written"
+        ),
     }
     if entry_point_materialized is not None:
         materialized["entry_point"] = entry_point_materialized

@@ -258,6 +258,27 @@ def _valid_ref_name(name: str) -> bool:
     )
 
 
+def _did_you_mean(name: str) -> str:
+    """A `` Did you mean: a, b?`` suffix of close primitive-name matches, else ``''``.
+
+    Mirrors the CLI parser's unknown-command suggester (:class:`_HpcArgumentParser`)
+    so a not-found ``describe`` names candidate primitives instead of dead-ending.
+    """
+    import difflib
+
+    from hpc_agent._kernel.registry.operations import operations_catalog
+
+    try:
+        names = [entry.get("name", "") for entry in operations_catalog()]
+    except RuntimeError:
+        # Registry not fully populated (partial fast-path / a monkeypatched
+        # unit test) — a suggestion is a nicety, never worth crashing the
+        # not-found envelope over.
+        return ""
+    close = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
+    return f" Did you mean: {', '.join(close)}?" if close else ""
+
+
 def _emit_describe_schema(name: str) -> int:
     """Emit a verb's RESOLVED input-schema JSON content (Move 2).
 
@@ -280,26 +301,39 @@ def _emit_describe_schema(name: str) -> int:
     from hpc_agent._kernel.registry.operations import schema_for
     from hpc_agent._kernel.registry.primitive import get_meta
     from hpc_agent.cli._dispatch import cli_to_invocation_string
+    from hpc_agent.cli._verb_aliases import resolve_to_registry_name
+
+    # Resolve EITHER name (run-#12 finding 22): a caller may pass the registry
+    # name (`reconcile-journal`) OR the CLI verb (`reconcile`). Look the
+    # primitive up by its registry name; a differing CLI verb remaps to it.
+    registry_name = resolve_to_registry_name(name)
 
     try:
-        meta = get_meta(name)
+        meta = get_meta(registry_name)
     except (KeyError, RuntimeError):
         return _err(
             error_code="spec_invalid",
-            message=f"no primitive named {name!r}",
+            message=f"no primitive named {name!r}.{_did_you_mean(registry_name)}",
             category="user",
             retry_safe=False,
         )
 
+    invocation = cli_to_invocation_string(meta.name, meta.cli)
     backed = {
         "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
-        "cli": cli_to_invocation_string(meta.name, meta.cli),
+        "cli": invocation,
     }
-    fname = schema_for(name, "input", backed)
+    fname = schema_for(registry_name, "input", backed)
     if not fname:
+        # The primitive EXISTS but takes no --spec (its inputs are CLI flags):
+        # say so, and name the CLI invocation so the caller does not burn a
+        # round-trip discovering the verb (`reconcile-journal` → `reconcile`).
         return _err(
             error_code="spec_invalid",
-            message=f"primitive {name!r} declares no input schema",
+            message=(
+                f"primitive {registry_name!r} declares no input schema — it takes "
+                f"no --spec. Invoke it directly: {invocation}"
+            ),
             category="user",
             retry_safe=False,
         )
@@ -332,28 +366,40 @@ def _emit_describe(name: str) -> int:
             retry_safe=False,
         )
 
+    # Resolve EITHER name (run-#12 finding 22): look the primitive up by its
+    # registry name, but emit the CLI verb as ``name`` so guidance that echoes a
+    # describe stays in CLI-verb terms (`reconcile-journal` and `reconcile` both
+    # describe cleanly and both print `reconcile`).
+    from hpc_agent.cli._verb_aliases import display_verb_for, resolve_to_registry_name
+
+    registry_name = resolve_to_registry_name(name)
+    display_name = display_verb_for(name)
+
     # #261: describe output is framework-stable (changes only with the package
     # version), so memoize the resolved data payload by (pkg_version, name). A
     # hit skips the registry load + procedure/skill resolution entirely. Only
     # successful describes are cached; a not-found name re-runs the live path.
     from hpc_agent.state import describe_cache
 
-    cached = describe_cache.load(name)
+    cached = describe_cache.load(display_name)
     if cached is not None:
         _ok(cached)
         return EXIT_OK
 
     try:
-        data = describe(name=name)
+        data = describe(name=registry_name)
     except ValueError:
         return _err(
             error_code="spec_invalid",
-            message=f"no skill or primitive named {name!r}",
+            message=f"no skill or primitive named {name!r}.{_did_you_mean(registry_name)}",
             category="user",
             retry_safe=False,
         )
 
-    describe_cache.store(name, data)
+    # Surface the CLI verb as the canonical name so a caller that pasted a
+    # registry name learns the invocable form.
+    data = {**data, "name": display_name}
+    describe_cache.store(display_name, data)
     _ok(data)
     return EXIT_OK
 

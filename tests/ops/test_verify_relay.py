@@ -544,6 +544,130 @@ def test_number_word_no_source_is_unverifiable(tmp_path: Path) -> None:
     assert unv[0].claim.lower() == "ninety-nine"
 
 
+# ── bug-sweep #12: value-semantic verification evidence (not a JSON key) ───────
+
+
+def _seed_brief(tmp_path: Path, **fields: object) -> None:
+    """Append one JSON record to ``<exp>/.hpc/runs/<run_id>.briefs.jsonl``.
+
+    Mirrors the persisted S2 brief (``ops/submit_blocks.append_brief``); the
+    canary-outcome brief carries ``"verified": <bool>`` regardless of outcome.
+    """
+    import json
+
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    with (runs_dir / f"{RUN_ID}.briefs.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(dict(fields)) + "\n")
+
+
+def test_verified_claim_after_failed_canary_is_flagged(tmp_path: Path) -> None:
+    """Bug-sweep #12: a persisted S2 brief with ``verified: false`` must NOT
+    vouch for a 'verified' relay — the JSON KEY 'verified' in the serialized
+    brief used to satisfy the old substring check regardless of the value."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False, failure_kind="canary_failed")
+
+    out = _run(tmp_path, "run-1 is verified and ready to submit.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert state[0].claim.lower() == "verified"
+
+
+def test_canary_green_claim_after_failed_canary_is_flagged(tmp_path: Path) -> None:
+    """Bug-sweep #12: same, for the 'canary green' verification phrase."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False, failure_kind="canary_failed")
+
+    out = _run(tmp_path, "The canary green result confirms run-1.")
+    assert out.clean is False
+    state = [m for m in out.mismatches if m.kind == "state"]
+    assert len(state) == 1
+    assert "green" in state[0].claim.lower()
+
+
+def test_verified_true_brief_evidences_the_claim(tmp_path: Path) -> None:
+    """Bug-sweep #12 counter: ``verified: true`` (a KEY mapping to boolean True)
+    DOES evidence a 'verified' relay — the value-semantic check still passes."""
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=True)
+
+    out = _run(tmp_path, "run-1 is verified.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+def test_canary_green_evidenced_by_string_value_passes(tmp_path: Path) -> None:
+    """Bug-sweep #12 counter: a string VALUE 'green' (``evidence_digest={"canary":
+    "green"}``) evidences the 'canary green' phrase even alongside a failed
+    brief's ``verified: false``."""
+    _seed_journal(tmp_path, canary="green")
+    _seed_sidecar(tmp_path)
+    _seed_brief(tmp_path, verified=False)
+
+    out = _run(tmp_path, "The canary green check is in for run-1.")
+    assert [m for m in out.mismatches if m.kind == "state"] == []
+
+
+# ── bug-sweep #39: negative source metrics relayed verbatim ────────────────────
+
+
+def test_negative_float_metric_relayed_verbatim_is_clean(tmp_path: Path) -> None:
+    """Bug-sweep #39: a negative float scalar in the record (log-likelihood,
+    delta, loss) relayed byte-for-byte must audit clean — the sign was dropped,
+    so '-1234.5' was extracted as '1234.5' and flagged as a contradiction."""
+    _seed_journal(tmp_path, mean_log_likelihood=-1234.5)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "mean_log_likelihood -1234.5 over the run.")
+    assert out.clean is True, out.mismatches
+
+
+def test_negative_after_equals_matches_source(tmp_path: Path) -> None:
+    """Bug-sweep #39: 'effect = -3.1' matches the stored ``-3.1``."""
+    _seed_journal(tmp_path, effect=-3.1)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The effect = -3.1 across all tasks.")
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+
+
+def test_negative_metric_stored_as_string_relayed_verbatim_is_clean(tmp_path: Path) -> None:
+    """Bug-sweep #39: a negative stored as a STRING (``"-3.5"``) used to be
+    excluded from the number pool entirely (identifier-shaped), so a verbatim
+    relay was 'unverifiable'; it now enters the pool as the number it is."""
+    _seed_journal(tmp_path, delta="-3.5")
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The delta was -3.5 this pass.")
+    assert [m for m in out.mismatches if m.kind in ("number", "unverifiable")] == []
+
+
+def test_hyphen_in_id_or_range_not_read_as_negative(tmp_path: Path) -> None:
+    """Bug-sweep #39 guard: the sign-capturing regex must not steal a hyphen from
+    an identifier ('foo-123') or a range ('waves 1-2') — neither becomes a
+    negative number claim."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "Artifact foo-123 spans waves 1-2.")
+    claims = {m.claim for m in out.mismatches}
+    assert "-123" not in claims
+    assert "-2" not in claims
+
+
+def test_sign_flip_still_flagged(tmp_path: Path) -> None:
+    """Bug-sweep #39 counter: a REAL contradiction (source +0.42 relayed as
+    -0.42) still fires as a number mismatch — the fix widens truth, not lies."""
+    _seed_journal(tmp_path, effect=0.42)
+    _seed_sidecar(tmp_path)
+
+    out = _run(tmp_path, "The effect was -0.42 overall.")
+    num = [m for m in out.mismatches if m.kind == "number"]
+    assert len(num) == 1
+    assert num[0].claim == "-0.42"
+
+
 # ── notebook-audit relay (T11): status / passed / sha claims ────────────────────
 
 _NB_AUDIT = "demo-audit"

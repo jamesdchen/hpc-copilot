@@ -73,6 +73,11 @@ from hpc_agent.cli.skill_returns import _KNOWN_SKILLS, _committed_path
 
 __all__ = ["build_hook_output", "extract_emit_invocation", "main"]
 
+# The emit must be an ACTUAL ``hpc-agent emit-skill-return`` invocation, not a
+# mere mention of the substring — a read-only ``grep -- emit-skill-return
+# --skill <name> notes.md`` used to false-positive (finding #56). Anchoring on
+# the ``hpc-agent emit-skill-return`` command token pair rejects the mention.
+_EMIT_INVOCATION_RE = re.compile(r"hpc-agent\s+emit-skill-return\b")
 # ``--skill <name>`` / ``--skill=<name>`` (optionally quoted) inside the Bash
 # command. The name charset mirrors skill_returns._SKILL_NAME_RE.
 _SKILL_FLAG_RE = re.compile(r"--skill(?:=|\s+)['\"]?([a-z][a-z0-9-]*)")
@@ -94,7 +99,7 @@ def extract_emit_invocation(command: Any) -> tuple[str, str | None] | None:
     name is *not* checked against :data:`_KNOWN_SKILLS` here; that policy
     check stays in :func:`build_hook_output`.
     """
-    if not isinstance(command, str) or "emit-skill-return" not in command:
+    if not isinstance(command, str) or _EMIT_INVOCATION_RE.search(command) is None:
         return None
     skill_match = _SKILL_FLAG_RE.search(command)
     if skill_match is None:
@@ -104,6 +109,38 @@ def extract_emit_invocation(command: Any) -> tuple[str, str | None] | None:
     if dir_match is not None:
         experiment_dir = next((g for g in dir_match.groups() if g), None)
     return skill_match.group(1), experiment_dir
+
+
+def _emit_reported_failure(tool_response: Any) -> bool:
+    """True when the Bash ``tool_response`` carries a POSITIVE failure signal.
+
+    A failed / interrupted emit commits no fresh envelope (finding #56), so the
+    autofetch must not inject a stale one. This inspects the just-run Bash
+    call's result for an explicit failure: a non-zero exit code, an interrupted
+    flag, or an ``ok: false`` stdout envelope (the shape the emitter prints on a
+    validation refusal). Absent any such signal — including an empty or
+    non-mapping ``tool_response`` — it returns ``False`` so the hook keeps its
+    pre-existing fail-open, additive posture.
+    """
+    if not isinstance(tool_response, dict):
+        return False
+    for key in ("exit_code", "exitCode", "returncode", "returnCode", "code"):
+        val = tool_response.get(key)
+        if isinstance(val, bool):  # a bool is not an exit code
+            continue
+        if isinstance(val, int) and val != 0:
+            return True
+    if tool_response.get("interrupted") is True:
+        return True
+    stdout = tool_response.get("stdout")
+    if isinstance(stdout, str) and stdout.strip():
+        try:
+            parsed = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("ok") is False:
+            return True
+    return False
 
 
 def build_hook_output(payload: Any) -> dict[str, Any] | None:
@@ -141,6 +178,14 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
         return None
     skill, flag_dir = invocation
     if skill not in _KNOWN_SKILLS:
+        return None
+
+    # A FAILED / interrupted emit commits no fresh envelope; injecting a stale
+    # one left by a prior session would feed the parent skill wrong paths and
+    # verdicts (finding #56). Gate on a POSITIVE failure signal from the Bash
+    # call that just ran. Fail-open by design: an empty/absent tool_response
+    # carries no signal and preserves the hook's pre-existing additive posture.
+    if _emit_reported_failure(payload.get("tool_response")):
         return None
 
     # Prefer the emit command's own --experiment-dir (the authoritative target

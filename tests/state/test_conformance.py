@@ -116,6 +116,53 @@ def test_insufficient_window_outside_routes_needs_verdict_not_nonconforming():
     assert report.keys[0].tier_reason == cf.INSUFFICIENT_WINDOW
 
 
+def _hetero_window(judged_value):
+    """A heterogeneous window: 3 receipts, only ONE carrying the judged key.
+
+    Two receipts carry only ``latency``; one carries ``drift``. The raw receipt
+    count (3) clears ``min_window_n=3``, but the judged key's own comparable
+    evidence is n=1.
+    """
+    return [
+        _receipt(0.01, observed_at="2026-05-01T00:00:00+00:00", key="latency"),
+        _receipt(0.02, observed_at="2026-05-02T00:00:00+00:00", key="latency"),
+        _receipt(judged_value, observed_at="2026-05-03T00:00:00+00:00", key="drift"),
+    ]
+
+
+def test_per_key_thin_window_never_auto_verdicts_inside():
+    # Baseline well-evidenced for 'drift' in [0.0, 1.0]; a single in-envelope
+    # observation must NOT read CONFORMING off n=1.
+    baseline = [{"drift": v} for v in (0.0, 0.5, 1.0, 0.4, 0.6)]
+    report = cf.judge_window(
+        baseline, _hetero_window(0.5), _decl(keys=["drift"], min_window_n=3), now=_NOW
+    )
+    assert report.tier == cf.NEEDS_VERDICT
+    kv = report.keys[0]
+    assert kv.tier_reason == cf.INSUFFICIENT_WINDOW
+    assert kv.within is None
+    assert kv.window_n == 1  # the disclosed per-key count, < min_window_n=3
+
+
+def test_per_key_thin_window_never_auto_verdicts_outside():
+    # Same window shape, one wildly out-of-envelope observation — must NOT fold
+    # to NONCONFORMING from n=1.
+    baseline = [{"drift": v} for v in (0.0, 0.5, 1.0, 0.4, 0.6)]
+    report = cf.judge_window(
+        baseline, _hetero_window(9.9), _decl(keys=["drift"], min_window_n=3), now=_NOW
+    )
+    assert report.tier == cf.NEEDS_VERDICT
+    assert report.keys[0].tier_reason == cf.INSUFFICIENT_WINDOW
+
+
+def test_per_key_window_meeting_floor_still_verdicts():
+    # A key carried by enough receipts to meet the floor still auto-verdicts.
+    baseline = _baseline([0.94, 0.95, 0.96, 0.97, 0.93])
+    report = cf.judge_window(baseline, _stream([0.94, 0.95, 0.96]), _decl(min_window_n=3), now=_NOW)
+    assert report.tier == cf.CONFORMING
+    assert report.keys[0].tier_reason == cf.WITHIN_ENVELOPE
+
+
 # --- thin baseline -----------------------------------------------------------
 
 

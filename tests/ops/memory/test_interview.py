@@ -237,6 +237,29 @@ def test_generator_enumerated(tmp_path: Path) -> None:
     assert data["preview"]["first"] == {"model": "opus-4.7", "dataset": "mmlu-pro"}
 
 
+def test_generator_records_interview_materialized_origin(tmp_path: Path) -> None:
+    """Run-#12 finding 14: a tasks.py the interview wrote from a typed recipe is
+    recorded as ``interview_materialized`` — so the submit walk never mislabels
+    the sweep ``hand_written``."""
+    intent = _minimal_intent(
+        3,
+        task_generator={"kind": "cartesian_product", "params": {"axes": {"seed": [0, 1, 2]}}},
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["tasks_py_origin"] == "interview_materialized"
+
+
+def test_validate_mode_records_hand_written_origin(tmp_path: Path) -> None:
+    """Validate mode (the interview agent authored tasks.py) is recorded as
+    ``hand_written`` — the genuine hand-written path keeps its label."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(3)  # no task_generator → validate mode
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["tasks_py_origin"] == "hand_written"
+
+
 def test_generator_cartesian_product(tmp_path: Path) -> None:
     """Cross-product over named axes. resolve(i) is dict-shaped."""
     intent = _minimal_intent(

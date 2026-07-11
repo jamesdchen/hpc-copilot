@@ -339,6 +339,38 @@ def _recommendations_from_ambiguities(
     return out
 
 
+def _resource_default_disclosures(
+    resolved: dict[str, Any], provenance: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Surface cluster-injected resource defaults as brief disclosures (finding 14).
+
+    A cluster resource default (e.g. ``gpu_type`` = the cluster's first declared
+    GPU) lands in ``resolved`` via ``cluster_default`` provenance — NOT because the
+    workload asked for it. Run #12 shipped ``gpu_type: a100`` into a pure-CPU brief.
+    This is a DISCLOSURE, not a guess or a block: the injected value stays put; the
+    brief just carries a workload-shaped sanity line so a ``y`` is an informed one.
+    """
+    res_prov = provenance.get("resources")
+    if not isinstance(res_prov, dict):
+        return []
+    notes: list[dict[str, Any]] = []
+    if res_prov.get("gpu_type") == "cluster_default" and resolved.get("gpu_type"):
+        gpu = resolved["gpu_type"]
+        notes.append(
+            {
+                "field": "gpu_type",
+                "value": gpu,
+                "provenance": "cluster_default",
+                "sanity": (
+                    f"gpu_type={gpu!r} was injected as the cluster's first declared "
+                    "GPU (cluster_default), not derived from the workload. If this is "
+                    "a CPU-only workload, clear gpu_type before greenlighting."
+                ),
+            }
+        )
+    return notes
+
+
 # ── S2 helpers ──────────────────────────────────────────────────────────────
 
 
@@ -444,6 +476,13 @@ def _submit_s1_impl(experiment_dir: Path, *, spec: SubmitS1Spec) -> SubmitBlockR
     # 3. Surface each safe_default as a pre-filled recommendation — NOT applied
     #    into resolved (apply-safe-defaults is the silent actor this kills, §6).
     brief["ambiguities"] = _recommendations_from_ambiguities(walk.ambiguities)
+
+    # Consumer #3 (finding 14): cluster-injected resource defaults (e.g. a
+    # gpu_type the workload never asked for) ride the brief as a workload-shaped
+    # sanity line — a disclosure, never a guess or a block.
+    resource_notes = _resource_default_disclosures(brief["resolved"], brief["provenance"])
+    if resource_notes:
+        brief["resource_default_notes"] = resource_notes
 
     # Consumer #2 (data-manifest): the VERDICT-FREE, code-rendered data-drift
     # disclosure rides the greenlight brief. Never gates, never raises (the

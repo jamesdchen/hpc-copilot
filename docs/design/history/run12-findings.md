@@ -370,6 +370,25 @@ pattern validated this night); the human path is the OnDemand WEB portal —
 plan's one-gateway + cluster-announces design removes both the client storm
 AND its remote residue; nearer-term, the reporter command should be
 fork-minimal (one exec, no module/conda for a pure sacct/squeue read).
+RULED RESPONSE (user, 2026-07-11 — "structurally proper, not a quick
+fix"): build BOTH defense layers pre-run-13, sequenced AFTER the
+2026-07-11 bug-sweep swarm lands (its agents own the neighboring files):
+LAYER 1 = remote-side deadline: the ssh_run seam wraps every framework
+remote command in `timeout <budget+margin>` derived from the SAME deadline
+the client computes — an orphaned remote half self-destructs by
+construction, regardless of how the client died. LAYER 2 = self-identifying
+remote processes (an HPC_AGENT_OP=<op>:<epoch> argv token at the same seam)
++ a doctor hygiene probe: ps -u $USER for MARKED processes older than the
+max legitimate deadline, pkill only those (never unmarked user processes),
+and surface the stray count in the doctor brief (the observability gap:
+47 strays would have been visible days before the quota wedged). These are
+belt-and-suspenders UNDER the crash-only plan, not a substitute: staging
+transfers and human sessions can orphan processes even after polling dies.
+Sequencing note: 2026-07-11 discovery2 was so exhausted that ssh/web-shell
+logins could not fork a shell — self-service recovery IMPOSSIBLE (the
+kill -9 -1 builtin needs a shell to run IN); only a CARC admin ticket or
+stray decay clears it. Bounded-lifetime strays (layer 1) are therefore
+also the guard against the UNRECOVERABLE version of this failure.
 
 ## 21. Stop-guard livelock: a CONSUMED greenlight is indistinguishable from
 ## a fresh one — every turn-end forces a tick against a parked-on-external
@@ -416,3 +435,25 @@ must speak CLI names, or describe/dispatch must both resolve BOTH names.
 FIX CLASS: (a) make `describe` and `dispatch` resolve registry aliases
 (one alias map, shared), and (b) lint guidance strings against the CLI
 verb list so a non-verb primitive name in user-facing prose fails CI.
+
+## 23. ssh_target is FROZEN in the journal record — no sanctioned path to
+## retarget a run to a different login node of the SAME cluster
+Live (discovery2 fork-exhausted and self-service-unrecoverable, discovery1
+healthy): editing ~/.hpc-agent/clusters.yaml host did NOTHING for the
+in-flight run — every consumer (ops/monitor/reconcile, cli/aggregate,
+cli/lifecycle, infra/backends/remote_factory) reads `record.ssh_target`,
+minted at submit time. The relay agent had to hand-edit the journal record
+JSON (ssh_target discovery2→discovery1). It worked, but that is surgery on
+journal state with no locking, no provenance trail, no validation — the
+exact improvisation class the block-drive papercut work exists to remove.
+`retarget-run` covers CLUSTER changes only. FIX CLASS: either (a) a
+`retarget-run` patch axis for host (`patch: {host: ...}` — re-derives
+ssh_target, journals the change as a decision, validates the new host
+serves the same scheduler/scratch), or (b) the structural fix: stop
+freezing the host — journal the CLUSTER key and resolve user@host at USE
+time from clusters.yaml (host is config, identity stays journaled), making
+login-node failover a config edit; needs a migration story for existing
+records. ALSO OBSERVED: the breaker UX held up well under the failover
+(net-triage breaker_open_cooling verdict + the sanctioned
+HPC_SSH_CIRCUIT_OVERRIDE worked as designed), and DNS shows
+discovery.usc.edu == discovery1's IP — the bare alias already IS node 1.

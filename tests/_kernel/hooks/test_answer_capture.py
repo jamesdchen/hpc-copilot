@@ -85,6 +85,45 @@ def test_multiselect_composed_of_labels_is_skipped_but_mixed_is_captured(
     assert [r["text"] for r in read_utterances(tmp_path)] == [mixed]
 
 
+def test_comma_containing_label_click_is_not_captured(tmp_path: Path) -> None:
+    """Finding #22: a clicked multi-select whose labels contain commas must be
+    recognised as a click (agent-authored), not laundered as human-typed."""
+    _scaffold_namespace(tmp_path)
+    questions = [
+        {
+            "question": "Which sweeps?",
+            "header": "Sweep",
+            "options": [{"label": "sweep lr=0.1, lr=0.2"}, {"label": "batch=32"}],
+        }
+    ]
+    # The harness joins the two clicked labels with ", " — the join now itself
+    # contains the label's own comma. Structural matching must still see a click.
+    clicked = "sweep lr=0.1, lr=0.2, batch=32"
+    both = _payload(tmp_path, questions=questions, answers={"q": clicked})
+    assert answer_capture.capture(both) == []
+    assert read_utterances(tmp_path) == []
+    # A single comma-containing label clicked alone is also a click.
+    single = _payload(tmp_path, questions=questions, answers={"q": "sweep lr=0.1, lr=0.2"})
+    assert answer_capture.capture(single) == []
+    assert read_utterances(tmp_path) == []
+
+
+def test_typed_text_next_to_comma_label_is_still_captured(tmp_path: Path) -> None:
+    """The complementary direction: genuinely typed residue is still captured
+    even when a comma-containing label is offered."""
+    _scaffold_namespace(tmp_path)
+    questions = [
+        {
+            "question": "Which sweeps?",
+            "header": "Sweep",
+            "options": [{"label": "sweep lr=0.1, lr=0.2"}, {"label": "batch=32"}],
+        }
+    ]
+    typed = "sweep lr=0.1, lr=0.2, and also n_samples=1000000"
+    answer_capture.capture(_payload(tmp_path, questions=questions, answers={"q": typed}))
+    assert [r["text"] for r in read_utterances(tmp_path)] == [typed]
+
+
 def test_annotation_notes_are_captured(tmp_path: Path) -> None:
     _scaffold_namespace(tmp_path)
     payload = _payload(

@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent.state import attestation, determinism, fingerprint_store, scopes
 from hpc_agent.state.decision_journal import SCOPE_KINDS
+from hpc_agent.state.runs import _TERMINAL_RECORD_SUFFIX
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -571,6 +572,14 @@ def _decision_journal_path(experiment_dir: Path, scope_kind: str, scope_id: str)
         # its journal here; this collector rebuilds the PATH by hand (non-creating,
         # no ``RepoLayout``) to match ``decisions_path``'s conclusion branch.
         return hpc / "conclusions" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "registration":
+        # Mirror ``decisions_path``'s registration branch (and
+        # ``challenges._target_journal_path``) — hand-built, non-creating.
+        return hpc / "registrations" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "pack":
+        return hpc / "packs" / f"{scope_id}.decisions.jsonl"
+    if scope_kind == "challenge":
+        return hpc / "challenges" / f"{scope_id}.decisions.jsonl"
     # scope_kind == "campaign"
     return hpc / "campaigns" / scope_id / "decisions.jsonl"
 
@@ -903,7 +912,13 @@ def collect_evidence(
     # --- (4 first) run sidecars: needed for lineage + envelope cmd_shas -------
     sidecar_map: dict[str, dict[str, Any]] = {}
     for path in sorted(hpc.glob("runs/*.json")):
-        if path.name.endswith(".last_status.json"):
+        # Skip the run's co-tenant records: the per-poll last-status snapshot and
+        # the block-terminal receipts (``<run_id>.<block>.terminal.json``). Both
+        # carry a top-level ``run_id`` and would otherwise clobber the real
+        # sidecar in ``sidecar_map`` (``.terminal.json`` sorts AFTER ``.json``),
+        # erasing the run's scope tags / ``submitted_at``. ``_TERMINAL_RECORD_SUFFIX``
+        # is shared with ``runs.find_existing_runs`` so the two walks can't drift.
+        if path.name.endswith(".last_status.json") or path.name.endswith(_TERMINAL_RECORD_SUFFIX):
             continue
         sidecar = _read_json(path)
         if sidecar is None:

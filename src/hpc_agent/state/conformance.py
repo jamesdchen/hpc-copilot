@@ -721,14 +721,22 @@ def _judge_key(
     window: Sequence[Mapping[str, Any]],
     *,
     window_sufficient: bool,
+    min_window_n: int,
 ) -> KeyVerdict:
     """Judge ONE declared key (C-compare arithmetic) → a :class:`KeyVerdict`.
 
     Precedence (all mechanical properties of the records, never a closeness
-    judgment): insufficient window → key/window presence novelty → incomparable
-    values → thin baseline → label novelty → range containment. The range
-    comparison runs ONLY when the window is sufficient, both sides are present,
-    every value is a comparable finite number, and the baseline is well-evidenced.
+    judgment): insufficient window (raw receipt count) → key/window presence
+    novelty → insufficient PER-KEY comparable evidence → incomparable values →
+    thin baseline → label novelty → range containment. The range comparison runs
+    ONLY when the window is sufficient, both sides are present, the key's own
+    comparable evidence meets ``min_window_n``, every value is a comparable finite
+    number, and the baseline is well-evidenced.
+
+    The per-key floor (``window_n >= min_window_n`` on the key's comparable
+    values, not the raw receipt count) is what keeps a key carried by a single
+    receipt in a heterogeneous window from auto-verdicting from n=1 — the pinned
+    'a thin window never auto-verdicts in either direction' contract.
     """
     baseline_values = [row[key] for row in baseline_rows if key in row]
     window_values = [r["payload"][key] for r in window if key in _payload(r)]
@@ -760,6 +768,13 @@ def _judge_key(
         # A live key the baseline never carried, or a baseline key the window
         # never carried — key novelty, disclosed.
         return verdict(KEY_NOVELTY, None)
+
+    if window_n < min_window_n:
+        # The raw receipt count cleared the floor, but THIS key is carried by
+        # fewer than min_window_n receipts (a heterogeneous window) — the key's
+        # own comparable evidence is thin, so it never auto-verdicts. Disclosed
+        # as INSUFFICIENT_WINDOW next to window_n, not folded to a verdict.
+        return verdict(INSUFFICIENT_WINDOW, None)
 
     if not all(_is_finite_number(v) for v in baseline_values) or not all(
         _is_finite_number(v) for v in window_values
@@ -819,7 +834,13 @@ def judge_window(
         judged_keys = list(declaration.keys)
 
     verdicts = tuple(
-        _judge_key(key, baseline_rows, receipts, window_sufficient=window_sufficient)
+        _judge_key(
+            key,
+            baseline_rows,
+            receipts,
+            window_sufficient=window_sufficient,
+            min_window_n=declaration.min_window_n,
+        )
         for key in judged_keys
     )
 

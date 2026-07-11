@@ -217,7 +217,9 @@ def test_run_abandoned_stops_before_aggregate(tmp_path: Path) -> None:
     assert res.stage_reached == "run_abandoned"
     assert res.needs_decision is True
     assert res.lifecycle_state == "abandoned"
-    assert "reconcile-journal" in res.reason
+    # Guidance speaks the CLI verb (`reconcile`), never the registry name
+    # `reconcile-journal` (run-#12 finding 22).
+    assert "reconcile " in res.reason and "reconcile-journal" not in res.reason
     m_agg.assert_not_called()
 
 

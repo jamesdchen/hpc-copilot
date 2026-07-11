@@ -60,9 +60,7 @@ def _materialized_data_axis(experiment_dir: str | None) -> dict[str, Any] | None
     from pathlib import Path
 
     try:
-        doc = json.loads(
-            (Path(experiment_dir) / "interview.json").read_text(encoding="utf-8")
-        )
+        doc = json.loads((Path(experiment_dir) / "interview.json").read_text(encoding="utf-8"))
         entry = (doc.get("_materialized") or {}).get("entry_point") or {}
         axis = entry.get("data_axis")
     except Exception:  # noqa: BLE001 — the hint is an optimization, never a gate
@@ -70,6 +68,31 @@ def _materialized_data_axis(experiment_dir: str | None) -> dict[str, Any] | None
     if isinstance(axis, dict) and isinstance(axis.get("kind"), str):
         return axis
     return None
+
+
+def _materialized_tasks_py_origin(experiment_dir: str | None) -> str | None:
+    """The interview's recorded origin for tasks.py, or ``None``.
+
+    Run-#12 finding 14: the interview persists
+    ``interview.json._materialized.tasks_py_origin`` —
+    ``interview_materialized`` when it wrote tasks.py from a typed
+    ``task_generator`` recipe, ``hand_written`` when the interview agent authored
+    it. This walk otherwise labels EVERY present-but-not-caller tasks.py
+    ``hand_written_tasks_py``, mislabeling an interview-materialized 2700-task
+    sweep as hand-written. Tolerant read: any missing/malformed layer returns
+    ``None`` and the hand-written label stands.
+    """
+    if not experiment_dir:
+        return None
+    import json
+    from pathlib import Path
+
+    try:
+        doc = json.loads((Path(experiment_dir) / "interview.json").read_text(encoding="utf-8"))
+        origin = (doc.get("_materialized") or {}).get("tasks_py_origin")
+    except Exception:  # noqa: BLE001 — the label is a disclosure, never a gate
+        return None
+    return origin if isinstance(origin, str) else None
 
 
 def _walk_submit_ambiguities_result_post(
@@ -161,7 +184,15 @@ def walk_submit_ambiguities(
         # No safe_default — the framework cannot invent a sweep (incident 1b).
         ambiguities.append(Ambiguity(field="task_generator", candidates=None, depends_on=()))
     else:
-        provenance["task_generator"] = "hand_written_tasks_py"
+        # A present tasks.py the caller didn't re-declare. Thread the REAL origin
+        # (finding 14): an interview-materialized sweep is NOT hand-written, and
+        # labeling it so misrepresents provenance in the brief.
+        origin = _materialized_tasks_py_origin(spec.experiment_dir)
+        provenance["task_generator"] = (
+            "interview_materialized"
+            if origin == "interview_materialized"
+            else "hand_written_tasks_py"
+        )
 
     # ── Step 3: entry point.
     if spec.entry_point_resolved:
@@ -217,9 +248,7 @@ def walk_submit_ambiguities(
                     candidates=None,
                     depends_on=("entry_point",),
                     safe_default=hint,
-                    context={
-                        "source": "interview.json _materialized.entry_point.data_axis"
-                    },
+                    context={"source": "interview.json _materialized.entry_point.data_axis"},
                 )
             )
         else:
