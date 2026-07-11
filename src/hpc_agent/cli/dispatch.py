@@ -219,8 +219,11 @@ def main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page (cp1252) whose codec
     # cannot encode the ``→`` and box-drawing characters in our --help
     # text and catalog tables, raising UnicodeEncodeError on print_help().
-    # Force UTF-8 on the std streams up front.
-    for _stream in (sys.stdout, sys.stderr):
+    # Force UTF-8 on the std streams up front — INCLUDING stdin: mcp-serve
+    # reads JSON-RPC lines from it, and a cp1252-decoded UTF-8 em-dash
+    # corrupts human text INSIDE the server before any file is written
+    # (run-#12 finding 13: the journaled goal's "â€"" mojibake).
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
         _reconfigure = getattr(_stream, "reconfigure", None)
         if _reconfigure is not None:
             with contextlib.suppress(ValueError, OSError):
