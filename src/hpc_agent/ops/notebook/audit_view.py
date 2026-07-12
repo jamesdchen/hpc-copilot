@@ -91,6 +91,7 @@ __all__ = [
     "AuditView",
     "build_audit_view",
     "render_markdown",
+    "render_summary_markdown",
 ]
 
 #: Classification of a source section against the template (by source-hash, D6).
@@ -669,20 +670,24 @@ def render_markdown(view: AuditView) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_summary_markdown(view: AuditView) -> str:
-    """The bodies-OMITTED render (run-#12 finding 12; user-ruled: OMIT at the
-    source, never compact downstream).
+def render_summary_markdown(view: AuditView, render_paths: Mapping[str, str] | None = None) -> str:
+    """The bodies-OMITTED DIGEST render (run-#12 finding 12, B1; user-ruled: OMIT
+    at the source, never compact downstream).
 
     Under popup-primary the model is no longer the display channel: the diff /
     assertion / flag BODIES live in the per-section render files and the
     sign-off popup, so shipping ~11k tokens of them through the agent every
     loop pass is pure cost plus a re-summarization temptation. This render
     carries the header, ONE metadata line per section (slug, tier,
-    classification, sha12s, counts), and the SAME next-actions footer +
-    compose-ready dropped drafts. Nothing here summarizes a body — it is the
-    metadata BESIDE the bodies, deterministic and code-authored like its
-    sibling.
+    classification, sha12s, verdict/diff COUNTS), a POINTER to where that
+    section's full render lives (its ``render_path``, when *render_paths* is
+    supplied — a ``{slug: experiment_relpath}`` mapping), and the SAME
+    next-actions footer + compose-ready dropped drafts. Nothing here summarizes
+    a body — it is the metadata BESIDE the bodies, deterministic and
+    code-authored like its sibling. *render_paths* is pure presentation
+    (relpath pointers), never part of any ``view_sha``.
     """
+    paths = render_paths or {}
     lines: list[str] = []
     lines.append("# Notebook audit view (metadata; bodies live in the render files + popup)")
     lines.append("")
@@ -707,6 +712,9 @@ def render_summary_markdown(view: AuditView) -> str:
             f"diff +{added}/-{removed}, {len(sv.assertions)} assertion(s), "
             f"{len(sv.lint_flags)} lint flag(s)"
         )
+        render_path = paths.get(sv.slug)
+        if render_path:
+            lines.append(f"  - full render: {render_path}")
     lines.append("")
     lines.extend(_render_next_actions(view))
     lines.extend(_render_dropped_drafts(view))

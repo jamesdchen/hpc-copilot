@@ -439,6 +439,32 @@ Deviations from the plan above, each with its recorded reason:
   / `concurrency_rationale`) add no schema regen. Re-run the standard regen +
   full suite to confirm.
 
+### Finding-12 drift (run #12, B1) — the audit-view payload cut
+
+- **`notebook-audit-view` emits the DIGEST by default; the full body is behind
+  `full: true`.** Under popup-primary the model is no longer the display channel,
+  so the default `markdown` is now `render_summary_markdown` — per-section
+  metadata (slug, tier, classification, sha12s, verdict/diff COUNTS), the
+  `render_path` pointer to where each full body lives, and the next-actions
+  footer, with NO diff/assertion/flag body bytes. The whole-body
+  `render_markdown` ships only when the caller passes the new spec field
+  `full: true` (a harness that still model-relays). The user ruling holds — OMIT
+  AT THE SOURCE, never compact downstream — so the digest is a distinct code
+  render, not a truncation of the full one.
+- **The `sections[].diff` wire duplication is DROPPED.** The unified diff shipped
+  TWICE per response (inside `markdown` AND a structured `NotebookSectionView.diff`
+  array); the structured field is removed. The diff stays derivable — the
+  content-addressed render file (`render_path`) and the `full: true` markdown both
+  carry it — so the wire ships the diff bytes zero times by default, never twice.
+  The pure `SectionView.diff` (in `ops/notebook/audit_view.py`) is untouched: the
+  render-store digest and the whole-body render still read it; only the WIRE model
+  drops it. `view_sha` is unaffected (it never covered the wire diff — it rolls
+  from the per-section payload shas).
+- **Wire-contract pin:** `tests/ops/notebook/test_view_op.py` — the default
+  response serialization carries no `diff` field, no `### diff-from-template`
+  header, and no diff-body bytes; the `full: true` response restores them, with
+  identical per-section `view_sha`/`render_path`.
+
 ## Related, planned separately
 
 The palatability projections the same review surfaced: the **run story** (a
