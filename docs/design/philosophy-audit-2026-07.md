@@ -26,6 +26,23 @@ axis: does the code everywhere still obey the ruling, and is the ruling
 3. Cheap fixes land during the sweep; everything else becomes an Opus spec
    (the handoff-bank pattern). The output of this audit is an updated
    enforcement map, not prose.
+4. **Output 2 — the upstream-fix plan (user-mandated 2026-07-11: "feed a
+   follow-up plan that fixes all problems upstream stemming from design
+   choices").** Every DRIFTED/EXPOSED finding must additionally name its
+   GENERATOR: the design choice that produces this class of defect — or
+   state "local defect, no generator" explicitly. Findings clustering on
+   one generator become a generator-level proposal in
+   `docs/plans/upstream-fixes-2026-07.md`: the upstream alternative, the
+   symptoms it retires (cite each finding), migration cost, and the
+   scope-by-constraint flip trigger (what makes the steady-state design
+   shippable). The 2026-07-11 exemplar of the pattern: NAT keepalives,
+   client timeouts, the idle reaper, orphaned remote processes, and the
+   40-minute reporter walk were FIVE symptoms of ONE choice (pull status
+   over long-lived silent channels); the generator fix is crash-only /
+   cluster-announces, and Phase 1 shipped the same day the cluster
+   diagnosed it. Per-symptom hardening is the belt; the generator fix is
+   the plan. A sweep that produces enforcement rows but no generator
+   analysis has done half its job.
 
 ## The drift class this hunts (run-#12 precedents, all found live 2026-07-10)
 
