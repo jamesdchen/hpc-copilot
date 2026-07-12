@@ -237,6 +237,33 @@ class TestResolveSshTarget:
         record = SimpleNamespace(cluster="hoffman2", ssh_target="u@hoffman2.idre.ucla.edu")
         assert resolve_ssh_target(record) == "u@hoffman2.idre.ucla.edu"
 
+    def test_template_placeholder_falls_back_to_frozen_and_discloses(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # The PACKAGED clusters.yaml template carries '<your_user>@...'
+        # placeholders. A derivation the transport would refuse is NOT a live
+        # resolution (the CI environment has only the template — every
+        # aggregate/monitor test crashed SpecInvalid on '<'/'>' before this
+        # guard): fall back to the frozen submit-time target, disclosed.
+        self._point_config_at(
+            tmp_path,
+            monkeypatch,
+            {
+                "hoffman2": {
+                    "scheduler": "sge",
+                    "user": "<your_user>",
+                    "host": "hoffman2.idre.ucla.edu",
+                }
+            },
+        )
+        record = SimpleNamespace(cluster="hoffman2", ssh_target="u@h")
+
+        with caplog.at_level(logging.WARNING, logger="hpc_agent.infra.clusters"):
+            resolved = resolve_ssh_target(record)
+
+        assert resolved == "u@h"  # frozen value used, placeholder never escapes
+        assert "not a usable ssh target" in caplog.text
+
     def test_missing_cluster_key_falls_back_to_frozen_and_discloses(
         self, tmp_path, monkeypatch, caplog
     ):

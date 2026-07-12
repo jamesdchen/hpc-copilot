@@ -458,6 +458,26 @@ def resolve_ssh_target(record: RunRecord) -> str:
             frozen,
         )
         return frozen
+    try:
+        # A derivation the transport would refuse is NOT a live resolution —
+        # the packaged clusters.yaml TEMPLATE carries '<your_user>@...'
+        # placeholders, and handing one to ssh_argv turns every consumer into
+        # a SpecInvalid crash (CI has only the template). An unconfigured
+        # entry falls back to the frozen value like every other can't-answer
+        # case. Imported lazily to keep this config module import-light.
+        from hpc_agent.infra.ssh_validation import validate_ssh_target as _validate
+
+        _validate(live)
+    except errors.SpecInvalid:
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] resolves to %r, which is not "
+            "a usable ssh target (an unconfigured template placeholder?); using "
+            "frozen submit-time ssh_target %r",
+            cluster,
+            live,
+            frozen,
+        )
+        return frozen
     if live != frozen:
         _log.info(
             "resolve_ssh_target: cluster %r now resolves to %r (frozen "
