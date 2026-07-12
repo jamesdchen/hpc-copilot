@@ -598,3 +598,38 @@ pre-announce runs age out). COROLLARY OBLIGATION (findings 3/16, twice
 reconfirmed tonight): every detached worker heartbeats progress into its
 log on the >10s discipline — a 0-byte log for 8 min of legitimate work is
 indistinguishable from frozen-at-birth without psutil excavation.
+
+## 28. The no-combiner per-task fallback can NEVER reduce this run — and it
+## says so only after a 40+ minute pull, blaming the tasks
+Live (run-12 close-out, third fire of the delta-less full pull): with the
+quarantine debris remotely removed (finding 26), the aggregate-run worker
+re-pulled the whole results/ tree (~40-90 min of scp; the G1/inversion
+fire, third occurrence) and THEN refused: "found no readable
+causal_tune_linear/metrics_table.csv sidecars ... The tasks likely never
+wrote" — while inspect-deployment showed 2700 of them on the cluster and
+the pull had just mirrored them locally. TWO stacked defects, both
+deterministic (a retry re-pays the pull and fails identically):
+(a) path-shaped summary artifact breaks the dir/filename rejoin — the
+task dir was computed as `p.parent` of each rglob match, which keeps the
+artifact's own subdir; reduce_metrics rejoining `dir / summary_name`
+doubles it (`.../causal_tune_linear/causal_tune_linear/metrics_table.csv`)
+so every sidecar reads as missing; (b) reduce_metrics is a JSON
+weighted-mean (json.load per sidecar) — a CSV artifact can never parse,
+is silently skipped, and the empty result triggers the refusal with the
+tasks-never-wrote misdiagnosis. The earlier finding-26 "2701 vs 2700"
+fire was the cardinality gate counting FILES before this branch; removing
+the debris let the run through to a branch structurally unable to succeed
+for it. FIXED same night: (1) non-JSON summary artifact now refuses
+BEFORE the pull, naming the real condition (fallback = JSON weighted-mean;
+supply the pack reducer / aggregate_cmd); (2) task dir strips ALL
+artifact path components; (3) the empty-reduce message distinguishes
+"nothing matched" from "N matched, none parsed as JSON". GENERATOR TAGS:
+the misdiagnosing message is finding-26's honest-refusal leg again
+(per-consumer pattern knowledge / message asserts a cause it didn't
+observe); paying the full pull before a knowable-in-advance refusal is
+the G13 frozen-manifest shape (the artifact's format was declared at
+submit — the refusal was computable at aggregate-CHECK time, before any
+transfer; check-time surfacing is the residual, not done). Run-12
+unblock: the pack reducer (per-bucket × estimator + DM tests) over the
+already-complete local mirror — core's weighted-mean could never have
+produced that brief.

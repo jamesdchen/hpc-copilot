@@ -50,7 +50,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hpc_agent import errors
@@ -359,6 +359,22 @@ def _per_task_metrics_reduce(
     case there is no numeric input, and fabricating a mean is exactly the
     failure mode being closed.
     """
+    # Refuse BEFORE the (potentially 40+ minute) pull when this fallback can
+    # never succeed: reduce_metrics parses JSON sidecars only, so a run whose
+    # declared summary artifact isn't JSON (run #12: the pack-reduced
+    # `causal_tune_linear/metrics_table.csv`) has no path through here — the
+    # old behavior paid the full results/ mirror twice and then blamed the
+    # tasks ("likely never wrote") for a reducer-side format limit.
+    if not summary_name.lower().endswith(".json"):
+        raise errors.RemoteCommandFailed(
+            f"no cluster-side _combiner/ for run_id {run_id!r} and the run "
+            f"declares a non-JSON summary artifact ({summary_name!r}) — the "
+            f"no-combiner per-task fallback is a JSON weighted-mean "
+            f"(reduce_metrics) and can NEVER reduce it, so refusing before "
+            f"pulling {results_subdir}/. Reduce this run with its own reducer "
+            f"(an aggregate_cmd / pack reducer that understands the artifact), "
+            f"or re-submit declaring a JSON summary artifact."
+        )
     results_local = out / "_per_task_results"
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     pull = rsync_pull(
@@ -383,7 +399,23 @@ def _per_task_metrics_reduce(
     # file is a per-task result dir. reduce_metrics scans each for that sidecar
     # and weighted-means across tasks — identical reduce semantics to the
     # combiner, run on the locally-pulled per-task sidecars.
-    result_dirs = sorted({str(p.parent) for p in results_local.rglob(summary_name) if p.is_file()})
+    #
+    # A summary artifact may be PATH-shaped (`sub/metrics.json`): the task dir
+    # is the match minus ALL of the artifact's components, not `p.parent` —
+    # `p.parent` keeps the artifact's own subdir, and reduce_metrics rejoining
+    # `dir / summary_name` then doubles it (`.../sub/sub/metrics.json`) so
+    # every sidecar reads as missing (run #12's "found no readable sidecars"
+    # against 2700 mirrored files).
+    summary_depth = len(PurePosixPath(summary_name).parts)
+
+    def _task_dir(match: Path) -> Path:
+        for _ in range(summary_depth):
+            match = match.parent
+        return match
+
+    result_dirs = sorted(
+        {str(_task_dir(p)) for p in results_local.rglob(summary_name) if p.is_file()}
+    )
     # Canary anti-contamination (run #6 harvest): the ``<run_id>-canary``
     # sibling writes its metrics.json under the SAME results/ subtree (its
     # result_dir_template renders with the canary's run_id, whose name has the
@@ -416,13 +448,25 @@ def _per_task_metrics_reduce(
         )
     aggregated = reduce_metrics(result_dirs, filename=summary_name)
     if not aggregated:
+        # Say what was actually observed: "no files matched" and "files
+        # matched but none parsed" are different failures with different
+        # remediations — the old single message blamed the tasks either way.
+        if result_dirs:
+            detail = (
+                f"the pull mirrored {len(result_dirs)} {summary_name} sidecars "
+                f"but NONE parsed as JSON (corrupt or non-JSON content) — "
+                f"inspect one, e.g. under {results_local}."
+            )
+        else:
+            detail = (
+                f"the tasks likely never wrote {summary_name}; inspect "
+                f"per-task stderr under {record.remote_path}/{run_id}/logs/."
+            )
         raise errors.RemoteCommandFailed(
             f"no cluster-side _combiner/ for run_id {run_id!r} and the per-task "
             f"{results_subdir}/ fallback found no readable {summary_name} sidecars "
             f"under {record.remote_path}/{results_subdir}/. There is no numeric "
-            f"input to reduce — refusing to fabricate an aggregate. The tasks "
-            f"likely never wrote {summary_name}; inspect per-task stderr under "
-            f"{record.remote_path}/{run_id}/logs/."
+            f"input to reduce — refusing to fabricate an aggregate. {detail}"
         )
 
     # T4 ingestion-at-harvest (docs/design/data-trace.md §"Storage: emission
