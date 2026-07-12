@@ -120,9 +120,12 @@ journal-adjacent — inside the trust boundary — so this verb loads them too
 into the NUMBER pool, WIDENING the source corpus without lowering the bar:
 
 * ``reduce_artifacts`` — ``_aggregated/<run_id>/metrics_aggregate.json`` (the
-  reducer's persisted aggregate, ``ops/aggregate_flow._persist_local_aggregate``)
-  and the combiner's ``_aggregated/<run_id>/_combiner/wave_<N>.json`` grid
-  partials;
+  reducer's persisted aggregate, ``ops/aggregate_flow._persist_local_aggregate``),
+  the combiner's ``_aggregated/<run_id>/_combiner/wave_<N>.json`` grid
+  partials, and any top-level ``_aggregated/<run_id>/*.csv`` table a registered
+  ``aggregate_cmd`` / pack reducer persisted (run-12 finding 29 — the corpus
+  previously knew only the two JSON names, so a truthful relay of the pack
+  reducer's table drew hundreds of mismatches);
 * ``campaign_briefs`` — the campaign decision journal
   (``.hpc/campaigns/<campaign_id>/decisions.jsonl``) when the run's sidecar
   carries a ``campaign_id``.
@@ -183,7 +186,10 @@ if TYPE_CHECKING:
 # stolen from an identifier or a range: it fires only when the char before the
 # ``-`` is neither a word char nor a ``.`` (so ``run-1`` / ``a-1`` / ``1-2`` /
 # ``3.14`` never read a hyphen or a fractional tail as a signed number).
-_NUM_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?%?")
+# The optional exponent tail makes a scientific-notation literal (a reducer
+# table's ``4.585623e-11`` — run-12 finding 29) ONE number token on both the
+# source-collection and relay-audit sides, instead of splitting at the ``e``.
+_NUM_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?:[eE][+-]?\d+)?%?")
 
 
 def _normalize_num(raw: str) -> str:
@@ -425,6 +431,17 @@ def _is_run_id_like(token: str, scope_run_id: str) -> bool:
         # A faithful ISO date/timestamp quote, not a run-id claim (see
         # ``_ISO_DATETIME_RE``); its span is consumed by the pre-pass.
         return False
+    try:
+        # A token that fully parses as a numeric literal is a NUMBER claim,
+        # never a run-id one — scientific notation with a negative exponent
+        # (``4.585623e-11``) is hyphen+digit and long enough to read
+        # run-id-like (run-12 finding 29: a reducer table relay drew hundreds
+        # of run-id mismatches). Left unconsumed, so the number pass audits
+        # the whole literal (the relay-side twin of the #39 source-side fix).
+        float(_normalize_num(token))
+        return False
+    except ValueError:
+        pass
     return "-" in token and bool(re.search(r"\d", token)) and len(token) >= 8
 
 
@@ -709,16 +726,28 @@ def _read_json_tolerant(path: Path) -> Any:
 _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_\d+\.json$")
 
 
+# A CSV reduce artifact larger than this is skipped rather than read — the
+# corpus widens with the run-level table (tens of KB), never with a mirrored
+# per-task tree's worth of data.
+_CSV_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024
+
+
 def _load_reduce_artifacts(experiment_dir: Path, run_id: str) -> list[Any]:
     """Read the code-written reduce artifacts for *run_id* tolerantly (F-Q).
 
-    Two locations under the experiment's aggregated area, both written by the
+    Three shapes under the experiment's aggregated area, all written by the
     DETERMINISTIC reducer/combiner (inside the trust boundary, journal-adjacent):
 
     * ``_aggregated/<run_id>/metrics_aggregate.json`` — the reducer's persisted
       aggregate (``ops/aggregate_flow._persist_local_aggregate``);
     * ``_aggregated/<run_id>/_combiner/wave_<N>.json`` — the combiner's per-wave
-      grid partials (``wave_<N>.runtime.json`` siblings excluded).
+      grid partials (``wave_<N>.runtime.json`` siblings excluded);
+    * ``_aggregated/<run_id>/*.csv`` (top level ONLY, bounded size) — the table a
+      registered ``aggregate_cmd`` / pack reducer persists (run-12 finding 29:
+      ``metrics_table.csv``'s truthful relay drew 337 mismatches because the
+      corpus only knew the two JSON names). Cells are contributed as strings;
+      the pulled per-task mirror (``_per_task_results/``) is deliberately NOT
+      walked — the corpus carries the reducer's OUTPUT, not its input tree.
 
     Never creates or writes anything (mirrors :func:`_load_briefs`): a missing
     dir/file or unreadable/corrupt bytes yields no records for that artifact. The
@@ -740,6 +769,20 @@ def _load_reduce_artifacts(experiment_dir: Path, run_id: str) -> list[Any]:
         wave = _read_json_tolerant(wf)
         if wave is not None:
             out.append(wave)
+    try:
+        csv_files = sorted(p for p in agg_dir.glob("*.csv") if p.is_file())
+    except OSError:
+        csv_files = []
+    for cf in csv_files:
+        try:
+            if cf.stat().st_size > _CSV_ARTIFACT_MAX_BYTES:
+                continue
+            text = cf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        cells = [c.strip() for line in text.splitlines() for c in line.split(",") if c.strip()]
+        if cells:
+            out.append(cells)
     return out
 
 

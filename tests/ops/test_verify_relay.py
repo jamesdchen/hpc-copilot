@@ -389,6 +389,73 @@ def test_number_absent_from_reduce_artifacts_still_flagged(tmp_path: Path) -> No
     assert num[0].claim == "88888.5"
 
 
+# ── run-12 finding 29: CSV reduce tables + scientific notation ─────────────────
+
+
+def _seed_csv_table(tmp_path: Path, name: str, text: str) -> None:
+    """Write ``_aggregated/<run_id>/<name>`` (a pack reducer's persisted table)."""
+    agg_dir = tmp_path / "_aggregated" / RUN_ID
+    agg_dir.mkdir(parents=True, exist_ok=True)
+    (agg_dir / name).write_text(text, encoding="utf-8")
+
+
+def test_csv_reduce_table_relay_is_clean(tmp_path: Path) -> None:
+    """Finding-29 regression: relaying a registered aggregate_cmd's persisted CSV
+    table verifies CLEAN — the scientific-notation cell is ONE number claim (it
+    used to read run-id-shaped: hyphen+digit, len>=8) and the 6-digit bar count
+    a numeric claim (it used to read job-id-shaped)."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+    _seed_csv_table(
+        tmp_path,
+        "metrics_table.csv",
+        "estimator,bucket,qlike,mse,dm,n\n"
+        "ridge,all_features,0.127879,4.585623e-11,-19.925446,218934\n"
+        "ridge,baseline,0.134450,4.301069e-11,5.036257,218934\n",
+    )
+
+    out = _run(
+        tmp_path,
+        "Run run-1 complete (job 13610902): ridge all_features qlike 0.127879 "
+        "(mse 4.585623e-11, dm -19.925446) over 218934 bars.",
+    )
+    assert out.clean is True, out.mismatches
+    assert out.mismatches == []
+
+
+def test_sci_notation_flags_as_number_never_run_id(tmp_path: Path) -> None:
+    """Counter + shape isolation: a sci-notation value in NO artifact still
+    flags — but as a NUMBER mismatch, never the finding-29 run-id
+    misclassification."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_record(tmp_path, status="complete")
+
+    out = _run(tmp_path, "The mse was 4.585623e-11.")
+    hits = [m for m in out.mismatches if m.claim.startswith("4.585623")]
+    assert hits, "an unsupported sci-notation claim must still be audited"
+    assert all(m.kind != "run_id" for m in hits)
+
+
+def test_csv_ingest_is_bounded_and_top_level_only(tmp_path: Path, monkeypatch) -> None:
+    """Bounds: an oversized CSV and one nested under the pulled per-task mirror
+    contribute nothing — the corpus carries the reducer's OUTPUT only."""
+    import hpc_agent.ops.decision.verify_relay as vr
+
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    monkeypatch.setattr(vr, "_CSV_ARTIFACT_MAX_BYTES", 32)
+    _seed_csv_table(tmp_path, "metrics_table.csv", "qlike\n" + "0.127879\n" * 16)  # > 32 bytes
+    nested = tmp_path / "_aggregated" / RUN_ID / "_per_task_results" / "task_0"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "metrics_table.csv").write_text("qlike\n0.555555\n", encoding="utf-8")
+
+    out = _run(tmp_path, "qlike 0.127879 and per-task qlike 0.555555.")
+    flagged = {m.claim for m in out.mismatches}
+    assert "0.127879" in flagged  # oversized table skipped
+    assert "0.555555" in flagged  # nested mirror never walked
+
+
 # ── F-Q: campaign-scope briefs (numbers only) ──────────────────────────────────
 
 

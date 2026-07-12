@@ -633,3 +633,39 @@ transfer; check-time surfacing is the residual, not done). Run-12
 unblock: the pack reducer (per-bucket × estimator + DM tests) over the
 already-complete local mirror — core's weighted-mean could never have
 produced that brief.
+
+## 29. The relay audit blocked the TRUTHFUL relay of the reducer's own table
+## — 337 false mismatches from one corpus gap and one classifier gap
+Live (run-12 close-out, minutes after finding 28's unblock): the demo
+relayed the pack reducer's 27-row metrics_table.csv verbatim (as
+directed) and the relay-audit stop hook refused the turn with 337
+mismatches. Three stacked shapes: (a) CORPUS GAP — verify-relay's
+reduce-artifacts leg read exactly two hardcoded JSON names
+(metrics_aggregate.json, _combiner/wave_N.json); a registered
+aggregate_cmd's persisted CSV table was invisible, so every table value
+was "unsupported" (the finding-26 per-consumer-pattern class: the
+sanctioned artifact location existed, the consumer didn't know the
+shape); (b) scientific notation (4.585623e-11) is hyphen+digit and
+len>=8, so _IDENT_RE + _is_run_id_like classified ~100 table cells as
+"run-id-shaped token matches no authoritative identifier" (the proving-
+run-3 false-positive class: after ISO dates, verbs, and decimal parts,
+sci-notation is the fourth member); (c) the 6-digit bar count (n=218934)
+read as a job-id-shaped claim — the number-pool arm that would have
+cleared it existed but the pool lacked the CSV (pure downstream of (a)).
+The demo's remediation — withdraw the inline numbers, point at the
+delivered CSV — is doctrine-correct behavior under a false fire, but it
+defeats "relay the reducer's table", the exact E-render/full-vs-digest
+tension already ruled to be decided at build time. FIXED same night:
+_load_reduce_artifacts ingests top-level _aggregated/<run>/*.csv
+(bounded 4MB, never the _per_task_results mirror — reducer OUTPUT, not
+input); _NUM_RE gained an optional exponent tail (one token both sides);
+_is_run_id_like returns False for any token that fully parses as a float
+(the relay-side twin of the #39 source-side fix). Counter-tests pin that
+the bar did not lower: an unsupported sci value still flags (as a
+number), an oversized or nested CSV contributes nothing. GENERATOR TAG:
+G3 unbound-evidence-matching (name-shape classification over an unbound
+token stream) + the G10 shape (artifact-name vocabulary hand-listed at
+one consumer). Residual: the id/number token classifiers accrete
+carve-outs per false positive (dates, verbs, decimal parts, sci
+notation) — a positive grammar of "what is a number literal" would
+retire the class.
