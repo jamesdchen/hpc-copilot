@@ -532,3 +532,25 @@ the earlier native-binary-first verdict was a SHIP-TIME call (Windows
 named-pipe agent, engine maturity); the steady-state verdict is
 engine-first with library-native lifecycle — the trigger that flips it is
 the #8 inflight fix + this lesson landing in a released wheel.
+
+## 25. No sanctioned human-directed settle — closing run 12 required
+## journal surgery that bypassed the terminal-transition machinery
+Live (the close-out): with completion proven by TWO independent sources
+(foreground reporter RC=0 all-2700; result tree verified on disk) and the
+framework path structurally unable to finish on the old wheel, the human
+directed a settle — executed as a hand-edit of the run record (status →
+complete + a human_directed last_status). It worked (check READY → y →
+reducer), but it bypassed harvest_on_terminal (no summary pull, no
+transition stamp) and carries prose evidence instead of typed counts.
+Same improvisation class as finding 23's ssh_target edit: a legitimate
+HUMAN decision with no verb to express it. FIX CLASS: a human-directed
+settle path — `reconcile --human-directed` or a `settle-run` verb — that
+(a) takes an evidence statement + optional artifact refs, (b) journals it
+as a DECISION (the authorship gate applies; this is exactly a sign-off),
+(c) sets the terminal status, and (d) runs the SAME mark_run +
+harvest_on_terminal transition the automatic path runs. GENERATOR TAG
+(for the upstream-fixes plan): state transitions reachable only through
+inference-from-probes — every legitimate human override becomes surgery;
+the generator fix is that every transition the system can make on
+evidence must also be makeable on DIRECTED evidence through the same
+machinery.
