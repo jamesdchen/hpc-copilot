@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/host_retarget.input.json",
+  "title": "host-retarget input spec",
+  "description": "Inputs to ``host-retarget``: the in-flight run + the new cluster KEY.\n\n``run_id`` is the run to re-point — its record's ``cluster`` key is patched\nand every transport consumer picks up the new ``user@host`` at use time (no\njournal surgery). ``cluster`` is the NEW cluster KEY (a ``clusters.yaml``\nentry pointing at the healthy login node); it MUST serve the SAME scheduler\nand SAME scratch as the run's current cluster — a login-node failover, not a\ncluster move. ``reason`` is the optional human rationale journaled with the\ndecision (e.g. \"discovery2 fork-exhausted; failover to discovery1\").",
+  "type": "object",
+  "required": [
+    "run_id",
+    "cluster"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The in-flight run to re-point. Its record's `cluster` key is patched; resolve_ssh_target then derives the new user@host at use time.",
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "cluster": {
+      "description": "The NEW cluster KEY — a clusters.yaml entry for the healthy login node. MUST serve the SAME scheduler and scratch as the run's current cluster (a login-node failover). A different scheduler/scratch is refused (SpecInvalid) — use retarget-run for a genuine cluster move.",
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Optional human rationale journaled with the host-retarget decision.",
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}

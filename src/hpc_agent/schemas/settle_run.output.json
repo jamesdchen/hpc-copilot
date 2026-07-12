@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/settle_run.output.json",
+  "title": "settle-run output data",
+  "description": "The settle outcome — the journaled sign-off + the terminal transition.\n\n``stage_reached`` is ``settled`` when the status actually transitioned (the\ncommon case: a stuck in_flight run → terminal) or ``already_terminal`` when\nthe run already carried the target status (idempotent re-settle — the harvest\nis NOT re-fired, mirroring the probe path's transition gate). ``harvested`` is\nTrue exactly when ``harvest_on_terminal`` ran (only on a transition);\n``harvest`` carries its marker (finding 25's requirement: the same summary\npull + transition stamp the automatic path produces). ``decision_ts`` is the\njournaled sign-off's timestamp.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "run_id",
+    "status",
+    "prior_status",
+    "harvested",
+    "decision_ts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Whether the directed settle transitioned the status or it was already terminal.",
+      "enum": [
+        "settled",
+        "already_terminal"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The settled run.",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "description": "The terminal status now recorded.",
+      "title": "Status",
+      "type": "string"
+    },
+    "prior_status": {
+      "description": "The run's status before the settle.",
+      "title": "Prior Status",
+      "type": "string"
+    },
+    "harvested": {
+      "description": "True exactly when harvest_on_terminal ran (only on a status transition).",
+      "title": "Harvested",
+      "type": "boolean"
+    },
+    "harvest": {
+      "additionalProperties": true,
+      "description": "The harvest_on_terminal marker (summary pull + transition stamp), when it ran.",
+      "title": "Harvest",
+      "type": "object"
+    },
+    "decision_ts": {
+      "description": "Timestamp of the journaled directed-settle sign-off (the provenance trail).",
+      "title": "Decision Ts",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the settle outcome.",
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/settle_run.input.json",
+  "title": "settle-run input spec",
+  "description": "Inputs to ``settle-run``: the run + the DIRECTED terminal evidence.\n\n``run_id`` is the run to settle. ``status`` is the terminal state the directed\nevidence proves — one of ``complete`` / ``failed`` / ``abandoned`` (a\nnon-terminal status is refused). ``evidence`` is the human's directed evidence\nstatement and is REQUIRED — a directed settle with no evidence is refused\n(the whole point is DIRECTED evidence, not a bare status flip). ``artifact_refs``\noptionally corroborates (result-tree paths, a reporter log). ``task_counts``\noptionally supplies the typed counts finding 25 said the prose hand-edit\nlacked (e.g. ``{\"complete\": 2700, \"failed\": 0, \"total\": 2700}``). ``provenance``\noptionally names how the evidence was captured.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "status",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "The run to settle on directed evidence.",
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "description": "The terminal status the directed evidence proves — one of 'complete', 'failed', 'abandoned'. A non-terminal status is refused by the verb (settle-run only sets a TERMINAL state).",
+      "minLength": 1,
+      "title": "Status",
+      "type": "string"
+    },
+    "evidence": {
+      "description": "The directed evidence statement (REQUIRED) — what proves this terminal state (e.g. 'foreground reporter RC=0 all-2700; result tree verified on disk'). Journaled as the sign-off's proposal.",
+      "minLength": 1,
+      "title": "Evidence",
+      "type": "string"
+    },
+    "artifact_refs": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional corroborating artifact refs (result-tree paths, a reporter log).",
+      "title": "Artifact Refs"
+    },
+    "task_counts": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional typed counts recorded in last_status (the counts the prose hand-edit lacked) — e.g. {'complete': 2700, 'failed': 0, 'total': 2700}.",
+      "title": "Task Counts"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional note on how the directed evidence was captured (default 'human-directed').",
+      "title": "Provenance"
+    }
+  }
+}

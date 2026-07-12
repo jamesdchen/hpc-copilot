@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/host_retarget.output.json",
+  "title": "host-retarget output data",
+  "description": "The host-retarget outcome — the journaled login-node failover.\n\n``stage_reached`` is ``host_retargeted``. ``old_cluster`` / ``new_cluster``\nand ``old_ssh_target`` / ``new_ssh_target`` are the audit of what moved (the\nrun identity and its jobs did NOT move). ``decision_ts`` is the journaled\ndecision record's timestamp — the provenance trail finding 23 said the\nhand-edit lacked.",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "run_id",
+    "old_cluster",
+    "new_cluster",
+    "old_ssh_target",
+    "new_ssh_target",
+    "decision_ts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "const": "host_retargeted",
+      "description": "The boundary reached — the cluster key was patched and journaled.",
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The re-pointed run (its identity and jobs are unchanged).",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "old_cluster": {
+      "description": "The run's cluster key before the failover.",
+      "title": "Old Cluster",
+      "type": "string"
+    },
+    "new_cluster": {
+      "description": "The run's cluster key after the failover.",
+      "title": "New Cluster",
+      "type": "string"
+    },
+    "old_ssh_target": {
+      "description": "The user@host the run was talked to through before.",
+      "title": "Old Ssh Target",
+      "type": "string"
+    },
+    "new_ssh_target": {
+      "description": "The user@host resolved from the new cluster key (now live for every consumer).",
+      "title": "New Ssh Target",
+      "type": "string"
+    },
+    "decision_ts": {
+      "description": "Timestamp of the journaled host-retarget decision (the provenance trail).",
+      "title": "Decision Ts",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "description": "Human-readable one-line summary of the failover.",
+      "title": "Reason",
+      "type": "string"
+    }
+  }
+}
