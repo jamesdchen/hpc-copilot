@@ -61,7 +61,23 @@ def test_curated_catalog_is_derived_blocks_union_extras() -> None:
         # unioned explicitly like the loop verbs).
         "audit-preflight",
         "evidence-brief",
+        # The read-loop QUERY verbs the skills name MCP-direct ("go DIRECT
+        # through MCP") — none declares next_block, so each is an explicit
+        # union (the run-#8 unreachable-verb lesson; enforced by
+        # scripts/lint_skill_mcp_reachability.py). revise-resolved is the
+        # SKILL-tagged (MCP-direct) mutate that VERIFIABLY declares no
+        # next_block, so it does not derive despite the directive.
+        "read-decisions",
+        "verify-relay",
+        "attention-queue",
+        "revise-resolved",
     }
+    # poll-detached (architect memo §2) is a curated extra built by a SIBLING
+    # unit (m-poll). Until it lands it is ABSENT from the registry and filtered
+    # out of the curated set, so the pin guards on registry presence rather than
+    # asserting a verb that does not exist yet.
+    if "poll-detached" in get_registry():
+        expected.add("poll-detached")
 
     assert names == expected
     # Sanity anchors: block verbs are in; the loop driver + commit are in; a

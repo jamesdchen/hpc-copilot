@@ -217,6 +217,53 @@ _CURATED_EXTRA_VERBS = frozenset(
         # read with no ``next_block``; unreachable, the agent skips the
         # prior-evidence surface or hand-walks the stores.
         "evidence-brief",
+        # ── the read-loop QUERY verbs the skills name MCP-direct ─────────────
+        # These are pure reads the skills instruct the agent to call "DIRECT
+        # through MCP — never a spec-file round-trip" (hpc-submit/hpc-status/
+        # hpc-aggregate/hpc-campaign/hpc-notebook-audit SKILL §"Read-only QUERY
+        # verbs go DIRECT through MCP"). None declares ``next_block`` (a read is
+        # not a block), so none DERIVES in; each is unioned explicitly per the
+        # run-#8 lesson — an MCP-unreachable verb gets hand-rolled (a Write +
+        # Bash + Read spec-file round-trip for a value one MCP call returns, the
+        # stale-relay class the rule-10 Stop hook exists to catch). The
+        # reachability lint (scripts/lint_skill_mcp_reachability.py) enforces
+        # that every verb a SKILL body names MCP-direct is curated-reachable.
+        #
+        # ``read-decisions`` — the decision-journal chain-coherence read named
+        # MCP-direct at hpc-submit/hpc-status/hpc-aggregate/hpc-campaign/
+        # hpc-notebook-audit SKILLs (the parallel-prep back-half preflight scan).
+        "read-decisions",
+        # ``verify-relay`` — the relay-integrity read named MCP-direct at
+        # hpc-submit/hpc-status/hpc-aggregate/hpc-campaign SKILLs ("relay the
+        # numbers `status-snapshot`/`verify-relay` report — never a figure you
+        # remember").
+        "verify-relay",
+        # ``attention-queue`` — the fleet-wide needs-your-verdict digest named
+        # MCP-direct at hpc-status SKILL ("read-only MCP, direct — no spec-file
+        # round-trip"); its ``render`` is relayed VERBATIM, so a spec-file
+        # round-trip is exactly the hand-rolled detour this entry closes.
+        "attention-queue",
+        # ``revise-resolved`` — the spec-delta re-resolve the hpc-submit SKILL
+        # names MCP-direct ("call `revise-resolved` (MCP-direct) — NEVER
+        # hand-write or hand-edit a spec JSON"). VERIFIED it declares NO
+        # ``next_block`` (``_wire/workflows/revise_resolved.py::
+        # ReviseResolvedResult``), so despite the SKILL's MCP-direct directive it
+        # does NOT derive into the curated catalog — the honest fix is this
+        # explicit union, not a phantom ``next_block``. (``retarget-run``, the
+        # sibling recovery arm the same SKILL names MCP-direct, DOES declare
+        # ``next_block`` and derives in — no entry needed.) Hand-rolling this one
+        # is precisely the finding-4/10/13/17 spec-corruption class the verb
+        # exists to make impossible.
+        "revise-resolved",
+        # ``poll-detached`` — the zero-SSH detached-lease liveness query (architect
+        # memo §2, built by the sibling m-poll unit; wire ``_wire/queries/
+        # poll_detached.py``, home ``ops/monitor/poll_detached.py``). Added here
+        # now so the curated surface is complete the moment that verb lands; it is
+        # a pure read (no ``next_block``, so no derivation) and, until m-poll
+        # merges, is simply ABSENT from the registry — ``_curated_metas`` filters
+        # ``_CURATED_EXTRA_VERBS`` through ``if v in base``, so a not-yet-built
+        # extra is a harmless no-op (the pin test guards on registry presence).
+        "poll-detached",
     }
 )
 
