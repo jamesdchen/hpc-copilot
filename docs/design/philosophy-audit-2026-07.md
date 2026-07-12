@@ -63,20 +63,56 @@ axis: does the code everywhere still obey the ruling, and is the ruling
    subset-contract-tests against their catalog (#2, #34; the repo's own
    ⊆-test precedent is the fix pattern). Bugs prove a generator is LIVE;
    predicates bound its blast radius — the plan needs both.
-   **Structure (user-ruled 2026-07-11): TWO SWEEPS, bug sweep FIRST.**
-   Sweep 1 = the upstream bug sweep: dockets only, no code — one agent
-   retro-classifies the bug corpus and MINTS
-   `docs/plans/upstream-fixes-2026-07.md` (generators ranked by
-   fired-symptom count + diagnosis cost); fits the relay's first idle
-   window, so the ranking exists before anything expensive runs. Sweep 2
-   = the per-axis philosophy sweep: produces the enforcement map, and its
-   DRIFTED/EXPOSED findings APPEND to the same plan — new members raise a
-   known generator's rank; bug-unfired generators enter at
-   predicted-risk rank, labeled as such. Merge discipline: ONE generator
-   ledger in the plan; every symptom tagged with its evidence source
-   (fired-bug vs predicate-violation) — never conflated, never
-   double-counted. Sweep 1's clusters ride into sweep 2's agent prompts
-   as membership hypotheses.
+   **Structure (user-ruled 2026-07-11, refined same night): TWO SWEEPS +
+   ONE SYNTHESIS, bug sweep FIRST.**
+
+   *Sweep 1 — the upstream bug sweep* (one agent, dockets only, no code;
+   fits the relay's first idle window). Retro-classifies the bug corpus
+   and MINTS `docs/plans/upstream-fixes-2026-07.md`. Output shape is a
+   TABLE (bug → generator → confidence), with an explicit
+   **unclassified-residue bucket** — a bug that fits no generator stays
+   local-defect; shoehorning is worse than residue. **Entry threshold: a
+   generator needs ≥2 independent symptoms** to enter the plan (one
+   symptom = a local defect until a second fires). **Rank = fired-symptom
+   count weighted by diagnosis cost** — the dockets narrate the hours
+   each bug burned (the 2026-07-11 saga: one generator, a full day);
+   use them.
+
+   *Sweep 2 — the per-axis philosophy sweep* (agents by axis GROUP, not
+   per axis; group by shared scope so one agent reads one code region:
+   authorship/attestation gates [B4/B14/B8], transport/lifecycle
+   [B3/B3'/B15/B16/A-subprocess/B13], journal/state truth [B12/A4/B7],
+   altitude/packs [A3/A5/A6/A7/B6], human-attention surfaces
+   [B1/B2/B5/B10], prose/skills [C + B11]). Standing instructions for
+   every agent: (a) **check HEAD first** — git log the suspect surface
+   before writing a verdict; the 2026-07-11 swarm twice re-dispatched
+   already-fixed findings; (b) read-only plus CHEAP fixes only (≈≤20
+   lines + a test); anything larger is a spec, not an edit; (c) findings
+   carry a generator tag (sweep 1's clusters ride in the prompt as
+   membership hypotheses) but agents do NOT edit the plan.
+
+   *Synthesis — one editor, not an append.* Sweep-2 agents EMIT tagged
+   findings in their reports; a single synthesis pass (the relay's
+   judgment) merges them into the plan: resolves generator-naming
+   collisions, re-ranks, and labels bug-unfired generators
+   predicted-risk. Parallel agents never write one ledger (the
+   2026-07-11 swarm's shared-file collisions are the precedent).
+
+   *Verification discipline* (the bug-sweep's own lesson: 11 of 84
+   candidates were refuted — ~13% of unverified findings are wrong):
+   an **ENFORCED** verdict requires a DEMONSTRATED fire (run the
+   synthetic violation, cite the failing output), never a claimed one;
+   a **DRIFTED** verdict enters the plan only after the synthesis editor
+   re-reads the cited file:line. Verdicts failing verification go back
+   as PLAUSIBLE, not in.
+
+   *Exit criteria — the audit is CLOSED when:* (1) the enforcement map
+   in engineering-principles is updated with every new/verified row;
+   (2) the plan ranks every ≥2-symptom generator with its upstream
+   alternative, retired-symptom list, migration cost, and
+   scope-by-constraint flip trigger; (3) ONE consolidated RULING-NEEDED
+   list stands at the top of the plan for the user — scattered inline
+   rulings do not count as surfaced.
 
 ## The drift class this hunts (run-#12 precedents, all found live 2026-07-10)
 
