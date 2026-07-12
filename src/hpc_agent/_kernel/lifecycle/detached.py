@@ -60,6 +60,14 @@ __all__ = [
     "launch_submit_block_detached",
 ]
 
+#: Bounded wait for the ``(run_id, block)`` decide→spawn→stamp lease lock
+#: (run-#12 finding 16: a timeout-less acquire froze a successor worker 15 min
+#: at 0 CPU behind a wedged holder). Sized well above the critical section
+#: (a liveness read + one Popen), so a legitimate holder always releases first;
+#: expiry means the holder is wedged/leaked and the refusal names its pid.
+#: Module-level so tests can shrink it.
+_LEASE_LOCK_TIMEOUT_SEC = 60.0
+
 # The human-amplification block verbs whose wall-clock is cluster-bound and so
 # detach-by-contract (docs/design/human-amplification-blocks.md §3, "Blocks never
 # block the chat"): the S2 canary-wait, the S3 main-array watch, the speculative
@@ -326,6 +334,19 @@ def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:
     return lease_path
 
 
+def _read_lease_holder_pid(detached_dir: Path, block: str, run_id: str) -> int | None:
+    """The pid recorded in the sibling ``.lease.json``, or ``None`` if it is
+    absent/unreadable/malformed — the holder named in a lock-acquire refusal
+    (run-#12 finding 16)."""
+    lease_path = detached_dir / f"{block}-{run_id}.lease.json"
+    try:
+        prior = json.loads(lease_path.read_text(encoding="utf-8"))
+        pid = int(prior.get("pid", -1))
+    except (OSError, ValueError, TypeError):
+        return None
+    return pid if pid > 0 else None
+
+
 def _spawn_detached(
     *, run_id: str, block: str, argv: list[str], log_path: Path, cwd: str
 ) -> DetachedLaunch:
@@ -350,7 +371,29 @@ def _spawn_detached(
 
     detached_dir = log_path.parent
     lock_path = detached_dir / f"{block}-{run_id}.lease.lock"
-    with io.advisory_flock(lock_path, timeout_sec=60.0):
+    # Bounded acquire (run-#12 finding 16: a successor worker sat 15 min at 0 CPU
+    # behind a wedged holder's timeout-less lock, invisible). advisory_flock
+    # raises a path-naming TimeoutError at expiry; we NAME THE HOLDER by reading
+    # the sibling lease.json so the refusal points at a pid to inspect, not just
+    # a lock file.
+    try:
+        lock_cm = io.advisory_flock(lock_path, timeout_sec=_LEASE_LOCK_TIMEOUT_SEC)
+        lock_cm.__enter__()
+    except TimeoutError as exc:
+        holder = _read_lease_holder_pid(detached_dir, block, run_id)
+        who = (
+            f"the holder is pid {holder}"
+            if holder is not None
+            else "the holder pid is unrecorded (lease.json absent/unreadable)"
+        )
+        raise DetachedLeaseHeld(
+            f"could not acquire the ({run_id!r}, {block!r}) detach lease lock at "
+            f"{lock_path} within {_LEASE_LOCK_TIMEOUT_SEC:.0f}s — {who}. A live "
+            "holder means a launch for this key is already in flight; poll the "
+            "journal instead of spawning again. If that pid is dead the lock "
+            "leaked — delete the .lease.lock only after confirming it."
+        ) from exc
+    try:
         lease_path = _guard_single_lease(detached_dir, block, run_id)
 
         log_handle = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — handed to the child
@@ -392,6 +435,8 @@ def _spawn_detached(
             ),
             encoding="utf-8",
         )
+    finally:
+        lock_cm.__exit__(None, None, None)
 
     return DetachedLaunch(
         run_id=run_id,

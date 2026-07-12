@@ -51,13 +51,36 @@ Design, and the ban-safety invariants it preserves (each has a test):
 * **Invariant 2 — slot-held-while-open.** The persistent connection holds one
   :mod:`hpc_agent.infra.ssh_slots` per-host slot for its whole lifetime
   (acquired at connect, released at close), so it counts against the fleet's
-  per-host connection cap.
-* **Invariant 3 — idle self-close.** A connection idle past
-  :data:`IDLE_CLOSE_SEC` is reaped so a forgotten engine never holds a
-  login-node session forever (clusters count those).
-* **Invariant 4 — dead/wedged discard.** A wedged command (per-command
-  deadline) or a dead channel discards the connection and raises
-  :class:`EngineUnavailable` for the CURRENT call; the next call reconnects.
+  per-host connection cap. That cap is the connection-RATE courtesy — a
+  cluster-social POLICY the framework owns; it stays hand-rolled by design.
+
+Liveness is asyncssh-native (the G4 library-lifecycle shrink, ruled
+2026-07-12). The framework does NOT hand-roll a liveness probe or an
+idle-by-last-completion reaper (the run-#12 finding-24 severing bug — a
+long-silent in-flight command read as "idle" and cut, then silently
+re-executed one-shot). Instead:
+
+* **Death detection is asyncssh keepalives.** ``keepalive_interval`` /
+  ``keepalive_count_max`` on the connection (:func:`_keepalive_interval`) keep a
+  NAT'd flow alive and let the LIBRARY declare a silently-dropped session dead;
+  the close then surfaces as an asyncssh exception on the NEXT
+  :meth:`_Engine.run` (``ConnectionLost`` / a channel-open failure), which is
+  caught, discards the connection, and reconnects breaker-gated. There is no
+  framework timer that severs a connection to "detect" death — the library owns
+  that, and an in-flight command is NEVER cut by a framework idle rule (the
+  ``inflight`` counter vetoes any recycle while a command runs).
+* **The one retained framework recycle is a SLOT/SESSION courtesy, not a
+  liveness mechanism.** A connection that has gone QUIET past
+  :data:`IDLE_CLOSE_SEC` — and has ZERO commands in flight — is closed to free
+  its per-host slot and login-node session promptly (clusters count idle
+  sessions; the run-#10 F-B residual was an mcp-serve holding its slot until
+  process exit). This is a whole-connection recycle at a SAFE point (zero
+  inflight), the only shape the G4 ruling permits, justified as the same
+  cluster-social courtesy as the slot cap — never a mid-command sever.
+* **Wedged / dead discard.** A per-command deadline
+  (:func:`_await_bounded`), a torn channel, or any asyncssh run-time error
+  discards the connection and raises :class:`EngineUnavailable` for the CURRENT
+  call; the next call reconnects.
 
 Scope (phase 1, like the broker): IN-PROCESS only — one connection per host
 per process. Bulk transfers (rsync/tar/scp) keep their own connections.
@@ -97,22 +120,26 @@ __all__ = [
 #: ``"native"`` or unset keeps the one-shot / broker path.
 ENGINE_ENV = "HPC_SSH_ENGINE"
 
-#: Close a per-host connection after this many idle seconds so a forgotten
-#: engine does not hold a login-node session — and, crucially, its per-host ssh
-#: SLOT — open indefinitely. Default 120s (down from the broker's 600): the
-#: run-#10 F-B residual was an mcp-serve process that ran ONE quick verb and then
-#: held its slot until process exit, because the slot is released only at
-#: connection close and nothing closed the idle connection. A ~2-min idle close
-#: (enforced by the background sweep, :meth:`_Engine._sweep_idle`, not only the
-#: next-run() check) frees that slot promptly. Env: ``HPC_SSH_IDLE_CLOSE_SEC``.
+#: Recycle a per-host connection that has gone QUIET for this many seconds so a
+#: forgotten engine does not hold a login-node session — and, crucially, its
+#: per-host ssh SLOT — indefinitely. This is a SLOT/SESSION courtesy recycle
+#: (cluster-social policy), NOT a liveness timer: asyncssh keepalives own death
+#: detection (:func:`_keepalive_interval`), and a connection with a command in
+#: flight is never recycled (the ``inflight`` veto — the finding-24 no-mid-command
+#: -sever rule). Default 120s (down from the broker's 600): the run-#10 F-B
+#: residual was an mcp-serve process that ran ONE quick verb and then held its
+#: slot until process exit, because the slot is released only at connection close
+#: and nothing closed the quiet connection. A ~2-min quiet-recycle (enforced by
+#: the background sweep, :meth:`_Engine._sweep_idle`) frees that slot promptly.
+#: Env: ``HPC_SSH_IDLE_CLOSE_SEC``.
 IDLE_CLOSE_SEC = float(os.environ.get("HPC_SSH_IDLE_CLOSE_SEC", "120"))
 
-#: How often the background reaper thread sweeps for idle connections. An
-#: mcp-serve that ran one quick verb has no further ``run()`` to trigger the
-#: per-acquire idle check (:meth:`_Engine._reap_if_idle`), so a periodic sweep is
-#: what actually frees its slot ~:data:`IDLE_CLOSE_SEC` after last use instead of
-#: holding it until process exit. Kept well under IDLE_CLOSE_SEC so the close
-#: latency is idle + at most one sweep interval.
+#: How often the background sweeper thread looks for quiet connections to
+#: courtesy-recycle. An mcp-serve that ran one quick verb has no further
+#: ``run()`` to a host, so a periodic sweep — not the reuse path — is what frees
+#: its slot ~:data:`IDLE_CLOSE_SEC` after last use instead of holding it until
+#: process exit. Kept well under IDLE_CLOSE_SEC so the close latency is quiet-time
+#: + at most one sweep interval.
 _SWEEP_INTERVAL_SEC = 30.0
 
 #: Concurrent sessions (channels) allowed on ONE connection. OpenSSH's default
@@ -218,9 +245,33 @@ def _connect_timeout() -> float:
 
 
 def _sweep_interval() -> float:
-    """The idle-reaper sweep cadence, read fresh each loop so tests can shrink
-    it (:data:`_SWEEP_INTERVAL_SEC`)."""
+    """The courtesy-recycle sweep cadence, read fresh each loop so tests can
+    shrink it (:data:`_SWEEP_INTERVAL_SEC`)."""
     return _SWEEP_INTERVAL_SEC
+
+
+#: asyncssh keepalive default (seconds). Keepalives are the LIBRARY's native
+#: liveness mechanism — the thing that keeps a NAT'd flow alive and declares a
+#: silently-dropped session dead (the finding-24 fix, delegated to asyncssh
+#: rather than hand-rolled). Tighter than the native one-shot path's 30s because
+#: the engine reconnects cheaply on a false-positive drop, so it prefers faster
+#: death detection.
+_DEFAULT_KEEPALIVE_INTERVAL = 15
+#: Missed keepalives before asyncssh closes the connection (interval × this =
+#: the death-detection window). 15s × 3 = ~45s to notice a dropped session.
+_KEEPALIVE_COUNT_MAX = 3
+
+
+def _keepalive_interval() -> int:
+    """asyncssh keepalive interval (seconds), sharing the native path's
+    ``HPC_SSH_KEEPALIVE_INTERVAL`` knob so there is ONE keepalive tunable across
+    both transports. The literal ``default`` / invalid / non-positive falls to
+    :data:`_DEFAULT_KEEPALIVE_INTERVAL` (asyncssh has no ssh_config to defer to,
+    so ``default`` means the engine default, not "off")."""
+    raw = (os.environ.get("HPC_SSH_KEEPALIVE_INTERVAL") or "").strip()
+    if not raw or raw.lower() == "default" or not raw.isdigit() or int(raw) <= 0:
+        return _DEFAULT_KEEPALIVE_INTERVAL
+    return int(raw)
 
 
 # --- the asyncio loop thread (one per process, lazily created) ---------------
@@ -318,7 +369,10 @@ async def _connect(ssh_target: str) -> Any:
     connection). Default ``known_hosts`` is strict. ``preferred_auth`` pins
     publickey only — the BatchMode equivalent, never prompting. On Windows
     asyncssh auto-tries Pageant then the OpenSSH named-pipe agent, so no
-    ``agent_path`` is needed. Keepalives detect a silently-dropped session.
+    ``agent_path`` is needed. Keepalives (asyncssh-NATIVE) are the liveness
+    mechanism: they keep a NAT'd flow alive and let the library declare a
+    silently-dropped session dead — the framework hand-rolls no idle/liveness
+    reaper on top (the G4 shrink).
     """
     import asyncssh
 
@@ -327,8 +381,8 @@ async def _connect(ssh_target: str) -> Any:
         "config": (),
         "preferred_auth": ["publickey"],
         "connect_timeout": _connect_timeout(),
-        "keepalive_interval": 15,
-        "keepalive_count_max": 3,
+        "keepalive_interval": _keepalive_interval(),
+        "keepalive_count_max": _KEEPALIVE_COUNT_MAX,
     }
     user = _user_of(ssh_target)
     if user:
@@ -448,8 +502,8 @@ class _HostConn:
     under the engine's registry guard.
 
     ``inflight`` counts commands currently dispatched on this connection. The
-    idle reaper skips any connection with ``inflight > 0`` so a long remote leg
-    is never severed mid-command (bug-sweep #8).
+    courtesy sweeper skips any connection with ``inflight > 0`` so a long remote
+    leg is never severed mid-command (bug-sweep #8 / finding 24).
     """
 
     def __init__(self, ssh_target: str, conn: Any, slot_token: Any, sem: Any) -> None:
@@ -498,19 +552,28 @@ class _Engine:
         host = _host_of(ssh_target)
         if not host:
             raise EngineUnavailable("empty host")
-        self._reap_if_idle(host)
-        hc = self._get_live(host) or self._open(ssh_target, host)
+        # Reuse a LIVE connection (keepalives, not a framework idle reaper, own
+        # liveness — a still-open connection that merely went quiet is REUSED,
+        # saving a handshake and one connection attempt against the host); open
+        # one otherwise. Mark it BUSY (inflight) and stamp last_used at the
+        # command's START under the guard, RE-CHECKING alive: the courtesy
+        # sweeper takes the same guard, so once inflight is bumped it can never
+        # recycle this connection mid-command (the finding-24 no-mid-command
+        # -sever rule; #8's duplicate-execution hazard). If the sweeper discarded
+        # it in the get→mark window, reopen.
+        for _attempt in range(3):
+            hc = self._get_live(host) or self._open(ssh_target, host)
+            with self._guard:
+                if hc.alive:
+                    hc.inflight += 1
+                    hc.last_used = time.monotonic()
+                    break
+        else:
+            raise EngineUnavailable(
+                f"engine connection to {host} was recycled before dispatch could "
+                "claim it (retries exhausted)"
+            )
         outer = None if timeout is None else timeout + _RESULT_MARGIN
-        # Mark the connection BUSY before dispatch (and stamp last_used at the
-        # command's START, not only its completion) so the idle reaper — the
-        # background sweep AND the next-run() check — cannot sever it while a
-        # command is in flight. A remote leg longer than IDLE_CLOSE_SEC would
-        # otherwise be discarded under the live conn.run(): the in-flight command
-        # fails, the seam falls back to one-shot ssh, and a non-idempotent remote
-        # command executes twice (bug-sweep #8).
-        with self._guard:
-            hc.inflight += 1
-            hc.last_used = time.monotonic()
         try:
             result = _submit(_do_run(hc, cmd, timeout), deadline=outer)
         except EngineUnavailable:
@@ -606,17 +669,8 @@ class _Engine:
             self._ensure_sweeper()
             return hc
 
-    def _reap_if_idle(self, host: str) -> None:
-        with self._guard:
-            hc = self._conns.get(host)
-            stale = hc is not None and (
-                not hc.alive or (hc.inflight == 0 and hc.idle_for() > IDLE_CLOSE_SEC)
-            )
-        if stale and hc is not None:
-            self._discard(host, hc)
-
     def _ensure_sweeper(self) -> None:
-        """Start the background idle-reaper daemon on first open (idempotent)."""
+        """Start the background courtesy-recycle daemon on first open (idempotent)."""
         with self._guard:
             if self._sweeper is not None and self._sweeper.is_alive():
                 return
@@ -628,24 +682,28 @@ class _Engine:
             thread.start()
 
     def _sweeper_loop(self) -> None:
-        """Wake every :func:`_sweep_interval` and reap idle connections until
-        stopped. Exceptions are swallowed — a reaper must never crash a run."""
+        """Wake every :func:`_sweep_interval` and courtesy-recycle quiet
+        connections until stopped. Exceptions are swallowed — the sweeper must
+        never crash a run."""
         while not self._stop_sweeper.wait(_sweep_interval()):
             with contextlib.suppress(Exception):
                 self._sweep_idle()
 
     def _sweep_idle(self) -> None:
-        """Close every connection idle past :data:`IDLE_CLOSE_SEC` (or already
-        dead) and free its slot — the background counterpart to
-        :meth:`_reap_if_idle`, which only fires on the NEXT run() to a host.
+        """Courtesy-recycle every connection that has gone QUIET past
+        :data:`IDLE_CLOSE_SEC` (or was already discarded) and free its slot.
 
-        The F-B residual: an mcp-serve process that opened a connection for one
-        quick verb and then sat idle has no such trigger, so without this sweep
-        its per-host ssh slot stays claimed (slot is released only at connection
-        close) until process exit. The sweep frees it ~IDLE_CLOSE_SEC after last
-        use. An ACTIVE connection (idle ≤ threshold, OR a command in flight) is
-        never touched — a long remote leg must not be severed mid-command
-        (bug-sweep #8)."""
+        This is the ONLY framework-side recycle (the G4 shrink): it exists to
+        release a per-host slot + login-node session promptly, NOT to detect
+        death — asyncssh keepalives own that. It is the F-B residual's fix: an
+        mcp-serve process that opened a connection for one quick verb and then
+        sat quiet has no ``run()`` to a host to trigger reuse, so without this
+        sweep its per-host ssh slot stays claimed (slot is released only at
+        connection close) until process exit. The sweep frees it ~IDLE_CLOSE_SEC
+        after last use. A connection with a command IN FLIGHT (``inflight > 0``)
+        is NEVER recycled — a long remote leg must not be severed mid-command
+        (bug-sweep #8 / finding 24); the recycle is a whole-connection close at a
+        SAFE point, the only shape the G4 ruling permits."""
         with self._guard:
             stale = [
                 (host, hc)

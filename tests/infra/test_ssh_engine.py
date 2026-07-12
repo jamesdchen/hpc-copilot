@@ -94,6 +94,12 @@ def _install_connect(
     monkeypatch.setattr(ssh_engine, "_connect", _fake)
 
 
+async def _async_none(*_a: object, **_k: object) -> None:
+    """An async stand-in returning None — e.g. for the multi-address dial seam
+    (``None`` = let asyncssh dial), so a test can reach the real ``_connect``."""
+    return None
+
+
 def _recorder(sink: list[object]) -> Callable[..., None]:
     """A monkeypatch stand-in that records the ``detail`` kwarg (breaker
     failures) or the first positional (targets/tokens) into *sink* and returns
@@ -318,18 +324,23 @@ def test_slot_held_while_connected_and_released_on_close(
     assert released == ["SLOT"]  # freed at close
 
 
-def test_idle_connection_is_reaped(engine: _Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Invariant 3: an idle connection self-closes so no login-node session
-    lingers; the next call reconnects (a fresh connection object)."""
+def test_quiet_live_connection_is_reused_not_reaped_on_next_run(
+    engine: _Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G4 shrink: the reuse path no longer runs a framework idle reaper. A
+    connection that merely went quiet (even past IDLE_CLOSE_SEC) but is still
+    LIVE is REUSED on the next run() — keepalives, not a framework idle timer,
+    own death, and reusing a live connection saves a handshake and one
+    connection attempt against the host. (The quiet connection's slot is freed
+    only by the courtesy SWEEP when no further run() comes — see the sweep
+    tests below.)"""
     monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
-    # -1.0, not 0.0: idle_for() must be STRICTLY greater and two back-to-back
-    # monotonic() reads can be EQUAL on a fast runner (broker CI flake).
-    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)
+    monkeypatch.setattr(ssh_engine, "IDLE_CLOSE_SEC", -1.0)  # "quiet" by any measure
     _install_connect(monkeypatch, lambda _t: _StubConn())
     engine.run("echo one", ssh_target="u@h", timeout=15)
     first = engine._conns["h"].conn
-    engine.run("echo two", ssh_target="u@h", timeout=15)  # idle>-1 → reaped+reopened
-    assert engine._conns["h"].conn is not first
+    engine.run("echo two", ssh_target="u@h", timeout=15)  # reused, NOT reaped+reopened
+    assert engine._conns["h"].conn is first
 
 
 def test_wedged_command_raises_unavailable_and_discards_connection(
@@ -711,6 +722,73 @@ class TestMultiAddressDial:
             assert elapsed < 7.5, f"dead first address ate the budget ({elapsed:.1f}s)"
         finally:
             listener.close()
+
+
+class TestNativeKeepaliveLifecycle:
+    """G4 shrink: liveness is asyncssh-NATIVE (keepalives), not a framework idle
+    reaper. These pin that the connect kwargs carry keepalives, that the interval
+    shares the native path's one knob, and that death is detected at USE time via
+    a library exception (never a framework timer severing a connection)."""
+
+    def test_connect_kwargs_carry_native_keepalives(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The asyncssh connect passes keepalive_interval / keepalive_count_max —
+        the library's own liveness mechanism keeps a NAT'd flow alive and closes
+        a silently-dropped session (the finding-24 fix, delegated to asyncssh)."""
+        captured: dict[str, object] = {}
+
+        class _Cap:
+            @staticmethod
+            async def connect(host: str, **kwargs: object) -> _StubConn:
+                captured.update(kwargs)
+                captured["host"] = host
+                return _StubConn()
+
+        monkeypatch.delenv("HPC_SSH_KEEPALIVE_INTERVAL", raising=False)
+        # Drive the REAL _connect (not the stub seam) against a fake asyncssh, and
+        # skip the multi-address hand-dial so connect() is reached directly.
+        monkeypatch.setattr(ssh_engine, "_dial_multi_address", _async_none)
+        monkeypatch.setitem(__import__("sys").modules, "asyncssh", _Cap)
+        import asyncio
+
+        asyncio.run(ssh_engine._connect("u@h"))
+        assert captured["keepalive_interval"] == ssh_engine._DEFAULT_KEEPALIVE_INTERVAL
+        assert captured["keepalive_count_max"] == ssh_engine._KEEPALIVE_COUNT_MAX
+
+    def test_keepalive_interval_shares_the_native_knob(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One keepalive tunable across both transports: the engine reads the
+        same HPC_SSH_KEEPALIVE_INTERVAL the native ssh path uses; 'default' /
+        invalid falls to the engine default (asyncssh has no ssh_config)."""
+        monkeypatch.setenv("HPC_SSH_KEEPALIVE_INTERVAL", "42")
+        assert ssh_engine._keepalive_interval() == 42
+        for off in ("default", "", "-5", "abc"):
+            monkeypatch.setenv("HPC_SSH_KEEPALIVE_INTERVAL", off)
+            assert ssh_engine._keepalive_interval() == ssh_engine._DEFAULT_KEEPALIVE_INTERVAL
+
+    def test_death_surfaces_at_use_time_via_library_exception(
+        self, engine: _Engine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No framework liveness probe: a session asyncssh has closed is noticed
+        only when the NEXT run() dispatches on it and the library raises — the
+        engine discards + reconnects. (Contrast the deleted idle reaper, which
+        severed a live connection on a framework timer.)"""
+        monkeypatch.setattr(ssh_circuit, "check_circuit", lambda *a, **k: None)
+        calls = {"n": 0}
+
+        def _factory(_t: str) -> _StubConn:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # First conn dies silently; asyncssh raises ConnectionLost on use.
+                return _StubConn(raises=asyncssh.ConnectionLost("keepalives expired"))
+            return _StubConn(lambda _c: _StubResult(returncode=0, stdout="reconnected"))
+
+        _install_connect(monkeypatch, _factory)
+        with pytest.raises(EngineUnavailable):
+            engine.run("cmd", ssh_target="u@h", timeout=15)
+        assert "h" not in engine._conns  # the dead session was discarded on use
+        r = engine.run("cmd", ssh_target="u@h", timeout=15)
+        assert r.stdout == "reconnected"
 
 
 def test_successful_command_resets_the_breaker_counter(

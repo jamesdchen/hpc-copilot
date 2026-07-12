@@ -37,11 +37,27 @@ Mechanism — N claimable slots per host, shared across processes:
   never a new wedge class. While waiting they re-consult the circuit
   breaker: a circuit that opens turns the whole queue into fail-fast
   (an open breaker must not accumulate queued attempts).
-* A slot whose claimant crashed is reclaimed when its pid is no longer
-  alive (fast path, same-box) or its claim is older than
-  :data:`SLOT_TTL_SEC` (backstop; sized above the worst legitimate hold,
-  ``RSYNC_TIMEOUT_SEC=1800`` default). Normal releases are ``finally``
-  unlinks, so only a hard kill leaks a slot.
+* A slot whose claimant crashed is reclaimed by PID-LIVENESS: the claim
+  records its holder's pid, and a slot whose pid is no longer alive is
+  reclaimable (:func:`hpc_agent.infra.proc.pid_alive`, the shared probe over
+  psutil). There is NO wall-clock TTL expiry (the G4 library-lifecycle
+  shrink, ruled 2026-07-12): a wall-clock lease below the worst legitimate
+  hold is exactly what over-admitted a connection in bug-sweep #35, and a
+  TTL is the hand-rolled lifecycle bookkeeping the ruling retires. The
+  holder RELEASES its own slot (ownership-bound, below); a dead holder's
+  slot is reaped on liveness alone. Normal releases are ``finally`` unlinks,
+  so only a hard kill leaks a slot, and pid-liveness reclaims that on the
+  next contended acquire.
+
+  Scope of the pid-liveness reaper (honest limit): it assumes the claim's
+  pid lives in the SAME pid namespace as the reader — true for the normal
+  case (the journal home is local; the driving agent, detached workers, and
+  mcp-serve are sibling processes on one box). A journal home shared across
+  MACHINES (a foreign pid that is coincidentally alive locally) is outside
+  the guard's reliable domain; there it degrades toward under-admission
+  (a leaked foreign slot makes acquirers WAIT, never over-admit), bounded by
+  the fail-open :data:`SLOT_WAIT_MAX_SEC` give-up — the safe direction for a
+  burst limiter.
 
 Fail-open posture (same as the breaker): a broken state dir, an unwritable
 slot file, a corrupt claim doc — none of it may block SSH. Every OSError
@@ -79,7 +95,6 @@ __all__ = [
     "SLOT_JITTER_MAX_SEC",
     "SLOT_POLL_BASE_SEC",
     "SLOT_POLL_MAX_SEC",
-    "SLOT_TTL_SEC",
     "SLOT_WAIT_MAX_SEC",
     "acquire_slot",
     "connection_slot",
@@ -106,13 +121,6 @@ SLOT_POLL_MAX_SEC = 8.0
 #: fleet that starts waiting together re-polls staggered instead of in
 #: lockstep. Derived from the pid (deterministic, testable) — not random.
 SLOT_JITTER_MAX_SEC = 1.0
-
-#: Backstop staleness bound: a claim older than this is reclaimable even if
-#: its pid looks alive (e.g. pid reuse, or a foreign machine's pid on a
-#: shared journal home). Sized above the worst legitimate whole-call hold
-#: (``RSYNC_TIMEOUT_SEC`` defaults to 1800s). The pid-liveness check below
-#: reclaims a crashed claimant's slot much sooner on the common same-box case.
-SLOT_TTL_SEC = 2100.0
 
 #: Seconds a blocked waiter waits before its FIRST periodic slot-hold
 #: disclosure to stderr. F-N (run #10): a process blocked ~15 min acquiring a
@@ -195,8 +203,9 @@ def _slot_hold_disclosure(host: str, limit: int, *, now: float, elapsed: float) 
     """A deterministic one-line description of who is holding *host*'s slots.
 
     Pure disclosure for the F-N wait-visibility fix: names the host, the
-    elapsed wait, and — per slot — the holder's pid, claim age, and remaining
-    time-to-TTL. Read from the SAME slot files the claim path uses; a slot that
+    elapsed wait, and — per slot — the holder's pid, whether that pid is still
+    alive (the reclaim signal, now that pid-liveness is the sole reaper), and the
+    claim age. Read from the SAME slot files the claim path uses; a slot that
     is free or has an unreadable/malformed claim doc at read time is named as
     such (``free`` / ``unreadable``) rather than omitted, so every slot in the
     pool is accounted for. Never behaviour-changing — it only reports state.
@@ -221,8 +230,8 @@ def _slot_hold_disclosure(host: str, limit: int, *, now: float, elapsed: float) 
             parts.append(f"slot{i}=unreadable")
             continue
         age = max(0, int(now - claimed_at))
-        ttl_left = max(0, int(SLOT_TTL_SEC - (now - claimed_at)))
-        parts.append(f"slot{i}=pid:{pid} age:{age}s ttl:{ttl_left}s")
+        alive = "alive" if _pid_alive(pid) else "DEAD"
+        parts.append(f"slot{i}=pid:{pid}({alive}) age:{age}s")
     return (
         f"hpc-agent: still waiting {int(elapsed)}s for an ssh connection slot to "
         f"{host} (all {limit} held) — holders: {', '.join(parts)}"
@@ -256,13 +265,16 @@ _pid_alive = pid_alive
 def _claim_is_stale(
     path: Path,
     *,
-    now: float,
     pid_alive: Callable[[int], bool],
 ) -> bool:
-    """True when the slot file at *path* belongs to a dead or expired claim.
+    """True when the slot file at *path* belongs to a DEAD claim.
 
-    A malformed/unreadable claim doc reads as stale (fail-open: a corrupt
-    slot file must not permanently eat a slot).
+    Staleness is PID-LIVENESS only (the G4 shrink): a claim is reclaimable iff
+    its recorded pid is no longer alive. There is no wall-clock TTL — a lease
+    below the worst legitimate hold is exactly what over-admitted a connection
+    in bug-sweep #35, and ownership-bound :func:`release_slot` already guards the
+    hand-off race a TTL was reaching for. A malformed/unreadable claim doc reads
+    as stale (fail-open: a corrupt slot file must not permanently eat a slot).
     """
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -274,11 +286,8 @@ def _claim_is_stale(
     if not isinstance(doc, dict):
         return True
     try:
-        claimed_at = float(doc.get("claimed_at"))  # type: ignore[arg-type]
         pid = int(doc.get("pid"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return True
-    if now - claimed_at > SLOT_TTL_SEC:
         return True
     return not pid_alive(pid)
 
@@ -327,7 +336,7 @@ def _try_claim(
         path = base / f"{safe}.slot{i}"
         if _create_claim(path, host=host, pid=pid, now=now):
             return path
-        if _claim_is_stale(path, now=now, pid_alive=pid_alive):
+        if _claim_is_stale(path, pid_alive=pid_alive):
             stale.append(path)
     if not stale:
         return None
@@ -339,7 +348,7 @@ def _try_claim(
         for path in stale:
             # Re-check under the lock: a peer may have reclaimed it already,
             # and the new claim must not be stolen.
-            if not _claim_is_stale(path, now=now, pid_alive=pid_alive):
+            if not _claim_is_stale(path, pid_alive=pid_alive):
                 continue
             with contextlib.suppress(OSError):
                 path.unlink()
@@ -415,7 +424,7 @@ def acquire_slot(
                 flush=True,
             )
             announced = True
-        # F-N periodic disclosure: name the holders (pid / age / ttl) so a long
+        # F-N periodic disclosure: name the holders (pid / liveness / age) so a long
         # wait is legible instead of looking like a hung process. Fail-open.
         if now >= next_disclosure:
             _emit_slot_disclosure(host, limit, now=now, elapsed=now - start)
@@ -428,11 +437,14 @@ def release_slot(token: Path | None, *, pid: int | None = None) -> None:
     """Release a slot claimed by :func:`acquire_slot` (``None`` is a no-op).
 
     Ownership-verified (bug-sweep #35): re-read the slot doc and unlink ONLY
-    when it still records THIS releaser's pid. If our hold outran
-    :data:`SLOT_TTL_SEC` and a waiter TTL-reclaimed the slot while we held it,
-    the file at *token* now carries the SUCCESSOR's claim — unlinking it would
-    evict a live claimant and over-admit a connection to the very host the
-    limiter protects. On a pid mismatch the release is a no-op. A missing or
+    when it still records THIS releaser's pid. This is the ownership-bound
+    release the G4 ruling makes the PRIMARY hand-off mechanism (a TTL was the
+    hand-rolled backstop it retires): if a waiter reclaimed our slot while we
+    held it (only ever legitimate once our pid is dead — but a raced pid-reuse
+    successor is possible on a shared home), the file at *token* now carries the
+    SUCCESSOR's claim, and unlinking it would evict a live claimant and
+    over-admit a connection to the very host the limiter protects. On a pid
+    mismatch the release is a no-op. A missing or
     unreadable doc is also left alone (nothing verifiable to release; a corrupt
     leftover is handled by the staleness reclaim path). *pid* defaults to the
     current process (the acquirer's default), and is injectable to mirror
@@ -445,8 +457,8 @@ def release_slot(token: Path | None, *, pid: int | None = None) -> None:
         doc = json.loads(token.read_text(encoding="utf-8"))
         owner = int(doc["pid"])  # type: ignore[index]
     except (OSError, ValueError, TypeError, KeyError):
-        # Unverifiable ownership — leave the file for the TTL/pid-liveness
-        # reclaim rather than risk deleting a successor's live claim.
+        # Unverifiable ownership — leave the file for the pid-liveness reclaim
+        # rather than risk deleting a successor's live claim.
         return
     if owner != releaser:
         return  # our claim was reclaimed; the path belongs to another holder now

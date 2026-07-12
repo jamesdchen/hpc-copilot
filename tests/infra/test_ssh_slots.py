@@ -22,7 +22,6 @@ from hpc_agent.infra.ssh_slots import (
     DEFAULT_MAX_CONNECTIONS,
     SLOT_JITTER_MAX_SEC,
     SLOT_POLL_BASE_SEC,
-    SLOT_TTL_SEC,
     SLOT_WAIT_MAX_SEC,
     acquire_slot,
     connection_slot,
@@ -224,7 +223,7 @@ class TestWaitDisclosure:
     def test_wait_past_first_interval_discloses_holders(self, capsys):
         """FIRES: a wait that passes SLOT_DISCLOSE_FIRST_SEC emits a periodic
         disclosure naming the host, the elapsed wait, and each holder's pid +
-        claim age + time-to-TTL — so a long block is legible, not silent."""
+        liveness + claim age — so a long block is legible, not silent."""
         clock = FakeClock()
         _claim_n(2, clock, first_pid=100)  # slots held by pids 100, 101
 
@@ -237,10 +236,13 @@ class TestWaitDisclosure:
         err = capsys.readouterr().err
         assert "still waiting" in err
         assert HOST in err
-        # Both holders named with pid + age + ttl (deterministic wording).
+        # Both holders named with pid + liveness + age (deterministic wording).
         assert "slot0=pid:100" in err
         assert "slot1=pid:101" in err
-        assert "age:" in err and "ttl:" in err
+        assert "age:" in err
+        # Liveness is the reclaim signal now that pid-liveness is the sole reaper
+        # (the disclosure reads it via the REAL probe; fake test pids read DEAD).
+        assert "alive" in err or "DEAD" in err
 
     def test_immediate_claim_emits_no_disclosure(self, capsys):
         """PASSES: a free slot is claimed with no wait, so no disclosure line is
@@ -361,20 +363,22 @@ class TestRelease:
         release_slot(token, pid=100)
         assert not token.exists()
 
-    def test_release_after_ttl_reclaim_does_not_delete_successors_claim(self):
-        """bug-sweep #35: A's over-long hold is TTL-reclaimed by B, which now
-        holds slot0. When A finally releases its (reclaimed) token, the unlink
-        must be a NO-OP — deleting the path would evict B's LIVE claim and
-        over-admit a third concurrent connection to the host the limiter
-        exists to protect."""
+    def test_release_after_reclaim_does_not_delete_successors_claim(self):
+        """bug-sweep #35 (ownership-bound release, now the PRIMARY hand-off after
+        the G4 TTL removal): A's slot is reclaimed by B after A's pid reads dead;
+        B now holds slot0. When A's process (a raced pid-reuse successor on a
+        shared home) releases its stale token, the unlink must be a NO-OP —
+        deleting the path would evict B's LIVE claim and over-admit a third
+        concurrent connection to the host the limiter exists to protect."""
         clock = FakeClock()
         tokens = _claim_n(2, clock, first_pid=100)  # A=pid100 on slot0, pid101 on slot1
         slot0 = tokens[0]
         assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 100
-        # A's pid stays alive, but the hold outruns the TTL; B (pid 200)
-        # reclaims — _try_claim reclaims the first stale slot, slot0.
-        clock.advance(SLOT_TTL_SEC + 1)
-        tok_b = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=200, pid_alive=_ALIVE)
+        # A's pid (100) reads DEAD, so B (pid 200) reclaims the stale slot0 by
+        # pid-liveness — no wall clock involved.
+        tok_b = acquire_slot(
+            TARGET, clock=clock, sleep=_no_sleep, pid=200, pid_alive=lambda pid: pid != 100
+        )
         assert tok_b == slot0  # B reclaimed slot0
         assert json.loads(slot0.read_text(encoding="utf-8"))["pid"] == 200
         # A releases its now-reclaimed token: must NOT delete B's live claim.
@@ -442,17 +446,29 @@ class TestReclaim:
         assert tok is not None
         assert json.loads(tok.read_text(encoding="utf-8"))["pid"] == 200
 
-    def test_ttl_expired_slot_is_reclaimed_even_if_pid_looks_alive(self):
+    def test_live_pid_slot_is_never_reclaimed_by_wall_clock(self):
+        """G4 shrink: there is NO wall-clock TTL. A slot whose holder pid is
+        still ALIVE is never reclaimable no matter how long it has been held —
+        the acquirer waits and bounds out rather than over-admitting (a
+        wall-clock lease below the worst legitimate hold was the #35
+        over-admission)."""
         clock = FakeClock()
         _claim_n(2, clock)
-        clock.advance(SLOT_TTL_SEC + 1)
-        tok = acquire_slot(TARGET, clock=clock, sleep=_no_sleep, pid=201, pid_alive=_ALIVE)
-        assert tok is not None
+        clock.advance(1_000_000)  # an arbitrarily long, alive hold
+        slept: list[float] = []
+
+        def sleeper(seconds: float) -> None:
+            slept.append(seconds)
+            clock.advance(seconds)
+
+        with pytest.raises(SshSlotWaitTimeout):
+            acquire_slot(TARGET, clock=clock, sleep=sleeper, pid=201, pid_alive=_ALIVE)
+        assert slept  # actually waited — never stole a live slot on age alone
 
     def test_fresh_live_claim_is_never_stolen(self):
         clock = FakeClock()
         _claim_n(2, clock)
-        clock.advance(SLOT_TTL_SEC / 2)  # aged, but inside the TTL
+        clock.advance(60.0)  # aged, but the holder pids are alive
         slept: list[float] = []
 
         def sleeper(seconds: float) -> None:

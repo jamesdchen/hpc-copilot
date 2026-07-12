@@ -308,3 +308,48 @@ routes conservative, never to success):
 `build_cancel_cmd` was deliberately left as-is: its contract already says
 gone-ness is confirmed by a follow-up alive-check (now ack-gated), never by the
 cancel command's own exit code.
+
+## Drift note (2026-07-12): the G4 library-native lifecycle shrink
+
+User RULING 5 (upstream-fixes plan, pulled forward pre-run-13): shrink the
+hand-rolled transport-lifecycle MECHANISMS to what asyncssh already owns; the
+ban-risk circuit breaker (`infra/ssh_circuit.py`) and the connection-RATE
+courtesy (the `ssh_slots` per-host COUNT) are cluster-social POLICY and STAY
+hand-rolled by design. What changed, mechanism by mechanism:
+
+- **Engine idle reaper → keepalive-native liveness (`infra/ssh_engine.py`).**
+  Death detection is now asyncssh's own keepalives (`keepalive_interval` via the
+  shared `HPC_SSH_KEEPALIVE_INTERVAL` knob + `keepalive_count_max`): the LIBRARY
+  keeps a NAT'd flow alive and declares a silently-dropped session dead, and the
+  close surfaces as an asyncssh exception (`ConnectionLost` / channel-open
+  failure) on the NEXT `run()`, which discards + reconnects. The hand-rolled
+  `_reap_if_idle` (idle-by-last-completion, the run-#12 finding-24 severing
+  mechanism — a long-silent in-flight command read as "idle" and cut, then
+  re-executed one-shot, bug-sweep #8) is DELETED; a still-live connection that
+  merely went quiet is now REUSED, not reaped, saving a handshake. The ONE
+  retained framework recycle is the background `_sweep_idle`, reframed as a
+  SLOT/SESSION courtesy: it closes a connection idle past `IDLE_CLOSE_SEC` **only
+  at zero inflight** (a whole-connection recycle at a SAFE point, the only shape
+  the ruling permits) to free its per-host slot + login session promptly (the
+  run-#10 F-B residual). It never severs an in-flight command.
+- **`ssh_slots` TTL → pid-liveness reap (`infra/ssh_slots.py`).** The
+  wall-clock `SLOT_TTL_SEC` expiry is DELETED. A crashed holder's slot is
+  reclaimed by PID-LIVENESS alone (`infra/proc.pid_alive`); the holder RELEASES
+  its own slot (ownership-bound, bug-sweep #35). A wall-clock lease below the
+  worst legitimate hold was exactly the #35 over-admission, and ownership-bound
+  release already guards the hand-off race the TTL was reaching for. The per-host
+  slot COUNT (the connection-RATE courtesy) is unchanged. Honest limit recorded
+  inline: pid-liveness assumes the claim's pid shares the reader's namespace
+  (true for the local journal home); a machine-shared home degrades toward
+  under-admission (waiters wait, never over-admit), bounded by the fail-open
+  `SLOT_WAIT_MAX_SEC` give-up.
+- **Detached `lease.lock` bounded acquire (`_kernel/lifecycle/detached.py`).**
+  The `(run_id, block)` decide→spawn→stamp lock is acquired under
+  `advisory_flock(timeout_sec=_LEASE_LOCK_TIMEOUT_SEC=60)` (run-#12 finding 16: a
+  timeout-less acquire froze a successor 15 min at 0 CPU); on expiry the refusal
+  (`DetachedLeaseHeld`) NAMES the wedged holder's pid, read from the sibling
+  `.lease.json`.
+
+Kept as policy (untouched): `infra/ssh_circuit.py` (ban-risk breaker) and the
+`ssh_slots` count. The B16 `test_transport_lifecycle_homes` contract test and
+the multiplexing-assembly check remain the banked post-run-13 follow-up.

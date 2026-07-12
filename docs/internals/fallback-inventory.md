@@ -64,7 +64,7 @@ Each site is classified against this bar:
 | `ops/monitor/reconcile._gather_failure_features` | ssh blip fetching the failed-task log tail | empty tail + `None` classification | Evidence *enrichment* only; the `failed` verdict already stands on the reporter's positive `failed>=1` count. Never gates the verdict. |
 | `infra/transport.deploy_runtime` (content-hash cache) | manifest read `\|\| true` returns empty / corrupt | full deploy (re-ship all framework files) | Safe direction: a miss re-does the cheap work; a stale manifest can't claim a file landed because the transfer raises *before* the manifest is recorded. (But see §4 S5 — the cache *hit* is silent, an asymmetry with `rsync_push`'s delta disclosure.) |
 | `infra/inspect/_common._CACHE` (60s TTL) and the per-invocation probe caches | cache within horizon | serve cached snapshot | Planning-only, 60s horizon, bounded LRU; a stale node score is corrected on the next horizon and never gates a hard step (staging + canary are the gates). |
-| `infra/ssh_engine.engine_ssh_run` → `EngineUnavailable` | engine disabled / `asyncssh` unimportable / breaker-refused / wedged | caller falls back to the one-shot ssh path | Opt-in (`HPC_SSH_ENGINE=asyncssh`) and correctness-preserving: the fallback is never *worse* than the default path, and a remote non-zero exit is never mistaken for engine trouble. The fallback itself is transparent — acceptable because the two paths are behaviorally identical. |
+| `infra/ssh_engine.engine_ssh_run` → `EngineUnavailable` | engine disabled / `asyncssh` unimportable / breaker-refused / wedged / a session asyncssh keepalives closed (surfaced on the next `run()` as `ConnectionLost`) | caller falls back to the one-shot ssh path | Opt-in (`HPC_SSH_ENGINE=asyncssh`) and correctness-preserving: the fallback is never *worse* than the default path, and a remote non-zero exit is never mistaken for engine trouble. The fallback itself is transparent — acceptable because the two paths are behaviorally identical. Since the 2026-07-12 G4 shrink, liveness is asyncssh-native (keepalives), NOT a framework idle reaper — a dropped session is detected by the library at use time, and the only framework recycle left is the zero-inflight slot/session COURTESY sweep (`_sweep_idle`), which never severs an in-flight command. |
 
 ## 3. Coverage note
 
@@ -167,3 +167,22 @@ without forcing a spurious disclosure onto a genuine fail-safe.
 Starting the registry from §2 + §4 of this page (≈20 named sites) makes the
 initial allowlist auditable in one review, which is the property the blanket
 version can never have.
+
+## 8. Drift note (2026-07-12): the G4 library-native lifecycle shrink
+
+Two fail-open sites in this inventory shifted their reaping mechanism under the
+G4 ruling (upstream-fixes plan RULING 5; full record in
+`docs/design/connection-broker.md`). Recorded here so the audit stays true:
+
+- **`infra/ssh_slots` (the burst limiter's fail-open posture, §2/§3).** A
+  crashed holder's slot is now reclaimed by PID-LIVENESS alone — the wall-clock
+  `SLOT_TTL_SEC` backstop is DELETED. The fail-open direction is unchanged and
+  arguably safer: without the TTL a foreign-namespace pid (a machine-shared
+  journal home) leaks toward UNDER-admission (waiters wait, never over-admit),
+  bounded by the `SLOT_WAIT_MAX_SEC` give-up. Ownership-bound `release_slot`
+  (bug-sweep #35) is now the primary hand-off, not a TTL.
+- **`infra/ssh_engine` (JUSTIFIED-SILENT engine fallback, §2).** Liveness is
+  asyncssh-native (keepalives); the hand-rolled idle-by-last-completion reaper
+  is gone. The one retained framework recycle is the zero-inflight slot/session
+  courtesy sweep — a whole-connection close at a SAFE point, never a mid-command
+  sever. See the engine row in §2 for the updated trigger set.
