@@ -578,3 +578,23 @@ remove" and name the remote rm). GENERATOR TAG: reader/writer pattern
 knowledge duplicated per consumer instead of one definition — same
 generator as the tick-log path split (bug-sweep #14) and the
 _FRAMEWORK_ARTIFACT_NAMES drift (#27/#28).
+
+## 27. Detachment follows verb identity, not wall-time — reconcile is the
+## outlier that cost the night
+Every long-remote-leg block detaches by contract (s2/s3/s4, campaign,
+aggregate-run) EXCEPT reconcile, whose reporter leg ran 40 minutes INLINE
+in foreground session shells — killed serially by client timeouts, NAT
+weather, and session restarts, minting orphans each time; the relay
+reinvented detachment by hand (nohup) to get one clean run. Meanwhile the
+session restart that killed every background TASK left the detached
+aggregate worker untouched — a controlled demonstration of which
+architecture survives. RULE (proposed): detachment follows WALL-TIME and
+survivability, not verb identity — in-session: decision rendezvous,
+append-decision (authorship capture), sub-minute probes; detached:
+anything that must survive a restart (transfers, reduces, watches);
+conditional: reconcile detaches ONLY when it must walk (announce-era
+reconciles are one ls and stay inline; the need decays to zero as
+pre-announce runs age out). COROLLARY OBLIGATION (findings 3/16, twice
+reconfirmed tonight): every detached worker heartbeats progress into its
+log on the >10s discipline — a 0-byte log for 8 min of legitimate work is
+indistinguishable from frozen-at-birth without psutil excavation.
