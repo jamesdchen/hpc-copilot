@@ -834,14 +834,24 @@ def standing_challenges(
         # A filing must exist for the id to be a challenge (a stray verdict alone
         # is not addressable). Compute supersession from the filing's target.
         filing_target: TargetAddress | None = None
+        saw_filing = False
         for r in recs:
             if r.get("block") != CHALLENGE_BLOCK:
                 continue
+            saw_filing = True
             try:
                 filing_target = validate_challenge_resolved(_resolved_of(r)).target
             except errors.SpecInvalid:
-                filing_target = None
+                # A later unvalidatable filing must not erase an earlier valid
+                # target (#71: one bad newest filing silently dropped the whole
+                # challenge from every disclosure seat) — the last VALID
+                # filing's target stands.
+                continue
         if filing_target is None:
+            if saw_filing:
+                # Filing(s) exist but none validate: disclose, never silently
+                # drop a dissent record (B10).
+                skipped.append(Skipped(cid, "filing record(s) present but none validate"))
             continue
 
         # Address filter (exact) — the full address's discriminators.

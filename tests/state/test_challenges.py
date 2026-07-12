@@ -336,6 +336,44 @@ def test_reduce_superseded_discloses_underlying_verdict() -> None:
 # --- the ONE collector: address filtering + omission + non-creating ----------
 
 
+def test_valid_then_invalid_filing_keeps_the_challenge_standing(tmp_path: Path) -> None:
+    # #71 regression: a LATER unvalidatable filing record (hand-appended, or a
+    # kind that fell out of the closed set) must not erase the earlier VALID
+    # filing's target and silently drop the whole challenge from the standing
+    # view — the last VALID filing stands.
+    _write_sidecar(tmp_path, "widget-run-1", cmd_sha="cmd-1")
+    _write_challenge(
+        tmp_path,
+        "widget-c1",
+        _challenge_record(
+            "widget-c1", ts="2025-01-01T00:00:00Z", target=_run_target("widget-run-1", "cmd-1")
+        ),
+    )
+    bad = _challenge_record(
+        "widget-c1", ts="2025-01-02T00:00:00Z", target=_run_target("widget-run-1", "cmd-1")
+    )
+    del bad["resolved"]["citations"]  # unvalidatable: fails validate_challenge_resolved
+    _write_challenge(tmp_path, "widget-c1", bad)
+
+    out = challenges.standing_challenges(tmp_path)
+    assert {s.challenge_id for s in out.statuses} == {"widget-c1"}
+
+
+def test_only_invalid_filings_disclosed_as_skipped_not_dropped(tmp_path: Path) -> None:
+    # #71 sibling: when filings exist but NONE validate, the challenge lands in
+    # skipped (disclosure), never a silent continue (B10).
+    _write_sidecar(tmp_path, "widget-run-1", cmd_sha="cmd-1")
+    bad = _challenge_record(
+        "widget-c9", ts="2025-01-01T00:00:00Z", target=_run_target("widget-run-1", "cmd-1")
+    )
+    del bad["resolved"]["citations"]
+    _write_challenge(tmp_path, "widget-c9", bad)
+
+    out = challenges.standing_challenges(tmp_path)
+    assert out.statuses == ()
+    assert any(s.challenge_id == "widget-c9" and "none validate" in s.reason for s in out.skipped)
+
+
 def test_standing_challenges_filters_by_content_sha(tmp_path: Path) -> None:
     # Two challenges against two different run cmd_shas; sidecars present + current
     # so neither is superseded.
