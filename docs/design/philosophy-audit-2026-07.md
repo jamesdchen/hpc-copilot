@@ -1,6 +1,13 @@
 # Philosophy audit — 2026-07 (repo-wide doctrine-alignment sweep)
 
-Status: **SKELETON + B4 swept** (inventory 2026-07-10; the full sweep was
+Status: **EXECUTED 2026-07-12 — both sweeps + synthesis complete.** Sweep 1
+minted and verification-corrected `docs/plans/upstream-fixes-2026-07.md`
+(15 generators, 12-entry residue); sweep 2 delivered all 26 axis verdicts,
+each twice-verified (Opus adversarial first pass, Fable second pass; every
+verdict CONFIRMED). Verdict table in the Sweep log below; exit criteria
+met (enforcement map updated, plan ranked and merged, one consolidated
+RULING-NEEDED list at the top of the plan). Prior status for the record:
+**SKELETON + B4 swept** (inventory 2026-07-10; the full sweep was
 scheduled Day 2 = 2026-07-11 and was DISPLACED by the ship-day firefight —
 49 fixes, findings 20-24; see the ship-day memory). **RESCHEDULED, user-
 ratified 2026-07-11 late: the sweep is the FIRST OPUS WAVE of the run-13
@@ -177,9 +184,20 @@ missing their siblings' upgrades.
 
 ### C. Skill/prose surfaces (rot fastest — full re-read against current rulings)
 
-- The 9 packaged skills + 5 packaged commands + worker prompts: sweep each
-  against B1/B2/B4/B11 (the run-#12 precedent class).
-- `SESSION_HANDOFF.md` durable-reference section vs. current reality.
+- The 9 packaged skills + 5 packaged commands: sweep each against
+  B1/B2/B4/B11 (the run-#12 precedent class). *(Scope correction,
+  swept 2026-07-12: the original line also named "worker prompts", but
+  `hpc_agent/_kernel/extension/worker_prompts/` no longer exists — the
+  §6 worker deletion removed it; the prose lints' glob for it matches
+  nothing, an A1 guard-can-fire gap recorded under the B11 verdict. The
+  sweep also found a TENTH skill, `hpc-claim-check`, orphaned in the
+  pre-R2 tree `src/slash_commands/` — unpackaged and lint-invisible;
+  moved into the packaged tree, commit `44536fd`.)*
+- ~~`SESSION_HANDOFF.md` durable-reference section vs. current reality.~~
+  *(Scope correction, swept 2026-07-12: no such file exists anywhere in
+  the repo — the release skill Step 8 shows it deliberately lives OUTSIDE
+  the repo (user homedir). Not sweepable in-repo; struck rather than
+  reported DRIFTED.)*
 
 ## Sweep log
 
@@ -210,3 +228,50 @@ Overnight-consent parks on the ruling. Bound capture
 (`docs/design/bound-capture.md`) supersedes the forensic tier at popup-
 capable seats when it lands; these anchors harden the fallback tier that
 remains.
+
+### Sweep 2 — all 26 axes (swept + twice-verified 2026-07-12)
+
+Protocol: six Fable finder agents by axis group; every axis verdict then
+adversarially verified by an Opus first pass and independently adjudicated
+by a Fable second pass. Every verdict below is **CONFIRMED** (nothing came
+back PLAUSIBLE); every ENFORCED verdict carries a fire DEMONSTRATED by at
+least two of the three passes (synthetic violations planted, guard output
+quoted, tree restored). Cheap fixes landed in commits `d9c6632`,
+`65e9b14`, `44536fd`, `081d32e`; specs and enforcement-row proposals are
+banked in `docs/plans/upstream-fixes-2026-07.md` §Sweep-2 merge.
+
+| Axis | Verdict | The load-bearing fact |
+|---|---|---|
+| B12 journal-as-truth | **ENFORCED** | item-5 hook live (runs verify_relay in-process, `relay_audit_stop.py:841`); false-block on truthful supersession relays (G11 twin-store drift) fixed `65e9b14`, both directions reproduced |
+| A4 lifecycle one-definition | **ENFORCED** | both fire demos re-run by mutation (drift-predicate route-through pin; settled-failure-outranks-absence, 9 parametrizations) |
+| B7 one-definition | **DRIFTED** | sixth `read_terminal` consumer at `state/run_story.py:301-306` skips the currency compare; enforcement row proposed |
+| B4 authorship tiers | **DRIFTED** | ts>=anchor fix-wave NOT landed; all five exposed gates re-confirmed; faithful exploit demonstrated (one shared word "holdout" from a standing pre-lock utterance lands an unlock; no-overlap control refused) — the finder's own demo was corrected by the first pass (empty-log no-op) |
+| B14 bound-capture | **DRIFTED** | forensic tier still primary at every gate; `docs/design/bound-capture.md` remains the banked dispatch-ready spec |
+| B8 no-unlock-verb | **ENFORCED** | NEW pin `test_no_unlock_affordance_in_registry_or_chains` (`d9c6632`) sweeps registry + chain tables; substring-scope caveat (synonyms evade) recorded in the map |
+| A9 multi-human | **DRIFTED (narrow)** | the sweep's ONE overturned verdict: finder+first-pass said ENFORCED; second pass found the notebook-draft attestor stamp under a single declared actor — byte-identity row re-scoped, RULING NEEDED (census-null vs keep) |
+| B3 positive-evidence | **DRIFTED→fixed** | aggregate `verify_per_task_outputs` false-green (rc-0 severed channel = "all outputs present") reproduced against pre-fix commit; one-ack-definition fix landed `65e9b14` |
+| B3′ ack one-definition | **DRIFTED** | remaining un-acked `.stdout` consumers inventoried; `lint_remote_read_ack` spec banked (allowlist seeded from connection-broker.md + the B3 low-severity observations) |
+| B13 no-bare-subprocess under mcp-serve | **DRIFTED** | bounded_subprocess hardening landed `65e9b14`; AST-walker lint spec banked (inventory re-derived mechanically, not from prose) |
+| B15 env-vs-record | **DRIFTED** | doctor-local only; shared env-disclosure helper spec banked (five transport-affecting HPC_* vars incl. `HPC_SSH_CIRCUIT_OVERRIDE`) |
+| B16 lifecycle library-boundary | **ALIGNED-UNENFORCED** | no new hand-rolled mechanism since the ruling; `test_transport_lifecycle_homes` contract-test proposal banked (post-run-13 schedule stands, ruling 5) |
+| B9 observe/judge/route | **ALIGNED-UNENFORCED** | no verb added since the ruling actuates outside the sanctioned set (`update-run-constraints` is the one sanctioned cluster-write); operations.json side-effects contract-test proposal banked |
+| A3 library-knowledge Q1-Q4 | **ENFORCED** | all four rows' fire paths re-demonstrated (planted heavy import + template-imports-core probe both caught verbatim) |
+| A5 registration mechanism-only | **ENFORCED** | vocabulary pin fires on planted "holdout" literal; the cross-kind `uncontested` key verified as mechanized amendment, not creep |
+| A6 measure-don't-ask | **ENFORCED** | AST pin fires on planted `1e-9` classifier literal; caller_override disclosure verified |
+| A7 packs bind-as-data | **ENFORCED** | pack_gate drift fires green; pack-boundary pins' hand-listed file tuple covered 3 of 5 ops modules (G10 instance) — widened to a derived glob `081d32e`; aliased-from-import evasion recorded predicted-risk |
+| B6 LISTS-never-NOMINATES | **ENFORCED** | newer projections clean; sibling-pin vocabulary divergence noted for the map; relay_render/status_blocks follow-on row proposed |
+| B1 popup-primary | **DRIFTED** | mechanism ENFORCED (block-agnostic elicitation, real-gate popup round-trip green) but run-12 finding 12 NOT fixed: audit-view still ships the diff twice (~11k tokens model-carried); omit-at-the-source spec banked into the plan so it cannot be lost; D6 prose corrected in-place `081d32e` |
+| B2 poka-yoke | **ENFORCED** | run-12 findings 1/2/5 all fixed-at-HEAD (compose-and-disclose at on-ramp/interview/preflight); preflight compose branch gained its missing fire tests in-sweep; experiment_dir compose is prose-tier only — annotated in the map |
+| B5 trusted display | **ENFORCED** | render+sha locks verified on status/digest/brief surfaces; one retired-comment doc nit noted |
+| B10 no-silent-caps | **DRIFTED** | #71 live at HEAD (whole challenge silently dropped on one unvalidatable filing — B10 member confirmed; severity upgraded from the bug-sweep's LOW, disclosed); #68 fixed-at-HEAD with pin; never-fires test spec = the exact valid-then-invalid repro |
+| A8 chart-judges | **ENFORCED** | no LLM verdict on conformance; NEEDS_VERDICT routes to the human attention queue (`attention_queue.py:226-227`) |
+| C skill/prose | **DRIFTED** | orphaned 10th skill (above); opt-in/DEFAULT canary contradiction; fenced `qmod -cj` prescription; stale hpc-worker references — all fixed `44536fd`; popup-primary prose now pinned by a failing-on-regression test |
+| B11 verbs-over-internals | **DRIFTED** | worker_prompts lint glob points at a deleted directory; scan-root duplication in `.pre-commit-config.yaml` `files:` filters; CI reaches these lints only via pre-commit — consolidation spec banked |
+| A2 determinism boundary (prose) | **ENFORCED** | no-Edit onboarding pin + decorate-byte-identical fire demos re-run |
+
+Verification-discipline yield, for the record: the two-pass protocol
+corrected one full verdict (A9), invalidated and faithfully rebuilt one
+exploit demo (B4), caught stale line-cites/counts in over a dozen evidence
+fields before they entered the map, and confirmed 100% of the finder
+verdicts it did not correct — consistent with the ~13% unverified-error
+base rate the discipline was built against.
