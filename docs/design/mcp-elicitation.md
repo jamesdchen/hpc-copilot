@@ -342,7 +342,18 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
   retry-only fallback to the PRIMARY read-and-sign channel — still one site,
   still append-decision-or-nothing (D5's channel lock intact), still no new verb;
   only the ordering/framing changed, orchestrated in the server around an
-  untouched gate.
+  untouched gate. **Corrected 2026-07-12 (philosophy-audit sweep 2, B1): the
+  first sentence's hook-tier carve-out never matched the implementation and is
+  RETIRED.** As coded, the trigger is the `authorship_evidence` marker on any
+  `append-decision` refusal — tool-scoped, block-AGNOSTIC — so every
+  authorship-BAR refusal elicits, `scope-unlock` included (pinned end-to-end
+  against the real gate:
+  `tests/test_mcp_elicitation_firing.py::test_accept_typed_appends_and_retry_succeeds_real_gate`,
+  block=`scope-unlock`). The plain greenlight `y` stays hook-tier only BY
+  CONSTRUCTION: a passing append never refuses, so there is nothing to elicit
+  on — and when a greenlight's `resolved` does trip the authorship bar
+  (a required-caller field with no human-attributed utterance), the popup
+  fires there too. One site means the TOOL, not one block.
 - No SDK, no new dependency, no change to `pyproject.toml`.
 
 ## Task waves (file-disjoint, Opus-sized; tests ride each task)
@@ -450,6 +461,17 @@ distinct KEY (`authorship_evidence`), never on the mere presence of a
    never an asserted "elicitation works".
 
 ## Drift log
+
+- **D6 hook-tier carve-out retired (2026-07-12, philosophy-audit sweep 2,
+  axis B1):** the D6 sentence reserving `scope-unlock` / the plain greenlight
+  for "the hook-tier flow in v1" described a block-scoped trigger that was
+  never built — E2's marker rides EVERY authorship-BAR refusal
+  (`journal.py::_refuse_missing_authorship`) and `_elicitation_applies` keys
+  on tool + marker only, so scope-unlock has elicited since the seam landed
+  (pinned by the real-gate test with block=`scope-unlock`). Prose corrected
+  in place; no code change. This is the audit's target drift class in the
+  inverse direction: the RULING (popup = THE default read-and-sign surface,
+  2026-07-10) was ahead of the prose, not the code.
 
 - **Pre-implementation verification (2026-07-07, adversarial plan review;
   no code had landed):**

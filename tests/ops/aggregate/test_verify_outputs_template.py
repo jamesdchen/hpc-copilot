@@ -35,7 +35,9 @@ def test_extra_braces_in_template_do_not_raise() -> None:
         if cmd.startswith("cat "):
             return _completed(stdout=_SIDECAR_JSON)
         scripts.append(cmd)
-        return _completed(stdout="MISSING:results/h{horizon}/metrics.1.json\n")
+        return _completed(
+            stdout="MISSING:results/h{horizon}/metrics.1.json\n__HPC_OUTPUTS_ACK__=0\n"
+        )
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = verify_per_task_outputs(
@@ -58,7 +60,7 @@ def test_bare_positional_braces_do_not_raise() -> None:
     def fake_ssh_run(cmd, *, ssh_target, **_kw):
         if cmd.startswith("cat "):
             return _completed(stdout=_SIDECAR_JSON)
-        return _completed(stdout="")
+        return _completed(stdout="__HPC_OUTPUTS_ACK__=0\n")
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = verify_per_task_outputs(

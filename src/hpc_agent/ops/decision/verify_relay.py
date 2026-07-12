@@ -906,6 +906,14 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
         cid = src.get("campaign_id")
         if isinstance(cid, str) and cid:
             auth_ids.add(cid)
+        # The supersession audit links (ops/supersession stamps both directions
+        # on the run record) are authoritative identifiers: a truthful relay of
+        # a supersession names the OTHER run in the pair ("X was superseded by
+        # Y"), and Y would otherwise flag as an unknown run-id for X's audit.
+        for key in ("supersedes", "superseded_by"):
+            sup = src.get(key)
+            if isinstance(sup, str) and sup:
+                auth_ids.add(sup)
         for key in ("job_ids", "parent_run_ids"):
             vals = src.get(key)
             if isinstance(vals, list):

@@ -353,3 +353,45 @@ def test_remote_garbled_stdout_degrades_not_crashes(monkeypatch, tmp_path: Path)
     # marker_scan requested but section empty → all-zero, stable shape.
     assert set(result.marker_counts) == set(KNOWN_MARKERS)
     assert all(v == 0 for v in result.marker_counts.values())
+
+
+def test_render_has_no_interpretation_vocabulary() -> None:
+    """B6 (LISTS never NOMINATES): the dir-digest render composes counts/paths
+    only — no urgency/recommendation vocabulary in a literal that flows into the
+    relayed digest. Mirrors
+    ``test_evidence_boundary.test_render_has_no_interpretation_vocabulary`` for
+    this newer projection (and ``ops/evidence_project.py``, the shared
+    evidence-projection helper, which must stay a verbatim-labels projector).
+    """
+    import ast
+    import inspect
+
+    from hpc_agent.ops import evidence_project
+    from hpc_agent.ops.dir_digest import _render
+
+    banned = ("urgent", "recommend", "should", "promising", "must ", "don't")
+    # ``_render`` is the one seat whose literals flow into the relayed digest
+    # (module-wide would false-positive on SpecInvalid error prose, which
+    # legitimately says "must be a mapping"). ``evidence_project`` is scanned
+    # whole — it is a verbatim-labels projector and carries no refusal prose.
+    for mod in (_render, evidence_project):
+        tree = ast.parse(inspect.getsource(mod))
+        docstrings = {
+            stmt.value
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for stmt in node.body
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+        }
+        literals = [
+            node.value.lower()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node not in docstrings
+        ]
+        for text in literals:
+            for word in banned:
+                assert word not in text, (
+                    f"interpretation vocabulary {word!r} in a {mod.__name__} literal: {text!r}"
+                )

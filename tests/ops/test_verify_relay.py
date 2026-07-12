@@ -883,3 +883,65 @@ def test_notebook_malformed_journal_line_skipped(tmp_path: Path) -> None:
 
     out = _nb_run(tmp_path, "load-data is signed_current.")
     assert out.clean is True
+
+
+# ── supersession links are authoritative identifiers ──────────────────────────
+
+
+def test_superseded_by_token_is_authoritative(tmp_path: Path) -> None:
+    """A truthful supersession relay names the successor run: the record's
+    stamped ``superseded_by`` link (``ops/supersession`` writes it as the
+    durable audit evidence) is an authoritative identifier for this run's
+    audit — never an unknown-run-id mismatch."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=RUN_ID,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["13610902"],
+            total_tasks=10,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status="abandoned",
+            superseded_by="pi-sweep-v2",
+            superseded_at="2026-07-12T00:00:00+00:00",
+        ),
+    )
+
+    out = _run(tmp_path, f"Run {RUN_ID} was superseded by pi-sweep-v2.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+
+
+def test_unrelated_run_id_still_flagged_when_superseded_by_present(tmp_path: Path) -> None:
+    """The supersession link exempts ONLY the named pair — an unrelated
+    run-id-shaped token still flags (the fix must not blanket-exempt)."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=RUN_ID,
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="u@h",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=["13610902"],
+            total_tasks=10,
+            submitted_at="2026-07-03T00:00:00+00:00",
+            experiment_dir=str(tmp_path),
+            status="abandoned",
+            superseded_by="pi-sweep-v2",
+        ),
+    )
+
+    out = _run(tmp_path, f"Run {RUN_ID} was superseded by some-other-run7.")
+    rid = [m for m in out.mismatches if m.kind == "run_id"]
+    assert len(rid) == 1
+    assert rid[0].claim == "some-other-run7"

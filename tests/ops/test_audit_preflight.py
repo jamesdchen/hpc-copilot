@@ -221,3 +221,50 @@ class TestRootsDefaultFromRecordedConfig:
         assert result.input_roots == ["declared"]
         (b,) = [b for b in result.blockers if b.check == "roots"]
         assert "declared" in b.blocker
+
+
+class TestComposeFromPack:
+    """Template omitted → compose from the bound pack seam, or refuse LOUDLY
+    (run-#12 finding 5; the selection definition itself is pinned in
+    tests/state/test_pack_declarations.py)."""
+
+    def test_omitted_template_nothing_composable_is_loud(self, tmp_path: Path) -> None:
+        # No interview.json / no opted-in pack → SpecInvalid naming the remedy,
+        # never a guessed template (the guard-can-fire conversion for c6f2594).
+        from hpc_agent import errors
+
+        with pytest.raises(errors.SpecInvalid, match="audit_template seam"):
+            ap.audit_preflight(
+                experiment_dir=tmp_path,
+                spec=AuditPreflightSpec(),
+            )
+
+    def test_omitted_template_composes_from_bound_pack_seam(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from hpc_agent.state.pack_sweep import reseal_manifest
+
+        root = tmp_path / "packs" / "toy"
+        (root / "templates").mkdir(parents=True)
+        (root / "templates" / "audit.py").write_text(
+            "# %%\n# hpc-audit-section: load-data\nx = 1\n", encoding="utf-8"
+        )
+        recipe = {
+            "name": "toy",
+            "version": "1.0.0",
+            "seams": {"audit_template": "templates/audit.py"},
+            "fills_slots": [],
+            "pack_files": ["templates/audit.py"],
+            "sweep": [],
+        }
+        (root / "sweep.json").write_text(_json.dumps(recipe), encoding="utf-8")
+        reseal_manifest(tmp_path / "packs/toy/manifest.json", root / "sweep.json")
+        (tmp_path / "interview.json").write_text(
+            _json.dumps({"packs": [{"pack": "toy", "manifest": "packs/toy/manifest.json"}]}),
+            encoding="utf-8",
+        )
+        result = ap.audit_preflight(experiment_dir=tmp_path, spec=AuditPreflightSpec())
+        # The composed template was checked (parses; not git-committed here, so
+        # the unsigned-template blocker may fire) — the point is the SEAM path
+        # was resolved, never a refusal and never a guessed path.
+        assert result.template == "packs/toy/templates/audit.py"

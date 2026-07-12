@@ -788,6 +788,28 @@ def test_state_claim_silent_when_no_scope_named(tmp_path: Path) -> None:
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
 
 
+def test_state_claim_passes_on_journaled_supersession(tmp_path: Path) -> None:
+    """A run genuinely superseded — ``superseded_by`` stamped on the run record
+    and settled abandoned via ``mark_run``, exactly what ``ops/supersession``
+    leaves behind — is truthfully relayed as superseded → no block. The decision
+    journal's standing launch greenlight is the approval that STARTED the run,
+    not a contradiction of its later journaled closure."""
+    from hpc_agent.state.journal import mark_run, update_run_record
+
+    _seed_run(tmp_path, status="in_flight")
+
+    def _stamp(r):  # the ops/supersession.supersede_run record shape
+        r.superseded_by = "pi-sweep-v2"
+        r.superseded_at = "2026-07-12T00:00:00+00:00"
+        r.last_status = {**(r.last_status or {}), "verdict_reason": "superseded_by=pi-sweep-v2"}
+
+    update_run_record(tmp_path, RUN_ID, _stamp)
+    mark_run(tmp_path, RUN_ID, status="abandoned")
+
+    transcript = _transcript(tmp_path, f"Run {RUN_ID} was superseded by pi-sweep-v2.")
+    assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
+
+
 def test_state_claim_ignores_verb_on_a_different_line(tmp_path: Path) -> None:
     """Proximity guard: a revocation verb about something unrelated, on a
     different line from the run id, does not fire (no false block)."""

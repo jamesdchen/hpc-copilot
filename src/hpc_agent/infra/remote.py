@@ -599,6 +599,12 @@ def _capture_windows(
     """
     proc = subprocess.Popen(  # noqa: S603 - argv built by ssh_argv, no shell
         argv,
+        # stdin ISOLATION (run-12 finding 4): under ``mcp-serve`` the parent's
+        # stdin IS the live JSON-RPC pipe, and ``ssh`` reads-and-forwards local
+        # stdin by default — an inheriting child steals protocol bytes or
+        # blocks forever. No caller of this seam feeds stdin (the ``tar | ssh``
+        # pump rides ``run_capture_bounded(stdin=...)`` instead).
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -640,7 +646,10 @@ def _capture_via_select(
     """
     if _WINDOWS:
         return _capture_windows(argv, timeout=timeout)
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # stdin=DEVNULL: same isolation rationale as _capture_windows above.
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
     out, err = _communicate_select(proc, argv=argv, timeout=timeout)
     assert proc.returncode is not None  # set by _communicate_select
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)

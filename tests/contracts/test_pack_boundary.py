@@ -58,19 +58,31 @@ _SRC = _REPO_ROOT / "src" / "hpc_agent"
 
 # The core files that make up the pack substrate. The AST pins (no-import,
 # no-literal-vocab) sweep exactly these; the getsource pins reach into the
-# record/reduce ones.
-_PACK_STATE_FILES = (
-    _SRC / "state" / "pack.py",
-    _SRC / "state" / "pack_declarations.py",
-    _SRC / "state" / "pack_receipts.py",
-)
-_PACK_OPS_FILES = (
-    _SRC / "ops" / "pack" / "bind_op.py",
-    _SRC / "ops" / "pack" / "record_receipt_op.py",
-    _SRC / "ops" / "pack" / "status_op.py",
+# record/reduce ones. DERIVED by glob, not hand-listed: the auto-remedy wave
+# added ``ops/pack/refresh_op.py`` + ``state/pack_sweep.py`` and a hand-listed
+# tuple silently missed both — a new pack module must be pinned the day it
+# lands, not when someone remembers to append it here.
+_PACK_STATE_FILES = tuple(sorted((_SRC / "state").glob("pack*.py")))
+_PACK_OPS_FILES = tuple(sorted((_SRC / "ops" / "pack").glob("*.py"))) + (
     _SRC / "ops" / "pack_gate.py",
 )
 _ALL_PACK_FILES = _PACK_STATE_FILES + _PACK_OPS_FILES
+
+
+def test_pack_file_lists_cover_the_known_substrate() -> None:
+    """The derived scan set covers every known pack module (glob sanity pin)."""
+    names = {p.name for p in _ALL_PACK_FILES}
+    assert {
+        "pack.py",
+        "pack_declarations.py",
+        "pack_receipts.py",
+        "pack_sweep.py",
+        "bind_op.py",
+        "record_receipt_op.py",
+        "status_op.py",
+        "refresh_op.py",
+        "pack_gate.py",
+    } <= names, f"pack boundary scan set lost a known module: {sorted(names)}"
 
 
 # --- authoritative closed sets (kept inline; drift surfaces here) -----------

@@ -27,9 +27,9 @@ Skill("hpc-submit", {
 
 The skill resolves the rest through the block loop; the slash never enumerates every field.
 
-## Speculative canary (opt-in)
+## Speculative canary (DEFAULT)
 
-If the user wants to overlap the S1 review with the canary, tell the skill to run `submit-speculate` during the S1 round — a plain `y` then finds S2 already done, and a spec-changing nudge just re-canaries (nudges never cancel). One speculative canary per pending brief.
+The skill fires `submit-speculate` when presenting the S1 brief by default (skipped only when unresolved REQUIRED ambiguities leave no recommended spec) — a plain `y` then finds S2 already done, and a spec-changing nudge just re-canaries (nudges never cancel). One speculative canary per pending brief. Do not tell the user it needs opting into; it is the skill's default.
 
 ## Relaying a brief to the user
 
@@ -50,7 +50,7 @@ Collect `y` or the nudge and hand it back to the skill. Do **not** re-compute th
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
+| `Eqw` state (SGE) | Job error | Surface to the user — clearing it (`qmod -cj`) is a scheduler-mutating verb the write fence blocks from agent Bash; the user runs it themselves or greenlights a resubmit |
 | `PENDING` (SLURM) > 30 min | Resource unavailable | Try a different partition |
 | Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
 | Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |

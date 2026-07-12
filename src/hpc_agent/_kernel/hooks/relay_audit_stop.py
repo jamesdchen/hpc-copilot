@@ -768,6 +768,20 @@ def _decision_state_findings(
         except Exception:
             continue  # a scope we cannot read is a silent pass
         has_greenlight = any(r.get("response") == "y" for r in records)
+        # A genuine supersession is journaled on the RUN RECORD (ops/supersession
+        # stamps ``superseded_by`` — the durable evidence), NOT as a decision
+        # record, so a truthful "run X was superseded" must read as supported:
+        # the decision journal's standing greenlight is the launch approval, not
+        # a contradiction of the later closure.
+        superseded_evidence = False
+        if scope_kind == "run":
+            try:
+                from hpc_agent.state.journal import load_run
+
+                rec = load_run(experiment_dir, scope_id)
+                superseded_evidence = bool(rec is not None and rec.superseded_by)
+            except Exception:
+                superseded_evidence = False
         if pos_here and not has_greenlight and len(findings) < _MAX_STATE_CLAIM_FINDINGS:
             findings.append(
                 _Violation(
@@ -781,7 +795,12 @@ def _decision_state_findings(
                     ),
                 )
             )
-        if neg_here and (not records or standing) and len(findings) < _MAX_STATE_CLAIM_FINDINGS:
+        if (
+            neg_here
+            and not superseded_evidence
+            and (not records or standing)
+            and len(findings) < _MAX_STATE_CLAIM_FINDINGS
+        ):
             detail = (
                 "the latest decision is a standing greenlight, not a revocation"
                 if standing
