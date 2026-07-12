@@ -48,13 +48,41 @@ def test_sge_cap_is_tc_flag(tmp_path):
     assert cmd[cmd.index("-tc") + 1] == "20"  # separate slot-limit flag
 
 
+def test_torque_cap_suffixes_array_range():
+    # TORQUE ``-t`` accepts the ``%N`` slot-limit suffix (cap_style="range_suffix").
+    backend = get_backend(
+        "torque", script="j.pbs", ssh_run=_noop_ssh, remote_repo="/r", pass_env_keys=("K",)
+    )
+    cmd = backend._build_command("1-100", "job", {"K": "V"}, concurrency_cap=8)
+    assert cmd[cmd.index("-t") + 1] == "1-100%8"
+    assert "max_run_subjobs=8" not in " ".join(cmd)
+
+
+def test_pbspro_cap_is_max_run_subjobs_attr_not_range_suffix():
+    # #32: PBS Pro ``-J`` REJECTS the ``%N`` suffix (``qsub: illegal -J value``);
+    # the cap is a separate ``-l max_run_subjobs=N`` attribute and the range
+    # stays bare (cap_style="max_run_subjobs"). PBS Pro must NOT inherit
+    # TORQUE's/SLURM's range-suffix rule.
+    backend = get_backend(
+        "pbspro", script="j.pbs", ssh_run=_noop_ssh, remote_repo="/r", pass_env_keys=("K",)
+    )
+    cmd = backend._build_command("1-100", "job", {"K": "V"}, concurrency_cap=8)
+    assert cmd[cmd.index("-J") + 1] == "1-100"  # range unchanged, no %8
+    assert "1-100%8" not in cmd
+    assert cmd[cmd.index("-l") + 1] == "max_run_subjobs=8"
+
+
 @pytest.mark.parametrize("family,flag", [("pbspro", "-J"), ("torque", "-t")])
-def test_pbs_cap_suffixes_array_range(family, flag):
+def test_pbs_no_cap_is_byte_identical(family, flag):
+    # A None / omitted cap emits neither a suffix nor a max_run_subjobs attr.
     backend = get_backend(
         family, script="j.pbs", ssh_run=_noop_ssh, remote_repo="/r", pass_env_keys=("K",)
     )
-    cmd = backend._build_command("1-100", "job", {"K": "V"}, concurrency_cap=8)
-    assert cmd[cmd.index(flag) + 1] == "1-100%8"
+    bare = backend._build_command("1-100", "job", {"K": "V"})
+    assert backend._build_command("1-100", "job", {"K": "V"}, concurrency_cap=None) == bare
+    assert backend._build_command("1-100", "job", {"K": "V"}, concurrency_cap=0) == bare
+    assert bare[bare.index(flag) + 1] == "1-100"
+    assert "max_run_subjobs" not in " ".join(bare)
 
 
 # ---------------------------------------------------------------------------

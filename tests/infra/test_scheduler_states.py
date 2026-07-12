@@ -8,10 +8,14 @@ present. These cover the pure, scheduler-shape-only backend helpers.
 
 from __future__ import annotations
 
+import pytest
+
 from hpc_agent.infra.backends import get_backend_class
 
 SGE = get_backend_class("sge")
 SLURM = get_backend_class("slurm")
+PBSPRO = get_backend_class("pbspro")
+TORQUE = get_backend_class("torque")
 
 
 def test_sge_build_scheduler_state_cmd() -> None:
@@ -73,6 +77,26 @@ def test_scheduler_query_ran_positive_evidence() -> None:
     # SLURM: ack present but non-zero rc (all jobs left the queue) still ran.
     clean, ok = SLURM.scheduler_query_ran("__HPC_SCHED_ACK__=1\n")
     assert ok is True and clean == ""
+
+
+@pytest.mark.parametrize("cls", [PBSPRO, TORQUE])
+def test_pbs_scheduler_query_ran_treats_nonzero_rc_as_ran(cls) -> None:
+    """#5: PBS queries EXPLICIT ids (``qstat -t <id>``) and qstat exits non-zero
+    once a queried id has left the queue ('Unknown Job Id' / 'job has finished').
+    That non-zero rc is the EXPECTED result of a finished job, not a binary
+    failure — so, like SLURM, ack PRESENCE proves the query ran and the kept
+    rows stay parseable. The old SGE rc==0 rule pinned every finished PBS run at
+    UNKNOWN forever."""
+    # A still-running row plus a non-zero rc (some ids already gone):
+    clean, ok = cls.scheduler_query_ran("123.svr R workq\n__HPC_SCHED_ACK__=153\n")
+    assert ok is True
+    assert clean == "123.svr R workq\n" and "__HPC_SCHED_ACK__" not in clean
+    # Every job finished: empty body + non-zero rc still counts as 'ran'.
+    _, ok = cls.scheduler_query_ran("__HPC_SCHED_ACK__=35\n")
+    assert ok is True
+    # No ack at all = silent/truncated channel → UNKNOWN, never 'all terminal'.
+    _, ok = cls.scheduler_query_ran("")
+    assert ok is False
 
 
 def test_slurm_parse_scheduler_states() -> None:
