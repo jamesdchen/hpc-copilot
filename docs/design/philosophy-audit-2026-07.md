@@ -43,6 +43,26 @@ axis: does the code everywhere still obey the ruling, and is the ruling
    diagnosed it. Per-symptom hardening is the belt; the generator fix is
    the plan. A sweep that produces enforcement rows but no generator
    analysis has done half its job.
+   **Input corpus (user-directed 2026-07-11): confirmed BUGS join the
+   audit findings as generator evidence — and they RANK the plan.**
+   Retro-classify every confirmed bug in
+   docs/internals/bug-sweep-2026-07-11.md (73) and the run-findings
+   dockets (runs 5/10/11/12) with the same generator tag; observed
+   symptom count + diagnosis cost order the proposals (a generator with
+   four fired bugs outranks a predicate with zero incidents). Starter
+   clusters from the 2026-07-11 corpus — hypotheses for the sweep to
+   VERIFY, not conclusions: (1) hand-rolled connection lifecycle vs
+   library-native (#8, #35, #16, #15, #50, finding 24 — overlaps B16);
+   (2) pull-status-over-silent-channels (the recorded exemplar);
+   (3) win32-as-retrofit in path/process handling (#10, #11, #64, #65,
+   finding 17, the MSYS arg-conversion trap); (4) bare writes vs ONE
+   atomic-write discipline (#42, #52, #57, #61 — four independent
+   torn-write bugs, one missing helper); (5) text/substring forensics vs
+   structured evidence (#12, #39, #54, #55 — the bound-capture
+   generator); (6) hand-maintained vocabulary Literals vs
+   subset-contract-tests against their catalog (#2, #34; the repo's own
+   ⊆-test precedent is the fix pattern). Bugs prove a generator is LIVE;
+   predicates bound its blast radius — the plan needs both.
 
 ## The drift class this hunts (run-#12 precedents, all found live 2026-07-10)
 
