@@ -46,9 +46,7 @@ def test_expired_entry_is_a_miss() -> None:
     """An entry past the TTL is a miss (clock injected, no real time)."""
     snapshot_cache.store(CLUSTER, scheduler="slurm", snapshot=_snapshot(), clock=lambda: 1000.0)
     ttl = snapshot_cache.snapshot_ttl_sec()
-    fresh = snapshot_cache.load_fresh(
-        CLUSTER, scheduler="slurm", clock=lambda: 1000.0 + ttl - 1
-    )
+    fresh = snapshot_cache.load_fresh(CLUSTER, scheduler="slurm", clock=lambda: 1000.0 + ttl - 1)
     assert fresh is not None
     assert (
         snapshot_cache.load_fresh(CLUSTER, scheduler="slurm", clock=lambda: 1000.0 + ttl + 1)
@@ -226,17 +224,13 @@ def test_degraded_fetch_is_reinspected_cross_process(
     monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(_write_clusters(tmp_path)))
     ins._CACHE.clear()
     # rc=1 on the node section produces a snapshot carrying an errors entry.
-    bad_runner = _FakeRunner(
-        {"echo __HPC_SCONTROL_NODE__": (0, _slurm_combined("", 1), "")}
-    )
+    bad_runner = _FakeRunner({"echo __HPC_SCONTROL_NODE__": (0, _slurm_combined("", 1), "")})
     first = ins.inspect_cluster(CLUSTER, runner=bad_runner, use_cache=True)
     assert first.errors  # degraded
     assert not snapshot_cache.cache_path(CLUSTER).exists()
 
     ins._CACHE.clear()
-    second_runner = _FakeRunner(
-        {"echo __HPC_SCONTROL_NODE__": (0, _slurm_combined("", 1), "")}
-    )
+    second_runner = _FakeRunner({"echo __HPC_SCONTROL_NODE__": (0, _slurm_combined("", 1), "")})
     ins.inspect_cluster(CLUSTER, runner=second_runner, use_cache=True)
     assert len(second_runner.calls) >= 1  # re-inspected live
 

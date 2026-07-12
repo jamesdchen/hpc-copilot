@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/poll_detached.input.json",
+  "title": "poll-detached input spec",
+  "description": "Which detached worker to snapshot.\n\n``experiment_dir`` is deliberately NOT a field here: it is supplied through\nthe standard ``--experiment-dir`` CLI arg (``experiment_dir_arg=True`` on the\n:class:`CliShape`, injected as an optional MCP input property), exactly as\nevery sibling monitor query resolves it (``ops/monitor/{status,reconcile,\nlist_in_flight,...}.py``). The architect memo's shorthand lists it beside\n``run_id``/``block`` as an input, but the sibling-mirroring CliShape it also\nmandates is where it belongs — the journal/terminal reads receive it as the\nprimitive's ``experiment_dir`` kwarg.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "block"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "block": {
+      "minLength": 1,
+      "title": "Block",
+      "type": "string"
+    }
+  }
+}

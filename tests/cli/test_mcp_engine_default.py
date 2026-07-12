@@ -71,9 +71,7 @@ def test_default_when_unset_turns_engine_on(
     assert "engine=on" in ready
 
 
-def test_user_preset_env_wins(
-    _clean_engine_env: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_user_preset_env_wins(_clean_engine_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A user-set value survives (setdefault is a no-op) and reports user-set.
 
     Uses ``native`` to prove we do not clobber a deliberate opt-*out* via the

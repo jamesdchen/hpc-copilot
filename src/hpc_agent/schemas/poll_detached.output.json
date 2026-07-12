@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/poll_detached.output.json",
+  "title": "poll-detached output data",
+  "description": "A single instant read of a detached worker's liveness + durable records.\n\n``state`` fuses the raw signals into the one answer callers act on:\n\n* ``running`` — a lease exists and its pid is alive: the worker is driving\n  the block. Observe further via the journal (``watch``); do NOT relaunch\n  (the lease is single, ``_kernel/lifecycle/detached.py::_guard_single_lease``).\n* ``exited_recorded`` — the lease pid is dead AND a block terminal is on disk:\n  the worker finished cleanly-or-not and stamped its verdict. Read the\n  terminal / journal for the outcome; a re-invoke will REPLAY, not re-spawn.\n* ``exited_unrecorded`` — the lease pid is dead but NO terminal was recorded:\n  the dead-worker gap (run-#12). The worker died without stamping a terminal;\n  escalate to the doctor / re-arm rather than waiting on a wake that will\n  never come.\n* ``no_lease`` — no lease file for ``(run_id, block)``: the worker was never\n  launched (or its lease was reclaimed). The journal status still reports\n  whatever is on disk.\n\n``watch`` is the constant ``\"journal\"``: every further observation of a\ndetached worker is a journal read (never an SSH dial) — the field states the\ncontract so a caller polls the right surface.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "block",
+    "lease_present",
+    "pid",
+    "pid_alive",
+    "journal_status",
+    "terminal_recorded",
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "block": {
+      "title": "Block",
+      "type": "string"
+    },
+    "lease_present": {
+      "title": "Lease Present",
+      "type": "boolean"
+    },
+    "pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Pid"
+    },
+    "pid_alive": {
+      "title": "Pid Alive",
+      "type": "boolean"
+    },
+    "journal_status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Journal Status"
+    },
+    "terminal_recorded": {
+      "title": "Terminal Recorded",
+      "type": "boolean"
+    },
+    "state": {
+      "enum": [
+        "running",
+        "exited_recorded",
+        "exited_unrecorded",
+        "no_lease"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "watch": {
+      "const": "journal",
+      "default": "journal",
+      "title": "Watch",
+      "type": "string"
+    }
+  }
+}

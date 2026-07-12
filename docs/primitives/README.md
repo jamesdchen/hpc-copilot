@@ -136,6 +136,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [notebook-status](notebook-status.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-status --spec <path> [--experiment-dir <dir>]` |
 | [pack-status](pack-status.md) | yes | _none_ | `hpc-agent pack-status --spec <path> [--experiment-dir <dir>]` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>] [--cores-per-task <cores_per_task>] [--gpus-per-task <gpus_per_task>] [--interactive]` |
+| [poll-detached](poll-detached.md) | yes | _none_ | `hpc-agent poll-detached --spec <path> [--experiment-dir <dir>]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` |
 | [read-decisions](read-decisions.md) | yes | _none_ | `hpc-agent read-decisions --spec <path> [--experiment-dir <dir>]` |
 | [recall](recall.md) | yes | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` |
