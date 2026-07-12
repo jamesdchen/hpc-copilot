@@ -18,7 +18,11 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.cluster_logs import fetch_task_logs
 from hpc_agent.infra.cluster_status import ssh_status_report as _ssh_status_report
-from hpc_agent.infra.clusters import load_clusters_config, resolve_ssh_target
+from hpc_agent.infra.clusters import (
+    load_clusters_config,
+    remote_activation_for_sidecar,
+    resolve_ssh_target,
+)
 from hpc_agent.ops.recover.runner_failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
@@ -98,13 +102,28 @@ def fetch_failures(
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for run_id {run_id!r}")
 
-    # Fresh poll: enumerate failed tasks.
+    # Fresh poll: enumerate failed tasks. Seed the run's cluster env activation
+    # exactly as ``logs --all-failed`` / ``record_status`` do — the reporter runs
+    # on the login node via ssh_run and would otherwise hit the bare login-node
+    # python that lacks hpc_agent (rc=127 on conda clusters, the run-#7/#8 class).
+    # ``fetch_failures`` was the SEVENTH, unseeded reporter consumer (G6): the
+    # journal record always knows the cluster; backfill it into the sidecar when
+    # the sidecar carries none so the deriver's cluster-backfill arm fires (#281).
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        _sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (OSError, json.JSONDecodeError, errors.HpcError):
+        _sidecar = {}
+    if record.cluster and not _sidecar.get("cluster"):
+        _sidecar = {**_sidecar, "cluster": record.cluster}
     report = _ssh_status_report(
         ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         run_id=run_id,
         job_ids=record.job_ids,
         job_name=record.job_name,
+        remote_activation=remote_activation_for_sidecar(_sidecar),
     )
     failed_ids: list[int] = []
     for tid_str, info in (report.get("tasks") or {}).items():

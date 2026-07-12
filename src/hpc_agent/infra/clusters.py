@@ -677,24 +677,32 @@ def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | No
     The ``<your_env>`` placeholder is treated as unset.
 
     The ``conda activate`` is emitted whenever a conda env is configured AND
-    conda can be reached — via an explicit ``source <conda_source>`` OR a
-    ``module load`` (the module-provided-conda configuration). Gating the
-    activate on ``conda_source`` alone left every control-plane command on a
-    module-conda cluster running under the login node's bare ``python`` (``No
-    module named ...`` / rc 127); Activation finding-24 requires the activate in
-    that case too. A cluster with neither a source nor any module has no way to
-    reach conda, so it still emits no (doomed) ``conda activate``.
+    conda is EVIDENCED reachable — via an explicit ``source <conda_source>`` OR a
+    conda-NAMING ``module load`` (:func:`_modules_provide_conda`, the
+    module-provided-conda configuration). This is the SAME finding-24 predicate
+    the :class:`Activation` invariant gates *acceptance* on, so accept-at-submit
+    and activate-at-control-plane are ONE definition of "conda reachable" (G6):
+    a non-conda module (``gcc/11``) is not evidence, a spec pairing it with a
+    ``conda_env`` is refused at submit, so the control-plane must not emit a
+    doomed ``conda activate`` for it either. Gating the activate on
+    ``conda_source`` alone had left every control-plane command on a module-conda
+    cluster running under the login node's bare ``python`` (``No module named
+    ...`` / rc 127); a cluster with neither a source nor a conda-naming module
+    has no way to reach conda, so it still emits no (doomed) ``conda activate``.
     """
     parts: list[str] = []
-    for mod in cluster_cfg.get("modules") or []:
+    modules = cluster_cfg.get("modules") or []
+    for mod in modules:
         parts.append(f"module load {shlex.quote(str(mod))}")
     conda_source = cluster_cfg.get("conda_source")
     if conda_source:
         parts.append(f"source {shlex.quote(str(conda_source))}")
-    # ``parts`` is non-empty iff a ``module load`` or a ``source`` was emitted —
-    # exactly the "conda is reachable" condition. Activate the configured env in
-    # both the source-conda and module-conda configurations.
-    if parts:
+    # "Conda is reachable" is the finding-24 predicate the ``Activation``
+    # invariant shares: an explicit ``conda_source`` OR a conda-naming module.
+    conda_reachable = bool(conda_source) or _modules_provide_conda(
+        " ".join(str(m) for m in modules)
+    )
+    if conda_reachable:
         env = conda_env or next(iter(cluster_cfg.get("conda_envs") or []), None)
         if env and env != "<your_env>":
             parts.append(f"conda activate {shlex.quote(str(env))}")

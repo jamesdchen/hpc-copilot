@@ -232,6 +232,7 @@ def _nonempty_failing_task_ids(
     job_ids: list[str],
     job_name: str,
     min_rows: int,
+    remote_activation: str = "",
 ) -> list[int]:
     """Return task ids whose CSV result has fewer than *min_rows* data rows.
 
@@ -241,6 +242,11 @@ def _nonempty_failing_task_ids(
     A task that is ``complete`` at min_rows=0 but NOT at min_rows=N wrote a
     result file with too few real data rows: that is the precise
     "wrote something, but no real data" signal Check 1 gates on.
+
+    *remote_activation* seeds the run's conda/module env exactly as every other
+    reporter consumer does — without it the login-node reporter falls to bare
+    ``python`` (rc=127 on conda clusters, the run-#7/#8 class); this Check-1
+    reporter was an unseeded consumer (G6).
 
     Pure read-only: two SSH round-trips, no cluster-side or local writes.
     """
@@ -254,6 +260,7 @@ def _nonempty_failing_task_ids(
             job_ids=job_ids,
             job_name=job_name,
             min_rows=rows,
+            remote_activation=remote_activation,
         )
         out: set[int] = set()
         for tid_str, entry in (report.get("tasks") or {}).items():
@@ -1670,6 +1677,8 @@ def _aggregate_flow_impl(
     nonempty_rows_checked = False
     nonempty_failing: list[int] = []
     if spec.min_rows > 0:
+        from hpc_agent.infra.clusters import remote_activation_for_sidecar
+
         nonempty_failing = _nonempty_failing_task_ids(
             run_id,
             ssh_target=resolve_ssh_target(record),
@@ -1677,6 +1686,9 @@ def _aggregate_flow_impl(
             job_ids=list(record.job_ids),
             job_name=record.job_name,
             min_rows=spec.min_rows,
+            remote_activation=remote_activation_for_sidecar(
+                sidecar_for_cmd or {}, fallback_cluster=record.cluster
+            ),
         )
         nonempty_rows_checked = True
 

@@ -208,3 +208,43 @@ def test_fetch_failures_passes_none_spans_with_no_sidecar_at_all(tmp_path, monke
     run_id = "20260101-000000-nosc"
     _, captured = _drive_fetch_failures(tmp_path, monkeypatch, run_id=run_id)
     assert captured["job_task_spans"] is None
+
+
+def test_fetch_failures_seeds_reporter_activation_from_record_cluster(
+    tmp_path, monkeypatch
+) -> None:
+    """G6 / #13-sibling: ``fetch_failures`` was the SEVENTH, unseeded reporter
+    consumer — it ran the login-node status reporter with no ``remote_activation``
+    and so exited 127 on conda clusters. The record always knows the cluster; the
+    reporter must receive the derived conda activation for a bare sidecar."""
+    from hpc_agent.ops.recover import failures_atom
+
+    run_id = "20260101-000000-actv"
+    experiment = tmp_path / "exp"
+    experiment.mkdir()
+    _seed_journal_record(tmp_path, monkeypatch, experiment, run_id, ["100", "200"])
+
+    captured: dict = {}
+
+    def _reporter(**kwargs):
+        captured.update(kwargs)
+        return {"tasks": {}}  # no failed tasks — short-circuits before log fetch
+
+    monkeypatch.setattr(failures_atom, "_ssh_status_report", _reporter)
+    # The record's cluster "c" carries conda config; the bare sidecar has none,
+    # so activation MUST derive from the cluster (fallback_cluster arm, #281).
+    monkeypatch.setattr(
+        failures_atom,
+        "load_clusters_config",
+        lambda: {"c": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-env"]}},
+    )
+    import hpc_agent.infra.clusters as clusters_mod
+
+    monkeypatch.setattr(
+        clusters_mod,
+        "load_clusters_config",
+        lambda: {"c": {"conda_source": "/c/conda.sh", "conda_envs": ["hpc-env"]}},
+    )
+
+    failures_atom.fetch_failures(experiment_dir=experiment, run_id=run_id)
+    assert "conda activate hpc-env" in captured.get("remote_activation", "")
