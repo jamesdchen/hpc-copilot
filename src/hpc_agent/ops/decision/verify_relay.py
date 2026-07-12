@@ -25,30 +25,47 @@ contradiction.
 Claim extraction & the heuristics (the bar is USEFUL-conservative, not perfect
 — prefer flagging to missing):
 
-* **Run-id / job-id tokens (checked first).** A token is "run-id-like" when it
-  equals the run in scope, starts with ``run-``, is timestamp-shaped
-  (``\\d{8}-\\d{6}…``), or carries a hyphen + a digit and is >= 8 chars. Each is
-  matched against the authoritative id set (scope run_id + sidecar/record
-  run_id, job_ids, parent_run_ids) by exact match or shared prefix (a short-sha
-  reference passes). A run-id-like token matching nothing → ``run_id``
-  mismatch — EXCEPT the registry's verb vocabulary ("Next: submit-s3" names a
-  verb, not a run; proving run #3 false positive), derived live from the
-  ``@primitive`` registry, and EXCEPT ISO 8601 date/timestamp tokens
-  ("2026-07-03T00:00:00+00:00" — the journal's own timestamps; a faithful
-  quote is neither an id nor a number claim, so the whole span is consumed
-  and audited as neither). Standalone digit runs (>= 5 digits) are treated as
-  job-id claims ONLY when the run has recorded job_ids to compare against
-  (else they fall through to number checking) — and never when the digits are
-  the fractional part of a decimal (``3.141338...``) or when they verify as a
-  numeric claim against the source numbers (``1000000`` samples); both fall
-  through to the number pass (proving run #3 false positives). The character
-  spans of every id token are then excluded from number extraction, so the
-  digits inside a run-id never masquerade as a numeric claim.
+* **The numeric-literal grammar (ONE positive definition, not a growing carve-out
+  list).** A single grammar (``_NUM_GRAMMAR``) defines the full numeric
+  vocabulary the audit recognizes — signed ints, grouping commas, decimals,
+  percentages, and scientific notation — and BOTH sides consume it: the
+  source-collection side extracts source numbers with it, and the relay-audit
+  side runs it as a numeric-span PRE-PASS. The pre-pass consumes every maximal
+  numeric-literal span and audits it as a number (or, for a bare job-id-length
+  digit run, as a job-id claim), so no numeric FORMAT can reach the id
+  classifiers. This *replaced* the accretion of one carve-out per false positive
+  — ISO dates, registry verbs, decimal fraction / integer parts, and (run-12
+  finding 29) scientific notation — that had grown at each classifier: the id
+  passes now simply never see a numeric literal, because ``_is_run_id_like``
+  rejects any token the grammar matches and the pre-pass has already consumed
+  every literal's span. Adding a future numeric format is one edit to the
+  grammar, not a new exception at every classifier.
 
-* **Numbers.** ``(?<![\\w.])-?\\d[\\d,]*(?:\\.\\d+)?%?`` — ints, floats,
-  percentages, comma-grouped values, and an OPTIONAL leading minus so a verbatim
-  relay of a negative source metric passes (the lookbehind keeps the ``-`` off
-  identifier/range hyphens; commas normalized away, ``%`` stripped). A claim passes
+* **Run-id / job-id tokens.** A token is "run-id-like" when it equals the run in
+  scope, starts with ``run-``, is timestamp-shaped (``\\d{8}-\\d{6}…``), or
+  carries a hyphen + a digit and is >= 8 chars — but NEVER when it is wholly a
+  numeric literal (the grammar decides). Each is matched against the
+  authoritative id set (scope run_id + sidecar/record run_id, job_ids,
+  parent_run_ids) by exact match or shared prefix (a short-sha reference passes).
+  A run-id-like token matching nothing → ``run_id`` mismatch — EXCEPT the
+  registry's verb vocabulary ("Next: submit-s3" names a verb, not a run; proving
+  run #3 false positive), derived live from the ``@primitive`` registry, and
+  EXCEPT ISO 8601 date/timestamp tokens ("2026-07-03T00:00:00+00:00" — the
+  journal's own timestamps; a faithful quote is neither an id nor a number
+  claim, so the whole span is consumed up front and audited as neither). The
+  run-id ident pass runs BEFORE the numeric pre-pass (a run-id legitimately
+  embeds digits — ``run-1`` — so its span must be consumed first); a bare digit
+  run (>= 5 digits) is a job-id claim ONLY when the run has recorded job_ids and
+  the digits do not verify as a number (``1000000`` samples is a number, not a
+  suspicious job id). The character spans of every id token are excluded from
+  number extraction, so the digits inside a run-id never masquerade as a numeric
+  claim.
+
+* **Numbers.** ``(?<![\\w.])`` + ``_NUM_GRAMMAR`` — ints, floats,
+  percentages, comma-grouped values, scientific notation, and an OPTIONAL leading
+  minus so a verbatim relay of a negative source metric passes (the lookbehind
+  keeps the ``-`` off identifier/range hyphens; commas normalized away, ``%``
+  stripped). A claim passes
   on an exact normalized-string match, on float equality (so ``95`` == ``95.0``),
   or — for a DECIMAL claim only — when it is a string-prefix of a longer source
   value (pure truncation like ``3.14`` of ``3.1411``). A rounding that changes a
@@ -177,19 +194,41 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-# ── number extraction ─────────────────────────────────────────────────────────
+# ── the numeric-literal grammar (ONE definition, consumed by both sides) ───────
 
-# Ints, floats, comma-grouped values, trailing-``%`` percentages, and an
-# OPTIONAL leading minus so a verbatim relay of a negative source metric
-# (log-likelihoods, deltas, losses — bug-sweep #39) is not flagged as a
-# contradiction. The ``(?<![\w.])`` lookbehind keeps the ``-`` from being
-# stolen from an identifier or a range: it fires only when the char before the
-# ``-`` is neither a word char nor a ``.`` (so ``run-1`` / ``a-1`` / ``1-2`` /
-# ``3.14`` never read a hyphen or a fractional tail as a signed number).
-# The optional exponent tail makes a scientific-notation literal (a reducer
-# table's ``4.585623e-11`` — run-12 finding 29) ONE number token on both the
-# source-collection and relay-audit sides, instead of splitting at the ``e``.
-_NUM_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?:[eE][+-]?\d+)?%?")
+# THE positive grammar of "what is a number literal" — the full numeric
+# vocabulary this audit recognizes: an OPTIONAL leading minus, a digit run with
+# grouping commas, an OPTIONAL decimal fraction, an OPTIONAL scientific-notation
+# exponent, and an OPTIONAL trailing ``%``. It is the single definition BOTH
+# sides consume: the source-collection side (:func:`_collect_source_numbers`)
+# extracts source numbers with it, and the relay-audit side runs it as a
+# numeric-span PRE-PASS that consumes every maximal numeric-literal span before
+# the run-id / job-id classifiers see the text (run-12 finding 29). Growing the
+# vocabulary (another numeric format) is one edit HERE, not a new per-format
+# carve-out at each classifier.
+#
+# The ``(?<![\w.])`` lookbehind keeps the ``-`` from being stolen from an
+# identifier or a range: it fires only when the char before the ``-`` is neither
+# a word char nor a ``.`` (so ``run-1`` / ``a-1`` / ``1-2`` / ``3.14`` never read
+# a hyphen or a fractional tail as a signed number). The optional exponent tail
+# makes a scientific-notation literal (a reducer table's ``4.585623e-11``) ONE
+# maximal token, so its integer / fractional parts never split into stray
+# digit runs.
+_NUM_GRAMMAR = r"-?\d[\d,]*(?:\.\d+)?(?:[eE][+-]?\d+)?%?"
+_NUM_RE = re.compile(r"(?<![\w.])" + _NUM_GRAMMAR)
+# The anchored form of the SAME grammar: True iff a whole token IS one numeric
+# literal. This is THE test both classifiers use to answer "is this token a
+# number, not an id?" — replacing the ad-hoc ``float()`` probes and the
+# decimal-part span heuristics that used to accrete one carve-out per new
+# numeric format (dates, verbs, decimal fraction / integer parts, scientific
+# notation). ``re.fullmatch`` because a partial numeric prefix of a larger token
+# (``4.585623e`` with trailing junk, ``run-1``) is NOT a number literal.
+_FULL_NUM_RE = re.compile(_NUM_GRAMMAR)
+
+
+def _is_number_literal(s: str) -> bool:
+    """True iff *s* is wholly one numeric literal under the grammar."""
+    return bool(_FULL_NUM_RE.fullmatch(s))
 
 
 def _normalize_num(raw: str) -> str:
@@ -204,19 +243,14 @@ def _is_identifier_like(s: str) -> bool:
     ``20260703-141500-ab``), so their embedded numbers are excluded from the
     source-number pool to avoid a relay number spuriously "matching" them.
 
-    A string that fully parses as a signed numeric literal is NOT an identifier,
-    though (bug-sweep #39): a negative metric stored as a STRING (``"-3.5"``) has
-    a ``-`` and a digit, so the naive test excluded it from the pool entirely and
-    a verbatim relay of it was flagged as unverifiable. Such tokens belong in the
-    number pool; only genuine ids (``run-1``, ``20260703-141500-ab``) stay out.
+    A string that IS wholly a numeric literal (under the one grammar) is NOT an
+    identifier, though (bug-sweep #39): a negative metric stored as a STRING
+    (``"-3.5"``) has a ``-`` and a digit, so the naive test excluded it from the
+    pool entirely and a verbatim relay of it was flagged as unverifiable. Such
+    tokens belong in the number pool; only genuine ids (``run-1``,
+    ``20260703-141500-ab``) stay out.
     """
-    if "-" not in s or not re.search(r"\d", s):
-        return False
-    try:
-        float(_normalize_num(s))
-    except ValueError:
-        return True
-    return False
+    return "-" in s and bool(re.search(r"\d", s)) and not _is_number_literal(s)
 
 
 def _collect_source_numbers(obj: Any, strings: set[str], floats: list[float]) -> None:
@@ -396,8 +430,11 @@ def _nearest_number(raw: str, source_floats: list[float]) -> str | None:
 
 # Tokens with internal ``._-`` separators — the run-id-shaped candidates.
 _IDENT_RE = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+")
-_JOB_ID_RE = re.compile(r"\d{5,}")
 _TS_PREFIX_RE = re.compile(r"\d{8}-\d{6}")
+# A bare digit run of job-id length — the ONLY numeric-literal shape the numeric
+# pre-pass may hand to the job-id arm (a decimal / comma-grouped / signed / sci
+# span is unambiguously a number, never a job id).
+_BARE_JOB_DIGITS_RE = re.compile(r"\d{5,}")
 
 # ISO 8601 date / datetime spans ("2026-07-03", "2026-07-03T00:00:00+00:00") —
 # the journal's own timestamp dialect (``infra.time.utcnow_iso``). A faithful
@@ -427,21 +464,17 @@ def _is_run_id_like(token: str, scope_run_id: str) -> bool:
         return True
     if _TS_PREFIX_RE.match(token):
         return True
+    if _is_number_literal(token):
+        # A token that IS wholly a numeric literal is a NUMBER claim, never a
+        # run-id one — decimals, comma-grouped values, percentages, and
+        # scientific notation (``4.585623e-11``) all read hyphen+digit and long
+        # enough to look run-id-shaped (run-12 finding 29). THE grammar decides;
+        # the numeric pre-pass audits the whole literal against the source pool.
+        return False
     if _ISO_DATE_TOKEN_RE.fullmatch(token):
         # A faithful ISO date/timestamp quote, not a run-id claim (see
-        # ``_ISO_DATETIME_RE``); its span is consumed by the pre-pass.
+        # ``_ISO_DATETIME_RE``); its span is consumed by the ISO pre-pass.
         return False
-    try:
-        # A token that fully parses as a numeric literal is a NUMBER claim,
-        # never a run-id one — scientific notation with a negative exponent
-        # (``4.585623e-11``) is hyphen+digit and long enough to read
-        # run-id-like (run-12 finding 29: a reducer table relay drew hundreds
-        # of run-id mismatches). Left unconsumed, so the number pass audits
-        # the whole literal (the relay-side twin of the #39 source-side fix).
-        float(_normalize_num(token))
-        return False
-    except ValueError:
-        pass
     return "-" in token and bool(re.search(r"\d", token)) and len(token) >= 8
 
 
@@ -472,29 +505,6 @@ def _registry_verb_names() -> frozenset[str]:
 
     register_primitives()
     return frozenset(get_registry())
-
-
-def _is_fraction_digits(text: str, start: int) -> bool:
-    """True when the digit run at *start* is the fractional part of a decimal.
-
-    ``3.141338909090909`` splits on the ``.`` under a bare ``\\d{5,}`` scan,
-    and the fractional digits are NOT a job-id claim (proving run #3 false
-    positive) — the whole decimal is audited by the number pass instead.
-    """
-    return start >= 2 and text[start - 1] == "." and text[start - 2].isdigit()
-
-
-def _is_integer_part_of_decimal(text: str, end: int) -> bool:
-    """True when the digit run ending at *end* is the INTEGER part of a decimal.
-
-    The mirror of :func:`_is_fraction_digits`: ``29133.060892393198`` splits on
-    the ``.`` under a bare ``\\d{5,}`` scan into ``29133`` (integer part) and
-    ``060892393198`` (fractional). The integer part is NOT a job-id claim (a
-    reducer-computed ``qlike_sum`` — F-Q false positive: its integer part was
-    flagged as a job-id-shaped token); leaving the span unconsumed lets the
-    number pass audit the WHOLE decimal against the source numbers.
-    """
-    return end + 1 < len(text) and text[end] == "." and text[end + 1].isdigit()
 
 
 # ── state extraction ───────────────────────────────────────────────────────────
@@ -1005,52 +1015,53 @@ def verify_relay(*, experiment_dir: Path, spec: VerifyRelayInput) -> VerifyRelay
                 )
             )
 
-    # Standalone digit job-id claims — only when the run has recorded job_ids.
-    if job_ids:
-        for m in _JOB_ID_RE.finditer(relay):
-            if _overlaps(m.start(), m.end(), consumed_spans):
-                continue
-            if _is_fraction_digits(relay, m.start()):
-                # Fractional digits of a decimal ("pi_estimate 3.1413..."),
-                # not a job-id claim. Leave the span unconsumed so the number
-                # pass audits the WHOLE decimal against the source numbers.
-                continue
-            if _is_integer_part_of_decimal(relay, m.end()):
-                # Integer part of a decimal ("qlike_sum 29133.0608..." — F-Q):
-                # not a job-id claim. Leave the span unconsumed so the number
-                # pass audits the WHOLE decimal (the integer part alone would
-                # match no source number and be flagged spuriously).
-                continue
-            token = m.group(0)
-            if token not in job_ids and _match_number(token, source_num_strings, source_num_floats):
-                # A digit run that verifies against a recorded number is a
-                # numeric claim ("1000000" samples), not a suspicious job id
-                # (proving run #3 false positive). Leave the span unconsumed
-                # so the number pass counts it as the number it just matched.
-                continue
-            consumed_spans.append((m.start(), m.end()))
-            claims_checked += 1
-            if token not in job_ids:
-                mismatches.append(
-                    RelayMismatch(
-                        claim=token,
-                        kind="run_id",
-                        detail=(
-                            f"job-id-shaped token {token!r} is not among the run's "
-                            f"recorded job ids {sorted(job_ids)}"
-                        ),
-                        nearest_source_value=", ".join(sorted(job_ids)),
-                    )
-                )
-
-    # ── (2) numbers (skipping id spans + conversational uses) ──────────────────
+    # ── (2) numeric-literal pre-pass (THE grammar; consumes every maximal span) ─
+    # Every maximal numeric-literal span (``_NUM_RE`` — the one grammar) is
+    # audited here and its span consumed, so no numeric FORMAT can reach the
+    # run-id / job-id classifiers (run-12 finding 29 retired the per-format
+    # carve-outs for ISO dates, decimal fraction / integer parts, and scientific
+    # notation). Each span resolves to exactly one verdict:
+    #
+    #   * JOB-ID claim — a bare digit run of job-id length (``\\d{5,}``), and
+    #     ONLY when the run has recorded ``job_ids`` and the digits do not verify
+    #     as a number (a recorded ``1000000`` samples count is a number, not a
+    #     suspicious job id). A recorded job id passes; any other such run flags
+    #     ``run_id``.
+    #   * NUMBER claim — everything else the grammar matches (decimals,
+    #     comma-grouped, percentages, scientific notation, signed, short ints, or
+    #     any int when the run has no recorded job_ids): audited against the
+    #     source number pool exactly as before.
     for m in _NUM_RE.finditer(relay):
         if _overlaps(m.start(), m.end(), consumed_spans):
             continue
         raw = m.group(0)
         if _is_conversational_number(relay, m.start(), m.end(), raw):
+            # Chatter (list marker / ``~2 minutes``), not a fact. Not consumed:
+            # a bare short int is invisible to the id classifiers anyway.
             continue
+        is_job_candidate = (
+            bool(job_ids)
+            and bool(_BARE_JOB_DIGITS_RE.fullmatch(raw))
+            and not _match_number(raw, source_num_strings, source_num_floats)
+        )
+        consumed_spans.append((m.start(), m.end()))
         claims_checked += 1
+        if is_job_candidate:
+            # A bare job-id-length digit run that verifies as no number: a
+            # job-id claim. A recorded id passes; anything else is unknown.
+            if raw not in job_ids:
+                mismatches.append(
+                    RelayMismatch(
+                        claim=raw,
+                        kind="run_id",
+                        detail=(
+                            f"job-id-shaped token {raw!r} is not among the run's "
+                            f"recorded job ids {sorted(job_ids)}"
+                        ),
+                        nearest_source_value=", ".join(sorted(job_ids)),
+                    )
+                )
+            continue
         if not has_source_numbers:
             mismatches.append(
                 RelayMismatch(

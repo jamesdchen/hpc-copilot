@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from hpc_agent._wire.queries.verify_relay import VerifyRelayInput, VerifyRelayResult
 from hpc_agent.ops.decision.verify_relay import verify_relay
 from hpc_agent.state.decision_journal import append_decision
@@ -454,6 +456,93 @@ def test_csv_ingest_is_bounded_and_top_level_only(tmp_path: Path, monkeypatch) -
     flagged = {m.claim for m in out.mismatches}
     assert "0.127879" in flagged  # oversized table skipped
     assert "0.555555" in flagged  # nested mirror never walked
+
+
+# ── finding 29: the positive numeric-literal grammar (no per-format carve-out) ─
+#
+# A numeric literal of ANY format the grammar recognizes is audited as a NUMBER,
+# never misclassified as a run-id/job-id — even with recorded job_ids making the
+# job-id arm live. This is the class the accreting carve-outs (ISO dates, verbs,
+# decimal fraction/integer parts, scientific notation) were each patching one at
+# a time; the parametrization proves the grammar covers the whole vocabulary.
+
+_STRUCTURED_LITERALS = [
+    "4.585623e-11",  # scientific notation, negative exponent
+    "4.585623e+11",  # scientific notation, positive exponent
+    "1.5e10",  # scientific notation, unsigned exponent
+    "2E5",  # scientific notation, capital E
+    "-19.925446",  # signed decimal
+    "3.14159",  # plain decimal
+    "95.5%",  # decimal percentage
+    "45%",  # integer percentage
+    "1,234,567",  # comma-grouped integer
+    "-3.5",  # signed short decimal
+]
+
+
+@pytest.mark.parametrize("literal", _STRUCTURED_LITERALS)
+def test_numeric_literal_of_any_format_never_classifies_as_id(tmp_path: Path, literal: str) -> None:
+    """Finding 29: a numeric literal NEVER flags as run_id/job_id, whatever its
+    format — the job-id arm is live (recorded job_ids) yet the grammar consumes
+    the whole literal first. Unsupported here, so it flags as a NUMBER."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+
+    out = _run(tmp_path, f"The metric was {literal} this run.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    # It was AUDITED as a number (not silently dropped) — the finding-29 corpus
+    # gap is separate; here the value is genuinely absent, so it flags.
+    assert any(m.kind in ("number", "unverifiable") for m in out.mismatches), out.mismatches
+
+
+@pytest.mark.parametrize("literal", ["4.585623e-11", "-19.925446", "95.5%", "1,234,567"])
+def test_supported_numeric_literal_of_any_format_is_clean(tmp_path: Path, literal: str) -> None:
+    """The passes-side: when the same literal IS in the source corpus, a verbatim
+    relay of any format verifies CLEAN and never trips the id classifier."""
+    _seed_journal(
+        tmp_path,
+        core_hours=128,
+        m_sci="4.585623e-11",
+        m_neg=-19.925446,
+        m_pct="95.5%",
+        m_comma="1,234,567",
+    )
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+
+    out = _run(tmp_path, f"The metric was {literal}.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    assert out.clean is True, out.mismatches
+
+
+def test_grammar_boundaries_still_classify_as_before(tmp_path: Path) -> None:
+    """The grammar's edges: tokens that are NOT whole numeric literals still
+    classify exactly as before — a run-id, a timestamp-shaped id, an ISO date
+    quote (neither), and a trailing-``e`` sci-notation fragment (its numeric
+    prefix is a number, the dangling ``e`` is not part of the literal)."""
+    _seed_journal(tmp_path, core_hours=128)
+    _seed_sidecar(tmp_path)
+    _seed_record(tmp_path, status="complete", job_ids=["13610902"])
+
+    # run-<n>: a run-id claim (run- prefix, not the scope run-1).
+    out = _run(tmp_path, "Results for run-2 are ready.")
+    assert [m.claim for m in out.mismatches if m.kind == "run_id"] == ["run-2"]
+
+    # timestamp-shaped id (\\d{8}-\\d{6}…): still a run-id claim, NOT a number.
+    out = _run(tmp_path, "See run 20260703-141500-ab.")
+    assert [m.claim for m in out.mismatches if m.kind == "run_id"] == ["20260703-141500-ab"]
+
+    # ISO date quote: neither id nor number (consumed up front).
+    out = _run(tmp_path, "Checked on 2026-07-05.")
+    assert out.mismatches == []
+
+    # '4.585623e' trailing-e junk: 'e' with no exponent digits is NOT part of a
+    # numeric literal, so the maximal literal is '4.585623' (a number claim) and
+    # nothing reads as a run-id.
+    out = _run(tmp_path, "The raw cell 4.585623e looked malformed.")
+    assert [m for m in out.mismatches if m.kind == "run_id"] == []
+    assert any(m.claim == "4.585623" and m.kind == "number" for m in out.mismatches), out.mismatches
 
 
 # ── F-Q: campaign-scope briefs (numbers only) ──────────────────────────────────
