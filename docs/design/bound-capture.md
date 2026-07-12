@@ -135,3 +135,40 @@ verb.
   audit axis B14 evidence.
 - **(c) Unlock/registration adopt bound capture** — DEFAULT: post-v1, one
   gate per wave, after the T8 tier has live evidence.
+
+## Drift log
+
+* **2026-07-12 — USER RULING 3: the OVERNIGHT-CONSENT gate is the FIRST shipped
+  bound reader, ahead of the notebook v1 scope.** The ruling moved
+  `_assert_overnight_consent_authorship`
+  (`ops/decision/journal.py`) to **bound-capture ONLY** — no recency-window
+  forensic tier, no word-overlap over the utterance log. Built:
+  - **Wave 1 (shipped):** `state/utterances.py::append_utterance` gained a
+    `bound: dict | None` keyword — stored verbatim under the `bound` key when a
+    non-empty mapping, omitted otherwise (chat-hook captures stay byte-identical).
+    The frozen `{ts, sha256, text}` schema is unchanged; `bound` is additive.
+  - **Wave 2 (overnight-scoped):** `mcp_server._overnight_consent_binding` builds
+    the binding server-side from the refusing call's spec — the scope tuple, the
+    `heal_classes` list, the `cmd_sha` spec-identity, and a code-composed
+    morning-boundary coverage window — all CODE-SELECTED identifiers, never model
+    prose (poison rule). `_elicit_then_retry` passes it to `append_utterance`, and
+    `_render_elicitation_prompt` renders the coverage so the popup names exactly
+    what it captures. (The notebook-sign-off Wave 2 remains PLANNED.)
+  - **Gate (the bound reader):** the gate matches a bound utterance record on
+    `(scope_kind, scope_id, block)` AND coverage — `cmd_sha` exact, the consent's
+    declared `heal_classes` ⊆ the record's covered classes, a non-expired coverage
+    window, non-bare text. No match → REFUSE with the E2 authorship-missing marker
+    (so the popup fires) and a message naming the grant path. The forensic
+    word-overlap path is DELETED.
+  - **Route-through contract:** the `_assert_overnight_consent_authorship` B4
+    exemption (`tests/contracts/test_utterance_route_through.py`) is RETIRED; the
+    new base reader `_bound_consent_records` carries an exemption on the
+    vocabulary-impossibility rationale (a chat hook cannot forge a `bound`
+    binding), the same class as the sha-prefix FILING gates.
+  - **Grant path — popup only.** The elicitation popup is the sole binding
+    surface; there is deliberately no utterance-write verb (the store doctrine
+    forbids one), so a pure-CLI / no-elicitation session cannot grant overnight
+    consent — the intended tightening, surfaced by the refusal message rather than
+    silently. The notebook-scoped Waves 2–4 (and settled-decision 6's "v1 = the
+    notebook gate only") are unchanged; this ruling simply lit up the overnight
+    gate first because its forensic tier was the one under active exploit review.

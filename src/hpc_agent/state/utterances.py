@@ -19,6 +19,17 @@ One JSON object per line: ``{"ts": <iso>, "sha256": <full-text digest>,
 prompt, so a capped entry still carries a verifiable fingerprint of what the
 human sent.
 
+A record MAY additionally carry ``bound`` — an opaque mapping the WRITER binds
+the utterance to the exact subject it was captured FOR (``docs/design/bound-capture.md``).
+A ``UserPromptSubmit`` / ``AskUserQuestion`` chat capture NEVER sets it (those
+surfaces know no scope); only a view-aware surface that knows precisely what the
+typed text signs (the MCP elicitation popup, or a conforming second harness)
+writes ``bound``, so a bound record IMPLIES the elicitation channel. The store is
+opaque to its shape — it round-trips ``bound`` verbatim; only a gate matches it
+(the overnight standing-consent gate is the first bound reader — USER RULING 3,
+2026-07-12). The additive key needs no schema bump: every reader here reads
+defensively by shape and ignores an unknown key.
+
 No-scaffold discipline (the ``notify._alerts_paths`` pattern): the capture
 hook is installed user-globally and fires in ANY repo the user works in, so
 the writer must never create a ``<repo_hash>/`` namespace for an arbitrary
@@ -175,7 +186,11 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
 
 
 def append_utterance(
-    experiment_dir: Path, text: str, actor: str | None = None
+    experiment_dir: Path,
+    text: str,
+    actor: str | None = None,
+    *,
+    bound: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Append one human prompt to the repo's utterance log; return the record.
 
@@ -186,6 +201,13 @@ def append_utterance(
     conforming utterance log byte-for-byte. An INVALID actor slug FAILS OPEN to
     the unsuffixed log: a broken config degrades to today's tier, never wedges
     capture.
+
+    ``bound`` (``docs/design/bound-capture.md``) is written VERBATIM under the
+    ``bound`` key when it is a non-empty mapping, and OMITTED otherwise — so a
+    chat-hook capture (which passes nothing) is byte-identical to before. The
+    store never inspects its shape; only a gate matches it. A view-aware surface
+    that knows exactly what the typed text signs (the MCP elicitation popup)
+    passes it; the chat hooks never do.
 
     Returns ``None`` (a clean no-op) when:
 
@@ -216,6 +238,8 @@ def append_utterance(
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "text": _truncate_utf8(text, MAX_UTTERANCE_BYTES),
         }
+        if isinstance(bound, dict) and bound:
+            record["bound"] = bound
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
         return record

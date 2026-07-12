@@ -202,9 +202,12 @@ def _actor_scoped_human_texts(experiment_dir: Path, ids: list[str]) -> list[str]
 # agent-composed revoke/verdict/unlock rides through (the B4 exposure, philosophy
 # audit 2026-07 sweep log). The sha-prefix-bound FILING gates need no anchor (an
 # 8-hex prefix cannot pre-exist the artifact it fingerprints — temporal binding
-# by vocabulary impossibility); the overnight-consent gate parks on USER RULING 3
-# (no natural anchor). Both are left on the unbounded reader with a documented
-# exemption (the route-through contract test pins this).
+# by vocabulary impossibility). The overnight-consent gate RETIRED its unbounded
+# reader entirely (USER RULING 3, 2026-07-12): it reads only BOUND consent records
+# (:func:`_bound_consent_records`) captured at a surface that named exactly what
+# they cover, so the chat pool it once word-overlapped is never consulted — the
+# same vocabulary-impossibility class as the sha-prefix gates (a chat hook cannot
+# forge a ``bound`` binding), documented in the route-through exemption.
 
 
 def _fresh_human_texts(
@@ -3550,43 +3553,77 @@ def _compose_overnight_consent(
     )
 
 
+def _bound_consent_records(
+    experiment_dir: Path, *, scope_kind: str, scope_id: str, block: str
+) -> list[dict[str, Any]]:
+    """Utterance records whose ``bound`` names EXACTLY this scope + block.
+
+    THE bound-capture reader (``docs/design/bound-capture.md``): selects only the
+    utterances a view-aware surface (the MCP elicitation popup) captured BOUND to
+    ``(scope_kind, scope_id, block)`` — a chat-hook prompt never carries ``bound``,
+    so it can never appear here. This reads the utterance store but is NOT the
+    "unbounded naming pool" the B4 ts>=anchor filter guards: the B4 exploit is that
+    the utterance which CREATED a target permanently satisfies a NAMING leg, and it
+    cannot apply to an EXACT binding the chat hook is structurally unable to forge
+    (the same "temporal binding by vocabulary impossibility" class as the
+    sha-prefix FILING gates). Documented as such in the B4 route-through exemption.
+    """
+    from hpc_agent.state.utterances import read_utterances
+
+    out: list[dict[str, Any]] = []
+    for rec in read_utterances(experiment_dir):
+        bound = rec.get("bound")
+        if not isinstance(bound, dict):
+            continue
+        if bound.get("scope_kind") != scope_kind:
+            continue
+        if bound.get("scope_id") != scope_id:
+            continue
+        if bound.get("block") != block:
+            continue
+        out.append(rec)
+    return out
+
+
 def _assert_overnight_consent_authorship(
     experiment_dir: Path, spec: AppendDecisionInput, resolved: dict[str, Any] | None
 ) -> None:
-    """Overnight standing-consent gate — the human's typed acceptance of fallout.
+    """Overnight standing-consent gate — the human's BOUND acceptance of fallout.
 
     A STANDING CONSENT (``docs/design/notebook-audit.md`` item 8) lets named
     boundaries auto-advance while the human sleeps. It is journaled as an
     ``append-decision`` under the distinct block
     :data:`hpc_agent.ops.overnight.OVERNIGHT_CONSENT_BLOCK` (there is no consent
     verb — this gate is the only choke point), so it cannot be laundered around.
-    Four legs, mirroring the ``scope-unlock`` gate's structure:
+    Three legs:
 
     * **block convention** — the ``overnight-consent`` block is valid only for a
       ``run`` / ``campaign`` scope (a boundary the human sleeps through), refused
       for any other ``scope_kind``.
-    * **authorship** (item 8 pin a) — the ``response`` is the human's OWN typed
-      utterance accepting the fallout; a bare ack (:func:`_is_bare_ack`) cannot
-      grant it, and with the harness utterance log installed the utterance's word
-      tokens must derive from a logged human prompt (the shared lock tier — the
-      model never composes a consent). These carry the E2 authorship-missing
-      marker (a fresh utterance resolves them, so an MCP retry-after-elicit fits).
-    * **hard caps + spec identity** (pins b + c) —
-      :func:`hpc_agent.ops.overnight.assert_consent_hard_caps`: an ``expires_at``
-      morning boundary, a ``budget_cap`` / ``walltime_cap`` ceiling, and the
-      ``cmd_sha`` spec-identity binding consumption dies on.
-    * **the wake** (second amendment) —
-      :func:`hpc_agent.ops.overnight.assert_wake_armed`: a harness-tracked
-      ``status-watch`` armed for the same scope, else the consent is refused (a
-      pre-y no watch can consume is theater). Caps / wake are STRUCTURAL refusals
-      (a fresh utterance cannot fix a missing cap or an unarmed watch), so they
-      are deliberately NOT marked with the authorship-missing marker.
+    * **bound authorship** (USER RULING 3, 2026-07-12 — bound-capture ONLY) — a
+      BOUND consent record (``docs/design/bound-capture.md``) captured at a surface
+      that named EXACTLY what it covers must exist, matching this append's
+      ``(scope_kind, scope_id, block)`` AND its coverage: the ``cmd_sha``
+      spec-identity, the ``heal_classes`` the consent declares (the record must
+      cover at least them), a non-expired coverage window, and non-bare text. The
+      FORENSIC word-overlap tier (an agent-relayed ``response`` word-matched over
+      the unbounded chat log) is DELETED: overnight consent is valid ONLY when
+      captured through a binding surface, never reconstructed from the stream. The
+      missing-bound refusal carries the E2 authorship-missing marker so the MCP
+      popup fires, captures the typed consent BOUND to this coverage
+      (``mcp_server._overnight_consent_binding``), and the retry finds it.
+    * **hard caps + spec identity + the wake** (pins b + c + the wake amendment) —
+      :func:`hpc_agent.ops.overnight.assert_consent_hard_caps` and
+      :func:`hpc_agent.ops.overnight.assert_wake_armed`. STRUCTURAL refusals (a
+      fresh utterance cannot supply a cap or arm a watch), so deliberately NOT
+      marked with the authorship-missing marker.
 
     Every non-``overnight-consent`` record passes untouched. Reached through the
     top-level ``hpc_agent.ops.overnight`` module (a role-root sibling, allowed
     from inside the ``decision`` subject exactly like the ``field_ownership``
     facade import).
     """
+    from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
     from hpc_agent.ops import overnight as _overnight
 
     if spec.block != _overnight.OVERNIGHT_CONSENT_BLOCK:
@@ -3599,32 +3636,66 @@ def _assert_overnight_consent_authorship(
             f"scope_kind={spec.scope_kind!r}."
         )
 
-    # Leg 1 — authorship: the consent is the human's OWN typed utterance (pin a).
-    response = str(spec.response or "")
-    if _is_bare_ack(response):
-        _refuse_missing_authorship(
-            "overnight-consent authorship gate: a standing consent accepts the "
-            "fallout of unattended overnight advances and is the human's OWN typed "
-            f"act — a bare {spec.response!r} (a 'y' / click) cannot grant it. The "
-            "human must type the consent, naming the boundaries and the caps they "
-            "accept."
+    # Leg 1 — BOUND authorship (bound-capture ONLY, USER RULING 3): a consent is
+    # valid only when captured at a surface that named exactly what it covers.
+    res = resolved if isinstance(resolved, dict) else {}
+    declared_classes = res.get("heal_classes")
+    consent_classes = (
+        {str(c) for c in declared_classes if isinstance(c, str)}
+        if isinstance(declared_classes, list)
+        else set()
+    )
+    bound_cmd_sha = res.get("cmd_sha") if isinstance(res.get("cmd_sha"), str) else None
+    now = utcnow()
+
+    covered = False
+    for rec in _bound_consent_records(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        block=_overnight.OVERNIGHT_CONSENT_BLOCK,
+    ):
+        if _is_bare_ack(str(rec.get("text") or "")):
+            continue  # a typed 'y' bound to the coverage is still a bare ack
+        subject = rec["bound"].get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        # Spec identity: the bound record must name THIS consent's cmd_sha (a
+        # consent binds to a spec; both-absent falls through to the caps refusal).
+        subj_sha = subject.get("cmd_sha") if isinstance(subject.get("cmd_sha"), str) else None
+        if subj_sha != bound_cmd_sha:
+            continue
+        # Repair-class coverage: the human's bound consent must cover at least the
+        # classes this consent declares (it can cover more — a superset is fine).
+        subj_classes_raw = subject.get("heal_classes")
+        subj_classes = (
+            {str(c) for c in subj_classes_raw if isinstance(c, str)}
+            if isinstance(subj_classes_raw, list)
+            else set()
         )
-    _actor_ids, _ = _read_interview_actors(experiment_dir)
-    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
-    if harness_texts is not None:
-        human_words: set[str] = set()
-        for text in harness_texts:
-            human_words |= _ha_word_tokens(text)
-        consent_words = _ha_word_tokens(response)
-        if consent_words and not (consent_words & human_words):
-            _refuse_missing_authorship(
-                "overnight-consent authorship gate: with the harness utterance log "
-                "installed, the consent must derive from a logged human utterance "
-                f"(harness-captured), not the agent-relayed response {spec.response!r}. "
-                "The model must never compose a standing consent — have the human "
-                "type it in a prompt. (Under >1 declared actors the pool is the "
-                "SESSION ACTOR'S log only — MH4.)"
-            )
+        if not consent_classes <= subj_classes:
+            continue
+        # Coverage window: a bound consent whose window has passed no longer covers.
+        subj_expires = subject.get("expires_at")
+        expires = parse_iso_utc_or_none(subj_expires if isinstance(subj_expires, str) else None)
+        if expires is not None and now >= expires:
+            continue
+        covered = True
+        break
+
+    if not covered:
+        _refuse_missing_authorship(
+            "overnight-consent bound-authorship gate: a standing consent accepts the "
+            "fallout of unattended overnight advances and is valid ONLY when captured "
+            "at a binding surface that names exactly what it covers (bound-capture, "
+            "USER RULING 3) — there is no bound consent record covering this boundary "
+            f"({spec.scope_kind} {spec.scope_id!r}), its cmd_sha, its declared "
+            f"heal_classes {sorted(consent_classes)}, and a live coverage window. A "
+            "free-text chat utterance (however it names the boundaries) can NEVER "
+            "satisfy it — the chat channel captures no binding. To GRANT: run under an "
+            "elicitation-capable harness so the overnight-consent popup fires and "
+            "captures your typed consent BOUND to this coverage; type the consent "
+            "there (a bare 'y' cannot stand in for it)."
+        )
 
     # Legs 2 + 3 — structural (never the authorship marker): hard caps + spec
     # identity, then the armed wake.

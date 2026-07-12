@@ -63,9 +63,12 @@ _EXEMPT: dict[str, str] = {
     "_assert_reproduction_verdict_authorship": "sha-prefix leg (sample content_sha) — B4 ALIGNED",
     "_assert_conclusion_full": "E-shape sha-prefix leg (cited sha) — B4 ALIGNED",
     "_assert_challenge_filing_full": "C-gate sha-prefix leg (target + cited sha) — B4 ALIGNED",
-    "_assert_overnight_consent_authorship": (
-        "no natural temporal anchor — a standing consent precedes the boundary it "
-        "covers; parks on USER RULING 3 (B4 sweep), left untouched pending the ruling"
+    "_bound_consent_records": (
+        "bound-capture reader (USER RULING 3, 2026-07-12): selects ONLY utterances "
+        "carrying an exact ``bound`` binding a view-aware surface wrote — the chat "
+        "hook cannot forge one, so the B4 ts>=anchor exploit (a creation utterance "
+        "permanently satisfies a NAMING leg) cannot apply. Same temporal-binding-by-"
+        "vocabulary-impossibility class as the sha-prefix FILING gates."
     ),
 }
 

@@ -182,7 +182,18 @@ declared-but-dark rule).
 `append-decision` boundary (run-#12 finding 8: the elicitation bubble fires at
 `append-decision`, not at audit-view), and the human's typed `y` there IS the
 mint. So the choreography reuses the shipped elicitation firing site verbatim —
-no new consent surface. The minted anchor is the `append-decision` record itself,
+no new consent surface.
+
+**The consent capture is BOUND (USER RULING 3, 2026-07-12).** The overnight
+STANDING-CONSENT gate (`ops/decision/journal.py::_assert_overnight_consent_authorship`)
+now accepts a consent ONLY when the eliciting popup captured the typed reply
+BOUND to exactly what it covers — the boundary scope, the `cmd_sha` spec-identity,
+the declared `heal_classes`, and a coverage window (`docs/design/bound-capture.md`).
+The prior word-overlap-over-the-chat-log tier is DELETED: overnight consent is
+valid only when captured through the binding surface, never reconstructed from the
+stream. When a C1 anchor mint arrives (the env-pin anchor below, or the head-anchored
+predicate), it rides this same bound firing site — the popup names the predicate and
+binds the human's `y` to it. The minted anchor is the `append-decision` record itself,
 riding the authorship gates (a laundered anchor is the sign-off-echo class — the
 Stop hook's echo detection applies). The full render of what would be healed and
 what predicate the anchor states rides the popup body
@@ -336,6 +347,12 @@ The HEAL classification is genuinely underdetermined (**RULING-NEEDED**, §9):
 Interim (build-safe regardless of the ruling): REPORT-ONLY — surface the drift in
 every doctor brief and the morning brief; do not auto-unset.
 
+Regardless of which way the finding-24d ruling lands, the C1 env-pin-anchor mint
+(should it be chosen) rides the **bound-capture** consent seat now in force
+(USER RULING 3, 2026-07-12): the popup names the env-pin predicate and binds the
+human's `y` to that exact coverage — the same firing site the overnight standing
+consent already uses. No new consent surface is added by the env-drift heal.
+
 ## 7. Obligations that bind repairs
 
 ### 7.1 The re-verification obligation for Class B
@@ -477,6 +494,18 @@ neighboring files. Then, ordered by dependency:
 
 ## Drift log
 
+* **2026-07-12 — USER RULING 3: overnight-consent capture is bound-only (BUILT).**
+  The overnight standing-consent authorship gate
+  (`ops/decision/journal.py::_assert_overnight_consent_authorship`) moved to
+  **bound-capture ONLY** — the forensic word-overlap-over-the-utterance-log tier
+  is DELETED; consent is valid only when the eliciting popup captured the typed
+  reply BOUND to its coverage (scope, `cmd_sha`, `heal_classes`, coverage window).
+  Built end-to-end: `append_utterance(bound=…)` (Wave 1),
+  `mcp_server._overnight_consent_binding` + `_render_overnight_consent_block`
+  (the binding + the coverage the popup names), the bound reader in the gate, and
+  the retired B4 route-through exemption. Full record shape + waves in
+  `docs/design/bound-capture.md` drift log. The C1 anchor-mint choreography (§4.3,
+  §6d) inherits this same bound firing site.
 * **2026-07-11 — run-#12 census folded in (this revision).** Added §6 (findings
   20–24 as classified worked examples), §5 flagship (three-stacked-root-causes),
   §8 sequencing, §7.3 safety boundaries tied to `overnight.py` symbols. Status

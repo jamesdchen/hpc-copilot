@@ -4,8 +4,10 @@ Fires each leg of the ``overnight-consent`` authorship gate
 (``ops/decision/journal.py::_assert_overnight_consent_authorship``) and the
 consumption / morning-brief seams (``ops/overnight.py``):
 
-* the consent is the human's OWN typed utterance — a bare ack is refused, and a
-  model-composed utterance (no derivation from the harness log) is refused;
+* the consent is valid ONLY when captured at a binding surface (bound-capture,
+  USER RULING 3, 2026-07-12) — a standing free-text chat utterance never
+  satisfies it, a bound record for a different boundary/class/expiry is refused,
+  and a bound record for the firing boundary passes;
 * hard caps ride the record — missing ``expires_at`` / an already-past expiry /
   no resource cap / a missing ``cmd_sha`` binding each refuse;
 * the WAKE must be armed — an ``overnight-consent`` whose scope has no live
@@ -60,6 +62,37 @@ def _arm_wake(run_id: str) -> None:
     lease.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
 
 
+def _seed_bound(
+    experiment_dir: Path,
+    *,
+    scope_kind: str = "run",
+    scope_id: str = _RUN_ID,
+    heal_classes: list[str] | None = None,
+    cmd_sha: str | None = _CMD_SHA,
+    expires_at: str | None = None,
+    text: str = "let it run overnight to the widget canary, cap 50 dollars",
+) -> None:
+    """Seed a BOUND overnight-consent utterance (what the elicitation popup writes).
+
+    Bound-capture ONLY (USER RULING 3): the gate accepts a consent only when a
+    view-aware surface captured the typed reply BOUND to the coverage. This mints
+    that record the way ``mcp_server._overnight_consent_binding`` would.
+    """
+    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
+    bound = {
+        "channel": "elicitation",
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "block": overnight.OVERNIGHT_CONSENT_BLOCK,
+        "subject": {
+            "heal_classes": sorted(heal_classes or []),
+            "expires_at": expires_at or _iso(utcnow() + timedelta(hours=8)),
+            "cmd_sha": cmd_sha,
+        },
+    }
+    append_utterance(experiment_dir, text, bound=bound)
+
+
 def _resolved(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "expires_at": _iso(utcnow() + timedelta(hours=8)),
@@ -95,8 +128,9 @@ def _append(
 # ── happy path ────────────────────────────────────────────────────────────────
 
 
-def test_consent_records_when_wake_armed_and_caps_present(experiment_dir: Path) -> None:
+def test_consent_records_when_bound_and_wake_armed(experiment_dir: Path) -> None:
     _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
     result = _append(experiment_dir)
     records = sdj.read_decisions(experiment_dir, "run", _RUN_ID)
     assert result.count == 1
@@ -104,7 +138,15 @@ def test_consent_records_when_wake_armed_and_caps_present(experiment_dir: Path) 
     assert records[-1]["resolved"]["cmd_sha"] == _CMD_SHA
 
 
-# ── authorship (pin a) ────────────────────────────────────────────────────────
+# ── bound authorship (USER RULING 3, 2026-07-12 — bound-capture ONLY) ─────────
+
+
+def test_no_bound_record_refused(experiment_dir: Path) -> None:
+    # No binding surface captured a consent → refuse, naming the grant path.
+    _arm_wake(_RUN_ID)
+    with pytest.raises(errors.SpecInvalid, match="bound consent record") as exc:
+        _append(experiment_dir)
+    assert "popup fires" in str(exc.value)
 
 
 def test_bare_ack_refused(experiment_dir: Path) -> None:
@@ -113,23 +155,61 @@ def test_bare_ack_refused(experiment_dir: Path) -> None:
         _append(experiment_dir, response="y")
 
 
-def test_model_composed_utterance_refused_when_log_present(experiment_dir: Path) -> None:
-    _arm_wake(_RUN_ID)
-    # Seed a harness utterance log whose words do NOT overlap the consent text.
-    utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
-    append_utterance(experiment_dir, "please schedule the meeting tomorrow")
-    with pytest.raises(errors.SpecInvalid, match="logged human utterance"):
-        _append(
-            experiment_dir,
-            response="fabricated overnight authorization the human never typed",
-        )
-
-
-def test_derived_utterance_accepted_when_log_present(experiment_dir: Path) -> None:
+def test_standing_free_text_utterance_never_satisfies(experiment_dir: Path) -> None:
+    # The DELETED forensic tier: a standing free-text chat utterance whose words
+    # overlap the consent text (any age) can NEVER satisfy the gate now — it
+    # carries no binding.
     _arm_wake(_RUN_ID)
     utterances_path(experiment_dir).parent.mkdir(parents=True, exist_ok=True)
     append_utterance(experiment_dir, "let it run overnight to the widget canary, cap 50 dollars")
-    result = _append(experiment_dir)  # default response derives from that utterance
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir)
+
+
+def test_bound_record_for_different_boundary_refused(experiment_dir: Path) -> None:
+    # A bound record for a DIFFERENT spec identity (cmd_sha) does not cover this one.
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir, cmd_sha="deadbeefcafe99887766")
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir)
+
+
+def test_bound_record_missing_declared_class_refused(experiment_dir: Path) -> None:
+    # The consent declares heal_classes the bound record does NOT cover → refuse.
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir, heal_classes=["A"])
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir, resolved=_resolved(heal_classes=["A", "B"]))
+
+
+def test_expired_bound_coverage_refused(experiment_dir: Path) -> None:
+    # A bound record whose coverage window has passed no longer covers → refuse.
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir, expires_at=_iso(utcnow() - timedelta(minutes=5)))
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir)
+
+
+def test_bare_bound_text_refused(experiment_dir: Path) -> None:
+    # A bound record whose TEXT is a bare ack is still not a deliberate statement.
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir, text="y")
+    with pytest.raises(errors.SpecInvalid, match="bound consent record"):
+        _append(experiment_dir)
+
+
+def test_bound_record_for_firing_boundary_accepted(experiment_dir: Path) -> None:
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
+    result = _append(experiment_dir)
+    assert result.count == 1
+
+
+def test_bound_superset_of_declared_classes_accepted(experiment_dir: Path) -> None:
+    # The bound record may cover MORE classes than the consent declares.
+    _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir, heal_classes=["A", "B"])
+    result = _append(experiment_dir, resolved=_resolved(heal_classes=["A"]))
     assert result.count == 1
 
 
@@ -140,6 +220,7 @@ def test_missing_expires_at_composed(experiment_dir: Path) -> None:
     # Poka-yoke: an omitted expires_at is COMPOSED (next-morning boundary) and
     # DISCLOSED, not refused — the record lands.
     _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
     resolved = _resolved()
     del resolved["expires_at"]
     result = _append(experiment_dir, resolved=resolved)
@@ -155,6 +236,7 @@ def test_already_expired_at_record_time_refused(experiment_dir: Path) -> None:
     # A human-SUPPLIED past expiry is NOT overridden — the caps gate still fires
     # (composition fills omissions, never masks a bad value).
     _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
     resolved = _resolved(expires_at=_iso(utcnow() - timedelta(hours=1)))
     with pytest.raises(errors.SpecInvalid, match="future"):
         _append(experiment_dir, resolved=resolved)
@@ -163,6 +245,7 @@ def test_already_expired_at_record_time_refused(experiment_dir: Path) -> None:
 def test_no_resource_cap_composed(experiment_dir: Path) -> None:
     # Poka-yoke: neither cap present → a walltime_cap is COMPOSED + disclosed.
     _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
     resolved = _resolved()
     del resolved["budget_cap"]
     del resolved["walltime_cap"]
@@ -175,6 +258,9 @@ def test_no_resource_cap_composed(experiment_dir: Path) -> None:
 
 def test_missing_cmd_sha_binding_refused(experiment_dir: Path) -> None:
     _arm_wake(_RUN_ID)
+    # Bound record with no cmd_sha matches the cmd_sha-less consent → bound
+    # authorship passes and the STRUCTURAL caps refusal on the missing identity fires.
+    _seed_bound(experiment_dir, cmd_sha=None)
     resolved = _resolved()
     del resolved["cmd_sha"]
     with pytest.raises(errors.SpecInvalid, match="cmd_sha"):
@@ -193,6 +279,7 @@ def test_wake_not_armed_auto_armed(experiment_dir: Path, monkeypatch: pytest.Mon
         return True
 
     monkeypatch.setattr(overnight, "_arm_status_watch", _fake_arm)
+    _seed_bound(experiment_dir)
     result = _append(experiment_dir)  # no lease pre-created
     assert result.count == 1
     assert overnight.status_watch_armed(_RUN_ID) is True
@@ -202,6 +289,7 @@ def test_wake_token_absent_composed(experiment_dir: Path) -> None:
     # Poka-yoke: an omitted wake TOKEN is composed (the watch is already armed here)
     # and disclosed — the record lands rather than refusing.
     _arm_wake(_RUN_ID)
+    _seed_bound(experiment_dir)
     resolved = _resolved()
     del resolved["wake"]
     result = _append(experiment_dir, resolved=resolved)

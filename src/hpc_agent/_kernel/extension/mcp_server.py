@@ -350,6 +350,15 @@ def _render_elicitation_prompt(
         raw_view_sha = resolved.get("view_sha")
         view_sha = str(raw_view_sha).strip() if isinstance(raw_view_sha, str) else ""
 
+    # Overnight standing consent (USER RULING 3, 2026-07-12): the popup IS the
+    # binding surface — it names EXACTLY what the consent covers (the boundary,
+    # the repair classes, the caps + morning boundary) so the human's typed reply
+    # is captured BOUND to that coverage (docs/design/bound-capture.md). The
+    # binding itself is built by ``_overnight_consent_binding``; here we render
+    # what it covers, from code-selected identifiers only.
+    if block == _OVERNIGHT_CONSENT_BLOCK and scope_kind in ("run", "campaign"):
+        return "\n".join(_render_overnight_consent_block(scope_kind, scope_id, resolved))
+
     lines = ["Your sign-off must be typed by you, in your own words."]
     if scope_kind and scope_id:
         lines.append(f"Decision scope: {scope_kind} {scope_id}.")
@@ -368,6 +377,119 @@ def _render_elicitation_prompt(
         "'y' or a clicked option cannot stand in for it."
     )
     return "\n".join(lines)
+
+
+# The overnight standing-consent block terminator, duplicated as a plain literal
+# (like ``ops/overnight._DEFAULT_CHAIN_TICK_SECONDS``) so the elicitation firing
+# site never imports the ops role-root at module load. Kept in lockstep with
+# ``hpc_agent.ops.overnight.OVERNIGHT_CONSENT_BLOCK`` (a drift test could pin it).
+_OVERNIGHT_CONSENT_BLOCK = "overnight-consent"
+
+
+def _render_overnight_consent_block(
+    scope_kind: str, scope_id: str, resolved: Mapping[str, Any]
+) -> list[str]:
+    """The coverage a standing-consent popup names, from code-selected identifiers.
+
+    Names EXACTLY what the human's typed consent will be BOUND to (the same subset
+    ``_overnight_consent_binding`` copies into the record): the boundary scope, the
+    repair classes it authorizes (``heal_classes``), and the caps + morning
+    boundary. Never embeds model free text (``response`` / ``proposal`` /
+    ``evidence_digest``). The morning boundary shown is the code-composed default
+    (:func:`ops.overnight.compose_consent_defaults`) so it matches what the gate
+    records, even when the caller omitted ``expires_at``.
+    """
+    heal_classes = resolved.get("heal_classes")
+    classes = (
+        sorted(str(c) for c in heal_classes if isinstance(c, str))
+        if isinstance(heal_classes, list)
+        else []
+    )
+    try:
+        from hpc_agent.ops.overnight import compose_consent_defaults
+
+        composed = compose_consent_defaults(dict(resolved))
+        expires_at = str(composed.get("expires_at") or "")
+    except Exception:  # noqa: BLE001 — a compose failure must not wedge the popup
+        expires_at = str(resolved.get("expires_at") or "")
+    budget_cap = resolved.get("budget_cap")
+    walltime_cap = resolved.get("walltime_cap")
+
+    lines = [
+        "Your OVERNIGHT consent must be typed by you, in your own words.",
+        f"Boundary you are consenting to advance unattended: {scope_kind} {scope_id}.",
+    ]
+    lines.append(
+        "Repair classes you authorize while you sleep: "
+        + (", ".join(classes) if classes else "none (watcher re-arm only)")
+        + "."
+    )
+    if expires_at:
+        lines.append(f"Consent expires at the morning boundary: {expires_at}.")
+    caps = []
+    if isinstance(budget_cap, (int, float)) and not isinstance(budget_cap, bool):
+        caps.append(f"budget_cap={budget_cap}")
+    if isinstance(walltime_cap, (int, float)) and not isinstance(walltime_cap, bool):
+        caps.append(f"walltime_cap={walltime_cap}s")
+    if caps:
+        lines.append("Hard caps on the fallout: " + ", ".join(caps) + ".")
+    lines.append(
+        "Type your consent, naming the boundary and the caps you accept, in your "
+        "own words. A bare 'y' or a clicked option cannot stand in for it."
+    )
+    return lines
+
+
+def _overnight_consent_binding(arguments: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The ``bound`` mapping a captured overnight-consent utterance carries, or ``None``.
+
+    For an ``append-decision`` refusal on the ``overnight-consent`` block, binds the
+    human's typed reply to the EXACT coverage the popup displayed
+    (:func:`_render_overnight_consent_block`) so the gate's evidence is one exact
+    lookup, never a word-overlap over the unbound chat stream (USER RULING 3,
+    docs/design/bound-capture.md). Every value is a CODE-SELECTED identifier copied
+    from the spec — the scope tuple, the ``heal_classes`` list, the ``cmd_sha``
+    spec-identity, and a code-composed morning-boundary coverage window — NEVER
+    model free text (``response`` / ``proposal`` / ``evidence_digest``), mirroring
+    :func:`_render_elicitation_prompt`'s selection. ``None`` for any non-overnight
+    refusal (a notebook / scope-unlock sign-off carries no overnight binding).
+    """
+    spec = arguments.get("spec")
+    spec = spec if isinstance(spec, dict) else {}
+    if str(spec.get("block") or "").strip() != _OVERNIGHT_CONSENT_BLOCK:
+        return None
+    scope_kind = str(spec.get("scope_kind") or "").strip()
+    scope_id = str(spec.get("scope_id") or "").strip()
+    if scope_kind not in ("run", "campaign") or not scope_id:
+        return None
+    resolved = spec.get("resolved")
+    resolved = resolved if isinstance(resolved, dict) else {}
+    heal_classes = resolved.get("heal_classes")
+    classes = (
+        sorted(str(c) for c in heal_classes if isinstance(c, str))
+        if isinstance(heal_classes, list)
+        else []
+    )
+    cmd_sha_raw = resolved.get("cmd_sha")
+    cmd_sha = cmd_sha_raw if isinstance(cmd_sha_raw, str) and cmd_sha_raw else None
+    try:
+        from hpc_agent.ops.overnight import compose_consent_defaults
+
+        composed = compose_consent_defaults(dict(resolved))
+        expires_at = composed.get("expires_at")
+    except Exception:  # noqa: BLE001 — a compose failure must not wedge capture
+        expires_at = resolved.get("expires_at")
+    return {
+        "channel": "elicitation",
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "block": _OVERNIGHT_CONSENT_BLOCK,
+        "subject": {
+            "heal_classes": classes,
+            "expires_at": expires_at if isinstance(expires_at, str) else None,
+            "cmd_sha": cmd_sha,
+        },
+    }
 
 
 # The digest is a SIGNING surface, not a reading surface (RULING 2): a byte budget
@@ -1459,7 +1581,12 @@ class McpServer:
         from hpc_agent.state.utterances import append_utterance
 
         # ``experiment_dir`` was resolved above (shared with the render-digest read).
-        record = append_utterance(experiment_dir, text)
+        # For an overnight standing consent the capture is BOUND to the coverage the
+        # popup named (USER RULING 3, docs/design/bound-capture.md): the gate then
+        # matches this exact binding instead of word-overlapping the chat stream. A
+        # non-overnight sign-off binds nothing (``None``) — byte-identical to before.
+        bound = _overnight_consent_binding(arguments)
+        record = append_utterance(experiment_dir, text, bound=bound)
         if record is None:
             # Fail-open (no namespace / unwritable log): nothing was recorded, so
             # a retry would re-refuse identically — return the original refusal.
