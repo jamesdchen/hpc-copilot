@@ -415,9 +415,18 @@ precedent, promoted to a written contract in this doc + the verb's doc page):
 `doctor` spec's deterministic-testing precedent): the newest current
 registration record whose `conformance.review_horizon` is non-null and
 `< now` reduces **`stale`** with cause `horizon-lapsed` — time-based
-staleness joining edit-based drift in the ONE reduction, so
-`verify-registration`, the deployment refusal, and the queue all inherit it
-with zero new consumers.
+staleness joining edit-based drift in the ONE reduction. The horizon is
+inherited by every caller that threads a real `now` into that reduction: the
+attention **queue** (`ops/attention_queue.py::collect_registrations`) does,
+and it is the queue — not `verify-registration` — that carries the horizon
+leg of the **deployment gate** (bug-sweep #48 arm (a), RULING 2 2026-07-12:
+the time-aware queue owns the deployment gate). `verify-registration`
+deliberately passes `now=None` and stays TIME-INDEPENDENT so its R6 `view_sha`
+is byte-stable (a wall-clock `now` would drift the signed witness hourly); the
+caller-side deploy refusal reads the queue's `horizon-lapsed` item for the
+time leg and verify's `status` for the edit-drift leg. Zero new *reducers* —
+the one `reduce_registration` still owns the verdict; the horizon simply rides
+the queue's existing consumer rather than verify's frozen status.
 
 **The re-verdict that cures a lapse without re-registration:** a
 `"registration-review"` record on the registration's journal —

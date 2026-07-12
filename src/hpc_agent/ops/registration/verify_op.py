@@ -12,6 +12,19 @@ stale/revoked/missing subject and it NEVER blocks. The deployment refusal lives
 CALLER-SIDE (R8: "core does not own the deploy boundary"), wired against
 ``status`` in the consuming repo.
 
+**This ``status`` is TIME-INDEPENDENT by design (R6).** This op takes NO ``now``
+source and passes none into ``reduce_registration`` — so a lapsed
+``review_horizon`` (live-conformance C-horizon, a TIME-based staleness) is NOT
+reflected here. That is deliberate: the ``view_sha`` a sign-off binds is the
+canonical-JSON sha of the reduced status + legs (R6), and admitting a wall-clock
+``now`` would make an unchanged registration's witness drift by the hour. The
+DEPLOYMENT gate's horizon leg therefore lives on the TIME-aware attention queue
+(``ops/attention_queue.py::collect_registrations`` threads ``now`` into the ONE
+``reduce_registration``; ``horizon_lapsed_registration_ids`` is its read helper),
+NOT on this op — bug-sweep #48 arm (a), RULING 2 (2026-07-12): the time-aware
+queue owns the deployment gate. The caller refuses on a non-``current`` ``status``
+here OR a horizon-lapsed item there.
+
 Boundary posture (``docs/internals/engineering-principles.md`` Q1): every value
 this op touches is opaque caller data — field slugs, field values, ``subject_id``s,
 evidence notes are counted, echoed, diffed by IDENTITY, never read for meaning.

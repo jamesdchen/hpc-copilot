@@ -80,6 +80,7 @@ __all__ = [
     "collect_ssh_circuits",
     "collect_data_manifest",
     "collect_registrations",
+    "horizon_lapsed_registration_ids",
     "REGISTRATION_STALE",
     "REGISTRATION_BLOCKED",
     "REPRODUCTION_NEEDS_VERDICT",
@@ -771,6 +772,27 @@ def collect_registrations(experiment_dir: Path, *, now: str) -> list[AttentionIt
                 )
             )
     return items
+
+
+def horizon_lapsed_registration_ids(experiment_dir: Path, *, now: str) -> set[str]:
+    """Registration ids the time-aware queue flags horizon-lapsed at *now* — a read.
+
+    The DEPLOYMENT gate's TIME leg (live-conformance C-horizon; bug-sweep #48 arm
+    (a)). REUSES the ONE queue reduction (:func:`collect_registrations`, which
+    threads *now* into ``state/registration.py::reduce_registration``) and returns
+    the ids whose ``registration-stale`` item names a lapsed review horizon
+    (``evidence["stale_cause"] == HORIZON_LAPSED``). No SECOND horizon evaluation
+    is minted here — the queue owns it; drift-based staleness (``stale_cause``
+    ``None``) is deliberately excluded (it is a `verify-registration` `status`
+    leg, not the horizon leg). Read-only, fail-open per the collector it wraps.
+    """
+    from hpc_agent.state.registration import HORIZON_LAPSED
+
+    lapsed: set[str] = set()
+    for item in collect_registrations(experiment_dir, now=now):
+        if item.kind == REGISTRATION_STALE and item.evidence.get("stale_cause") == HORIZON_LAPSED:
+            lapsed.add(item.scope_id)
+    return lapsed
 
 
 def _recompute_registration_dossier(experiment_dir: Path, winner: Mapping[str, Any]) -> str | None:
