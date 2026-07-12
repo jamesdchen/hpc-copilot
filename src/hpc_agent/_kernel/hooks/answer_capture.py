@@ -155,13 +155,15 @@ def capture(payload: Any) -> list[dict[str, Any]]:
         return []
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
-    # MT1's ``actor=`` landed; None is its default, so passing it directly is
-    # byte-identical for the unset case (the old conditional **splat mapped a
-    # dict[str, str] onto the keyword-only ``bound`` param under mypy).
+    # The actor kwarg is passed only when a declared actor resolves (the tests
+    # pin the omitted-when-unset call shape). Annotated dict[str, Any]: a bare
+    # dict[str, str] splat maps onto the keyword-only ``bound`` param under
+    # mypy's invariance and broke CI's whole-tree check.
     actor = env_actor()
+    kwargs: dict[str, Any] = {"actor": actor} if actor else {}
     records = []
     for text in _typed_texts(payload):
-        record = append_utterance(cwd_dir, text, actor=actor)
+        record = append_utterance(cwd_dir, text, **kwargs)
         if record is not None:
             records.append(record)
     return records
