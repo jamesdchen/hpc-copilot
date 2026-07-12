@@ -352,5 +352,68 @@ def test_template_echo_fail_open_on_manifest_drift(tmp_path: Path) -> None:
     )
 
 
+# --- compose_audit_template: the ONE selection definition (run-#12 finding 5) ---
+
+
+def _seal_seam_pack(base: Path, name: str) -> str:
+    """Seal a minimal manifest with an ``audit_template`` seam; return manifest rel."""
+    from hpc_agent.state.pack_sweep import reseal_manifest
+
+    root = base / "packs" / name
+    (root / "templates").mkdir(parents=True, exist_ok=True)
+    (root / "templates" / "audit.py").write_text(f"# %% {name}\n", encoding="utf-8")
+    recipe = {
+        "name": name,
+        "version": "1.0.0",
+        "seams": {"audit_template": "templates/audit.py"},
+        "fills_slots": [],
+        "pack_files": ["templates/audit.py"],
+        "sweep": [],
+    }
+    (root / "sweep.json").write_text(json.dumps(recipe), encoding="utf-8")
+    rel = f"packs/{name}/manifest.json"
+    reseal_manifest(base / rel, root / "sweep.json")
+    return rel
+
+
+def test_compose_audit_template_referenced_pack_outranks_optin_order(tmp_path: Path) -> None:
+    # ``beta`` is the TARGET of a receipt_bindings slot (the program pack), so it
+    # wins over ``alpha`` despite alpha coming first in opt-in order.
+    rel_a = _seal_seam_pack(tmp_path, "alpha")
+    rel_b = _seal_seam_pack(tmp_path, "beta")
+    packs = [
+        {"pack": "alpha", "manifest": rel_a, "receipt_bindings": []},
+        {
+            "pack": "beta",
+            "manifest": rel_b,
+            "receipt_bindings": [{"slot": "s", "pack": "beta"}],
+        },
+    ]
+    chosen = pd.compose_audit_template(packs, tmp_path)
+    assert chosen is not None and chosen["pack"] == "beta"
+    assert chosen["value"] == "packs/beta/templates/audit.py"
+    assert chosen["source"] == "pack_audit_template_seam"
+
+
+def test_compose_audit_template_falls_back_to_optin_order(tmp_path: Path) -> None:
+    # No referenced candidate → the FIRST opted-in pack with the seam wins.
+    rel_a = _seal_seam_pack(tmp_path, "alpha")
+    rel_b = _seal_seam_pack(tmp_path, "beta")
+    packs = [
+        {"pack": "alpha", "manifest": rel_a, "receipt_bindings": []},
+        {"pack": "beta", "manifest": rel_b, "receipt_bindings": []},
+    ]
+    chosen = pd.compose_audit_template(packs, tmp_path)
+    assert chosen is not None and chosen["pack"] == "alpha"
+
+
+def test_compose_audit_template_none_when_nothing_composes(tmp_path: Path) -> None:
+    # Empty opt-in / unreadable manifests → None (the audit-preflight seat then
+    # refuses LOUDLY; pinned in tests/ops/test_audit_preflight.py).
+    assert pd.compose_audit_template([], tmp_path) is None
+    packs = [{"pack": "ghost", "manifest": "packs/ghost/manifest.json"}]
+    assert pd.compose_audit_template(packs, tmp_path) is None
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
