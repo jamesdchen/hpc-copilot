@@ -210,9 +210,7 @@ class TestResolveSshTarget:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(p))
         return p
 
-    def test_host_change_resolves_to_new_host_with_no_record_surgery(
-        self, tmp_path, monkeypatch
-    ):
+    def test_host_change_resolves_to_new_host_with_no_record_surgery(self, tmp_path, monkeypatch):
         # The record was submitted when `discovery` pointed at discovery2; its
         # FROZEN ssh_target still says discovery2. A login-node failover edits
         # clusters.yaml to discovery1 — a CONFIG change, no journal surgery.

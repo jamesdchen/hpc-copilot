@@ -49,15 +49,7 @@ def _worker_prompt_file(tmp_path: Path, body: str, *, name: str = "demo.md") -> 
     logic is exercised by handing the path straight to :func:`lint_file`, not
     by scanning a root through ``main``.
     """
-    p = (
-        tmp_path
-        / "src"
-        / "hpc_agent"
-        / "_kernel"
-        / "extension"
-        / "worker_prompts"
-        / name
-    )
+    p = tmp_path / "src" / "hpc_agent" / "_kernel" / "extension" / "worker_prompts" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
     return p
