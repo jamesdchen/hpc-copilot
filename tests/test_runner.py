@@ -781,9 +781,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
         # Existence check: pretend task 1's output is missing.
-        return _completed(
-            stdout="MISSING:results/metrics.1.json\n" + _OUTPUTS_ACK, returncode=0
-        )
+        return _completed(stdout="MISSING:results/metrics.1.json\n" + _OUTPUTS_ACK, returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = verify_per_task_outputs(
