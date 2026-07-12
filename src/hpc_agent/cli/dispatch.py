@@ -263,14 +263,24 @@ def _record_detached_failure_terminal(exit_code: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    try:
-        rc = _dispatch_main(argv)
-    except Exception:
-        _record_detached_failure_terminal(3)
-        raise
-    if rc != 0:
-        _record_detached_failure_terminal(rc)
-    return rc
+    # A DETACHED worker heartbeats liveness into its captured log while the verb
+    # runs (run-#12 findings 3/16/27, the >10s-progress discipline): a 0-byte log
+    # for minutes of legitimate scp/rsync work is indistinguishable from a
+    # frozen-at-birth freeze without it. No-op unless this process is a detached
+    # worker (HPC_DETACHED_RUN_ID set) and HPC_DETACH_HEARTBEAT_SEC > 0. Started
+    # before the verb runs, stopped in the CM's finally AFTER the verb returns —
+    # so the wait-first loop never emits a line after the final envelope.
+    from hpc_agent._kernel.lifecycle.heartbeat import detached_heartbeat
+
+    with detached_heartbeat():
+        try:
+            rc = _dispatch_main(argv)
+        except Exception:
+            _record_detached_failure_terminal(3)
+            raise
+        if rc != 0:
+            _record_detached_failure_terminal(rc)
+        return rc
 
 
 def _dispatch_main(argv: list[str] | None = None) -> int:

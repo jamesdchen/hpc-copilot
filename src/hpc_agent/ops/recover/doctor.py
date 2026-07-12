@@ -284,6 +284,15 @@ def scan_dead_detached_workers(experiment_dir: Path, *, now: str) -> list[dict[s
     per-experiment ``.hpc/runs/`` terminal store. No SSH. Fail-open: an absent
     dir, an unreadable/pid-less/foreign-experiment lease, or a lease still
     naming a LIVE pid yields nothing surfaced.
+
+    FUTURE (not implemented): this scan only catches a worker whose pid is DEAD.
+    A worker that is ALIVE but wedged mid-flight is invisible here. Each lease has
+    a sibling ``_detached/*.log`` into which
+    :func:`hpc_agent._kernel.lifecycle.heartbeat.detached_heartbeat` appends an
+    ``[hb] alive Ns …`` line every ~30s; reading that log's last ``[hb]`` line
+    beside a LIVE lease — a stale elapsed stamp, or a ``frozen-at-birth suspect``
+    flag — would extend this scan from "dead pid, no terminal" to "alive but
+    frozen", the finding-16 signature. Left as a note so the seam is discoverable.
     """
     detached_dir = _current_homedir() / "_detached"
     if not detached_dir.is_dir():
