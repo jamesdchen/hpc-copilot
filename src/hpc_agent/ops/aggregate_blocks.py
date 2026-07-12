@@ -43,7 +43,7 @@ from hpc_agent._wire.workflows.aggregate_blocks import (
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
 from hpc_agent.ops.aggregate.invariants import verify_aggregation_complete
-from hpc_agent.ops.aggregate_flow import aggregate_flow
+from hpc_agent.ops.aggregate_flow import aggregate_flow, per_task_fallback_reducible
 from hpc_agent.ops.aggregate_preflight import aggregate_preflight
 from hpc_agent.ops.block_gate import assert_greenlit_target
 from hpc_agent.ops.monitor.harvest_guard import harvest_marker_path
@@ -51,6 +51,7 @@ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
+from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -201,6 +202,54 @@ def _integrity_issues(vac: dict[str, Any], *, allow_partial: bool) -> list[dict[
     return issues
 
 
+def _reducibility_issue(experiment_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """Surface, BEFORE the greenlight, a run that can NEVER reduce (finding 28).
+
+    A run submitted with NO ``aggregate_cmd`` (no custom / pack reducer) AND whose
+    declared summary artifact is non-JSON takes the built-in no-combiner per-task
+    fallback at aggregate-run — a JSON weighted-mean (:func:`reduce_metrics`) that
+    structurally cannot reduce the artifact. The run path refuses at RUN time, but
+    only after a 40+ minute results/ pull; the condition is knowable HERE from the
+    sidecar the submit wrote (``aggregate_defaults.aggregate_cmd`` +
+    ``resolved_summary_artifact``), so surface it as a never-auto-masked readiness
+    decision — the SAME predicate the run path keys on
+    (:func:`per_task_fallback_reducible`), lifted so the two can never disagree.
+
+    Returns the issue dict, or ``None`` when the run has a reducer / a JSON
+    artifact / no readable sidecar. Best-effort: a missing or corrupt sidecar is
+    not this gate's concern (the readiness gate already handles a missing record).
+    """
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, ValueError, errors.HpcError):
+        return None
+    if not isinstance(sidecar, dict):
+        return None
+    # Same records the run path reads in aggregate_flow._combiner_only_reduce: an
+    # aggregate_cmd routes to the custom reducer (cluster-reduce hint), never this
+    # fallback — so no aggregate_cmd is the precondition for the fallback firing.
+    has_agg_cmd = bool((sidecar.get("aggregate_defaults") or {}).get("aggregate_cmd"))
+    if has_agg_cmd:
+        return None
+    summary_name = resolved_summary_artifact(sidecar)
+    if per_task_fallback_reducible(summary_name):
+        return None
+    return {
+        "issue": "non_reducible_summary_artifact",
+        "detail": {"summary_artifact": summary_name, "aggregate_cmd": None},
+        "recommendation": (
+            f"this run has NO aggregate_cmd and declares a non-JSON summary "
+            f"artifact ({summary_name!r}); the built-in no-combiner per-task "
+            f"fallback is a JSON weighted-mean (reduce_metrics) and can NEVER "
+            f"reduce it — the reduce would refuse at aggregate-run after a full "
+            f"results/ pull. Register an aggregate_cmd / pack reducer that "
+            f"understands the artifact, or re-submit declaring a JSON summary "
+            f"artifact."
+        ),
+        "auto_masked": False,
+    }
+
+
 # ── run helpers ───────────────────────────────────────────────────────────────
 
 
@@ -337,6 +386,19 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
         # Combiner not pulled yet (pre-run check) — nothing to verify or mask
         # here; aggregate-run owns the post-pull integrity verification.
         integrity_checked = False
+
+    # Reducibility readiness (finding 28): a run with NO aggregate_cmd and a
+    # non-JSON summary artifact takes the no-combiner per-task fallback, which can
+    # NEVER reduce it — knowable HERE from the sidecar, surfaced before the
+    # greenlight instead of after a 40+ min pull. Gated on integrity NOT checked:
+    # ``integrity_checked`` is True iff a local ``_combiner/`` was found, meaning
+    # the combiner ran and aggregate-run reduces via ``local_reduce`` (never the
+    # per-task fallback) — so there is no reducibility problem to surface then.
+    if not integrity_checked:
+        reducibility = _reducibility_issue(experiment_dir, run_id)
+        if reducibility is not None:
+            integrity_issues = [*integrity_issues, reducibility]
+
     brief["integrity_checked"] = integrity_checked
     brief["integrity_report"] = integrity_report
     brief["integrity_issues"] = integrity_issues  # never auto-masked (§2)
@@ -406,8 +468,6 @@ def _agg_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
     mismatch is "the tree moved → do not replay a stale outcome". An
     unreadable/absent sidecar yields ``""`` → the replay refuses (re-execute).
     """
-    from hpc_agent.state.runs import read_run_sidecar
-
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
     except (OSError, ValueError, errors.HpcError):

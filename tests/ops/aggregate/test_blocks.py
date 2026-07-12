@@ -212,6 +212,102 @@ def test_check_missing_waves_blocks_by_default_but_not_under_allow_partial(
     assert "missing_waves" in surfaced
 
 
+# ── aggregate-check: reducibility readiness (run #12 finding 28) ──────────────
+
+
+def _write_sidecar(experiment_dir: Path, **overrides: Any) -> None:
+    """Write a per-run sidecar for the reducibility readiness gate.
+
+    ``summary_artifact`` / ``aggregate_defaults`` are the two records the gate
+    reads (mirrors the run path's ``_combiner_only_reduce`` decision)."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    base: dict[str, Any] = {
+        "cmd_sha": "deadbeef",
+        "run_id": _RUN_ID,
+        "hpc_agent_version": "0.0.0-test",
+        "submitted_at": "2026-01-01T00:00:00+00:00",
+        "executor": "python run.py",
+        "result_dir_template": "results/causal_tune_linear/{estimator}/task-{task_id}",
+        "task_count": 4,
+        "tasks_py_sha": "",
+    }
+    base.update(overrides)
+    write_run_sidecar(experiment_dir, **base)
+
+
+def test_check_surfaces_non_reducible_csv_artifact_before_greenlight(
+    journal_home, experiment
+) -> None:
+    """Finding 28: a terminal run with NO aggregate_cmd and a non-JSON summary
+    artifact can NEVER reduce through the built-in per-task fallback — surfaced at
+    CHECK time as a never-auto-masked blocking issue, before the 40+ min pull."""
+    upsert_run(experiment, _record(status="complete"))
+    _write_sidecar(experiment, summary_artifact="causal_tune_linear/metrics_table.csv")
+    spec = AggregateCheckSpec(run_id=_RUN_ID, run_preflight=False)
+
+    # Integrity unavailable (no combiner pulled yet) — the common pre-run shape.
+    with mock.patch.object(
+        blocks,
+        "verify_aggregation_complete",
+        side_effect=errors.SpecInvalid("combiner_dir_local is not a directory"),
+    ):
+        result = blocks.aggregate_check(experiment, spec=spec)
+
+    assert result.stage_reached == "integrity_review"
+    assert result.needs_decision is True
+    issues = {i["issue"]: i for i in result.brief["integrity_issues"]}
+    assert "non_reducible_summary_artifact" in issues
+    issue = issues["non_reducible_summary_artifact"]
+    assert issue["auto_masked"] is False
+    assert issue["detail"]["summary_artifact"] == "causal_tune_linear/metrics_table.csv"
+    assert "aggregate_cmd" in issue["recommendation"]
+
+
+def test_check_no_reducibility_issue_when_aggregate_cmd_present(journal_home, experiment) -> None:
+    """An aggregate_cmd routes to the custom reducer, never the per-task fallback —
+    so a non-JSON artifact is NOT a reducibility problem. No issue, stays ready."""
+    upsert_run(experiment, _record(status="complete"))
+    _write_sidecar(
+        experiment,
+        summary_artifact="causal_tune_linear/metrics_table.csv",
+        aggregate_defaults={"aggregate_cmd": "python reduce.py"},
+    )
+    spec = AggregateCheckSpec(run_id=_RUN_ID, run_preflight=False)
+
+    with mock.patch.object(
+        blocks,
+        "verify_aggregation_complete",
+        side_effect=errors.SpecInvalid("combiner_dir_local is not a directory"),
+    ):
+        result = blocks.aggregate_check(experiment, spec=spec)
+
+    assert result.stage_reached == "ready"
+    assert result.needs_decision is False
+    surfaced = {i["issue"] for i in result.brief["integrity_issues"]}
+    assert "non_reducible_summary_artifact" not in surfaced
+
+
+def test_check_no_reducibility_issue_for_json_artifact(journal_home, experiment) -> None:
+    """A JSON summary artifact reduces cleanly through the per-task fallback — no
+    reducibility issue even with no aggregate_cmd."""
+    upsert_run(experiment, _record(status="complete"))
+    _write_sidecar(experiment, summary_artifact="metrics.json")
+    spec = AggregateCheckSpec(run_id=_RUN_ID, run_preflight=False)
+
+    with mock.patch.object(
+        blocks,
+        "verify_aggregation_complete",
+        side_effect=errors.SpecInvalid("combiner_dir_local is not a directory"),
+    ):
+        result = blocks.aggregate_check(experiment, spec=spec)
+
+    assert result.stage_reached == "ready"
+    assert result.needs_decision is False
+    surfaced = {i["issue"] for i in result.brief["integrity_issues"]}
+    assert "non_reducible_summary_artifact" not in surfaced
+
+
 # ── aggregate-run: results table + empty interpretation slot ──────────────────
 
 

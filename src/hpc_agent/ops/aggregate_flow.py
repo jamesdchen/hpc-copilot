@@ -79,7 +79,23 @@ from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
 
-__all__ = ["aggregate_flow", "AggregateFlowResult"]
+__all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
+
+
+def per_task_fallback_reducible(summary_name: str) -> bool:
+    """Whether the no-combiner per-task weighted-mean fallback CAN reduce a run
+    whose declared summary artifact is *summary_name*.
+
+    The fallback (:func:`_per_task_metrics_reduce` → :func:`reduce_metrics`) is a
+    JSON weighted-mean: it ``json.load``s each per-task sidecar. A non-JSON
+    artifact (run #12's pack-reduced ``causal_tune_linear/metrics_table.csv``) has
+    NO path through it. This is the ONE definition of that limit — the run-path
+    refusal (BEFORE the 40+ min pull, in ``_per_task_metrics_reduce``) and the
+    aggregate-CHECK readiness surface (BEFORE the greenlight, in
+    ``ops.aggregate_blocks``) both key on it, so the two can never disagree
+    (run #12 finding 28).
+    """
+    return summary_name.lower().endswith(".json")
 
 
 @dataclass(frozen=True)
@@ -365,7 +381,7 @@ def _per_task_metrics_reduce(
     # `causal_tune_linear/metrics_table.csv`) has no path through here — the
     # old behavior paid the full results/ mirror twice and then blamed the
     # tasks ("likely never wrote") for a reducer-side format limit.
-    if not summary_name.lower().endswith(".json"):
+    if not per_task_fallback_reducible(summary_name):
         raise errors.RemoteCommandFailed(
             f"no cluster-side _combiner/ for run_id {run_id!r} and the run "
             f"declares a non-JSON summary artifact ({summary_name!r}) — the "
