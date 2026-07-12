@@ -71,7 +71,36 @@ from typing import Any
 # Re-exported from the CLI primitive so this hook and the verbs can never drift.
 from hpc_agent.cli.skill_returns import _KNOWN_SKILLS, _committed_path
 
-__all__ = ["build_hook_output", "extract_emit_invocation", "main"]
+__all__ = [
+    "build_hook_output",
+    "extract_emit_invocation",
+    "main",
+    "read_committed_envelope",
+]
+
+
+def read_committed_envelope(experiment_dir: Path, skill: str) -> str | None:
+    """The committed sub-skill return envelope as canonical JSON, or ``None``.
+
+    The ONE reader both the PostToolUse autofetch and the Stop-guard completer
+    (:mod:`hpc_agent._kernel.hooks.skill_return_stop_guard`) route through — the
+    same bytes ``fetch-skill-return`` would print to stdout (``json.dumps(...,
+    sort_keys=True)``). A missing / permission-denied file (the emit itself
+    failed validation) or non-JSON content yields ``None`` (the caller stays a
+    clean no-op). Read-only: it never clears the file — the autofetch is purely
+    additive, and the completer clears explicitly once it has injected.
+    """
+    committed = _committed_path(experiment_dir, skill)
+    try:
+        envelope_text = committed.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        envelope = json.loads(envelope_text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return json.dumps(envelope, sort_keys=True)
+
 
 # The emit must be an ACTUAL ``hpc-agent emit-skill-return`` invocation, not a
 # mere mention of the substring — a read-only ``grep -- emit-skill-return
@@ -198,23 +227,15 @@ def build_hook_output(payload: Any) -> dict[str, Any] | None:
     else:
         experiment_dir = Path(os.getcwd())
 
-    committed = _committed_path(experiment_dir, skill)
-    try:
-        envelope_text = committed.read_text(encoding="utf-8")
-    except OSError:
-        # Missing file / permission / not-a-file → the parent's own
-        # fetch-skill-return surfaces the typed "skill_return_missing"
-        # envelope. The hook stays silent rather than inventing one.
+    # The ONE shared reader (also used by the Stop-guard completer): a missing /
+    # permission-denied file (the emit itself failed validation) or non-JSON
+    # content yields None → the parent's own fetch-skill-return surfaces the
+    # typed "skill_return_missing" envelope; the hook stays silent rather than
+    # inventing one. The canonical serialization matches fetch-skill-return's
+    # stdout exactly.
+    additional_context = read_committed_envelope(experiment_dir, skill)
+    if additional_context is None:
         return None
-
-    try:
-        # Parse only to validate it is JSON; re-serialise canonically so the
-        # injected context matches fetch-skill-return's stdout exactly.
-        envelope = json.loads(envelope_text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-    additional_context = json.dumps(envelope, sort_keys=True)
     return {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",

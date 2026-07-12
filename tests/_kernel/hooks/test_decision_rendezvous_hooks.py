@@ -421,3 +421,207 @@ def test_extract_drive_invocation_parses_run_id_and_dir() -> None:
 
 def test_extract_drive_invocation_none_without_block_drive() -> None:
     assert fetch.extract_drive_invocation("hpc-agent doctor --run-id r-1") is None
+
+
+# ─── the COMPLETER (RULED 2026-07-12): run the mechanical tick in code ────────
+#
+# Dark by default: with no capability declared, every Stop-guard test ABOVE
+# exercises the REJECTOR verbatim. Activating HPC_STOP_HOOK_APPEND flips the
+# completer on — code runs the parked block-drive tick itself, gated on a
+# MECHANICAL next verb + a HEALTHY transport (breaker closed). The fork-exhaustion
+# night (finding 20/21) is the breaker-open counter-example: the completer must
+# refuse and degrade to the rejector byte-for-byte.
+
+from hpc_agent.infra import ssh_circuit  # noqa: E402
+from hpc_agent.state.journal import clear_pending_decision  # noqa: E402
+
+_MECH_NEXT_VERB = "submit-s3"
+
+
+def _park_mechanical(exp: Path, run_id: str = _RUN_ID) -> None:
+    """Park at a boundary whose successor is a REAL chain block (mechanical)."""
+    upsert_run(exp, _record(run_id))
+    mark_pending_decision(
+        run_id,
+        block="submit-s2",
+        workflow=_WORKFLOW,
+        brief=_BRIEF,
+        resume_cursor={
+            "workflow": _WORKFLOW,
+            "run_id": run_id,
+            "next_verb": _MECH_NEXT_VERB,
+            "current_verb": "submit-s2",
+        },
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=exp,
+    )
+
+
+def _commit_y_targeting(exp: Path, next_block: str, run_id: str = _RUN_ID) -> None:
+    append_decision(
+        exp,
+        scope_kind="run",
+        scope_id=run_id,
+        block="submit-s2",
+        response="y",
+        resolved={"approved": True, "next_block": next_block},
+    )
+
+
+def _activate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HPC_STOP_HOOK_APPEND", "1")
+
+
+def _open_breaker(host: str = "h") -> None:
+    """Trip the SSH circuit for *host* — a genuinely-cooling OPEN state."""
+    import time
+
+    path = ssh_circuit.circuit_state_path(host)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = ssh_circuit._fresh_doc(host)
+    doc.update({"state": "open", "opened_at": time.time(), "cooldown_sec": 300.0})
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_completer_dark_default_is_rejector_identical(tmp_path: Path, monkeypatch) -> None:
+    """With NO capability declared (the default landing) the mechanical advance
+    the completer would run instead BOUNCES — rejector-identical."""
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "systemMessage" not in out
+    assert "block-drive" in out["reason"]
+
+
+def test_completer_advance_clears_marker_no_bounce(tmp_path: Path, monkeypatch) -> None:
+    """Capability declared + mechanical verb + healthy transport → code runs the
+    tick; on advance the marker clears and the stop PROCEEDS (no bounce)."""
+    _activate(monkeypatch)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+
+    called: dict = {}
+
+    def _fake_tick(exp: Path, run_id: str, workflow: str | None):
+        called["hit"] = (run_id, workflow)
+        clear_pending_decision(run_id, experiment_dir=exp)  # advanced → marker cleared
+        return type("R", (), {"action": "advanced", "brief": None})(), 0
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _fake_tick)
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+
+    assert called["hit"] == (_RUN_ID, _WORKFLOW)
+    assert out is not None
+    assert "decision" not in out
+    assert "advanced the driver in code" in out["systemMessage"]
+
+
+def test_completer_breaker_open_degrades_to_rejector(tmp_path: Path, monkeypatch) -> None:
+    """The fork-exhaustion night: transport breaker OPEN → the completer REFUSES
+    and the output is byte-identical to today's rejector; the tick never runs."""
+    _activate(monkeypatch)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+    _open_breaker("h")  # the run record's ssh_target is "u@h"
+
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("the tick must not run against an open breaker")
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _must_not_run)
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+
+    # Byte-identical to the pure rejector.
+    monkeypatch.delenv("HPC_STOP_HOOK_APPEND", raising=False)
+    assert out == guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None and out["decision"] == "block" and "systemMessage" not in out
+
+
+def test_completer_judgment_verb_degrades_to_rejector(tmp_path: Path, monkeypatch) -> None:
+    """A JUDGMENT next verb (a recovery arm, not a chain block) → the completer
+    refuses and bounces; the model must author the resume."""
+    _activate(monkeypatch)
+    upsert_run(tmp_path, _record())
+    mark_pending_decision(
+        _RUN_ID,
+        block="submit-s2",
+        workflow=_WORKFLOW,
+        brief=_BRIEF,
+        resume_cursor={"workflow": _WORKFLOW, "run_id": _RUN_ID, "next_verb": "retarget-run"},
+        awaiting_since="2026-07-03T00:30:00+00:00",
+        experiment_dir=tmp_path,
+    )
+    _commit_y_targeting(tmp_path, "retarget-run")
+
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("a judgment verb must not run the tick")
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _must_not_run)
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None and out["decision"] == "block" and "systemMessage" not in out
+
+
+def test_completer_new_boundary_reparks_bounces_with_brief(tmp_path: Path, monkeypatch) -> None:
+    """The tick advances but re-parks at a NEW boundary (a fresh human decision):
+    render-a-proposal is model judgment → bounce carrying the fresh brief."""
+    _activate(monkeypatch)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+
+    fresh_brief = {"proposal": "s3 wants a bigger budget", "cost": 99}
+
+    def _fake_tick(exp: Path, run_id: str, workflow: str | None):
+        clear_pending_decision(run_id, experiment_dir=exp)
+        wf = workflow or _WORKFLOW
+        mark_pending_decision(  # re-park at a NEW boundary (submit-s4)
+            run_id,
+            block=_MECH_NEXT_VERB,
+            workflow=wf,
+            brief=fresh_brief,
+            resume_cursor={"workflow": wf, "run_id": run_id, "next_verb": "submit-s4"},
+            awaiting_since="2026-07-03T02:00:00+00:00",
+            experiment_dir=exp,
+        )
+        return type("R", (), {"action": "advanced", "brief": fresh_brief})(), 0
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _fake_tick)
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None
+    assert out["decision"] == "block"
+    assert "submit-s4" in out["reason"]
+    assert "bigger budget" in out["reason"]  # the fresh brief rode the reason
+
+
+def test_completer_same_boundary_repark_proceeds(tmp_path: Path, monkeypatch) -> None:
+    """The tick ran but did not advance (same boundary re-parked — not_ready /
+    first-span failure): a model bounce buys nothing (finding 21) → PROCEED."""
+    _activate(monkeypatch)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+
+    def _fake_tick(exp: Path, run_id: str, workflow: str | None):
+        # Leave the marker exactly as parked (the block did not advance).
+        return type("R", (), {"action": "skip", "brief": None})(), 1
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _fake_tick)
+    out = guard.build_hook_output(_stop_payload(tmp_path))
+    assert out is not None
+    assert "decision" not in out
+    assert "did not advance" in out["systemMessage"]
+
+
+def test_completer_stop_hook_active_never_runs_tick(tmp_path: Path, monkeypatch) -> None:
+    """Loop safety: a forced continuation passes through BEFORE the completer,
+    so the tick never runs on a stop_hook_active re-entry."""
+    _activate(monkeypatch)
+    _park_mechanical(tmp_path)
+    _commit_y_targeting(tmp_path, _MECH_NEXT_VERB)
+
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("stop_hook_active must short-circuit before the tick")
+
+    monkeypatch.setattr(guard, "_run_drive_tick", _must_not_run)
+    assert guard.build_hook_output(_stop_payload(tmp_path, stop_hook_active=True)) is None
