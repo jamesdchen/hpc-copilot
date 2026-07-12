@@ -55,19 +55,28 @@ _ANNOUNCE_ACK = "__HPC_ANNOUNCE_ACK__"
 def read_announcements(
     *, ssh_target: str, remote_path: str, run_id: str, task_count: int
 ) -> dict[str, int]:
-    """Return ``{announced, complete, failed, missing}`` from the cluster markers.
+    """Return ``{present, announced, complete, failed, missing}`` from the markers.
 
     ONE bounded ssh exec: ``cd`` into ``<remote_path>/.hpc/announce/<run_id>``
     and, only on success, echo the ack then two pure ``ls … | wc -l`` counts —
     one per filename-encoded state. ``announced = complete + failed``;
     ``missing = max(0, task_count - announced)``.
 
-    A missing announce dir (a pre-announce run) or a read carrying no positive
-    ack returns all-zero counts (``announced == 0``) — the capability signal the
-    caller uses to fall through to the legacy probe path unchanged. An ssh
+    ``present`` is the capability signal — ``True`` iff the positive ack was
+    seen, i.e. the announce dir EXISTS (this is an announce-era run whose
+    dispatcher has written at least one terminal marker). A missing announce dir
+    (a pre-announce run, or a run no task has finished yet — the dispatcher
+    creates the dir lazily on the FIRST marker) or a read carrying no positive
+    ack returns ``present == False`` with all-zero counts (``announced == 0``):
+    the caller falls through to the legacy probe / reporter-walk path. An ssh
     TRANSPORT failure (rc != 0, e.g. rc 255) raises
     :class:`~hpc_agent.errors.RemoteCommandFailed` so the caller never reads a
     connectivity blip as "nothing announced".
+
+    Phase-1 consumers (``reconcile``) key off ``announced > 0`` and ignore
+    ``present``; the Phase-2 monitor poll loop keys off ``present`` to prefer
+    this ONE-readdir census over the per-task reporter walk for the whole
+    lifecycle (``docs/design/crash-only-monitoring.md``).
     """
     announce_dir = f"{remote_path.rstrip('/')}/{ANNOUNCE_SUBPATH}/{run_id}"
     n_complete = f'"$(ls task_*.{ANNOUNCE_STATE_COMPLETE} 2>/dev/null | wc -l)"'
@@ -88,11 +97,18 @@ def read_announcements(
         # No positive ack: the announce dir doesn't exist yet (pre-announce run)
         # or the read was truncated. Treat as "no announcements" — the caller
         # falls through to the legacy probe path unchanged.
-        return {"announced": 0, "complete": 0, "failed": 0, "missing": max(0, int(task_count))}
+        return {
+            "present": 0,
+            "announced": 0,
+            "complete": 0,
+            "failed": 0,
+            "missing": max(0, int(task_count)),
+        }
     complete = _parse_count(lines, "complete=")
     failed = _parse_count(lines, "failed=")
     announced = complete + failed
     return {
+        "present": 1,
         "announced": announced,
         "complete": complete,
         "failed": failed,

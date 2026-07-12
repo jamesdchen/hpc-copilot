@@ -80,5 +80,30 @@ Run-#12 evidence file: findings 3/16/17.3/19 in run12-findings.md.
     zero markers fall through byte-identically (old runs unchanged).
   TRUST BOUNDARY (stated in both module docstrings): markers settle LIFECYCLE
   only — the aggregate integrity gate still independently verifies outputs.
+- **Phase 2 (watch consumes announcements end-to-end), implemented
+  2026-07-12.** The `monitor_flow` poll loop now prefers the ONE-readdir
+  announce census over the per-task reporter WALK for the WHOLE lifecycle —
+  not just at terminal (the G1 plan's "steady state when the watch consumes
+  announcements end-to-end"). Each tick, `_announce_status` reads the markers
+  in one bounded ssh exec; when the announce dir EXISTS (an announce-era run),
+  the run's status is resolved from the census with NO walk, the not-yet-
+  terminal (`missing`) tasks map to `pending` so the shared classifier
+  (`classify.classify_polling`) reads a PARTIAL census as still-in-flight and
+  a FULL one settles terminal exactly as the walk would for the same counts.
+  A pre-announce run (no announce dir yet) falls back to the reporter walk,
+  DISCLOSED (`docs/internals/fallback-inventory.md`: once-per-call INFO +
+  in-band `status_source` on every tick) — the fallback need decays as
+  pre-announce runs age out. `read_announcements` grew a `present` capability
+  flag for this (the ack/no-ack distinction Phase 1 collapsed). File:
+  `ops/monitor_flow.py::_announce_status` + the poll-loop announce-first branch;
+  pinned by `tests/ops/monitor/test_flow_announce.py`.
+  Also this window: **bug-sweep #44** — reconcile's PURE-API branch settled on
+  a count-less `{"checked_at": ...}` summary, so a finished pure-API run whose
+  jobs aged out of the live queue was flipped `abandoned` (the #351 class,
+  pure-API path). Reconcile now pulls `backend.task_statuses` (the same shape
+  `record_status` uses) so `settle` sees real completion/failure evidence; a
+  liveness-only backend keeps the pinned abandoned via `NotImplementedError`,
+  a query failure routes through `unable_to_verify`. Pinned by
+  `tests/ops/monitor/test_monitor_pure_api.py`.
   Still banked, NOT yet built: the sentinel job (W1), the stateless watchdog
   poll leg (W2), status-watch re-labeling (W3), ssh-gateway unification (W4).

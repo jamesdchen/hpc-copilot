@@ -717,17 +717,43 @@ def _reconcile_one(
         # there is no SSH status reporter and no wave-listing to do, so the
         # combiner waves stay as the journal recorded them.
         from hpc_agent.infra.backends.remote_factory import backend_for_record
+        from hpc_agent.ops.monitor.status import _pure_api_status_summary
 
-        summary = {"checked_at": utcnow_iso()}
         reporter_failed = False
         combined = list(record.combined_waves)
+        backend = backend_for_record(record, scheduler=scheduler)
         try:
-            alive = backend_for_record(record, scheduler=scheduler).alive_job_ids(record.job_ids)
+            alive = backend.alive_job_ids(record.job_ids)
             alive_check_failed = False
         except Exception as exc:
             alive = list(record.job_ids)  # treat as still alive on error
             warnings.append(f"alive check: {exc}")
             alive_check_failed = True
+        # #44: settle on REAL per-task counts, not a count-less summary. A
+        # finished pure-API run whose jobs aged out of the live queue
+        # (``alive == []``) would otherwise hit the settle guard below with a
+        # ``{"checked_at": ...}`` summary — where ``all_tasks_complete`` is False
+        # by construction — and be flipped ``abandoned`` (the #351 "finished run
+        # read as abandoned" class, re-opened on the pure-API path). Mirror
+        # ``record_status``'s pure-API branch: pull ``task_statuses`` and build
+        # the SAME summary shape (``_pure_api_status_summary``), so ``settle``
+        # sees the completion/failure evidence the backend can prove.
+        try:
+            per_task = backend.task_statuses(record.job_ids, total_tasks=record.total_tasks)
+        except NotImplementedError:
+            # Liveness-only backend: no per-task counts exist. Keep the
+            # count-less summary — ``settle`` then yields the pinned ``abandoned``
+            # for a genuinely evidence-less record (the liveness-only contract).
+            summary = {"checked_at": utcnow_iso()}
+        except Exception as exc:  # noqa: BLE001 — a real query failure is UNKNOWN, not abandon
+            # A task_statuses failure (auth/network) is not evidence of
+            # abandonment — route through ``unable_to_verify`` (reporter_failed)
+            # exactly like an ssh reporter failure, never silent abandon.
+            summary = {"checked_at": utcnow_iso()}
+            warnings.append(f"task statuses: {exc}")
+            reporter_failed = True
+        else:
+            summary = _pure_api_status_summary(per_task)
     else:
         # --- Crash-only Phase-1 announce fast path (docs/design/crash-only-monitoring.md) ---
         # The dispatcher writes ONE per-task marker file on its terminal

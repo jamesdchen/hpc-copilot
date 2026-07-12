@@ -46,7 +46,7 @@ def test_full_announcement_counts_complete_and_failed(monkeypatch: pytest.Monkey
     res = announce.read_announcements(
         ssh_target="u@h", remote_path="/remote/exp", run_id="r1", task_count=10
     )
-    assert res == {"announced": 10, "complete": 8, "failed": 2, "missing": 0}
+    assert res == {"present": 1, "announced": 10, "complete": 8, "failed": 2, "missing": 0}
     # ONE exec, pointed at the per-run announce dir, pure-ls (no cat).
     assert "/remote/exp/.hpc/announce/r1" in captured["cmd"]
     assert "cat" not in captured["cmd"]
@@ -59,7 +59,7 @@ def test_partial_announcement_reports_missing(monkeypatch: pytest.MonkeyPatch) -
     res = announce.read_announcements(
         ssh_target="u@h", remote_path="/remote", run_id="r1", task_count=10
     )
-    assert res == {"announced": 3, "complete": 3, "failed": 0, "missing": 7}
+    assert res == {"present": 1, "announced": 3, "complete": 3, "failed": 0, "missing": 7}
 
 
 def test_no_ack_reads_as_no_announcements(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,7 +70,7 @@ def test_no_ack_reads_as_no_announcements(monkeypatch: pytest.MonkeyPatch) -> No
     res = announce.read_announcements(
         ssh_target="u@h", remote_path="/remote", run_id="r1", task_count=5
     )
-    assert res == {"announced": 0, "complete": 0, "failed": 0, "missing": 5}
+    assert res == {"present": 0, "announced": 0, "complete": 0, "failed": 0, "missing": 5}
 
 
 def test_ssh_transport_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:

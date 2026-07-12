@@ -55,8 +55,11 @@ from hpc_agent._kernel.contract.vocabulary import LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.clusters import resolve_ssh_target
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
 from hpc_agent.ops.monitor.reconcile import mark_terminal
@@ -68,7 +71,7 @@ from hpc_agent.ops.monitor.terminal import (
 from hpc_agent.ops.monitor.tick_log import _append_tick, _status_fingerprint
 from hpc_agent.ops.monitor.waves import _newly_complete_waves, _read_partial_ok
 from hpc_agent.ops.resolve_and_recover_flow import maybe_resolve_and_recover
-from hpc_agent.state.journal import load_run
+from hpc_agent.state.journal import is_kill_confirmed, load_run, update_run_status
 from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]
@@ -154,17 +157,10 @@ _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
 _DETERMINISTIC_ENV_POLLS_TO_FAIL: int = 3
 
 
-def _is_deterministic_env_failure(exc: BaseException) -> bool:
-    """A poll fault that fails EVERY poll the same way and never heals by
-    waiting: the cluster-side reporter exited 126/127 (wrong/absent conda env, or
-    ``hpc_agent`` not importable). Everything else — a network blip, an ``rc=1``
-    reporter, a timeout — is transient and rides the budget. The returncode is
-    read off the exception attribute, never string-parsed (mirrors
-    ``verify_canary._classify_poll_failure``)."""
-    return isinstance(exc, errors.RemoteCommandFailed) and getattr(exc, "returncode", None) in (
-        126,
-        127,
-    )
+# The rc-126/127 broken-env split is owned by ONE definition in
+# ``hpc_agent.errors`` (G7) — ``verify_canary`` consumes the same one, so the
+# twin that used to live here and drift per fix is retired.
+_is_deterministic_env_failure = errors.is_deterministic_env_failure
 
 
 def _floor_poll_interval(requested: float) -> float:
@@ -178,6 +174,69 @@ def _floor_poll_interval(requested: float) -> float:
     """
     floor = min(_MIN_POLL_INTERVAL_SECONDS, _MAX_ADAPTIVE_POLL_SECONDS)
     return max(float(requested), floor)
+
+
+def _announce_status(experiment_dir: Path, run_id: str, *, record: Any) -> Any | None:
+    """Announce-first status for an announce-era run, or ``None`` to use the walk.
+
+    Crash-only-monitoring **Phase 2** (``docs/design/crash-only-monitoring.md``).
+    Reads the dispatcher's per-task terminal markers in ONE bounded ssh exec (one
+    ``ls``, NO per-task reporter walk) and, when the announce dir EXISTS (an
+    announce-era run whose dispatcher has written ≥1 marker), persists the
+    canonical 5-key ``last_status`` derived from that census and returns the
+    refreshed record. The whole run lifecycle is then driven off the census — the
+    cluster ANNOUNCES state, the client stops PULLING it over a long-silent
+    channel that a NAT/reaper severs (run-12 findings 20/24: a 20-25 min reporter
+    walk severed mid-flight left a finished run unverifiable).
+
+    Returns ``None`` — the caller falls back to the reporter walk (DISCLOSED) —
+    when the announce dir does not exist yet (a pre-announce run, or a run no task
+    has finished; the dispatcher creates the dir lazily on the FIRST marker) OR on
+    any ssh error. The fallback need decays as pre-announce runs age out.
+
+    A not-yet-terminal task shows up as ``missing`` in the census and is mapped to
+    ``pending`` in the 5-key summary, so the shared terminal classifier
+    (:func:`classify.classify_polling`) reads a PARTIAL census as still-in-flight
+    — never as "no work left" (a partial census must never settle terminal,
+    mirroring reconcile's Phase-1 arm). The raw census rides along under
+    ``task_announcements`` for precise progress, and ``status_source`` /
+    ``verdict_source`` mark the evidence provenance for every downstream reader.
+    """
+    try:
+        census = read_announcements(
+            ssh_target=resolve_ssh_target(record),
+            remote_path=record.remote_path,
+            run_id=run_id,
+            task_count=record.total_tasks,
+        )
+    except Exception:  # noqa: BLE001 — census is best-effort; fall through to the walk
+        return None
+    if not census.get("present"):
+        return None
+    complete = int(census["complete"])
+    failed = int(census["failed"])
+    missing = int(census["missing"])
+    last_status: dict[str, Any] = {
+        "complete": complete,
+        "failed": failed,
+        "running": 0,
+        # A not-yet-terminal (unannounced) task is "pending" for the classifier
+        # so a PARTIAL census stays in-flight (pending > 0 blocks both the
+        # no-work-left failure arm and the unknown-escalation arm); it settles
+        # terminal only when missing == 0 (every task announced).
+        "pending": missing,
+        "unknown": 0,
+        "checked_at": utcnow_iso(),
+        "verdict_source": "task_announcements",
+        "status_source": "task_announcements",
+        "task_announcements": {
+            "announced": int(census["announced"]),
+            "complete": complete,
+            "failed": failed,
+            "missing": missing,
+        },
+    }
+    return update_run_status(experiment_dir, run_id, last_status=last_status)
 
 
 def _stamp_watchdog(experiment_dir: Path, run_id: str, next_tick_seconds: float) -> None:
@@ -358,188 +417,245 @@ def monitor_flow(
     # escalates to a reporter-unreachable TIMEOUT at the threshold instead of
     # riding the whole budget silently (run #7).
     consecutive_env_polls = 0
+    # Crash-only Phase 2: disclose the pull-path fallback ONCE per call (the
+    # DISCLOSURE-OR-REFUSAL bar, docs/internals/fallback-inventory.md) the first
+    # tick that falls to the reporter walk because no announcements are present.
+    walk_fallback_disclosed = False
     try:
         while True:
             state.ticks += 1
             elapsed = _now() - started
 
-            # Poll. A single transient poll fault (a reporter rc!=0 →
-            # RemoteCommandFailed, or a TimeoutError — an OSError subclass —
-            # after the backoff window) must NOT abort a healthy multi-hour poll
-            # and kill the detached child; only the outer try/finally would catch
-            # it and re-raise. Mirror the sibling canary loop
-            # (ops/verify_canary.py): swallow the transient fault, note it on a
-            # tick, and continue to the next poll. The loop stays bounded by the
-            # wall-clock budget below, so a poller that keeps failing past the
-            # budget still terminates to TIMEOUT with the guaranteed harvest.
-            try:
-                record = record_status(
-                    experiment_dir,
-                    run_id,
-                    ssh_target=resolve_ssh_target(record),
-                    remote_path=record.remote_path,
-                    job_ids=list(record.job_ids),
-                    job_name=record.job_name,
-                    file_glob=file_glob,
-                )
-            except (errors.RemoteCommandFailed, OSError) as exc:
-                # Classify: a DETERMINISTIC broken-env fault (reporter rc 126/127)
-                # fails EVERY poll identically and never heals by waiting, so
-                # escalate FAST rather than ride the whole budget silently (run #7:
-                # the main watch rode 28+ ticks of rc=127 while a finished array sat
-                # unread). A transient fault resets the count and still rides the
-                # budget → TIMEOUT with the guaranteed harvest (the tolerance below).
-                if _is_deterministic_env_failure(exc):
-                    consecutive_env_polls += 1
-                else:
-                    consecutive_env_polls = 0
-                env_broken = consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
-                logging.getLogger(__name__).warning(
-                    "monitor_flow: %s poll failure for run %s (tick %d): %s — %s",
-                    "deterministic-env" if _is_deterministic_env_failure(exc) else "transient",
+            # --- Crash-only Phase 2: announce-first census ---------------------
+            # Prefer the ONE-readdir marker census over the per-task reporter walk
+            # for the whole lifecycle wherever announcements exist (the pull leg is
+            # what NAT/reapers sever at terminal — run-12 findings 20/24). An
+            # announce-era run resolves its status from the census with NO walk; a
+            # pre-announce run (or one no task has announced yet) falls back to the
+            # walk, DISCLOSED. Kill-confirmed runs are left to reconcile's
+            # kill-arm, and pure-API backends have no announce dir → straight to
+            # the backend-API poll inside record_status.
+            announced_record = None
+            if backend_requires_ssh(record.backend) and not is_kill_confirmed(record):
+                announced_record = _announce_status(experiment_dir, run_id, record=record)
+            if announced_record is not None:
+                # Census leg: the run's status was resolved from the ONE-readdir
+                # marker census — NO per-task reporter walk. ``_announce_status``
+                # already persisted ``last_status`` (source-marked).
+                record = announced_record
+                last_status = dict(record.last_status or {})
+                # Progress legibility, census leg — same shape as the walk leg's
+                # per-poll line, but sourced from the one-readdir marker count.
+                logging.getLogger(__name__).info(
+                    "monitor: run %s tick %d — %s/%s announced complete "
+                    "(failed %s, awaiting %s) via task announcements (no walk)",
                     run_id,
                     state.ticks,
-                    exc,
-                    (
-                        f"reporter UNREACHABLE after {consecutive_env_polls} "
-                        "consecutive env failures — escalating"
-                        if env_broken
-                        else "continuing to the next poll"
-                    ),
+                    last_status.get("complete", 0),
+                    record.total_tasks,
+                    last_status.get("failed", 0),
+                    last_status.get("pending", 0),
                 )
-                # Re-derive the budget so repeated transient failures still
-                # terminate (rather than spin forever skipping the check below).
-                over_budget = (_now() - started) >= wall_clock_budget_seconds
-                terminate = over_budget or env_broken
-                _append_tick(
-                    experiment_dir,
-                    run_id,
-                    summary=dict(record.last_status or {}),
-                    diff_from_prev={
-                        "newly_complete": [],
-                        "newly_failed": [],
-                        "newly_combined_waves": [],
-                    },
-                    actions=[{"kind": "poll_error", "error": str(exc)}],
-                    lifecycle_state=LifecycleState.TIMEOUT if terminate else "in_flight",
-                    next_tick_seconds=None if terminate else effective_interval,
-                )
-                if terminate:
-                    _ingest_runtime_at_terminal(experiment_dir, record=record)
-                    terminal_cause = "reporter-unreachable" if env_broken else "cap-overrun"
-                    escalation = (
+            else:
+                # Pull leg (fallback): no announcements present — a pre-announce
+                # run, or a run no task has announced a terminal state for yet.
+                # DISCLOSE the degrade to the reporter walk ONCE per call
+                # (DISCLOSURE-OR-REFUSAL bar; the announce census takes over as
+                # soon as the dispatcher writes its first marker). Pure-API
+                # backends don't announce — no disclosure, record_status polls
+                # the backend API directly.
+                if backend_requires_ssh(record.backend) and not walk_fallback_disclosed:
+                    walk_fallback_disclosed = True
+                    logging.getLogger(__name__).info(
+                        "monitor: run %s — no task announcements present; using the "
+                        "status-reporter walk (a pre-announce run, or no task has "
+                        "announced a terminal state yet). The cheap one-readdir "
+                        "announce census takes over once the dispatcher writes markers.",
+                        run_id,
+                    )
+                # Poll. A single transient poll fault (a reporter rc!=0 →
+                # RemoteCommandFailed, or a TimeoutError — an OSError subclass —
+                # after the backoff window) must NOT abort a healthy multi-hour poll
+                # and kill the detached child; only the outer try/finally would catch
+                # it and re-raise. Mirror the sibling canary loop
+                # (ops/verify_canary.py): swallow the transient fault, note it on a
+                # tick, and continue to the next poll. The loop stays bounded by the
+                # wall-clock budget below, so a poller that keeps failing past the
+                # budget still terminates to TIMEOUT with the guaranteed harvest.
+                try:
+                    record = record_status(
+                        experiment_dir,
+                        run_id,
+                        ssh_target=resolve_ssh_target(record),
+                        remote_path=record.remote_path,
+                        job_ids=list(record.job_ids),
+                        job_name=record.job_name,
+                        file_glob=file_glob,
+                    )
+                except (errors.RemoteCommandFailed, OSError) as exc:
+                    # Classify: a DETERMINISTIC broken-env fault (reporter rc 126/127)
+                    # fails EVERY poll identically and never heals by waiting, so
+                    # escalate FAST rather than ride the whole budget silently (run #7:
+                    # the main watch rode 28+ ticks of rc=127 while a finished array sat
+                    # unread). A transient fault resets the count and still rides the
+                    # budget → TIMEOUT with the guaranteed harvest (the tolerance below).
+                    if _is_deterministic_env_failure(exc):
+                        consecutive_env_polls += 1
+                    else:
+                        consecutive_env_polls = 0
+                    env_broken = consecutive_env_polls >= _DETERMINISTIC_ENV_POLLS_TO_FAIL
+                    logging.getLogger(__name__).warning(
+                        "monitor_flow: %s poll failure for run %s (tick %d): %s — %s",
+                        "deterministic-env" if _is_deterministic_env_failure(exc) else "transient",
+                        run_id,
+                        state.ticks,
+                        exc,
                         (
-                            f"status reporter UNREACHABLE — {consecutive_env_polls} "
-                            "consecutive deterministic failures (rc 126/127: wrong/absent "
-                            "conda env, or hpc_agent not importable on the login node). The "
-                            "array may be running or already complete, but its status is "
-                            "UNREADABLE; fix the cluster env then re-watch, or harvest "
-                            f"results directly. Last poll error: {exc}"
+                            f"reporter UNREACHABLE after {consecutive_env_polls} "
+                            "consecutive env failures — escalating"
+                            if env_broken
+                            else "continuing to the next poll"
+                        ),
+                    )
+                    # Re-derive the budget so repeated transient failures still
+                    # terminate (rather than spin forever skipping the check below).
+                    over_budget = (_now() - started) >= wall_clock_budget_seconds
+                    terminate = over_budget or env_broken
+                    _append_tick(
+                        experiment_dir,
+                        run_id,
+                        summary=dict(record.last_status or {}),
+                        diff_from_prev={
+                            "newly_complete": [],
+                            "newly_failed": [],
+                            "newly_combined_waves": [],
+                        },
+                        actions=[{"kind": "poll_error", "error": str(exc)}],
+                        lifecycle_state=LifecycleState.TIMEOUT if terminate else "in_flight",
+                        next_tick_seconds=None if terminate else effective_interval,
+                    )
+                    if terminate:
+                        _ingest_runtime_at_terminal(experiment_dir, record=record)
+                        terminal_cause = "reporter-unreachable" if env_broken else "cap-overrun"
+                        escalation = (
+                            (
+                                f"status reporter UNREACHABLE — {consecutive_env_polls} "
+                                "consecutive deterministic failures (rc 126/127: wrong/absent "
+                                "conda env, or hpc_agent not importable on the login node). The "
+                                "array may be running or already complete, but its status is "
+                                "UNREADABLE; fix the cluster env then re-watch, or harvest "
+                                f"results directly. Last poll error: {exc}"
+                            )
+                            if env_broken
+                            else None
                         )
-                        if env_broken
+                        return MonitorFlowResult(
+                            run_id=run_id,
+                            lifecycle_state=LifecycleState.TIMEOUT,
+                            last_status=dict(record.last_status or {}),
+                            combined_waves=state.last_combined_waves,
+                            failed_waves=state.last_failed_waves,
+                            ticks=state.ticks,
+                            elapsed_seconds=_now() - started,
+                            escalation_reason=escalation,
+                        )
+                    # Live poller, transient blip: re-stamp the watchdog so a genuinely
+                    # dead poller is still doctor-visible, then back off and retry.
+                    _stamp_watchdog(experiment_dir, run_id, effective_interval)
+                    _sleep(effective_interval)
+                    continue
+                except (
+                    errors.SshCircuitOpen,
+                    errors.SshUnreachable,
+                    errors.SshSlotWaitTimeout,
+                ) as exc:
+                    # A NETWORK fault, not a RemoteCommandFailed/OSError: the per-host
+                    # SSH circuit breaker opened (SshCircuitOpen), the host went
+                    # transiently unreachable, or our own per-host slot wait timed out.
+                    # None is an HpcError caught above, so without this clause a single
+                    # blip that opens the breaker would kill the detached multi-hour
+                    # watch (run #7: a 3×60s hoffman2 latency spike). Classify it
+                    # transient: reset the deterministic-env counter, tick a poll_error,
+                    # re-check the wall-clock budget, and — for a breaker-open — sleep
+                    # out the remaining cooldown (never below the floor) before the next
+                    # poll rather than hammering an open circuit (retry_safe=False). The
+                    # loop stays bounded by the budget → TIMEOUT with the guaranteed
+                    # harvest if the fault never clears. Cooldown wait mirrors
+                    # harvest_guard._circuit_wait_sec.
+                    consecutive_env_polls = 0
+                    over_budget = (_now() - started) >= wall_clock_budget_seconds
+                    logging.getLogger(__name__).warning(
+                        "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s",
+                        run_id,
+                        state.ticks,
+                        exc,
+                        (
+                            "over budget — escalating to TIMEOUT"
+                            if over_budget
+                            else "waiting out the breaker cooldown, then retrying"
+                        ),
+                    )
+                    _append_tick(
+                        experiment_dir,
+                        run_id,
+                        summary=dict(record.last_status or {}),
+                        diff_from_prev={
+                            "newly_complete": [],
+                            "newly_failed": [],
+                            "newly_combined_waves": [],
+                        },
+                        actions=[{"kind": "poll_error", "error": str(exc)}],
+                        lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
+                        next_tick_seconds=None if over_budget else effective_interval,
+                    )
+                    if over_budget:
+                        _ingest_runtime_at_terminal(experiment_dir, record=record)
+                        terminal_cause = "cap-overrun"
+                        return MonitorFlowResult(
+                            run_id=run_id,
+                            lifecycle_state=LifecycleState.TIMEOUT,
+                            last_status=dict(record.last_status or {}),
+                            combined_waves=state.last_combined_waves,
+                            failed_waves=state.last_failed_waves,
+                            ticks=state.ticks,
+                            elapsed_seconds=_now() - started,
+                            escalation_reason=None,
+                        )
+                    # Wait out the breaker cooldown before the next poll, floored at
+                    # effective_interval. SshUnreachable / SshSlotWaitTimeout carry no
+                    # deadline → _circuit_wait_sec returns None → the floor interval.
+                    circuit_wait = (
+                        _circuit_wait_sec(exc, now=time.time())
+                        if isinstance(exc, errors.SshCircuitOpen)
                         else None
                     )
-                    return MonitorFlowResult(
-                        run_id=run_id,
-                        lifecycle_state=LifecycleState.TIMEOUT,
-                        last_status=dict(record.last_status or {}),
-                        combined_waves=state.last_combined_waves,
-                        failed_waves=state.last_failed_waves,
-                        ticks=state.ticks,
-                        elapsed_seconds=_now() - started,
-                        escalation_reason=escalation,
+                    sleep_for = (
+                        max(effective_interval, circuit_wait)
+                        if circuit_wait is not None
+                        else effective_interval
                     )
-                # Live poller, transient blip: re-stamp the watchdog so a genuinely
-                # dead poller is still doctor-visible, then back off and retry.
-                _stamp_watchdog(experiment_dir, run_id, effective_interval)
-                _sleep(effective_interval)
-                continue
-            except (
-                errors.SshCircuitOpen,
-                errors.SshUnreachable,
-                errors.SshSlotWaitTimeout,
-            ) as exc:
-                # A NETWORK fault, not a RemoteCommandFailed/OSError: the per-host
-                # SSH circuit breaker opened (SshCircuitOpen), the host went
-                # transiently unreachable, or our own per-host slot wait timed out.
-                # None is an HpcError caught above, so without this clause a single
-                # blip that opens the breaker would kill the detached multi-hour
-                # watch (run #7: a 3×60s hoffman2 latency spike). Classify it
-                # transient: reset the deterministic-env counter, tick a poll_error,
-                # re-check the wall-clock budget, and — for a breaker-open — sleep
-                # out the remaining cooldown (never below the floor) before the next
-                # poll rather than hammering an open circuit (retry_safe=False). The
-                # loop stays bounded by the budget → TIMEOUT with the guaranteed
-                # harvest if the fault never clears. Cooldown wait mirrors
-                # harvest_guard._circuit_wait_sec.
-                consecutive_env_polls = 0
-                over_budget = (_now() - started) >= wall_clock_budget_seconds
-                logging.getLogger(__name__).warning(
-                    "monitor_flow: transient ssh fault for run %s (tick %d): %s — %s",
+                    _stamp_watchdog(experiment_dir, run_id, sleep_for)
+                    _sleep(sleep_for)
+                    continue
+                last_status = dict(record.last_status or {})
+                # In-band fallback disclosure: mark that this tick's counts came
+                # from the reporter walk, not the announce census (the tick log
+                # is the per-poll audit trail). A pure-API poll is not a walk
+                # fallback, so only tag ssh reporter walks.
+                if backend_requires_ssh(record.backend):
+                    last_status.setdefault("status_source", "status_reporter_walk")
+                # Progress legibility (run #7: a silent healthy watch reads as "stuck"
+                # and triggered false stall alarms) — one concise per-poll line.
+                logging.getLogger(__name__).info(
+                    "monitor: run %s tick %d — %s/%s complete (running %s, pending %s, failed %s)",
                     run_id,
                     state.ticks,
-                    exc,
-                    (
-                        "over budget — escalating to TIMEOUT"
-                        if over_budget
-                        else "waiting out the breaker cooldown, then retrying"
-                    ),
+                    last_status.get("complete", 0),
+                    record.total_tasks,
+                    last_status.get("running", 0),
+                    last_status.get("pending", 0),
+                    last_status.get("failed", 0),
                 )
-                _append_tick(
-                    experiment_dir,
-                    run_id,
-                    summary=dict(record.last_status or {}),
-                    diff_from_prev={
-                        "newly_complete": [],
-                        "newly_failed": [],
-                        "newly_combined_waves": [],
-                    },
-                    actions=[{"kind": "poll_error", "error": str(exc)}],
-                    lifecycle_state=LifecycleState.TIMEOUT if over_budget else "in_flight",
-                    next_tick_seconds=None if over_budget else effective_interval,
-                )
-                if over_budget:
-                    _ingest_runtime_at_terminal(experiment_dir, record=record)
-                    terminal_cause = "cap-overrun"
-                    return MonitorFlowResult(
-                        run_id=run_id,
-                        lifecycle_state=LifecycleState.TIMEOUT,
-                        last_status=dict(record.last_status or {}),
-                        combined_waves=state.last_combined_waves,
-                        failed_waves=state.last_failed_waves,
-                        ticks=state.ticks,
-                        elapsed_seconds=_now() - started,
-                        escalation_reason=None,
-                    )
-                # Wait out the breaker cooldown before the next poll, floored at
-                # effective_interval. SshUnreachable / SshSlotWaitTimeout carry no
-                # deadline → _circuit_wait_sec returns None → the floor interval.
-                circuit_wait = (
-                    _circuit_wait_sec(exc, now=time.time())
-                    if isinstance(exc, errors.SshCircuitOpen)
-                    else None
-                )
-                sleep_for = (
-                    max(effective_interval, circuit_wait)
-                    if circuit_wait is not None
-                    else effective_interval
-                )
-                _stamp_watchdog(experiment_dir, run_id, sleep_for)
-                _sleep(sleep_for)
-                continue
-            last_status = dict(record.last_status or {})
-            # Progress legibility (run #7: a silent healthy watch reads as "stuck"
-            # and triggered false stall alarms) — one concise per-poll line.
-            logging.getLogger(__name__).info(
-                "monitor: run %s tick %d — %s/%s complete (running %s, pending %s, failed %s)",
-                run_id,
-                state.ticks,
-                last_status.get("complete", 0),
-                record.total_tasks,
-                last_status.get("running", 0),
-                last_status.get("pending", 0),
-                last_status.get("failed", 0),
-            )
 
             # Compute diff against the prior tick (for the tick log).
             prev_summary = state.last_summary
