@@ -61,7 +61,6 @@ from hpc_agent.execution.mapreduce.reduce.rollup import (
     rollup_by_grid_point,
     rollup_by_wave,
 )
-from hpc_agent.infra.io import atomic_write_json
 from hpc_agent.infra.time import utcnow_iso
 
 # ---------------------------------------------------------------------------
@@ -374,6 +373,10 @@ def pin_scheduler_profile(meta_path: str | Path, profile) -> None:
     # dropping the profile pin (and the merged ``backend`` hint) that every later
     # reader depends on to avoid the sacct heuristic (bug-sweep #61, generator
     # G12). indent=2/sort_keys=True bytes are identical to the prior write.
+    # Imported lazily: this module ships in the DEPLOYED reporter closure,
+    # which does not carry infra/io — the pin writer runs client-side only.
+    from hpc_agent.infra.io import atomic_write_json
+
     atomic_write_json(p, existing)
 
 

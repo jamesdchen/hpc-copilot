@@ -125,6 +125,13 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         # probe. Spec-taking query with a REQUIRED ssh_target, so {} is invalid and
         # it appears in the schema-file-parametrized remediation probes.
         "stray-sweep",
+        # The G2 mechanization wave (RULING 6, 2026-07-12): directed-evidence
+        # twins of the probe paths — host-retarget (finding 23) and settle-run
+        # (finding 25) — plus update-run-constraints, which gained its CLI
+        # surface with the B9 side-effects fix the same night.
+        "host-retarget",
+        "settle-run",
+        "update-run-constraints",
         # notebook-lint (notebook-audit substrate, T4): a read-only validate verb
         # over an audit source .py. Gains a --spec CLI surface, so the inventory
         # tracks it here. Its input schema (notebook_lint.input.json) is baked by
