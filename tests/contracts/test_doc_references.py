@@ -78,16 +78,11 @@ CONSOLE_SCRIPT_ALLOWLIST: dict[str, str] = {
 
 # ``src/hpc_agent/...`` path references that are legitimately absent on disk.
 # Keyed by (doc relative to repo root, normalised ``src/hpc_agent/...`` ref).
-MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {
-    # submit-sequence.md is owned by the d-rewrite unit, which rewrites it
-    # against block-drive reality (the claude -p worker prompts were deleted
-    # in the worker-removal wave). Reported to the integrator; drop this entry
-    # once d-rewrite lands.
-    (
-        "docs/internals/submit-sequence.md",
-        "src/hpc_agent/_kernel/extension/worker_prompts/submit.md",
-    ): "owned by d-rewrite; worker prompts deleted in the worker-removal wave",
-}
+# Empty: the d-rewrite entry for submit-sequence.md's ``worker_prompts/submit.md``
+# ref was dropped once d-rewrite landed — the rewrite now names the deleted
+# prompt only in the bare ``worker_prompts/submit.md`` form, which the
+# ``hpc_agent/``-anchored detector does not yield, so no allowlisting is needed.
+MODULE_PATH_ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 # ---------------------------------------------------------------------------

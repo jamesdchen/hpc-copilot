@@ -63,17 +63,26 @@ def _enable_ssh_engine_default() -> str:
 
     Returns the engine disposition for the stderr ready line, one of:
 
-    * ``"off"`` — opted out via ``HPC_MCP_NO_SSH_ENGINE=1``; we touch nothing.
+    * ``"off"`` — the engine is not enabled: opted out of *our* injection via
+      ``HPC_MCP_NO_SSH_ENGINE=1`` AND no independent ``HPC_SSH_ENGINE=asyncssh``.
     * ``"user-set"`` — ``HPC_SSH_ENGINE`` was already set; ``setdefault`` is a
       no-op, so the user's choice (asyncssh *or* native/off) wins.
     * ``"on"`` — env was unset; we default it to ``asyncssh``.
+
+    The label reflects the EFFECTIVE disposition, not the injection decision:
+    the opt-out suppresses only our ``setdefault``, it does not disable an engine
+    the operator turned on independently via ``HPC_SSH_ENGINE=asyncssh`` (the ssh
+    seam reads that env, not our opt-out — :func:`ssh_engine.engine_enabled`).
+    Reporting ``off`` while the engine is genuinely on would defeat the line's
+    purpose ("why is MCP slow must be a measurement, not a mystery"), so under
+    the opt-out we report the engine's real state.
 
     Uses ``setdefault`` (not assignment) so user-preset always wins, per memo §3.
     """
     from hpc_agent.infra import ssh_engine
 
     if os.environ.get(NO_SSH_ENGINE_ENV, "").strip() == "1":
-        return "off"
+        return "user-set" if ssh_engine.engine_enabled() else "off"
     preset = ssh_engine.ENGINE_ENV in os.environ
     os.environ.setdefault(ssh_engine.ENGINE_ENV, "asyncssh")
     return "user-set" if preset else "on"

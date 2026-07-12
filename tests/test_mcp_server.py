@@ -458,6 +458,37 @@ def test_mcp_allows_campaign_run_with_detach() -> None:
     assert runner.calls, "detached invocation must reach the runner"
 
 
+def test_mcp_refuses_wait_detached_on_full_catalog() -> None:
+    """``wait-detached`` is the blocking wait itself (no detach remedy). It is
+    invocable on the DEFAULT ``full`` catalog (agent_facing query), so over the
+    synchronous server it would wedge the line — refused outright at the seam,
+    naming the MCP-safe reads (``poll-detached`` / backgrounded Bash). It never
+    reaches the runner."""
+    runner = FakeRunner()
+    server = _server(catalog="full", runner=runner)
+    resp = _call(server, "wait-detached", {"spec": {"run_id": "r1"}})
+    assert "error" in resp
+    assert "poll-detached" in resp["error"]["message"]
+    assert "wait-detached" in resp["error"]["message"]
+    assert not runner.calls, "refused blocking wait must not reach the runner"
+
+
+def test_mcp_refuses_wait_detached_via_tiered_run_primitive() -> None:
+    """The tiered catalog routes calls through ``run-primitive``; the blocking-
+    wait refusal fires on the inner name, so ``wait-detached`` is wedge-proof
+    there too."""
+    runner = FakeRunner()
+    server = _server(catalog="tiered", runner=runner)
+    resp = _call(
+        server,
+        "run-primitive",
+        {"name": "wait-detached", "arguments": {"spec": {"run_id": "r1"}}},
+    )
+    assert "error" in resp
+    assert "poll-detached" in resp["error"]["message"]
+    assert not runner.calls, "refused blocking wait must not reach the runner"
+
+
 # ─── curated reachability of the MCP-direct read/recovery verbs ──────────────
 
 

@@ -974,6 +974,19 @@ _DETACH_REQUIRED_VERBS = frozenset(
     }
 )
 
+# ``wait-detached`` is refused OUTRIGHT, not detach-gated: it is itself the
+# blocking wait (a local pid-lease block that runs "potentially many
+# minutes/hours" — ``ops/monitor/wait_detached.py``), so there is no
+# ``detach=true`` remedy — it is not a submit that can be handed to a worker.
+# The curated catalog already excludes it (its Result declares no ``next_block``
+# and it is not a curated extra), but the DEFAULT ``full`` catalog and
+# ``tiered`` expose it (it is ``agent_facing`` ``verb="query"``); without this
+# seam refusal a client calling it there wedges the synchronous server for the
+# whole wait (proving-run-3 head-of-line class). The MCP-safe alternatives are
+# named in the refusal: ``poll-detached`` for an instant snapshot, or running
+# ``wait-detached`` via backgrounded Bash OUTSIDE this server.
+_BLOCKING_WAIT_VERBS = frozenset({"wait-detached"})
+
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
@@ -986,7 +999,22 @@ def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     aggregate iteration can hold the line for many minutes on a throttled host).
     The detached path returns a pid handle immediately; ``wait-detached`` (via
     backgrounded Bash) wakes the caller once.
+
+    ``wait-detached`` itself is refused outright (:data:`_BLOCKING_WAIT_VERBS`):
+    it is the blocking wait, with no ``detach`` escape hatch, so over this
+    synchronous server any invocation wedges the line. Curated already excludes
+    it; this backstops the ``full``/``tiered`` catalogs where it is otherwise
+    invocable.
     """
+    if name in _BLOCKING_WAIT_VERBS:
+        raise _Invalid(
+            f"{name} is a BLOCKING local wait on a detached worker's lease pid "
+            "(potentially many minutes/hours) with no detach=true remedy — over "
+            "this synchronous server it wedges every later tool call "
+            "(head-of-line; an abandoned turn does not stop it). For an instant "
+            "status read call `poll-detached`; to be woken at completion run "
+            "`hpc-agent wait-detached` via backgrounded Bash OUTSIDE this server."
+        )
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}
     if name in _DETACH_REQUIRED_VERBS and not spec_dict.get("detach"):

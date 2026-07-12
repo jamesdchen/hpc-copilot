@@ -133,6 +133,26 @@ def test_helper_disposition_matrix(
     assert mcp_cli._enable_ssh_engine_default() == "off"
 
 
+def test_opt_out_reports_effective_state_not_off_when_engine_user_enabled(
+    _clean_engine_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-out suppresses our injection, NOT an independent user opt-in.
+
+    ``HPC_MCP_NO_SSH_ENGINE=1`` only skips our ``setdefault``; if the operator
+    also set ``HPC_SSH_ENGINE=asyncssh`` the engine is genuinely enabled
+    (the ssh seam reads that env). The ready line must report the effective
+    state (``user-set``), not a mystery ``off`` — else the observability line
+    lies about a live engine.
+    """
+    monkeypatch.setenv(mcp_cli.NO_SSH_ENGINE_ENV, "1")
+    monkeypatch.setenv(ssh_engine.ENGINE_ENV, "asyncssh")
+    assert ssh_engine.engine_enabled() is True
+    assert mcp_cli._enable_ssh_engine_default() == "user-set"
+    # A non-asyncssh preset under opt-out is genuinely off → honest "off".
+    monkeypatch.setenv(ssh_engine.ENGINE_ENV, "native")
+    assert mcp_cli._enable_ssh_engine_default() == "off"
+
+
 def test_unimportable_asyncssh_falls_back_to_one_shot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
