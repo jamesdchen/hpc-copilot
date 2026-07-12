@@ -25,11 +25,36 @@ Also exposes :func:`atomic_write_json` — the canonical
 crash-durable JSON writer (tempfile + fsync + replace + parent-dir
 fsync). v2 audit found six modules with subtly different inline
 copies; this is the one all of them should call.
+
+Two siblings share that recipe for the non-JSON shapes the
+bug-sweep-2026-07 generator G12 ("bare-writes-vs-one-atomic-discipline")
+named:
+
+- :func:`atomic_write_text` — a pre-serialized string writer for durable
+  artifacts whose exact on-disk bytes are load-bearing (a content-addressed
+  pack manifest whose sha IS its identity; external ``settings.json`` /
+  ``.claude.json`` the tool does not own and must never truncate). ``newline=""``
+  so the bytes round-trip exactly.
+- :func:`atomic_replace_path` — a context manager yielding a temp sibling path
+  for durable artifacts a *third-party writer* builds by path (the dossier
+  ``ZipFile(archive_path, "w")`` seal), swapping it into place atomically on a
+  clean exit so a crash mid-build never destroys the previously-sealed file.
+
+The lint ``scripts/lint_atomic_durable_writes.py`` is the enforcement row: a
+truncating ``write_text``/``ZipFile(_, "w")`` to a durable artifact must route
+through one of these three.
 """
 
 from __future__ import annotations
 
-__all__ = ["atomic_locked_update", "advisory_flock", "append_jsonl_line", "atomic_write_json"]
+__all__ = [
+    "atomic_locked_update",
+    "advisory_flock",
+    "append_jsonl_line",
+    "atomic_write_json",
+    "atomic_write_text",
+    "atomic_replace_path",
+]
 
 import contextlib
 import json
@@ -62,6 +87,24 @@ def _replace_with_retry(src: str, dst: Path) -> None:
             if sys.platform != "win32" or attempt == 4:
                 raise
             time.sleep(0.05 * (attempt + 1))
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Best-effort ``fsync`` of *directory* so a rename into it is durable.
+
+    NFS and some other network filesystems refuse to open a directory for
+    fsync; the OSError is suppressed (best-effort), matching the historical
+    inline copies this consolidates.
+    """
+    try:
+        dir_fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        with contextlib.suppress(OSError):
+            os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
@@ -124,20 +167,90 @@ def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
                     os.fsync(fh.fileno())
         _replace_with_retry(tmp, path)
         if fsync:
-            try:
-                dir_fd = os.open(str(path.parent), os.O_RDONLY)
-                try:
-                    with contextlib.suppress(OSError):
-                        os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except OSError:
-                # Some filesystems (notably NFS) don't allow opening a dir
-                # for fsync; best-effort.
-                pass
+            _fsync_dir(path.parent)
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
+        raise
+
+
+def atomic_write_text(path: Path, text: str, *, fsync: bool = True) -> None:
+    """Write the pre-serialized string *text* to *path* atomically and durably.
+
+    The text sibling of :func:`atomic_write_json`, for durable artifacts whose
+    EXACT on-disk bytes are load-bearing and must be preserved verbatim — a
+    content-addressed pack manifest whose raw-bytes sha is its bind identity, or
+    an external ``settings.json`` / ``.claude.json`` the tool does not own and
+    must never leave truncated. The caller has already produced the canonical
+    string (its own ``json.dumps(..., sort_keys=..., indent=...)`` + trailing
+    newline); this writer does not re-serialize, so the bytes round-trip exactly.
+
+    Recipe is identical to :func:`atomic_write_json` — a ``mkstemp`` sibling,
+    ``flush`` + ``fsync`` the data, ``os.replace`` to swap, ``fsync`` the parent
+    dir — so a kill / power loss mid-write leaves either the previous file or the
+    new one, never a torn one. ``newline=""`` disables newline translation so an
+    embedded ``"\n"`` is not rewritten to ``"\r\n"`` on win32.
+
+    ``fsync=False`` keeps the write atomic but drops durability — see the
+    :func:`atomic_write_json` tradeoff note; use it only for a regenerable cache.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            if fsync:
+                with contextlib.suppress(OSError):
+                    os.fsync(fh.fileno())
+        _replace_with_retry(tmp, path)
+        if fsync:
+            _fsync_dir(path.parent)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+@contextlib.contextmanager
+def atomic_replace_path(path: Path, *, fsync: bool = True) -> Iterator[Path]:
+    """Yield a temp sibling of *path*; on a clean exit swap it in atomically.
+
+    The by-path sibling of :func:`atomic_write_json`, for durable artifacts a
+    third-party writer builds *by path* rather than from a serialized payload —
+    the dossier ``ZipFile(archive_path, "w")`` seal is the motivating case. The
+    caller writes the whole artifact to the yielded temp path (``ZipFile`` on it,
+    ``shutil.copy`` into it, …); on a clean exit the temp file is ``fsync``-ed and
+    ``os.replace``-d over *path*, then the parent dir is ``fsync``-ed. On ANY
+    exception (or a SIGKILL — the temp path is randomized and left for the OS to
+    reap) the previously-sealed *path* is untouched, closing the truncate window
+    that ``ZipFile(path, "w")`` opens the instant it truncates in place.
+
+    ``mkstemp`` allocates and opens the temp file; the fd is closed immediately
+    so the caller can re-open the path (``ZipFile`` needs a path, not an fd). The
+    temp file therefore exists (empty) when yielded, so a caller that writes
+    nothing still produces a valid empty replacement rather than failing the
+    swap.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    os.close(fd)
+    tmp_path = path.parent / os.path.basename(tmp)
+    try:
+        yield tmp_path
+        if fsync:
+            with contextlib.suppress(OSError):
+                fh = os.open(str(tmp_path), os.O_RDONLY)
+                try:
+                    os.fsync(fh)
+                finally:
+                    os.close(fh)
+        _replace_with_retry(str(tmp_path), path)
+        if fsync:
+            _fsync_dir(path.parent)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
         raise
 
 
@@ -250,16 +363,7 @@ def atomic_locked_update(
             os.fsync(tmp.fileno())
             tmp.close()
             _replace_with_retry(tmp.name, path)
-            try:
-                dir_fd = os.open(str(path.parent), os.O_RDONLY)
-                try:
-                    with contextlib.suppress(OSError):
-                        os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except OSError:
-                # NFS / some network FSes refuse dir fsync; best-effort.
-                pass
+            _fsync_dir(path.parent)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp.name)

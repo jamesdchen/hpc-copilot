@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.io import atomic_write_text
 
 __all__ = ["DEFAULT_CLAUDE_DIR", "install_agent_assets"]
 
@@ -397,7 +398,7 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     config["mcpServers"] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    atomic_write_text(config_path, json.dumps(config, indent=2, sort_keys=False) + "\n")
     return {"config_path": str(config_path), "action": action, "wrote": True}
 
 
@@ -519,9 +520,7 @@ def _merge_hook_entry(
     settings["hooks"] = hooks
 
     claude_dir.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
     return {
         "settings_path": str(settings_path),
         "action": action,
@@ -626,9 +625,7 @@ def _merge_skill_permissions(
     settings["permissions"] = permissions
 
     claude_dir.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
     return {
         "settings_path": str(settings_path),
         "action": "added",
@@ -827,9 +824,7 @@ def _merge_deny_rules(
     settings["permissions"] = permissions
 
     claude_dir.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
     return {
         "settings_path": str(settings_path),
         "action": "added" if missing else "updated",

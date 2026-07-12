@@ -58,6 +58,7 @@ from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.export_dossier import ExportDossierResult, ExportDossierSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.io import atomic_replace_path
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.provenance_manifest import manifest_signature
 from hpc_agent.state import scopes as _scopes
@@ -65,7 +66,7 @@ from hpc_agent.state.decision_briefs import briefs_path
 from hpc_agent.state.decision_journal import decisions_path
 from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import load_run
-from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+from hpc_agent.state.runs import read_run_sidecar_or_empty, run_sidecar_path
 
 if TYPE_CHECKING:
     from hpc_agent.state.run_record import RunRecord
@@ -130,17 +131,23 @@ def _sha256_hex(data: bytes) -> str:
 
 
 def _safe_sidecar(experiment_dir: Path, run_id: str) -> dict[str, Any]:
-    """Return a run's parsed sidecar dict, or ``{}`` when none exists.
+    """Return a run's parsed sidecar dict, or ``{}`` when none exists or it is
+    unreadable.
 
     The parse happens inside :func:`state.runs.read_run_sidecar` — this module
     itself never parses the bytes it seals (the no-parse boundary pin). A run
     with a journal record but no sidecar (or vice versa) yields ``{}`` rather
     than raising, so a missing store is data, not an error.
+
+    Routes through the shared :func:`state.runs.read_run_sidecar_or_empty`
+    tolerant reader (#43): a torn, hand-edited, or newer-schema sidecar was
+    ALREADY sealed by ``_gather_optional`` at the raw-bytes boundary — only this
+    identity projection re-parses it, and a crash here would take down
+    ``export_dossier`` / ``compute_dossier_signature`` (and the registration
+    recompute lock) instead of degrading to the null-padded projection it
+    already emits for a sidecar-less run.
     """
-    try:
-        return read_run_sidecar(experiment_dir, run_id)
-    except FileNotFoundError:
-        return {}
+    return read_run_sidecar_or_empty(experiment_dir, run_id)
 
 
 def _project_run_identity(
@@ -860,7 +867,15 @@ def export_dossier(*, experiment_dir: Path, spec: ExportDossierSpec) -> ExportDo
         archive_path = experiment_dir / "_dossier" / f"{run_id}.zip"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    # Build the zip on a temp sibling and atomically swap it in (bug-sweep #42,
+    # generator G12): ZipFile(archive_path, "w") TRUNCATES the previously-sealed
+    # registration-grade archive the instant it opens, so a crash mid-write
+    # destroys it. atomic_replace_path leaves the old seal untouched until the new
+    # one is fully written and fsync'd.
+    with (
+        atomic_replace_path(archive_path) as tmp_archive,
+        zipfile.ZipFile(tmp_archive, "w", zipfile.ZIP_DEFLATED) as zf,
+    ):
         for path in sorted(sig.write_map):
             zf.writestr(path, sig.write_map[path])
         # manifest.json is the seal over the entries — NOT itself an entry.

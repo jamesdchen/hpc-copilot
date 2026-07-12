@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
+from hpc_agent.infra.io import atomic_write_text
 from hpc_agent.state.pack import SEAM_NAMES, sha256_bytes, sha256_file
 from hpc_agent.state.scopes import validate_tag
 
@@ -349,7 +350,11 @@ def reseal_manifest(manifest_path: Path, recipe_path: Path) -> ResealOutcome:
         )
 
     text = serialize_manifest(fresh)
-    manifest_path.write_text(text, encoding="utf-8")
+    # Atomic + durable: the manifest's raw-bytes sha IS the pack's bind identity,
+    # so a torn write would spuriously revoke every clearance signed under the
+    # intact manifest (bug-sweep #52, generator G12). atomic_write_text preserves
+    # the exact canonical bytes whose sha is computed on the next line.
+    atomic_write_text(manifest_path, text)
     new_sha = sha256_bytes(text.encode("utf-8"))
     return ResealOutcome(
         recipe_found=True,

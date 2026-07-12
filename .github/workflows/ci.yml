@@ -129,6 +129,8 @@ jobs:
         run: python scripts/lint_subject_init.py
       - name: Lint text I/O declares utf-8 encoding
         run: python scripts/lint_text_io_encoding.py
+      - name: Lint durable artifacts are written atomically
+        run: python scripts/lint_atomic_durable_writes.py
       - name: Lint cluster-side schema-version constants stay synced
         run: python scripts/lint_schema_versions.py
       - name: Lint plugin manifests reconcile with runtime
