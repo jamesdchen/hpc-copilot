@@ -122,6 +122,25 @@ def test_graduation_gate_is_the_entry_ticket() -> None:
     assert "passed" in text, "done == the notebook-status `passed` predicate"
 
 
+def test_popup_is_the_primary_signoff_surface_not_chat_parking() -> None:
+    """Run-12 finding 9 / user ruling 2026-07-09/10 (E-render): over MCP the
+    sign-off popup is THE default read-and-sign surface — the skill must say
+    to proceed directly to ``append-decision`` (whose elicit-then-retry wrap
+    opens the popup) and must NOT re-encode the superseded pre-popup
+    chat-first flow (the drift class fixed in ``101cd111``: the skill parked
+    waiting for chat text where a popup could fire)."""
+    text = _text()
+    assert re.search(r"popup[^.\n]*PRIMARY|PRIMARY[^.\n]*popup", text), (
+        "the popup must be named the PRIMARY sign-off surface (E-render ruling)"
+    )
+    assert re.search(r"do NOT park|never park", text, re.I), (
+        "the skill must forbid parking for chat text where the popup can fire"
+    )
+    assert re.search(r"[Cc]hat-first is the FALLBACK", text), (
+        "chat-first must be stated as the fallback (no elicitation channel), not the default"
+    )
+
+
 def test_skill_never_resolves_and_elicits_free_text() -> None:
     text = _text()
     assert "never resolves a decision" in text, (
