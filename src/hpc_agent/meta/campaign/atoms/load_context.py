@@ -148,7 +148,7 @@ def _refill_is_deterministic(experiment_dir: Path, campaign_id: str) -> bool:
         ]
     except (OSError, ValueError, KeyError):
         return False
-    return decision == "refill"
+    return bool(decision == "refill")
 
 
 def _next_step_hint(

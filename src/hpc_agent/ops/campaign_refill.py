@@ -70,7 +70,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
@@ -190,6 +190,12 @@ def _build_iteration_resolve_spec(
             f"prior run {prior.run_id!r} sidecar carries no ``executor`` — cannot "
             "reconstruct the next iteration's per-task command for refill."
         )
+    result_dir_template = sidecar.get("result_dir_template")
+    if not result_dir_template:
+        raise errors.SpecInvalid(
+            f"prior run {prior.run_id!r} sidecar carries no ``result_dir_template`` "
+            "— cannot reconstruct the next iteration's per-task result dirs for refill."
+        )
 
     ssh_target = resolve_ssh_target(prior)
 
@@ -215,7 +221,6 @@ def _build_iteration_resolve_spec(
     # with the compute-run-id resolve runs internally (same _submitted_count →
     # same cached proposal), so it can never disagree with resolve's cross-check.
     total = int(compute_run_id(experiment_dir, run_name=profile)["total"])
-    result_dir_template = sidecar.get("result_dir_template")
 
     submit = BuildSubmitSpecInput(
         profile=profile,
@@ -382,7 +387,7 @@ def campaign_refill(experiment_dir: Path, *, spec: CampaignRefillSpec) -> Campai
     #    bound the crash window (RFC E5).
     submitted: list[SubmittedIteration] = []
     blocked: list[BlockedSlot] = []
-    stage = "refilled"
+    stage: Literal["refilled", "no_refill_needed", "refill_blocked"] = "refilled"
 
     # Export HPC_CAMPAIGN_ID around BOTH the disk reconstruction (its internal
     # compute-run-id) and every slot's resolve, so the async scaffold's
