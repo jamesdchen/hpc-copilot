@@ -186,7 +186,11 @@ def notebook_draft(*, experiment_dir: Path, spec: NotebookDraftSpec) -> Notebook
         )
 
     declared = _declared_actor_ids(experiment_dir)
-    actor = _resolve_session_actor(declared)
+    # Census-null (A9, RULED 2026-07-12): the attestor stamp is written ONLY
+    # when >1 actor is declared — the same zero/one-actor byte-identity floor
+    # every decision record holds, so a sole-actor session's draft record
+    # never forks its bytes on whether HPC_ACTOR happened to be exported.
+    actor = _resolve_session_actor(declared) if len(declared) > 1 else None
     if len(declared) > 1 and actor is None:
         raise errors.SpecInvalid(
             "notebook-draft: this experiment declares more than one actor "

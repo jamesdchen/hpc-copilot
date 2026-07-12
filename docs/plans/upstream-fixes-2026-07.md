@@ -78,17 +78,14 @@ residue bucket — shoehorning is worse than residue.
    RULING 1: patch the journaled cluster key as a decision) +
    human-directed settle (r12-f25: directed evidence through the SAME
    mark_run + harvest_on_terminal machinery) build as one wave.
-7. **A9 notebook-draft attestor stamp (sweep 2, the one overturned
-   verdict; feeds the multi-human byte-identity row):** the draft record
-   stamps `attestor_id` under exactly ONE declared actor
-   (`ops/notebook/draft_op.py:189` guards with ≥1, not >1) while every
-   decision record holds the zero/one-actor byte-identity floor. Rule:
-   (a) census-null the draft stamp (`len(declared) > 1` like its
-   siblings — byte-identity restored, provenance lost for the sole-actor
-   case), or (b) keep the stamp and re-scope the byte-identity row to
-   decision records only (provenance kept, the MH1 D7 claim narrowed).
-   The enforcement-map row carries the disclosed exception either way
-   until ruled.
+7. **RULED 2026-07-12 — A9 notebook-draft attestor stamp: (a)
+   census-null.** The draft stamp is written only under the same
+   `len(declared) > 1` census as every sibling gate; the zero/one-actor
+   byte-identity floor is uniform across ALL record types again and the
+   enforcement-map exception is retired (sole-actor draft provenance
+   remains recoverable from the utterance log). User: "we'll let the
+   humans handle politics when it comes to it." Built + pinned same day
+   (test_sole_actor_census_nulled_byte_identical).
 
 ---
 

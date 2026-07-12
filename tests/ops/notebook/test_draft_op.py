@@ -179,6 +179,30 @@ def test_zero_actors_records_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert author is None
 
 
+def test_sole_actor_census_nulled_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A9 (RULED 2026-07-12, census-null): with exactly ONE declared actor the
+    # draft record holds the same zero/one-actor byte-identity floor as every
+    # decision record — attestor_id stays None, and the journaled bytes are
+    # IDENTICAL whether or not HPC_ACTOR is exported.
+    _write(tmp_path)
+    _write_interview(tmp_path, ["alice"])
+    monkeypatch.setenv("HPC_ACTOR", "alice")
+    result = _run(tmp_path)
+    assert result.actor is None
+    journal = tmp_path / ".hpc" / "notebooks" / f"{_AUDIT}.decisions.jsonl"
+    with_actor = journal.read_text(encoding="utf-8")
+
+    import shutil
+
+    shutil.rmtree(tmp_path / ".hpc")
+    monkeypatch.delenv("HPC_ACTOR", raising=False)
+    result = _run(tmp_path)
+    assert result.actor is None
+    assert journal.read_text(encoding="utf-8") == with_actor
+
+
 def test_unknown_section_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(tmp_path)
     monkeypatch.delenv("HPC_ACTOR", raising=False)
