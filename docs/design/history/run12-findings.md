@@ -554,3 +554,27 @@ inference-from-probes — every legitimate human override becomes surgery;
 the generator fix is that every transition the system can make on
 evidence must also be makeable on DIRECTED evidence through the same
 machinery.
+
+## 26. Write-isolation debris (_wip_*_failed_*) is invisible to SOME readers
+## but not the pull or the per-task reduce — a self-restoring "foreign rows"
+## refusal with a misdiagnosing message
+Live (the run-12 reduce): task 676's failed first attempt left the
+dispatcher's quarantine dir (_wip_676_failed_<nonce>) beside its good
+result. The per-task reduce glob counted its metrics_table.csv → 2701 vs
+2700 → refused as "FOREIGN rows (another run's results sharing the tree)"
+— wrong diagnosis, the dir name says exactly what it is. Local quarantine
+didn't stick: the PUSH exclude set unions the _wip pattern but the PULL
+does not, so every re-sync restored the debris (the demo looped on it
+once before spotting the re-pull). Remote rm was the unblock — a human
+remote write for framework debris. FIX CLASS (three legs, one
+definition): (a) the write-isolation pattern gets ONE shared definition
+(dispatcher mints it; status scan, invariants column check, per-task
+reduce glob, and BOTH transfer directions consume it) — pull excludes
+union it exactly as push does; (b) the reduce glob skips any path with a
+_wip component; (c) the foreign-rows message distinguishes genuinely
+foreign run rows from THIS run's failed-attempt debris (the dir name
+carries the task id — say "quarantined failed attempt of task N; safe to
+remove" and name the remote rm). GENERATOR TAG: reader/writer pattern
+knowledge duplicated per consumer instead of one definition — same
+generator as the tick-log path split (bug-sweep #14) and the
+_FRAMEWORK_ARTIFACT_NAMES drift (#27/#28).
