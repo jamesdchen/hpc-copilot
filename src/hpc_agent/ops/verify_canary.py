@@ -118,7 +118,7 @@ def _classify_poll_failure(exc: BaseException) -> str:
     class belongs to the connection breaker). The returncode is read off the
     exception attribute, never string-parsed from the message.
     """
-    if isinstance(exc, errors.RemoteCommandFailed) and exc.returncode in (126, 127):
+    if errors.is_deterministic_env_failure(exc):
         return "deterministic_env"
     return "transient"
 
@@ -891,12 +891,7 @@ def verify_canary(
                 file_glob=file_glob,
                 remote_activation=remote_activation,
             )
-        except (
-            errors.RemoteCommandFailed,
-            errors.SshCircuitOpen,
-            errors.SshUnreachable,
-            OSError,
-        ) as exc:
+        except errors.TRANSIENT_TRANSPORT_ERRORS as exc:
             # SshCircuitOpen (an HpcError, NOT an OSError) is raised when a
             # transient blip trips the per-host breaker; without it here the
             # canary gate crashes with an undeclared exception instead of riding

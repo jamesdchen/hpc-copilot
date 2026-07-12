@@ -585,6 +585,24 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     return data
 
 
+def read_run_sidecar_or_empty(experiment_dir: Path, run_id: str) -> dict[str, Any]:
+    """Tolerant sibling of :func:`read_run_sidecar`: return ``{}`` for a
+    missing / torn / non-UTF-8 / foreign-schema sidecar instead of raising.
+
+    The ONE present-or-gap reader that dossier / evidence / prune consumers
+    route through, so the "which read failures degrade to a gap" degrade set is
+    defined ONCE (:data:`hpc_agent.errors.TOLERANT_RECORD_READ_ERRORS`) rather
+    than re-enumerated per consumer — the drift that sealed a corrupt sidecar
+    into an uncaught traceback at ``export_dossier`` (#43). A caller that needs
+    the missing-vs-corrupt distinction still calls :func:`read_run_sidecar` and
+    handles the raise itself.
+    """
+    try:
+        return read_run_sidecar(experiment_dir, run_id)
+    except errors.TOLERANT_RECORD_READ_ERRORS:
+        return {}
+
+
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
     """Return every run-sidecar ``.hpc/runs/<id>.json``, newest-first by mtime.
 

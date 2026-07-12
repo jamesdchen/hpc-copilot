@@ -10,6 +10,8 @@ The full enum is documented in ``docs/reference/cli-spec.md``.
 
 from __future__ import annotations
 
+import json as _json  # private alias: keep ``json`` out of the public error surface
+
 __all__ = [
     "HpcError",
     "SshUnreachable",
@@ -37,6 +39,9 @@ __all__ = [
     "SubmissionIncomplete",
     "StructuredOutputError",
     "ModelEndpointError",
+    "TRANSIENT_TRANSPORT_ERRORS",
+    "TOLERANT_RECORD_READ_ERRORS",
+    "is_deterministic_env_failure",
 ]
 
 
@@ -778,6 +783,69 @@ class ModelEndpointError(HpcError):
         "or an unsupported response_format; a 5xx or connection error is a "
         "transient outage — retry."
     )
+
+
+# ── Transport / read failure taxonomy (G7: one classified set, not per-consumer
+#    hand-copied except tuples) ────────────────────────────────────────────────
+#
+# The owning-module home for the failure classifications that were re-enumerated
+# as a hand-copied ``except`` tuple at every consumer. A new transport error
+# (``SshCircuitOpen``, ``SshSlotWaitTimeout``) or stdlib corner
+# (``UnicodeDecodeError``) joins the ONE definition here and every seam that
+# imports it inherits the fix, instead of drifting per site (bug-sweep #15/#16/
+# #26/#43/#50/#73; the rc=127 class fought across runs #7/#8).
+
+#: The canonical "a status/poll read over the transport failed transiently" set.
+#: A consumer polling a long-lived remote (the canary / monitor watch loops)
+#: catches THIS ONE tuple instead of re-listing transport error classes per site.
+#: Every member is a *transient-transport* fault that must RIDE the wall-clock
+#: budget (the connection breaker / slot limiter owns the recovery); the
+#: deterministic-env split that escalates fast is :func:`is_deterministic_env_failure`.
+#: ``OSError`` covers the raw-socket / ``TimeoutError`` transport blips
+#: (``TimeoutError`` is an ``OSError`` subclass on all supported runtimes).
+TRANSIENT_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    RemoteCommandFailed,
+    SshCircuitOpen,
+    SshUnreachable,
+    SshSlotWaitTimeout,
+    OSError,
+)
+
+#: The canonical degrade set for a TOLERANT read of a durable JSON record (a run
+#: sidecar, a journal record): a missing / torn / non-UTF-8 / foreign-schema file
+#: is ABSENT (present-or-gap), never an uncaught crash. Consumers pass this to
+#: ``except`` (or route through a shared tolerant reader) instead of each
+#: re-deriving which of FileNotFoundError / OSError / UnicodeDecodeError /
+#: JSONDecodeError / a strict schema-version ``HpcError`` they remembered to list
+#: — the drift that sealed a corrupt sidecar into an uncaught traceback at
+#: ``export_dossier`` (#43) and crashed ``prune-orphan-sidecars`` on one bad file
+#: (#73). ``FileNotFoundError`` is an ``OSError`` subclass, named for the reader.
+TOLERANT_RECORD_READ_ERRORS: tuple[type[Exception], ...] = (
+    FileNotFoundError,
+    OSError,
+    UnicodeDecodeError,
+    _json.JSONDecodeError,
+    HpcError,
+)
+
+
+def is_deterministic_env_failure(exc: BaseException) -> bool:
+    """True when *exc* is the broken-env signature that never heals by waiting.
+
+    The SSH connection SUCCEEDED and the remote command deterministically exited
+    126 ("not executable") or 127 ("command not found") — the run's ``python`` /
+    conda env is absent or wrong, so every identical poll fails identically and a
+    watch must escalate FAST rather than ride the whole budget silently (run #7:
+    28+ ticks of rc=127 against a finished array). EVERY other transport failure
+    — a dropped connection, an open breaker, a slot-wait timeout, a plain
+    ``TimeoutError``, or a ``RemoteCommandFailed`` with any other returncode — is
+    transient and rides the budget (that class belongs to the breaker). The
+    returncode is read off the exception attribute, never string-parsed.
+
+    The single home for the rc-126/127 split that ``ops.monitor_flow`` and
+    ``ops.verify_canary`` poll loops each consumed as a hand-copied twin.
+    """
+    return isinstance(exc, RemoteCommandFailed) and getattr(exc, "returncode", None) in (126, 127)
 
 
 def _registry_remediation_with_placeholders(kind: str, placeholders: dict[str, str]) -> str:

@@ -169,8 +169,18 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     from hpc_agent._kernel.registry.primitive import register_single_module
     from hpc_agent.cli.parser import build_single_verb_parser
 
-    register_single_module(module_name)
-    parser = build_single_verb_parser(primitive_name)
+    try:
+        register_single_module(module_name)
+        parser = build_single_verb_parser(primitive_name)
+    except ImportError:
+        # The OTHER staleness mode (docstring: "any stale-map miss falls back"):
+        # the verb's defining module was renamed/deleted while the verb still
+        # exists elsewhere, so register_single_module's bare import_module raises
+        # ModuleNotFoundError. Degrade to the full registry walk (which discovers
+        # modules by package walk, not the map) instead of letting the traceback
+        # escape main() as a non-envelope crash for a verb the walk dispatches
+        # fine (#59).
+        return None
     if parser is None:
         # Stale map (module no longer defines the verb / shape changed): fall
         # back. register_single_module already imported the module, which the

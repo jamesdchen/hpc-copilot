@@ -41,7 +41,7 @@ from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.fingerprint_store import fingerprint_path
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
-from hpc_agent.state.runs import write_run_sidecar
+from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 from hpc_agent.state.scopes import record_lock, record_look
 
 if TYPE_CHECKING:
@@ -188,6 +188,23 @@ def test_every_seeded_store_becomes_exactly_one_entry(journal_home: Path, experi
     assert not result.gaps
     assert result.entry_count == len(result.manifest["entries"])
     assert result.run_ids == [_RID]
+
+
+def test_corrupt_sidecar_degrades_to_gap_not_crash(journal_home: Path, experiment: Path) -> None:
+    """#43: a torn / hand-edited / newer-schema sidecar must degrade the identity
+    projection (null-padded), not crash export_dossier / the recompute lock. The
+    raw sidecar bytes are still sealed at the no-parse boundary."""
+    _seed_full_run(experiment, _RID, scopes=["holdout"])
+    # Corrupt the sidecar AFTER seeding — a truncated write the strict
+    # read_run_sidecar parse would raise json.JSONDecodeError on.
+    run_sidecar_path(experiment, _RID).write_text('{"run_id": "', encoding="utf-8")
+
+    # Succeeds (no uncaught traceback); the recompute signature is total.
+    result = export_dossier(experiment_dir=experiment, spec=ExportDossierSpec(run_id=_RID))
+    assert result.run_ids == [_RID]
+    assert compute_dossier_signature(experiment_dir=experiment, run_id=_RID)
+    # The raw (corrupt) sidecar bytes are still sealed as a source entry.
+    assert "sidecar" in _sources_of(result.manifest)
 
 
 def test_archive_layout_and_manifest_are_written(journal_home: Path, experiment: Path) -> None:
