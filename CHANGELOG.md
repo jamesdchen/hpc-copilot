@@ -65,6 +65,32 @@ evidence and relays the human's `y`/nudge. Registry grew 101 → 121 primitives.
   canary during S1 review (budget of 1, nudge-invalidation both free via the
   canary TTL cache).
 
+### Added — opt-in continuous-async campaign refill (RFC #362, Phase 1)
+
+- **`campaign-refill`** — the autonomous refill actor
+  (`ops/campaign_refill.py`). Once a campaign is greenlit and its manifest sets
+  `async_refill`, the pool is kept ~full instead of draining to zero at each
+  iteration barrier: each tick calls `campaign-advance` authoritatively and, on
+  `decision == "refill"`, resolves + detach-submits `refill_count` fresh
+  iterations **sequentially** through `resolve-submit-inputs` (the per-slot
+  sidecar write advances the async optuna scaffold's proposal index, so each
+  slot gets a **distinct** trial) + `campaign-run` (the per-iteration spine).
+  No new state files, no cursor — partial ticks self-correct via
+  `in_flight`-shrinking `refill_count`. The greenlit manifest is the standing
+  consent; `campaign-refill` refuses an un-greenlit campaign and carries no
+  per-iteration human boundary.
+- **Wiring:** `campaign-watch` gains a fourth no-boundary terminator
+  `watching_refill` (split out of `watching_healthy`); `block-drive` chains
+  `campaign-watch/watching_refill → campaign-refill` in code and ends the chain
+  there (the next tick re-enters via `campaign-watch` — one step per tick).
+  `load-context` routes a deterministic `kind="cli"` refill step when async is
+  on, the manifest is greenlit, and advance decided `refill`.
+- **Opt-in & default-safe:** with `async_refill` unset the behavior is
+  byte-identical to the synchronous batch loop (property-tested); every new
+  branch is dead unless the flag is set. **Not yet non-experimental:** the
+  Phase-2 live-verify gate (`scripts/campaign_async_live_verify.py`, RFC §10)
+  has not run on a real cluster.
+
 ### Added — §5 recovery machine
 
 - **Watchdog / dead-man's switch:** every driver + monitor tick stamps

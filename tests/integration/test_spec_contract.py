@@ -100,6 +100,7 @@ _CHAINED_UNGATED_HOPS: frozenset[tuple[str, str]] = frozenset(
         ("campaign-greenlight", "greenlit"),
         ("campaign-greenlight", "already_greenlit"),
         ("campaign-watch", "watching_complete"),
+        ("campaign-watch", "watching_refill"),
     }
 )
 # Ungated but needs_decision=True → the driver parks; spec_hint is human-facing.
@@ -238,6 +239,29 @@ def test_campaign_watch_complete_spec_hint_validates() -> None:
     assert nb is not None
     assert nb["verb"] == "campaign-complete"
     assert_valid_spec("campaign-complete", nb["spec_hint"])
+
+
+def test_campaign_watch_refill_spec_hint_validates() -> None:
+    """campaign-watch → campaign-refill: the hint the block emits validates VERBATIM.
+
+    The ``watching_refill`` terminator (RFC #362) fires only when
+    ``campaign_advance`` decides ``refill`` (needs live pool/budget state), so —
+    like ``watching_complete`` — we build the hint through the block's own
+    ``_next_block`` helper with the same ``campaign_id`` kwarg the terminator
+    passes and validate it against ``CampaignRefillSpec``. It is chained verbatim
+    (needs_decision=False), so a missing required field would stall the tick.
+    """
+    from hpc_agent.meta.campaign import blocks as campaign_blocks
+
+    nb = campaign_blocks._next_block(
+        "campaign-watch",
+        "watching_refill",
+        "free slots with budget headroom; refill the pool.",
+        campaign_id=_CAMPAIGN_ID,
+    )
+    assert nb is not None
+    assert nb["verb"] == "campaign-refill"
+    assert_valid_spec("campaign-refill", nb["spec_hint"])
 
 
 def test_parking_ungated_hops_are_decision_terminators() -> None:

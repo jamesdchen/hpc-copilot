@@ -255,6 +255,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [block-drive](block-drive.md) | yes | spawns-subprocess: `hpc-agent`; writes-journal: `<run_id>` | `hpc-agent block-drive --spec <path> [--experiment-dir <dir>]` |
 | [campaign-complete](campaign-complete.md) | yes | _none_ | `hpc-agent campaign-complete --spec <path> [--experiment-dir <dir>]` |
 | [campaign-greenlight](campaign-greenlight.md) | yes | writes-campaign-state: `<experiment_dir>/.hpc/campaigns/<campaign_id>/` | `hpc-agent campaign-greenlight --spec <path> [--experiment-dir <dir>]` |
+| [campaign-refill](campaign-refill.md) | yes | scheduler-submit: `<cluster>`; writes-campaign-state: `<experiment_dir>/.hpc/runs/<run_id>.json` | `hpc-agent campaign-refill --spec <path> [--experiment-dir <dir>]` |
 | [campaign-run](campaign-run.md) | yes | scheduler-submit: `<cluster>`; ssh: `<cluster>`; writes-aggregate-output: `<experiment_dir>/_aggregated/<run_id>/` | `hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]` |
 | [campaign-watch](campaign-watch.md) | yes | _none_ | `hpc-agent campaign-watch --spec <path> [--experiment-dir <dir>]` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` |

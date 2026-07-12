@@ -61,6 +61,13 @@ ORDER: dict[str, list[str]] = {
     "status": ["status-snapshot", "status-watch"],
     "aggregate": ["aggregate-check", "aggregate-run"],
     "campaign": ["campaign-greenlight", "campaign-watch", "campaign-complete"],
+    # RFC #362: campaign-refill is a side-spur off campaign-watch (watching_refill),
+    # NOT a linear campaign touchpoint — adding it to the "campaign" chain would
+    # shift the block_index positions the §4 field-change routing compares for the
+    # three real touchpoints. Its own single-member family gives it a WORKFLOW_OF
+    # entry + block_index(0) (so the SUCCESSORS coverage test's WORKFLOW_OF
+    # membership assertion holds) without perturbing the campaign chain.
+    "campaign-refill": ["campaign-refill"],
 }
 
 # Each block verb → its workflow family. Derived from ORDER so the two can never
@@ -228,9 +235,17 @@ SUCCESSORS: dict[tuple[str, str], str | None] = {
     # campaign-watch
     ("campaign-watch", "watching_complete"): "campaign-complete",  # stop fired → completion.
     ("campaign-watch", "watching_healthy"): None,  # self-chains async — no boundary, no hint.
+    ("campaign-watch", "watching_refill"): "campaign-refill",  # free slots → refill (#362).
     ("campaign-watch", "watching_anomaly"): None,  # loud-fail / budget halt — human decides.
     # campaign-complete — end of the campaign chain.
     ("campaign-complete", "complete"): None,
+    # campaign-refill (RFC #362) — a side-spur off watch; every stage ends the
+    # chain, so the next cron/loop tick re-enters via campaign-watch (one step
+    # per tick). NOT in ORDER["campaign"] (it is not a linear touchpoint) and NOT
+    # in GATED_BLOCKS (its own greenlight refusal is the consent check).
+    ("campaign-refill", "refilled"): None,  # chain ends; next tick re-enters via campaign-watch.
+    ("campaign-refill", "no_refill_needed"): None,  # advance said wait/stop/continue — noop.
+    ("campaign-refill", "refill_blocked"): None,  # live-prior / scaffold escalation — human.
 }
 
 

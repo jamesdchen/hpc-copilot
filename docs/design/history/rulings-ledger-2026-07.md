@@ -1,9 +1,19 @@
-# Rulings ledger — 2026-07-07 → 07-10 (INDEX)
+# Rulings ledger — 2026-07-07 → 07-12 (INDEX)
 
 An index for double-checking: one line of essence per user ruling + a pointer
 to the CANONICAL record (the owning doc's drift log / section — canon lives
 THERE; this page is navigation, not restatement; if a line here disagrees
 with the pointed record, the record wins).
+
+## 2026-07-12
+- **#362 async-refill Phase-1 BUILD ordered (user):** land the opt-in
+  continuous-async campaign refill on the block-drive architecture, with
+  `campaign-run` as the per-iteration spine and the new `campaign-refill`
+  primitive as the actor (re-homed off the deleted `deterministic_resolver.py`
+  refill arm) → `campaign-async-refill.md` drift log (v1). Default off is
+  byte-identical; the Phase-2 live-verify gate
+  (`scripts/campaign_async_live_verify.py`) is UNCHANGED and still gates
+  non-experimental status — green unit tests are not "done."
 
 ## 2026-07-10
 - Three-tier pack distribution (upstream-in-core-repo / lab fork / per-
