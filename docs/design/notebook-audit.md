@@ -587,19 +587,49 @@ Three prose rules from run #11 with real code seats, ranked value-per-effort
 (user-endorsed for after the thesis deadline; see also the audit-handoff note
 above and E-render in mcp-elicitation.md):
 
-1. **Dirty-worktree disclosure at S1** (smallest; submit-side). "Commit
-   before relaunch — uncommitted fixes are invisible to provenance" is
-   prose-only today: `dirty` detection exists in `audit-preflight`
-   (template-clean) and `verify_canary`, but nothing at submit resolve
-   discloses a dirty experiment repo. Add a disclosure line to the S1 brief —
-   NEVER a blocker (hacking dirty is legitimate; invisible-dirty is the bug).
-2. **Sign-off echo detection** (hook-side). The "never compose the sign-off
-   utterance" ban (skill invariant, 2026-07-09) is unenforced conduct prose;
-   the relay-audit Stop hook already reads transcript + journal (rule 10), so
-   it can flag a journaled `notebook-sign-off` `response` matching a prior
+1. **Dirty-worktree disclosure at S1** (smallest; submit-side). **SHIPPED
+   (run #11 item 1, 2026-07-09, `b2c55c05`).** "Commit before relaunch —
+   uncommitted fixes are invisible to provenance" was prose-only: `dirty`
+   detection existed in `audit-preflight` (template-clean) and `verify_canary`,
+   but nothing at submit resolve disclosed a dirty experiment repo.
+   `resolve-submit-inputs._dirty_worktree_disclosure` (composed by `submit-s1`)
+   now folds a NEVER-blocking line into the S1 resolved brief's `reason` via a
+   bounded, fail-open `git status --porcelain` (the `git_output` 2 s helper) —
+   git absent / non-repo / timeout → no disclosure, never an error; the
+   decision surface (`stage_reached`, `needs_decision`) stays byte-identical.
+   Fires-and-passes pairs in `tests/ops/test_resolve_submit_inputs.py`
+   (dirty→present / clean→absent / non-git→absent). Not a blocker (hacking
+   dirty is legitimate; invisible-dirty was the bug).
+2. **Sign-off echo detection** (hook-side). **SHIPPED, then RE-RULED to
+   journal-only provenance (built `eff1dc33`/`8a110910` 2026-07-09; re-ruled
+   `cdf183c9` 2026-07-10 night).** The "never compose the sign-off utterance"
+   ban (skill invariant, 2026-07-09) was unenforced conduct prose; the
+   relay-audit Stop hook already reads transcript + journal (rule 10), so it
+   flags a journaled `notebook-sign-off` `response` matching a prior
    ASSISTANT-authored line — laundered authorship. Complement of the F-R
    number-word class: F-R catches the model restating rejected content; this
    catches the human restating model-drafted attestation.
+   `relay_audit_stop._sign_off_echo_findings` (over `_prior_assistant_texts` —
+   the trailing final relay excluded, so a stop that legitimately QUOTES the
+   response is not laundering) detects the LATEST sign-off per audit by
+   whitespace-normalized substring or high token containment, both floored by a
+   minimum length so short acks never collide. Per the **2026-07-10 night user
+   ruling** the surfaced nag AND the block are REMOVED in BOTH the rejector and
+   completer modes: LLM drafting help is sanctioned amplification and the
+   y-ack-ease hazard is guarded by the digest-read / tiered sign-off gates, not
+   by wording originality — so echo is JOURNAL-ONLY provenance. Each detection
+   becomes one deduped `notebook-echo-provenance` record
+   (`state/notebook_audit.record_echo_provenance`, response
+   `echo_provenance`). Fires-and-passes pairs in
+   `tests/_kernel/hooks/test_relay_audit_stop.py`
+   (`test_echo_is_journal_only_provenance_never_blocks` /
+   `_passes_on_original_human_utterance` / `_ignores_final_message_quoting…` /
+   `_ignores_short_response` / `test_completer_mode_echo_is_journal_only_no_append`).
+   Deliberately NOT an append-time refusal in `ops/decision/journal.py`: an
+   append gate cannot see assistant-authored lines (the utterance log captures
+   only human text — the echo, not its source), and per the ruling a sign-off
+   must NOT block on echo; the post-hoc hook seat with both halves on disk is
+   the only sound one.
 3. **Render relay-due markers** (medium; schema regen tail). "A link is not a
    relay" is prose; the Amendment-3 relay-due pattern (journaled marker only
    the relayed state word discharges) already covers `notebook-status`

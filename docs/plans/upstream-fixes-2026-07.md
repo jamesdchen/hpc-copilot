@@ -1,7 +1,22 @@
 # Upstream fixes — 2026-07 (generator-level plan)
 
 Status: **COMPLETE — minted by Sweep 1, verification-corrected, Sweep-2
-merged (2026-07-12).** This file is the Output-2 plan mandated 2026-07-11
+merged (2026-07-12). BUILD LEDGER (2026-07-12, the same night): every
+generator's upstream fix and every banked spec was BUILT or verified
+already-landed in the 26-wave train `eb89fc87..6d6deac1` —** G1 Phase 2
+(announce consumption end-to-end), G2 (host-retarget + settle-run;
+5.1/5.2 verified built), G3 (B4 ts>=anchor wave + bound-capture
+overnight consent per RULING 3), G4 (library-native shrink, pulled
+forward per RULING 5, + the B16 homes pin), G5 (residuals #64/#65),
+G6 (one activation definition + 2 live rc=127 consumers), G7 (errors.py
+taxonomy), G8/G13/G15 (verified landed; TUI manifest residual built),
+G9 (dialect profiles; #5/#32 fixed), G10 (lockstep pins), G11 (#71
+challenge-drop fixed), G12 (atomic-write discipline + lint), G14 (MH7
+refuse+route per RULING 4); banked specs 1-9 all landed (B3′ ack lint,
+finding-12 payload cut, B13 earlier, B15 env-echo helper, B16 pin, B9
+contract + update-run-constraints, C/B11 consolidation, B7 row);
+residue #45/#47/#51/#58/#72 fixed, the rest verified already-fixed.
+The seven RULING items below are all RULED with builds landed. This file is the Output-2 plan mandated 2026-07-11
 ("feed a follow-up plan that fixes all problems upstream stemming from
 design choices"). The RULING NEEDED list below (7 items) is the one
 consolidated list awaiting the user; everything else is ranked proposals
