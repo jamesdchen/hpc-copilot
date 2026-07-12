@@ -347,7 +347,14 @@ def _reproduction_evidence_floor(
     A MISSING ledger (or an empty ``cmd_sha``) is an ordinary shortfall (n=0)
     named in the returned dict — never a fabricated pass. Returns ``evidence_meets``'
     ``(met, shortfall)``.
+
+    The ONE cross-kind ``requires`` key (``uncontested``) is stripped HERE, at
+    the seam that forwards into ``evidence_meets`` (#47): it is a standing-
+    challenge count checked by ``_apply_uncontested_demand``, never an
+    evidence-floor demand, and ``evidence_meets`` loud-refuses unknown keys —
+    so any caller forwarding a validated ``requires`` dict verbatim crashed.
     """
+    demand = {k: v for k, v in demand.items() if k != UNCONTESTED_REQUIRES_KEY}
     cmd_sha = str(repro_ident.get("cmd_sha") or "")
     identity: dict[str, Any] = {
         "cmd_sha": repro_ident.get("cmd_sha"),
@@ -432,20 +439,25 @@ def _check_reproduction(
     sha_ok = recomputed == entry.content_sha
 
     # The R4 fingerprint evidence floor (the reserved seam, now WIRED). Absent a
-    # ``requires`` floor the reproduction currency is exactly as before.
+    # ``requires`` floor the reproduction currency is exactly as before. The
+    # ONE cross-kind key (``uncontested``) is stripped before forwarding (#47):
+    # ``_apply_uncontested_demand`` checks it downstream, and ``evidence_meets``
+    # loud-refuses keys outside its own set — forwarding it crashed check_chain
+    # on any reproduction entry declaring ``uncontested: true``.
+    floor_demand = {k: v for k, v in entry.requires.items() if k != UNCONTESTED_REQUIRES_KEY}
     floor_reason: str | None = None
-    if entry.requires:
+    if floor_demand:
         floor_met, shortfall = _reproduction_evidence_floor(
             experiment_dir,
             repro_ident=repro_ident,
             sidecar=current_sidecar,
-            demand=dict(entry.requires),
+            demand=floor_demand,
         )
         if not floor_met:
             floor_reason = (
                 "fingerprint evidence floor unmet: "
                 f"{json.dumps(shortfall, sort_keys=True)} (demand "
-                f"{json.dumps(dict(entry.requires), sort_keys=True)})"
+                f"{json.dumps(floor_demand, sort_keys=True)})"
             )
 
     if not drift.drifted and cross_linked and sha_ok and floor_reason is None:

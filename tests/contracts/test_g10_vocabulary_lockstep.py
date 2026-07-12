@@ -32,10 +32,6 @@ Built here:
 
 from __future__ import annotations
 
-import pytest
-
-from hpc_agent import errors
-
 # ── #27/#28 — the census-excluded trace transport filename ────────────────────
 
 
@@ -155,21 +151,6 @@ def test_deploy_cache_manifest_is_protected() -> None:
 # ── #47 — reproduction ``requires`` whitelist vs evidence_meets demand keys ────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=errors.SpecInvalid,
-    reason=(
-        "KNOWN-UNFIXED bug-sweep #47: ops/registration/prereqs.py::_check_reproduction "
-        "forwards dict(entry.requires) — including the sanctioned cross-kind "
-        "'uncontested' key — into _reproduction_evidence_floor → determinism."
-        "evidence_meets, which loud-refuses any demand key outside _ALLOWED_DEMAND_KEYS. "
-        "A reproduction entry declaring uncontested:true therefore crashes check_chain "
-        "with a misleading internal error. The fix must STRIP the cross-kind key(s) "
-        "(handled separately by _apply_uncontested_demand) before forwarding to "
-        "evidence_meets. When that lands this test XPASSes and strict-xfail flips it to "
-        "a hard failure — remove the marker then."
-    ),
-)
 def test_reproduction_floor_does_not_forward_cross_kind_key(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """The reproduction evidence floor must not forward a cross-kind ``requires`` key.
 
