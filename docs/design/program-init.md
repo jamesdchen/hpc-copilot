@@ -1,5 +1,5 @@
 ---
-status: planned
+status: plan
 ---
 # Program init — materializing the three-tier pack architecture (build spec)
 

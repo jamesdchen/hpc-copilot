@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: shipped
 ---
 # Multi-human — the trust substrate for a research group
 

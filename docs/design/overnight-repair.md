@@ -1,5 +1,5 @@
 ---
-status: design
+status: plan
 ---
 # Overnight repair — the A/B/C heal taxonomy (design)
 
