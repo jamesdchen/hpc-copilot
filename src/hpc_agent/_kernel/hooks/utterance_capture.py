@@ -94,12 +94,10 @@ def capture(payload: Any) -> dict[str, Any] | None:
         return None
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
-    # Seam: MT1 adds ``actor=`` to ``append_utterance``. Pass it only when set
-    # so this call works both before and after MT1 lands (unset → today's
-    # signature, byte-identical).
-    actor = env_actor()
-    kwargs = {"actor": actor} if actor else {}
-    return append_utterance(cwd_dir, prompt, **kwargs)
+    # MT1's ``actor=`` landed; None is its default, so passing it directly is
+    # byte-identical for the unset case (the old conditional **splat mapped a
+    # dict[str, str] onto the keyword-only ``bound`` param under mypy).
+    return append_utterance(cwd_dir, prompt, actor=env_actor())
 
 
 def main(argv: list[str] | None = None) -> int:

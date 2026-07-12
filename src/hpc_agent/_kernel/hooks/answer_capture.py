@@ -155,13 +155,13 @@ def capture(payload: Any) -> list[dict[str, Any]]:
         return []
     cwd = payload.get("cwd")
     cwd_dir = Path(cwd) if isinstance(cwd, str) and cwd else Path(os.getcwd())
-    # Seam: MT1 adds ``actor=`` to ``append_utterance``. Pass it only when set
-    # so this call works both before and after MT1 lands.
+    # MT1's ``actor=`` landed; None is its default, so passing it directly is
+    # byte-identical for the unset case (the old conditional **splat mapped a
+    # dict[str, str] onto the keyword-only ``bound`` param under mypy).
     actor = env_actor()
-    kwargs = {"actor": actor} if actor else {}
     records = []
     for text in _typed_texts(payload):
-        record = append_utterance(cwd_dir, text, **kwargs)
+        record = append_utterance(cwd_dir, text, actor=actor)
         if record is not None:
             records.append(record)
     return records
