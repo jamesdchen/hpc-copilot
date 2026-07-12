@@ -76,6 +76,16 @@ Ordering = fired-symptom count weighted by diagnosis cost (docket-narrated
 hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
 `pr5-fN` / `pr2-fN` = proving runs 5/2 symptom inventories.
 
+Applied uniformly (adjudicated 2026-07-12): generators with docket-narrated
+live cost rank above sweep-caught-only generators of similar or larger
+count, scaled by the cost's size (G6's rc=127 class fought across runs
+#7/#8 sits above G7 despite 3-vs-8 counts; G7's eight symptoms (#65
+counted as overlap-only) with a 30-min narrated delay sit above G8's
+four symptoms with one ~1-hour
+incident — adjacent by design); generators with NO narrated cost order by
+count alone (G10, G11, then G9). Severity/blast-radius is disclosed per
+entry but is never a ranking input.
+
 ### G1. pull-status-over-silent-channels — RANK 1
 
 - **Thesis:** run/task status is PULLED over long-lived, mostly-silent SSH
@@ -135,7 +145,9 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   "state transitions reachable only through inference-from-probes — every
   legitimate human override becomes surgery").
 - **Diagnosis cost (cited):** pr5-f9 "'S2 on hoffman2' polled discovery
-  for 31 min"; pr5-f12 "30-min silence while every poll died exit 127";
+  for 31 min"; pr5-f13 (member): the hand-carried retarget dropped
+  job_env, causing the 30-min all-polls-exit-127 outage (delay narrated
+  at pr5-f12, whose poll-loop root is G7's — no cost is double-borrowed);
   pr2-f3 a 5-minute `find /` disk crawl; pr2-f8/f10 duplicate detached
   workers self-inflicting SSH contention; two full proving-run failure
   inventories reduce to this one behavior (pr5 §6: "every remaining
@@ -181,7 +193,10 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   envelopes), #53/#70 (run ownership parsed from filename shape while the
   record's own run_id field is ignored — foreign terminals sealed into
   another run's story/dossier), #60 ('dispatch.py' bare-substring
-  executor refusal). Supporting audit findings: the B4 sweep's
+  executor refusal), #24 (the scheduler write fence is defeated by
+  exec/eval/xargs/command-substitution/leading-redirection forms —
+  token-position text matching that under-matches its own threat
+  model). Supporting audit findings: the B4 sweep's
   scope-unlock word-overlap and naming-only revoke gates (whole-log, no
   anchor).
 - **Diagnosis cost (cited):** r12-f10's false attestations + user
@@ -210,7 +225,7 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   pre-elicitation. The elicitation popup FIRING live (r12-f11) is the
   constraint flip; bound capture becomes primary at popup-capable seats,
   the forensic tier demotes to the honestly-weaker fallback it is.
-- **Confidence:** high (the dockets name the generator themselves; 12+
+- **Confidence:** high (the dockets name the generator themselves; 13+
   independent symptoms).
 
 ### G4. hand-rolled-connection-lifecycle (vs library-native) — RANK 4
@@ -265,7 +280,10 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   inside the server), #10/#11 (the drive-colon translation exists ONLY at
   rsync_push; _rsync_deploy and rsync_pull never got it — every deploy
   and every pull fails with MSYS rsync installed), #9 (rsync-less push:
-  unbounded pump join deadlocks forever when ssh exits early), #64
+  unbounded pump join deadlocks forever when ssh exits early — a novel
+  defect OF the second stack, like r12-f17 leg 1's argv limit, not a
+  POSIX-mirroring miss like #10/#11/#64; it rides the retrofit-stack
+  half of the thesis), #64
   (RSYNC_RSH space-joins a spaced binary path — Program Files breaks
   every rsync), #65 (Path.home() RuntimeError crashes every ssh_argv in
   stripped-env service contexts). Overlap: #26 (PowerShell UTF-16 spec —
@@ -296,16 +314,18 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   new consumer or cluster shape re-arms the rc=127 broken-env class.
 - **Fired symptoms retired:** pr5-f13 (job_env activation dropped to `{}`
   across a hand-carried retarget → canary + every poll died exit 127;
-  root of wave 4 "activation is resolver-owned"), pr5-f12 (30-min
-  silence while every poll died exit 127; doctor false-flagged a stall),
+  root of wave 4 "activation is resolver-owned"),
   #13 (`logs --all-failed` is the SIXTH reporter consumer, unseeded —
   the enforcement row enumerates five), #33 (remote_activation_prefix
   disagrees with the cluster-side preamble for module-provided-conda
   clusters — the exact configuration the finding-24 Activation rule was
   built to accept).
 - **Diagnosis cost (cited):** the rc=127 class is "the run-#7/#8 class"
-  the dockets say was fought across runs; pr5-f12's 30 minutes of
-  blindness per occurrence.
+  the dockets say was fought across runs; pr5-f13's hand-carried
+  activation drop caused the 30-min all-polls-exit-127 outage — the
+  30-min DIAGNOSIS DELAY of that outage is owned by the poll loop's
+  misclassification (pr5-f12, now G7): one incident, cost split by root
+  and cited once per owner.
 - **Upstream alternative:** ONE activation definition that emits BOTH the
   cluster-side preamble and the control-plane prefix (accept-at-submit
   and activate-at-control-plane stay one definition, per #33's sketch);
@@ -339,10 +359,16 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   UnicodeDecodeError its sibling find_run_by_cmd_sha has), #65-overlap
   (RuntimeError from Path.home; primary G5), #59 (fast-dispatch
   self-heal doesn't cover ImportError, half the documented staleness
-  contract).
-- **Diagnosis cost:** mostly sweep-caught before firing live; the
-  consequence class is severe (a dead detached watch = the overnight-
-  blindness class; duplicate concurrent arrays writing one result dir).
+  contract), pr5-f12 (the poll loop classified a deterministic rc=127
+  env failure as transient and rode the 30-min budget while the canary
+  loop stamped no liveness; doctor false-flagged a stall — root per
+  pr5 §2 row 12, fixed wave 3 `d304b911`; overlap: the outage's TRIGGER
+  was pr5-f13's activation drop, G6/G2).
+- **Diagnosis cost:** pr5-f12 fired live — a 30-min diagnosis delay
+  narrated in the pr5 docket; the remaining members are sweep-caught,
+  with a severe prospective class (a dead detached watch = the
+  overnight-blindness class; duplicate concurrent arrays writing one
+  result dir).
 - **Upstream alternative:** the taxonomy is owned where it is raised —
   (a) transport errors re-parented so consumers catch ONE classified
   base (transient-transport vs deterministic-env), mirroring
@@ -388,41 +414,7 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   be deleted rather than hardened.
 - **Confidence:** medium.
 
-### G9. scheduler-dialect-monoculture (one family's grammar assumed for all) — RANK 9
-
-- **Thesis:** scheduler-family differences (exit-code semantics, array
-  grammar, cap syntax, hostname forms) are handled by copying one
-  family's rule into another's branch instead of per-family capability
-  profiles pinned by per-family contract fixtures; every family the
-  primary dev loop doesn't exercise silently carries another family's
-  assumptions.
-- **Fired symptoms retired:** #5 (PBS got SGE's rc==0 rule → permanent
-  UNKNOWN once any job finishes; SLURM's branch special-cases exactly
-  this), #6 (comma task-ranges forwarded to qsub -t/-J which accept a
-  single range — non-contiguous resubmit always fails on SGE/PBSPro,
-  including the repo's primary Hoffman2/UGE target), #7 (sacct pending-
-  aggregate rows `_[1-10]` parsed as malformed — queued tasks invisible
-  every poll), #32 (%N cap suffix is TORQUE/SLURM syntax emitted for PBS
-  Pro → every capped pbspro submit rejected), #63 (SGE qhost FQDNs vs
-  qstat short names — the PBS parser fixed exactly this asymmetry;
-  SGE normalized one side only).
-- **Diagnosis cost:** sweep-caught (no narrated burned hours); severity
-  is availability-shaped — whole families are unusable for recovery/
-  status paths.
-- **Upstream alternative:** family CAPABILITY PROFILES (e.g.
-  `supports_comma_array_ranges`, cap-emission attribute, explicit-id
-  ack semantics, hostname normalization) consumed by the builders/
-  parsers, plus a per-family fixture matrix in tests so every rule is
-  pinned per family rather than inherited by fallthrough.
-- **Migration cost:** medium — profile flags are cheap; honest fixtures
-  for the PBS family need collection.
-- **Flip trigger:** scope-by-constraint — SGE/SLURM are the exercised
-  targets today; the steady-state matrix ships when profile flags +
-  fixtures land, and real-PBS validation gates on the first PBS
-  deployment.
-- **Confidence:** medium-high.
-
-### G10. hand-maintained-vocabulary-sets (vs subset-contract-tests against the catalog) — RANK 10
+### G10. hand-maintained-vocabulary-sets (vs subset-contract-tests against the catalog) — RANK 9
 
 - **Thesis:** membership sets derived from a growing catalog (error-class
   Literals, scope kinds, framework-artifact names, protected files,
@@ -448,7 +440,8 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   cache the ruling built).
 - **Diagnosis cost:** #2 reproduced in-venv (kills the monitor's
   terminal-FAILED tick); the rest sweep-caught; #27/#28 reopen a class
-  with a named enforcement row.
+  with a named enforcement row. Leads the no-narrated-cost tier on
+  count (7 independent) plus #2's live in-venv reproduction.
 - **Upstream alternative:** every derived set either REFERENCES the
   owning catalog constant or carries a contract test asserting the
   subset/lockstep relation (iterate ALL SCOPE_KINDS; census-excluded
@@ -460,7 +453,7 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   assertion conversion for the enforcement map.
 - **Confidence:** high.
 
-### G11. twin-predicate-drift (shared predicates with two homes) — RANK 11
+### G11. twin-predicate-drift (shared predicates with two homes) — RANK 10
 
 - **Thesis:** one predicate/path/guard has two (or N) hand-maintained
   homes — reader vs writer, CLI vs TUI twin, two wire entries, sibling
@@ -485,7 +478,8 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   implicit-wave-0 fallback its sibling runner reader implements —
   confirmed arm (a), fixed).
 - **Diagnosis cost:** sweep-caught; #14's class is the run-#8
-  "arm a cron on a finished run" cost re-armed.
+  "arm a cron on a finished run" cost re-armed. Equal count to G10 in
+  the no-narrated-cost tier, no live reproduction — second in the tier.
 - **Upstream alternative:** route-through-one-definition with lockstep
   pins: reader imports the writer's path helper; twins share the
   predicate or carry a lockstep test asserting agreement; decisions
@@ -497,6 +491,43 @@ hours). Symptom ids: `#N` = bug-sweep 2026-07-11; `r12-fN` = run12 findings;
   is the deliverable.
 - **Confidence:** medium-high (the cluster is defined by the repo's own
   B7 axis; members verified individually).
+
+### G9. scheduler-dialect-monoculture (one family's grammar assumed for all) — RANK 11
+
+- **Thesis:** scheduler-family differences (exit-code semantics, array
+  grammar, cap syntax, hostname forms) are handled by copying one
+  family's rule into another's branch instead of per-family capability
+  profiles pinned by per-family contract fixtures; every family the
+  primary dev loop doesn't exercise silently carries another family's
+  assumptions.
+- **Fired symptoms retired:** #5 (PBS got SGE's rc==0 rule → permanent
+  UNKNOWN once any job finishes; SLURM's branch special-cases exactly
+  this), #6 (comma task-ranges forwarded to qsub -t/-J which accept a
+  single range — non-contiguous resubmit always fails on SGE/PBSPro,
+  including the repo's primary Hoffman2/UGE target), #7 (sacct pending-
+  aggregate rows `_[1-10]` parsed as malformed — queued tasks invisible
+  every poll), #32 (%N cap suffix is TORQUE/SLURM syntax emitted for PBS
+  Pro → every capped pbspro submit rejected), #63 (SGE qhost FQDNs vs
+  qstat short names — the PBS parser fixed exactly this asymmetry;
+  SGE normalized one side only).
+- **Diagnosis cost:** sweep-caught (no narrated burned hours); severity
+  is availability-shaped — whole families are unusable for recovery/
+  status paths, including the primary Hoffman2/UGE target for
+  non-contiguous resubmit. That severity is disclosed for the fix's
+  priority audience but is NOT the ranking axis — with zero
+  docket-narrated hours G9 ranks below the higher-count G10/G11.
+- **Upstream alternative:** family CAPABILITY PROFILES (e.g.
+  `supports_comma_array_ranges`, cap-emission attribute, explicit-id
+  ack semantics, hostname normalization) consumed by the builders/
+  parsers, plus a per-family fixture matrix in tests so every rule is
+  pinned per family rather than inherited by fallthrough.
+- **Migration cost:** medium — profile flags are cheap; honest fixtures
+  for the PBS family need collection.
+- **Flip trigger:** scope-by-constraint — SGE/SLURM are the exercised
+  targets today; the steady-state matrix ships when profile flags +
+  fixtures land, and real-PBS validation gates on the first PBS
+  deployment.
+- **Confidence:** medium-high.
 
 ### G12. bare-writes-vs-one-atomic-discipline — RANK 12
 
@@ -616,7 +647,7 @@ table.
 | #6 | G9 scheduler-dialect | high | |
 | #7 | G9 scheduler-dialect | high | |
 | #8 | G4 hand-rolled-lifecycle | high | overlap G1 (second severing mechanism) |
-| #9 | G5 win32-retrofit | medium | the rsync-less fallback path is the win32 path |
+| #9 | G5 win32-retrofit | medium | second-transport-stack half of G5 (novel concurrency defect in the designed rsync-less Windows path), not the mirroring half |
 | #10 | G5 win32-retrofit | high | also a G11-shaped sibling miss |
 | #11 | G5 win32-retrofit | high | also a G11-shaped sibling miss |
 | #12 | G3 unbound-evidence | high | |
@@ -631,7 +662,7 @@ table.
 | #21 | G10 vocabulary-sets | high | |
 | #22 | G3 unbound-evidence | high | |
 | #23 | G3 unbound-evidence | high | sibling site of #1 |
-| #24 | residue | medium | text-fence bypass; G3-adjacent but no bound channel exists for Bash hooks |
+| #24 | G3 unbound-evidence | medium | fence UNDER-match sibling of #60's over-match; same command-text-token mechanism as #56/#60; fix class (f) structured shell-token/word-boundary analysis |
 | #25 | G11 twin-predicate | high | |
 | #26 | G7 exception-taxonomy | high | overlap G5 (PowerShell UTF-16 trigger) |
 | #27 | G10 vocabulary-sets | high | shares root event with #28 (counted once) |
@@ -692,7 +723,9 @@ threshold.
 **Docket findings classified (non-bug corpus):** r12-f3/f16/f19/f20/f24 →
 G1; r12-f23/f25 + pr5 (f4/f9/f10/f13/f15/f17 + retarget) + pr2 (f2–f11) →
 G2; r12-f9/f10/f21 → G3; r12-f16(lease)/f24(lesson) → G4; r12-f13/f17 →
-G5; pr5-f12/f13 → G6; r12-f17-leg3 + pr5-f14 → G8; r12-f18 → G13.
+G5; pr5-f13 → G6 (also a G2 member); pr5-f12 → G7 (pr5 §2 row 12 roots it
+in the poll loop, not activation; the incident's trigger f13 stays G6/G2);
+r12-f17-leg3 + pr5-f14 → G8; r12-f18 → G13.
 Run12 findings 1/2/5/14 (compose-from-bound-config missing at consumers)
 and 12 (model-as-display payload) belong to poka-yoke/altitude axes
 (B2/B6) — left for sweep 2's axis agents; they are findings, not bugs, and
@@ -700,15 +733,44 @@ their generator (interview-time-only composition) had no confirmed-bug
 member in this corpus. Run12-f22 (registry-name vs CLI-verb skew) —
 single incident, no bug-corpus mate: local defect with its own fix class.
 
+Completing the run-12 pass (adjudicated 2026-07-12): **r12-f4** (bare
+subprocess.run inherited the server's JSON-RPC stdin; FIXED live
+`3c1a150`) — enforcement home is the B13 axis (sweep 2, transport/
+lifecycle group); supplementary UNCOUNTED G4-kin evidence (hand-rolled
+process lifecycle bypassing the repo's own bounded runner — neither an
+SSH channel nor a status pull, so not a counted G1/G4 member).
+**r12-f6**: local resolver defect (double-prefix), no generator; its
+engines/pack-vocab under-supply joins the f1/f2/f5/f14
+compose-from-bound-config list left for sweep 2 (B2/B6). **r12-f11**
+(popup digest under-supplies review): left for sweep 2's human-attention
+group (B1/B5); cited in this plan only as G3's flip-trigger evidence.
+**r12-f15** (output-contract detector scans the wrapper, not the wrapped
+script): local defect, no generator — the guard-checks-a-structural-proxy
+class (pr5 §5.1 lesson; A1 guard-can-fire axis). **r12-f7** (fixed
+lint-prose false positive) and **r12-f8** (a WATCH note, expected popup
+behavior — not a defect) are intentionally undispositioned.
+
 ## Unclassified residue (stay local-defect; fix per-symptom)
 
-#4, #19, #24, #31, #41, #45, #48 (ruling-gated), #49, #51, #58, #68, #71,
-#72 — thirteen entries, each verified against every proposed generator and
+#4, #19, #31, #41, #45, #48 (ruling-gated), #49, #51, #58, #68, #71,
+#72 — twelve entries, each verified against every proposed generator and
 kept out deliberately. Shoehorning is worse than residue: if sweep 2
 surfaces a second independent symptom for any of these shapes (e.g.
-another side-effects-before-validation ordering bug to pair with #41, or
-a second silent-drop disclosure gap to pair with #71/#68), the synthesis
-editor promotes the pair.
+another side-effects-before-validation ordering bug to pair with #41),
+the synthesis editor promotes the pair.
+
+Two same-shape pairs were examined and deliberately NOT promoted
+(adjudicated 2026-07-12): **#68 and #71** share the silent-drop OUTCOME
+(B10) but not a design choice — #68 is a closed escalation-label tuple
+whose renderer drops the evidence element; #71 is a last-record-wins
+reduce that re-validates history against current closed sets and
+silently continues. Both are flagged by name to sweep 2's B10 axis
+agent; promote only if that sweep identifies the shared upstream
+choice. **#49 and #72** share the values-unvalidated-where-keys/
+structure-are-loud shape on unrelated seams with local fixes (a
+producer-side predicate gate; a validator's loud-refusal extension) —
+held as a candidate half-applied-value-validation generator, promoted
+on a third member or an identified shared seam.
 
 ## What sweep 2 should carry as membership hypotheses
 
