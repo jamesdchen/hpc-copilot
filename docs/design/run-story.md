@@ -349,6 +349,24 @@ Deviations from the plan above, recorded so the next reader trusts the code
 over the prose. Nothing changed a settled decision; these are realization
 details the frozen models forced.
 
+- **2026-07-12 — D1 gains an eighth stream: `overnight-ledger` (Class-C2
+  findings).** The overnight-repair taxonomy (`docs/design/overnight-repair.md`
+  §4.4/§7.4/§10) routes a Class-C2 finding — a result-shaping / anomaly
+  OBSERVATION the autonomous healer must never act on — into the run story as
+  science. `state/run_story.py::project_c2_findings` projects the
+  `detail.heal_class == "C2"` lines of a run's overnight consumption ledger
+  (`ops/overnight.py::overnight_ledger_path` → `<run_id>.overnight.jsonl`),
+  read via `read_consumption_ledger` through a LAZY import (one-definition; no
+  eager state→ops dependency). The A/B/C1 lines stay OPERATIONAL (the morning
+  brief's `class_morning_sections`) and never project. The event: `kind`
+  `c2-finding`, `actor` code, `evidence` = cause slug + class + report-only
+  disposition (identity literals, whitelisted in `story_render`), `ts` = the
+  finding's `failed_at`; new `STREAM_RANK` 7 (appended, ranks after
+  `journal-record` on a same-second tie — no existing rank shifts). This is the
+  ONE story source that is not a dossier-sealed store (D5's `--from-dossier`
+  recompute owes sealing the overnight ledger when that deferred mode ships); the
+  boundary test's `_EXPECTED_STREAMS` enumerates it as the reviewed exception.
+
 - **Wave A (recorded by that agent, respected here):** the journal-record
   lifecycle STAMPS and the `verdict_history` entries share the one
   `journal-record` stream noun and therefore one `STREAM_RANK`; D2's separate

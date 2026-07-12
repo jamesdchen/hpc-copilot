@@ -20,10 +20,13 @@ Reads route through the existing store readers
 (:func:`~hpc_agent.state.decision_journal.read_decisions`,
 :func:`~hpc_agent.state.decision_briefs.read_briefs`,
 :func:`~hpc_agent.state.block_terminal.read_terminal`,
-:func:`~hpc_agent.state.journal.load_run`, and a tolerant read alongside
-:func:`~hpc_agent.state.scopes.looks_path`); every one is tolerant of an
-absent/corrupt store (one bad record never strands the trail — the
-tolerant-read doctrine).
+:func:`~hpc_agent.state.journal.load_run`, a tolerant read alongside
+:func:`~hpc_agent.state.scopes.looks_path`, and — for the Class-C2 overnight
+findings — the canonical ledger reader
+:func:`~hpc_agent.ops.overnight.read_consumption_ledger` via a LAZY import, so
+the ledger path/format keeps one definition without an eager ops dependency);
+every one is tolerant of an absent/corrupt store (one bad record never strands
+the trail — the tolerant-read doctrine).
 
 Pure I/O-thin state module (the :mod:`hpc_agent.state.scopes` posture): no
 ``_wire`` import, no SSH, no mapreduce. The ``ops`` layer (Wave B / T4) owns
@@ -59,6 +62,7 @@ __all__ = [
     "project_scope_decisions",
     "project_looks",
     "project_notebook_decisions",
+    "project_c2_findings",
     "merge_events",
     "build_story",
 ]
@@ -77,6 +81,13 @@ _JOURNAL_RECORD = "journal-record"
 _SCOPE_JOURNAL = "scope-journal"
 _LOOK_LEDGER = "look-ledger"
 _NOTEBOOK_JOURNAL = "notebook-journal"
+# The overnight consumption ledger (``ops/overnight.py::overnight_ledger_path`` —
+# ``<run_id>.overnight.jsonl``). NOT a dossier-sealed store (yet): a story source
+# ADDED by the overnight-repair taxonomy so a Class-C2 finding — a result-shaping
+# / anomaly OBSERVATION the autonomous healer must never act on — lands in the run
+# story as science (``docs/design/overnight-repair.md`` §4.4/§7.4/§10). Only the C2
+# subset projects (the A/B/C1 lines stay the healer's own operational audit trail).
+_OVERNIGHT_LEDGER = "overnight-ledger"
 
 #: Every stream noun an event may be typed by (closed set).
 STREAMS: frozenset[str] = frozenset(
@@ -88,6 +99,7 @@ STREAMS: frozenset[str] = frozenset(
         _SCOPE_JOURNAL,
         _LOOK_LEDGER,
         _NOTEBOOK_JOURNAL,
+        _OVERNIGHT_LEDGER,
     }
 )
 
@@ -105,6 +117,11 @@ STREAMS: frozenset[str] = frozenset(
 # position is realized by EMISSION ORDER — :func:`project_journal_record` emits
 # the stamps before the verdict entries, and the stable merge preserves that
 # within-second order (a stable sort keeps insertion order for equal keys).
+#
+# The overnight-ledger C2 finding is a DERIVED observation the overnight loop
+# reaches AFTER the run's own records exist, so it ranks last (7) — a same-second
+# tie sorts it after the journal-record stamps. Appended (not inserted) so no
+# existing rank shifts and the pinned tie-break order is unchanged.
 STREAM_RANK: dict[str, int] = {
     _BRIEFS: 0,
     _BLOCK_TERMINAL: 1,
@@ -113,6 +130,7 @@ STREAM_RANK: dict[str, int] = {
     _LOOK_LEDGER: 4,
     _NOTEBOOK_JOURNAL: 5,
     _JOURNAL_RECORD: 6,
+    _OVERNIGHT_LEDGER: 7,
 }
 
 _HUMAN = "human"
@@ -133,6 +151,14 @@ _NOTEBOOK_ATTESTOR = {
 _SCOPE_ACTION_KEY = "scope_action"
 _SCOPE_LOCK = "lock"
 _SCOPE_UNLOCK = "unlock"
+
+# The Class-C2 overnight-finding record class + its fixed disposition (mirrors
+# ``ops/recover/heal_taxonomy.py`` — the ``detail.heal_class == "C2"`` ledger
+# lines). ``kind`` names the class + report-only nature; the disposition rides
+# ``evidence`` so it renders explicitly beside the cause.
+_C2_HEAL_CLASS = "C2"
+_C2_FINDING = "c2-finding"
+_C2_DISPOSITION = "report-only"
 
 
 @dataclass(frozen=True)
@@ -506,6 +532,52 @@ def project_notebook_decisions(
     return out
 
 
+def project_c2_findings(records: Sequence[dict[str, Any]], run_id: str) -> list[StoryEvent]:
+    """Project a run's overnight consumption ledger — the Class-C2 findings ONLY (D1).
+
+    The overnight-repair taxonomy (``docs/design/overnight-repair.md`` §4.4 / §7.4)
+    routes a Class-C2 finding — a result-shaping / anomaly OBSERVATION the autonomous
+    healer must never act on (a version upgrade, a winsorize, a retry-selection, a raw
+    result anomaly) — OUT of the infra brief and INTO the run story as science. A
+    result anomaly is a finding, and the story is where science lands.
+
+    Only ledger lines whose ``detail.heal_class`` is ``"C2"`` project. The A / B heals
+    and C1 parks are OPERATIONAL — the healer's own audit trail, kept by the morning
+    brief's ``class_morning_sections`` — not observations ABOUT the experiment, so they
+    are skipped here (the ``project_notebook_decisions`` non-attestation-block precedent).
+
+    ``actor="code"`` (a finding is code-composed, never a human act); ``kind`` is the
+    ``c2-finding`` record class; ``evidence`` carries the CAUSE slug + the class + the
+    report-only disposition — identity/classification literals, never a metric value
+    (``subject_id`` is the run whose ledger this is). ``ts`` is the finding's
+    ``failed_at`` — when it happened overnight (the ``project_journal_record`` stamp
+    idiom: ``_with_ts`` over the recorded timestamp key).
+    """
+    out: list[StoryEvent] = []
+    for record in records:
+        detail = record.get("detail")
+        detail = detail if isinstance(detail, dict) else {}
+        if str(detail.get("heal_class") or "") != _C2_HEAL_CLASS:
+            continue
+        evidence: dict[str, Any] = {
+            "cause": str(detail.get("cause") or ""),
+            "heal_class": _C2_HEAL_CLASS,
+            "disposition": _C2_DISPOSITION,
+        }
+        ts, evidence = _with_ts({"ts": record.get("failed_at")}, evidence)
+        out.append(
+            StoryEvent(
+                ts=ts,
+                stream=_OVERNIGHT_LEDGER,
+                actor=_CODE,
+                kind=_C2_FINDING,
+                subject_id=run_id,
+                evidence=evidence,
+            )
+        )
+    return out
+
+
 # ── the ONE merge (D2) ────────────────────────────────────────────────────────
 
 
@@ -563,6 +635,8 @@ def build_story(
         events.extend(project_briefs(read_briefs(experiment_dir, run_id), run_id))
         events.extend(project_block_terminals(experiment_dir, run_id))
         events.extend(project_journal_record(load_run(experiment_dir, run_id)))
+        c2_records = _read_overnight_c2_ledger(experiment_dir, run_id)
+        events.extend(project_c2_findings(c2_records, run_id))
     for tag in scope_tags:
         events.extend(project_scope_decisions(read_decisions(experiment_dir, "scope", tag), tag))
         events.extend(project_looks(_read_looks(experiment_dir, tag), tag))
@@ -573,6 +647,25 @@ def build_story(
             )
         )
     return merge_events(events)
+
+
+def _read_overnight_c2_ledger(experiment_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """Tolerant read of a run's overnight consumption ledger (the tolerant-read idiom).
+
+    Routes through the canonical ops-layer reader
+    (:func:`~hpc_agent.ops.overnight.read_consumption_ledger`) via a LAZY import — the
+    ledger's path + JSONL format live there (one-definition), and the lazy import keeps
+    the state module free of an eager ops dependency (the ``RepoLayout`` lazy-import
+    idiom in :func:`project_block_terminals`). Any failure yields ``[]`` — an absent or
+    torn overnight ledger never strands the rest of a run's trail.
+    """
+    try:
+        from hpc_agent.ops.overnight import read_consumption_ledger
+
+        return read_consumption_ledger(experiment_dir, "run", run_id)
+    except Exception as exc:  # noqa: BLE001 - tolerant read: one bad ledger never strands the trail
+        _log.warning("run_story: skipping unreadable overnight ledger for %s (%s)", run_id, exc)
+        return []
 
 
 def _read_looks(experiment_dir: Path, tag: str) -> list[dict[str, Any]]:
