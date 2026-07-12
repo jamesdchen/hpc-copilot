@@ -486,13 +486,22 @@ entry but is never a ranking input.
   (collect_evidence re-implements the runs walk and forgot the
   terminal-suffix exclusion the canonical walk documents), #40
   (dir-digest checks sentinel position while the sibling preflight probe
-  documents the login-chatter hazard and checks presence). Supplementary:
+  documents the login-chatter hazard and checks presence), r12-f26 (the
+  write-isolation `_wip_*_failed_*` pattern: PUSH excludes union it, PULL
+  does not — every re-sync restored quarantine debris the per-task reduce
+  then counted as "foreign rows"; dispatcher mints the pattern, five
+  consumers hand-know it; docket-minted tag "reader/writer pattern
+  knowledge duplicated per consumer instead of one definition", overlap
+  with G10's derived-set shape noted). Supplementary:
   the ADJUDICATED disputed bug (verify_aggregation_complete lacked the
   implicit-wave-0 fallback its sibling runner reader implements —
   confirmed arm (a), fixed).
-- **Diagnosis cost:** sweep-caught; #14's class is the run-#8
-  "arm a cron on a finished run" cost re-armed. Equal count to G10 in
-  the no-narrated-cost tier, no live reproduction — second in the tier.
+- **Diagnosis cost:** mostly sweep-caught; #14's class is the run-#8
+  "arm a cron on a finished run" cost re-armed. r12-f26 FIRED LIVE in the
+  run-12 reduce (one self-restoring refusal loop + a misdiagnosing
+  message + a human remote rm for framework debris — minutes-scale,
+  narrated). Equal sweep count to G10; the live fire is small-cost, so
+  the G10/G11 order stands (rule: narrated cost scaled by size).
 - **Upstream alternative:** route-through-one-definition with lockstep
   pins: reader imports the writer's path helper; twins share the
   predicate or carry a lockstep test asserting agreement; decisions
@@ -881,3 +890,23 @@ The hypotheses held. Verified joins and new fired members:
 9. B7 sixth-consumer enforcement row — `read_terminal` consumers either
    route through the canonical currency compare or carry the
    `run_story.py:301-306`-style explicit narrating-history exemption.
+
+## Docket merge: run-12 finding 26 (2026-07-12, synthesis editor)
+
+**G11 gains a live-fired member (r12-f26, a888591d):** the write-isolation
+quarantine pattern (`_wip_*_failed_*`) is minted by the dispatcher but
+hand-known per consumer — the PUSH exclude set unions it while the PULL
+does not (the reader/writer twin), so every re-sync restored the debris;
+the per-task reduce glob counted the quarantined `metrics_table.csv` and
+refused with a misdiagnosing "foreign rows" message. Fix class from the
+docket (three legs, one definition): (a) ONE shared pattern definition
+consumed by status scan, invariants check, reduce glob, and BOTH transfer
+directions; (b) reduce glob skips any `_wip` path component; (c) the
+foreign-rows message distinguishes this run's failed-attempt debris
+(names the task id, says "safe to remove") from genuinely foreign rows.
+The docket tag ("reader/writer pattern knowledge duplicated per
+consumer") straddles G11 and G10; classified G11-primary on the
+pull-vs-push twin being the fire, G10 overlap disclosed. Re-rank
+examined and declined: the live cost is minutes-scale, below the bar
+that would pull G11 over G10 under the scaled-cost rule — the order
+stands, disclosed in G11's cost line.
