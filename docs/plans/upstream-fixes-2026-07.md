@@ -37,27 +37,34 @@ residue bucket — shoehorning is worse than residue.
 
 ## RULING NEEDED (consolidated — the synthesis editor appends here; one list, at the top)
 
-1. **ssh_target unfreezing (run12 finding 23, feeds G2):** retarget-to-host
-   as (a) a `retarget-run` patch axis (journal the change as a decision) vs
-   (b) stop freezing the host — journal the CLUSTER key, resolve
-   `user@host` at use time from clusters.yaml (host is config, identity is
-   journaled; needs a migration story for existing records). The docket
-   presents both; neither is ruled.
-2. **verify-registration horizon (#48):** should the deployment refusal
-   consult the time-aware queue (verify's status stays deliberately
-   time-independent for R6 view_sha stability), or does verify itself gain
-   a `now` source with horizon-lapse surfaced OUTSIDE the view_sha-bound
-   projection? The queue and the reporter currently diverge; which surface
-   owns the deployment gate is a design call, not a fix.
-3. **Overnight-consent anchor (B4 sweep, feeds G3):** the one attestation
-   gate with no natural temporal anchor (a standing consent precedes the
-   boundary it covers). Candidates: recency window, or bound-capture only.
-   Marked "USER RULING needed" in the B4 sweep log; re-surfaced here.
-4. **MH7 legacy-unattributed withdraw (#37, feeds G14):** when a challenge
-   filing is unattributed (pre-declaration or no HPC_ACTOR), may an
-   attributed declared actor withdraw it, or is refusal + route-through
-   challenge-verdict the only path? The fix sketch defers explicitly to a
-   design ruling.
+1. **RULED 2026-07-12 — ssh_target unfreezing (run12 finding 23, feeds
+   G2): (b) resolve at use time.** The journal records the CLUSTER key
+   (history — what the human approved); `user@host` is config, resolved
+   fresh from clusters.yaml at every use through ONE resolver. Records
+   keep writing `ssh_target` as submit-time provenance; consumers stop
+   trusting it; a record whose cluster key can't resolve falls back to
+   the frozen value with disclosure (the migration shim — no record
+   rewriting). Build dispatched same day.
+2. **RULED 2026-07-12 — verify-registration horizon (#48): (a) the
+   time-aware queue owns the deployment gate.** verify-registration's
+   status stays deliberately time-independent (R6 view_sha byte-identity
+   preserved; no `now` in the signed projection); the caller-side
+   deployment refusal consults the queue's horizon-lapse signal, which
+   already threads `now` through the one shared reduction.
+   live-conformance.md C-horizon prose updated to name the queue as the
+   horizon-inheriting deployment gate. Build dispatched same day.
+3. **RULED 2026-07-12 — overnight-consent anchor (B4 sweep, feeds G3):
+   bound-capture ONLY.** No recency-window forensic tier: overnight
+   consent is valid only when captured through a binding surface
+   (elicitation) naming exactly what it covers. User directive: "build
+   this out properly, we can wait for it to build before run 13" — the
+   build gates run 13. Design substrate: docs/design/bound-capture.md +
+   overnight-repair.md C1.
+4. **RULED 2026-07-12 — MH7 legacy-unattributed withdraw (#37, feeds
+   G14): refusal + route-through challenge-verdict.** No one may
+   withdraw what no one owns; closure is a challenge-verdict recording
+   who resolved it and why ("withdrawn-as-stale" is a legitimate cheap
+   verdict). Closure stays possible, erasure doesn't.
 5. **G4 schedule confirmation:** the library-native connection-lifecycle
    shrink is RULED post-run-13 steady-state with a recorded flip trigger
    ("the #8 inflight fix + this lesson landing in a released wheel" —

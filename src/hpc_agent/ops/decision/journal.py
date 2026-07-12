@@ -57,6 +57,7 @@ from hpc_agent.state.decision_journal import decisions_path as _decisions_path
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
 from hpc_agent.state.registration import (
     CONFORMANCE_VERDICT_BLOCK,
+    REGISTRATION_BLOCK,
     REGISTRATION_BLOCK_FAMILY,
     REGISTRATION_REVIEW_BLOCK,
     REVOKE_BLOCK,
@@ -188,6 +189,168 @@ def _actor_scoped_human_texts(experiment_dir: Path, ids: list[str]) -> list[str]
             return None
         return _harness_human_texts(experiment_dir, actor=actor)
     return _harness_human_texts(experiment_dir)
+
+
+# ── B4 ts>=anchor fix-wave: ONE shared utterance-freshness filter ─────────────
+#
+# The finding-10 pattern (``_signoff_fresh_human_texts``) generalized: every
+# authorship gate whose evidence is NAMING over the utterance log — scope-unlock
+# and the four naming-only revoke/verdict floors — bounds the harness-utterance
+# pool to records logged AT OR AFTER the target's own timestamp. Without the
+# bound the naming leg is permanently satisfied by the very utterance that
+# CREATED the target (the human named every id at creation), so a later
+# agent-composed revoke/verdict/unlock rides through (the B4 exposure, philosophy
+# audit 2026-07 sweep log). The sha-prefix-bound FILING gates need no anchor (an
+# 8-hex prefix cannot pre-exist the artifact it fingerprints — temporal binding
+# by vocabulary impossibility); the overnight-consent gate parks on USER RULING 3
+# (no natural anchor). Both are left on the unbounded reader with a documented
+# exemption (the route-through contract test pins this).
+
+
+def _fresh_human_texts(
+    experiment_dir: Path, *, actor_ids: list[str], anchor: float | None
+) -> list[str] | None:
+    """Actor-scoped harness utterances filtered to ``ts >= anchor`` (finding-10, generalized).
+
+    THE shared temporal filter every naming-over-the-log authorship gate routes
+    through — scope-unlock and the four revoke/verdict floors (the B4 fix-wave),
+    plus :func:`_signoff_fresh_human_texts`, which supplies the render mtime as
+    *anchor*. A human can only attest a target that EXISTED when they typed, so an
+    utterance older than the target's own timestamp is not attestation.
+
+    Tiering mirrors :func:`_actor_scoped_human_texts`:
+
+    * ``None`` — no log at all, or an unattributed >1-actor session — signals the
+      caller to fall to the journal-response FRICTION tier (byte-identical to the
+      unfiltered scoped read's ``None``).
+    * *anchor* ``None`` — the anchor could not be determined — returns the
+      UNFILTERED pool: the missing-anchor case a re-elicited utterance cannot fix
+      (each gate's own existence refusal owns a never-created target), mirroring
+      :func:`_signoff_fresh_human_texts`'s absent-render posture.
+    * otherwise — only utterances with a parseable ``ts`` at or after
+      ``int(anchor)`` (utterance ``ts`` is seconds-resolution). An EMPTY list —
+      the log exists but nothing fresh names the target — makes the gate refuse
+      (the authorship marker / popup cue). A record with no parseable ``ts`` is
+      EXCLUDED (conservative).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+    from hpc_agent.state.utterances import read_utterances
+
+    if len(actor_ids) > 1:
+        actor = _session_actor(experiment_dir, actor_ids)
+        if actor is None:
+            return None
+        records = read_utterances(experiment_dir, actor=actor)
+    else:
+        records = read_utterances(experiment_dir)
+    if not records:
+        return None
+    if anchor is None:
+        return [str(r.get("text") or "") for r in records]
+    floor = int(anchor)
+    fresh: list[str] = []
+    for rec in records:
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if when >= floor:
+            fresh.append(str(rec.get("text") or ""))
+    return fresh
+
+
+def _fresh_authored_text(experiment_dir: Path, response: str, *, anchor: float | None) -> str:
+    """The human-authored text a NAMING-only revoke/verdict gate reads, ts-bound.
+
+    The :func:`_registration_authored_text` posture with the B4 ``ts >= anchor``
+    filter layered in: with the harness utterance log present the naming token
+    must derive from an utterance logged at or after *anchor* (the target
+    record's own ts — a revoke/verdict must post-date what it resolves). Absent
+    the log, or an unattributed >1-actor session, the agent-relayed ``response``
+    is the friction tier (byte-identical to the pre-B4 fallback). An *anchor* of
+    ``None`` (no parseable target ts) leaves the pool unfiltered; the gate's own
+    existence check owns the never-created case.
+    """
+    actor_ids, _ = _read_interview_actors(experiment_dir)
+    fresh = _fresh_human_texts(experiment_dir, actor_ids=actor_ids, anchor=anchor)
+    if fresh is not None:
+        return "\n".join(fresh)
+    return response
+
+
+def _target_record_ts(
+    experiment_dir: Path,
+    *,
+    scope_kind: str,
+    scope_id: str,
+    filing_block: str,
+    id_field: str,
+    target_id: str,
+) -> float | None:
+    """Epoch-seconds ts of the NEWEST filing that created *target_id*, or ``None``.
+
+    The B4 anchor for a revoke/verdict gate: the record it resolves must already
+    exist, so that filing's own ``ts`` bounds the utterance pool the naming leg
+    reads (a revoke authored before the filing existed is the creation utterance
+    re-read, not attestation). Scans *target_id*'s journal thread for the newest
+    record on *filing_block* whose ``resolved[id_field] == target_id`` and parses
+    its ``ts``. ``None`` when no such parseable filing exists — the caller then
+    leaves the pool unfiltered (a re-elicit cannot conjure a filing that was never
+    made; each floor's existence refusal owns that case).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+
+    newest: float | None = None
+    for rec in _read_decisions(experiment_dir, scope_kind, scope_id):
+        if rec.get("block") != filing_block:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get(id_field) != target_id:
+            continue
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if newest is None or when > newest:
+            newest = when
+    return newest
+
+
+def _newest_lock_ts(experiment_dir: Path, scope_id: str) -> float | None:
+    """Epoch-seconds ts of the scope's NEWEST lock record, or ``None`` (B4 anchor).
+
+    An unlock re-opens a scope, so its rationale must post-date the LOCK it
+    re-opens: the newest ``scope-lock`` record whose ``resolved.scope_action`` is
+    ``lock`` is the anchor. ``None`` when the scope has no lock record on file —
+    the pool is then unfiltered (nothing yet to have post-dated; the unlock's
+    bare-ack + overlap legs still gate it).
+    """
+    from hpc_agent.infra.time import parse_iso_utc
+    from hpc_agent.state.scopes import _SCOPE_LOCK_BLOCK
+
+    newest: float | None = None
+    for rec in _read_decisions(experiment_dir, "scope", scope_id):
+        if rec.get("block") != _SCOPE_LOCK_BLOCK:
+            continue
+        resolved = rec.get("resolved")
+        if not isinstance(resolved, dict) or resolved.get("scope_action") != "lock":
+            continue
+        ts = rec.get("ts")
+        if not isinstance(ts, str) or not ts:
+            continue
+        try:
+            when = parse_iso_utc(ts).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if newest is None or when > newest:
+            newest = when
+    return newest
 
 
 def _assert_actor_policy(
@@ -1041,8 +1204,14 @@ def _assert_unlock_authorship(
             "re-opening the scope."
         )
 
+    # B4 ts>=anchor: the rationale must derive from an utterance logged AT OR
+    # AFTER the LOCK it re-opens — a standing prompt that happened to share a word
+    # with the unlock, typed before the scope was ever locked, is not a decision
+    # to re-open it (the philosophy-audit B4 exposure). Anchor = the scope's
+    # newest lock record ts (None → unfiltered: no lock on file yet).
     _actor_ids, _ = _read_interview_actors(experiment_dir)
-    harness_texts = _actor_scoped_human_texts(experiment_dir, _actor_ids)
+    anchor = _newest_lock_ts(experiment_dir, spec.scope_id)
+    harness_texts = _fresh_human_texts(experiment_dir, actor_ids=_actor_ids, anchor=anchor)
     if harness_texts is not None:
         human_words: set[str] = set()
         for text in harness_texts:
@@ -1052,10 +1221,11 @@ def _assert_unlock_authorship(
             _refuse_missing_authorship(
                 "scope-unlock authorship gate: with the harness utterance log "
                 "installed, the unlock rationale must derive from a logged human "
-                "utterance (harness-captured), not the agent-relayed response "
-                f"{spec.response!r}. Have the human state why the scope is being "
-                "re-opened in a prompt. (Under >1 declared actors the pool is the "
-                "SESSION ACTOR'S log only — MH4.)"
+                "utterance (harness-captured) dated AT OR AFTER the lock it re-opens "
+                f"(B4 ts>=anchor), not the agent-relayed response {spec.response!r}. "
+                "Have the human state why the scope is being re-opened in a prompt. "
+                "(Under >1 declared actors the pool is the SESSION ACTOR'S log only "
+                "— MH4.)"
             )
 
 
@@ -1125,42 +1295,23 @@ def _signoff_fresh_human_texts(
     missing-render refusal belongs to the UNMARKED trusted-display lock,
     where re-eliciting an utterance cannot fix it. A record with no
     parseable ``ts`` is excluded — conservative; the popup remedies.
+
+    The temporal filter itself is the ONE shared :func:`_fresh_human_texts`
+    helper (the B4 fix-wave generalized this finding-10 pattern); this function
+    only computes the render-mtime *anchor* and delegates. An absent /
+    unstatable render yields ``anchor=None`` → the unfiltered pool, exactly the
+    original missing-render posture.
     """
-    from hpc_agent.infra.time import parse_iso_utc
-    from hpc_agent.state.utterances import read_utterances
-
-    if len(actor_ids) > 1:
-        actor = _session_actor(experiment_dir, actor_ids)
-        if actor is None:
-            return None
-        records = read_utterances(experiment_dir, actor=actor)
-    else:
-        records = read_utterances(experiment_dir)
-    if not records:
-        return None
-
     from hpc_agent.ops import notebook_view as _notebook_view
 
     render = _notebook_view.render_path(
         experiment_dir, audit_id=audit_id, section=section, view_sha=view_sha
     )
     try:
-        anchor = int(render.stat().st_mtime)
+        anchor: float | None = int(render.stat().st_mtime)
     except OSError:
-        return [str(r.get("text") or "") for r in records]
-
-    fresh: list[str] = []
-    for rec in records:
-        ts = rec.get("ts")
-        if not isinstance(ts, str) or not ts:
-            continue
-        try:
-            when = parse_iso_utc(ts).timestamp()
-        except (TypeError, ValueError):
-            continue
-        if when >= anchor:
-            fresh.append(str(rec.get("text") or ""))
-    return fresh
+        anchor = None
+    return _fresh_human_texts(experiment_dir, actor_ids=actor_ids, anchor=anchor)
 
 
 def _section_specific_tokens(section_view: Any) -> set[str]:
@@ -1844,12 +1995,26 @@ def _assert_revoke_floor(
             f"{spec.response!r} (a 'y' / click) cannot revoke it. State why you are revoking "
             f"the registration ({registration_id!r})."
         )
-    authored = _registration_authored_text(experiment_dir, response)
+    # B4 ts>=anchor: the naming leg reads only utterances logged at or after the
+    # target registration's ts — the human named the id at CREATION, so an
+    # unbounded read is permanently satisfied and an agent-composed revoke rides
+    # through. Anchor = the registration filing record's ts (None → unfiltered,
+    # the existence checks above / below own the never-registered case).
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        filing_block=REGISTRATION_BLOCK,
+        id_field="registration_id",
+        target_id=registration_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
     if not _names_slug(authored, registration_id):
         _refuse_missing_authorship(
             "registration-revoke gate: the revoke must NAME the registration_id "
-            f"{registration_id!r} token-exact (the #26 floor). Restate, naming the "
-            "registration being overturned."
+            f"{registration_id!r} token-exact (the #26 floor), in an utterance logged "
+            "AT OR AFTER the registration it overturns (B4 ts>=anchor). Restate, naming "
+            "the registration being overturned."
         )
 
 
@@ -2724,12 +2889,26 @@ def _assert_conclusion_revoke_floor(
             f"{spec.response!r} (a 'y' / click) cannot revoke it. State why you are "
             f"withdrawing the conclusion ({conclusion_id!r})."
         )
-    authored = _registration_authored_text(experiment_dir, response)
+    # B4 ts>=anchor: name the conclusion in an utterance logged AT OR AFTER the
+    # conclusion it withdraws — the creation utterance (which named the id) no
+    # longer self-satisfies the naming leg. Anchor = the conclusion filing ts.
+    from hpc_agent.state.evidence import CONCLUSION_BLOCK
+
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind=spec.scope_kind,
+        scope_id=spec.scope_id,
+        filing_block=CONCLUSION_BLOCK,
+        id_field="conclusion_id",
+        target_id=conclusion_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
     if not _names_slug(authored, conclusion_id):
         _refuse_missing_authorship(
             "conclusion-revoke gate: the revoke must NAME the conclusion_id "
-            f"{conclusion_id!r} token-exact (the #26 floor). Restate, naming the "
-            "conclusion being withdrawn."
+            f"{conclusion_id!r} token-exact (the #26 floor), in an utterance logged "
+            "AT OR AFTER the conclusion it withdraws (B4 ts>=anchor). Restate, naming "
+            "the conclusion being withdrawn."
         )
 
 
@@ -3207,11 +3386,27 @@ def _assert_challenge_verdict_authorship(
             f"is a HUMAN act — a bare {spec.response!r} (a 'y' / click) cannot resolve it. "
             f"Name the challenge ({challenge_id!r}) and state your reasoning."
         )
-    authored = _registration_authored_text(experiment_dir, response)
+    # B4 ts>=anchor: name the challenge in an utterance logged AT OR AFTER the
+    # filing it resolves — the challenger named the id when FILING, so an
+    # unbounded read lets an agent-composed verdict/withdraw ride the creation
+    # utterance. Anchor = the challenge filing ts (the thread is keyed by
+    # challenge_id; None → unfiltered, the filing-existence checks own that case).
+    from hpc_agent.state.challenges import CHALLENGE_BLOCK
+
+    anchor = _target_record_ts(
+        experiment_dir,
+        scope_kind="challenge",
+        scope_id=challenge_id,
+        filing_block=CHALLENGE_BLOCK,
+        id_field="challenge_id",
+        target_id=challenge_id,
+    )
+    authored = _fresh_authored_text(experiment_dir, response, anchor=anchor)
     if not _names_slug(authored, challenge_id):
         _refuse_missing_authorship(
             f"challenge-{'verdict' if is_verdict else 'withdraw'} gate: the resolution must "
-            f"NAME the challenge_id {challenge_id!r} token-exact (the #26 floor). Restate, "
+            f"NAME the challenge_id {challenge_id!r} token-exact (the #26 floor), in an "
+            "utterance logged AT OR AFTER the filing it resolves (B4 ts>=anchor). Restate, "
             "naming the challenge being resolved."
         )
 
