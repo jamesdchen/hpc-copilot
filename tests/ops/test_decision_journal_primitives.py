@@ -1351,6 +1351,25 @@ def test_no_signoff_affordance_in_registry(tmp_path: Path) -> None:
     assert offenders == [], f"a sign-off verb affordance leaked into the registry: {offenders}"
 
 
+def test_no_unlock_affordance_in_registry_or_chains(tmp_path: Path) -> None:
+    """The no-unlock-verb doctrine's affordance leg (enforcement map: 'a
+    scope-unlock verb / chain-reachable unlock step appears' fires the row): NO
+    primitive is named like an unlock/relax verb, and NO chain table step carries
+    one — a scope unlock is an append-decision record under the gated block or
+    nothing (mirrors ``test_no_signoff_affordance_in_registry``)."""
+    from hpc_agent.infra.block_chain import ORDER
+    from tests._registry_helpers import core_only_registry
+
+    offenders = [name for name in core_only_registry() if "unlock" in name or "relax" in name]
+    assert offenders == [], f"an unlock verb affordance leaked into the registry: {offenders}"
+    chain_offenders = [
+        step for chain in ORDER.values() for step in chain if "unlock" in step or "relax" in step
+    ]
+    assert chain_offenders == [], (
+        f"a chain-reachable unlock step leaked into a chain table: {chain_offenders}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Trusted-display lock (v1.5): a sign-off requires the content-addressed render
 # for what-the-human-saw to exist on disk AND be current at append. The audit
