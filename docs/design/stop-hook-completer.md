@@ -481,16 +481,17 @@ last. Each step ships its own tests and is independently revertible.
   but the v1 gate should be verified on the primary CLI surface first.
 * ~~Echo-class placement~~ — RULED 2026-07-10 (violation class, append-only,
   never bounces; see §2).
-* **RULING-NEEDED — the rendezvous mechanical completer.** Should
-  `decision_rendezvous_stop_guard` run the parked `block-drive` tick in code
-  (omission) instead of bouncing, once crash-only monitoring removes the
-  SSH-storm hazard? The false-bounce fix (`greenlight_targets_boundary`) is
-  landed and independent; the mechanical completer awaits a ruling on the
-  readiness gate (§ The decision-rendezvous guard, migration table, sequencing
-  step 5).
-* **RULING-NEEDED — the `skill_return_stop_guard` split.** Confirm the fetch
-  is completable (inject the envelope) while the parent-skill continuation
-  stays a judgment bounce.
+* **RULED 2026-07-12 — the rendezvous mechanical completer: ON, gated on
+  transport readiness.** User: "the proper thing for code to do if nothing
+  ambiguous is in the way of the workflow." `decision_rendezvous_stop_guard`
+  runs the parked `block-drive` tick in code when the greenlight genuinely
+  targets the boundary AND the next verb is mechanical AND the run's SSH
+  breaker/transport is healthy; anything ambiguous (breaker open, degraded
+  transport, judgment verb) still bounces to the model. The fork-exhaustion
+  night stays the canonical counter-example the gate exists for.
+* **RULED 2026-07-12 — the `skill_return_stop_guard` split: YES.** Code
+  completes the fetch (inject the envelope — the autofetch sibling is the
+  precedent); the parent-skill continuation stays a judgment bounce.
 
 ## Drift log
 

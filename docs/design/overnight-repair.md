@@ -459,19 +459,26 @@ neighboring files. Then, ordered by dependency:
 
 ## 9. Open questions / RULING-NEEDED
 
-* **RULING-NEEDED — env overrides and spec identity (finding 24d, §6d).** Are
-  transport env overrides (`HPC_SSH_ENGINE`, keepalive tunables) part of the
-  spec-identity `cmd_sha`? If yes, a drift kills the consent (spec-changed) and
-  there is no heal. If no, env drift is a C1-minted-env-pin-anchor heal. The
-  taxonomy underdetermines this; interim posture is REPORT-ONLY.
-* **RULING-NEEDED — steady-state engine lifecycle vs the taxonomy (finding 24
-  library-boundary lesson).** The post-run-13 plan shrinks hand-rolled connection
-  lifecycle to what no library can know (ban-risk breaker, connection-rate
-  courtesy) and outsources idle/keepalive/multiplex management to asyncssh. Does
-  the overnight healer treat a connection sever as A (re-arm) unconditionally once
-  the library owns keepalives, or does a sever that RECURS under correct
-  keepalives escalate to a C-style finding (a cluster-social signal, not a
-  mechanical fault)? Deferred to the engine-first steady-state work.
+* **RULED 2026-07-12 — env overrides and spec identity (finding 24d, §6d):
+  the enumerated transport-only vars are NOT spec identity.**
+  `HPC_SSH_ENGINE`, `HPC_SSH_CIRCUIT_OVERRIDE`, `HPC_NO_SSH_MULTIPLEX`,
+  `HPC_SSH_BINARY`, `HPC_CLUSTERS_CONFIG` are client-side transport
+  selection — provably never threaded into the job's environment — so
+  drift on them is the C1 env-pin heal (elicit → heal on y → mint the
+  anchor → Class B next episode). EVERY other env var — anything that can
+  reach the executor's environment on the cluster — IS spec identity:
+  drift kills the standing consent (`spec-changed`), human consulted, no
+  heal. Enforcement: a contract test pins healable-set ∩
+  job-env-threaded-set = ∅ so a refactor can't silently move a healable
+  var into the job env. Evidence basis disclosed: one fired member
+  (finding 24, four config locations); the co-members ride the same one
+  mechanism at zero var-specific build cost.
+* **RULED 2026-07-12 — steady-state engine lifecycle vs the taxonomy:
+  recurrence ESCALATES.** With the G4 shrink landed (asyncssh owns
+  keepalives), a single sever is Class A (re-arm); a sever that RECURS
+  under correct keepalives escalates to a C-style finding — a
+  cluster-social signal for the human, not a mechanical fault to re-heal.
+  Matches G4's mechanism/policy split.
 * **Spend meters** (sequencing item 1). Order relative to first B heal: meter
   first.
 * **C1 overnight wake.** Should a C1 park fire a push (via `notification_plan`) or
