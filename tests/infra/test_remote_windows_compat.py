@@ -15,6 +15,7 @@ rather than a hardcoded ``/tmp``.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -210,6 +211,79 @@ def test_rsync_rsh_respects_caller_set_value(monkeypatch):
     monkeypatch.setenv("RSYNC_RSH", "ssh -v")
     # A caller who already pinned RSYNC_RSH wins; we don't clobber it.
     assert ssh_options._rsync_rsh_env() == {}
+
+
+# ---------------------------------------------------------------------------
+# #64: RSYNC_RSH is whitespace-tokenized by rsync — a spaced binary path
+# (Program Files) must stay one shell word, or rsync execs ``C:\Program``.
+# The RSH env is the transport entry point the win32 operand/quoting matrix
+# (push src, pull dst, deploy staging via ``_msys_local``) had not yet covered.
+# ---------------------------------------------------------------------------
+
+
+def test_rsync_rsh_quotes_spaced_binary_on_windows(monkeypatch):
+    monkeypatch.delenv("RSYNC_RSH", raising=False)
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    # Pin a Program Files ssh.exe (spaces are the norm there) and make the
+    # native-OpenSSH probe see it as present so _ssh_binary returns it verbatim.
+    spaced = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    monkeypatch.setenv("HPC_SSH_BINARY", spaced)
+    monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: True)
+    env = ssh_options._rsync_rsh_env()
+    rsh = env["RSYNC_RSH"]
+    # The binary is one double-quoted token; the split keeps it whole while the
+    # option flags that follow remain separately splittable.
+    assert rsh.startswith(f'"{spaced}" ')
+    assert shlex.split(rsh)[0] == spaced
+
+
+def test_rsync_rsh_leaves_unspaced_binary_unquoted(monkeypatch):
+    # The common case (bare ``ssh`` or an unspaced native path) keeps the exact
+    # pre-fix bytes — no gratuitous quoting.
+    monkeypatch.delenv("RSYNC_RSH", raising=False)
+    monkeypatch.delenv("HPC_SSH_BINARY", raising=False)
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: False)
+    rsh = ssh_options._rsync_rsh_env()["RSYNC_RSH"]
+    assert rsh.startswith("ssh ")
+    assert '"' not in rsh
+
+
+def test_rsync_rsh_quotes_spaced_binary_posix_shlex(monkeypatch):
+    # On POSIX the same hazard exists (rsync word-splits RSYNC_RSH); shlex.quote
+    # is the canonical shell-safe form.
+    monkeypatch.delenv("RSYNC_RSH", raising=False)
+    monkeypatch.setattr(ssh_options.sys, "platform", "linux")
+    monkeypatch.setenv("HPC_SSH_BINARY", "/opt/my ssh/ssh")
+    rsh = ssh_options._rsync_rsh_env()["RSYNC_RSH"]
+    assert shlex.split(rsh)[0] == "/opt/my ssh/ssh"
+
+
+# ---------------------------------------------------------------------------
+# #65: Path.home() raises RuntimeError (not OSError) in a stripped Windows env
+# (USERPROFILE/HOMEDRIVE+HOMEPATH/USERNAME all unset). The config probe must
+# fail open (no override) instead of taking down every ssh_argv call.
+# ---------------------------------------------------------------------------
+
+
+def test_read_ssh_config_text_fails_open_on_home_runtimeerror(monkeypatch):
+    def _boom():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(ssh_options.Path, "home", staticmethod(_boom))
+    assert ssh_options._read_ssh_config_text() is None
+
+
+def test_config_forces_no_multiplex_fails_open_on_home_runtimeerror(monkeypatch):
+    # The win32-only probe consuming _read_ssh_config_text must not crash the
+    # transport when home is unresolvable — it degrades to "no override".
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+
+    def _boom():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(ssh_options.Path, "home", staticmethod(_boom))
+    assert ssh_options._ssh_config_forces_no_multiplex() is False
 
 
 def test_ssh_add_binary_defaults_to_bare_name_on_posix(monkeypatch):
