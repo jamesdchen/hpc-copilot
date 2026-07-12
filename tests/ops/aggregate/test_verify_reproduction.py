@@ -577,6 +577,53 @@ def test_partial_receipt_missing_field_refused() -> None:
         )
     # A full receipt is never refused.
     _validate_receipt_partiality({"partial": False})
+    # bug-sweep #51: an EMPTY task_indices list is a valid full disclosure for an
+    # incomparable partial pair (accounted via uncompared_tasks), NOT refused.
+    _validate_receipt_partiality(
+        {"partial": True, "task_indices": [], "uncompared_keys": 0, "uncompared_tasks": 2}
+    )
+
+
+def test_partial_missing_per_task_metrics_is_incomparable_finding(tmp_path: Path) -> None:
+    """bug-sweep #51 variant 1: a partial repro whose per-task metrics are absent
+    on both sides returns an exit-0 incomparable FINDING with full partiality
+    accounting — never a raised SpecInvalid from the no-silent-caps guard.
+    """
+    _write_sidecar(tmp_path, ORIG, cluster="hoffman2")
+    _write_sidecar(
+        tmp_path, REPRO, reproduces=ORIG, cluster="hoffman2", extra={"task_sample": [0, 2]}
+    )
+    # No _per_task files written on either side (the normal state right after a
+    # partial repro finishes, before the metrics are pulled locally).
+    res = _run(tmp_path)
+    assert res.stage_reached == "incomparable"
+    assert res.needs_decision is True
+    assert res.receipt["partial"] is True
+    assert res.receipt["task_indices"] == []
+    assert res.receipt["uncompared_tasks"] == 2
+    assert res.receipt["uncompared_keys"] == 0
+    assert res.appended_sample is None  # no fingerprint sample for a no-compare
+
+
+def test_partial_disjoint_present_tasks_is_incomparable_no_stray_sample(tmp_path: Path) -> None:
+    """bug-sweep #51 variant 2: disjoint present tasks (task 0 only on original,
+    task 1 only on repro) → empty intersection → incomparable finding, and NO
+    fingerprint sample is appended before/around it (the sample-without-receipt
+    the pre-fix disjoint path left in the ledger).
+    """
+    _write_sidecar(tmp_path, ORIG, cluster="hoffman2")
+    _write_sidecar(
+        tmp_path, REPRO, reproduces=ORIG, cluster="hoffman2", extra={"task_sample": [0, 1]}
+    )
+    _write_per_task(tmp_path, ORIG, 0, {"acc": 0.9})
+    _write_per_task(tmp_path, REPRO, 1, {"acc": 0.8})
+    res = _run(tmp_path)
+    assert res.stage_reached == "incomparable"
+    assert res.needs_decision is True
+    assert res.receipt["partial"] is True
+    assert res.receipt["task_indices"] == []
+    assert res.receipt["uncompared_tasks"] == 2
+    assert res.appended_sample is None
 
 
 # --------------------------------------------------------------------------- #

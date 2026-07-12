@@ -444,6 +444,28 @@ def test_evidence_meets_unknown_key_refused() -> None:
         d.evidence_meets([s], [True], {"min_n": 1, "bogus": 2}, identity=_IDENT)
 
 
+def test_evidence_meets_non_int_min_n_refused_not_crash() -> None:
+    """bug-sweep #72: a caller-authored non-int ``min_n`` is a loud SpecInvalid
+    (the same posture as an unknown KEY), never a raw TypeError from ``n < min_n``.
+    """
+    s = _sample([_pk("widgets.rate", 1.0, 1.0)])
+    with pytest.raises(errors.SpecInvalid):
+        d.evidence_meets([s], [True], {"min_n": "3"}, identity=_IDENT)
+    with pytest.raises(errors.SpecInvalid):
+        d.evidence_meets([s], [True], {"min_n_full": 1.5}, identity=_IDENT)
+
+
+def test_evidence_meets_string_scales_refused_not_iterated() -> None:
+    """bug-sweep #72: a string (not list) ``scales`` is refused loudly instead of
+    being iterated character-by-character into a nonsense per-char shortfall.
+    """
+    s = _sample([_pk("widgets.rate", 1.0, 1.0)])
+    with pytest.raises(errors.SpecInvalid):
+        d.evidence_meets([s], [True], {"scales": "main"}, identity=_IDENT)
+    with pytest.raises(errors.SpecInvalid):
+        d.evidence_meets([s], [True], {"clusters": [1, 2]}, identity=_IDENT)
+
+
 # --- AST / import pins -------------------------------------------------------
 
 

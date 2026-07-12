@@ -49,6 +49,22 @@ def test_fresh_install_adds_skill_allow_rules(tmp_path: Path) -> None:
         assert f"Skill({skill_name})" in allow
 
 
+def test_maintainer_release_skill_not_installed_or_granted(tmp_path: Path) -> None:
+    """bug-sweep #58: the maintainer-only ``release`` skill (frontmatter
+    ``internal: true``) is NEVER copied into an end user's ~/.claude/skills, and
+    therefore NEVER gets an auto-invoke ``Skill(release)`` permission grant.
+    """
+    result = install_agent_assets(claude_dir=tmp_path)
+
+    assert "release" not in result["skills_installed"]
+    assert not (tmp_path / "skills" / "release").exists()
+    allow = _allow(_settings(tmp_path))
+    assert "Skill(release)" not in allow
+    # A normal bundled skill IS installed + granted (proves the filter is scoped).
+    assert "hpc-submit" in result["skills_installed"]
+    assert "Skill(hpc-submit)" in allow
+
+
 # ─── idempotency ────────────────────────────────────────────────────────────
 
 

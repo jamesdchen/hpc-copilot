@@ -166,23 +166,63 @@ def _probe_cron_binary(ssh_target: str, binary: str) -> tuple[bool, str]:
     return True, "viable"
 
 
+def _locked_read_prefix(binary: str) -> str:
+    """Shell prefix that acquires a per-user lock and reads the crontab FAIL-CLOSED.
+
+    The blind ``{binary} -l 2>/dev/null | ... | {binary} -`` pipeline this
+    replaces had two data-loss modes (bug-sweep #45): (1) a transient ``-l``
+    failure (NIS/LDAP/NFS blip) emitted nothing, so the write replaced the user's
+    ENTIRE table with just the new/empty line; (2) two concurrent installs on the
+    same login node raced the read-modify-write and dropped each other's marker.
+
+    This prefix serializes the read-modify-write under an ``mkdir``-based lock
+    (portable, no ``flock`` dependency), captures ``-l``'s rc + combined output
+    explicitly, treats only the recognized "no crontab for <user>" empty-table
+    message as proceed-with-empty, and ``exit``s non-zero on any other failure so
+    the caller (register: ``_check`` raises; remove: best-effort no-op) leaves the
+    table UNTOUCHED rather than clobbering it. Leaves the table in ``$t``.
+    """
+    return (
+        'd="${HOME:-/tmp}/.hpc/watcher"; mkdir -p "$d" 2>/dev/null; '
+        'L="$d/cron.lock.d"; n=0; '
+        'while ! mkdir "$L" 2>/dev/null; do n=$((n+1)); [ $n -ge 100 ] && break; sleep 0.1; done; '
+        "trap 'rmdir \"$L\" 2>/dev/null' EXIT INT TERM; "
+        f"t=$({binary} -l 2>&1); rc=$?; "
+        "if [ $rc -ne 0 ]; then "
+        "if printf '%s' \"$t\" | grep -qi 'no crontab for'; then t=\"\"; "
+        "else printf '%s\\n' "
+        f'"watcher-install: {binary} -l failed (rc=$rc): $t" >&2; exit $rc; fi; '
+        "fi"
+    )
+
+
 def _register_cron_line(ssh_target: str, *, binary: str, cron_line: str, marker: str) -> None:
     """Idempotently install *cron_line* under *binary*, keyed on *marker*.
 
-    Reads the current table, strips any prior line carrying this run's marker,
-    appends the fresh line, and reinstalls — so a re-install never duplicates.
+    Reads the current table (fail-closed, under a lock — see
+    :func:`_locked_read_prefix`), strips any prior line carrying this run's
+    marker, appends the fresh line, and reinstalls — so a re-install never
+    duplicates and a transient read failure never truncates the table.
     """
     cmd = (
-        f"( {binary} -l 2>/dev/null | grep -vF {shlex.quote(marker)} ; "
-        f"printf '%s\\n' {shlex.quote(cron_line)} ) | {binary} -"
+        f"{_locked_read_prefix(binary)}; "
+        f'{{ [ -n "$t" ] && printf \'%s\\n\' "$t" | grep -vF {shlex.quote(marker)}; '
+        f"printf '%s\\n' {shlex.quote(cron_line)}; }} | {binary} -"
     )
     _check(ssh_run(cmd, ssh_target=ssh_target), f"register {binary} line")
 
 
 def _remove_cron_line(ssh_target: str, *, binary: str, marker: str) -> None:
-    """Best-effort removal of this run's *marker* line from *binary*'s table."""
+    """Best-effort removal of this run's *marker* line from *binary*'s table.
+
+    Fail-closed + locked (see :func:`_locked_read_prefix`): a transient ``-l``
+    failure leaves the table untouched instead of replacing it with an empty one,
+    and an already-empty table is a no-op.
+    """
     cmd = (
-        f"{binary} -l 2>/dev/null | grep -vF {shlex.quote(marker)} | {binary} - 2>/dev/null || true"
+        f"{_locked_read_prefix(binary)}; "
+        f'[ -z "$t" ] && exit 0; '
+        f"printf '%s\\n' \"$t\" | grep -vF {shlex.quote(marker)} | {binary} -"
     )
     ssh_run(cmd, ssh_target=ssh_target)
 

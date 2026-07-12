@@ -876,6 +876,39 @@ def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> 
     )
 
 
+def _skill_is_internal(skill_dir: Any) -> bool:
+    """True when a skill's ``SKILL.md`` frontmatter marks it maintainer-only.
+
+    A skill flagged ``internal: true`` (or ``distribution: maintainer``) in its
+    leading ``---``-fenced YAML frontmatter is a maintainer procedure (the
+    ``release`` skill bumps versions, commits, and builds wheels) that must never
+    be copied into an end user's ``~/.claude/skills`` nor granted an auto-invoke
+    ``Skill(...)`` permission (bug-sweep #58). Parsed with a minimal frontmatter
+    scan — no yaml dependency, and only the frontmatter block is consulted.
+    """
+    md = skill_dir / "SKILL.md"
+    try:
+        text = md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        k = key.strip().lower()
+        v = value.strip().strip('"').strip("'").lower()
+        if k == "internal" and v in ("true", "yes", "1"):
+            return True
+        if k == "distribution" and v == "maintainer":
+            return True
+    return False
+
+
 def _install_tree(
     root: Any, target: Path, *, dry_run: bool
 ) -> tuple[list[str], list[str], list[str], list[str]]:
@@ -917,6 +950,13 @@ def _install_tree(
             cleared.append(cleared_path)
         for skill in skills_src.iterdir():
             if not skill.is_dir():
+                continue
+            if _skill_is_internal(skill):
+                # Maintainer-only skills (e.g. ``release`` — it bumps versions,
+                # commits, builds wheels) are NEVER installed into an end user's
+                # ~/.claude, and therefore never granted an auto-invoke
+                # ``Skill(...)`` permission (the permission merge below feeds off
+                # this returned ``skills`` list). bug-sweep #58.
                 continue
             skills.append(skill.name)
             if not dry_run:

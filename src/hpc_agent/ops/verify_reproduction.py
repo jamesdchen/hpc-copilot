@@ -610,11 +610,16 @@ def _validate_receipt_partiality(receipt: Mapping[str, Any]) -> None:
     and what it did NOT compare (uncompared key/task counts) — a subset receipt
     that prints like a full one is the silent-caps failure this pins. Raises
     :class:`errors.SpecInvalid` naming the missing field.
+
+    An EMPTY ``task_indices`` list is a valid full disclosure ("nothing compared,
+    accounted for via uncompared_tasks") for an incomparable partial pair
+    (bug-sweep #51) — distinct from ``None``, which is undisclosed and stays
+    refused.
     """
     if receipt.get("partial") is not True:
         return
     task_indices = receipt.get("task_indices")
-    if not isinstance(task_indices, (list, tuple)) or not task_indices:
+    if not isinstance(task_indices, (list, tuple)):
         raise errors.SpecInvalid(
             "verify-reproduction: a partial receipt must record the exact task_indices "
             f"it compared (no-silent-caps); got {task_indices!r}"
@@ -1072,7 +1077,13 @@ def verify_reproduction(
         orig_metrics, orig_source = _load_run_metrics(experiment_dir, original_run_id)
         repro_metrics, repro_source = _load_run_metrics(experiment_dir, repro_run_id)
 
-    if orig_metrics is None or repro_metrics is None:
+    # An empty compared set (disjoint present tasks, or metrics missing on either
+    # side) is an incomparable FINDING, never a raised guard (bug-sweep #51). Both
+    # variants route here: a partial pair whose per-task intersection is empty is
+    # as incomparable as a missing artifact — comparing zero overlapping tasks is
+    # not a reproduction.
+    empty_partial = partial and not compared_indices
+    if orig_metrics is None or repro_metrics is None or empty_partial:
         # A missing metrics artifact is an incomparable FINDING (not an error):
         # the run may simply not have been aggregated yet. No envelope, no sample.
         per_key: list[dict[str, Any]] = []
@@ -1082,10 +1093,26 @@ def verify_reproduction(
             missing.append(f"original [{orig_source}]")
         if repro_metrics is None:
             missing.append(f"repro [{repro_source}]")
-        reason = (
-            "reproduction verdict: incomparable — missing metrics artifact for "
-            + " and ".join(missing)
-        )
+        if missing:
+            reason = (
+                "reproduction verdict: incomparable — missing metrics artifact for "
+                + " and ".join(missing)
+            )
+        else:
+            # Both sides present but no per-task overlap (disjoint task samples).
+            reason = (
+                "reproduction verdict: incomparable — no per-task overlap between "
+                f"the two runs (compared 0 of {len(indices or [])} requested indices)"
+            )
+        # Partial receipts MUST disclose the partiality accounting even when
+        # nothing was compared: [] task_indices is a full disclosure (via
+        # uncompared_tasks), distinct from an undisclosed None. Without this the
+        # no-silent-caps guard raised SpecInvalid instead of emitting the finding.
+        if partial:
+            assert indices is not None
+            compared_indices = compared_indices or []
+            uncompared_tasks = len(indices) - len(compared_indices)
+            uncompared_keys = 0
         schema_version = RECEIPT_SCHEMA_VERSION_TIERED if partial else RECEIPT_SCHEMA_VERSION
         appended_record = None
     else:

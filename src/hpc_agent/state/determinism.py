@@ -1017,6 +1017,28 @@ def evidence_meets(
             f"determinism.evidence_meets: unknown demand key(s) {sorted(unknown)}; "
             f"allowed: {sorted(_ALLOWED_DEMAND_KEYS)}"
         )
+    # The loud-named-refusal covers VALUES too, not only key names (bug-sweep
+    # #72). ``demand`` arrives verbatim from a caller-authored ``requires`` (JSON)
+    # whose value types are unvalidated upstream; a non-int ``min_n`` used to
+    # crash with a raw ``TypeError`` at the ``n < min_n`` compare, and a string
+    # ``scales`` was iterated character-by-character into a nonsense shortfall.
+    # Refuse both with the same declared SpecInvalid the unknown-key branch uses.
+    for _key in ("min_n", "min_n_full"):
+        _val = demand.get(_key)
+        if _val is not None and (not isinstance(_val, int) or isinstance(_val, bool)):
+            raise errors.SpecInvalid(
+                f"determinism.evidence_meets: demand key {_key!r} must be an int; "
+                f"got {type(_val).__name__} {_val!r}"
+            )
+    for _key in ("scales", "clusters"):
+        _val = demand.get(_key)
+        if _val is not None and (
+            not isinstance(_val, list) or not all(isinstance(_s, str) for _s in _val)
+        ):
+            raise errors.SpecInvalid(
+                f"determinism.evidence_meets: demand key {_key!r} must be a list of "
+                f"strings; got {type(_val).__name__} {_val!r}"
+            )
     filtered = filter_current_identity(
         samples, admitted, identity=identity, data_identity=data_identity
     )
