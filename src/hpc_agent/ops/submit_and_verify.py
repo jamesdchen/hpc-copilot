@@ -33,6 +33,7 @@ from hpc_agent._wire.workflows.submit_and_verify import (
 )
 from hpc_agent._wire.workflows.verify_canary import VerifyCanaryResult
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.submit_flow import SubmitFlowResult, fire_second_canary, submit_flow
 from hpc_agent.ops.verify_canary import verify_canary
 
@@ -132,7 +133,7 @@ def _pull_canary_task0_metrics(experiment_dir: Path, canary_run_id: str) -> Path
         ) from exc
     local = pulls_dir(experiment_dir, canary_run_id)
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=result_subdir,
         local_dir=str(local),

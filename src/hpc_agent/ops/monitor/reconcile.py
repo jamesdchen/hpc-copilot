@@ -15,6 +15,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.announce import read_announcements
 from hpc_agent.ops.monitor.classify import settle
@@ -347,7 +348,7 @@ def _settle_from_announcements(
         from hpc_agent.state.runs import read_job_task_spans
 
         features = _gather_failure_features(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_name=record.job_name,
             job_ids=list(record.job_ids),
@@ -744,7 +745,7 @@ def _reconcile_one(
         if not is_kill_confirmed(record):
             try:
                 _announce = read_announcements(
-                    ssh_target=record.ssh_target,
+                    ssh_target=resolve_ssh_target(record),
                     remote_path=record.remote_path,
                     run_id=run_id,
                     task_count=record.total_tasks,
@@ -772,9 +773,10 @@ def _reconcile_one(
                     "missing": int(_announce["missing"]),
                 }
         with ThreadPoolExecutor(max_workers=3) as pool:
+            _resolved_ssh_target = resolve_ssh_target(record)
             fut_status = pool.submit(
                 _ssh_status_report,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 remote_path=record.remote_path,
                 run_id=run_id,
                 job_ids=record.job_ids,
@@ -786,12 +788,12 @@ def _reconcile_one(
             )
             fut_waves = pool.submit(
                 _ssh_list_combined_waves,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 remote_path=record.remote_path,
             )
             fut_alive = pool.submit(
                 _ssh_alive_job_ids,
-                ssh_target=record.ssh_target,
+                ssh_target=_resolved_ssh_target,
                 job_ids=record.job_ids,
                 scheduler=scheduler,
             )
@@ -951,7 +953,7 @@ def _reconcile_one(
             from hpc_agent.state.runs import read_job_task_spans
 
             features = _gather_failure_features(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 job_name=record.job_name,
                 job_ids=list(record.job_ids),

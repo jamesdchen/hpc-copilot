@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -881,7 +882,7 @@ def verify_canary(
             last_watchdog_stamp = now
         try:
             report = ssh_status_report(
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 run_id=canary_run_id,
                 job_ids=list(record.job_ids),
@@ -937,7 +938,7 @@ def verify_canary(
 
                 try:
                     scan = ssh_marker_scan(
-                        ssh_target=record.ssh_target,
+                        ssh_target=resolve_ssh_target(record),
                         remote_path=record.remote_path,
                         run_id=canary_run_id,
                     )
@@ -1041,7 +1042,7 @@ def verify_canary(
     from hpc_agent.state.runs import read_job_task_spans
 
     logs = fetch_task_logs(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=list(record.job_ids),
@@ -1074,7 +1075,7 @@ def verify_canary(
             _canary_sidecar, canary_run_id=canary_run_id, explicit=checkpoint_result_dir
         )
         probe = _verify_remote_checkpoint(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             ckpt_result_dir=ckpt_dir,
             remote_activation=remote_activation,
@@ -1195,7 +1196,7 @@ def verify_canary(
     # Optional output verification.
     if expect_output:
         output_ok, output_detail = verify_combiner_artifact(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             expect_output=expect_output,
         )
@@ -1250,7 +1251,7 @@ def verify_canary(
         _result_dir = None
     if _result_dir is not None:
         runtime = _read_canary_exit_code(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             result_dir=_result_dir,
         )
@@ -1292,7 +1293,7 @@ def verify_canary(
         try:
             sha = ssh_run(
                 f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'",
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
             )
             if sha.returncode == 0:
                 metrics_fingerprint = sha.stdout.strip() or None

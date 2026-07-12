@@ -448,7 +448,12 @@ def resubmit_flow(
             # supersedes the journal), but fall back to the journal record
             # so a missing/empty sidecar doesn't blank these and trip
             # downstream validation.
-            ssh_target = (sidecar or {}).get("ssh_target") or existing.ssh_target
+            # ssh_target is CONFIG, resolved fresh from clusters.yaml for the
+            # record's cluster at use time (run12 finding 23 / RULING 1) — the
+            # sidecar's frozen copy is not trusted for the transport call below.
+            from hpc_agent.infra.clusters import resolve_ssh_target
+
+            ssh_target = resolve_ssh_target(existing)
             remote_path = (sidecar or {}).get("remote_path") or existing.remote_path
 
             # Clear the retry preamble's terminal ``.hpc_failed`` markers for

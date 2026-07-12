@@ -10,17 +10,23 @@ than silently disabling the feature.
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
+
+if TYPE_CHECKING:
+    from hpc_agent.state.run_record import RunRecord
+
+_log = logging.getLogger(__name__)
 
 # Scheduler families the framework ships golden profiles for. A
 # ``scheduler`` value outside this set is permitted only when the entry
@@ -373,6 +379,94 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
         # downstream `.get(...)` calls on the result don't AttributeError.
         result: dict[str, Any] = yaml.safe_load(f) or {}
     return result
+
+
+def resolve_ssh_target(record: RunRecord) -> str:
+    """Resolve the LIVE ``user@host`` for *record*'s cluster at USE time.
+
+    run12 finding 23 / upstream-fixes RULING 1 (option b, "resolve at use
+    time"): the journal records the CLUSTER key — that is HISTORY, what the
+    human approved. ``user@host`` is *config*: it is resolved fresh from
+    ``clusters.yaml`` on every transport-consuming call. So a login-node
+    failover (or any host change) is a config edit — change
+    ``clusters.yaml[cluster].host`` (or the record's one ``cluster`` key) and
+    every consumer picks up the new target with NO journal surgery.
+
+    ``record.ssh_target`` is still WRITTEN at submit (honest provenance of what
+    was used then), but consumers no longer TRUST it: this resolver returns the
+    value derived from config and only FALLS BACK to the frozen
+    ``record.ssh_target`` when config can't answer — the cluster key is absent
+    from ``clusters.yaml`` (an ad-hoc cluster, or one removed after submit), the
+    entry yields no derivable ``user@host`` (no ``user``/``host``), the config
+    can't be loaded, or the record predates the ``cluster`` field entirely. That
+    fallback IS the migration shim — no record is ever rewritten.
+
+    The fallback is DISCLOSED on the log (the existing surface — no new wire
+    field): a WARNING names the reason, and a live resolution that DIFFERS from
+    the frozen submit-time value is logged at INFO so a host retarget leaves a
+    trail. Best-effort throughout — a bad/missing ``clusters.yaml`` degrades to
+    the frozen value rather than breaking status / monitor / aggregate.
+    """
+    frozen = str(getattr(record, "ssh_target", "") or "")
+    cluster = str(getattr(record, "cluster", "") or "").strip()
+    if not cluster:
+        # Record predates the cluster field (or it was never populated) — the
+        # frozen submit-time target is the only identity we have.
+        _log.warning(
+            "resolve_ssh_target: record carries no cluster key; using frozen "
+            "submit-time ssh_target %r (retarget by config is unavailable for "
+            "this record)",
+            frozen,
+        )
+        return frozen
+    try:
+        cfg = load_clusters_config().get(cluster)
+    except Exception as exc:  # noqa: BLE001 — a bad/missing config must not break transport
+        _log.warning(
+            "resolve_ssh_target: could not load clusters.yaml for cluster %r "
+            "(%s); using frozen submit-time ssh_target %r",
+            cluster,
+            exc,
+            frozen,
+        )
+        return frozen
+    if not cfg:
+        _log.warning(
+            "resolve_ssh_target: cluster %r absent from clusters.yaml; using "
+            "frozen submit-time ssh_target %r (add the cluster to clusters.yaml "
+            "to retarget its host at use time)",
+            cluster,
+            frozen,
+        )
+        return frozen
+    try:
+        live = ClusterConfig.model_validate(cfg).ssh_target
+    except Exception as exc:  # noqa: BLE001 — a malformed entry must not break transport
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] failed validation (%s); using "
+            "frozen submit-time ssh_target %r",
+            cluster,
+            exc,
+            frozen,
+        )
+        return frozen
+    if not live:
+        _log.warning(
+            "resolve_ssh_target: clusters.yaml[%r] yields no derivable user@host "
+            "(missing user/host); using frozen submit-time ssh_target %r",
+            cluster,
+            frozen,
+        )
+        return frozen
+    if live != frozen:
+        _log.info(
+            "resolve_ssh_target: cluster %r now resolves to %r (frozen "
+            "submit-time value was %r) — using the live config target",
+            cluster,
+            live,
+            frozen,
+        )
+    return live
 
 
 def writable_clusters_config_path() -> Path:

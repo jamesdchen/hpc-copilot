@@ -55,6 +55,7 @@ from hpc_agent._kernel.contract.vocabulary import LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.classify import unresolved_unknown
 from hpc_agent.ops.monitor.harvest_guard import _circuit_wait_sec, harvest_on_terminal
@@ -375,7 +376,7 @@ def monitor_flow(
                 record = record_status(
                     experiment_dir,
                     run_id,
-                    ssh_target=record.ssh_target,
+                    ssh_target=resolve_ssh_target(record),
                     remote_path=record.remote_path,
                     job_ids=list(record.job_ids),
                     job_name=record.job_name,
@@ -580,7 +581,7 @@ def monitor_flow(
                         experiment_dir,
                         run_id,
                         wave=wave,
-                        ssh_target=record.ssh_target,
+                        ssh_target=resolve_ssh_target(record),
                         remote_path=record.remote_path,
                         force=(attempt > 1),
                     )

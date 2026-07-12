@@ -35,6 +35,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.watcher_install import WatcherInstallResult, WatcherInstallSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.remote import ssh_run
 from hpc_agent.state.journal import load_run
 
@@ -496,14 +497,17 @@ def watcher_install(
     if record is None:
         raise errors.SpecInvalid(f"watcher-install: no journal record for run_id {spec.run_id!r}")
 
+    resolved_ssh_target = resolve_ssh_target(record)
     if spec.action == "status":
-        result = _status(spec=spec, ssh_target=record.ssh_target)
+        result = _status(spec=spec, ssh_target=resolved_ssh_target)
     elif spec.action == "uninstall":
-        result = _uninstall(spec=spec, ssh_target=record.ssh_target, remote_path=record.remote_path)
+        result = _uninstall(
+            spec=spec, ssh_target=resolved_ssh_target, remote_path=record.remote_path
+        )
     else:
         result = _install(
             spec=spec,
-            ssh_target=record.ssh_target,
+            ssh_target=resolved_ssh_target,
             remote_path=record.remote_path,
             job_name=record.job_name,
         )

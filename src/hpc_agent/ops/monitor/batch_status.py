@@ -78,7 +78,7 @@ def batch_status(*, experiment_dir: Path) -> dict[str, Any]:
     """
     from hpc_agent.infra.backends import backend_requires_ssh, get_backend_class
     from hpc_agent.infra.cluster_status import ssh_batch_scheduler_states
-    from hpc_agent.infra.clusters import load_clusters_config
+    from hpc_agent.infra.clusters import load_clusters_config, resolve_ssh_target
     from hpc_agent.state.index import find_in_flight_runs
 
     records = find_in_flight_runs(experiment_dir)
@@ -105,7 +105,7 @@ def batch_status(*, experiment_dir: Path) -> dict[str, Any]:
         if not r.job_ids:
             skipped.append({"run_id": r.run_id, "reason": "no_job_ids"})
             continue
-        groups.setdefault((r.ssh_target, scheduler), []).append(r)
+        groups.setdefault((resolve_ssh_target(r), scheduler), []).append(r)
 
     runs_out: dict[str, Any] = {}
     queries = 0

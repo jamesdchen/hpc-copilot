@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.infra.clusters import resolve_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,7 +91,7 @@ def verify_submitted(experiment_dir: Path, *, run_id: str) -> dict[str, Any]:
 
     backend_cls = get_backend_class(scheduler)
     cmd = backend_cls.build_scheduler_state_cmd(job_ids)
-    proc = remote.ssh_run(cmd, ssh_target=record.ssh_target)
+    proc = remote.ssh_run(cmd, ssh_target=resolve_ssh_target(record))
     if proc.returncode != 0:
         # A non-zero rc is an SSH transport failure, not "no jobs found" —
         # surface it as such rather than reporting all gone.

@@ -18,7 +18,7 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.cluster_logs import fetch_task_logs
 from hpc_agent.infra.cluster_status import ssh_status_report as _ssh_status_report
-from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.clusters import load_clusters_config, resolve_ssh_target
 from hpc_agent.ops.recover.runner_failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
@@ -100,7 +100,7 @@ def fetch_failures(
 
     # Fresh poll: enumerate failed tasks.
     report = _ssh_status_report(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         run_id=run_id,
         job_ids=record.job_ids,
@@ -138,7 +138,7 @@ def fetch_failures(
     from hpc_agent.state.runs import read_job_task_spans
 
     logs = fetch_task_logs(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=record.job_ids,

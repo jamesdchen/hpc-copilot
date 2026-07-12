@@ -64,6 +64,7 @@ from hpc_agent.execution.mapreduce.reduce.metrics import (
     reduce_partials,
 )
 from hpc_agent.infra.backends import backend_requires_ssh
+from hpc_agent.infra.clusters import resolve_ssh_target
 from hpc_agent.infra.io import atomic_write_json
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.time import utcnow_iso
@@ -394,7 +395,7 @@ def _per_task_metrics_reduce(
     results_local = out / "_per_task_results"
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=scoped_subdir,
         local_dir=str(results_local),
@@ -558,7 +559,7 @@ def _ingest_task_traces(
     scoped_subdir = _run_scoped_results_subdir(experiment_dir, run_id, record, results_subdir)
     try:
         pull = rsync_pull(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=scoped_subdir,
             local_dir=str(traces_local),
@@ -684,7 +685,7 @@ def _combiner_only_reduce(
     """
     include_patterns = _incremental_include_patterns(combiner_local, list(record.combined_waves))
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir="_combiner",
         local_dir=str(combiner_local),
@@ -890,7 +891,7 @@ def _cluster_final_reduce(
     )
 
     proc = run_final_reduce(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         run_id=run_id,
         force=True,  # idempotent: aggregate_flow may be re-run; always refresh
@@ -912,7 +913,7 @@ def _cluster_final_reduce(
     # cluster-side ``_aggregated/<run_id>`` source dir; only the LOCAL sink flattens.
     agg_local = out
     pull = rsync_pull(
-        ssh_target=record.ssh_target,
+        ssh_target=resolve_ssh_target(record),
         remote_path=record.remote_path,
         remote_subdir=f"_aggregated/{run_id}",
         local_dir=str(agg_local),
@@ -1364,7 +1365,7 @@ def _aggregate_flow_impl(
         refreshed = record_status(
             experiment_dir,
             run_id,
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_ids=record.job_ids,
             job_name=record.job_name,
@@ -1442,7 +1443,7 @@ def _aggregate_flow_impl(
             scope_looks=_record_scope_looks(experiment_dir, run_id, reducer_block="aggregate-flow"),
         )
 
-    _validate_ssh_target(record.ssh_target)
+    _validate_ssh_target(resolve_ssh_target(record))
 
     # Mode resolution + cluster-reduce short-circuit. The cluster-reduce
     # path runs the user's reducer on the cluster and pulls only its
@@ -1465,7 +1466,7 @@ def _aggregate_flow_impl(
         try:
             sidecar_for_cmd = (
                 _read_remote_sidecar(
-                    ssh_target=record.ssh_target,
+                    ssh_target=resolve_ssh_target(record),
                     remote_path=record.remote_path,
                     run_id=run_id,
                 )
@@ -1544,7 +1545,7 @@ def _aggregate_flow_impl(
             waves_combined_this_call, combiner_failures = _combine_missing(
                 experiment_dir,
                 run_id,
-                ssh_target=record.ssh_target,
+                ssh_target=resolve_ssh_target(record),
                 remote_path=record.remote_path,
                 waves=missing,
                 max_retries=combiner_max_retries,
@@ -1643,7 +1644,7 @@ def _aggregate_flow_impl(
     if pull_summaries:
         sl = out / "summaries"
         sp = rsync_pull(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             remote_subdir=results_subdir,
             local_dir=str(sl),
@@ -1671,7 +1672,7 @@ def _aggregate_flow_impl(
     if spec.min_rows > 0:
         nonempty_failing = _nonempty_failing_task_ids(
             run_id,
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_ids=list(record.job_ids),
             job_name=record.job_name,

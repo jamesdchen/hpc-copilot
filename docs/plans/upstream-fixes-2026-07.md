@@ -65,17 +65,19 @@ residue bucket — shoehorning is worse than residue.
    withdraw what no one owns; closure is a challenge-verdict recording
    who resolved it and why ("withdrawn-as-stale" is a legitimate cheap
    verdict). Closure stays possible, erasure doesn't.
-5. **G4 schedule confirmation:** the library-native connection-lifecycle
-   shrink is RULED post-run-13 steady-state with a recorded flip trigger
-   ("the #8 inflight fix + this lesson landing in a released wheel" —
-   run12 finding 24). Confirm the trigger has fired (released wheel) and
-   whether four fired symptoms pull the work forward or the post-run-13
-   sequencing stands.
-6. **G2 mechanization greenlight:** `revise-resolved` + the retarget arm
-   (proving-run-5 waves 5.1/5.2) are *designed, not mechanized*; run12
-   findings 23/25 added two more missing verbs (host retarget, human-
-   directed settle). Confirm these enter the run-13 build window as one
-   wave.
+5. **RULED 2026-07-12 — G4 schedule: PULLED FORWARD, pre-run-13.** The
+   user overrode the post-run-13 sequencing: the library-native
+   connection-lifecycle shrink (B16 scope — mechanisms go library-native;
+   the ban-risk breaker and connection-RATE courtesy stay as
+   cluster-social policy) builds before run 13. The flip trigger had
+   fired (the #8 inflight fix + keepalives in the released wheel) and
+   four fired symptoms pulled it forward.
+6. **RULED 2026-07-12 — G2 mechanization wave: IN, gating run 13 if
+   doing it properly requires it.** `revise-resolved` + the retarget
+   recovery arm (pr5 waves 5.1/5.2) + host-retarget (trivial post
+   RULING 1: patch the journaled cluster key as a decision) +
+   human-directed settle (r12-f25: directed evidence through the SAME
+   mark_run + harvest_on_terminal machinery) build as one wave.
 7. **A9 notebook-draft attestor stamp (sweep 2, the one overturned
    verdict; feeds the multi-human byte-identity row):** the draft record
    stamps `attestor_id` under exactly ONE declared actor

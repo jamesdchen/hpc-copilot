@@ -18,7 +18,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.backends import backend_requires_ssh
-from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.clusters import load_clusters_config, resolve_ssh_target
 from hpc_agent.ops.monitor.logs import fetch_task_logs
 from hpc_agent.ops.monitor.status import _ssh_status_report
 from hpc_agent.state.journal import load_run
@@ -182,7 +182,7 @@ def fetch_logs(
         if record.cluster and not _sidecar.get("cluster"):
             _sidecar = {**_sidecar, "cluster": record.cluster}
         report = _ssh_status_report(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             run_id=run_id,
             job_ids=record.job_ids,
@@ -220,7 +220,7 @@ def fetch_logs(
         from hpc_agent.state.runs import read_job_task_spans
 
         logs = fetch_task_logs(
-            ssh_target=record.ssh_target,
+            ssh_target=resolve_ssh_target(record),
             remote_path=record.remote_path,
             job_name=record.job_name,
             job_ids=record.job_ids,
