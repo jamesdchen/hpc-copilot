@@ -81,6 +81,7 @@ _REPRESENTATIVE_HINT_KWARGS: dict[tuple[str, str], dict[str, Any]] = {
     ("campaign-greenlight", "greenlit"): {"campaign_id": _CAMPAIGN_ID},
     ("campaign-greenlight", "already_greenlit"): {"campaign_id": _CAMPAIGN_ID},
     ("campaign-watch", "watching_complete"): {"campaign_id": _CAMPAIGN_ID},
+    ("campaign-watch", "watching_refill"): {"campaign_id": _CAMPAIGN_ID},
 }
 
 

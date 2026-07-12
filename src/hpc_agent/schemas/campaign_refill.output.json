@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_refill.output.json",
+  "title": "campaign-refill output data",
+  "description": "Shape of the ``data`` field on a ``campaign-refill`` envelope.\n\n``stage_reached`` is the deterministic dispatch over the advance decision +\nper-slot resolve outcomes; ``needs_decision`` is set only on\n``refill_blocked`` (a slot hit a resume-vs-fresh / scaffold escalation a\nhuman must resolve). The clean ``refilled`` / ``no_refill_needed`` terminals\nend the chain — the next cron/loop tick re-enters via ``campaign-watch``\n(one-step-per-tick).",
+  "type": "object",
+  "required": [
+    "stage_reached",
+    "needs_decision",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "stage_reached": {
+      "description": "Which refill outcome this tick reached.",
+      "enum": [
+        "refilled",
+        "no_refill_needed",
+        "refill_blocked"
+      ],
+      "title": "Stage Reached",
+      "type": "string"
+    },
+    "needs_decision": {
+      "description": "True only for refill_blocked (a slot hit a live-prior / scaffold escalation the human must resolve); False for refilled and the no_refill_needed typed no-op.",
+      "title": "Needs Decision",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Human-readable summary of the tick's outcome.",
+      "title": "Reason",
+      "type": "string"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The campaign this refill tick operated on.",
+      "title": "Campaign Id"
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The campaign-advance decision this tick (refill / wait_in_flight / stop_* / continue) — the authoritative source refill consumed.",
+      "title": "Decision"
+    },
+    "refill_count": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The pool-slots-to-fill count advance requested this tick (max(0, min(K - in_flight, remaining_max_jobs))); 0 on no_refill_needed.",
+      "title": "Refill Count"
+    },
+    "submitted": {
+      "description": "One row per spawned detached campaign-run child (run_id + pid + stage).",
+      "items": {
+        "$ref": "#/$defs/SubmittedIteration"
+      },
+      "title": "Submitted",
+      "type": "array"
+    },
+    "blocked": {
+      "description": "Slots that stopped at a resume-vs-fresh / scaffold escalation before submit.",
+      "items": {
+        "$ref": "#/$defs/BlockedSlot"
+      },
+      "title": "Blocked",
+      "type": "array"
+    },
+    "next_block": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Always null in practice: the chain ENDS at campaign-refill — the next cron/loop tick re-enters via campaign-watch (one-step-per-tick). The field is DECLARED so the MCP curated catalog derives campaign-refill as a block (a block is any verb whose Result declares next_block).",
+      "title": "Next Block"
+    },
+    "active_env_overrides": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Every framework-relevant HPC_* environment variable currently exported in THIS process's environment, verbatim (B15 disclosure; mirror CampaignRunResult). Refill spawns cluster-submitting children, so a stray transport override reshapes every submit — echoing it makes the env-vs-record drift visible. Empty when no HPC_* variable is set.",
+      "title": "Active Env Overrides",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "BlockedSlot": {
+      "additionalProperties": false,
+      "description": "A refill slot that stopped at a genuine escalation before it could submit.\n\n``resolve-submit-inputs`` returned ``prior_run_found`` (a live prior matches\nthis cmd_sha — only the human picks resume-vs-fresh) or\n``needs_scaffold_interview`` (``.hpc/tasks.py`` absent). The refill loop\nBREAKS on the first blocked slot — continuing would ask more trials against\nan unresolved slot — so ``campaign-refill`` returns ``refill_blocked``.",
+      "properties": {
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The computed run_id of the blocked slot, when resolve got that far; else null.",
+          "title": "Run Id"
+        },
+        "stage": {
+          "description": "resolve-submit-inputs stage that blocked (prior_run_found / needs_scaffold_interview).",
+          "title": "Stage",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The resolve-submit-inputs reason the human must act on.",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "reason"
+      ],
+      "title": "campaign-refill blocked slot",
+      "type": "object"
+    },
+    "SubmittedIteration": {
+      "additionalProperties": false,
+      "description": "One refill slot that spawned a detached ``campaign-run`` child this tick.",
+      "properties": {
+        "run_id": {
+          "description": "The run_id resolve-submit-inputs computed for this iteration.",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "detached_pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The detached campaign-run worker's OS process id (informational — do NOT wait on it; the outcome arrives via the journal). None if the child replayed a recorded terminal instead of spawning.",
+          "title": "Detached Pid"
+        },
+        "stage_reached": {
+          "description": "The campaign-run child's stage_reached (``detached`` on a fresh spawn).",
+          "title": "Stage Reached",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "stage_reached"
+      ],
+      "title": "campaign-refill submitted iteration",
+      "type": "object"
+    }
+  }
+}

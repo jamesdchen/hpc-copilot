@@ -47,9 +47,12 @@ __all__ = ["campaign_complete", "campaign_greenlight", "campaign_watch"]
 
 # ``campaign-advance`` decisions grouped by the watch terminator they map to.
 # HEALTHY: the campaign is nominal (self-chaining ticks, no human boundary).
+# REFILL is split OUT (RFC #362): a ``refill`` decision is NOT a passive healthy
+# tick — it hands off to the ``campaign-refill`` actor (``watching_refill``), so
+# it must not lump into ``watching_healthy`` (which maps to a chain END).
 # ANOMALY: a §5 loud-fail guard tripped, or a budget halt needs a human. A
 # ``stop_converged`` maps to the COMPLETE hand-off (handled separately).
-_WATCH_HEALTHY: frozenset[str] = frozenset({"continue", "wait_in_flight", "refill"})
+_WATCH_HEALTHY: frozenset[str] = frozenset({"continue", "wait_in_flight"})
 _WATCH_ANOMALY: frozenset[str] = frozenset(
     {"stop_circuit_breaker", "stop_resubmit_cap", "stop_over_budget"}
 )
@@ -314,9 +317,10 @@ def campaign_greenlight(
             "running campaign for a health / anomaly brief. Composes "
             "campaign-advance's evidence — it OBSERVES, never runs a tick (ticks "
             "self-chain via the driver). Terminators: watching_healthy (no "
-            "boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, "
-            "surfaces the anomaly_brief) / watching_complete (stop criterion "
-            "fired → hand off to campaign-complete)."
+            "boundary) / watching_refill (free pool slot → hand off to "
+            "campaign-refill, no boundary) / watching_anomaly (loud-fail or budget "
+            "halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop "
+            "criterion fired → hand off to campaign-complete)."
         ),
         spec_arg=True,
         spec_model=CampaignWatchSpec,
@@ -339,7 +343,10 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
       (``needs_decision=True``), surfacing the drafted ``anomaly_brief``;
     * a fired stop criterion (``stop_converged``) → ``watching_complete``
       (``needs_decision=False``), a hand-off hint to ``campaign-complete``;
-    * anything nominal (``continue`` / ``wait_in_flight`` / ``refill``) →
+    * a free pool slot with budget headroom (``refill``, RFC #362) →
+      ``watching_refill`` (``needs_decision=False``), a hand-off hint to
+      ``campaign-refill`` — autonomous execution the greenlight authorized;
+    * anything nominal (``continue`` / ``wait_in_flight``) →
       ``watching_healthy`` (``needs_decision=False``).
     """
     from hpc_agent.meta.campaign.atoms.advance import campaign_advance
@@ -379,6 +386,30 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
                 "campaign-watch",
                 "watching_complete",
                 "a stop criterion fired; build the completion brief.",
+                campaign_id=cid,
+            ),
+        )
+
+    if decision == "refill":
+        # RFC #362: a free pool slot with budget headroom — hand off to the
+        # campaign-refill ACTOR (needs_decision=False; it is autonomous execution
+        # the greenlight already authorized, not a human boundary). Split out of
+        # watching_healthy because that terminator maps to a chain END, whereas
+        # refill must chain to campaign-refill (block_chain SUCCESSORS).
+        return CampaignBlockResult(
+            block="watch",
+            stage_reached="watching_refill",
+            needs_decision=False,
+            reason=(
+                f"campaign {cid!r} has free pool slot(s) (advance: {adv.get('reason')}); "
+                "hand off to campaign-refill to top the pool up."
+            ),
+            campaign_id=cid,
+            brief=brief,
+            next_block=_next_block(
+                "campaign-watch",
+                "watching_refill",
+                "free slots with budget headroom; refill the pool.",
                 campaign_id=cid,
             ),
         )

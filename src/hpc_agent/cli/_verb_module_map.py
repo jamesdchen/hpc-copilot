@@ -33,6 +33,7 @@ VERB_MODULE_MAP: dict[str, tuple[str, str]] = {
     'build-template': ('build-template', 'hpc_agent.incorporation.build.template'),
     'campaign-complete': ('campaign-complete', 'hpc_agent.meta.campaign.blocks'),
     'campaign-greenlight': ('campaign-greenlight', 'hpc_agent.meta.campaign.blocks'),
+    'campaign-refill': ('campaign-refill', 'hpc_agent.ops.campaign_refill'),
     'campaign-run': ('campaign-run', 'hpc_agent.ops.campaign_run'),
     'campaign-watch': ('campaign-watch', 'hpc_agent.meta.campaign.blocks'),
     'challenge-status': ('challenge-status', 'hpc_agent.ops.challenge_status_op'),

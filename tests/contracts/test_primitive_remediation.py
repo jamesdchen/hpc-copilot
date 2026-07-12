@@ -112,6 +112,7 @@ _SPEC_VERBS: frozenset[str] = frozenset(
         "block-drive",
         "campaign-complete",
         "campaign-greenlight",
+        "campaign-refill",
         "campaign-watch",
         "doctor",
         # doctor-install accepts an all-optional spec, so it IS a live --spec

@@ -1888,6 +1888,21 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent campaign-refill --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "campaign_refill.input.json",
+    "name": "campaign-refill",
+    "output_schema": "campaign_refill.output.json",
+    "python": "hpc_agent.ops.campaign_refill.campaign_refill",
+    "side_effects": [
+      "scheduler-submit",
+      "writes-campaign-state"
+    ],
+    "summary": "RFC #362 refill actor: top a greenlit async campaign's pool back up this tick. Calls campaign-advance authoritatively; if it decides refill, resolves + submits refill_count iterations SEQUENTIALLY (each a detached campaign-run). Refuses an un-greenlit campaign (greenlight is the standing consent). Stages: refilled / no_refill_needed / refill_blocked. No new state file, no cursor — partial ticks self-correct via next tick's shrunk refill_count.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent campaign-run --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "campaign_run.input.json",
@@ -1911,7 +1926,7 @@
     "output_schema": "campaign_block.output.json",
     "python": "hpc_agent.meta.campaign.blocks.campaign_watch",
     "side_effects": [],
-    "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
+    "summary": "Campaign block (async execution surface): a READ-ONLY digest of the running campaign for a health / anomaly brief. Composes campaign-advance's evidence — it OBSERVES, never runs a tick (ticks self-chain via the driver). Terminators: watching_healthy (no boundary) / watching_refill (free pool slot → hand off to campaign-refill, no boundary) / watching_anomaly (loud-fail or budget halt → y/nudge, surfaces the anomaly_brief) / watching_complete (stop criterion fired → hand off to campaign-complete).",
     "verb": "workflow"
   },
   {

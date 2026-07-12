@@ -28,6 +28,7 @@
         "greenlit",
         "already_greenlit",
         "watching_healthy",
+        "watching_refill",
         "watching_anomaly",
         "watching_complete",
         "complete"
