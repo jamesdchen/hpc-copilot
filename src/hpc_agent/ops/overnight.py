@@ -78,6 +78,10 @@ __all__ = [
     "overnight_ledger_path",
     "record_consumption",
     "read_consumption_ledger",
+    "consumed_spend",
+    "consent_heal_classes",
+    "consent_authorizes_class",
+    "sever_recurrence_count",
     "notification_plan",
     "overnight_morning_brief",
     "morning_brief_if_any",
@@ -682,6 +686,103 @@ def read_consumption_ledger(
     return out
 
 
+# ── the spend meter (sequencing item 1: meter before the first B heal) ────────
+
+
+def consumed_spend(experiment_dir: Path, scope_kind: str, scope_id: str) -> tuple[float, float]:
+    """Sum the ``(budget, walltime)`` a scope has ALREADY consumed under its consent.
+
+    The spend meter the overnight-repair sequencing puts FIRST (§8 item 1): every
+    consumption-ledger line MAY carry ``detail.spent_budget`` / ``detail.spent_walltime``
+    (a boundary that launched a real array, a B heal that resubmitted tasks). This
+    sums them so :func:`standing_consent_status` can be consulted with the REAL
+    running total instead of the ``0.0`` placeholder the callers passed before a B
+    heal made the meter load-bearing. Non-numeric / missing costs count as zero (a
+    disclosed no-op line spends nothing); fail-safe by construction — a torn ledger
+    line contributes nothing rather than raising.
+
+    Returns ``(spent_budget, spent_walltime)``. HEAL_FAILED lines are excluded (a
+    fail-loud flip is bookkeeping, not spend); HEAL_ATTEMPT lines ARE counted when
+    they carry a cost (a respawn that burned walltime is real fallout).
+    """
+    spent_budget = 0.0
+    spent_walltime = 0.0
+    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
+        if str(line.get("event_kind") or "") == HEAL_FAILED_KIND:
+            continue
+        detail = _as_dict(line.get("detail"))
+        b = detail.get("spent_budget")
+        w = detail.get("spent_walltime")
+        if _is_positive_number(b):
+            spent_budget += float(cast("float", b))
+        if _is_positive_number(w):
+            spent_walltime += float(cast("float", w))
+    return spent_budget, spent_walltime
+
+
+# ── declared heal-class cap (§7.2 rule 4) ─────────────────────────────────────
+
+
+def consent_heal_classes(consent: dict[str, Any] | None) -> set[str]:
+    """The repair classes a standing consent DECLARES it authorizes (``resolved.heal_classes``).
+
+    A consent that names no classes authorizes NOTHING beyond the shipped watcher
+    re-arm (the Class-A ``self_heal_campaign`` reference posture, which predates the
+    taxonomy and rides the consent's mere existence). The set is drawn verbatim from
+    the bound record's declared classes; the class-authorization gate
+    (:func:`consent_authorizes_class`) reads it, and the bound-capture gate already
+    verified the human's typed consent COVERS at least these classes.
+    """
+    resolved = _as_dict(consent.get("resolved")) if isinstance(consent, dict) else {}
+    raw = resolved.get("heal_classes")
+    if not isinstance(raw, list):
+        return set()
+    return {str(c) for c in raw if isinstance(c, str)}
+
+
+def consent_authorizes_class(consent: dict[str, Any] | None, heal_class: str) -> bool:
+    """True when *consent* declares it authorizes healing *heal_class* (§7.2 rule 4).
+
+    The consumption-side companion to the write-time bound-capture gate: a heal of
+    class X may proceed under a consent only when X is in ``resolved.heal_classes``.
+    Class C is NEVER authorized here regardless of the declared set (the §7.3 hard
+    "never heal a Class C" — C1 elicits, C2 reports; neither is an autonomous heal),
+    so ``C1`` / ``C2`` always return False even if a malformed consent lists them.
+    """
+    if heal_class in ("C1", "C2"):
+        return False
+    return heal_class in consent_heal_classes(consent)
+
+
+# ── recurrence escalation (§9 RULED 2026-07-12: a sever recurring escalates) ──
+
+
+def sever_recurrence_count(
+    experiment_dir: Path, scope_kind: str, scope_id: str, *, heal_class: str = "A"
+) -> int:
+    """How many times a heal of *heal_class* has been RE-ARMED for this scope.
+
+    Counts the ``respawned`` heal-attempt lines carrying ``detail.heal_class ==
+    heal_class`` (default ``A`` — the severed-connection / watcher-re-arm class).
+    The escalation ruling (§9): with correct keepalives a SINGLE sever is Class A
+    (re-arm), but a sever that RECURS under correct keepalives is no longer a
+    mechanical fault to re-heal — it is a cluster-social signal that routes to a
+    C-style finding. A caller that sees this counter exceed its escalation
+    threshold stops re-arming and reports (the taxonomy module's
+    ``escalate_if_recurring`` owns the threshold + the routing).
+    """
+    n = 0
+    for line in read_consumption_ledger(experiment_dir, scope_kind, scope_id):
+        if str(line.get("event_kind") or "") != HEAL_ATTEMPT_KIND:
+            continue
+        detail = _as_dict(line.get("detail"))
+        if str(detail.get("outcome") or "") != "respawned":
+            continue
+        if str(detail.get("heal_class") or "A") == heal_class:
+            n += 1
+    return n
+
+
 # ── the wiring seam: consult-and-consume a named boundary (item 8 seam 1) ─────
 
 
@@ -749,8 +850,8 @@ def consume_boundary_under_consent(
     failed_at: str | None = None,
     detail: dict[str, Any] | None = None,
     now_iso: str | None = None,
-    spent_budget: float = 0.0,
-    spent_walltime: float = 0.0,
+    spent_budget: float | None = None,
+    spent_walltime: float | None = None,
 ) -> ConsumptionOutcome:
     """Consult a scope's standing consent at *boundary_block*; ledger the auto-advance.
 
@@ -772,13 +873,19 @@ def consume_boundary_under_consent(
 
     The caller supplies ``current_cmd_sha`` (the run sidecar fingerprint / the campaign
     spec identity), mirroring how :func:`standing_consent_status` delegates identity
-    derivation. ``spent_budget`` / ``spent_walltime`` default to 0.0 — a spend meter is
-    a future seam; the expiry (morning boundary) + spec-identity legs are enforced now.
+    derivation. ``spent_budget`` / ``spent_walltime`` default to ``None`` → the SPEND
+    METER (:func:`consumed_spend`) supplies the running total from the ledger (§8 item
+    1), so the budget/walltime caps are enforced against real consumption; a caller
+    that already knows the total passes it explicitly.
     """
     if not is_consumable_boundary(scope_kind, boundary_block):
         return ConsumptionOutcome(
             False, ConsentDecision(False, "boundary-not-consumable", None), None
         )
+    if spent_budget is None or spent_walltime is None:
+        metered_budget, metered_walltime = consumed_spend(experiment_dir, scope_kind, scope_id)
+        spent_budget = metered_budget if spent_budget is None else spent_budget
+        spent_walltime = metered_walltime if spent_walltime is None else spent_walltime
     decision = standing_consent_status(
         experiment_dir,
         scope_kind=scope_kind,
@@ -1290,12 +1397,15 @@ def self_heal_campaign(
         identity = _campaign_spec_identity(read_manifest(experiment_dir, campaign_id=campaign_id))
     except Exception:  # noqa: BLE001 — a manifest read failure must not crash the heal
         identity = ""
+    metered_budget, metered_walltime = consumed_spend(experiment_dir, "campaign", campaign_id)
     decision = standing_consent_status(
         experiment_dir,
         scope_kind="campaign",
         scope_id=campaign_id,
         current_cmd_sha=identity,
         now_iso=now,
+        spent_budget=metered_budget,
+        spent_walltime=metered_walltime,
     )
     if not decision.live:
         return HealOutcome("consent-not-live", decision.reason)
@@ -1405,7 +1515,16 @@ def self_heal_campaign(
         campaign_id=campaign_id,
         outcome="respawned",
         now_iso=now,
-        detail={"run_id": run_id, "watcher": "status-watch", "pid": launch.pid},
+        detail={
+            "run_id": run_id,
+            "watcher": "status-watch",
+            "pid": launch.pid,
+            # Class A (invariant-by-construction): the re-arm restores a watcher, no
+            # result value can change. Tagged so ``sever_recurrence_count`` /
+            # ``escalate_if_recurring`` can see a sever RECURRING under correct
+            # keepalives and route it to a C-style finding (§9 escalation ruling).
+            "heal_class": "A",
+        },
     )
     return HealOutcome(
         "respawned", f"re-armed status-watch on {run_id}", chain=chain, attempt_line=line
@@ -1529,9 +1648,23 @@ def overnight_morning_brief(
     if heal_failed is not None:
         heal_failed["attempts_detail"] = heal_attempts
     consent_resolved = _as_dict(consent.get("resolved")) if consent is not None else {}
+
+    # Per-class sections (§7.4): A/B heals, C1 parked elicitations, C2 findings. Lazy
+    # import — the taxonomy module imports THIS module, so a top-level import would
+    # cycle. Fail-open: a taxonomy read error must never blank the brief.
+    try:
+        from hpc_agent.ops.recover.heal_taxonomy import class_morning_sections
+
+        class_sections = class_morning_sections(experiment_dir, scope_kind, scope_id)
+    except Exception:  # noqa: BLE001 — a class-section read must not wedge the brief
+        class_sections = {}
+
     return {
         # LEADS with the fail-loud disclosure when the chain died unrecoverably.
         "heal_failure": heal_failed,
+        # Per-class breakdown (§7.4): the human reads A/B heals, C1 parked
+        # elicitations ready-to-sign at wake, and C2 findings routed to the run story.
+        "class_sections": class_sections,
         "scope_kind": scope_kind,
         "scope_id": scope_id,
         "surfaced_at": surfaced_at,

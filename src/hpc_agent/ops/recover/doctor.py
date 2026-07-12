@@ -18,6 +18,7 @@ version-skew check's bounded (2 s timeout, fail-open) local ``git rev-parse``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -381,6 +382,39 @@ def _attention_summary(
     return needs_attention, line
 
 
+def _transport_drift_routing(now: str) -> list[AlertRecord]:
+    """Route live transport-env drift to its heal class (detection + routing ONLY).
+
+    The classifier front-end's doctor-seat wiring (overnight-repair.md §8 item 3).
+    Reads ONLY local state — the live healable transport overrides
+    (:func:`infra.env_flags.active_transport_overrides`) — and, for each live
+    override, asks the classifier (:func:`ops.recover.heal_taxonomy.classify_crash_cause`)
+    for its route. Surfaces each as a routing alert. It NEVER opens SSH and NEVER
+    unsets a var — a drifted transport var is C1 (elicit-then-mint the env-pin anchor)
+    or, once an anchor exists, B; the ENACTMENT is a spawned detached child, never the
+    doctor process. Returns ``[]`` when no transport override is live.
+    """
+    from hpc_agent.infra.env_flags import active_transport_overrides
+    from hpc_agent.ops.recover.heal_taxonomy import classify_crash_cause
+
+    live = active_transport_overrides()
+    if not live:
+        return []
+    routing = classify_crash_cause("env-drift", context={"anchored": False})
+    names = ", ".join(sorted(live))
+    return [
+        AlertRecord(
+            ts=now,
+            message=(
+                f"transport-env drift routed to Class {routing.heal_class} "
+                f"({routing.arm}): live healable transport override(s) [{names}]. "
+                f"{routing.reason} doctor ROUTES only — it never unsets a var; the "
+                "heal is enacted by a spawned detached child on the human's `y`."
+            ),
+        )
+    ]
+
+
 @primitive(
     name="doctor",
     verb="query",
@@ -520,6 +554,16 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
                     heal_alerts.append(AlertRecord(ts=now, message=str(msg)))
         except Exception:  # noqa: BLE001 — self-heal must never break the watchdog scan
             heal_alerts = []
+        # Classifier front-end on the doctor seat (overnight-repair.md §8 item 3,
+        # §10 doctor-seat row): crash-cause → class ROUTING only. Detection +
+        # routing, NEVER actuation — the doctor process opens no SSH; a heal is
+        # enacted by a spawned detached child (the stray reaper / watcher re-arm).
+        # The one cause the doctor can classify from pure LOCAL state is transport
+        # ENV DRIFT (a live healable transport override, finding 24d) — routed to
+        # C1 (elicit-then-mint) or, once an env-pin anchor exists, B. Surfaced as a
+        # routing alert; the doctor never unsets a var.
+        with contextlib.suppress(Exception):
+            heal_alerts.extend(_transport_drift_routing(now))
 
     # Both the log audit-trail entries and the dead-worker drafts ride the
     # envelope's `alerts` list for delivery; only the log entries feed the

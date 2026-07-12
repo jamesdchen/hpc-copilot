@@ -487,19 +487,54 @@ neighboring files. Then, ordered by dependency:
 
 ## 10. Substrate map (exists → build)
 
-| Seam | Exists | Build |
-|---|---|---|
-| Consent + caps + wake | `ops/overnight.py::assert_consent_hard_caps` / `assert_wake_armed` | `heal_classes` cap on the consent record |
-| Heal audit trail | consumption ledger, `HEAL_ATTEMPT_KIND`/`HEAL_FAILED_KIND` | per-class detail: `heal_class`, `anchor_ref`, `verify_result` |
-| The one shipped heal | `self_heal_campaign` (watcher re-arm, Class A) | the classifier front-end: crash-cause → class routing |
-| Class-A stray reaper | `ops/recover/stray_sweep.py::stray_sweep` (finding 20) | fold `--reap` into the overnight seat as a spawned detached child |
-| Env-drift detection | `ops/recover/doctor.py::_active_env_overrides` (finding 24d) | the finding-24d ruling → report-only vs C1 env-pin anchor |
-| Doctor seat | `ops/recover/doctor.py` → `self_heal_scan` | detection + class ROUTING only (no-SSH/never-actuate); enactment = spawned detached children |
-| Anchors | fingerprint, manifest, generator spec, known-answer (all journaled) | the C1 anchor ledger + mint-on-`y` elicitation |
-| Morning brief | `overnight_morning_brief` (leads with heal failure) | per-class sections; C1 parked elicitations; C2 → run story |
-| Fresh canary | S2 canary machinery + announce markers | boundary-index sampling parameter |
+| Seam | Exists | Build | Status |
+|---|---|---|---|
+| Consent + caps + wake | `ops/overnight.py::assert_consent_hard_caps` / `assert_wake_armed` | `heal_classes` cap on the consent record | BUILT — the record carries `heal_classes` (bound-capture gate) + `overnight.py::consent_authorizes_class` gates the consumption side (C never authorized) |
+| Heal audit trail | consumption ledger, `HEAL_ATTEMPT_KIND`/`HEAL_FAILED_KIND` | per-class detail: `heal_class`, `anchor_ref`, `verify_result` | BUILT — detail fields threaded; the watcher re-arm tags `heal_class:"A"`; `class_morning_sections` reads them |
+| The one shipped heal | `self_heal_campaign` (watcher re-arm, Class A) | the classifier front-end: crash-cause → class routing | BUILT — `heal_taxonomy.classify_crash_cause` + `_ROUTING_TABLE` (the §6 worked cases); wired into the doctor seat |
+| Class-A stray reaper | `ops/recover/stray_sweep.py::stray_sweep` (finding 20) | fold `--reap` into the overnight seat as a spawned detached child | BUILT — `heal_taxonomy.spawn_stray_reap_detached` (reuses `_kernel.lifecycle.detached._spawn_detached`; doctor never dials) |
+| Env-drift detection | `ops/recover/doctor.py::_active_env_overrides` (finding 24d) | the finding-24d ruling → report-only vs C1 env-pin anchor | BUILT — `infra/env_flags.active_transport_overrides` + `heal_taxonomy.env_drift_class` (C1 unanchored → B anchored) |
+| Doctor seat | `ops/recover/doctor.py` → `self_heal_scan` | detection + class ROUTING only (no-SSH/never-actuate); enactment = spawned detached children | BUILT — `doctor._transport_drift_routing` routes transport drift (no SSH); enactment stays spawned children |
+| Anchors | fingerprint, manifest, generator spec, known-answer (all journaled) | the C1 anchor ledger + mint-on-`y` elicitation | BUILT — `heal_taxonomy` C1 anchor ledger (`anchor_ledger_path` / `mint_env_pin_anchor`); env-pin is the first member; `compose_env_pin_elicitation` rides the bound firing site |
+| Morning brief | `overnight_morning_brief` (leads with heal failure) | per-class sections; C1 parked elicitations; C2 → run story | BUILT — `overnight_morning_brief` folds in `class_morning_sections` (A/B heals, C1 parked, C2 findings, minted anchors) |
+| Fresh canary | S2 canary machinery + announce markers | boundary-index sampling parameter | BUILT — `heal_taxonomy.boundary_index_sample` (first/last of the repaired range); threads as the canary path's `boundary_indices` |
+
+The ∩=∅ enforcement (§9 RULING): `infra/env_flags.HEALABLE_TRANSPORT_ENV_VARS`
+is the healable transport set; `tests/contracts/test_heal_env_disjoint.py`
+derives the job-env-threaded set MECHANICALLY from the `.hpc/`-rooted members of
+`transport._build_deploy_items` (the shipped job-side runtime) and pins the empty
+intersection, so a refactor cannot silently move a healable var into the job env.
 
 ## Drift log
+
+* **2026-07-12 — the heal machinery BUILT (this revision).** All §10 rows land
+  (see the Status column): the spend meter (`overnight.py::consumed_spend`, wired
+  into `consume_boundary_under_consent` + `self_heal_campaign` — §8 item 1, meter
+  first), the `heal_classes` consumption gate (`consent_authorizes_class` — C never
+  authorized), the per-class heal-audit detail (`heal_class` / `anchor_ref` /
+  `verify_result`), the classifier front-end + routing table
+  (`ops/recover/heal_taxonomy.py::classify_crash_cause`), the Class-A stray-reap
+  enactment (`spawn_stray_reap_detached`, a spawned detached child), the Class-B
+  env-pin restore + verify + boundary-index canary sampling, the C1 anchor ledger +
+  mint-on-`y` (env-pin the first member; the same drift is Class B next episode),
+  the C2 report-only routing (`report_c2_finding`), the per-class morning-brief
+  sections, and the recurrence escalation (`escalate_if_recurring` — a sever
+  recurring under correct keepalives routes to a C-finding, not a re-heal loop). The
+  ∩=∅ contract test (`tests/contracts/test_heal_env_disjoint.py`) pins the healable
+  transport set (`infra/env_flags.HEALABLE_TRANSPORT_ENV_VARS`) disjoint from the
+  mechanically-derived job-env set. The doctor seat ROUTES transport drift
+  (`_transport_drift_routing`) without opening SSH; enactment is a spawned detached
+  child (the never-actuate boundary). Deferred by dependency (not owned this wave):
+  the live S2-canary wiring of `boundary_index_sample` into the real submit-flow
+  canary path (the sampling helper + the `reverify` obligation are built; threading
+  it into `ops/submit_flow.py`'s canary is a submit-owned edit) and the run-story
+  PROJECTION of C2 findings (the C2 observation is composed + surfaced in the morning
+  brief's `class_c2_findings` section; wiring it into `state/run_story.py`'s stream
+  projection is a run-story-owned edit). The C1 overnight-wake posture (§9 "push only
+  when the parked heal blocks a consented boundary") rides the shipped
+  `notification_plan` — a C1 park surfaces in the morning brief (declared-but-dark)
+  and only escalates to a push through the existing fail-loud channel when it blocks a
+  consumable boundary.
 
 * **2026-07-12 — USER RULING 3: overnight-consent capture is bound-only (BUILT).**
   The overnight standing-consent authorship gate

@@ -21,9 +21,35 @@ from __future__ import annotations
 
 import os
 
-__all__ = ["active_env_overrides", "env_actor", "env_flag"]
+__all__ = [
+    "HEALABLE_TRANSPORT_ENV_VARS",
+    "active_env_overrides",
+    "active_transport_overrides",
+    "env_actor",
+    "env_flag",
+]
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# The client-side TRANSPORT-SELECTION env vars — the ONLY vars an overnight healer
+# may touch (overnight-repair.md §9 RULING 2026-07-12; finding 24d). Each is read
+# ONLY on the control plane (``infra/remote.py`` / ``infra/ssh_engine.py`` /
+# ``infra/clusters.py`` / ``infra/ssh_circuit.py``) to pick HOW the client dials —
+# it is PROVABLY never threaded into the job's environment (the cluster-side deploy
+# files never reference it; ``tests/contracts/test_heal_env_disjoint.py`` pins the
+# empty intersection so a refactor cannot silently move one into the job env). Drift
+# on one of these is the C1 env-pin heal (elicit → heal on `y` → mint the anchor →
+# Class B next episode). EVERY other ``HPC_*`` var is potentially job-env identity
+# and its drift kills the standing consent (``spec-changed``) — never healed.
+HEALABLE_TRANSPORT_ENV_VARS = frozenset(
+    {
+        "HPC_SSH_ENGINE",
+        "HPC_SSH_CIRCUIT_OVERRIDE",
+        "HPC_NO_SSH_MULTIPLEX",
+        "HPC_SSH_BINARY",
+        "HPC_CLUSTERS_CONFIG",
+    }
+)
 
 
 def env_flag(var: str, *, default: bool = False) -> bool:
@@ -50,6 +76,18 @@ def active_env_overrides() -> dict[str, str]:
     consume it so no two surfaces can drift on what "the active env" means.
     """
     return {k: v for k, v in sorted(os.environ.items()) if k.startswith("HPC_")}
+
+
+def active_transport_overrides() -> dict[str, str]:
+    """The live overrides among the HEALABLE transport vars, verbatim (sorted).
+
+    The subset of :func:`active_env_overrides` restricted to
+    :data:`HEALABLE_TRANSPORT_ENV_VARS` — the client-side transport-selection vars
+    an overnight env-pin heal (C1 → B) may touch. Pure disclosure: it never judges
+    a value; a live entry that mismatches the env-pin anchor IS the drift finding.
+    Empty when none of the healable transport vars is set.
+    """
+    return {k: v for k, v in sorted(os.environ.items()) if k in HEALABLE_TRANSPORT_ENV_VARS}
 
 
 def env_actor(var: str = "HPC_ACTOR") -> str | None:
