@@ -184,6 +184,60 @@ def test_boundary_index_sample_hits_edges() -> None:
     assert tax.boundary_index_sample(5, 5) == [5]  # single-index range
 
 
+class _FakeSpec:
+    run_id = "widget-run"
+
+
+def test_reverify_boundary_canaries_passes_index_to_canary_machinery(tmp_path: Path) -> None:
+    """The heal-arm call site fires ONE fresh canary per sampled edge index and
+    threads the boundary_index into the canary machinery (§7.1)."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake_fire(experiment_dir, *, spec, canary_run_id, boundary_index):
+        calls.append({"canary_run_id": canary_run_id, "boundary_index": boundary_index})
+        return [f"job-{boundary_index}"]
+
+    results = tax.reverify_boundary_canaries(
+        tmp_path,
+        spec=_FakeSpec(),
+        first_index=0,
+        last_index=99,
+        fire=_fake_fire,
+    )
+
+    # Both boundaries fired, each carrying its own index + a distinct canary run_id.
+    assert [c["boundary_index"] for c in calls] == [0, 99]
+    assert [c["canary_run_id"] for c in calls] == [
+        "widget-run-canary-b0",
+        "widget-run-canary-b99",
+    ]
+    assert results == [
+        {"boundary_index": 0, "canary_run_id": "widget-run-canary-b0", "job_ids": ["job-0"]},
+        {"boundary_index": 99, "canary_run_id": "widget-run-canary-b99", "job_ids": ["job-99"]},
+    ]
+
+
+def test_reverify_boundary_canaries_single_index_fires_once(tmp_path: Path) -> None:
+    """A single-index repaired range fires exactly one canary (no duplicate edge)."""
+    calls: list[int] = []
+
+    def _fake_fire(experiment_dir, *, spec, canary_run_id, boundary_index):
+        calls.append(boundary_index)
+        return ["j"]
+
+    tax.reverify_boundary_canaries(
+        tmp_path, spec=_FakeSpec(), first_index=7, last_index=7, fire=_fake_fire
+    )
+    assert calls == [7]
+
+
+def test_reverify_boundary_canaries_defaults_to_live_canary_leg() -> None:
+    """With no injected fire, the default binds the live S2 canary machinery."""
+    from hpc_agent.ops.submit_flow import fire_second_canary
+
+    assert tax._default_canary_fire() is fire_second_canary
+
+
 # ── the spend meter gates the caps (sequencing item 1) ────────────────────────
 
 

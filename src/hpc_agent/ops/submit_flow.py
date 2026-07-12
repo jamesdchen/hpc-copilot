@@ -1234,41 +1234,50 @@ _CANARY_MIRROR_ESSENTIALS: tuple[str, ...] = (
 )
 
 
-def _canary_task0_trial_params(
-    experiment_dir: Path, main: dict[str, Any]
+def _canary_trial_params(
+    experiment_dir: Path, main: dict[str, Any], task_index: int = 0
 ) -> list[dict[str, Any]] | None:
-    """One-element frozen manifest of task 0's kwargs for a canary sidecar.
+    """One-element frozen manifest of task ``task_index``'s kwargs for a canary sidecar.
 
-    The canary IS the main run's task 0, so its sidecar must carry task 0's REAL
-    resolved kwargs in ``trial_params`` — otherwise a sweep-axis
+    The canary IS one of the main run's tasks, so its sidecar must carry that
+    task's REAL resolved kwargs in ``trial_params`` — otherwise a sweep-axis
     ``result_dir_template`` (``{estimator}/chunk_{chunk_start}/…``) cannot render
     downstream and the determinism-fingerprint sample never mints (run-#12
     finding 18: ``causal_tune_linear`` canary sidecar carried ``trial_params:
     null``, so the sample never minted for ANY sweep-templated run).
 
+    ``task_index`` defaults to 0 — the ordinary canary IS the main run's task 0,
+    so the default is byte-identical to the historical behaviour. A Class-B heal's
+    re-verify (docs/design/overnight-repair.md §7.1) passes a BOUNDARY index (the
+    first/last affected task of a repaired range) so the fresh canary exercises
+    the edge kwargs, not just index 0 — run-#10's harvest-gap class showed edge
+    indices are where repairs go wrong.
+
     Two sources, in order:
 
-    * The main sidecar's already-frozen manifest (``trial_params[0]``) — copy it
-      verbatim when present (an ordinary submit through compute-run-id).
-    * A local MINT via ``tasks.resolve(0)`` when the main sidecar carries no
-      manifest (a synthesized / manifest-less main sidecar) — this is the
+    * The main sidecar's already-frozen manifest (``trial_params[task_index]``) —
+      copy it verbatim when present (an ordinary submit through compute-run-id).
+    * A local MINT via ``tasks.resolve(task_index)`` when the main sidecar carries
+      no manifest (a synthesized / manifest-less main sidecar) — this is the
       frozen-manifest doctrine applied at its source: freeze the manifest ONCE
       on the control plane so the cluster never re-executes ``tasks.py``
       (the ``dispatch.py`` / ``combiner.py`` precedent, one directory up).
 
-    Best-effort: an unimportable / mis-shaped ``tasks.py`` yields ``None`` (the
-    prior behaviour), so a repo without a resolvable task list is never a hard
-    failure of the mirror.
+    Best-effort: an unimportable / mis-shaped ``tasks.py``, or an out-of-range
+    ``task_index``, yields ``None`` (the prior behaviour), so a repo without a
+    resolvable task list is never a hard failure of the mirror.
     """
     main_tp = main.get("trial_params")
-    if isinstance(main_tp, list) and main_tp and isinstance(main_tp[0], dict):
-        return [dict(main_tp[0])]
+    if isinstance(main_tp, list) and 0 <= task_index < len(main_tp):
+        entry = main_tp[task_index]
+        if isinstance(entry, dict):
+            return [dict(entry)]
     try:
         from hpc_agent import load_tasks_module
         from hpc_agent._kernel.contract.layout import RepoLayout
 
         tasks = load_tasks_module(RepoLayout(experiment_dir).tasks)
-        resolved = tasks.resolve(0)
+        resolved = tasks.resolve(task_index)
     except (
         FileNotFoundError,
         AttributeError,
@@ -1284,8 +1293,21 @@ def _canary_task0_trial_params(
     return None
 
 
-def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
+def _mirror_canary_sidecar(
+    experiment_dir: Path,
+    main_run_id: str,
+    canary_run_id: str,
+    *,
+    boundary_index: int = 0,
+) -> None:
     """Ensure the canary's per-run sidecar exists AND matches the main run's.
+
+    ``boundary_index`` (default 0 — byte-identical to the historical task-0
+    canary) selects WHICH main-run task's frozen kwargs the canary dispatches:
+    a Class-B heal's re-verify (docs/design/overnight-repair.md §7.1) passes a
+    BOUNDARY index so the fresh canary exercises the first/last affected task of a
+    repaired range rather than always index 0. Only the mirrored ``trial_params``
+    changes — the canary is still a 1-task probe under its own run_id.
 
     The dispatcher hard-requires ``.hpc/runs/<run_id>.json``; the canary uses
     run_id ``<main>-canary``, which Step 6d never writes and
@@ -1360,14 +1382,15 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         # so it shares the main run's ancestry and composed identity.
         parent_run_ids=main.get("parent_run_ids") or None,
         node_sha=main.get("node_sha") or None,
-        # The canary IS task 0 — carry ITS resolved params (run-#12 finding-18
-        # follow-up: the canary metrics pull renders result_dir_template from
-        # sidecar trial_params, which was null here, so the determinism-
-        # fingerprint sample never minted for sweep-templated runs). Copy the
-        # main manifest's task 0 when frozen; otherwise MINT it locally from
-        # tasks.resolve(0) so a manifest-less main sidecar still yields real
-        # kwargs (the sidecar-writer follow-up seat the finding named).
-        trial_params=_canary_task0_trial_params(experiment_dir, main),
+        # The canary carries the boundary task's resolved params (default index 0
+        # = the main run's task 0; run-#12 finding-18 follow-up: the canary
+        # metrics pull renders result_dir_template from sidecar trial_params,
+        # which was null here, so the determinism-fingerprint sample never minted
+        # for sweep-templated runs). Copy the main manifest's task at
+        # ``boundary_index`` when frozen; otherwise MINT it locally from
+        # tasks.resolve(boundary_index) so a manifest-less main sidecar still
+        # yields real kwargs (the sidecar-writer follow-up seat the finding named).
+        trial_params=_canary_trial_params(experiment_dir, main, boundary_index),
     )
 
 
@@ -2218,8 +2241,14 @@ def _fire_canary(
     canary_run_id: str,
     backend_obj: HPCBackend,
     job_env_full: dict[str, str],
+    boundary_index: int = 0,
 ) -> list[str]:
     """Mirror sidecar + qsub the 1-task canary + record it — the canary leg.
+
+    ``boundary_index`` (default 0 — byte-identical to today's task-0 canary)
+    selects which main-run task the fresh canary dispatches: a Class-B heal's
+    re-verify (docs/design/overnight-repair.md §7.1) passes a BOUNDARY index so
+    the probe exercises the first/last affected task of a repaired range.
 
     Extracted VERBATIM from :func:`_submit_one_spec`'s fresh-canary branch so a
     SECOND canary (the determinism fingerprint's ``<run_id>-canary2``, fired from
@@ -2234,7 +2263,9 @@ def _fire_canary(
     # Mirror the main sidecar to <canary_run_id>.json so the canary dispatches
     # the SAME per-task executor (#162a) — otherwise it errors 'sidecar not
     # found' and the canary gate is a no-op (#160).
-    _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
+    _mirror_canary_sidecar(
+        experiment_dir, spec.run_id, canary_run_id, boundary_index=boundary_index
+    )
     canary_env = dict(job_env_full)
     canary_env["HPC_RUN_ID"] = canary_run_id
     canary_env["HPC_TASK_COUNT"] = "1"
@@ -2306,6 +2337,7 @@ def fire_second_canary(
     *,
     spec: SubmitFlowSpec,
     canary_run_id: str,
+    boundary_index: int = 0,
 ) -> list[str]:
     """Fire a SECOND 1-task canary for the determinism-fingerprint double canary.
 
@@ -2316,6 +2348,14 @@ def fire_second_canary(
     and dispatches the SAME command as the first. rsync/deploy already ran in the
     two-phase gate's Phase 1, so this only mirrors + qsubs + records (no
     transport). Returns the parsed canary job ids for provenance.
+
+    ``boundary_index`` (default 0 — the ordinary task-0 canary, byte-identical to
+    the double-canary caller which passes nothing) selects which main-run task the
+    fresh canary dispatches. This is the seam a Class-B heal's re-verify uses to
+    request a BOUNDARY-index canary (docs/design/overnight-repair.md §7.1): one
+    ``fire_second_canary`` call per sampled edge index, each under its own
+    ``<run_id>-canary-b<idx>`` id, so the repaired path re-earns its greenlight at
+    the first/last affected task rather than only index 0.
 
     A naive second ``submit_flow`` call could NOT do this: its canary leg
     hardcodes ``<run_id>-canary`` and its replay branch would reuse the just
@@ -2345,6 +2385,7 @@ def fire_second_canary(
         canary_run_id=canary_run_id,
         backend_obj=backend_obj,
         job_env_full=job_env_full,
+        boundary_index=boundary_index,
     )
 
 

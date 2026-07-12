@@ -13,7 +13,9 @@ the watcher re-arm). This module builds the taxonomy ON TOP of it:
   ``stray-sweep --reap`` into the overnight seat as a SPAWNED detached child that
   owns the one cold dial (§4.1 enactment rule), never dialed from the doctor process;
 * the **Class-B env-pin heal** (:func:`restore_env_to_pin` + :func:`verify_env_restored`)
-  + the boundary-index canary sampling (:func:`boundary_index_sample`, §7.1);
+  + the boundary-index canary sampling (:func:`boundary_index_sample`, §7.1), wired
+  into the live S2 canary machinery by :func:`reverify_boundary_canaries` (the
+  re-verify fires one fresh canary per sampled edge index);
 * the **Class-C1 elicit-then-heal** (:func:`compose_env_pin_elicitation` +
   :func:`mint_env_pin_anchor`) — the env-drift finding parks a bound elicitation; the
   human's ``y`` mints an env-pin anchor into the C1 anchor ledger, so the SAME drift
@@ -30,6 +32,7 @@ route, never actuate** (the doctor seat routes; a spawned detached child enacts)
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -61,6 +64,7 @@ __all__ = [
     "restore_env_to_pin",
     "verify_env_restored",
     "boundary_index_sample",
+    "reverify_boundary_canaries",
     "spawn_stray_reap_detached",
     "report_c2_finding",
     "escalate_if_recurring",
@@ -524,6 +528,68 @@ def boundary_index_sample(first_index: int, last_index: int) -> list[int]:
     """
     lo, hi = (first_index, last_index) if first_index <= last_index else (last_index, first_index)
     return [lo] if lo == hi else [lo, hi]
+
+
+def reverify_boundary_canaries(
+    experiment_dir: Path,
+    *,
+    spec: Any,
+    first_index: int,
+    last_index: int,
+    fire: Callable[..., list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fire a fresh Class-B re-verify canary at EACH boundary of a repaired range (§7.1).
+
+    This is the heal-arm call site that threads the boundary-index sampling
+    parameter INTO the live S2 canary machinery. Given the repaired range's
+    first/last affected task, it samples the boundaries (:func:`boundary_index_sample`)
+    and fires ONE fresh canary per edge index through the existing canary submit leg
+    (``ops.submit_flow.fire_second_canary``), each under its own
+    ``<run_id>-canary-b<idx>`` id so the probes never collide with each other or with
+    the ordinary ``<run_id>-canary``. The canary at index *i* dispatches the main
+    run's task-*i* frozen kwargs — the repaired path re-earns its greenlight AT the
+    edge, not just at index 0 (run-#10's harvest-gap class: edge indices are where
+    repairs go wrong).
+
+    The **enactment rule** (§4.1) still binds: the healer process never opens SSH
+    itself. In production the overnight/doctor seat passes ``fire`` = a wrapper that
+    spawns the canary submission as a detached child owning the one cold dial; the
+    default (``fire_second_canary``) is the in-process leg the two-phase gate and the
+    determinism double-canary already use, and is the seam this function threads the
+    ``boundary_index`` through. Returns one record per boundary
+    (``{"boundary_index", "canary_run_id", "job_ids"}``) for the ``verify_result`` /
+    morning-brief canary-outcome disclosure.
+    """
+    fire_fn = fire if fire is not None else _default_canary_fire()
+    results: list[dict[str, Any]] = []
+    for idx in boundary_index_sample(first_index, last_index):
+        canary_run_id = f"{spec.run_id}-canary-b{idx}"
+        job_ids = fire_fn(
+            experiment_dir,
+            spec=spec,
+            canary_run_id=canary_run_id,
+            boundary_index=idx,
+        )
+        results.append(
+            {
+                "boundary_index": idx,
+                "canary_run_id": canary_run_id,
+                "job_ids": list(job_ids),
+            }
+        )
+    return results
+
+
+def _default_canary_fire() -> Callable[..., list[str]]:
+    """The default boundary-canary firing leg — the live S2 canary machinery.
+
+    Lazily imported so the ``ops.submit_flow`` dependency (and its transitive
+    transport imports) is paid only when a Class-B re-verify actually fires, never
+    at module load (heal_taxonomy is imported by the no-SSH doctor seat).
+    """
+    from hpc_agent.ops.submit_flow import fire_second_canary
+
+    return fire_second_canary
 
 
 # ── Class A enactment: fold stray-sweep --reap into the overnight seat (§6a) ───

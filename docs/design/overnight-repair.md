@@ -497,7 +497,7 @@ neighboring files. Then, ordered by dependency:
 | Doctor seat | `ops/recover/doctor.py` → `self_heal_scan` | detection + class ROUTING only (no-SSH/never-actuate); enactment = spawned detached children | BUILT — `doctor._transport_drift_routing` routes transport drift (no SSH); enactment stays spawned children |
 | Anchors | fingerprint, manifest, generator spec, known-answer (all journaled) | the C1 anchor ledger + mint-on-`y` elicitation | BUILT — `heal_taxonomy` C1 anchor ledger (`anchor_ledger_path` / `mint_env_pin_anchor`); env-pin is the first member; `compose_env_pin_elicitation` rides the bound firing site |
 | Morning brief | `overnight_morning_brief` (leads with heal failure) | per-class sections; C1 parked elicitations; C2 → run story | BUILT — `overnight_morning_brief` folds in `class_morning_sections` (A/B heals, C1 parked, C2 findings, minted anchors) |
-| Fresh canary | S2 canary machinery + announce markers | boundary-index sampling parameter | BUILT — `heal_taxonomy.boundary_index_sample` (first/last of the repaired range); threads as the canary path's `boundary_indices` |
+| Fresh canary | S2 canary machinery + announce markers | boundary-index sampling parameter | BUILT — `heal_taxonomy.boundary_index_sample` (first/last of the repaired range); WIRED into the live S2 canary path via `submit_flow.fire_second_canary(..., boundary_index=)` → `_fire_canary` → `_mirror_canary_sidecar` → `_canary_trial_params` (default 0 = task-0 canary, byte-identical), and the heal-arm call site `heal_taxonomy.reverify_boundary_canaries` fires one fresh canary per sampled edge index |
 
 The ∩=∅ enforcement (§9 RULING): `infra/env_flags.HEALABLE_TRANSPORT_ENV_VARS`
 is the healable transport set; `tests/contracts/test_heal_env_disjoint.py`
@@ -506,6 +506,22 @@ derives the job-env-threaded set MECHANICALLY from the `.hpc/`-rooted members of
 intersection, so a refactor cannot silently move a healable var into the job env.
 
 ## Drift log
+
+* **2026-07-12 — boundary-index sampling WIRED into the live S2 canary path.** The
+  one deferred item from the heal-machinery wave (below) landed: the
+  `boundary_index_sample` helper now threads through the real submit-flow canary
+  leg. `submit_flow._canary_task0_trial_params` generalized to
+  `_canary_trial_params(experiment_dir, main, task_index=0)` (selects the main
+  run's task-`task_index` frozen kwargs, default 0 = byte-identical to the historical
+  task-0 canary); `boundary_index` rides `_mirror_canary_sidecar` → `_fire_canary`
+  → `fire_second_canary` as a Python-only internal kwarg (no wire-model change, so
+  no regen), mirroring the `_skip_preflight` trusted-internal-caller pattern. The
+  heal-arm call site `heal_taxonomy.reverify_boundary_canaries` fires ONE fresh
+  canary per sampled edge index, each under its own `<run_id>-canary-b<idx>` id, and
+  takes an injectable `fire` callable (default = the live `fire_second_canary`) so the
+  enactment rule holds — the overnight/doctor seat passes a detached-spawning `fire`;
+  the healer process never dials inline. Default path proven byte-identical
+  (`test_default_canary_is_task0_byte_identical`).
 
 * **2026-07-12 — the heal machinery BUILT (this revision).** All §10 rows land
   (see the Status column): the spend meter (`overnight.py::consumed_spend`, wired

@@ -76,6 +76,74 @@ def test_fire_second_canary_mirrors_sidecar_and_records(tmp_path: Path, monkeypa
     assert recorded["total_tasks"] == 1
 
 
+def test_boundary_index_selects_named_task_kwargs(tmp_path: Path, monkeypatch) -> None:
+    """A boundary-index canary dispatches the NAMED main task's frozen kwargs (§7.1).
+
+    The Class-B heal re-verify samples the edge indices of a repaired range; the
+    canary at index N carries the main run's task-N trial_params, not task 0's.
+    """
+    from hpc_agent.ops import submit_flow as sf
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    # A sweep main run with a frozen per-task manifest (one dict per task).
+    write_run_sidecar(
+        tmp_path,
+        run_id="run-x",
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-07-08T00:00:00Z",
+        executor="python run.py --chunk $CHUNK",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=4,
+        tasks_py_sha="b" * 64,
+        cluster="hoffman2",
+        remote_path="/remote",
+        trial_params=[{"chunk": 0}, {"chunk": 1}, {"chunk": 2}, {"chunk": 3}],
+    )
+
+    monkeypatch.setattr(sf, "build_remote_backend", lambda **_kw: object())
+    monkeypatch.setattr(sf, "_make_single_array_submission", lambda *_a, **_k: ["888"])
+    monkeypatch.setattr(sf, "submit_and_record", lambda *_a, **_k: (None, False))
+
+    # Fire a canary at the LAST affected index (3) — the repaired-range boundary.
+    sf.fire_second_canary(tmp_path, spec=_spec(), canary_run_id="run-x-canary-b3", boundary_index=3)
+
+    sidecar = read_run_sidecar(tmp_path, "run-x-canary-b3")
+    # 1-task probe carrying task 3's REAL kwargs (not task 0's {"chunk": 0}).
+    assert sidecar["task_count"] == 1
+    assert sidecar["trial_params"] == [{"chunk": 3}]
+
+
+def test_default_canary_is_task0_byte_identical(tmp_path: Path, monkeypatch) -> None:
+    """Omitting boundary_index keeps the historical task-0 canary (byte-identical)."""
+    from hpc_agent.ops import submit_flow as sf
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    write_run_sidecar(
+        tmp_path,
+        run_id="run-x",
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.0.0",
+        submitted_at="2026-07-08T00:00:00Z",
+        executor="python run.py --chunk $CHUNK",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=4,
+        tasks_py_sha="b" * 64,
+        cluster="hoffman2",
+        remote_path="/remote",
+        trial_params=[{"chunk": 0}, {"chunk": 1}, {"chunk": 2}, {"chunk": 3}],
+    )
+
+    monkeypatch.setattr(sf, "build_remote_backend", lambda **_kw: object())
+    monkeypatch.setattr(sf, "_make_single_array_submission", lambda *_a, **_k: ["777"])
+    monkeypatch.setattr(sf, "submit_and_record", lambda *_a, **_k: (None, False))
+
+    sf.fire_second_canary(tmp_path, spec=_spec(), canary_run_id="run-x-canary2")
+
+    sidecar = read_run_sidecar(tmp_path, "run-x-canary2")
+    assert sidecar["trial_params"] == [{"chunk": 0}]  # task 0, exactly as before
+
+
 def test_canary_forces_digests_on_even_when_main_array_is_off(tmp_path: Path, monkeypatch) -> None:
     """data-trace T3: the canary IS an identity run (canary-vs-local trace-diff),
     so it forces HPC_TRACE_DIGESTS=1 even when the main array's job_env carries
