@@ -660,9 +660,7 @@ def resolve_pack_echoes(
     return out
 
 
-def compose_audit_template(
-    packs: list[dict[str, Any]], base_dir: Path
-) -> dict[str, str] | None:
+def compose_audit_template(packs: list[dict[str, Any]], base_dir: Path) -> dict[str, str] | None:
     """Choose the audit-facing template from bound packs' ``audit_template`` seams.
 
     The ONE selection definition (run-#12 finding 5: the compose seat existed

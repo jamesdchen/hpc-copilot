@@ -1,11 +1,16 @@
 # Philosophy audit — 2026-07 (repo-wide doctrine-alignment sweep)
 
-Status: **SKELETON** (inventory pass 2026-07-10; sweep scheduled Day 2,
-2026-07-11). User-named mandate: *"double check that everything in the repo
-is aligned"* — distinct from the adversarial seam sweep (correctness between
-the week's trains). This audit asks, per doctrine axis: does the code
-everywhere still obey the ruling, and is the ruling **enforced** or merely
-**remembered**?
+Status: **SKELETON + B4 swept** (inventory 2026-07-10; the full sweep was
+scheduled Day 2 = 2026-07-11 and was DISPLACED by the ship-day firefight —
+49 fixes, findings 20-24; see the ship-day memory). **RESCHEDULED, user-
+ratified 2026-07-11 late: the sweep is the FIRST OPUS WAVE of the run-13
+relay session** — dispatch it into the CI/wheel/env idle windows, one agent
+per axis group, AFTER reading the C-2026-07-11 additions below (the ship
+day grew the axis list). User-named mandate: *"double check that everything
+in the repo is aligned"* — distinct from the adversarial seam sweep
+(correctness between the week's trains). This audit asks, per doctrine
+axis: does the code everywhere still obey the ruling, and is the ruling
+**enforced** or merely **remembered**?
 
 ## Method
 
@@ -73,6 +78,15 @@ missing their siblings' upgrades.
 | B12 | Journal as truth: state claims must match a journal record at utterance time | no surface invites unjournaled state claims | item-5 hook landed; sweep prose |
 | B13 | No bare `subprocess.run` reachable from `mcp-serve` (finding 4's enforcement candidate — promote to a lint) | stdin isolation + tree-kill bounded everywhere under the server | NEW ROW to write |
 | B14 | Trust the channel, not the inference: attestation is CAPTURED BOUND at a scope-aware surface, never reconstructed forensically from a general stream (findings 9/10 — the treadmill class) | every evidence tier is honestly ranked; bound capture ahead of forensic ahead of friction; no new gate starts at the forensic tier when a binding surface exists | `docs/design/bound-capture.md` is the banked plan; sweep other gates for the same retrofit smell |
+
+### B-additions from the 2026-07-11 ship day (write these rows into the
+### sweep alongside B1-B14; each has fresh live evidence)
+
+| # | Axis | Predicate sketch | Known-suspect surfaces |
+|---|---|---|---|
+| B15 | Env-vs-record drift: framework-relevant env is DISCLOSED at every judgment surface | any HPC_* override active at decision time appears in the brief (doctor's `active_env_overrides` landed; is any OTHER surface that judges transport/state blind to env?) | HPC_SSH_ENGINE sat exported for days contradicting the session record — hours of misattribution (finding 24). Sweep: status-snapshot, net-triage, campaign briefs |
+| B16 | Connection-lifecycle library boundary: hand-rolled lifecycle shrinks to what NO library can know (ban-risk breaker, connection-RATE courtesy); idle mgmt / keepalives / multiplexing are the library's | no framework code re-implements a transport-lifecycle mechanism its library exposes | the engine's idle reaper was the ONLY failing piece of an otherwise library-native stack (finding 24 library-boundary lesson); ssh_slots is the next suspect; ruled steady-state item, post-run-13 |
+| B3′ | (B3 hardening) every REMOTE READ routes through `wrap_with_ack`/`split_ack` — silence-as-success is now one-definition | a parse_remote_json / `.stdout`-reading ssh consumer without an ack is a lint hit | sentinel-ack landed for status-reporter + scheduler (d028ac24) with a swept inventory in connection-broker.md; the ALIGNED-UNENFORCED conversion = a lint over new consumers |
 
 ### C. Skill/prose surfaces (rot fastest — full re-read against current rulings)
 
