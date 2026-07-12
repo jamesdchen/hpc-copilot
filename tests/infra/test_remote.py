@@ -1097,3 +1097,42 @@ class TestBuildRemoteCommand:
         with remote.remote_op("ambient"):
             wrapped = remote.build_remote_command("echo hi", timeout=30, op="explicit")
         assert shlex.split(wrapped)[0].startswith(f"{remote.OP_MARKER_PREFIX}=explicit:")
+
+
+class TestCaptureSeamStdinIsolation:
+    """The capture seams never hand the parent's stdin to a child (run-12
+    finding 4): under ``mcp-serve`` (the default IN-PROCESS runner) the
+    parent's stdin is the live JSON-RPC pipe, and ``ssh`` reads-and-forwards
+    local stdin by default — an inheriting child steals protocol bytes or
+    blocks forever. Both capture seams must give the child DEVNULL.
+
+    Fire path: each seam runs in a RE-EXEC'd parent whose stdin carries
+    pending bytes (pytest's own fd 0 is already null-like, so an in-process
+    call could never catch an inheritance regression). The seam's child must
+    read 0 bytes (DEVNULL EOF), never the parent's payload."""
+
+    @staticmethod
+    def _assert_seam_isolates(seam_name: str) -> None:
+        inner = (
+            f"from hpc_agent.infra.remote import {seam_name}; import sys; "
+            f"p = {seam_name}([sys.executable, '-c', "
+            "'import sys; print(len(sys.stdin.buffer.read()))'], timeout=30); "
+            "print('CHILD_READ=' + p.stdout.strip())"
+        )
+        outer = subprocess.run(
+            [sys.executable, "-c", inner],
+            input="PROTOCOL-BYTES-THAT-MUST-NOT-LEAK",
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert outer.returncode == 0, outer.stderr
+        assert "CHILD_READ=0" in outer.stdout
+
+    def test_capture_via_select_child_stdin_is_devnull(self):
+        self._assert_seam_isolates("_capture_via_select")
+
+    def test_capture_windows_child_stdin_is_devnull(self):
+        # The Windows-named seam is portable (plain Popen + communicate), so
+        # its stdin isolation is pinned on every platform.
+        self._assert_seam_isolates("_capture_windows")

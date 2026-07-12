@@ -470,6 +470,10 @@ _WAVE_ACK = "__HPC_WAVE_ACK__\n"
 # which raises RemoteCommandFailed rather than being parsed as an empty report.
 _STATUS_ACK = "\n__HPC_STATUS_ACK__=0"
 
+# Positive-evidence ack for the aggregate per-task output existence check
+# (``verify_per_task_outputs``): silence must never read as "all present".
+_OUTPUTS_ACK = "__HPC_OUTPUTS_ACK__=0\n"
+
 
 def test_sge_alive_check_empty_queue_with_ack_returns_empty():
     """An acked empty ``qstat -u $USER`` output means the query RAN and found no
@@ -777,7 +781,9 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
         # Existence check: pretend task 1's output is missing.
-        return _completed(stdout="MISSING:results/metrics.1.json\n", returncode=0)
+        return _completed(
+            stdout="MISSING:results/metrics.1.json\n" + _OUTPUTS_ACK, returncode=0
+        )
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = verify_per_task_outputs(
@@ -798,7 +804,7 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
     def fake_ssh_run(cmd, *, ssh_target, **_kw):
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
-        return _completed(stdout="", returncode=0)  # nothing missing
+        return _completed(stdout=_OUTPUTS_ACK, returncode=0)  # acked, nothing missing
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = verify_per_task_outputs(
@@ -809,6 +815,62 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
             template="results/metrics.{task_id}.json",
         )
     assert missing == []
+
+
+def test_verify_per_task_outputs_silent_ackless_read_raises(journal_home, experiment):
+    """Sentinel-ack ruling at the aggregate PRECONDITION gate: an rc-0 empty
+    read with NO ack is a severed/truncated channel — UNKNOWN, never "all
+    outputs present". Reading silence as success would green the combine on
+    unverified inputs (the run-12 finding-24 mechanism)."""
+    from hpc_agent import errors
+
+    sidecar_json = json.dumps(
+        {"sidecar_schema_version": 1, "task_count": 2, "wave_map": {"0": [0, 1]}}
+    )
+
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=sidecar_json)
+        return _completed(stdout="", returncode=0)  # rc 0, no ack: silence
+
+    with (
+        patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run),
+        pytest.raises(errors.RemoteCommandFailed, match="positive-evidence ack"),
+    ):
+        verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            run_id="run_x",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+
+
+def test_verify_per_task_outputs_acked_nonzero_rc_raises(journal_home, experiment):
+    """The ack rides a ``;`` so a failed remote ``cd`` lands in the ack's rc,
+    not the ssh returncode — it must stay loud, never read as zero missing."""
+    from hpc_agent import errors
+
+    sidecar_json = json.dumps(
+        {"sidecar_schema_version": 1, "task_count": 2, "wave_map": {"0": [0, 1]}}
+    )
+
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=sidecar_json)
+        return _completed(stdout="__HPC_OUTPUTS_ACK__=1\n", returncode=0)
+
+    with (
+        patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run),
+        pytest.raises(errors.RemoteCommandFailed, match="remote rc=1"),
+    ):
+        verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            run_id="run_x",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
 
 
 def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journal_home, experiment):
@@ -822,7 +884,7 @@ def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journa
         captured.append(cmd)
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
-        return _completed(stdout="", returncode=0)
+        return _completed(stdout=_OUTPUTS_ACK, returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
         verify_per_task_outputs(
