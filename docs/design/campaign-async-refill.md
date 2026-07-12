@@ -258,11 +258,17 @@ superseded intermediate plan.
   and the manifest is greenlit and advance says `refill`,
   `load_context._build_delegate` routes a `kind="cli"` refill step.
 - **No new state files, no cursor** (design §3/§6 held). Crash-mid-tick residue
-  is bounded: a slot that wrote its sidecar but not yet spawned its
-  `campaign-run` child leaves an orphan sidecar that still counts against
-  `in_flight`, so next tick's `refill_count` shrinks and the partial tick
-  self-corrects; `load-context`/`doctor` surface the orphan. This is exactly the
-  window the §10 live-verify "no stranded trials" criterion exercises.
+  is bounded, but NOT via `in_flight`: a slot that wrote its sidecar before
+  spawning its `campaign-run` child leaves an orphan sidecar — a *cluster*
+  sidecar with no *journal* `RunRecord` yet (the detached child writes that
+  record later), so it never raises `in_flight`. What prevents a DOUBLE-SUBMIT is
+  the async scaffold indexing its proposal by the sidecar count: the orphan
+  consumes its index, so the replacement slot asks the next, distinct trial.
+  `refill_count` shrinks next tick only through the BUDGET arm (the orphan raises
+  the sidecar-counted `spent_jobs`), so that shrink is CAP-DEPENDENT — with no
+  `max_jobs` the orphan is a stranded trial `load-context`/`doctor` surface, not
+  a pool that self-heals over `in_flight`. This is exactly the window the §10
+  live-verify "no stranded trials" criterion exercises.
 - **Consent model:** the greenlit manifest is the standing consent for
   autonomous refill; iterations carry no per-iteration human boundary
   (human-amplification design §4). `campaign-refill` refuses an un-greenlit

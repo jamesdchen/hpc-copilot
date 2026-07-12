@@ -231,6 +231,72 @@ def test_resolve_and_submit_interleave_per_slot(tmp_path: Path) -> None:
     assert order == ["resolve", "run", "resolve", "run"]
 
 
+# ── per-slot distinctness: HPC_CAMPAIGN_ID is exported around the resolve loop ─
+
+
+def test_exports_campaign_id_env_during_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The async scaffold's per-slot distinctness reads the campaign id from
+    ``HPC_CAMPAIGN_ID`` at materialization time. The actor must EXPORT it from
+    ``spec.campaign_id`` (not trust the ambient shell), so ``_submitted_count``
+    advances per slot and each asks a distinct trial. Capture it inside the
+    resolve call; assert it is the campaign id and is RESTORED (here: popped) after."""
+    monkeypatch.delenv("HPC_CAMPAIGN_ID", raising=False)
+    _greenlit_async_manifest(tmp_path, campaign_id="camp")
+    seen: list[str | None] = []
+
+    def _resolve_se(*_a: Any, **_k: Any) -> ResolveSubmitInputsResult:
+        import os
+
+        seen.append(os.environ.get("HPC_CAMPAIGN_ID"))
+        return _resolved(f"ml-{len(seen):04d}0000")
+
+    with (
+        mock.patch(_ADV, return_value={"decision": "refill", "reason": "r", "refill_count": 2}),
+        mock.patch(_BUILD, return_value=mock.sentinel.resolve_spec),
+        mock.patch(_RESOLVE, side_effect=_resolve_se),
+        mock.patch(_RUN, side_effect=lambda *a, **k: _detached("x", 1)),
+    ):
+        res = campaign_refill(tmp_path, spec=CampaignRefillSpec(campaign_id="camp"))
+
+    assert res.stage_reached == "refilled"
+    assert seen == ["camp", "camp"]  # exported for every slot's resolve
+    import os
+
+    assert "HPC_CAMPAIGN_ID" not in os.environ  # restored (was unset) after the tick
+
+
+def test_restores_preexisting_campaign_id_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-existing ambient ``HPC_CAMPAIGN_ID`` is overridden to ``spec.campaign_id``
+    for the resolve (correctness: refill this campaign, not whatever the shell drove)
+    and RESTORED to its prior value afterward."""
+    monkeypatch.setenv("HPC_CAMPAIGN_ID", "other-campaign")
+    _greenlit_async_manifest(tmp_path, campaign_id="camp")
+    seen: list[str | None] = []
+
+    def _resolve_se(*_a: Any, **_k: Any) -> ResolveSubmitInputsResult:
+        import os
+
+        seen.append(os.environ.get("HPC_CAMPAIGN_ID"))
+        return _resolved("ml-aaaa1111")
+
+    with (
+        mock.patch(_ADV, return_value={"decision": "refill", "reason": "r", "refill_count": 1}),
+        mock.patch(_BUILD, return_value=mock.sentinel.resolve_spec),
+        mock.patch(_RESOLVE, side_effect=_resolve_se),
+        mock.patch(_RUN, side_effect=lambda *a, **k: _detached("x", 1)),
+    ):
+        campaign_refill(tmp_path, spec=CampaignRefillSpec(campaign_id="camp"))
+
+    import os
+
+    assert seen == ["camp"]
+    assert os.environ["HPC_CAMPAIGN_ID"] == "other-campaign"  # ambient value restored
+
+
 # ── blocked mid-loop ──────────────────────────────────────────────────────────
 
 

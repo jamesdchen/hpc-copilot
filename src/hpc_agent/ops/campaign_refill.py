@@ -35,12 +35,26 @@ parallelize slots.
 
 Resolve+submit-per-slot atomically (RFC E5): ``campaign_run`` is called
 IMMEDIATELY after each slot's ``resolve-submit-inputs``, inside the same loop
-iteration, to minimize the crash window between the sidecar write (which already
-counts toward ``in_flight``) and the detached child spawn. A crash in that
-window leaves an orphan sidecar that occupies a slot until reconciled — but it
-DOES shrink next tick's ``refill_count`` (``advance``'s recompute over the
-journal), so partial ticks self-correct with no cursor and no new state file
-(``load-context`` flags the orphan; ``doctor`` reconciles it).
+iteration, to minimize the crash window between the sidecar write and the
+detached child spawn. A crash there leaves an ORPHAN: a cluster sidecar
+(``<exp>/.hpc/runs/<run_id>.json``) with no journal ``RunRecord`` yet — the
+detached child writes that record via ``ops/submit/runner.py::submit_and_record``
+(``upsert_run``), AFTER child startup, so the sidecar write does NOT raise
+``in_flight``. Two facts bound the residue, and NEITHER is ``in_flight``:
+
+* No DOUBLE-SUBMIT (the real safety property): the async scaffold indexes its
+  proposal by the campaign SIDECAR count
+  (``optuna_async_strategy.py::_submitted_count`` == ``len(prior_records(...))``)
+  and caches per index — the orphan's sidecar consumes its index, so the
+  replacement slot asks the NEXT trial (a genuinely distinct run), never a
+  re-qsub of the orphan.
+* refill_count SHRINKS next tick ONLY through the BUDGET arm: the orphan sidecar
+  raises ``campaign-budget``'s sidecar-counted ``spent_jobs``, so
+  ``remaining_max_jobs`` drops. This self-correction is CAP-DEPENDENT — with no
+  ``max_jobs`` budget the orphan does NOT shrink ``pool_room`` (``K − in_flight``
+  over the JOURNAL, which the orphan never touched); the slot is then the §10-E5
+  "stranded trial" ``load-context`` flags and ``doctor`` reconciles, not a pool
+  that silently self-heals over ``in_flight``.
 
 One-step-per-tick re-entry (``infra/block_chain.py::SUCCESSORS``): every
 ``campaign-refill`` stage maps to a chain END; the next cron/loop tick re-enters
@@ -54,6 +68,8 @@ I/O contracts:
 
 from __future__ import annotations
 
+import contextlib
+import os
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -68,12 +84,47 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.env_flags import active_env_overrides
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from hpc_agent._wire.workflows.campaign_run import CampaignRunSpec
     from hpc_agent._wire.workflows.resolve_submit_inputs import ResolveSubmitInputsSpec
 
 __all__ = ["campaign_refill"]
+
+_CAMPAIGN_ID_ENV = "HPC_CAMPAIGN_ID"
+
+
+@contextlib.contextmanager
+def _exported_campaign_id(campaign_id: str) -> Iterator[None]:
+    """Export ``HPC_CAMPAIGN_ID`` for this tick's resolve / compute-run-id calls.
+
+    Per-slot trial distinctness is LOAD-BEARING and driven by the async scaffold's
+    ``_submitted_count()`` == ``len(prior_records(exp, HPC_CAMPAIGN_ID))``
+    (``execution/mapreduce/templates/scaffolds/optuna_async_strategy.py``). That
+    count reads the campaign id from ``os.environ[HPC_CAMPAIGN_ID]`` at
+    task-module materialization time — ``compute-run-id`` re-execs ``tasks.py``
+    FRESH each call (``hpc_agent.load_tasks_module``), so the module-top
+    ``_CID = os.environ.get(...)`` is re-read live. If the var is UNSET — and
+    ``campaign-refill`` is a self-contained agent-facing / MCP primitive reachable
+    WITHOUT the ambient export a cron/driver would set (the load-context delegate
+    prompt hands an agent the bare ``--spec {"campaign_id": ...}`` invocation) —
+    every slot reads ``_submitted_count()==0`` → the SAME cached proposal →
+    identical ``cmd_sha`` / ``run_id`` → the pool collapses to ONE real iteration.
+    The id is known (``spec.campaign_id``), so export it around the resolve loop
+    rather than trust the caller's shell, then RESTORE the prior value so the
+    result's ``active_env_overrides`` discloses the ambient env, not this
+    transient set.
+    """
+    prior = os.environ.get(_CAMPAIGN_ID_ENV)
+    os.environ[_CAMPAIGN_ID_ENV] = campaign_id
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop(_CAMPAIGN_ID_ENV, None)
+        else:
+            os.environ[_CAMPAIGN_ID_ENV] = prior
 
 # resolve-submit-inputs placeholders for the run identity: compute-run-id inside
 # resolve OVERRIDES both from the freshly-materialized task list, so these only
@@ -270,10 +321,14 @@ def campaign_refill(experiment_dir: Path, *, spec: CampaignRefillSpec) -> Campai
     re-enters via ``campaign-watch`` (one-step-per-tick).
 
     NO driver memory, NO new state file, NO cursor: the whole decision is
-    recomputed from journal state via ``campaign-advance`` each tick, and each
-    submitted iteration's sidecar (written by ``resolve-submit-inputs``)
-    immediately raises ``in_flight`` so the next tick's ``refill_count`` shrinks
-    — partial ticks self-correct (RFC E5).
+    recomputed from journal state via ``campaign-advance`` each tick. Per-slot
+    distinctness (no double-submit) is guaranteed by the async scaffold's
+    sidecar-indexed proposal count — NOT by ``in_flight``, which a freshly
+    written sidecar does not raise (the detached child writes the journal record
+    later). A crash mid-tick leaves an orphan sidecar whose budget cost shrinks
+    the next tick's ``refill_count`` only when a ``max_jobs`` cap is set;
+    otherwise it is a stranded trial ``load-context`` / ``doctor`` reconcile (RFC
+    E5). See the module docstring for the full mechanism.
     """
     from hpc_agent.meta.campaign.atoms.advance import campaign_advance
     from hpc_agent.meta.campaign.manifest import read_manifest
@@ -328,34 +383,43 @@ def campaign_refill(experiment_dir: Path, *, spec: CampaignRefillSpec) -> Campai
     blocked: list[BlockedSlot] = []
     stage = "refilled"
 
-    resolve_spec = _build_iteration_resolve_spec(experiment_dir, cid)
-    for _ in range(n):
-        rr = resolve_submit_inputs(experiment_dir, spec=resolve_spec)
-        if rr.stage_reached != "resolved":
-            # A live prior / scaffold interview is a genuine escalation — stop
-            # refilling (continuing would ask more trials against an unresolved
-            # slot) and hand it back for a human decision.
-            blocked.append(BlockedSlot(run_id=rr.run_id, stage=rr.stage_reached, reason=rr.reason))
-            stage = "refill_blocked"
-            break
-        # resolve-submit-inputs sets run_id/submit_spec on its ``resolved`` path;
-        # a ``resolved`` stage with either absent is a contract violation, not a
-        # silent None to thread into a detached submit — fail loudly.
-        if rr.run_id is None or rr.submit_spec is None:
-            raise errors.SpecInvalid(
-                f"campaign {cid!r} resolve-submit-inputs reported ``resolved`` but "
-                "carries no run_id / submit_spec; cannot build the refill iteration."
+    # Export HPC_CAMPAIGN_ID around BOTH the disk reconstruction (its internal
+    # compute-run-id) and every slot's resolve, so the async scaffold's
+    # sidecar-indexed _submitted_count sees the right campaign and each slot asks a
+    # DISTINCT trial — the per-slot distinctness invariant, made self-contained
+    # rather than dependent on the caller's ambient shell (_exported_campaign_id).
+    with _exported_campaign_id(cid):
+        resolve_spec = _build_iteration_resolve_spec(experiment_dir, cid)
+        for _ in range(n):
+            rr = resolve_submit_inputs(experiment_dir, spec=resolve_spec)
+            if rr.stage_reached != "resolved":
+                # A live prior / scaffold interview is a genuine escalation — stop
+                # refilling (continuing would ask more trials against an unresolved
+                # slot) and hand it back for a human decision.
+                blocked.append(
+                    BlockedSlot(run_id=rr.run_id, stage=rr.stage_reached, reason=rr.reason)
+                )
+                stage = "refill_blocked"
+                break
+            # resolve-submit-inputs sets run_id/submit_spec on its ``resolved``
+            # path; a ``resolved`` stage with either absent is a contract
+            # violation, not a silent None to thread into a detached submit —
+            # fail loudly.
+            if rr.run_id is None or rr.submit_spec is None:
+                raise errors.SpecInvalid(
+                    f"campaign {cid!r} resolve-submit-inputs reported ``resolved`` but "
+                    "carries no run_id / submit_spec; cannot build the refill iteration."
+                )
+            run_id = rr.run_id
+            crspec = _wrap_campaign_run_spec(cid, run_id, rr.submit_spec)
+            res = campaign_run(experiment_dir, spec=crspec)
+            submitted.append(
+                SubmittedIteration(
+                    run_id=run_id,
+                    detached_pid=res.detached_pid,
+                    stage_reached=res.stage_reached,
+                )
             )
-        run_id = rr.run_id
-        crspec = _wrap_campaign_run_spec(cid, run_id, rr.submit_spec)
-        res = campaign_run(experiment_dir, spec=crspec)
-        submitted.append(
-            SubmittedIteration(
-                run_id=run_id,
-                detached_pid=res.detached_pid,
-                stage_reached=res.stage_reached,
-            )
-        )
 
     if stage == "refill_blocked":
         reason = (

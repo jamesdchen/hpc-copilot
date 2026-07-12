@@ -312,6 +312,38 @@ def test_async_refill_decides_while_runs_in_flight(journal_home, experiment):
     assert "campaign" in delegate["prompt"]
 
 
+def test_async_refill_greenlit_routes_cli_refill(journal_home, experiment):
+    """RFC #362 (flag ON): async ON + manifest GREENLIT + advance decides refill →
+    the delegate is a DETERMINISTIC ``kind="cli"`` campaign-refill step (no
+    judgement), not the agent decide chain. Exercises the ``_refill_is_deterministic``
+    True path + the ``kind="cli"`` refill arm of ``_build_delegate`` (the house rule
+    that every new branch gets a test with the flag ON — the un-greenlit sibling
+    above pins the ``kind="agent"`` fallback)."""
+    from hpc_agent.meta.campaign.manifest import write_manifest
+
+    _seed_in_flight_campaign_run(experiment, "20260521-120000-aaa", "optuna-1")
+    write_manifest(
+        experiment,
+        campaign_id="optuna-1",
+        async_refill=True,
+        max_in_flight=4,
+        greenlit=True,
+        greenlit_at="2026-07-12T00:00:00Z",
+    )
+
+    ctx = load_context(experiment_dir=experiment)
+    # 1 in flight < K=4, unbounded budget → real campaign-advance decides refill.
+    assert ctx["next_step_hint"] == "decide"
+    delegate = ctx["delegate"]
+    assert delegate["kind"] == "cli"
+    assert delegate["step"] == "refill"
+    assert delegate["campaign_id"] == "optuna-1"
+    # Refill is keyed on campaign_id, never a run_id (no per-run dispatch shape).
+    assert delegate["run_id"] is None
+    assert delegate["spawn_request"] is None
+    assert "campaign-refill" in delegate["prompt"]
+
+
 def test_async_off_still_monitors_in_flight(journal_home, experiment):
     """Default-off: the same in-flight campaign run routes monitor, not refill —
     synchronous routing is byte-identical when no async manifest is present."""
