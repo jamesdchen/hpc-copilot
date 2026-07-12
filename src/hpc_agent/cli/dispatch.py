@@ -120,15 +120,34 @@ def _strip_verb_group(argv: list[str]) -> list[str]:
 
 
 def _fast_dispatch_enabled() -> bool:
-    """Whether the single-verb fast path may run (opt-out + plugin gate).
+    """Whether the single-verb fast path may run (opt-out + CLI-shaping gate).
 
     Disabled by ``HPC_AGENT_NO_FAST_CLI=1`` (a field kill switch for the
-    central path) and whenever any ``hpc_agent.plugins`` entry point is
-    installed — a plugin may override or extend a core verb via
-    ``register_cli``, which only the full :func:`build_parser` walk honours, so
-    a plugin's mere presence forces every verb onto the full path. The
-    entry-point scan is cheap and short-circuits under
-    ``HPC_AGENT_DISABLE_PLUGINS=1``.
+    central path). Otherwise the fast path serves any verb present in
+    ``VERB_MODULE_MAP`` UNLESS an installed plugin can reshape a core verb's
+    CLI — in which case every verb must take the full :func:`build_parser`
+    walk that honours the reshaping.
+
+    Guard-can-fire analysis — WHY the earlier wholesale "any plugin installed →
+    full path" disable was safe to narrow. The plugin contract
+    (``_kernel/registry/plugins.py``) has exactly ONE hook handed the argparse
+    subparsers, ``register_cli`` (see
+    ``plugins.register_plugin_cli`` — the sole seam that can override or extend
+    a core verb's parser). A plugin that implements only the
+    primitive-registration hook (``primitive_modules``) contributes NEW verbs;
+    those are absent from ``VERB_MODULE_MAP``, so they miss the fast path and
+    fall through to the full walk on their own — such a plugin cannot alter a
+    core verb the fast path already serves. The remaining hooks
+    (``slash_command_assets`` / ``schema_assets`` / ``worker_prompt_assets`` /
+    ``run_setup_actions`` / ``MANIFEST``) never touch the parser. So the guard
+    that mattered — "a plugin may reshape a core verb's CLI" — fires ONLY for a
+    ``register_cli``-implementing plugin, and the fast path stays byte-identical
+    to the full path for core verbs as long as no such plugin is installed.
+
+    ``HPC_AGENT_DISABLE_PLUGINS=1`` short-circuits to allow — with plugins
+    disabled none can reshape anything (``load_plugins`` honours the same var
+    and returns ``()``). Any metadata/load error → full path (``False``): the
+    byte-identical fallback is preserved by construction.
     """
     import os
 
@@ -136,10 +155,15 @@ def _fast_dispatch_enabled() -> bool:
         return False
     if os.environ.get("HPC_AGENT_DISABLE_PLUGINS") == "1":
         return True
-    from importlib.metadata import entry_points
-
     try:
-        return not list(entry_points(group="hpc_agent.plugins"))
+        from hpc_agent._kernel.registry.plugins import load_plugins
+
+        # Mirror register_plugin_cli's hook selection exactly: a plugin can
+        # reshape the CLI iff it exposes a callable ``register_cli``.
+        reshapes_cli = any(
+            callable(getattr(plugin, "register_cli", None)) for plugin in load_plugins()
+        )
+        return not reshapes_cli
     except Exception:  # noqa: BLE001 — a metadata hiccup must not break the CLI
         return False
 
@@ -152,8 +176,9 @@ def _try_fast_dispatch(argv: list[str]) -> int | None:
     path. Falls back (returns ``None``) for: an empty argv, a leading global
     flag (``--version`` / top-level ``--help``), a verb absent from the
     generated map (grouped verbs, Tier-3 ``run`` / ``mcp-serve``, unknown
-    verbs), an installed plugin, or any stale-map miss. Every fallback path
-    yields byte-identical behaviour to before — only speed differs.
+    verbs), an installed CLI-shaping (``register_cli``) plugin, or any
+    stale-map miss. Every fallback path yields byte-identical behaviour to
+    before — only speed differs.
     """
     if not argv or argv[0].startswith("-"):
         return None
@@ -314,8 +339,9 @@ def _dispatch_main(argv: list[str] | None = None) -> int:
     # Single-verb fast path: import ONLY the module that defines a known
     # ungrouped verb instead of the full ~100-module registry walk (~half the
     # cold-start cost). Returns None — falling through to the full path — for
-    # help/version, grouped/Tier-3/unknown verbs, an installed plugin, or any
-    # stale-map miss, so behaviour is byte-identical and only speed differs.
+    # help/version, grouped/Tier-3/unknown verbs, an installed CLI-shaping
+    # plugin, or any stale-map miss, so behaviour is byte-identical and only
+    # speed differs.
     fast = _try_fast_dispatch(argv)
     if fast is not None:
         return fast
