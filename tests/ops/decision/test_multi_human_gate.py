@@ -471,3 +471,63 @@ def test_challenge_single_actor_byte_identical(
     _verdict(tmp_path, "uphold widget-dissent — the replication stands")
     recs = read_decisions(tmp_path, "challenge", _CHALLENGE_ID)
     assert all("attestor_id" not in r for r in recs)
+
+
+# ── RULING 4 (bug-sweep #37): an UNATTRIBUTED filing may not be withdrawn ──────
+
+
+def _setup_unattributed_filing(experiment_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """>1 declared actors, but the challenge is FILED with no HPC_ACTOR set →
+    the filing's ``attestor_id`` lands as None (also the shape of any filing made
+    before actors were declared)."""
+    _write_interview(experiment_dir, {"actors": {"ids": ["alice", "bob"]}})
+    _seed_runs(experiment_dir)
+    monkeypatch.delenv("HPC_ACTOR", raising=False)  # unattributed filing
+    filed = _file_challenge(experiment_dir)
+    assert filed.record.attestor_id is None  # the #37 precondition
+
+
+def test_withdraw_of_unattributed_filing_refused_even_when_attributed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RULING 4: even an ATTRIBUTED actor may not WITHDRAW an unowned filing — it
+    routes to challenge-verdict (was the confusing 'actor None' mirror defect)."""
+    _setup_unattributed_filing(tmp_path, monkeypatch)
+    monkeypatch.setenv("HPC_ACTOR", "bob")  # a real, declared actor
+    with pytest.raises(errors.SpecInvalid, match="no one owns it"):
+        _withdraw(tmp_path, "withdraw widget-dissent — it looks stale")
+
+
+def test_unattributed_withdraw_of_unattributed_filing_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact #37 hole: an anonymous session (no HPC_ACTOR) withdrawing an
+    unattributed filing — ``None != None`` is False, so the old compare passed and
+    silenced unowned dissent. Now refused (challenger is None fires first)."""
+    _setup_unattributed_filing(tmp_path, monkeypatch)
+    monkeypatch.delenv("HPC_ACTOR", raising=False)  # anonymous withdrawer
+    with pytest.raises(errors.SpecInvalid, match="no one owns it"):
+        _withdraw(tmp_path, "withdraw widget-dissent — it looks stale")
+
+
+def test_verdict_closes_unattributed_filing_recording_the_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sanctioned route-through is not a dead-end: an attributed actor CLOSES
+    an unattributed filing via a challenge-verdict (the cheap 'withdrawn-as-stale'
+    shape), and the resolver is recorded as the record's attestor_id."""
+    _setup_unattributed_filing(tmp_path, monkeypatch)
+    monkeypatch.setenv("HPC_ACTOR", "bob")  # an attributed actor resolves it
+    out = _append(
+        tmp_path,
+        scope_kind="challenge",
+        scope_id=_CHALLENGE_ID,
+        block="challenge-verdict",
+        response="uphold widget-dissent — withdrawn-as-stale, filed anonymously",
+        resolved={
+            "challenge_id": _CHALLENGE_ID,
+            "verdict": "upheld",
+            "reasoning": "withdrawn-as-stale — the anonymous filing is no longer relevant",
+        },
+    )
+    assert out.record.attestor_id == "bob"  # the resolver is recorded

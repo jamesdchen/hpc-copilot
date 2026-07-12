@@ -3357,7 +3357,12 @@ def _assert_challenge_verdict_authorship(
     filing record's ``attestor_id``, :func:`_challenge_filing_attestor`; the resolver
     is the session actor) and refuses an UNATTRIBUTED resolution; the WITHDRAWAL gate
     refuses ``withdrawer != challenger`` (a second actor silencing another's standing
-    dissent is the suppression channel). Pure identity over opaque slugs — Q1-clean.
+    dissent is the suppression channel) AND refuses withdrawing an UNATTRIBUTED filing
+    outright (challenger is ``None`` — RULING 4, bug-sweep #37: no one owns it, so no
+    one may withdraw it; ``None != None`` is False, so the compare alone would leave
+    the anonymous-suppression channel open — the refusal routes to challenge-verdict,
+    which records WHO resolved it, e.g. the cheap "withdrawn-as-stale" shape). Pure
+    identity over opaque slugs — Q1-clean.
     Zero/one actor declared → silent, byte-identical (a solo researcher legitimately
     resolves their own past challenge). These identity refusals are the loud/dangling
     posture (NOT the E2 marker — a re-elicited utterance cannot fix WHO the session
@@ -3457,6 +3462,29 @@ def _assert_challenge_verdict_authorship(
                     "DIFFERENT declared actor must resolve it."
                 )
         else:  # CHALLENGE_WITHDRAW_BLOCK
+            if challenger is None:
+                # RULING 4 (2026-07-12, bug-sweep #37): an UNATTRIBUTED filing
+                # (no HPC_ACTOR at filing time, or filed before actors were
+                # declared → attestor_id is None) has NO owner, so NO ONE may
+                # withdraw it — a withdrawal is the challenger's own private
+                # retraction, and an unowned filing has no challenger to retract.
+                # This check MUST precede the identity compare: ``None != None`` is
+                # False, so without it an anonymous session (the driving agent that
+                # forgot HPC_ACTOR) would silence unowned dissent (the exact #37
+                # anonymous-suppression hole), and an attributed actor would hit the
+                # confusing "session actor is someone else than None" path. Closure
+                # stays possible without erasure: route to challenge-verdict, which
+                # RECORDS who resolved it and why (the cheap "withdrawn-as-stale"
+                # verdict shape) — no one may withdraw what no one owns.
+                raise errors.SpecInvalid(
+                    "challenge-withdraw gate (MH7 / RULING 4): challenge "
+                    f"{challenge_id!r} was filed WITHOUT actor attribution — no one "
+                    "owns it, so no one may withdraw it (a withdrawal is the "
+                    "challenger's own retraction, and an unowned filing has no "
+                    "challenger to retract). Resolve it via a challenge-verdict "
+                    "instead (e.g. reasoning 'withdrawn-as-stale') — that RECORDS "
+                    "who resolved it and why. Closure stays possible; erasure does not."
+                )
             if session_actor != challenger:
                 raise errors.SpecInvalid(
                     "challenge-withdraw gate (MH7): only the CHALLENGER who filed "
