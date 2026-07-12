@@ -63,6 +63,20 @@ axis: does the code everywhere still obey the ruling, and is the ruling
    subset-contract-tests against their catalog (#2, #34; the repo's own
    ⊆-test precedent is the fix pattern). Bugs prove a generator is LIVE;
    predicates bound its blast radius — the plan needs both.
+   **Structure (user-ruled 2026-07-11): TWO SWEEPS, bug sweep FIRST.**
+   Sweep 1 = the upstream bug sweep: dockets only, no code — one agent
+   retro-classifies the bug corpus and MINTS
+   `docs/plans/upstream-fixes-2026-07.md` (generators ranked by
+   fired-symptom count + diagnosis cost); fits the relay's first idle
+   window, so the ranking exists before anything expensive runs. Sweep 2
+   = the per-axis philosophy sweep: produces the enforcement map, and its
+   DRIFTED/EXPOSED findings APPEND to the same plan — new members raise a
+   known generator's rank; bug-unfired generators enter at
+   predicted-risk rank, labeled as such. Merge discipline: ONE generator
+   ledger in the plan; every symptom tagged with its evidence source
+   (fired-bug vs predicate-violation) — never conflated, never
+   double-counted. Sweep 1's clusters ride into sweep 2's agent prompts
+   as membership hypotheses.
 
 ## The drift class this hunts (run-#12 precedents, all found live 2026-07-10)
 
