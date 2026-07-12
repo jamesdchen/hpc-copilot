@@ -36,6 +36,7 @@ from hpc_agent._wire.queries.doctor import (
     VersionSkew,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.state.block_terminal import read_terminal_with_fallback
 from hpc_agent.state.decision_journal import (
@@ -169,20 +170,6 @@ def _resolve_source_repo(experiment_dir: Path) -> tuple[str, str] | None:
     if not sha:
         return None
     return str(root), sha
-
-
-def _active_env_overrides() -> dict[str, str]:
-    """Every ``HPC_*`` env var currently exported, verbatim — pure disclosure.
-
-    The env-vs-record drift seat (run-12 finding 24 addendum): an override like
-    ``HPC_SSH_ENGINE=asyncssh`` can outlive the session that set it and silently
-    reroute every ssh call while the durable record says it was retired. Doctor
-    echoes the live environment so the drift is visible in every brief; it
-    never judges the values — an unexpected entry IS the finding.
-    """
-    import os
-
-    return {k: v for k, v in sorted(os.environ.items()) if k.startswith("HPC_")}
 
 
 def _detect_version_skew(experiment_dir: Path) -> VersionSkew | None:
@@ -567,7 +554,7 @@ def doctor(*, experiment_dir: Path, spec: DoctorSpec) -> dict[str, Any]:
         awaiting_advance_count=len(advance_proposals),
         awaiting_advance=advance_proposals,
         version_skew=_detect_version_skew(experiment_dir),
-        active_env_overrides=_active_env_overrides(),
+        active_env_overrides=active_env_overrides(),
     )
     dumped: dict[str, Any] = result.model_dump(mode="json")
 

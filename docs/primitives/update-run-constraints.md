@@ -2,7 +2,8 @@
 name: update-run-constraints
 verb: mutate
 side_effects:
-- ssh: <cluster> (scontrol update Features)
+- ssh: <cluster> (scontrol update jobid=<id> Features=<expr>)
+- writes-sidecar: <experiment>/.hpc/runs/<run_id>.json (constraints.features mirror)
 idempotent: true
 idempotency_key: run_id
 error_codes:
@@ -16,7 +17,7 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: (none — Python-only primitive)
+  cli: hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.ops.monitor.update_constraints.update_run_constraints
 ---
 # update-run-constraints

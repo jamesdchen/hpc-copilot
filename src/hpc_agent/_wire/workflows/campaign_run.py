@@ -194,3 +194,17 @@ class CampaignRunResult(BaseModel):
             "read the journal). None on the synchronous path."
         ),
     )
+    active_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Every framework-relevant HPC_* environment variable currently "
+            "exported in THIS process's environment, verbatim. Pure disclosure "
+            "— the brief never judges the values (run-12 finding 24 addendum, "
+            "B15). A campaign iteration submits, polls and pulls over SSH, so a "
+            "stray transport override (e.g. HPC_SSH_ENGINE='asyncssh') silently "
+            "reshapes every cluster call while the durable record says otherwise; "
+            "echoing it on the iteration brief makes the env-vs-record drift "
+            "visible at the decision boundary. An override that shows up here "
+            "unexpectedly IS the finding. Empty when no HPC_* variable is set."
+        ),
+    )

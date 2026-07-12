@@ -198,6 +198,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [emit-skill-return](emit-skill-return.md) | yes | filesystem: `<experiment_dir>/.hpc/_returns/` | `hpc-agent emit-skill-return [--experiment-dir <dir>] --skill <skill>` |
 | [export-attestations](export-attestations.md) | yes | file_write: `<output_path>` | `hpc-agent export-attestations --spec <path> [--experiment-dir <dir>]` |
 | [export-dossier](export-dossier.md) | yes | file_write: `<output_path>` | `hpc-agent export-dossier --spec <path> [--experiment-dir <dir>]` |
+| [host-retarget](host-retarget.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl` | `hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]` |
 | [kill](kill.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent kill --spec <path> [--experiment-dir <dir>]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [notebook-auto-clear](notebook-auto-clear.md) | yes | file_write: `<experiment>/.hpc/notebooks/<audit_id>.decisions.jsonl` | `hpc-agent notebook-auto-clear --spec <path> [--experiment-dir <dir>]` |
@@ -214,7 +215,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [reconcile-stale](reconcile-stale.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile-stale [--experiment-dir <dir>] [--now <now>] [--stale-after-hours <stale_after_hours>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` |
 | [scope-lock](scope-lock.md) | yes | file_write: `<experiment>/.hpc/scopes/<tag>.decisions.jsonl` | `hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]` |
-| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |
+| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]` |
 | [watcher-install](watcher-install.md) | yes | ssh: `<cluster>`; scheduler-submit: `<cluster>` | `hpc-agent watcher-install [--experiment-dir <dir>] --run-id <run_id> [--action <action>] --scheduler <scheduler> [--stale-sec <stale_sec>] [--interval-min <interval_min>]` |
 | [write-run-sidecar](write-run-sidecar.md) | yes | file_write: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]` |
 
@@ -261,6 +262,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [resolve-submit-inputs](resolve-submit-inputs.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py`; writes-sidecar: `<experiment>/.hpc/cli.py`; writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent resolve-submit-inputs --spec <path> [--experiment-dir <dir>]` |
 | [retarget-run](retarget-run.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<new_run_id>.json`; ssh: `<old-cluster>` | `hpc-agent retarget-run --spec <path> [--experiment-dir <dir>]` |
 | [revise-resolved](revise-resolved.md) | yes | writes-sidecar: `<experiment>/.hpc/runs/<run_id>.json` | `hpc-agent revise-resolved --spec <path> [--experiment-dir <dir>]` |
+| [settle-run](settle-run.md) | yes | writes-journal: `<experiment>/.hpc/decisions/run/<run_id>.jsonl`; ssh: `<cluster>` | `hpc-agent settle-run --spec <path> [--experiment-dir <dir>]` |
 | [status-pipeline](status-pipeline.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-pipeline --spec <path> [--experiment-dir <dir>]` |
 | [status-snapshot](status-snapshot.md) | yes | ssh: `<cluster>` | `hpc-agent status-snapshot --spec <path> [--experiment-dir <dir>]` |
 | [status-watch](status-watch.md) | yes | ssh: `<cluster>`; writes-tick-log: `<experiment_dir>/<run_id>.monitor.jsonl` | `hpc-agent status-watch --spec <path> [--experiment-dir <dir>]` |

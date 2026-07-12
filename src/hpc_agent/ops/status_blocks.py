@@ -45,6 +45,7 @@ from hpc_agent._wire.workflows.status_blocks import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.block_chain import next_block_hint
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 from hpc_agent.ops.attention_queue import collect_queue
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
@@ -348,6 +349,12 @@ def status_snapshot(experiment_dir: Path, *, spec: StatusSnapshotSpec) -> Status
         "open_ssh_circuits": open_ssh_circuits,
         "attention": attention,
         "overnight": overnight,
+        # Env-vs-record drift disclosure (run-12 finding 24 addendum, B15): echo
+        # every exported HPC_* override verbatim on the surface an agent already
+        # reads at the top of a session. The seat that let HPC_SSH_ENGINE sit
+        # exported for days contradicting the durable record — pure disclosure,
+        # never judged. Rides the brief dict (no wire contract). Empty when unset.
+        "active_env_overrides": active_env_overrides(),
     }
 
     needs_decision = bool(stalled or anomalies)

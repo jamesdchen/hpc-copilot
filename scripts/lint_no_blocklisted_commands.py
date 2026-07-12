@@ -47,13 +47,23 @@ with a ``;``) — only a real framework-command line is a runnable instruction.
 Scope
 -----
 
-* ``src/hpc_agent/slash_commands/skills/**/SKILL.md``
-* ``src/hpc_agent/_kernel/extension/worker_prompts/*.md``
+The scanned surface is defined ONCE in ``scripts/_agent_prose_targets.py``
+(shared with ``lint_no_raw_ssh``): ``src/hpc_agent/slash_commands/skills/*/SKILL.md``.
+The ``_kernel/extension/worker_prompts/*.md`` glob was RETIRED from the scan
+(dead — see that module). The invoke-only **worker-strictness LOGIC** below
+(``is_worker`` keys off ``worker_prompts`` in a path's parts) is retained and
+still exercised by synthetic fixtures that call :func:`lint_file` directly, so
+the stricter rule is alive should a worker ``.md`` surface return.
 
 A genuine human-debug doc adds a cited ``(path, category)`` entry to
 :data:`ALLOWLIST`. Every violation prints ``path:lineno: blocked <category>:
 ...`` and the script exits 1. Fire path:
 ``tests/scripts/test_lint_no_blocklisted_commands.py``.
+
+CI reach: this lint runs **only via pre-commit** (the
+``lint-no-blocklisted-commands`` local hook in ``.pre-commit-config.yaml``) —
+it is deliberately NOT in ``ci.yml``'s direct ``python scripts/lint_*`` list,
+so pre-commit is the enforcement path.
 """
 
 from __future__ import annotations
@@ -62,11 +72,11 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _agent_prose_targets import iter_agent_prose_targets  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 SCAN_ROOT = REPO / "src"
-
-_SKILL_GLOB = "hpc_agent/slash_commands/skills/*/SKILL.md"
-_WORKER_PROMPT_GLOB = "hpc_agent/_kernel/extension/worker_prompts/*.md"
 
 # Cited exemptions: ``(scan-root-relative path, category)`` for a genuine
 # human-debug doc that must show a blocked command.
@@ -224,10 +234,7 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
 
 
 def iter_targets(scan_root: Path) -> list[Path]:
-    out: list[Path] = []
-    for glob in (_SKILL_GLOB, _WORKER_PROMPT_GLOB):
-        out.extend(p for p in sorted(scan_root.glob(glob)) if p.is_file())
-    return out
+    return iter_agent_prose_targets(scan_root)
 
 
 def main(scan_root: Path | None = None) -> int:

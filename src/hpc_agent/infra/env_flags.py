@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 
-__all__ = ["env_actor", "env_flag"]
+__all__ = ["active_env_overrides", "env_actor", "env_flag"]
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -32,6 +32,24 @@ def env_flag(var: str, *, default: bool = False) -> bool:
     if not value:
         return default
     return value.lower() in _TRUTHY
+
+
+def active_env_overrides() -> dict[str, str]:
+    """Every ``HPC_*`` env var currently exported, verbatim — pure disclosure.
+
+    The env-vs-record drift seat (run-12 finding 24 addendum): an override like
+    ``HPC_SSH_ENGINE=asyncssh`` can outlive the session that set it and silently
+    reroute every ssh call while the durable record says it was retired. Every
+    judgment surface echoes the live environment so the drift is visible in each
+    brief; it never judges the values — an unexpected entry IS the finding.
+
+    Superset disclosure: returns ALL ``HPC_*`` variables (sorted), never a
+    hardcoded allow-list — a stray, never-anticipated override is exactly the
+    one worth surfacing. Empty when no ``HPC_*`` variable is set. This is THE
+    one definition; doctor, status-snapshot, net-triage and campaign briefs all
+    consume it so no two surfaces can drift on what "the active env" means.
+    """
+    return {k: v for k, v in sorted(os.environ.items()) if k.startswith("HPC_")}
 
 
 def env_actor(var: str = "HPC_ACTOR") -> str | None:

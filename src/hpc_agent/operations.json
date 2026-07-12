@@ -160,6 +160,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent host-retarget --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "host_retarget.input.json",
+    "name": "host-retarget",
+    "output_schema": "host_retarget.output.json",
+    "python": "hpc_agent.ops.host_retarget.host_retarget",
+    "side_effects": [
+      "writes-journal"
+    ],
+    "summary": "Move an IN-FLIGHT run to a different login node of the SAME cluster (run-12 finding 23): patch the run's journaled `cluster` key so resolve_ssh_target derives the new user@host at use time — no journal surgery. The new cluster MUST serve the same scheduler & scratch (a login-node failover, not a cluster move); a different scheduler/scratch is REFUSED — use retarget-run for that. Journals the failover as a decision (the provenance trail the hand-edit lacked).",
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent kill --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "kill.input.json",
@@ -388,16 +402,17 @@
   },
   {
     "agent_facing": true,
-    "cli": null,
+    "cli": "hpc-agent update-run-constraints --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "update_run_constraints.input.json",
     "name": "update-run-constraints",
     "output_schema": "update_run_constraints.output.json",
     "python": "hpc_agent.ops.monitor.update_constraints.update_run_constraints",
     "side_effects": [
-      "ssh"
+      "ssh",
+      "writes-sidecar"
     ],
-    "summary": "",
+    "summary": "Mutate a run's cluster-side SLURM Features in place via `scontrol update jobid=<id> Features=<expr>` — retargets constraints WITHOUT cancel+resubmit, so the jobs keep their accumulated age priority; mirrors the new feature set onto the run sidecar.",
     "verb": "mutate"
   },
   {
@@ -1969,6 +1984,21 @@
       "writes-sidecar"
     ],
     "summary": "Apply a resolver-owned FIELD DELTA {field: value} to a run's latest greenlit resolved and RE-RESOLVE, re-deriving job_env/executor/run_id/cmd_sha/sidecar from the delta (proving-run-5 wave 5.1). The patch may name only INPUT fields (cluster, goal, task_generator, walltime_sec, entry_point, …); a derived field (job_env, executor, ssh_target, …) is REFUSED. Returns the amended brief for the human's re-y — it does NOT bypass the append-decision gates.",
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent settle-run --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "settle_run.input.json",
+    "name": "settle-run",
+    "output_schema": "settle_run.output.json",
+    "python": "hpc_agent.ops.settle_run.settle_run",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "summary": "Human-directed terminal settle (run-12 finding 25): given directed terminal evidence, journal it as a sign-off, set the terminal status, and run the SAME mark_run + harvest_on_terminal transition the probe path runs — no journal surgery. Refuses a non-terminal status or empty evidence. The harvest fires only on a status TRANSITION (an idempotent re-settle does not re-pull).",
     "verb": "workflow"
   },
   {

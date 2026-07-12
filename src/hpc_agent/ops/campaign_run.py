@@ -44,6 +44,7 @@ from hpc_agent._wire.workflows.campaign_run import (
     CampaignRunSpec,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.status_pipeline import status_pipeline
 from hpc_agent.ops.submit_pipeline import submit_pipeline
@@ -229,6 +230,11 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
         key_run_id = spec.aggregate.run_id
         replay = _replay_campaign_terminal(experiment_dir, key_run_id)
         if replay is not None:
+            # Re-stamp the LIVE env on a replayed terminal: env-vs-record drift
+            # (B15) is about what is exported NOW, not what was exported when the
+            # worker recorded its outcome — the current environment is the one
+            # that would reroute a re-invoke.
+            replay.active_env_overrides = active_env_overrides()
             return replay
 
         from hpc_agent._kernel.lifecycle.detached import launch_submit_block_detached
@@ -238,11 +244,17 @@ def campaign_run(experiment_dir: Path, *, spec: CampaignRunSpec) -> CampaignRunR
             experiment_dir=str(experiment_dir),
             spec=_detached_campaign_spec_dict(spec),
         )
-        return _detached_campaign_result(
+        handle = _detached_campaign_result(
             run_id=launch.run_id, pid=launch.pid, log_path=launch.log_path
         )
+        handle.active_env_overrides = active_env_overrides()
+        return handle
 
     result = _campaign_run_impl(experiment_dir, spec=spec)
+    # Env-echo disclosure (B15): every campaign brief carries the live HPC_*
+    # overrides, echoed the way doctor does — one seat here covers every
+    # stage_reached the impl returns (pure disclosure, never judged).
+    result.active_env_overrides = active_env_overrides()
     try:
         if result.stage_reached in _RELAY_DUE_STAGES:
             from hpc_agent.state.notebook_audit import record_scope_relay_due

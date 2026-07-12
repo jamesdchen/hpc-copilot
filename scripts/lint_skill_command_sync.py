@@ -233,6 +233,31 @@ def main() -> int:
     declared_skills = {pair[0] for pair in WORKFLOW_PAIRS}
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
 
+    # SKILL_ONLY_OK / SLASH_ONLY_OK must each be a SUBSET of what is actually
+    # on disk. Otherwise an allow-list entry passes VACUOUSLY for a file that
+    # does not exist — exactly the ``hpc-claim-check`` drift the sweep caught
+    # (an orphaned skill named in SKILL_ONLY_OK but never packaged, invisible
+    # to every prose lint because no file matched). A stale allow-list entry is
+    # an error, not a silent pass. (G10 lockstep: the derived set ⊆ its owning
+    # catalog — here the catalog is "files present".)
+    stale_skill_ok = sorted(SKILL_ONLY_OK - skill_ids_present)
+    if stale_skill_ok:
+        errors.append(
+            "SKILL_ONLY_OK names skill(s) with no SKILL.md on disk: "
+            f"{stale_skill_ok}. A missing skill passes every prose lint "
+            "vacuously (the hpc-claim-check drift). Remove the stale entry "
+            "from scripts/lint_skill_command_sync.py:SKILL_ONLY_OK, or restore "
+            "the skill file."
+        )
+    stale_slash_ok = sorted(SLASH_ONLY_OK - slash_ids_present)
+    if stale_slash_ok:
+        errors.append(
+            "SLASH_ONLY_OK names slash command(s) with no .md on disk: "
+            f"{stale_slash_ok}. Remove the stale entry from "
+            "scripts/lint_skill_command_sync.py:SLASH_ONLY_OK, or restore the "
+            "command file."
+        )
+
     # Every skill on disk gets its frontmatter validated (execution +
     # category agreement), independent of whether it's paired with a
     # slash. The pairing checks come after.

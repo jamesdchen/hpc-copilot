@@ -57,6 +57,7 @@ from hpc_agent._wire.queries.net_triage import (
     TriageVerdict,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.env_flags import active_env_overrides
 from hpc_agent.infra.ssh_circuit import (
     OVERRIDE_ENV,
     circuit_state_path,
@@ -479,4 +480,5 @@ def net_triage(*, spec: NetTriageSpec | None = None) -> NetTriageResult:
         hosts=hosts,
         all_reachable=all_reachable,
         summary=summary,
+        active_env_overrides=active_env_overrides(),
     )
