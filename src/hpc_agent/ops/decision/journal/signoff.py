@@ -10,6 +10,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.decision_journal import AppendDecisionInput
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 from ._shared import (
     _fresh_human_texts,
@@ -137,16 +138,7 @@ def _read_interview_audited_source(
     caller then refuses on an unresolvable SOURCE, which is the load-bearing loud
     failure; a duplicate refusal on the JSON shape would only muddy the message.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("audited_source")
         if isinstance(block, dict) and block.get("audit_id") == audit_id:
             return block

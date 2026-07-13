@@ -9,7 +9,6 @@ module imports only ``infra`` / ``state`` substrate, so it never cycles back."""
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any, NoReturn
 from hpc_agent import errors
 from hpc_agent.infra.env_flags import env_actor
 from hpc_agent.state.decision_journal import read_decisions as _read_decisions
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 # ── E2: the authorship-refusal marker (docs/design/mcp-elicitation.md D4/E2) ──
 
@@ -77,16 +77,7 @@ def _read_interview_actors(experiment_dir: Path) -> tuple[list[str], dict[str, l
     ``policy`` is the optional ``{block: [slug, ...]}`` delegation mapping (MH8),
     ``{}`` when absent. Core never interprets the slugs — it compares identity.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("actors")
         if not isinstance(block, dict):
             return [], {}
