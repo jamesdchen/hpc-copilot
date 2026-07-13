@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import uuid
@@ -295,6 +296,55 @@ def _pid_alive(pid: int) -> bool:
     return proc_pid_alive(pid)
 
 
+def _current_host() -> str:
+    """Hostname of THIS machine, stamped into a lease (F43).
+
+    An NFS-shared journal home is read from every login node, but
+    :func:`_pid_alive` (``psutil.pid_exists``) only probes the LOCAL process
+    table — a live worker on ``login1`` reads as a dead pid from ``login2`` and
+    the lease would be wrongly reclaimed, spawning a duplicate worker. Recording
+    the host lets the guard REFUSE a cross-host lease it cannot verify instead of
+    reclaiming blind. Best-effort: an unresolvable hostname degrades to "" (the
+    guard then falls back to pid-only liveness, the pre-F43 behaviour)."""
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
+
+
+def _process_create_time(pid: int) -> float | None:
+    """Process start-time for *pid* on this host, or ``None`` if unavailable (F43).
+
+    Paired with the pid in a lease so pid REUSE after a reboot — the lease pid is
+    alive but now belongs to a STRANGER started later — is distinguishable from
+    the original holder still running: a create-time mismatch marks the lease
+    stale/reclaimable, curing the permanent ``DetachedLeaseHeld`` wedge whose
+    error text falsely promised self-heal. A thin, monkeypatchable wrapper over
+    ``psutil``; any failure (no such process, access denied) degrades to ``None``
+    → the caller falls back to pid-only liveness (pre-F43 behaviour)."""
+    if pid <= 0:
+        return None
+    try:
+        import psutil
+
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 — best-effort; any failure means "unknown", fall back
+        return None
+
+
+def _create_times_match(recorded: Any, current: float) -> bool:
+    """Whether a lease's recorded start-time matches the pid's current one.
+
+    A 1s tolerance absorbs float/JSON round-trip jitter while staying far below
+    the seconds-to-hours gap a genuine post-reboot pid reuse produces. A
+    non-numeric recorded value can't prove reuse, so it reads as a MATCH (refuse,
+    never reclaim on ambiguity — the conservative direction)."""
+    try:
+        return abs(float(recorded) - float(current)) < 1.0
+    except (TypeError, ValueError):
+        return True
+
+
 def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:
     """Refuse a second LIVE detached worker for the same ``(run_id, block)``.
 
@@ -318,12 +368,47 @@ def _guard_single_lease(detached_dir: Path, block: str, run_id: str) -> Path:
     """
     lease_path = detached_dir / f"{block}-{run_id}.lease.json"
     if lease_path.exists():
+        prior: dict[str, Any] = {}
         try:
-            prior = json.loads(lease_path.read_text(encoding="utf-8"))
+            loaded = json.loads(lease_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                prior = loaded
             prior_pid = int(prior.get("pid", -1))
         except (OSError, ValueError, TypeError):
             prior_pid = -1
+        prior_host = prior.get("host")
+        prior_ct = prior.get("create_time")
+        this_host = _current_host()
+        # F43 (a): a lease stamped on a DIFFERENT host (NFS-shared journal home
+        # across login nodes). Its pid names a process in ANOTHER host's process
+        # table, so the local _pid_alive probe is meaningless — a live remote
+        # worker reads as a dead local pid and we would reclaim, spawning a
+        # duplicate. Refuse WITH the holder's host rather than reclaim blind.
+        if (
+            prior_pid > 0
+            and isinstance(prior_host, str)
+            and prior_host
+            and this_host
+            and prior_host != this_host
+        ):
+            raise DetachedLeaseHeld(
+                f"the ({run_id!r}, {block!r}) lease at {lease_path} is held by a "
+                f"worker (pid {prior_pid}) on a DIFFERENT host {prior_host!r} "
+                f"(this host is {this_host!r}); its liveness cannot be verified "
+                "from here over the shared journal home, so this launch is refused "
+                "rather than reclaiming (reclaiming would race a possibly-live "
+                f"remote worker and duplicate it). If that host/worker is gone, "
+                f"delete {lease_path} to relink, then relaunch."
+            )
         if prior_pid > 0 and _pid_alive(prior_pid):
+            # F43 (b): the pid is alive on THIS host. Distinguish the original
+            # holder from a post-reboot pid REUSE via the recorded start-time —
+            # a mismatch means a stranger now owns the pid, so the lease is stale
+            # and reclaimable (a reboot leaves the file but not the worker).
+            if prior_ct is not None:
+                current_ct = _process_create_time(prior_pid)
+                if current_ct is not None and not _create_times_match(prior_ct, current_ct):
+                    return lease_path  # pid reuse → stale lease, reclaim
             raise DetachedLeaseHeld(
                 f"a live detached worker (pid {prior_pid}) already owns the "
                 f"({run_id!r}, {block!r}) lease at {lease_path}; refusing a second "
@@ -422,19 +507,21 @@ def _spawn_detached(
 
         # Stamp the lease with the just-launched pid while still under the flock,
         # so a concurrent launch for the same key sees a live lease the moment it
-        # acquires the lock.
-        lease_path.write_text(
-            json.dumps(
-                {
-                    "run_id": run_id,
-                    "block": block,
-                    "pid": proc.pid,
-                    "log_path": str(log_path.resolve()),
-                    "argv": argv,
-                }
-            ),
-            encoding="utf-8",
-        )
+        # acquires the lock. ``host`` + ``create_time`` (F43) let the guard tell a
+        # cross-login-node lease it can't verify from a locally-reclaimable one,
+        # and a post-reboot pid reuse from the original holder still running.
+        lease_payload: dict[str, Any] = {
+            "run_id": run_id,
+            "block": block,
+            "pid": proc.pid,
+            "host": _current_host(),
+            "log_path": str(log_path.resolve()),
+            "argv": argv,
+        }
+        create_time = _process_create_time(proc.pid)
+        if create_time is not None:
+            lease_payload["create_time"] = create_time
+        lease_path.write_text(json.dumps(lease_payload), encoding="utf-8")
     finally:
         lock_cm.__exit__(None, None, None)
 

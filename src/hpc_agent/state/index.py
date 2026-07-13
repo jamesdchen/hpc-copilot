@@ -25,6 +25,7 @@ from hpc_agent.state.run_record import (
     _locked,
     _read_json,
     journal_dir,
+    journal_root_if_exists,
     runs_dir,
 )
 
@@ -141,7 +142,13 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
     from hpc_agent.state.journal import load_run
     from hpc_agent.state.run_record import _current_homedir, _run_path
 
-    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
+    # F46: probe the namespace with the NON-CREATING accessor. The old
+    # ``journal_dir(experiment_dir).exists()`` guard could never fire — the call
+    # itself mkdir'd the namespace + wrote repo.json — so every read from a
+    # journal-less cwd scaffolded a ghost namespace. journal_root_if_exists()
+    # only computes the path, so a read of a non-existent journal returns [] and
+    # leaves no trace.
+    if not _current_homedir().exists() or not journal_root_if_exists(experiment_dir).exists():
         return []
     if _index_is_stale(experiment_dir):
         _rebuild_index(experiment_dir)
@@ -158,6 +165,15 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
             continue
         record = load_run(experiment_dir, rid)
         if record is None:
+            continue
+        # F42: trust the record we just loaded, not the index tag. A crash
+        # between a terminal run-write and its index refresh leaves index.json
+        # claiming ``in_flight`` for a run that is terminal on disk, and once a
+        # sibling write bumps the index mtime past the run file the staleness
+        # rebuild never fires again. Without this filter find_in_flight_runs
+        # returns the finished run forever (doctor re-arms it, the campaign
+        # loop counts a phantom live run). The status is already in hand.
+        if record.status != "in_flight":
             continue
         records.append((_safe_mtime(path), record))
     records.sort(key=lambda item: item[0], reverse=True)
@@ -176,7 +192,8 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
 
     if not campaign_id:
         return []
-    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
+    # F46: non-creating namespace probe (see find_in_flight_runs).
+    if not _current_homedir().exists() or not journal_root_if_exists(experiment_dir).exists():
         return []
     files = _all_run_files(experiment_dir)
     matched: list[tuple[float, RunRecord]] = []
@@ -206,7 +223,8 @@ def find_held_runs(experiment_dir: Path, campaign_id: str | None = None) -> list
     from hpc_agent.state.journal import is_held, load_run
     from hpc_agent.state.run_record import _current_homedir
 
-    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
+    # F46: non-creating namespace probe (see find_in_flight_runs).
+    if not _current_homedir().exists() or not journal_root_if_exists(experiment_dir).exists():
         return []
     held: list[tuple[float, RunRecord]] = []
     for path in _all_run_files(experiment_dir):
