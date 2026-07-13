@@ -217,9 +217,15 @@ class TestDeployRuntime:
             captured["remote_path"] = remote_path
             captured["dst_rels"] = [it.dst_rel for it in items]
 
+        def _capture_manifest(*, ssh_target, remote_path, content):
+            captured["manifest_written"] = content
+
         with (
             patch("hpc_agent.infra.remote._capture_via_select") as mock_ssh,
             patch("hpc_agent.infra.transport._deploy_transfer", side_effect=_capture),
+            patch(
+                "hpc_agent.infra.transport._write_deploy_manifest", side_effect=_capture_manifest
+            ),
         ):
             mock_ssh.return_value = _cp()
             transport.deploy_runtime(ssh_target="u@c", remote_path="/p")
@@ -244,10 +250,11 @@ class TestDeployRuntime:
         assert "rm -f" in mkdir_argv[-1]
         assert "/p/hpc_agent/__init__.py" in mkdir_argv[-1]
 
-        # One batched transfer to the project root carrying every file plus the
-        # cache-manifest write. No scheduler arg → sge + slurm cpu/gpu/mpi
+        # One batched transfer to the project root carrying every file. The
+        # cache manifest does NOT ride it (#F53) — it is written in a separate
+        # post-transfer leg. No scheduler arg → sge + slurm cpu/gpu/mpi
         # templates. Twelve base files + the 7-module status-reporter eager
-        # closure (#349) + manifest = 20 dst_rels.
+        # closure (#349) = 19 dst_rels (no manifest item).
         assert captured["ssh_target"] == "u@c"
         assert captured["remote_path"] == "/p"
         rels = set(captured["dst_rels"])
@@ -276,9 +283,12 @@ class TestDeployRuntime:
         assert "hpc_agent/errors.py" in rels
         assert "hpc_agent/infra/time.py" in rels
         assert "hpc_agent/execution/mapreduce/_guard.py" in rels
-        # Cache manifest write (#242), riding the same transfer.
-        assert ".hpc/.deploy_state.json" in rels
-        assert len(rels) == 20, sorted(rels)
+        # Cache manifest (#242) NEVER rides the file transfer (#F53): it is
+        # written in the separate post-transfer leg, not a transfer item.
+        assert ".hpc/.deploy_state.json" not in rels
+        assert len(rels) == 19, sorted(rels)
+        # ... and the separate manifest-write leg DID fire (first deploy).
+        assert "manifest_written" in captured
 
 
 # ---------------------------------------------------------------------------

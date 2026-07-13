@@ -1220,6 +1220,92 @@ def test_delta_kill_switch_forces_full_tar(
     assert "HPC_NO_DEPLOY_DELTA=1" in capsys.readouterr().err
 
 
+def test_path_excluded_anchors_internal_slash_patterns() -> None:
+    """#F57: an internal-slash exclude is ROOT-ANCHORED — it drops that path and
+    everything under it, but not a same-named component elsewhere in the tree.
+    Before the fix such patterns were inert here (silently shipped in delta
+    mode while the rsync and full-copy tar modes honored them)."""
+    pats = [p.rstrip("/") for p in ["data/interim/"]]
+    # The anchored subtree and its descendants are excluded ...
+    assert transport._path_excluded(("data", "interim"), pats)
+    assert transport._path_excluded(("data", "interim", "big.bin"), pats)
+    assert transport._path_excluded(("data", "interim", "sub", "deep.bin"), pats)
+    # ... but a sibling, a same-named subtree NOT at the root, and a
+    # prefix-collision are all kept (root-anchoring + component boundary).
+    assert not transport._path_excluded(("data", "final", "keep.bin"), pats)
+    assert not transport._path_excluded(("src", "data", "interim"), pats)
+    assert not transport._path_excluded(("data", "interim_v2", "x"), pats)
+    # A bare name still matches at ANY depth (unchanged).
+    assert transport._path_excluded(("src", "data", "cache"), ["cache"])
+
+
+def test_delta_manifest_honors_internal_slash_exclude(tmp_path: Path) -> None:
+    """#F57 fire-path: the rsync-less DELTA push must drop an anchored
+    internal-slash pattern from the local manifest — exactly as the full-copy
+    tar mode (``--exclude=data/interim``) does — so the SAME push command ships
+    the SAME file set whether or not the remote-manifest round-trip succeeded.
+    Before the fix ``data/interim/**`` shipped ONLY in delta mode."""
+    (tmp_path / "keep.py").write_text("code")
+    interim = tmp_path / "data" / "interim"
+    interim.mkdir(parents=True)
+    (interim / "big.bin").write_text("huge intermediate")
+    (interim / "sub").mkdir()
+    (interim / "sub" / "deep.bin").write_text("deeper")
+    (tmp_path / "data" / "final.txt").write_text("keep this")
+
+    rels = transport._pushable_relpaths(tmp_path, [p.rstrip("/") for p in ["data/interim/"]])
+    assert "keep.py" in rels
+    assert "data/final.txt" in rels  # sibling of the excluded subtree survives
+    assert not any(r.startswith("data/interim/") for r in rels)
+
+
+def test_remote_snippet_honors_internal_slash_exclude(tmp_path: Path) -> None:
+    """#F57 lockstep: the DEPLOYED-runtime snippet must anchor an internal-slash
+    exclude the SAME way the local manifest now does, or the delta would ship a
+    phantom diff for the excluded subtree. Execute the real snippet and compare
+    file sets against the local manifest."""
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+
+    from hpc_agent.infra.manifest import Manifest
+
+    tree = tmp_path / "tree"
+    for rel, content in {
+        "keep.py": "code",
+        "data/interim/big.bin": "intermediate",
+        "data/interim/sub/deep.bin": "deeper",
+        "data/final.txt": "keep",
+    }.items():
+        f = tree / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content)
+
+    exclude = ["data/interim/"]
+    snippet_file = tmp_path / "snippet.py"
+    snippet_file.write_text(transport._REMOTE_MANIFEST_SNIPPET, encoding="utf-8")
+    env = {
+        **_os.environ,
+        "HPC_DELTA_EXCLUDES": _json.dumps([p.rstrip("/") for p in exclude]),
+        "HPC_DELTA_CAP": str(transport._DELTA_MANIFEST_FILE_CAP),
+    }
+    proc = _sp.run(
+        [sys.executable, str(snippet_file)],
+        cwd=str(tree),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    remote = Manifest.from_dict(_json.loads(proc.stdout))
+    local = transport._local_push_manifest(tree, exclude)
+    # Same file set on both sides -> zero phantom delta for the excluded subtree.
+    assert set(remote.paths) == set(local.paths)
+    assert not any(p.startswith("data/interim/") for p in remote.paths)
+    assert "data/final.txt" in remote.paths
+
+
 def test_remote_snippet_agrees_with_local_manifest(tmp_path: Path) -> None:
     """The DEPLOYED-runtime snippet and the LOCAL manifest must describe the same
     tree with the same content-hash atoms, or the delta would ship phantom

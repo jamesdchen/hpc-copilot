@@ -184,3 +184,116 @@ def test_own_push_manifest_is_never_an_anomaly(
     assert capture_deletes == []
     assert _journal_lines(tmp_path) == []
     assert "ANOMALY" not in capsys.readouterr().err
+
+
+# --- #F58: a refused/failed prune must retain the extra's manifest provenance ---
+
+
+def test_refused_prune_retains_manifest_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#F58: a cap-REFUSED prune returns its manifest-known extras so the caller
+    keeps them in the push manifest. Without this they downgrade to never-touched
+    ANOMALYs on the very next push and the disclosed 'raise the cap and re-push'
+    remediation can never work."""
+    paths = [f"ours/f{i}.py" for i in range(5)]
+    monkeypatch.setattr(transport, "_read_prior_push_manifest", lambda **_: set(paths))
+    monkeypatch.setenv("HPC_DEPLOY_PRUNE_MAX_FILES", "3")  # 5 > 3 → refuse
+
+    def _no_delete(**_):  # type: ignore[no-untyped-def]
+        raise AssertionError("a refused plan must never delete")
+
+    monkeypatch.setattr(transport, "_execute_prune", _no_delete)
+    remote = _remote_manifest([FileEntry(path=p, size=1, sha256="s") for p in paths])
+
+    retained = transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/remote/proj",
+        local_path=tmp_path,
+        remote_manifest=remote,
+        extra=tuple(paths),
+        timeout=30,
+    )
+    assert retained == set(paths)
+
+
+def test_failed_delete_retains_manifest_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#F58: a manifest-known extra whose delete FAILS (fail-open ssh error →
+    _execute_prune returns False) is still on the remote, so its provenance must
+    be retained for the next push's prune retry."""
+    monkeypatch.setattr(transport, "_read_prior_push_manifest", lambda **_: {"ours/dropped.py"})
+    monkeypatch.setattr(transport, "_execute_prune", lambda **_: False)  # delete failed
+    remote = _remote_manifest([FileEntry(path="ours/dropped.py", size=1, sha256="s")])
+
+    retained = transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/remote/proj",
+        local_path=tmp_path,
+        remote_manifest=remote,
+        extra=("ours/dropped.py",),
+        timeout=30,
+    )
+    assert retained == {"ours/dropped.py"}
+
+
+def test_confirmed_delete_drops_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CONFIRMED delete removes the extra from the remote, so it must NOT be
+    retained — keeping it would resurrect a phantom prunable on the next push."""
+    monkeypatch.setattr(transport, "_read_prior_push_manifest", lambda **_: {"ours/dropped.py"})
+    monkeypatch.setattr(transport, "_execute_prune", lambda **_: True)  # delete confirmed
+    remote = _remote_manifest([FileEntry(path="ours/dropped.py", size=1, sha256="s")])
+
+    retained = transport._prune_manifest_known_extras(
+        ssh_target="host",
+        remote_path="/remote/proj",
+        local_path=tmp_path,
+        remote_manifest=remote,
+        extra=("ours/dropped.py",),
+        timeout=30,
+    )
+    assert retained == set()
+
+
+def test_rsync_push_writes_union_manifest_on_refused_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#F58 fire-path at the transport seam: when the delta push's prune is
+    REFUSED, the push manifest rsync_push writes must include BOTH the current
+    local paths AND the un-pruned manifest-known extra — so a re-push with a
+    raised cap still classifies it prunable."""
+    from unittest.mock import patch
+
+    from hpc_agent.infra.manifest import build_manifest
+
+    (tmp_path / "keep.py").write_text("code")
+    # Remote holds keep.py (identical → nothing to ship) plus a manifest-known
+    # extra we dropped locally.
+    local_m = build_manifest(tmp_path)
+    remote_m = Manifest(
+        entries=(*local_m.entries, FileEntry(path="ours/dropped.py", size=10, sha256="oldsha"))
+    )
+    monkeypatch.setattr(transport, "_read_prior_push_manifest", lambda **_: {"ours/dropped.py"})
+    monkeypatch.setenv("HPC_DEPLOY_PRUNE_MAX_FILES", "0")  # force REFUSE
+
+    written: dict[str, list[str]] = {}
+
+    def _capture_write(*, ssh_target, remote_path, paths, timeout):  # type: ignore[no-untyped-def]
+        written["paths"] = list(paths)
+
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport._remote_push_manifest", return_value=remote_m),
+        patch("hpc_agent.infra.transport._write_push_manifest", side_effect=_capture_write),
+    ):
+        result = transport.rsync_push(
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[], delete=True
+        )
+
+    assert result.returncode == 0
+    assert "keep.py" in written["paths"]
+    # Provenance retained despite the refusal — the un-pruned extra survives.
+    assert "ours/dropped.py" in written["paths"]
