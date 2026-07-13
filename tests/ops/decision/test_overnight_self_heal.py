@@ -99,7 +99,7 @@ def _stub_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     import hpc_agent.meta.campaign.manifest as manifest_mod
 
     monkeypatch.setattr(
-        blocks_mod, "_campaign_spec_identity", lambda *_a, **_k: _CAMPAIGN_ID + "-identity"
+        blocks_mod, "campaign_spec_identity", lambda *_a, **_k: _CAMPAIGN_ID + "-identity"
     )
     monkeypatch.setattr(manifest_mod, "read_manifest", lambda *_a, **_k: {"goal": "sweep widgets"})
 
