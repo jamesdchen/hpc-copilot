@@ -429,9 +429,9 @@ _MANIFEST = {"goal": "sweep widgets", "budget": 100.0, "strategy": {"name": "gri
 
 
 def _campaign_identity() -> str:
-    from hpc_agent.meta.campaign.blocks import _campaign_spec_identity
+    from hpc_agent.meta.campaign.blocks import campaign_spec_identity
 
-    return _campaign_spec_identity(_MANIFEST)
+    return campaign_spec_identity(_MANIFEST)
 
 
 @pytest.fixture

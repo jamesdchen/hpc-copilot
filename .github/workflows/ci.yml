@@ -105,41 +105,85 @@ jobs:
             uv.lock
       - name: Install package with dev extras
         run: pip install -e '.[dev]'
+      # Static analysis + generator-drift gates are Python-version-independent
+      # (ruff, mypy, the lints, and the ``--check`` gates behave identically on
+      # 3.10 / 3.11 / 3.12), so they run on ONE matrix leg (3.12) instead of all
+      # three — the other two legs exist to run the test suite across versions.
+      - name: Auto-regenerate generated artifacts (PR only)
+        # docs.yml's proven pattern, adopted here: on a PR, regenerate every
+        # checked-in generated artifact LOCALLY before the ``--check`` gates
+        # below. The separate ``regen-pr`` job lands the fix back on the branch,
+        # but its GITHUB_TOKEN auto-commit does not trigger a fresh run and this
+        # leg checked out the pre-regen SHA — so without this local regen the
+        # ``--check`` gates would see stale files and fail on a branch whose
+        # generated files merely drifted against an upstream merge. Skipped on
+        # push to main / claude/**, where ``--check`` is the hard gate.
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
+        run: |
+          python scripts/build_schemas.py --write
+          python scripts/build_primitive_frontmatter.py --write
+          python scripts/build_primitive_index.py --write
+          python scripts/build_operations_index.py --write
+          python scripts/bake_operations_json.py --write
       - name: Ruff lint
+        if: matrix.python-version == '3.12'
         run: ruff check .
       - name: Ruff format check
+        if: matrix.python-version == '3.12'
         run: ruff format --check .
       - name: Mypy
+        if: matrix.python-version == '3.12'
         run: mypy src/hpc_agent
       - name: Check primitive frontmatter is regenerated from registry
+        if: matrix.python-version == '3.12'
         run: python scripts/build_primitive_frontmatter.py --check
       - name: Check no pending primitive docs
+        if: matrix.python-version == '3.12'
         run: python scripts/check_no_pending_primitive_docs.py
       - name: Check skills <-> slash_commands stay in sync
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_skill_command_sync.py
       - name: Lint decision-content blocks stay byte-identical across files
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_decision_content.py
       - name: Lint @pure files (no I/O imports/calls)
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_pure_files.py
       - name: Lint subject imports (no cross-subject reach)
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_subject_imports.py
       - name: Lint library-knowledge imports (declared assembly points only)
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_library_knowledge.py
       - name: Lint subject __init__.py is docstring-only
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_subject_init.py
       - name: Lint text I/O declares utf-8 encoding
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_text_io_encoding.py
       - name: Lint durable artifacts are written atomically
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_atomic_durable_writes.py
       - name: Lint cluster-side schema-version constants stay synced
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_schema_versions.py
-      - name: Lint plugin manifests reconcile with runtime
-        run: python scripts/lint_plugin_manifests.py
       - name: Lint telemetry fields declare cumulative vs per-tick delta
+        if: matrix.python-version == '3.12'
         run: python scripts/lint_telemetry_labels.py
+      - name: Lint every schema file is reachable from schema_for
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_schema_reachability.py
+      - name: Lint public wire models resolve to an emitted schema
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_wire_suffix.py
+      - name: Lint mirror comments name their twin + pinning test
+        if: matrix.python-version == '3.12'
+        run: python scripts/lint_mirror_ledger.py
       - name: Check JSON schemas regenerated from Pydantic
+        if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check
       - name: Check baked operations.json is up to date
+        if: matrix.python-version == '3.12'
         run: python scripts/bake_operations_json.py --check
       - name: Pytest (default)
         run: pytest -q
@@ -219,6 +263,13 @@ jobs:
             pip install jupytext nbformat nbclient ipykernel nbdime
           fi
           pip install -e "examples/plugins/${{ matrix.plugin }}" --no-deps
+      - name: Lint plugin manifest reconciles with runtime
+        # Runs HERE, not in the ``test`` job: ``lint_plugin_manifests`` is a hard
+        # no-op (``return 0``) when no plugins are installed, and the ``test`` job
+        # installs none — so it could never actually fire there. This job installs
+        # a plugin, so the lint checks that plugin's MANIFEST against the runtime
+        # reality (primitive names, worker-prompt overlays, cli_register).
+        run: python scripts/lint_plugin_manifests.py
       - name: Plugin offline tests (fake API client, zero network)
         run: pytest -q "examples/plugins/${{ matrix.plugin }}/tests"
       - name: actionlint workflow templates (syntax + expressions)

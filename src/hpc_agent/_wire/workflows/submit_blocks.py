@@ -36,6 +36,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from hpc_agent._wire._shared import DetachedHandleFields
 from hpc_agent._wire.queries.walk_submit_ambiguities import WalkSubmitAmbiguitiesInput
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
@@ -69,7 +70,7 @@ BlockStage = Literal[
 ]
 
 
-class SubmitBlockResult(BaseModel):
+class SubmitBlockResult(DetachedHandleFields):
     """Shared ``data`` block for every submit block (S1–S4).
 
     The ``brief`` is the code-digested evidence the LLM drafts a proposal over
@@ -135,33 +136,6 @@ class SubmitBlockResult(BaseModel):
             "under ``resolved.next_block``; the successor block's gate verifies the "
             "journaled greenlight names it. NEVER free-prose — a mis-sequenced call "
             "fails loudly."
-        ),
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3): True when the block spawned a "
-            "durable detached worker and returned immediately instead of blocking "
-            "the chat on the scheduler. The gate + drift guard already fired "
-            "synchronously BEFORE the detach; the brief is not held in a process — "
-            "read it from the journal via status-snapshot / the completion "
-            "notification. False on the synchronous (detach=False) path."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached block\'s outcome — ``"journal"`` when '
-            "``started`` is True (the detached worker stamps the per-run journal "
-            "record as it polls; poll it cluster-free). None on the synchronous path."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description=(
-            "The detached worker's OS process id (informational — do NOT wait on "
-            "it; read the journal). None on the synchronous path. A dead worker is "
-            "detected by the §5 watchdog via a lapsed next_tick_due, not by this pid."
         ),
     )
 

@@ -139,7 +139,6 @@ hpc_agent = [
     # files — they are rendered from the scheduler profile at deploy time
     # (Phase 2 / Option C). Only the shared preambles ship statically.
     "execution/mapreduce/templates/runtime/common/*.sh",
-    "_kernel/extension/worker_prompts/*.md",
     # The harness-conformance kit ships in the wheel (D-K1): a conforming
     # harness runs it via ``pytest --pyargs hpc_agent.conformance``, so its
     # committed fixture VECTORS (canonicalization digests, relay triples, the

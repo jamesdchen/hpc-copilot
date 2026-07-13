@@ -53,7 +53,7 @@ def sidecar(
     task_count: int = 10,
     tasks_py_sha: str = "",
 ) -> None:
-    """Write a per-run sidecar so ``_current_cmd_sha`` has a tree fingerprint to
+    """Write a per-run sidecar so ``read_run_cmd_sha`` has a tree fingerprint to
     key the terminal replay on (the replay refuses on an absent/empty sha)."""
     from hpc_agent.state.runs import write_run_sidecar
 

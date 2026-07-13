@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hpc_agent._wire.queries.verify_relay import VerifyRelayInput, VerifyRelayResult
-from hpc_agent.ops.decision.verify_relay import verify_relay
+from hpc_agent.ops.decision.journal.verify_relay import verify_relay
 from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.runs import write_run_sidecar
 

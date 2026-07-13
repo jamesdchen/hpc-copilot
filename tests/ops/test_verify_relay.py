@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent._wire.queries.verify_relay import VerifyRelayInput, VerifyRelayResult
-from hpc_agent.ops.decision.verify_relay import verify_relay
+from hpc_agent.ops.decision.journal.verify_relay import verify_relay
 from hpc_agent.state.decision_journal import append_decision
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -442,7 +442,7 @@ def test_sci_notation_flags_as_number_never_run_id(tmp_path: Path) -> None:
 def test_csv_ingest_is_bounded_and_top_level_only(tmp_path: Path, monkeypatch) -> None:
     """Bounds: an oversized CSV and one nested under the pulled per-task mirror
     contribute nothing — the corpus carries the reducer's OUTPUT only."""
-    import hpc_agent.ops.decision.verify_relay as vr
+    import hpc_agent.ops.decision.journal.verify_relay as vr
 
     _seed_journal(tmp_path, core_hours=128)
     _seed_sidecar(tmp_path)
@@ -878,7 +878,7 @@ def _nb_sign(tmp_path: Path, slug: str, *, view_sha: str = "view-1") -> None:
 
 
 def _nb_run(tmp_path: Path, relay: str) -> VerifyRelayResult:
-    from hpc_agent.ops.decision.verify_relay import verify_notebook_relay
+    from hpc_agent.ops.decision.journal.verify_relay import verify_notebook_relay
 
     return verify_notebook_relay(tmp_path, _NB_AUDIT, relay)
 

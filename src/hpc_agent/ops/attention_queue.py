@@ -497,7 +497,7 @@ def collect_audits(experiment_dir: Path, *, now: str) -> QueueCollection:
     ``state/audit_source.py``). An audit with no resolvable ``audited_source``
     opt-in contributes nothing and is recorded in ``skipped`` (D7 fail-safe).
     """
-    from hpc_agent.ops.decision.verify_relay import _nb_resolve_sources
+    from hpc_agent.ops.decision.journal.verify_relay import _nb_resolve_sources
     from hpc_agent.state.notebook_audit import (
         SIGNED_STALE,
         UNSIGNED,

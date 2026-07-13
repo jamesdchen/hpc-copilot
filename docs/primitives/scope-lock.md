@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent scope-lock --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.ops.decision.scope_lock.scope_lock
+  python: hpc_agent.ops.decision.journal.scope_lock.scope_lock
 ---
 # scope-lock
 

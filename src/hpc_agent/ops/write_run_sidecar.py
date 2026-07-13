@@ -167,7 +167,7 @@ def write_run_sidecar(*, experiment_dir: Path, spec: WriteRunSidecarInput) -> di
     # on resubmit). Run FIRST so a bare `train.py` surfaces its own precise
     # "prefix the interpreter" message rather than the generic dispatcher refusal
     # below. Lazy import keeps module load free of incorporation/build.
-    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+    from hpc_agent.infra.executor_guard import check_per_task_executor
 
     check_per_task_executor(spec.executor, experiment_dir=Path(experiment_dir))
 

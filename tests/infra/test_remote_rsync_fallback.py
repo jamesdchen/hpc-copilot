@@ -1047,7 +1047,7 @@ def _remote_manifest_like(local_root: Path, *, drop: set[str], flip: set[str]):
     byte-identical (-> never shipped)."""
     from dataclasses import replace
 
-    from hpc_agent.ops.transfer.manifest import Manifest, build_manifest
+    from hpc_agent.infra.manifest import Manifest, build_manifest
 
     entries = []
     for e in build_manifest(local_root).entries:
@@ -1227,7 +1227,7 @@ def test_remote_snippet_agrees_with_local_manifest(tmp_path: Path) -> None:
     import os as _os
     import subprocess as _sp
 
-    from hpc_agent.ops.transfer.manifest import Manifest, build_manifest
+    from hpc_agent.infra.manifest import Manifest, build_manifest
 
     tree = tmp_path / "tree"
     for rel, content in {
@@ -1264,6 +1264,6 @@ def test_remote_snippet_agrees_with_local_manifest(tmp_path: Path) -> None:
     assert remote.digest == local.digest
     assert remote.digest == build_manifest(tree, paths=list(local.paths)).digest
     assert "results/out.txt" not in remote.paths  # excluded on both sides
-    from hpc_agent.ops.transfer.manifest import manifest_delta
+    from hpc_agent.infra.manifest import manifest_delta
 
     assert manifest_delta(local, remote).nothing_to_ship

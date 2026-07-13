@@ -324,6 +324,15 @@ def project_block_terminals(experiment_dir: Path, run_id: str) -> list[StoryEven
         return out
     for term_path in term_paths:
         block = term_path.name.removeprefix(prefix).removesuffix(suffix)
+        # No currency compare here (B7 one-definition): the REPLAY consumers
+        # (submit/campaign/aggregate/status blocks) gate on
+        # ``record.cmd_sha == current-tree sha`` so a nudged tree re-executes
+        # instead of replaying a stale outcome. The story is a HISTORY
+        # projection, not a replay gate — the store overwrites (latest-wins, one
+        # terminal per (run_id, block)), so the record on disk IS the run's most
+        # recent terminal EVENT and must project regardless of the current sha.
+        # Adding the compare here would silently drop a superseded-but-real
+        # terminal from the timeline (the complete-journal-trail contract).
         record = read_terminal(experiment_dir, run_id, block)
         if record is None:
             continue

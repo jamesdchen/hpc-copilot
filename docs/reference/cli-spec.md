@@ -20,7 +20,10 @@ External consumers (agent harnesses, the in-process
 contributors edit the Pydantic. Pre-commit's `build-schemas`
 `--check` gate fails CI when the two diverge.
 
-73 schemas cover the full agent-facing surface:
+The `src/hpc_agent/schemas/` directory holds 244 `*.json` schema files
+covering the agent-facing surface (count with
+`ls src/hpc_agent/schemas/*.json | wc -l` — this is the on-disk file
+count, not a hand-maintained literal). They break down as:
 
 - `envelope.json` — universal stdout envelope (success / error variants
   via discriminated union on `ok`).

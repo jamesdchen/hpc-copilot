@@ -30,7 +30,6 @@ facade (the ``field_ownership`` precedent).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,6 +39,7 @@ from hpc_agent.ops.notebook.lint import notebook_lint
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import parse_percent_source
 from hpc_agent.state.data_trace import read_trace
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 __all__ = [
     "AuditConfig",
@@ -93,16 +93,7 @@ def read_interview_audited_source(experiment_dir: Path, audit_id: str | None) ->
     ``notebook-record-config`` verb can refuse when the opt-in path already owns
     the config (one source of truth — never a second reader of the file format).
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("audited_source")
         if isinstance(block, dict) and (audit_id is None or block.get("audit_id") == audit_id):
             return block

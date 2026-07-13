@@ -92,26 +92,23 @@ def _output_validation_enabled() -> bool:
 def _output_schema_for(primitive_name: str) -> dict | None:
     """Load the output JSON schema for *primitive_name*, or None if absent.
 
-    Uses the same 3-candidate ladder as
-    :func:`hpc_agent._kernel.registry.operations.schema_for` so the runtime
-    validator never disagrees with the docs/catalog about which file
-    backs a given primitive — pre-v3 this only looked up
-    ``<name>.output.json`` and silently no-op'd on every primitive
-    whose schema is keyed off the CLI subcommand name (preflight,
-    discover, status, submit, reconcile, runtime_prior;
-    v3 BUG-1V3-1).
+    Resolves via the shared
+    :func:`hpc_agent._kernel.registry.operations.schema_candidate_ladder` — the
+    single ladder definition that also backs the catalog's
+    :func:`~hpc_agent._kernel.registry.operations.schema_for` — so the runtime
+    validator never disagrees with the docs/catalog about which file backs a
+    given primitive. Pre-v3 a local copy of the ladder only looked up
+    ``<name>.output.json`` and silently no-op'd on every primitive whose schema
+    is keyed off the CLI subcommand name (preflight, discover, status, submit,
+    reconcile, runtime_prior; v3 BUG-1V3-1); the two copies then had to be
+    hand-kept in lockstep, which this de-duplication removes.
     """
-    candidates = [
-        f"{primitive_name.replace('-', '_')}.output.json",
-        f"{primitive_name}.output.json",
-    ]
-    # An explicit ``CliShape.schema_ref.output`` override takes precedence
-    # (a shape-named shared file the convention can't reach, e.g. the
-    # ``submit-s1..s4`` blocks → ``submit_block.output.json``). Also add the
-    # CLI-derived candidate so CLI-renamed primitives (e.g. ``check-preflight``
-    # → ``preflight.output.json``) resolve too. Kept in lockstep with
-    # ``operations.schema_for`` so the runtime validator and the catalog never
-    # disagree about which file backs a given primitive.
+    # Resolve the ``CliShape.schema_ref.output`` override and CLI-subcommand
+    # name from the live registry when available, then hand both to the shared
+    # ladder. Wrapped defensively — a registry hiccup must never crash output
+    # validation, only fall back to the convention-only ladder.
+    override: str | None = None
+    cli_name: str | None = None
     try:
         from hpc_agent._kernel.registry.operations import _cli_subcommand
         from hpc_agent._kernel.registry.primitive import get_registry
@@ -120,17 +117,22 @@ def _output_schema_for(primitive_name: str) -> dict | None:
         if meta is not None and meta.cli:
             schema_ref = meta.cli.schema_ref
             if schema_ref is not None and schema_ref.output:
-                candidates.insert(0, f"{schema_ref.output}.output.json")
+                override = f"{schema_ref.output}.output.json"
 
             from hpc_agent.cli._dispatch import cli_to_invocation_string
 
             cli_str = cli_to_invocation_string(meta.name, meta.cli)
             if cli_str:
                 cli_name = _cli_subcommand({"cli": cli_str})
-                if cli_name:
-                    candidates.append(f"{cli_name.replace('-', '_')}.output.json")
     except Exception:  # noqa: BLE001 — fallback ladder; never crash validation
-        pass
+        override = None
+        cli_name = None
+
+    from hpc_agent._kernel.registry.operations import schema_candidate_ladder
+
+    candidates = schema_candidate_ladder(
+        primitive_name, "output", override=override, cli_name=cli_name
+    )
 
     for fname in candidates:
         try:

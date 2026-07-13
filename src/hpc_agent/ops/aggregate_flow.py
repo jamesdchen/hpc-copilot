@@ -78,7 +78,7 @@ from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.data_trace import ingest_trace, trace_store_path
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
-from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
+from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_summary_artifact
 
 __all__ = ["aggregate_flow", "AggregateFlowResult", "per_task_fallback_reducible"]
 
@@ -1088,20 +1088,6 @@ def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
 _AGG_FLOW_BLOCK_KEY = terminal_block_key("aggregate-flow")
 
 
-def _agg_flow_cmd_sha(experiment_dir: Path, run_id: str) -> str:
-    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
-
-    The identity a terminal replay is keyed on (mirrors the submit-block /
-    status-watch recorders): a moved/absent ``cmd_sha`` → the replay refuses
-    (re-execute), never a false hit.
-    """
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, ValueError, errors.HpcError):
-        return ""
-    return str((sidecar or {}).get("cmd_sha") or "")
-
-
 def _detached_agg_flow_spec_dict(spec: AggregateFlowSpec) -> dict[str, Any]:
     """Serialize *spec* with ``detach`` forced OFF for the detached child.
 
@@ -1125,7 +1111,7 @@ def _replay_agg_flow_terminal(experiment_dir: Path, run_id: str) -> AggregateFlo
     record = read_terminal(experiment_dir, run_id, _AGG_FLOW_BLOCK_KEY)
     if record is None:
         return None
-    current_sha = _agg_flow_cmd_sha(experiment_dir, run_id)
+    current_sha = read_run_cmd_sha(experiment_dir, run_id)
     if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
         return None
     stored = record.get("result")
@@ -1153,7 +1139,7 @@ def _record_agg_flow_terminal(experiment_dir: Path, result: AggregateFlowResult)
         experiment_dir,
         run_id=result.run_id,
         block=_AGG_FLOW_BLOCK_KEY,
-        cmd_sha=_agg_flow_cmd_sha(experiment_dir, result.run_id),
+        cmd_sha=read_run_cmd_sha(experiment_dir, result.run_id),
         result_dump=result.to_envelope_data(),
     )
 

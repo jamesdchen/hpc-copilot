@@ -78,6 +78,30 @@ class TestEndToEnd:
         result = ste.smoke_test_executor(module_path=mod, output_file="/tmp/custom.parquet")
         assert "OF=/tmp/custom.parquet" in result["stdout_tail"]
 
+    def test_default_output_is_private_tempdir_not_a_fixed_shared_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Omitting output_file mints a per-invocation private temp path (0700,
+        unique, removed on return) — never a fixed ``/tmp/smoke.csv`` a co-tenant
+        could pre-plant a symlink at. The dir must not leak after the call."""
+        import os
+
+        mod = _write_module(
+            tmp_path,
+            "def compute(args):\n    print('OF=' + args.output_file)\n",
+        )
+        result = ste.smoke_test_executor(module_path=mod)
+        assert result["exit_code"] == 0
+        of_line = next(ln for ln in result["stdout_tail"].splitlines() if ln.startswith("OF="))
+        used = of_line[len("OF=") :]
+        assert used != "/tmp/smoke.csv"
+        # A private per-invocation dir (OS-agnostic: the dir basename carries the
+        # prefix — the path separator differs on Windows, so don't match "/...").
+        assert os.path.basename(os.path.dirname(used)).startswith("hpc-smoke-")
+        # This invocation's own scratch dir must be gone (race-free vs. sibling
+        # workers — we check the exact dir we minted, not a shared glob).
+        assert not os.path.exists(os.path.dirname(used))
+
     def test_raising_compute_returns_nonzero_with_traceback(self, tmp_path: Path) -> None:
         mod = _write_module(
             tmp_path,

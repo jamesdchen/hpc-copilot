@@ -57,17 +57,18 @@ moves it.
 ``ops/relay_render.py`` posture): pure, deterministic formatting of the same
 fields — NO LLM-freeform prose enters the audit path (D6).
 
-Pure and stdlib-only (``ast`` / ``difflib`` / ``hashlib`` / ``json``): no
+Pure (``ast`` / ``difflib`` / ``json`` + the shared canonical-sha): no
 ``@primitive`` (the verb wrapper is a later wave), no I/O, no ``_wire`` import,
 no dependency on ``ops/notebook/lint.py`` (its findings arrive as an opaque
-parameter). Hashing routes through ``state.audit_source``'s one primitive.
+parameter). ``view_sha`` hashing routes through the ONE conformance-pinned
+canonicalization (:func:`~hpc_agent.state.determinism.canonical_sha`); source
+hashing routes through ``state.audit_source``'s one primitive.
 """
 
 from __future__ import annotations
 
 import ast
 import difflib
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -79,6 +80,7 @@ from hpc_agent.execution.mapreduce.data_trace_contract import (
 )
 from hpc_agent.state.audit_source import ParsedModule, normalize_source
 from hpc_agent.state.data_trace import records_sha
+from hpc_agent.state.determinism import canonical_sha
 
 __all__ = [
     "INHERITED",
@@ -189,11 +191,6 @@ def _canonical_json(obj: Any) -> str:
     platform-stable (no timestamps, no absolute paths ever enter the payloads).
     """
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha_json(obj: Any) -> str:
-    """sha256 hexdigest of :func:`_canonical_json` of *obj* (utf-8)."""
-    return hashlib.sha256(_canonical_json(obj).encode("utf-8")).hexdigest()
 
 
 def _plainify(obj: Any) -> Any:
@@ -519,7 +516,7 @@ def build_audit_view(
                 assertions=assertions,
                 lint_flags=flags,
                 tier=tier,
-                view_sha=_sha_json(payload),
+                view_sha=canonical_sha(payload),
                 payload=payload,
                 trace_summary=summary,
             )
@@ -556,7 +553,7 @@ def build_audit_view(
         dropped_template_slugs=dropped,
         source_module_sha=source.module_sha,
         template_module_sha=template.module_sha,
-        view_sha=_sha_json(module_payload),
+        view_sha=canonical_sha(module_payload),
         payload=module_payload,
         dropped_template_drafts=dropped_drafts,
     )

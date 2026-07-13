@@ -17,10 +17,9 @@
     },
     "output_file": {
       "minLength": 1,
-      "default": "/tmp/smoke.csv",
       "title": "Output File",
       "type": "string",
-      "description": "Path passed to compute() as Namespace.output_file. Defaults to a throwaway under /tmp; the smoke test only checks the module imports and compute() runs clean, not the artifact it writes."
+      "description": "Path passed to compute() as Namespace.output_file. When omitted, a throwaway file inside a private per-invocation temp directory (0700, unique name, removed on return) is used — never a fixed shared path like /tmp/smoke.csv, so a co-tenant on a login node cannot pre-plant a symlink or collide. The smoke test only checks the module imports and compute() runs clean, not the artifact it writes."
     },
     "timeout_sec": {
       "minimum": 1,

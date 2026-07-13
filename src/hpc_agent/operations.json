@@ -393,7 +393,7 @@
     "input_schema": "scope_lock.input.json",
     "name": "scope-lock",
     "output_schema": "scope_lock.output.json",
-    "python": "hpc_agent.ops.decision.scope_lock.scope_lock",
+    "python": "hpc_agent.ops.decision.journal.scope_lock.scope_lock",
     "side_effects": [
       "file_write"
     ],
@@ -1202,7 +1202,7 @@
     "input_schema": "scope_status.input.json",
     "name": "scope-status",
     "output_schema": "scope_status.output.json",
-    "python": "hpc_agent.ops.decision.scope_lock.scope_status",
+    "python": "hpc_agent.ops.decision.journal.scope_lock.scope_status",
     "side_effects": [],
     "summary": "Report the lock + look state of one caller-tagged scope, or every scope under .hpc/scopes/ when the tag is omitted. Pure read: {scope: {locked, looks: {prior_looks, distinct_lineages}, lock_history_len}}. Look counts are IDENTITY counts — no metric is ever consulted.",
     "verb": "query"
@@ -1312,7 +1312,7 @@
     "input_schema": "verify_relay.input.json",
     "name": "verify-relay",
     "output_schema": "verify_relay.output.json",
-    "python": "hpc_agent.ops.decision.verify_relay.verify_relay",
+    "python": "hpc_agent.ops.decision.journal.verify_relay.verify_relay",
     "side_effects": [],
     "summary": "Audit an agent's draft relay text against a run's durable records (decision journal, sidecar, RunRecord, briefs). Deterministic claim-extraction — numbers, run/job ids, state words — diffed against the record. Returns a verdict; never blocks (conduct rule 10).",
     "verb": "query"

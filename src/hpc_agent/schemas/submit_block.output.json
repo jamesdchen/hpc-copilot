@@ -11,6 +11,38 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "started": {
+      "default": false,
+      "description": "Detach-by-contract handle (design §3): True when this atom spawned a durable detached worker and returned immediately instead of blocking the chat on the work (the scheduler dial / harvest / iteration spine). The gate + drift guard already fired synchronously BEFORE the detach; the outcome is not held in a process — read it from the per-run journal via status-snapshot / the completion notification. False on the synchronous (detach=False) path.",
+      "title": "Started",
+      "type": "boolean"
+    },
+    "watch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How to learn the detached work's outcome — ``\"journal\"`` when ``started`` is True (the detached worker stamps the per-run journal record as it runs; poll it cluster-free). None on the synchronous path.",
+      "title": "Watch"
+    },
+    "detached_pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path. A dead worker is detected by the §5 watchdog via a lapsed next_tick_due, not by this pid.",
+      "title": "Detached Pid"
+    },
     "block": {
       "description": "Which submit block produced this result.",
       "enum": [
@@ -91,38 +123,6 @@
       "default": null,
       "description": "The DETERMINISTICALLY-computed next block — ``{verb, why, spec_hint}`` — or null at a terminal / human-branch terminator (design §2, the ``_next_step_hint`` pattern generalized). ``verb`` names the next block's CLI verb; ``spec_hint`` is the minimal next-spec skeleton (run_id etc.). The LLM surfaces it the way /sync is proposed; the human's `y` greenlights THAT named verb; append-decision journals it under ``resolved.next_block``; the successor block's gate verifies the journaled greenlight names it. NEVER free-prose — a mis-sequenced call fails loudly.",
       "title": "Next Block"
-    },
-    "started": {
-      "default": false,
-      "description": "Detach-by-contract handle (design §3): True when the block spawned a durable detached worker and returned immediately instead of blocking the chat on the scheduler. The gate + drift guard already fired synchronously BEFORE the detach; the brief is not held in a process — read it from the journal via status-snapshot / the completion notification. False on the synchronous (detach=False) path.",
-      "title": "Started",
-      "type": "boolean"
-    },
-    "watch": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "How to learn the detached block's outcome — ``\"journal\"`` when ``started`` is True (the detached worker stamps the per-run journal record as it polls; poll it cluster-free). None on the synchronous path.",
-      "title": "Watch"
-    },
-    "detached_pid": {
-      "anyOf": [
-        {
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path. A dead worker is detected by the §5 watchdog via a lapsed next_tick_due, not by this pid.",
-      "title": "Detached Pid"
     }
   }
 }

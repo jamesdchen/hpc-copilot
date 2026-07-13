@@ -14,6 +14,38 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "started": {
+      "default": false,
+      "description": "Detach-by-contract handle (design §3): True when this atom spawned a durable detached worker and returned immediately instead of blocking the chat on the work (the scheduler dial / harvest / iteration spine). The gate + drift guard already fired synchronously BEFORE the detach; the outcome is not held in a process — read it from the per-run journal via status-snapshot / the completion notification. False on the synchronous (detach=False) path.",
+      "title": "Started",
+      "type": "boolean"
+    },
+    "watch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How to learn the detached work's outcome — ``\"journal\"`` when ``started`` is True (the detached worker stamps the per-run journal record as it runs; poll it cluster-free). None on the synchronous path.",
+      "title": "Watch"
+    },
+    "detached_pid": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path. A dead worker is detected by the §5 watchdog via a lapsed next_tick_due, not by this pid.",
+      "title": "Detached Pid"
+    },
     "run_id": {
       "pattern": "^[A-Za-z0-9._\\-]+$",
       "title": "Run Id",
@@ -125,38 +157,6 @@
       "default": null,
       "description": "Per-scope look counts recorded by this reduction, PRIOR to it: {tag: {prior_looks, distinct_lineages}}. `prior_looks` is the number of runs whose results were reduced against the scope BEFORE this one; `distinct_lineages` collapses supersession-chained reruns of the same experiment to one. Two plain integers per tag — the framework counts looks, it never interprets what they found. Null (key omitted in spirit) for a scope-less run, so existing consumers are untouched.",
       "title": "Scope Looks"
-    },
-    "started": {
-      "default": false,
-      "description": "Detach-by-contract handle (design §3; run-#10 F-K): True when a DIRECT aggregate-flow invocation with detach=true spawned a durable detached worker to own the combine + rsync harvest and returned immediately. The reduced metrics are read from the journal on completion; the data fields above are empty on the handle. False on every synchronous / composed path.",
-      "title": "Started",
-      "type": "boolean"
-    },
-    "watch": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "How to learn the detached harvest's outcome — ``\"journal\"`` when ``started`` is True. None on the synchronous path.",
-      "title": "Watch"
-    },
-    "detached_pid": {
-      "anyOf": [
-        {
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "The detached worker's OS process id (informational — do NOT wait on it; read the journal). None on the synchronous path.",
-      "title": "Detached Pid"
     }
   }
 }

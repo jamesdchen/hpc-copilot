@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from hpc_agent.infra import transport
-from hpc_agent.ops.transfer.manifest import FileEntry, Manifest
+from hpc_agent.infra.manifest import FileEntry, Manifest
 
 
 def _remote_manifest(entries: list[FileEntry]) -> Manifest:
