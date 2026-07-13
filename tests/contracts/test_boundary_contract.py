@@ -236,9 +236,7 @@ def _bad_core_imports(path: Path, allowed: frozenset[str]) -> list[str]:
     """
     imported = _imported_dotted_modules(path)
     return sorted(
-        m
-        for m in imported
-        if (m == "hpc_agent" or m.startswith("hpc_agent.")) and m not in allowed
+        m for m in imported if (m == "hpc_agent" or m.startswith("hpc_agent.")) and m not in allowed
     )
 
 
@@ -295,13 +293,7 @@ def test_templates_do_not_import_core() -> None:
     # Scaffolds live one directory over and are scanned against their own
     # (wider) allowlist — see SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES.
     scaffolds_root = (
-        REPO_ROOT
-        / "src"
-        / "hpc_agent"
-        / "execution"
-        / "mapreduce"
-        / "templates"
-        / "scaffolds"
+        REPO_ROOT / "src" / "hpc_agent" / "execution" / "mapreduce" / "templates" / "scaffolds"
     )
     if not scaffolds_root.is_dir():
         raise AssertionError(
