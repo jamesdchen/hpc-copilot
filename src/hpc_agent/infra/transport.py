@@ -145,6 +145,17 @@ PROTECTED_RUNTIME_FILES: list[str] = [
     ".hpc/.push_manifest.json",
 ]
 
+# Paths a scaffolded ``.gitignore`` marks as generated but the cluster
+# node *needs*: the executor package built at Step 0 (``src/``) and the
+# dispatch contract (``.hpc/tasks.py`` / ``.hpc/cli.py``). A caller derives
+# rsync excludes from ``.gitignore``, so these would otherwise be stripped
+# from the deploy bundle. The carve-out lives here — next to the exclude
+# constants it modifies — so every submit path (``submit_flow`` restoring the
+# push, ``executor_guard`` mirroring it in the static deploy-manifest check)
+# shares one definition. ``.hpc/.build-cache.json`` is NOT listed: it stays
+# excluded (a local-build artifact the node never reads).
+_GENERATED_SHIPPABLE: frozenset[str] = frozenset({"src", ".hpc/tasks.py", ".hpc/cli.py"})
+
 # The remote ``--delete`` pre-clean (tar fallback) gets its OWN timeout,
 # distinct from — and shorter than — the (30-min) transfer timeout, so a
 # pathological clean fails loud fast instead of silently eating the transfer

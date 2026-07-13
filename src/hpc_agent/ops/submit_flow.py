@@ -38,9 +38,23 @@ from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends import backend_requires_ssh
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
+
+# Executor-shape guards + the generated-shippable carve-out now live in the
+# shared ``hpc_agent.infra.*`` substrate, so ``ops.submit_flow`` no longer
+# imports from ``incorporation`` (and vice versa) — the cycle is broken and this
+# import can sit at module scope. ``_is_bare_script_name`` / ``_GENERATED_SHIPPABLE``
+# are re-exported here so their public import paths (test-pinned) are unchanged.
+from hpc_agent.infra.executor_guard import (
+    _is_bare_script_name,
+    check_per_task_executor,
+)
 from hpc_agent.infra.remote import SSH_TIMEOUT_SEC, ssh_run
 from hpc_agent.infra.ssh_validation import validate_ssh_target
-from hpc_agent.infra.transport import deploy_runtime, rsync_push
+from hpc_agent.infra.transport import (
+    _GENERATED_SHIPPABLE,
+    deploy_runtime,
+    rsync_push,
+)
 from hpc_agent.ops.submit.runner import submit_and_record
 from hpc_agent.state.journal import is_resubmittable_terminal, load_run
 
@@ -742,16 +756,6 @@ def _smoke_one_executor(
             )
 
 
-# Paths a scaffolded ``.gitignore`` marks as generated but the cluster
-# node *needs*: the executor package built at Step 0 (``src/``) and the
-# dispatch contract (``.hpc/tasks.py`` / ``.hpc/cli.py``). A caller derives
-# rsync excludes from ``.gitignore``, so these would otherwise be stripped
-# from the deploy bundle. The carve-out lives here — not in caller prose —
-# so every submit path ships them. ``.hpc/.build-cache.json`` is NOT listed:
-# it stays excluded (a local-build artifact the node never reads).
-_GENERATED_SHIPPABLE: frozenset[str] = frozenset({"src", ".hpc/tasks.py", ".hpc/cli.py"})
-
-
 def _keep_generated_shippable(excludes: list[str] | None) -> list[str] | None:
     """Drop excludes that would block shipping generated-but-needed files.
 
@@ -798,34 +802,6 @@ def _push_and_deploy(
     _log.info("staging: code pushed; deploying runtime files ...")
     deploy_runtime(ssh_target=ssh_target, remote_path=remote_path, scheduler=scheduler)
     _log.info("staging: deploy complete")
-
-
-# Script-file extensions that, as a *bare* single token, need an interpreter
-# (or an executable path) to run. A per-task ``executor`` of just ``train.py``
-# reaches the cluster as ``cd "$REPO_DIR" && train.py`` and exits 127 — the
-# shell has no interpreter to hand it to (proving-run-5 finding 17).
-_BARE_SCRIPT_EXTENSIONS: tuple[str, ...] = (".py", ".sh", ".r", ".jl")
-
-
-def _is_bare_script_name(executor: str | None) -> bool:
-    """True when *executor* is a lone script filename with no interpreter/path.
-
-    The unrunnable shape proving-run-5 finding 17 named: a single token (no
-    whitespace ⇒ no ``python`` / ``Rscript`` interpreter prefix) that ends in a
-    script extension (``.py`` / ``.sh`` / ``.R`` / ``.jl``) and carries no path
-    separator (``/`` or ``\\`` ⇒ not a ``./run.sh``-style runnable path). Run
-    verbatim by the cluster dispatcher it becomes ``command not found`` (exit
-    127). ``python train.py`` (interpreter prefix), ``./train.py`` and
-    ``scripts/train.py`` (path) are all runnable and return False.
-    """
-    if not executor:
-        return False
-    token = executor.strip()
-    if len(token.split()) != 1:
-        return False
-    if "/" in token or "\\" in token:
-        return False
-    return token.lower().endswith(_BARE_SCRIPT_EXTENSIONS)
 
 
 def _is_runnable_executor(executor: str | None) -> bool:
@@ -1027,8 +1003,6 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
             # hand-edited file meets the identical bar as a verb-written one
             # (format placeholders, bare module:function, bare script name,
             # wrong-case kwargs; the interface-blind property warns).
-            from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
-
             check_per_task_executor(str(existing_executor), experiment_dir=experiment_dir)
             # #312: the pre-written sidecar (Step 6d / resolve-submit-inputs)
             # was authored before submit-flow could compute provenance —

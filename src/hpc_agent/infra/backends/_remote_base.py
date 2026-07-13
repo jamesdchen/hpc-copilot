@@ -83,7 +83,7 @@ def executor_script_path(executor: str) -> str | None:
     """The script path an ``EXECUTOR`` command will ``cd "$REPO_DIR"`` then run.
 
     Reuses the same ``shlex.split`` extraction
-    :func:`hpc_agent.incorporation.build.submit_spec._check_register_run_executor`
+    :func:`hpc_agent.infra.executor_guard._check_register_run_executor`
     uses (#292): the per-task command lands relative to ``REPO_DIR``, so the
     file the cluster needs is the first ``<path>.py`` token in the command.
 
