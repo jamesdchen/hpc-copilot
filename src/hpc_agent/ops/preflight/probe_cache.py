@@ -30,9 +30,10 @@ mirroring ``infra.ssh_circuit`` (CLI invocations, detached workers, and the
 MCP server are separate processes; the cache only saves handshakes if they
 share one view).
 
-This is the CROSS-STAGE sibling of ``write_preflight_marker``'s 24h
-per-experiment marker: the marker gates the skill-level "re-run setup?"
-question, this cache elides the per-invocation ssh round-trip itself.
+This is the real preflight cache: it elides the per-invocation ssh
+round-trip itself. (A separate 24h ``write_preflight_marker`` once claimed
+to gate a skill-level "re-run setup?" question, but it had no consumer and
+was removed in #F31 — this cache is the only one that saves handshakes.)
 """
 
 from __future__ import annotations

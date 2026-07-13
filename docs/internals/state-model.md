@@ -64,24 +64,6 @@ Read by: `find-prior-run`, `monitor-summary`, audit tooling.
 
 Written by: every primitive that touches a run's lifecycle.
 
-### `preflight_<cluster>.json` — 24h cache marker
-
-After a green `check-preflight` run, this marker says "the cluster
-environment was healthy at `checked_at`; subsequent submits within 24
-hours can skip the re-probe." Read by `/submit-hpc`'s Step 6b gate.
-
-```json
-{
-  "checked_at": "2026-01-01T12:00:00Z",
-  "all_ok": true,
-  "cluster": "hoffman2"
-}
-```
-
-Read by: `submit-flow` Step 6b gate.
-
-Written by: `hpc-agent setup --cluster <name>` after a green probe.
-
 ### `campaigns/<slug>/` — campaign cursor + manifest
 
 Per-campaign state. The slug matches `^[A-Za-z0-9._\-]+$`.
@@ -282,9 +264,9 @@ A reverse index — given a primitive, which state files it touches.
 
 | Primitive | Reads | Writes |
 |---|---|---|
-| `load-context` | `runs/`, `journal.jsonl`, `campaigns/`, `preflight_*.json`, `axes.yaml`, `interview.json` | — |
+| `load-context` | `runs/`, `journal.jsonl`, `campaigns/`, `axes.yaml`, `interview.json` | — |
 | `find-prior-run` | `runs/`, `journal.jsonl` | — |
-| `setup` (with `--cluster`) | `clusters.yaml` | `~/.claude/`, `preflight_<cluster>.json` |
+| `setup` (with `--cluster`) | `clusters.yaml` | `~/.claude/` |
 | `check-preflight` | `clusters.yaml` | — |
 | `interview` | — | `tasks.py`, `interview.json`, optionally `wrappers/<name>.py` |
 | `build-tasks-py` | — | `tasks.py` |
@@ -292,7 +274,7 @@ A reverse index — given a primitive, which state files it touches.
 | `classify-axis` | `axes.yaml` | `axes.yaml` (executors side) |
 | `classify-axis-easy` | source code | — (pure query) |
 | `export-package` | notebooks/, `.build-cache.json` | `src/`, `.build-cache.json` |
-| `submit-flow` | `tasks.py`, `axes.yaml`, `runs/`, `interview.json`, `preflight_<cluster>.json` | `runs/<id>.json`, `journal.jsonl`, cluster scratch |
+| `submit-flow` | `tasks.py`, `axes.yaml`, `runs/`, `interview.json` | `runs/<id>.json`, `journal.jsonl`, cluster scratch |
 | `verify-canary` | `runs/<id>.json` | (cluster-side only) |
 | `monitor-flow` / `status` | `runs/<id>.json`, scheduler state | `runs/<id>.json` (lifecycle updates) |
 | `reconcile` | `runs/<id>.json`, scheduler state | `runs/<id>.json` |
@@ -314,7 +296,6 @@ A few cross-cutting properties worth knowing:
 - **The sidecar is the canonical run record.** If a sidecar exists, the run existed. If the lifecycle_state in the sidecar is `complete`, aggregation is safe.
 - **`cmd_sha` is the idempotency key.** Two submissions with the same `cmd_sha` are duplicates; the second is deduped against the first.
 - **The journal is append-only.** Never edited or compacted in normal operation.
-- **The preflight marker has a 24h TTL.** After 24h, the `/submit-hpc` Step 6b gate forces a re-probe.
 - **Campaign cursor advances by one per tick.** Each `hpc-block-drive` invocation either advances the cursor or fails; it never advances by more than one.
 - **Stage outputs land in shared cluster scratch.** Inter-stage data flow is purely filesystem; no journal entries between stages.
 

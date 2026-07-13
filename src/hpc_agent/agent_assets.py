@@ -913,6 +913,144 @@ def _install_tree(
     return commands, skills, agents, cleared
 
 
+# ── manifest-stamped pruning of removed/renamed assets (#F34) ────────────────
+#
+# ``_install_tree`` is COPY-ONLY: it adds/overwrites but never removes. So an
+# asset a release DELETED or RENAMED (e.g. the §6 worker removal dropped the
+# ``hpc-worker`` agent) stayed installed forever — a pre-§6 install keeps
+# ``~/.claude/agents/hpc-worker.md`` and its ``Skill(...)`` grant, and Claude
+# Code still discovers + routes to the stale skill/agent whose procedure drives
+# verbs the upgraded CLI refuses. The deny-rule and hook classes already
+# self-heal (``_merge_deny_rules`` REMOVES stale blanket rules); this is the
+# equivalent removal step for the three copied trees. We stamp a manifest of the
+# names THIS install owns and, on the next install, prune the owned names the
+# current tree no longer ships — never touching a name we did not stamp, so a
+# user's own hand-added skill/command is safe.
+
+_ASSET_MANIFEST_NAME = ".hpc-agent-manifest.json"
+_MANIFEST_KINDS: tuple[tuple[str, str, str | None], ...] = (
+    # (kind, subdir, suffix) — skills are per-name DIRECTORIES (suffix None);
+    # commands / agents are flat ``<name>.md`` files.
+    ("commands", "commands", ".md"),
+    ("skills", "skills", None),
+    ("agents", "agents", ".md"),
+)
+
+
+def _asset_manifest_path(claude_dir: Path) -> Path:
+    """Path to the install manifest stamping which asset names hpc-agent owns."""
+    return claude_dir / _ASSET_MANIFEST_NAME
+
+
+def _read_asset_manifest(claude_dir: Path) -> dict[str, list[str]]:
+    """Read the previous install's owned-asset manifest (empty on any absence/parse error)."""
+    try:
+        data = json.loads(_asset_manifest_path(claude_dir).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for kind, _subdir, _suffix in _MANIFEST_KINDS:
+        val = data.get(kind)
+        out[kind] = [x for x in val if isinstance(x, str)] if isinstance(val, list) else []
+    return out
+
+
+def _prune_stale_assets(
+    claude_dir: Path, *, current: dict[str, set[str]], dry_run: bool
+) -> dict[str, list[str]]:
+    """Delete assets a PRIOR install owned that the CURRENT tree no longer ships.
+
+    Reads the manifest (:func:`_asset_manifest_path`) the previous install wrote
+    and, per ``commands`` / ``skills`` / ``agents``, removes the on-disk asset for
+    every name the manifest OWNED but the current install did not re-copy. Only
+    manifest-owned names are touched (a user's own asset was never stamped, so it
+    is never pruned). Returns ``{commands, skills, agents}`` of the names pruned
+    from ownership (a stale skill's ``Skill(...)`` grant is dropped for these).
+    """
+    previous = _read_asset_manifest(claude_dir)
+    pruned: dict[str, list[str]] = {kind: [] for kind, _s, _x in _MANIFEST_KINDS}
+    if not previous:
+        return pruned
+    for kind, subdir, suffix in _MANIFEST_KINDS:
+        stale = sorted(set(previous.get(kind, ())) - current[kind])
+        for name in stale:
+            leaf = name if suffix is None else f"{name}{suffix}"
+            target = claude_dir / subdir / leaf
+            if not dry_run and target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            # Record it either way — it is no longer owned, so its manifest
+            # stamp and (for skills) its Skill(...) grant must go regardless of
+            # whether the file was already hand-deleted.
+            pruned[kind].append(name)
+    return pruned
+
+
+def _write_asset_manifest(
+    claude_dir: Path,
+    *,
+    commands: set[str],
+    skills: set[str],
+    agents: set[str],
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Stamp the names + package version this install owns (skipped on dry-run)."""
+    from hpc_agent import __version__
+
+    path = _asset_manifest_path(claude_dir)
+    payload = {
+        "version": __version__,
+        "commands": sorted(commands),
+        "skills": sorted(skills),
+        "agents": sorted(agents),
+    }
+    if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return {"manifest_path": str(path), "wrote": not dry_run, **payload}
+
+
+def _prune_skill_permissions(
+    claude_dir: Path, skill_names: list[str], *, dry_run: bool
+) -> dict[str, Any]:
+    """Drop the ``Skill(<name>)`` allow rules for pruned skills (mirror of the add merge).
+
+    Sibling of :func:`_merge_skill_permissions`, but REMOVING: a skill a release
+    deleted keeps its auto-invoke grant otherwise. Same skip-unparseable +
+    dry-run contract; reports ``removed`` (like :func:`_merge_deny_rules`). Every
+    other allow entry — a user's own rule, a surviving skill's grant — is kept.
+    """
+
+    def plan(settings: dict[str, Any]) -> _MergeOutcome:
+        permissions = settings.get("permissions")
+        if not isinstance(permissions, dict):
+            return _MergeOutcome(False, settings, "", "", {}, {"removed": []})
+        allow = permissions.get("allow")
+        if not isinstance(allow, list):
+            return _MergeOutcome(False, settings, "", "", {}, {"removed": []})
+        rules = {_skill_allow_rule(name) for name in skill_names}
+        present = [rule for rule in allow if rule in rules]
+        if not present:
+            return _MergeOutcome(False, settings, "", "", {}, {"removed": []})
+        permissions["allow"] = [rule for rule in allow if rule not in rules]
+        settings["permissions"] = permissions
+        return _MergeOutcome(
+            True, settings, "removed", "dry-run-would-remove", {"removed": present}, {"removed": []}
+        )
+
+    return _merge_json(
+        claude_dir / "settings.json",
+        path_key="settings_path",
+        unparseable_extra={"removed": []},
+        plan=plan,
+        dry_run=dry_run,
+    )
+
+
 def install_agent_assets(
     *, claude_dir: Path | None = None, dry_run: bool = False
 ) -> dict[str, Any]:
@@ -1043,6 +1181,22 @@ def install_agent_assets(
     # idempotent into .claude.json's mcpServers, never clobbering other servers.
     mcp_server = _register_mcp_server(target, dry_run=dry_run)
 
+    # Prune assets a prior install owned that this tree no longer ships (#F34) —
+    # the removal step _install_tree lacks. Runs against the manifest the last
+    # install stamped, then re-stamps below with the current ownership. Only
+    # manifest-owned names are removed; a user's own asset is never touched.
+    assets_pruned = _prune_stale_assets(
+        target,
+        current={"commands": commands, "skills": skills, "agents": agents},
+        dry_run=dry_run,
+    )
+    settings_permissions_pruned = _prune_skill_permissions(
+        target, assets_pruned["skills"], dry_run=dry_run
+    )
+    asset_manifest = _write_asset_manifest(
+        target, commands=commands, skills=skills, agents=agents, dry_run=dry_run
+    )
+
     # Grant Skill(<name>) for every installed skill so Claude Code's auto-mode
     # classifier stops silently denying the first /submit-hpc → Skill(hpc-submit)
     # call. Same additive + idempotent + skip-unparseable contract as the hook
@@ -1071,8 +1225,11 @@ def install_agent_assets(
         "skills_installed": sorted(skills),
         "agents_installed": sorted(agents),
         "cleared_collisions": cleared,
+        "assets_pruned": assets_pruned,
+        "asset_manifest": asset_manifest,
         **hook_reports,
         "settings_permissions": settings_permissions,
+        "settings_permissions_pruned": settings_permissions_pruned,
         "settings_deny": settings_deny,
         "mcp_server": mcp_server,
         "wrote": not dry_run,

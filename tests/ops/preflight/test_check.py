@@ -417,3 +417,124 @@ def test_no_runtime_uv_check_for_non_uv_spec(monkeypatch: pytest.MonkeyPatch) ->
     checks = {c["name"]: c for c in result["checks"]}
     assert "runtime_uv" not in checks
     assert called == []
+
+
+# ─── #F29: the CLI adapter maps all_ok=False → cluster-error + ok:false ───────
+
+
+def test_cli_preflight_exits_cluster_error_on_failure(capsys: pytest.CaptureFixture) -> None:
+    """FIRE PATH (#F29): `hpc-agent preflight --cluster <unknown>` exits 2 / ok:false.
+
+    Before the ``result_error`` hook, ``dispatch_primitive`` wrapped ANY return
+    in ``_ok``/``EXIT_OK``, so a broken env exited 0/ok:true and submit-s1 briefs
+    showed a green preflight. An unknown cluster forces ``cluster_known=False`` →
+    ``all_ok=False`` deterministically (no ssh: the ``cluster not in clusters``
+    branch never enters the transport block), driving the resurrected mapping.
+    """
+    import json
+
+    from hpc_agent.cli.dispatch import main
+
+    rc = main(["preflight", "--cluster", "definitely-not-a-cluster"])
+    assert rc == 2  # EXIT_CLUSTER_ERROR
+    envelope = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert envelope["ok"] is False
+    assert envelope["error_code"] == "remote_command_failed"
+    assert envelope["category"] == "cluster"
+    # The checks list still rides the ok:false envelope (degraded-but-inspectable).
+    names = {c["name"] for c in envelope["failure_features"]["checks"]}
+    assert "cluster_known" in names
+
+
+def test_cli_preflight_exits_zero_when_all_ok(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The complement of the fire path: an all-green verdict is still ok:true / exit 0."""
+    import json
+
+    from hpc_agent.cli.dispatch import main
+
+    # Force every local check green; no cluster arg → no ssh, no cluster checks.
+    monkeypatch.setattr(preflight, "agent_available", lambda: True)
+    monkeypatch.setattr(preflight, "agent_detail", lambda: "agent ok")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)  # take the named-pipe OK branch
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync", "scp", "tar"})):
+        rc = main(["preflight"])
+    assert rc == 0
+    envelope = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert envelope["ok"] is True
+    assert envelope["data"]["all_ok"] is True
+
+
+# ─── #F32: preflight validates clusters.yaml + names near-miss keys ───────────
+
+
+def test_cluster_config_valid_flags_near_miss_typo_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIRE PATH (#F32): a misspelled key (``conda_env`` for ``conda_envs``) fails
+    the newly-wired ``cluster_config_valid`` check by name.
+
+    ``validate_clusters_config`` had ZERO callers and ``extra='ignore'`` silently
+    dropped the typo, so the feature just never fired. Now preflight names it.
+    """
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {"hoffman2": {"scheduler": "slurm", "host": "h", "conda_env": ["hpc-pi"]}},
+    )
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_config_valid"]["ok"] is False
+    assert "conda_env" in checks["cluster_config_valid"]["detail"]
+    assert "conda_envs" in checks["cluster_config_valid"]["detail"]
+    assert result["all_ok"] is False
+
+
+def test_cluster_config_valid_flags_wrong_typed_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A wrong-typed value is caught at preflight, not hours later mid-submit."""
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        # max_walltime_sec must be an int; a string fails ClusterConfig validation.
+        lambda: {"c": {"scheduler": "slurm", "host": "h", "max_walltime_sec": "twelve"}},
+    )
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_config_valid"]["ok"] is False
+
+
+def test_cluster_config_valid_passes_clean_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A well-formed config passes the check (no false alarm on novel-but-valid keys)."""
+    monkeypatch.setattr(
+        preflight,
+        "load_clusters_config",
+        lambda: {"hoffman2": {"scheduler": "slurm", "host": "h", "conda_envs": ["hpc-pi"]}},
+    )
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_config_valid"]["ok"] is True
+
+
+# ─── #F33: an empty cluster entry fails a check instead of crashing preflight ─
+
+
+def test_empty_cluster_entry_does_not_crash_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIRE PATH (#F33): ``mycluster:`` with no body parses as ``None``; preflight
+    must report a failed ``cluster_known`` — not raise ``AttributeError``.
+
+    Before the isinstance guard, ``clusters[cluster].get('scheduler')`` raised on
+    the ``None`` entry → an internal envelope (exit 3) naming neither
+    clusters.yaml nor the cluster, making the documented "run preflight to
+    diagnose" remediation circular.
+    """
+    monkeypatch.setattr(preflight, "load_clusters_config", lambda: {"mycluster": None})
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight(cluster="mycluster")  # must not raise
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["cluster_known"]["ok"] is False
+    assert "empty" in checks["cluster_known"]["detail"]
+    # The transport block was skipped — no crash-prone probes ran.
+    assert "cluster_tcp_22" not in checks
+    assert result["all_ok"] is False
