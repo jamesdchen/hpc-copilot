@@ -142,6 +142,37 @@
   ]
  },
  {
+  "title": "A standing consent recorded AFTER the driver parked at the gated boundary is never consulted: run_tick's awaiting_decision path skips the overnight seam, so the consented S3 launch never happens and the night is silently lost",
+  "severity": "high",
+  "where": "src/hpc_agent/_kernel/lifecycle/block_drive.py:494-567, src/hpc_agent/_kernel/lifecycle/block_drive.py:798-809",
+  "category": "consent-scoping-hole",
+  "failure_scenario": "Evening: canary finishes early and a block-drive tick parks the run at the S2\u2192S3 gate (pending marker written, awaiting_since=T0). The human then says 'run it overnight' and the agent records a valid overnight-consent (caps, cmd_sha, wake armed \u2014 every gate passes). Every subsequent tick (status-watch terminal re-invoke, doctor, stop-guard completer, cron) reads the pending marker, finds no committed y targeting submit-s3, and returns awaiting_decision/exit 0 \u2014 _consume_overnight is only called at the _chain gated-successor park site (block_drive.py:798-809), i.e. only when the boundary is reached FRESH inside a tick that has a live consent already recorded. The parked-marker resume path never consults the consent, even though submit-s3's own gate (assert_greenlit_or_consented) would accept it if invoked. Result: main array never launches; morning brief shows a consent with consumed_count=0 and no explanation. The same race fires if the canary completes during the minutes the human is typing the consent.",
+  "fix_sketch": "In run_tick, when plan_block_action returns awaiting_decision and the marker's resume_cursor.next_verb is a gated block (block_chain.is_gated), consult _consume_overnight(experiment_dir, run_id, next_verb) before returning; on consumed=True, treat it as an advance into next_verb using the marker's next_spec_hint (clear the marker, run the span, with the existing on_first_failure re-park). Add a test: pending marker at submit-s2\u2192submit-s3 + live consent \u2192 tick advances and ledgers, instead of awaiting_decision.",
+  "evidence": "Read run_tick end-to-end: the only consent consult is inside _chain's gated-successor branch (line 799); the resume/awaiting path (lines 541-567) returns without it. tests/ops/decision/test_overnight_wiring.py:291-341 covers only the in-chain seam (_chain called directly); tests/_kernel/lifecycle/test_block_drive.py:470 (test_run_tick_awaiting_when_pending_uncommitted) pins awaiting_decision with no consent present \u2014 the marker+consent combination is untested. assert_wake_armed/arm_consent_wake (overnight.py:193-235, 426-455) happily record a consent in this state, so nothing warns the user it can never be consumed.",
+  "id": "F12",
+  "lens": "campaign-overnight",
+  "triage": "Consent recorded after park never consulted on the awaiting_decision resume path (only _chain gated-successor site consults it); novel scoping hole. Real lost night.",
+  "status": "CONFIRMED",
+  "final_severity": "high",
+  "severity_disputed": [
+   "medium",
+   "high"
+  ],
+  "votes": [
+   {
+    "shard": "A-campaign",
+    "verdict": "CONFIRMED",
+    "reasoning": "Confirmed run_tick's resume path (block_drive.py:500-536) computes committed_resolved via the boundary-scoped scan and, when None, plan_block_action returns awaiting_decision (235-244) and run_tick returns at 541 \u2014 never reaching the only _consume_overnight consult at the _chain gated-successor site (799). A grep found just three consent-consult sites; none run on marker-resume, and submit-s3's own gate never runs because the driver parks first. A consent recorded after the S2->S3 park is genuinely stranded. Fail-safe (parks, no wrong action), so I lower severity to medium."
+   },
+   {
+    "shard": "B3-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "grep shows the overnight consent is consumed at exactly three sites; run_tick returns for action=='awaiting_decision' at block_drive.py:556-567 before ever reaching _chain (:651) where the only driver-side _consume_overnight lives (:799), and submit-s3's gate never runs because the driver never advances into it. A consent recorded after the run has already parked at the gate is therefore consulted by nothing and the night is lost \u2014 a natural operator flow (see 'awaiting decision', say 'run it overnight')."
+   }
+  ],
+  "adjudication": "RULED high (fable pass, 2026-07-13): both skeptics confirmed the mechanism and reachability ('a natural operator flow'); the split was impact-only. Decisive: the morning brief (overnight.py:1662-1683) renders the consent and consumed_count=0 with NO field explaining why nothing was consumed, so the lost night is silent and undiagnosable from the surface the human reads \u2014 the overnight mechanism's entire purpose is defeated silently on a recurring nightly basis until a human happens to commit y while awake. Rubric: silently wedges a campaign for the night; state stays fail-safe (no wrong action), which is why one skeptic read medium."
+ },
+ {
   "title": "Driver and Stop guard disagree on 'y then a later record': the driver scans past a retraction nudge and consumes the retracted greenlight (launching the un-redrafted spec), while the guard goes silent on any unrelated later record (bedtime consent, sign-off), stalling a genuinely committed y",
   "severity": "high",
   "where": "src/hpc_agent/_kernel/lifecycle/block_drive.py:1101-1105, src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py:149-156",
@@ -399,6 +430,43 @@
   ]
  },
  {
+  "title": "Federated SLURM: sbatch routes jobs with --clusters=<X> but squeue/scancel liveness, state, and cancel builders never emit -M <X> \u2014 jobs are invisible to every monitor query and un-killable, with verify_submitted's missing-doesn't-fail-gate making it silent",
+  "severity": "high",
+  "where": "src/hpc_agent/infra/backends/_engine.py:571-572 (submit) vs 691-695,756-760,767-769 (queries/cancel), src/hpc_agent/ops/monitor/reconcile.py:138-142, src/hpc_agent/ops/monitor/kill.py:57-64",
+  "category": "family-semantics-gap",
+  "failure_scenario": "User sets `slurm_cluster` (schema: 'cluster name for federated SLURM installations'). Submit emits `sbatch --clusters=gpu ...` \u2014 the job lives on cluster 'gpu'. build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are classmethods taking only job_ids, so reconcile/kill/verify run plain `squeue -j <ids>` / `scancel <ids>` against the login node's default cluster: squeue prints nothing (ack present, ran_ok True) -> all jobs read gone immediately after a successful submit; verify_submitted reports them 'missing', which by pinned design does NOT fail the gate (bug-sweep refuted item on verify_submitted.py:134), so the pipeline proceeds; reconcile marks the healthy run abandoned; kill's scancel is a no-op yet verification confirms everything gone. Meanwhile query_sacct DOES thread cluster (`--clusters=` insert, query.py:158-159, _engine.py:993), proving the flag is known to be required \u2014 only the liveness/kill half lost it.",
+  "fix_sketch": "Give the three builders an optional `cluster: str | None = None` kwarg emitting `-M {cluster}` for the slurm family (squeue/scancel both accept -M), and thread the value from the call sites that already hold it: reconcile has `getattr(record, 'cluster', None)` in hand at reconcile.py:812, kill can read it off the same RunRecord, verify_submitted off the spec's slurm_cluster. Default None keeps every existing command byte-identical.",
+  "evidence": "Read _build_slurm_command:571-572 (`--clusters=` on submit), the three classmethod builders (no cluster parameter exists in their signatures), reconcile._ssh_alive_job_ids:140-142 and kill._attempt_backend_cancel:61-64 (call with job_ids only), query.py:158-159 (sacct half threads cluster). schemas/*.json confirm slurm_cluster is a supported user-facing config. No test covers alive-check/cancel with a cluster set (grepped tests for '-M'/'--clusters' in alive/cancel contexts). Not in the fixed/refuted/architecture-review lists (grepped squeue/scancel/federat).",
+  "id": "F37",
+  "lens": "scheduler-backends",
+  "triage": "Confirmed the three builders (e.g. build_cancel_cmd) take only job_ids with no cluster kwarg, so squeue/scancel omit -M while sbatch emits --clusters. verify_submitted's missing-doesn't-fail is refuted but the -M gap is a distinct new defect. Not banked.",
+  "related": [
+   {
+    "id": "F35",
+    "note": "Same compounding as F35/F36 for federated SLURM: F37 (alive/cancel builders omit -M <cluster>) yields empty squeue output that F35's rc-blind ran_ok=True reads as 'gone', settling a healthy run abandoned and false-confirming kills."
+   }
+  ],
+  "status": "CONFIRMED",
+  "final_severity": "high",
+  "severity_disputed": [
+   "medium",
+   "high"
+  ],
+  "votes": [
+   {
+    "shard": "A-scheduler",
+    "verdict": "CONFIRMED",
+    "reasoning": "build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are @classmethods taking only job_ids (no cluster kwarg, so structurally cannot emit -M), while _build_slurm_command:571 emits --clusters= and query.py:158 threads --clusters= into sacct \u2014 a real, self-inconsistent asymmetry. In SLURM multi-cluster mode (what --clusters= actually implements) squeue/scancel without -M query only the default cluster and miss a routed job, compounding with F35. Reachability and impact are gated on the slurm_cluster config being set to a non-default cluster in a genuinely multi-cluster (vs auto-federation) deployment, where squeue's default federation view could otherwise find the job \u2014 hence medium, not high."
+   },
+   {
+    "shard": "B3-highs",
+    "verdict": "CONFIRMED",
+    "reasoning": "sbatch emits --clusters={self.cluster} (_engine.py:571-572) but build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are classmethods with no cluster kwarg (:687,743,763), so squeue/scancel run against the login node's default cluster with no -M; query_sacct threads --clusters (:158-159), proving the flag is required and only the liveness/kill half dropped it. For a slurm_cluster-configured (multi-cluster) run, squeue returns empty-with-ack so the run settles abandoned and scancel silently no-ops. Real but scoped to the federated/multi-cluster config."
+   }
+  ],
+  "adjudication": "RULED high (fable pass, 2026-07-13): the split was reachability-only. Decisive: the failure is DETERMINISTIC once slurm_cluster targets a non-default cluster \u2014 the user hits it on their first submit, every time, in SLURM multi-cluster mode (what --clusters actually implements): monitoring blind, run settled abandoned while burning allocation, scancel a no-op with false 'confirmed gone'. Config-gated is not probabilistic-rare; it is a supported knob that breaks 100% when used. Caveat kept: in a true federation squeue's default federated view may partially mask the liveness half \u2014 the live-cluster check for F37 stays mandatory before the fix is finalized."
+ },
+ {
   "title": "Retry after a crash or mid-plan wave failure re-qsubs already-landed arrays: the crash-safety pre-stamp is written but no submit path ever reads it, so the same run_id ends up running twice and the first arrays become untracked ghosts",
   "severity": "high",
   "where": "src/hpc_agent/ops/submit_flow.py:2215-2234, src/hpc_agent/ops/submit_flow.py:2536-2577, src/hpc_agent/ops/submit_flow.py:2590-2592, src/hpc_agent/ops/submit/runner.py:508-517",
@@ -548,7 +616,8 @@
     "verdict": "CONFIRMED",
     "reasoning": "ssh_engine._Engine.run dispatches at line 578 (_submit(_do_run(hc,cmd,...))) then its `except Exception` at 583-595 collapses per-command asyncssh timeouts AND torn-connection failures \u2014 genuinely post-dispatch, command still running remotely under the timeout wrapper \u2014 into the same EngineUnavailable as pre-dispatch channel-open refusals, with no dispatched/undispatched distinction. ssh_run (remote.py:735-736) catches EngineUnavailable with bare `pass` and falls through to the one-shot path, re-executing the full remote_cmd -> duplicate qsub / concurrent combiner double-writer, then F54's ladder can retry on top. This is exactly the 'distinguish already-dispatched failures' extra that #8's landed inflight-sweeper veto left un-implemented. Gated behind the opt-in HPC_SSH_ENGINE=asyncssh (not the default path), which the finding scopes honestly; impact-when-fired justifies high."
    }
-  ]
+  ],
+  "post_verification": "Smoke correction: skeptics rated this 'opt-in gated' (HPC_SSH_ENGINE=asyncssh), but the live MCP smoke showed mcp-serve defaults the engine ON (active_env_overrides in every envelope; commit cf4651d). For MCP-driven usage this is DEFAULT-ON. Severity already high; reachability is broader than the votes assumed."
  },
  {
   "title": "Mid-call liveness heartbeat is silently swallowed under the default in-process runner: redirect_stderr captures the daemon thread's '[mcp] still running' lines, resurrecting the exact 'is it hung?' blindness it was shipped to fix",
@@ -685,36 +754,6 @@
     "shard": "A-aggregation",
     "verdict": "CONFIRMED",
     "reasoning": "Confirmed _aggregated appears in none of DEFAULT_RSYNC_EXCLUDES / MANDATORY / PROTECTED_OUTPUT_DIRS (results,_combiner,logs) / PROTECTED_RUNTIME; the local aggregate tree (out=experiment_dir/_aggregated/<run_id>, incl. _per_task_results at line 402 and _fingerprints at fingerprint_store.py:164) sits under experiment_dir, and _push_and_deploy pushes local_path=experiment_dir with delete=True default while _keep_generated_shippable only removes excludes. So every re-submit ships the pulled per-task/fingerprint tree up and --delete clobbers the cluster-side _aggregated written by the final reduce. Transfer-waste + remote-clobber both real; medium."
-   }
-  ]
- },
- {
-  "title": "A standing consent recorded AFTER the driver parked at the gated boundary is never consulted: run_tick's awaiting_decision path skips the overnight seam, so the consented S3 launch never happens and the night is silently lost",
-  "severity": "high",
-  "where": "src/hpc_agent/_kernel/lifecycle/block_drive.py:494-567, src/hpc_agent/_kernel/lifecycle/block_drive.py:798-809",
-  "category": "consent-scoping-hole",
-  "failure_scenario": "Evening: canary finishes early and a block-drive tick parks the run at the S2\u2192S3 gate (pending marker written, awaiting_since=T0). The human then says 'run it overnight' and the agent records a valid overnight-consent (caps, cmd_sha, wake armed \u2014 every gate passes). Every subsequent tick (status-watch terminal re-invoke, doctor, stop-guard completer, cron) reads the pending marker, finds no committed y targeting submit-s3, and returns awaiting_decision/exit 0 \u2014 _consume_overnight is only called at the _chain gated-successor park site (block_drive.py:798-809), i.e. only when the boundary is reached FRESH inside a tick that has a live consent already recorded. The parked-marker resume path never consults the consent, even though submit-s3's own gate (assert_greenlit_or_consented) would accept it if invoked. Result: main array never launches; morning brief shows a consent with consumed_count=0 and no explanation. The same race fires if the canary completes during the minutes the human is typing the consent.",
-  "fix_sketch": "In run_tick, when plan_block_action returns awaiting_decision and the marker's resume_cursor.next_verb is a gated block (block_chain.is_gated), consult _consume_overnight(experiment_dir, run_id, next_verb) before returning; on consumed=True, treat it as an advance into next_verb using the marker's next_spec_hint (clear the marker, run the span, with the existing on_first_failure re-park). Add a test: pending marker at submit-s2\u2192submit-s3 + live consent \u2192 tick advances and ledgers, instead of awaiting_decision.",
-  "evidence": "Read run_tick end-to-end: the only consent consult is inside _chain's gated-successor branch (line 799); the resume/awaiting path (lines 541-567) returns without it. tests/ops/decision/test_overnight_wiring.py:291-341 covers only the in-chain seam (_chain called directly); tests/_kernel/lifecycle/test_block_drive.py:470 (test_run_tick_awaiting_when_pending_uncommitted) pins awaiting_decision with no consent present \u2014 the marker+consent combination is untested. assert_wake_armed/arm_consent_wake (overnight.py:193-235, 426-455) happily record a consent in this state, so nothing warns the user it can never be consumed.",
-  "id": "F12",
-  "lens": "campaign-overnight",
-  "triage": "Consent recorded after park never consulted on the awaiting_decision resume path (only _chain gated-successor site consults it); novel scoping hole. Real lost night.",
-  "status": "CONFIRMED",
-  "final_severity": "medium",
-  "severity_disputed": [
-   "medium",
-   "high"
-  ],
-  "votes": [
-   {
-    "shard": "A-campaign",
-    "verdict": "CONFIRMED",
-    "reasoning": "Confirmed run_tick's resume path (block_drive.py:500-536) computes committed_resolved via the boundary-scoped scan and, when None, plan_block_action returns awaiting_decision (235-244) and run_tick returns at 541 \u2014 never reaching the only _consume_overnight consult at the _chain gated-successor site (799). A grep found just three consent-consult sites; none run on marker-resume, and submit-s3's own gate never runs because the driver parks first. A consent recorded after the S2->S3 park is genuinely stranded. Fail-safe (parks, no wrong action), so I lower severity to medium."
-   },
-   {
-    "shard": "B3-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "grep shows the overnight consent is consumed at exactly three sites; run_tick returns for action=='awaiting_decision' at block_drive.py:556-567 before ever reaching _chain (:651) where the only driver-side _consume_overnight lives (:799), and submit-s3's gate never runs because the driver never advances into it. A consent recorded after the run has already parked at the gate is therefore consulted by nothing and the night is lost \u2014 a natural operator flow (see 'awaiting decision', say 'run it overnight')."
    }
   ]
  },
@@ -968,42 +1007,6 @@
   ]
  },
  {
-  "title": "Federated SLURM: sbatch routes jobs with --clusters=<X> but squeue/scancel liveness, state, and cancel builders never emit -M <X> \u2014 jobs are invisible to every monitor query and un-killable, with verify_submitted's missing-doesn't-fail-gate making it silent",
-  "severity": "high",
-  "where": "src/hpc_agent/infra/backends/_engine.py:571-572 (submit) vs 691-695,756-760,767-769 (queries/cancel), src/hpc_agent/ops/monitor/reconcile.py:138-142, src/hpc_agent/ops/monitor/kill.py:57-64",
-  "category": "family-semantics-gap",
-  "failure_scenario": "User sets `slurm_cluster` (schema: 'cluster name for federated SLURM installations'). Submit emits `sbatch --clusters=gpu ...` \u2014 the job lives on cluster 'gpu'. build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are classmethods taking only job_ids, so reconcile/kill/verify run plain `squeue -j <ids>` / `scancel <ids>` against the login node's default cluster: squeue prints nothing (ack present, ran_ok True) -> all jobs read gone immediately after a successful submit; verify_submitted reports them 'missing', which by pinned design does NOT fail the gate (bug-sweep refuted item on verify_submitted.py:134), so the pipeline proceeds; reconcile marks the healthy run abandoned; kill's scancel is a no-op yet verification confirms everything gone. Meanwhile query_sacct DOES thread cluster (`--clusters=` insert, query.py:158-159, _engine.py:993), proving the flag is known to be required \u2014 only the liveness/kill half lost it.",
-  "fix_sketch": "Give the three builders an optional `cluster: str | None = None` kwarg emitting `-M {cluster}` for the slurm family (squeue/scancel both accept -M), and thread the value from the call sites that already hold it: reconcile has `getattr(record, 'cluster', None)` in hand at reconcile.py:812, kill can read it off the same RunRecord, verify_submitted off the spec's slurm_cluster. Default None keeps every existing command byte-identical.",
-  "evidence": "Read _build_slurm_command:571-572 (`--clusters=` on submit), the three classmethod builders (no cluster parameter exists in their signatures), reconcile._ssh_alive_job_ids:140-142 and kill._attempt_backend_cancel:61-64 (call with job_ids only), query.py:158-159 (sacct half threads cluster). schemas/*.json confirm slurm_cluster is a supported user-facing config. No test covers alive-check/cancel with a cluster set (grepped tests for '-M'/'--clusters' in alive/cancel contexts). Not in the fixed/refuted/architecture-review lists (grepped squeue/scancel/federat).",
-  "id": "F37",
-  "lens": "scheduler-backends",
-  "triage": "Confirmed the three builders (e.g. build_cancel_cmd) take only job_ids with no cluster kwarg, so squeue/scancel omit -M while sbatch emits --clusters. verify_submitted's missing-doesn't-fail is refuted but the -M gap is a distinct new defect. Not banked.",
-  "related": [
-   {
-    "id": "F35",
-    "note": "Same compounding as F35/F36 for federated SLURM: F37 (alive/cancel builders omit -M <cluster>) yields empty squeue output that F35's rc-blind ran_ok=True reads as 'gone', settling a healthy run abandoned and false-confirming kills."
-   }
-  ],
-  "status": "CONFIRMED",
-  "final_severity": "medium",
-  "severity_disputed": [
-   "medium",
-   "high"
-  ],
-  "votes": [
-   {
-    "shard": "A-scheduler",
-    "verdict": "CONFIRMED",
-    "reasoning": "build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are @classmethods taking only job_ids (no cluster kwarg, so structurally cannot emit -M), while _build_slurm_command:571 emits --clusters= and query.py:158 threads --clusters= into sacct \u2014 a real, self-inconsistent asymmetry. In SLURM multi-cluster mode (what --clusters= actually implements) squeue/scancel without -M query only the default cluster and miss a routed job, compounding with F35. Reachability and impact are gated on the slurm_cluster config being set to a non-default cluster in a genuinely multi-cluster (vs auto-federation) deployment, where squeue's default federation view could otherwise find the job \u2014 hence medium, not high."
-   },
-   {
-    "shard": "B3-highs",
-    "verdict": "CONFIRMED",
-    "reasoning": "sbatch emits --clusters={self.cluster} (_engine.py:571-572) but build_alive_check_cmd/build_scheduler_state_cmd/build_cancel_cmd are classmethods with no cluster kwarg (:687,743,763), so squeue/scancel run against the login node's default cluster with no -M; query_sacct threads --clusters (:158-159), proving the flag is required and only the liveness/kill half dropped it. For a slurm_cluster-configured (multi-cluster) run, squeue returns empty-with-ack so the run settles abandoned and scancel silently no-ops. Real but scoped to the federated/multi-cluster config."
-   }
-  ]
- },
- {
   "title": "TORQUE completed jobs linger in live qstat as state 'C' for the keep_completed window but are counted alive and classified RUNNING \u2014 kill verification reports 'still alive' after a successful qdel, and finished runs can't settle until the window expires",
   "severity": "medium",
   "where": "src/hpc_agent/infra/backends/_engine.py:723-740,874-890,939-944",
@@ -1154,7 +1157,8 @@
     "verdict": "CONFIRMED",
     "reasoning": "reconcile.py:801-825 fans 3 concurrent same-target ssh commands over ThreadPoolExecutor, all multiplexed on one per-host _HostConn (inflight up to 3). _Engine.run's failure discards at ssh_engine.py:581/590 call self._discard unconditionally with no inflight>1 veto, unlike the sweeper's inflight==0 veto (711); _discard->_do_close->conn.close() aborts the whole connection, severing peers mid-command into EngineUnavailable and one-shot re-exec. Real asymmetry; engine-opt-in gated, medium fits."
    }
-  ]
+  ],
+  "post_verification": "Smoke correction: same as F55 \u2014 engine default-ON under mcp-serve, so the peer-sever cascade (which feeds F55's silent re-execution) is default-on for MCP-driven monitor ticks, not opt-in. Severity stays medium (waste/burst, not direct corruption) but reachability is broader than the votes assumed."
  },
  {
   "title": "The rsync-less content-hash delta push silently IGNORES internal-slash exclude patterns: files a caller excluded with an anchored pattern (e.g. rsync_excludes=['data/interim/']) are excluded by the rsync and full-copy tar modes but SHIP in delta mode \u2014 the same push command transfers different file sets depending on whether the remote manifest round-trip succeeded",
@@ -1381,7 +1385,8 @@
     "verdict": "CONFIRMED",
     "reasoning": "Read journal_dir at run_record.py:408-424 (unconditionally mkdirs the namespace, writes repo.json, mkdirs runs/) and the three guards at index.py:144/179/209 (`not journal_dir(experiment_dir).exists()`): evaluating the guard itself calls journal_dir which creates the dir, so the exists() check is always True \u2014 a guard that can never fire, and the read scaffolds the namespace as a side effect. find_stalled_runs/find_parked_runs default experiment_dir to Path.cwd() (:257/307), so doctor/status invoked from a non-experiment dir mints a ghost ~/.claude/hpc/<hash>/ that fleet=True */repo.json walks then scan. Impact is low hygiene pollution, matching the finding's rating."
    }
-  ]
+  ],
+  "post_verification": "Empirically confirmed live in the sweep session: with ~/.claude/hpc absent, read-only status-snapshot (mark_seen=false) + doctor scaffolded ~/.claude/hpc/a8de6a2c9cd4/ (repo.json, index.json, runs/), first_seen stamped at the exact snapshot call time. See live-smoke-notes.md."
  },
  {
   "title": "Per-spec rsync_excludes are silently ignored in batch mode: submit-flow-batch honours only the batch-level field, while the single-spec surface honours the same field on the spec \u2014 a multi-spec campaign submit ships everything the specs asked to exclude",

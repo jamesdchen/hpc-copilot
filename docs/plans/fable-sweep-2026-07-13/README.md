@@ -6,7 +6,7 @@ these into work packages lands as a sibling file; these JSONs are the source of
 truth the hardening swarm should consume programmatically.
 
 - `verified-findings.json` — 57 canonical findings (55 CONFIRMED / 2 WEAK,
-  18 high / 28 medium / 9 low post-verification). Each record carries: the
+  20 high / 26 medium / 9 low post-verification-and-rulings (see RULINGS.md)). Each record carries: the
   finder's failure scenario + fix sketch + evidence, the triage spot-check
   rationale, cross-lens merge/related annotations (compounding chains), and
   every adversarial skeptic vote with reasoning (2 independent votes per
