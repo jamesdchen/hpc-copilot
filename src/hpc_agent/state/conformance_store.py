@@ -42,7 +42,6 @@ ledger file and routes shape/lock decisions through the shared kernels.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -50,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent.infra.io import append_jsonl_line
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state import attestation, scopes
+from hpc_agent.state import attestation, determinism, scopes
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -288,20 +287,14 @@ def _canonical_observation_sha(
 
     The harness-contract sha form (``docs/internals/harness-contract.md``:
     ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)``,
-    SHA-256 lowercase hex).
-
-    # T1 seam: ``state/conformance.py`` (T1, built in parallel) owns the same
-    # canonical payload sha; the orchestrator unifies the two (the fingerprint
-    # T3/T1 pairing merged cleanly at the identical seam). Until then this store
-    # implements the C-store JSON shape verbatim so it stands alone.
+    SHA-256 lowercase hex). The json+sha kernel is the ONE such canonicalization
+    (:func:`state.determinism.canonical_sha`), reused here rather than a local
+    copy; ``sort_keys`` neutralizes the assembly order so the digest is
+    byte-identical to :func:`state.conformance.canonical_content_sha`.
     """
-    canonical = json.dumps(
-        {"labels": dict(labels), "observed_at": observed_at, "payload": dict(payload)},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
+    return determinism.canonical_sha(
+        {"labels": dict(labels), "observed_at": observed_at, "payload": dict(payload)}
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _require_flat_scalar_dict(value: Any, *, what: str) -> dict[str, Any]:

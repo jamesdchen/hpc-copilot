@@ -56,8 +56,6 @@ vocabulary; nothing else.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -175,17 +173,6 @@ WELL_EVIDENCED_MIN_N = 3
 # --- the canonical payload sha (C-store; harness-contract form) --------------
 
 
-def _canonical_json(obj: Any) -> str:
-    """The harness sha canonicalization (``docs/internals/harness-contract.md``).
-
-    ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`` —
-    the ONE canonical form every ``content_sha`` in this package uses (the
-    notebook-audit ``_canonical_json`` sibling; state cannot import the ops
-    copy, so the leaf form is inlined here, byte-identical).
-    """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def canonical_content_sha(
     payload: Mapping[str, Any], labels: Mapping[str, Any], observed_at: str
 ) -> str:
@@ -194,10 +181,14 @@ def canonical_content_sha(
     The canonical-JSON sha (C-store) recomputed SERVER-SIDE at append and bound
     via ``state/attestation.py::bind`` — a hash cannot be asserted into
     existence. Pure and deterministic: the same three inputs always yield the
-    same hex digest.
+    same hex digest. The json+sha kernel is the ONE harness-contract
+    canonicalization (:func:`state.determinism.canonical_sha`), reused here
+    rather than a local copy; only the ``{payload, labels, observed_at}``
+    assembly lives at this seam.
     """
-    material = _canonical_json({"payload": payload, "labels": labels, "observed_at": observed_at})
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    return determinism.canonical_sha(
+        {"payload": payload, "labels": labels, "observed_at": observed_at}
+    )
 
 
 # --- the observation record model + validation (C-store) --------------------
