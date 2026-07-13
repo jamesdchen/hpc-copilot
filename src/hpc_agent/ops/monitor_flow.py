@@ -221,19 +221,29 @@ def _census_complete_task_ids(record: Any, run_id: str) -> set[int] | None:
     (fail closed — the caller degrades to no wave bookkeeping this tick).
     """
     from hpc_agent.infra import remote
+    from hpc_agent.infra.ssh_validation import split_ack, wrap_with_ack
     from hpc_agent.ops.monitor.announce import ANNOUNCE_STATE_COMPLETE, ANNOUNCE_SUBPATH
 
     announce_dir = f"{str(record.remote_path).rstrip('/')}/{ANNOUNCE_SUBPATH}/{run_id}"
     suffix = f".{ANNOUNCE_STATE_COMPLETE}"
-    cmd = f"cd {shlex.quote(announce_dir)} 2>/dev/null && ls task_*{suffix} 2>/dev/null; true"
+    # Ack-gate the listing (run-12 finding 24): a severed channel returns rc 0
+    # with truncated stdout that would masquerade as a short-but-valid marker
+    # list. wrap_with_ack replaces the ``… ; true`` mask with a sentinel echo;
+    # its ABSENCE (split_ack rc is None) is positive proof the read was
+    # truncated -> degrade to no wave bookkeeping this tick. An ack that is
+    # present but carries a non-zero rc (announce dir not created yet, or ``ls``
+    # matched nothing) is a legitimate empty read, not a truncation.
+    ack = "__HPC_CENSUS_ACK__="
+    inner = f"cd {shlex.quote(announce_dir)} 2>/dev/null && ls task_*{suffix} 2>/dev/null"
     try:
-        proc = remote.ssh_run(cmd, ssh_target=resolve_ssh_target(record))
+        proc = remote.ssh_run(wrap_with_ack(inner, ack), ssh_target=resolve_ssh_target(record))
     except Exception:  # noqa: BLE001 — best-effort; degrade to no wave bookkeeping
         return None
-    if proc.returncode != 0:
+    clean, rc = split_ack(proc.stdout, ack)
+    if rc is None:
         return None
     ids: set[int] = set()
-    for raw in proc.stdout.splitlines():
+    for raw in clean.splitlines():
         name = raw.strip()
         if not (name.startswith("task_") and name.endswith(suffix)):
             continue
