@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.interview_doc import iter_interview_docs
 from hpc_agent.state.pack import (
     SEAM_NAMES,
     load_manifest,
@@ -212,16 +213,7 @@ def _read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]]:
     A PRESENT-but-malformed ``packs`` block (not a list) is an opted-in-but-broken
     setup → loud :class:`errors.SpecInvalid`, never a silent pass.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         if "packs" not in doc:
             return []
         block = doc["packs"]
