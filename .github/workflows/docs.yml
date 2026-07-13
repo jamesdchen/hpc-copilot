@@ -50,7 +50,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # On ``pull_request`` events ``actions/checkout`` defaults to
           # the ephemeral ``refs/pull/<n>/merge`` ref (a merge of PR
@@ -63,7 +63,7 @@ jobs:
           # ``github.sha`` (the pushed commit) is used.
           ref: ${{ github.event.pull_request.head.ref || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
