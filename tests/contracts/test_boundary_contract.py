@@ -185,6 +185,25 @@ RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
 )
 
 
+# The ``templates/scaffolds/`` files are a *different* boundary than the
+# deployed runtime. Scaffolds are reference strategy/executor examples that
+# the researcher copies into their experiment repo and runs host-side (the
+# orchestrator ask/tell "propose" path), where a real ``hpc-agent`` install
+# is present — they are not shipped verbatim to a python-only compute node by
+# ``deploy_runtime``. So they carry the runtime allowlist PLUS the closed-loop
+# campaign warm-start reader they legitimately need. Keep this list narrow;
+# new entries require a matching update to ``docs/reference/boundary-contract.md``.
+SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES = RUNTIME_MODULES_ALLOWED_IN_TEMPLATES | frozenset(
+    {
+        # ``prior_records`` / ``prior`` — read-only, oldest-first reduced
+        # metrics for a campaign, used by the optuna/pbt strategy scaffolds
+        # to warm-start their optimizer from prior iterations. Part of the
+        # documented closed-loop campaign API (boundary-contract.md).
+        "hpc_agent.execution.mapreduce.reduce.history",
+    }
+)
+
+
 def _imported_dotted_modules(path: Path) -> set[str]:
     """Return the set of fully-qualified imported module names in ``path``.
 
@@ -208,6 +227,21 @@ def _imported_dotted_modules(path: Path) -> set[str]:
     return modules
 
 
+def _bad_core_imports(path: Path, allowed: frozenset[str]) -> list[str]:
+    """Return sorted ``hpc_agent[.*]`` imports in ``path`` not on ``allowed``.
+
+    The shared boundary-scan primitive: a file is an offender iff it imports
+    the core package (bare ``hpc_agent`` or a ``hpc_agent.`` submodule) via a
+    dotted name that is not an explicitly allowlisted runtime/scaffold module.
+    """
+    imported = _imported_dotted_modules(path)
+    return sorted(
+        m
+        for m in imported
+        if (m == "hpc_agent" or m.startswith("hpc_agent.")) and m not in allowed
+    )
+
+
 def test_templates_do_not_import_core() -> None:
     """No deployed file under ``hpc_agent/execution/mapreduce/templates/`` may import ``hpc_agent``.
 
@@ -216,12 +250,20 @@ def test_templates_do_not_import_core() -> None:
     ``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``). New entries require a matching
     update to ``docs/reference/boundary-contract.md``.
 
-    Only the *deployed* runtime template subdirectories are scanned; the
-    ``templates/scaffolds/`` files are deployed by code-paths that
-    handle their own import boundary (``deploy_runtime`` for
-    ``cli_dispatcher`` / ``executor_template`` patterns; the user's
-    submit flow for ``tasks_example``), so the deployed-runtime
-    boundary applies only on the runtime subdirectory.
+    Two boundaries are scanned, each against its own allowlist:
+
+    * ``templates/runtime/`` — files ``deploy_runtime`` ships verbatim to a
+      (possibly python-only) compute node, so they may only import modules
+      ``deploy_runtime`` actually deploys (``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``).
+    * ``templates/scaffolds/`` — reference strategy/executor examples the
+      researcher copies into their experiment repo and runs host-side, where a
+      real ``hpc-agent`` install is present. These carry the runtime allowlist
+      PLUS the closed-loop warm-start reader (``reduce.history``) that the
+      optuna/pbt strategy scaffolds legitimately need
+      (``SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES``). Preferring an
+      allowlist-with-rationale over rewriting the scaffolds keeps the worked
+      examples faithful; the wider allowance is documented in
+      ``docs/reference/boundary-contract.md``.
 
     Phase 2 (Option C): the per-scheduler ``cpu_array`` / ``gpu_array``
     scripts are no longer static files under ``runtime/{sge,slurm}/`` —
@@ -246,20 +288,57 @@ def test_templates_do_not_import_core() -> None:
                 f"the boundary scanner has nothing to check. See {CONTRACT_DOC}."
             )
         for path in _walk_python_files(subdir_path):
-            imported = _imported_dotted_modules(path)
-            bad = sorted(
-                m
-                for m in imported
-                if (m == "hpc_agent" or m.startswith("hpc_agent."))
-                and m not in RUNTIME_MODULES_ALLOWED_IN_TEMPLATES
-            )
+            bad = _bad_core_imports(path, RUNTIME_MODULES_ALLOWED_IN_TEMPLATES)
             if bad:
                 offenders.append((str(path.relative_to(REPO_ROOT)), bad))
+
+    # Scaffolds live one directory over and are scanned against their own
+    # (wider) allowlist — see SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES.
+    scaffolds_root = (
+        REPO_ROOT
+        / "src"
+        / "hpc_agent"
+        / "execution"
+        / "mapreduce"
+        / "templates"
+        / "scaffolds"
+    )
+    if not scaffolds_root.is_dir():
+        raise AssertionError(
+            f"expected scaffolds dir {scaffolds_root} to exist; the boundary "
+            f"scanner has nothing to check. See {CONTRACT_DOC}."
+        )
+    for path in _walk_python_files(scaffolds_root):
+        bad = _bad_core_imports(path, SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES)
+        if bad:
+            offenders.append((str(path.relative_to(REPO_ROOT)), bad))
+
     assert not offenders, (
         f"templates/** must not import from hpc_agent (except deployed "
-        f"runtime modules). See {CONTRACT_DOC}.\n"
+        f"runtime / allowlisted scaffold modules). See {CONTRACT_DOC}.\n"
         + "\n".join(f"  {p}: {mods}" for p, mods in offenders)
     )
+
+    # Fire-path: prove the scanner actually flags a non-allowlisted core
+    # import rather than passing vacuously. A probe file importing a
+    # framework-internal (``hpc_agent.state.runs`` — the module reduce.history
+    # itself pulls in, and precisely what the scaffold allowlist must NOT
+    # cover) must be caught, while its allowlisted sibling import is ignored.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        probe = Path(td) / "probe_boundary_violation.py"
+        probe.write_text(
+            "from hpc_agent.state.runs import find_existing_runs\n"
+            "from hpc_agent.executor_cli import flag\n",
+            encoding="utf-8",
+        )
+        caught = _bad_core_imports(probe, SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES)
+        assert caught == ["hpc_agent.state.runs"], (
+            "boundary scanner must flag a non-allowlisted core import "
+            "(hpc_agent.state.runs) while ignoring the allowlisted "
+            f"hpc_agent.executor_cli; got {caught!r}"
+        )
 
     # The rendered array scripts are deployed too — assert they never
     # reference the core package (no ``import hpc_agent`` / ``from
