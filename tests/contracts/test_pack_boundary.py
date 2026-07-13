@@ -536,7 +536,10 @@ def test_signoff_authorship_gate_never_names_pack_blocks() -> None:
     ``pack-receipt`` / a ``"pack"`` scope branch — so no future edit can wire a CODE
     receipt into a human tier without tripping here.
     """
-    src = (_SRC / "ops" / "decision" / "journal.py").read_text(encoding="utf-8")
+    # ``journal`` is a PACKAGE now — concatenate every submodule so the scan
+    # covers the whole gate surface, not just the __init__ facade.
+    pkg = _SRC / "ops" / "decision" / "journal"
+    src = "\n\n".join(py.read_text(encoding="utf-8") for py in sorted(pkg.rglob("*.py")))
     for needle in ("pack-bind", "pack-receipt", 'scope_kind == "pack"', "scope_kind=='pack'"):
         assert needle not in src, (
             f"the decision-journal authorship module mentions {needle!r} — a pack "

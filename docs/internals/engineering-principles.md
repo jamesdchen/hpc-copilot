@@ -12,6 +12,36 @@ asserted, two had silently rotted (see the drift log below) while every
 mechanized check stayed true. Lessons that can fire live in CI; only the
 irreducible judgment calls stay prose.
 
+## Reading this page
+
+This page is long — it aggregates every enforcement map in the repo and, at
+~31k tokens, exceeds the single-read cap of common agent tooling (it can no
+longer be read in one pass). It is **navigable, not linear**: jump to the
+section you need via the contents below, or `grep` for a rule. The two judgment
+rules that no lint enforces lead the page; everything after is an enforcement
+map (normative — the lint/test named in each row is the source of truth).
+
+- [Verify a guard can actually fire before classifying it as "intentional"](#verify-a-guard-can-actually-fire-before-classifying-it-as-intentional) — judgment rule
+- [The determinism boundary: judgment in the LLM, mechanism in verbs](#the-determinism-boundary-judgment-in-the-llm-mechanism-in-verbs)
+- [Library knowledge in core: the four-question boundary test](#library-knowledge-in-core-the-four-question-boundary-test) — judgment rule
+- [Lifecycle verdicts and run identity: one definition, named tests](#lifecycle-verdicts-and-run-identity-one-definition-named-tests)
+- [The registration kernel: the deployment-boundary attestation is mechanism-only](#the-registration-kernel-the-deployment-boundary-attestation-is-mechanism-only)
+- [The determinism fingerprint: measure, don't ask](#the-determinism-fingerprint-measure-dont-ask)
+- [Domain packs: bind-as-data, trust content-addressed](#domain-packs-bind-as-data-trust-content-addressed)
+- [Live conformance: the chart judges, the operator adjusts](#live-conformance-the-chart-judges-the-operator-adjusts)
+- [Multi-human: attributed, never verified](#multi-human-attributed-never-verified)
+
+**Companion page — narrative & drift-log history.** The per-incident narrative
+and drift-log *history* (context, not normative CI) lives in a sibling,
+[`engineering-principles-history.md`](engineering-principles-history.md), so the
+normative maps stay the focus here. **Deferred (P6.4):** a deeper split that
+extracts the incident narrative baked into individual enforcement-map rows was
+judged too risky for one pass — the "fires when" clauses reference their
+incidents inline, so relocating them row-by-row would risk severing a normative
+line from its justification. The maps therefore remain here in full; only the
+self-contained drift-log narrative was moved. Revisit if the row-level narrative
+is ever restructured.
+
 ## Verify a guard can actually fire before classifying it as "intentional"
 
 When you hit a constraint, a defensive default, an apparent duplication, or
@@ -171,14 +201,14 @@ inline branch.
 
 ### Drift log (why prose alone failed)
 
-Recorded so the next "let's just document it" proposal has the base rate:
-the `CLAUDE.md` predecessor of this page asserted three present-tense facts.
-By 2026-06, `_FAILURE_CATEGORY_PATTERNS` no longer existed (collapsed into
-`CLASSIFIER_CATEGORIES`; the prose still said "three tests iterate it") and
-the deploy-ship list it cited omitted `executor_cli.py`. The lints and tests
-from the same era all still held. Facts belong where they are checked; this
-page cites sources of truth (`transport._build_deploy_items`, the lint's
-`KNOWLEDGE_PACKAGES`) instead of restating their contents.
+Moved to the companion history page:
+[`engineering-principles-history.md` § Drift log](engineering-principles-history.md#drift-log-why-prose-alone-failed).
+In short: the `CLAUDE.md` predecessor of this page asserted three present-tense
+facts and two had silently rotted (`_FAILURE_CATEGORY_PATTERNS` collapsed into
+`CLASSIFIER_CATEGORIES`; the deploy-ship list omitted `executor_cli.py`) while
+every mechanized check stayed true — which is why this page cites sources of
+truth (`transport._build_deploy_items`, the lint's `KNOWLEDGE_PACKAGES`) instead
+of restating their contents.
 
 ## Lifecycle verdicts and run identity: one definition, named tests
 

@@ -490,7 +490,7 @@ def resolve_submit_inputs(
         """
         import warnings as _warnings
 
-        from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+        from hpc_agent.infra.executor_guard import check_per_task_executor
 
         try:
             with _warnings.catch_warnings(record=True) as caught:

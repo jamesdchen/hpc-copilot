@@ -275,3 +275,24 @@ exploit demo (B4), caught stale line-cites/counts in over a dozen evidence
 fields before they entered the map, and confirmed 100% of the finder
 verdicts it did not correct — consistent with the ~13% unverified-error
 base rate the discipline was built against.
+
+### Residue triage — B1 / B7 / B10 / B14 (swept 2026-07-13)
+
+The four Sweep-2 rows left DRIFTED above were re-verified LIVE at HEAD. Two
+had already landed (the sweep table was written before the same-day fixes);
+one is by-design and mis-framed; one is unchanged structural work. The
+Sweep-2 verdict rows are preserved as the historical record of what the
+2026-07-12 sweep saw; THIS section is the authoritative current status.
+
+| Row | Status at HEAD (2026-07-13) | Evidence |
+|---|---|---|
+| **B1** popup-primary | **FIXED** (was DRIFTED) | `df05a45` — `notebook/view_op.py:175` now DEFAULTS to `render_summary_markdown` (the bodies-omitted DIGEST: per-section metadata + render-file pointers, no ~11k-token diff/assertion/flag bytes); the whole-body render is behind `full:true`. The finding's "diff lived twice" leg is also closed — the structured `diff` array was dropped from `NotebookSectionView` (`view_op.py:118-121`); the diff stays derivable from the per-section render file. The omit-at-the-source ruling is realized at the call site, not compacted downstream. |
+| **B10** no-silent-caps | **FIXED** (was DRIFTED) | `be842f8` — `state/challenges.py:838-855` no longer lets a later unvalidatable filing reset `filing_target` to `None`: the last VALID filing's target stands, and when filings exist but none validate the challenge lands in `skipped` (`"filing record(s) present but none validate"`) rather than vanishing. Pinned by the exact valid-then-invalid never-fires repro `tests/state/test_challenges.py::test_valid_then_invalid_filing_keeps_the_challenge_standing` (passes). |
+| **B7** one-definition | **RE-FRAMED — run_story skip is CORRECT-BY-DESIGN; residue narrowed** | The sweep read `state/run_story.py`'s `read_terminal` consumer as a sixth site that "skips the currency compare". It correctly abstains: the run story is a HISTORY projection of the complete journal trail (module docstring — IDENTITY/ORDERING/COUNTING over opaque records), the terminal store OVERWRITES latest-wins (one terminal per `(run_id, block)`), so the record on disk is the run's most recent terminal EVENT and must project regardless of the current tree sha. Adding the `cmd_sha==current` gate there would silently DROP a superseded-but-real terminal — a B10 no-silent-caps violation, not a fix. The intentional divergence is now documented in-code at the call site (this pass). The genuine one-definition residue is unchanged and narrower than the row states: the currency compare (`not current_sha or record.cmd_sha != current_sha → re-execute`) is inlined byte-identically in the FIVE REPLAY consumers (`ops/submit_blocks.py`, `ops/campaign_run.py`, `ops/aggregate_flow.py`, `ops/aggregate_blocks.py`, `ops/status_blocks.py`), each beside its own `_*_cmd_sha` helper. Extracting the ONE `terminal_is_current(record, current_sha)` home in `state/block_terminal.py` + a route-through pin is dispatch-ready but touches the replay consumers (outside the philosophy-audit-residue lane); banked, NOT landed. |
+| **B14** bound-capture | **UNCHANGED — structural, banked** (still DRIFTED) | `docs/design/bound-capture.md` is still `Status: PLANNED (banked 2026-07-11)`; the forensic authorship tier remains primary at every gate. This is a full retrofit (a scope-aware binding-capture surface superseding forensic reconstruction), not a cheap fix — it stays the banked dispatch-ready spec. Re-verified unchanged; no code moved this pass. |
+
+Net: B1 and B10 CLOSED at HEAD (record only — fixes pre-landed same day);
+B7 re-framed (run_story abstention documented in-code; the true 5-site
+inline-duplication residue banked, out of this lane); B14 confirmed still
+open structural work. No enforcement-map row changes needed beyond what the
+landed commits already carry.

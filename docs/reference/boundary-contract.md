@@ -343,6 +343,30 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    To add a new entry, the module must (a) be deployed by `deploy_runtime`,
    (b) be stdlib-only or self-contained, and (c) be added to both the
    allowlist constant in the lint test and this doc in the same PR.
+
+   **Scaffolds are a distinct, wider boundary.** The reference examples
+   under `hpc_agent/execution/mapreduce/templates/scaffolds/` are *copied*
+   into the researcher's experiment repo and driven **host-side** — the
+   orchestrator ask/tell "propose" path — where a real `hpc-agent` install is
+   present. They are not shipped verbatim to a python-only compute node by
+   `deploy_runtime`. So the boundary test scans `scaffolds/` against a
+   separate, wider allowlist (`SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES` in
+   `tests/contracts/test_boundary_contract.py`) = the runtime allowlist above
+   **plus**:
+   - `hpc_agent.execution.mapreduce.reduce.history` — the read-only,
+     oldest-first `prior` / `prior_records` campaign warm-start readers (see
+     "Closed-loop campaigns" above). The optuna / pbt strategy scaffolds
+     (`optuna_strategy.py`, `optuna_async_strategy.py`, `pbt_strategy.py`)
+     import `prior_records` to seed their optimizer from prior iterations.
+     Unlike the runtime allowlist, this module is **not** deployed by
+     `deploy_runtime` and transitively imports framework internals
+     (`hpc_agent.state.runs`, `hpc_agent.errors`); that is acceptable for
+     scaffolds precisely because they run where `hpc-agent` is installed.
+     Preferring this allowlist-with-rationale over rewriting the scaffolds
+     keeps the worked examples faithful. To add a scaffold-only entry the
+     module must be part of the documented experiment-facing API and be added
+     to both the `SCAFFOLD_MODULES_ALLOWED_IN_TEMPLATES` constant and this doc
+     in the same PR.
 4. **`tests/**` may import either** — tests live in the framework repo and
    exercise both sides.
 

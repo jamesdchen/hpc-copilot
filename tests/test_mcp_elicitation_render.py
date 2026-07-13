@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from hpc_agent._kernel.extension import mcp_elicitation as ME
 from hpc_agent._kernel.extension import mcp_server as M
 from hpc_agent.ops.notebook.audit_view import build_audit_view
 from hpc_agent.ops.notebook.render_store import write_render
@@ -115,7 +116,7 @@ def test_prompt_surfaces_diff_hunks_and_bounded_body(tmp_path: Path) -> None:
 def test_prompt_diff_body_truncation_is_disclosed(tmp_path: Path, monkeypatch) -> None:
     # Squeeze the embed budget so the fixture's diff overruns it — the cut is
     # on a line boundary and the elision count is DISCLOSED, never silent.
-    monkeypatch.setattr(M, "_DIFF_EMBED_MAX_BYTES", 20)
+    monkeypatch.setattr(ME, "_DIFF_EMBED_MAX_BYTES", 20)
     sv = _write_render(tmp_path)
     prompt = M._render_elicitation_prompt(_notebook_args(sv.view_sha), tmp_path)
     assert "more diff lines — the full render on disk carries them" in prompt
@@ -152,7 +153,7 @@ def test_oversize_digest_emits_honest_refusal_not_a_silent_trim(
 ) -> None:
     # Squeeze the budget so the normal fixture overruns it; the composer must then
     # REFUSE to digest (naming the counts) rather than compress until an item drops.
-    monkeypatch.setattr(M, "_DIGEST_BLOCK_MAX_BYTES", 60)
+    monkeypatch.setattr(ME, "_DIGEST_BLOCK_MAX_BYTES", 60)
     sv = _write_render(tmp_path)
     prompt = M._render_elicitation_prompt(_notebook_args(sv.view_sha), tmp_path)
     assert "too large to digest honestly" in prompt

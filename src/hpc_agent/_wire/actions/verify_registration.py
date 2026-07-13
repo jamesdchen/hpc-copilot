@@ -67,6 +67,7 @@ TemplateStatus = Literal["current", "stale"]
 # T9 contract suite pins the two equal so adding a kind is a reviewed vocabulary
 # change in ONE place. ``pack-receipt`` is reserved (lands with the domain-pack
 # substrate); until then T4's checker refuses it loudly (never a silent pass).
+# MIRROR: hpc_agent.state.registration::PREREQUISITE_KINDS pinned-by tests/contracts/test_registration_boundary.py::test_prerequisite_kinds_is_the_closed_mechanism_noun_set
 PrerequisiteKind = Literal[
     "notebook-audit",
     "reproduction",

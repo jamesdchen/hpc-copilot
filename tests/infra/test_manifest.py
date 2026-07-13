@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent.ops.transfer.manifest import (
+from hpc_agent.infra.manifest import (
     Manifest,
     build_manifest,
     manifest_delta,

@@ -1391,10 +1391,10 @@ def self_heal_campaign(
     # spec moved (the consent already died on that leg).
     identity = ""
     try:
-        from hpc_agent.meta.campaign.blocks import _campaign_spec_identity
+        from hpc_agent.meta.campaign.blocks import campaign_spec_identity
         from hpc_agent.meta.campaign.manifest import read_manifest
 
-        identity = _campaign_spec_identity(read_manifest(experiment_dir, campaign_id=campaign_id))
+        identity = campaign_spec_identity(read_manifest(experiment_dir, campaign_id=campaign_id))
     except Exception:  # noqa: BLE001 — a manifest read failure must not crash the heal
         identity = ""
     metered_budget, metered_walltime = consumed_spend(experiment_dir, "campaign", campaign_id)

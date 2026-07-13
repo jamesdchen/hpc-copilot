@@ -149,6 +149,13 @@ class SlotStatus:
       against, or ``None`` when there is no current bind.
     * ``checked`` — the checked relpaths of the newest valid receipt (empty when
       missing) — what the currency recompute hashed on disk.
+    * ``current_sha`` — the composite ``content_sha`` the reduction recomputed
+      from the CURRENT bind + CURRENT on-disk bytes
+      (:func:`receipt_content_sha`), or ``None`` when there is no current bind or
+      no valid receipt to reduce. This is the identity a caller-asserted receipt
+      ``content_sha`` is compared against (the registration prereq recompute
+      lock, ``ops/registration/prereqs.py``); exposed here so that comparison
+      never re-derives the composite form out of band.
     """
 
     slot: str
@@ -157,6 +164,7 @@ class SlotStatus:
     reason: str | None
     manifest_sha: str | None
     checked: tuple[str, ...]
+    current_sha: str | None = None
 
     @property
     def passing(self) -> bool:
@@ -368,6 +376,7 @@ def slot_status(
             reason="missing",
             manifest_sha=bind.manifest_sha if bind else None,
             checked=(),
+            current_sha=None,
         )
     evidence = newest.evidence if isinstance(newest.evidence, dict) else {}
     checked_raw = evidence.get("checked")
@@ -378,7 +387,7 @@ def slot_status(
     if bind is None:
         # No current bind → currency cannot be established → the receipt is
         # revoked (a receipt is only current relative to a live bind).
-        return SlotStatus(slot, STALE, passed, "stale", None, checked)
+        return SlotStatus(slot, STALE, passed, "stale", None, checked, current_sha=None)
 
     # Recompute the read-form composite sha from CURRENT disk + CURRENT bind, the
     # identical form the record side built (:func:`receipt_content_sha`).
@@ -388,10 +397,14 @@ def slot_status(
     verdict = attestation.reduce(projected, current_sha=current_sha, subject_id=slot)
     if verdict == attestation.CURRENT:
         if passed:
-            return SlotStatus(slot, CURRENT_PASSED, True, None, bind.manifest_sha, checked)
-        return SlotStatus(slot, CURRENT_FAILED, False, "failed", bind.manifest_sha, checked)
+            return SlotStatus(
+                slot, CURRENT_PASSED, True, None, bind.manifest_sha, checked, current_sha
+            )
+        return SlotStatus(
+            slot, CURRENT_FAILED, False, "failed", bind.manifest_sha, checked, current_sha
+        )
     # STALE (ABSENT unreachable — newest is not None here). Drift = unsigned.
-    return SlotStatus(slot, STALE, passed, "stale", bind.manifest_sha, checked)
+    return SlotStatus(slot, STALE, passed, "stale", bind.manifest_sha, checked, current_sha)
 
 
 def slot_statuses(

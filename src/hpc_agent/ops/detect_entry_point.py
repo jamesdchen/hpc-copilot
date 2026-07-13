@@ -331,8 +331,8 @@ _MATERIALIZED_FIELDS: tuple[str, ...] = (
 def _read_materialized_entry_point(root: Path) -> dict[str, Any] | None:
     """Surface ``interview.json``'s ``_materialized.entry_point`` block, if any.
 
-    A wrapper-fallback onboarding (``hpc-wrap-entry-point`` /
-    ``/wrap-entry-point-hpc``) persists the chosen entry point to
+    A wrapper-fallback onboarding (the ``hpc-wrap-entry-point`` skill)
+    persists the chosen entry point to
     ``<experiment_dir>/interview.json`` under
     ``_materialized.entry_point`` — a ``{kind, ...}`` block whose ``kind``
     is ``shell_command`` / ``register_run`` / ``python_module``. Folding it

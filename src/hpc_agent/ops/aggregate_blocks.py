@@ -51,7 +51,7 @@ from hpc_agent.ops.scope_gate import assert_scopes_unlocked
 from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import TERMINAL_STATUSES
-from hpc_agent.state.runs import read_run_sidecar, resolved_summary_artifact
+from hpc_agent.state.runs import read_run_cmd_sha, read_run_sidecar, resolved_summary_artifact
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -459,22 +459,6 @@ def aggregate_check(experiment_dir: Path, *, spec: AggregateCheckSpec) -> Aggreg
 # ── aggregate-run detach-by-contract helpers (design §3; run-#10 F-K) ─────────
 
 
-def _agg_run_cmd_sha(experiment_dir: Path, run_id: str) -> str:
-    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
-
-    The identity a terminal replay is keyed on (mirrors
-    ``ops/submit_blocks._current_cmd_sha`` / ``ops/status_blocks._watch_cmd_sha``):
-    a nudge that re-resolves the run rewrites the sidecar ``cmd_sha``, so a
-    mismatch is "the tree moved → do not replay a stale outcome". An
-    unreadable/absent sidecar yields ``""`` → the replay refuses (re-execute).
-    """
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, ValueError, errors.HpcError):
-        return ""
-    return str((sidecar or {}).get("cmd_sha") or "")
-
-
 def _detached_agg_run_spec_dict(spec: AggregateRunSpec) -> dict[str, Any]:
     """Serialize *spec* with ``detach`` forced OFF for the detached child.
 
@@ -500,7 +484,7 @@ def _replay_agg_run_terminal(experiment_dir: Path, run_id: str) -> AggregateBloc
     record = read_terminal(experiment_dir, run_id, _AGG_RUN_BLOCK_KEY)
     if record is None:
         return None
-    current_sha = _agg_run_cmd_sha(experiment_dir, run_id)
+    current_sha = read_run_cmd_sha(experiment_dir, run_id)
     if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
         return None
     try:
@@ -524,7 +508,7 @@ def _record_agg_run_terminal(experiment_dir: Path, result: AggregateBlockResult)
         experiment_dir,
         run_id=result.run_id,
         block=_AGG_RUN_BLOCK_KEY,
-        cmd_sha=_agg_run_cmd_sha(experiment_dir, result.run_id),
+        cmd_sha=read_run_cmd_sha(experiment_dir, result.run_id),
         result_dump=result.model_dump(mode="json"),
     )
 

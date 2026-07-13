@@ -66,7 +66,7 @@ def _assert_derived_executor_runnable(executor_cmd: str, *, kind: str) -> None:
 
     The bar is the same pair the submit path enforces downstream:
 
-    * :func:`hpc_agent.incorporation.build.submit_spec.check_per_task_executor`
+    * :func:`hpc_agent.infra.executor_guard.check_per_task_executor`
       (format placeholders, bare ``module:function``, bare script names,
       kwarg casing) — called without an ``experiment_dir`` (the kwarg set is
       unknowable here, so that leg no-ops exactly as at sidecar-write time);
@@ -79,7 +79,7 @@ def _assert_derived_executor_runnable(executor_cmd: str, *, kind: str) -> None:
     # predicate write-run-sidecar applies); submit_flow is reached via the
     # package alias form (the direct subject spelling trips the
     # subject-import lint from inside ``memory``).
-    from hpc_agent.incorporation.build.submit_spec import check_per_task_executor
+    from hpc_agent.infra.executor_guard import check_per_task_executor
     from hpc_agent.ops import submit_flow as _submit_flow
 
     prefix = (

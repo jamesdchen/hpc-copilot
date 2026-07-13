@@ -41,7 +41,6 @@ satisfied by construction.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from hpc_agent import errors
@@ -56,6 +55,7 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.env_flags import env_actor  # type: ignore[attr-defined]
 from hpc_agent.state import notebook_audit
 from hpc_agent.state.audit_source import parse_percent_source
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 __all__ = ["notebook_draft"]
 
@@ -93,16 +93,7 @@ def _declared_actor_ids(experiment_dir: Path) -> list[str]:
     the D7 fail-safe — never an error). The count is what turns the >1-actor
     comparisons on; the ids are what a resolved session actor is validated against.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         actors = doc.get("actors")
         if isinstance(actors, dict):
             ids = actors.get("ids")

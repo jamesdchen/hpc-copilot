@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from hpc_agent._wire._shared import DetachedHandleFields
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent._wire.workflows.status_pipeline import StatusPipelineSpec
 from hpc_agent._wire.workflows.submit_pipeline import SubmitPipelineSpec
@@ -101,7 +102,7 @@ class CampaignRunSpec(BaseModel):
     )
 
 
-class CampaignRunResult(BaseModel):
+class CampaignRunResult(DetachedHandleFields):
     """Shape of the ``data`` field on a ``campaign-run`` envelope.
 
     ``stage_reached`` is the deterministic dispatch over the three sub-stage
@@ -169,29 +170,6 @@ class CampaignRunResult(BaseModel):
             "The aggregate-flow `data` summary on a `complete` stage (combined_waves, "
             "failed_waves, aggregated_metrics, etc.); null when aggregate was not reached "
             "or did not produce a clean result."
-        ),
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3; run-#10 F-K): True when campaign-run "
-            "spawned a durable detached worker to own the whole iteration and returned "
-            "immediately instead of running the spine in-process. The outcome is read "
-            "from the journal on completion. False on the synchronous (detach=False) path."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached iteration\'s outcome — ``"journal"`` when '
-            "``started`` is True. None on the synchronous path."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description=(
-            "The detached worker's OS process id (informational — do NOT wait on it; "
-            "read the journal). None on the synchronous path."
         ),
     )
     active_env_overrides: dict[str, str] = Field(

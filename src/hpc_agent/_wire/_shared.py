@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 # ── identifiers ──────────────────────────────────────────────────────────────
 
@@ -288,3 +288,51 @@ Runtime = Literal["uv"]
 # boundary (#337). ``pbspro`` and ``torque`` are the two PBS forks (distinct
 # command grammars; see SchedulerProfile).
 BackendName = Annotated[str, AfterValidator(_validate_registered_backend)]
+
+# ── detach-by-contract handle ─────────────────────────────────────────────────
+
+
+class DetachedHandleFields(BaseModel):
+    """The detach-by-contract handle triple (design §3), mixed into every
+    workflow ``*Result`` that can return an immediate detached handle instead of
+    blocking the chat on the work.
+
+    Every detaching atom — the submit blocks, ``status-watch``, ``aggregate-run``,
+    ``aggregate-flow``, ``campaign-run``, and ``submit-speculate`` — re-declared
+    these three fields verbatim. Declaring them ONCE here single-sources the
+    handle contract: the gate + drift guard fire synchronously BEFORE the detach,
+    and the outcome is read from the per-run journal rather than held in a
+    process. A ``*Result`` inherits this and its schema inlines the three fields
+    (no ``$defs`` — inheritance, not composition). This is a field-carrier mixin,
+    not an emitted wire model: its ``Fields`` suffix is skipped by the schema
+    generator, and each subclass keeps its own ``model_config`` title.
+    """
+
+    started: bool = Field(
+        default=False,
+        description=(
+            "Detach-by-contract handle (design §3): True when this atom spawned a "
+            "durable detached worker and returned immediately instead of blocking "
+            "the chat on the work (the scheduler dial / harvest / iteration spine). "
+            "The gate + drift guard already fired synchronously BEFORE the detach; "
+            "the outcome is not held in a process — read it from the per-run journal "
+            "via status-snapshot / the completion notification. False on the "
+            "synchronous (detach=False) path."
+        ),
+    )
+    watch: str | None = Field(
+        default=None,
+        description=(
+            'How to learn the detached work\'s outcome — ``"journal"`` when '
+            "``started`` is True (the detached worker stamps the per-run journal "
+            "record as it runs; poll it cluster-free). None on the synchronous path."
+        ),
+    )
+    detached_pid: int | None = Field(
+        default=None,
+        description=(
+            "The detached worker's OS process id (informational — do NOT wait on "
+            "it; read the journal). None on the synchronous path. A dead worker is "
+            "detected by the §5 watchdog via a lapsed next_tick_due, not by this pid."
+        ),
+    )

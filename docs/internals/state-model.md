@@ -315,7 +315,7 @@ A few cross-cutting properties worth knowing:
 - **`cmd_sha` is the idempotency key.** Two submissions with the same `cmd_sha` are duplicates; the second is deduped against the first.
 - **The journal is append-only.** Never edited or compacted in normal operation.
 - **The preflight marker has a 24h TTL.** After 24h, the `/submit-hpc` Step 6b gate forces a re-probe.
-- **Campaign cursor advances by one per tick.** Each `hpc-campaign-driver` invocation either advances the cursor or fails; it never advances by more than one.
+- **Campaign cursor advances by one per tick.** Each `hpc-block-drive` invocation either advances the cursor or fails; it never advances by more than one.
 - **Stage outputs land in shared cluster scratch.** Inter-stage data flow is purely filesystem; no journal entries between stages.
 
 ## Locations summary

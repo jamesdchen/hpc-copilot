@@ -6,7 +6,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from hpc_agent._wire._shared import CombinedWaves, FailedWaves, RunIdStrict
+from hpc_agent._wire._shared import (
+    CombinedWaves,
+    DetachedHandleFields,
+    FailedWaves,
+    RunIdStrict,
+)
 
 
 class AggregateFlowSpec(BaseModel):
@@ -137,7 +142,7 @@ class AggregateFlowSpec(BaseModel):
         return self
 
 
-class AggregateFlowResult(BaseModel):
+class AggregateFlowResult(DetachedHandleFields):
     """Shape of the ``data`` field on a successful ``aggregate-flow`` envelope."""
 
     model_config = ConfigDict(extra="forbid", title="aggregate-flow output data")
@@ -227,29 +232,5 @@ class AggregateFlowResult(BaseModel):
             "per tag — the framework counts looks, it never interprets what "
             "they found. Null (key omitted in spirit) for a scope-less run, so "
             "existing consumers are untouched."
-        ),
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3; run-#10 F-K): True when a DIRECT "
-            "aggregate-flow invocation with detach=true spawned a durable detached "
-            "worker to own the combine + rsync harvest and returned immediately. The "
-            "reduced metrics are read from the journal on completion; the data fields "
-            "above are empty on the handle. False on every synchronous / composed path."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
-            "``started`` is True. None on the synchronous path."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description=(
-            "The detached worker's OS process id (informational — do NOT wait on it; "
-            "read the journal). None on the synchronous path."
         ),
     )

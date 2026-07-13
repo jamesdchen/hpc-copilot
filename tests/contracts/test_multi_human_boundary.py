@@ -45,7 +45,7 @@ def _hpc_src_root() -> pathlib.Path:
 
 _ACTOR_MODULES = (
     "infra/env_flags.py",
-    "ops/decision/journal.py",
+    "ops/decision/journal",  # a PACKAGE now — _read concatenates its submodules
     "ops/notebook/draft_op.py",
     "state/utterances.py",
     "state/notebook_audit.py",
@@ -58,7 +58,14 @@ _ACTOR_MODULES = (
 
 
 def _read(rel: str) -> str:
-    return (_hpc_src_root() / rel).read_text(encoding="utf-8")
+    """Source text at *rel*. When *rel* names a PACKAGE directory (the decision
+    journal was split into ``ops/decision/journal/``), concatenate every submodule
+    so the whole-module source scans below still see the full gate surface rather
+    than going vacuous over a bare ``__init__.py``."""
+    path = _hpc_src_root() / rel
+    if path.is_dir():
+        return "\n\n".join(py.read_text(encoding="utf-8") for py in sorted(path.rglob("*.py")))
+    return path.read_text(encoding="utf-8")
 
 
 # ── attributed ≠ verified: no identity-verification path ──────────────────────
@@ -131,7 +138,10 @@ def test_gate_binds_attestor_id_to_the_server_resolved_actor() -> None:
     assert "_session_actor(" in src
     assert "attestor_id=attestor_id" in src
     # The gate never trusts a spec-side actor field (there is none to read).
-    module_src = inspect.getsource(journal)
+    # ``journal`` is a PACKAGE now, so inspect.getsource(journal) would return only
+    # __init__.py and this negative check would pass VACUOUSLY — read the whole
+    # concatenated package instead.
+    module_src = _read("ops/decision/journal")
     assert "spec.attestor_id" not in module_src
     assert "spec.actor" not in module_src
 
@@ -245,9 +255,9 @@ def test_gate_never_hardcodes_a_named_actor() -> None:
     """No fixture actor slug (``alice`` / ``bob``) is hardcoded in the core gate —
     identity comparisons are variable-to-variable over opaque slugs, never a
     named-actor special case (a named branch would be a vocabulary)."""
-    from hpc_agent.ops.decision import journal
-
-    module_src = inspect.getsource(journal)
+    # ``journal`` is a PACKAGE now — concatenate its submodules so this scan sees
+    # the whole gate surface instead of only the __init__ facade (a vacuous pass).
+    module_src = _read("ops/decision/journal")
     for slug in ("alice", "bob", "carol"):
         assert f'"{slug}"' not in module_src and f"'{slug}'" not in module_src, (
             f"a named actor {slug!r} is hardcoded in the gate module"

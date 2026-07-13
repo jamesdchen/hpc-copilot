@@ -30,12 +30,12 @@ Pure local reads — no SSH, no ``_wire`` import, no scheduler.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import read_decisions
+from hpc_agent.state.interview_doc import iter_interview_docs
 from hpc_agent.state.notebook_audit import (
     AUTO_CLEAR_BLOCK,
     PASSING_STATUSES,
@@ -65,16 +65,7 @@ def _read_audited_source(experiment_dir: Path) -> dict[str, Any] | None:
     opted in" → ``None`` → the D7 silent no-op. This is the ONLY filesystem probe
     on the not-opted-in path.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("audited_source")
         if isinstance(block, dict):
             return block

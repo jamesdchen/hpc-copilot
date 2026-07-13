@@ -23,9 +23,10 @@ import json
 import shlex
 import shutil
 import sys
+from collections.abc import Callable
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.io import atomic_write_text
@@ -53,252 +54,180 @@ def _hook_python() -> str:
     return shlex.quote(sys.executable.replace("\\", "/"))
 
 
-def _build_hook_command() -> str:
-    """The autofetch ``PostToolUse`` hook command, with a bash-level pre-filter.
+def _hook_command(module: str, prefilter: tuple[str, ...] = ()) -> str:
+    """The ``bash -c`` command string for a hook that runs ``python -m <module>``.
 
-    ``matcher: "Bash"`` fires this hook after **every** Bash call, and a
-    Python interpreter start costs ~300-500ms on Windows (#288). The ``case``
-    pre-filter keeps the non-emit common path at bash-builtin cost: only a
-    payload mentioning ``emit-skill-return`` reaches Python. (The substring
-    scan over the whole payload can false-positive on e.g. an unrelated
-    command echoing the verb name — that costs one no-op interpreter start,
-    nothing more.)
+    Two shapes, selected by *prefilter*:
+
+    * **Bare** (``prefilter=()``): ``<python> -m <module>``. Used by the hooks
+      that fire rarely — once per turn (Stop guards, relay audit), once per
+      session (alert count), once per prompt (utterance capture), or once per
+      matched tool call (answer capture) — where the interpreter start is paid
+      seldom and no pre-filter is worth its complexity.
+    * **Pre-filtered** (non-empty *prefilter*): a bash ``case`` gate that only
+      pipes the payload into Python when it contains one of the *prefilter*
+      substrings, keeping the every-Bash-call common path at bash-builtin cost.
+      A Python interpreter start costs ~300-500ms on Windows (#288), so the
+      ``matcher: "Bash"`` hooks (skill-return / rendezvous autofetch, the
+      scheduler write-fence) gate on their trigger verbs. The substring scan can
+      false-positive on an unrelated command echoing a verb — that costs one
+      no-op interpreter start, nothing more.
     """
-    return (
-        'input=$(cat); case "$input" in *emit-skill-return*) '
-        f"printf '%s' \"$input\" | {_hook_python()} "
-        "-m hpc_agent._kernel.hooks.skill_return_autofetch;; esac"
-    )
-
-
-def _build_stop_hook_command() -> str:
-    """The stop-guard ``Stop`` hook command — no pre-filter.
-
-    Stop fires once per turn (not per tool call), so the interpreter start is
-    paid rarely; the guard itself needs the filesystem probe either way.
-    """
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.skill_return_stop_guard"
-
-
-def _build_rendezvous_autofetch_command() -> str:
-    """The decision-rendezvous ``PostToolUse`` hook command, with a pre-filter.
-
-    Mirrors :func:`_build_hook_command`: ``matcher: "Bash"`` fires after every
-    Bash call, so a ``case`` pre-filter keeps the non-``block-drive`` common
-    path at bash-builtin cost — only a payload mentioning ``block-drive``
-    reaches Python (which then reads the freshly-parked brief back).
-    """
-    return (
-        'input=$(cat); case "$input" in *block-drive*) '
-        f"printf '%s' \"$input\" | {_hook_python()} "
-        "-m hpc_agent._kernel.hooks.decision_rendezvous_autofetch;; esac"
-    )
-
-
-def _build_rendezvous_stop_hook_command() -> str:
-    """The decision-rendezvous ``Stop`` guard command — no pre-filter.
-
-    Sibling of :func:`_build_stop_hook_command`: Stop fires once per turn, so
-    the interpreter start is paid rarely and the guard needs the journal probe
-    either way.
-    """
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
-
-
-# The ``PostToolUse`` hook that auto-fetches a sub-skill's return envelope the
-# moment the sub-skill's ``emit-skill-return`` Bash call commits it (see
-# :mod:`hpc_agent._kernel.hooks.skill_return_autofetch` for why the trigger is
-# the emit Bash call and not the Skill tool — the Skill tool returns *before*
-# the sub-skill body runs, so a Skill-matched hook can never see a fresh
-# envelope). install-commands merges this entry into
-# ``~/.claude/settings.json``'s ``hooks.PostToolUse`` array, additively,
-# idempotently, and self-healing on a stale prior install (including the
-# pre-0.10.58 ``matcher: "Skill"`` shape).
-_HOOK_COMMAND = _build_hook_command()
-_AUTOFETCH_NEEDLE = "hpc_agent._kernel.hooks.skill_return_autofetch"
-_SKILL_RETURN_HOOK_ENTRY: dict[str, Any] = {
-    "matcher": "Bash",
-    "hooks": [
-        {
-            "type": "command",
-            "command": _HOOK_COMMAND,
-        }
-    ],
-}
-
-# The ``Stop`` hook that blocks ending the turn while a committed sub-skill
-# return envelope sits unfetched (see
-# :mod:`hpc_agent._kernel.hooks.skill_return_stop_guard`). Deterministic
-# backstop for the advisory hand-back prose at sub-skill composition
-# boundaries. Stop entries take no matcher (there is no tool to match).
-_STOP_HOOK_COMMAND = _build_stop_hook_command()
-_STOP_GUARD_NEEDLE = "hpc_agent._kernel.hooks.skill_return_stop_guard"
-_SKILL_RETURN_STOP_ENTRY: dict[str, Any] = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": _STOP_HOOK_COMMAND,
-        }
-    ],
-}
-
-# The ``block-drive`` decision-rendezvous pair (see
-# :mod:`hpc_agent._kernel.hooks.decision_rendezvous_autofetch` /
-# ``decision_rendezvous_stop_guard``), generalizing the skill-return pair to the
-# §5 y/nudge boundary. The PostToolUse autofetch injects the brief a
-# ``block-drive`` tick just parked; the Stop guard blocks ending the turn once a
-# human ``y`` is committed but the driver has not advanced. Both merge additively
-# + idempotently, matched on the module-path needle.
-_RENDEZVOUS_AUTOFETCH_COMMAND = _build_rendezvous_autofetch_command()
-_RENDEZVOUS_AUTOFETCH_NEEDLE = "hpc_agent._kernel.hooks.decision_rendezvous_autofetch"
-_RENDEZVOUS_AUTOFETCH_ENTRY: dict[str, Any] = {
-    "matcher": "Bash",
-    "hooks": [
-        {
-            "type": "command",
-            "command": _RENDEZVOUS_AUTOFETCH_COMMAND,
-        }
-    ],
-}
-
-_RENDEZVOUS_STOP_COMMAND = _build_rendezvous_stop_hook_command()
-_RENDEZVOUS_STOP_NEEDLE = "hpc_agent._kernel.hooks.decision_rendezvous_stop_guard"
-_RENDEZVOUS_STOP_ENTRY: dict[str, Any] = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": _RENDEZVOUS_STOP_COMMAND,
-        }
-    ],
-}
-
-
-# The scheduler write-fence (conduct rule 7, proving-run-3 finding (d)):
-# mutating scheduler verbs (qsub/sbatch/qdel/scancel/qmod/qalter) are blocked
-# from the agent's Bash — including inside an ssh transport — while read-only
-# probes (qstat/squeue/qacct, plain ssh) stay allowed ("consequences are gated,
-# curiosity isn't" — James, 2026-07-04). PreToolUse + exit-2 blocks the call;
-# the bash ``case`` pre-filter keeps every non-matching Bash call at builtin
-# cost, and the Python side does command-position analysis so innocent
-# mentions (``grep qsub log``) pass.
-def _build_write_fence_command() -> str:
+    py = _hook_python()
+    if not prefilter:
+        return f"{py} -m {module}"
+    pattern = "|".join(f"*{verb}*" for verb in prefilter)
     return (
         'input=$(cat); case "$input" in '
-        "*qsub*|*sbatch*|*qdel*|*scancel*|*qmod*|*qalter*) "
-        f"printf '%s' \"$input\" | {_hook_python()} "
-        "-m hpc_agent._kernel.hooks.scheduler_write_fence;; esac"
+        f"{pattern}) "
+        f"printf '%s' \"$input\" | {py} "
+        f"-m {module};; esac"
     )
 
 
-_WRITE_FENCE_COMMAND = _build_write_fence_command()
-_WRITE_FENCE_NEEDLE = "hpc_agent._kernel.hooks.scheduler_write_fence"
-_WRITE_FENCE_ENTRY: dict[str, Any] = {
-    "matcher": "Bash",
-    "hooks": [
-        {
-            "type": "command",
-            "command": _WRITE_FENCE_COMMAND,
-        }
-    ],
-}
+def _hook_entry(command: str, *, matcher: str | None) -> dict[str, Any]:
+    """A single ``settings.json`` hook entry running *command*.
+
+    Emits ``{"matcher": ..., "hooks": [...]}`` when *matcher* is set (the
+    tool-matched events — ``Bash``, ``AskUserQuestion``) and the matcher-less
+    ``{"hooks": [...]}`` shape otherwise (``Stop`` / ``SessionStart`` /
+    ``UserPromptSubmit`` have no tool to match). Key order — matcher before
+    hooks — is preserved so the written JSON is byte-stable.
+    """
+    entry: dict[str, Any] = {}
+    if matcher is not None:
+        entry["matcher"] = matcher
+    entry["hooks"] = [{"type": "command", "command": command}]
+    return entry
 
 
-# The watchdog alert-count ``SessionStart`` hook (proving run #3: the scheduled
-# doctor wrote the stalled-driver alert to doctor.alerts.log and nothing
-# delivered it — detection without delivery is silence). Fires once per session
-# start (no matcher, no pre-filter — the interpreter start is paid rarely) and
-# prints "N unacknowledged hpc-agent watchdog alert(s) ..." to stdout, which
-# the harness injects as session context. Notify only: it never re-arms and
-# never acknowledges (the status-snapshot watermark owns acknowledgment); the
-# alert read is fail-open and non-creating, so a session started in an
-# unrelated repo is a clean silent no-op.
-def _build_alert_count_command() -> str:
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.alert_count"
+# Every hook module lives under this package; the full module path is also the
+# NEEDLE that :func:`_find_hook_entry_index` matches an installed entry on. The
+# needle is load-bearing: it is written into the command AND used to re-find our
+# entry across re-installs (moved venv, changed matcher/pre-filter shape), so it
+# must stay byte-stable — a renamed needle orphans an installed hook.
+_HOOK_MODULE_PREFIX = "hpc_agent._kernel.hooks."
+
+# Needle constants imported by :mod:`hpc_agent.ops.harness_capabilities` to probe
+# an installed settings.json for the capability hooks. Kept as explicit importable
+# names, byte-identical to the corresponding needles in :data:`_HOOK_SPECS`.
+_UTTERANCE_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "utterance_capture"
+_ANSWER_CAPTURE_NEEDLE = _HOOK_MODULE_PREFIX + "answer_capture"
+_RELAY_AUDIT_NEEDLE = _HOOK_MODULE_PREFIX + "relay_audit_stop"
+_ALERT_COUNT_NEEDLE = _HOOK_MODULE_PREFIX + "alert_count"
 
 
-_ALERT_COUNT_COMMAND = _build_alert_count_command()
-_ALERT_COUNT_NEEDLE = "hpc_agent._kernel.hooks.alert_count"
-_ALERT_COUNT_ENTRY: dict[str, Any] = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": _ALERT_COUNT_COMMAND,
-        }
-    ],
-}
+class _HookSpec(NamedTuple):
+    """One hook to merge into ``settings.json``: result key, event, needle, shape.
+
+    *result_key* is the field the merge report lands under in
+    :func:`install_agent_assets`'s return dict; *event* the ``settings.json``
+    hook event; *needle* the full module path (match key AND the ``-m`` target);
+    *matcher* the tool matcher (``None`` for matcher-less events); *prefilter*
+    the bash ``case`` trigger substrings (empty → bare invocation).
+    """
+
+    result_key: str
+    event: str
+    needle: str
+    matcher: str | None
+    prefilter: tuple[str, ...]
 
 
-# The human-utterance capture ``UserPromptSubmit`` hook (proving run #4: the
-# authorship gate verified value tokens against journal ``response`` fields the
-# agent itself writes — friction, not a lock). Fires on every prompt submit (no
-# matcher, no pre-filter — one interpreter start per human prompt is rare) and
-# appends the prompt (ts + sha256 + size-capped raw text) to the cwd repo's
-# ``<journal home>/<repo_hash>/utterances.jsonl`` — harness-written, so the
-# authorship gate can require caller values to derive from text a human
-# verifiably typed. No-scaffold: a prompt in a non-hpc repo is a silent no-op,
-# and the hook prints nothing (its record must stay out of model context).
-def _build_utterance_capture_command() -> str:
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.utterance_capture"
-
-
-_UTTERANCE_CAPTURE_COMMAND = _build_utterance_capture_command()
-_UTTERANCE_CAPTURE_NEEDLE = "hpc_agent._kernel.hooks.utterance_capture"
-_UTTERANCE_CAPTURE_ENTRY: dict[str, Any] = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": _UTTERANCE_CAPTURE_COMMAND,
-        }
-    ],
-}
-
-
-# The AskUserQuestion answer-capture ``PostToolUse`` hook (proving run #5:
-# answers given through the question selector never pass UserPromptSubmit, so
-# a human who TYPED the sweep into the tool's free-text field was invisible
-# to the authorship gate). Captures only TYPED answer text — a click on an
-# agent-authored option label is never logged (that would reopen the
-# laundering channel the utterance lock closes). Matched on the tool name, so
-# it fires rarely; no bash pre-filter needed.
-def _build_answer_capture_command() -> str:
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.answer_capture"
-
-
-_ANSWER_CAPTURE_COMMAND = _build_answer_capture_command()
-_ANSWER_CAPTURE_NEEDLE = "hpc_agent._kernel.hooks.answer_capture"
-_ANSWER_CAPTURE_ENTRY: dict[str, Any] = {
-    "matcher": "AskUserQuestion",
-    "hooks": [
-        {
-            "type": "command",
-            "command": _ANSWER_CAPTURE_COMMAND,
-        }
-    ],
-}
-
-
-# The relay-audit ``Stop`` hook (conduct rule 10, staged → active): nothing made
-# a driving agent run ``verify-relay``, so an unaudited relay still reached the
-# human. Fires once per turn end (no matcher — the interpreter start is paid
-# rarely), reads the final assistant text from the transcript, and when it names
-# a journaled run, audits it with verify-relay; contradiction mismatches block
-# the stop ONCE (loop-safe via stop_hook_active, same as the sibling Stop
-# guards) with the itemized summary so the agent corrects the relay. Fail-open:
-# no journal / no run mention / clean audit / any error → silent pass.
-def _build_relay_audit_command() -> str:
-    return f"{_hook_python()} -m hpc_agent._kernel.hooks.relay_audit_stop"
-
-
-_RELAY_AUDIT_COMMAND = _build_relay_audit_command()
-_RELAY_AUDIT_NEEDLE = "hpc_agent._kernel.hooks.relay_audit_stop"
-_RELAY_AUDIT_ENTRY: dict[str, Any] = {
-    "hooks": [
-        {
-            "type": "command",
-            "command": _RELAY_AUDIT_COMMAND,
-        }
-    ],
-}
+# The nine hooks install-commands wires into ``~/.claude/settings.json``,
+# additively + idempotently + self-healing (see :func:`_merge_hook_entry`).
+# Order is load-bearing: each hook is merged in sequence, so within one event
+# the entries append in this order. The one-line rationale per hook:
+#
+# * skill_return_autofetch — PostToolUse: auto-fetches a sub-skill's return
+#   envelope the moment its ``emit-skill-return`` Bash call commits it (the Skill
+#   tool returns before the sub-skill body runs, so a Skill-matched hook can
+#   never see a fresh envelope).
+# * skill_return_stop_guard — Stop: blocks ending the turn while a committed
+#   envelope sits unfetched (deterministic backstop for the hand-back prose).
+# * decision_rendezvous_autofetch / _stop_guard — the ``block-drive`` pair
+#   generalizing the skill-return pair to the §5 y/nudge boundary: PostToolUse
+#   injects the brief a block-drive tick parked; Stop blocks the turn once a
+#   human ``y`` is committed but the driver has not advanced.
+# * scheduler_write_fence — PreToolUse: blocks mutating scheduler verbs
+#   (qsub/sbatch/qdel/scancel/qmod/qalter, ssh transport included) while
+#   read-only probes stay allowed (conduct rule 7; command-position analysis so
+#   ``grep qsub log`` passes).
+# * alert_count — SessionStart: prints the unacknowledged watchdog-alert count
+#   into session context (proving run #3: detection without delivery is silence).
+# * utterance_capture — UserPromptSubmit: appends each human prompt to the repo's
+#   utterances log so the authorship gate can require human-typed evidence
+#   (proving run #4). Silent no-op outside an hpc repo.
+# * answer_capture — PostToolUse(AskUserQuestion): captures TYPED selector answer
+#   text (never a click on an agent-authored option) as authorship evidence too
+#   (proving run #5).
+# * relay_audit_stop — Stop: audits the final assistant text against the journal
+#   via verify-relay, blocking the stop once on a contradiction (conduct rule 10).
+_HOOK_SPECS: tuple[_HookSpec, ...] = (
+    _HookSpec(
+        "settings_hook",
+        "PostToolUse",
+        _HOOK_MODULE_PREFIX + "skill_return_autofetch",
+        "Bash",
+        ("emit-skill-return",),
+    ),
+    _HookSpec(
+        "settings_stop_hook",
+        "Stop",
+        _HOOK_MODULE_PREFIX + "skill_return_stop_guard",
+        None,
+        (),
+    ),
+    _HookSpec(
+        "settings_rendezvous_hook",
+        "PostToolUse",
+        _HOOK_MODULE_PREFIX + "decision_rendezvous_autofetch",
+        "Bash",
+        ("block-drive",),
+    ),
+    _HookSpec(
+        "settings_rendezvous_stop_hook",
+        "Stop",
+        _HOOK_MODULE_PREFIX + "decision_rendezvous_stop_guard",
+        None,
+        (),
+    ),
+    _HookSpec(
+        "settings_write_fence_hook",
+        "PreToolUse",
+        _HOOK_MODULE_PREFIX + "scheduler_write_fence",
+        "Bash",
+        ("qsub", "sbatch", "qdel", "scancel", "qmod", "qalter"),
+    ),
+    _HookSpec(
+        "settings_alert_count_hook",
+        "SessionStart",
+        _ALERT_COUNT_NEEDLE,
+        None,
+        (),
+    ),
+    _HookSpec(
+        "settings_utterance_hook",
+        "UserPromptSubmit",
+        _UTTERANCE_CAPTURE_NEEDLE,
+        None,
+        (),
+    ),
+    _HookSpec(
+        "settings_answer_capture_hook",
+        "PostToolUse",
+        _ANSWER_CAPTURE_NEEDLE,
+        "AskUserQuestion",
+        (),
+    ),
+    _HookSpec(
+        "settings_relay_audit_hook",
+        "Stop",
+        _RELAY_AUDIT_NEEDLE,
+        None,
+        (),
+    ),
+)
 
 
 # The registry-projected MCP server (``hpc-agent mcp-serve``) — the preferred,
@@ -333,6 +262,110 @@ def _mcp_config_path(claude_dir: Path) -> Path:
     return claude_dir.parent / ".claude.json"
 
 
+# Sentinel distinguishing "file present but not a JSON object" (refuse to
+# clobber) from "file absent" (start an empty ``{}`` model) in _load_json_object.
+_UNPARSEABLE = object()
+
+
+def _load_json_object(path: Path) -> Any:
+    """Load the JSON **object** at *path* for an additive merge.
+
+    Returns ``{}`` when *path* is absent (start a fresh model), the parsed
+    ``dict`` when it is a readable JSON object, or the :data:`_UNPARSEABLE`
+    sentinel when it exists but is unreadable / not a JSON object — precious
+    user config we refuse to clobber, so the caller reports
+    ``skipped-unparseable`` instead of overwriting it.
+    """
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return _UNPARSEABLE
+    if not isinstance(loaded, dict):
+        return _UNPARSEABLE
+    return loaded
+
+
+def _write_json_object(path: Path, obj: dict[str, Any]) -> None:
+    """Atomically write *obj* to *path*, pretty-printed with a trailing newline."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(obj, indent=2, sort_keys=False) + "\n")
+
+
+class _MergeOutcome(NamedTuple):
+    """A merge plan's decision, fed back to :func:`_merge_json`.
+
+    *changed* is ``False`` for an idempotent no-op (report ``already-present``
+    with *present_extra*). When ``True``, *config* is the mutated object to write;
+    *write_action* / *dryrun_action* are the ``action`` strings for the real vs.
+    ``dry_run`` branch, and *change_extra* the extra report fields (e.g. the
+    ``added`` / ``removed`` rule lists) shared by both.
+    """
+
+    changed: bool
+    config: dict[str, Any]
+    write_action: str
+    dryrun_action: str
+    change_extra: dict[str, Any]
+    present_extra: dict[str, Any]
+
+
+def _merge_json(
+    path: Path,
+    *,
+    path_key: str,
+    unparseable_extra: dict[str, Any],
+    plan: Callable[[dict[str, Any]], _MergeOutcome],
+    dry_run: bool,
+) -> dict[str, Any]:
+    """The generic additive/idempotent JSON-config merge core.
+
+    Loads the JSON object at *path* (:func:`_load_json_object`), refusing to
+    clobber an existing non-object (``skipped-unparseable``); otherwise hands the
+    loaded config to *plan*, which computes the mutation decision as a
+    :class:`_MergeOutcome`. An unchanged outcome is a no-op (``already-present``);
+    a changed outcome is written atomically unless *dry_run*.
+
+    Returns ``{<path_key>, "action", ...extra, "wrote"}`` — *path_key* is
+    ``"settings_path"`` or ``"config_path"``; the extra report fields come from
+    *unparseable_extra* / the outcome's extras (each caller's report shape).
+    """
+    config = _load_json_object(path)
+    if config is _UNPARSEABLE:
+        return {
+            path_key: str(path),
+            "action": "skipped-unparseable",
+            **unparseable_extra,
+            "wrote": False,
+        }
+
+    outcome = plan(config)
+    if not outcome.changed:
+        return {
+            path_key: str(path),
+            "action": "already-present",
+            **outcome.present_extra,
+            "wrote": False,
+        }
+
+    if dry_run:
+        return {
+            path_key: str(path),
+            "action": outcome.dryrun_action,
+            **outcome.change_extra,
+            "wrote": False,
+        }
+
+    _write_json_object(path, outcome.config)
+    return {
+        path_key: str(path),
+        "action": outcome.write_action,
+        **outcome.change_extra,
+        "wrote": True,
+    }
+
+
 def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     """Additively, idempotently register the ``hpc-agent`` MCP server in
     ``.claude.json``'s ``mcpServers`` object.
@@ -349,57 +382,44 @@ def _register_mcp_server(claude_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     ``"updated"`` / ``"already-present"`` / ``"skipped-unparseable"`` /
     ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
     """
-    config_path = _mcp_config_path(claude_dir)
 
-    config: dict[str, Any]
-    if config_path.exists():
-        try:
-            loaded = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            return {
-                "config_path": str(config_path),
-                "action": "skipped-unparseable",
-                "wrote": False,
-            }
-        if not isinstance(loaded, dict):
-            return {
-                "config_path": str(config_path),
-                "action": "skipped-unparseable",
-                "wrote": False,
-            }
-        config = loaded
-    else:
-        config = {}
+    def plan(config: dict[str, Any]) -> _MergeOutcome:
+        servers = config.get("mcpServers")
+        if not isinstance(servers, dict):
+            servers = {}
 
-    servers = config.get("mcpServers")
-    if not isinstance(servers, dict):
-        servers = {}
+        existing = servers.get(_MCP_SERVER_NAME)
+        # A user-set ``env`` on the existing registration (e.g.
+        # ``HPC_SSH_ENGINE=asyncssh`` opting the demo server into the connection
+        # engine) is the USER'S config, not ours: an install heals OUR keys
+        # (command/args after a moved venv) but must never destroy theirs —
+        # rewriting the entry wholesale silently un-set the engine flag on every
+        # install-commands run.
+        desired: dict[str, Any] = dict(_MCP_SERVER_ENTRY)
+        if isinstance(existing, dict) and isinstance(existing.get("env"), dict) and existing["env"]:
+            desired["env"] = existing["env"]
+        if existing == desired:
+            return _MergeOutcome(False, config, "", "", {}, {})
 
-    existing = servers.get(_MCP_SERVER_NAME)
-    # A user-set ``env`` on the existing registration (e.g.
-    # ``HPC_SSH_ENGINE=asyncssh`` opting the demo server into the connection
-    # engine) is the USER'S config, not ours: an install heals OUR keys
-    # (command/args after a moved venv) but must never destroy theirs —
-    # rewriting the entry wholesale silently un-set the engine flag on every
-    # install-commands run.
-    desired: dict[str, Any] = dict(_MCP_SERVER_ENTRY)
-    if isinstance(existing, dict) and isinstance(existing.get("env"), dict) and existing["env"]:
-        desired["env"] = existing["env"]
-    if existing == desired:
-        return {"config_path": str(config_path), "action": "already-present", "wrote": False}
+        servers = dict(servers)
+        servers[_MCP_SERVER_NAME] = desired
+        config["mcpServers"] = servers
+        return _MergeOutcome(
+            True,
+            config,
+            "updated" if existing is not None else "added",
+            "dry-run-would-update" if existing is not None else "dry-run-would-add",
+            {},
+            {},
+        )
 
-    if dry_run:
-        action = "dry-run-would-update" if existing is not None else "dry-run-would-add"
-        return {"config_path": str(config_path), "action": action, "wrote": False}
-
-    servers = dict(servers)
-    action = "updated" if existing is not None else "added"
-    servers[_MCP_SERVER_NAME] = desired
-    config["mcpServers"] = servers
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(config_path, json.dumps(config, indent=2, sort_keys=False) + "\n")
-    return {"config_path": str(config_path), "action": action, "wrote": True}
+    return _merge_json(
+        _mcp_config_path(claude_dir),
+        path_key="config_path",
+        unparseable_extra={},
+        plan=plan,
+        dry_run=dry_run,
+    )
 
 
 def DEFAULT_CLAUDE_DIR() -> Path:
@@ -460,72 +480,47 @@ def _merge_hook_entry(
     we do **not** overwrite it — the install reports ``skipped-unparseable`` so
     a human can resolve it rather than risking the loss of hand-written config.
     """
-    settings_path = claude_dir / "settings.json"
 
-    settings: dict[str, Any]
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            # Present but unreadable / not JSON. A settings.json is precious
-            # user config; refuse to clobber it rather than guess.
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "wrote": False,
-            }
-        if not isinstance(loaded, dict):
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "wrote": False,
-            }
-        settings = loaded
-    else:
-        settings = {}
+    def plan(settings: dict[str, Any]) -> _MergeOutcome:
+        hooks = settings.get("hooks")
+        if not isinstance(hooks, dict):
+            # Absent or wrong-typed ``hooks`` → start a fresh mapping. (A non-dict
+            # ``hooks`` would itself be malformed Claude config; replacing it is
+            # the only way to wire our entry, and we only do so when adding.)
+            hooks = {}
+        event_entries = hooks.get(event)
+        if not isinstance(event_entries, list):
+            event_entries = []
 
-    hooks = settings.get("hooks")
-    if not isinstance(hooks, dict):
-        # Absent or wrong-typed ``hooks`` → start a fresh mapping. (A non-dict
-        # ``hooks`` would itself be malformed Claude config; replacing it is the
-        # only way to wire our entry, and we only do so when adding.)
-        hooks = {}
-    event_entries = hooks.get(event)
-    if not isinstance(event_entries, list):
-        event_entries = []
+        existing_idx = _find_hook_entry_index(event_entries, needle)
+        if existing_idx is not None and event_entries[existing_idx] == entry:
+            return _MergeOutcome(False, settings, "", "", {}, {})
 
-    existing_idx = _find_hook_entry_index(event_entries, needle)
-    if existing_idx is not None and event_entries[existing_idx] == entry:
-        return {
-            "settings_path": str(settings_path),
-            "action": "already-present",
-            "wrote": False,
-        }
+        event_entries = list(event_entries)
+        if existing_idx is not None:
+            event_entries[existing_idx] = entry
+            write_action = "updated"
+        else:
+            event_entries.append(entry)
+            write_action = "added"
+        hooks[event] = event_entries
+        settings["hooks"] = hooks
+        return _MergeOutcome(
+            True,
+            settings,
+            write_action,
+            "dry-run-would-update" if existing_idx is not None else "dry-run-would-add",
+            {},
+            {},
+        )
 
-    if dry_run:
-        return {
-            "settings_path": str(settings_path),
-            "action": "dry-run-would-update" if existing_idx is not None else "dry-run-would-add",
-            "wrote": False,
-        }
-
-    event_entries = list(event_entries)
-    if existing_idx is not None:
-        event_entries[existing_idx] = entry
-        action = "updated"
-    else:
-        event_entries.append(entry)
-        action = "added"
-    hooks[event] = event_entries
-    settings["hooks"] = hooks
-
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
-    return {
-        "settings_path": str(settings_path),
-        "action": action,
-        "wrote": True,
-    }
+    return _merge_json(
+        claude_dir / "settings.json",
+        path_key="settings_path",
+        unparseable_extra={},
+        plan=plan,
+        dry_run=dry_run,
+    )
 
 
 def _skill_allow_rule(skill_name: str) -> str:
@@ -570,68 +565,34 @@ def _merge_skill_permissions(
     ``"already-present"``); on dry-run, lists the strings that *would*
     have been added.
     """
-    settings_path = claude_dir / "settings.json"
 
-    settings: dict[str, Any]
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "added": [],
-                "wrote": False,
-            }
-        if not isinstance(loaded, dict):
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "added": [],
-                "wrote": False,
-            }
-        settings = loaded
-    else:
-        settings = {}
+    def plan(settings: dict[str, Any]) -> _MergeOutcome:
+        permissions = settings.get("permissions")
+        if not isinstance(permissions, dict):
+            permissions = {}
+        allow = permissions.get("allow")
+        if not isinstance(allow, list):
+            allow = []
 
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-    allow = permissions.get("allow")
-    if not isinstance(allow, list):
-        allow = []
+        canonical_rules = [_skill_allow_rule(name) for name in skill_names]
+        missing = [rule for rule in canonical_rules if rule not in allow]
+        if not missing:
+            return _MergeOutcome(False, settings, "", "", {}, {"added": []})
 
-    canonical_rules = [_skill_allow_rule(name) for name in skill_names]
-    missing = [rule for rule in canonical_rules if rule not in allow]
+        allow = list(allow) + missing
+        permissions["allow"] = allow
+        settings["permissions"] = permissions
+        return _MergeOutcome(
+            True, settings, "added", "dry-run-would-add", {"added": missing}, {"added": []}
+        )
 
-    if not missing:
-        return {
-            "settings_path": str(settings_path),
-            "action": "already-present",
-            "added": [],
-            "wrote": False,
-        }
-
-    if dry_run:
-        return {
-            "settings_path": str(settings_path),
-            "action": "dry-run-would-add",
-            "added": missing,
-            "wrote": False,
-        }
-
-    allow = list(allow) + missing
-    permissions["allow"] = allow
-    settings["permissions"] = permissions
-
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
-    return {
-        "settings_path": str(settings_path),
-        "action": "added",
-        "added": missing,
-        "wrote": True,
-    }
+    return _merge_json(
+        claude_dir / "settings.json",
+        path_key="settings_path",
+        unparseable_extra={"added": []},
+        plan=plan,
+        dry_run=dry_run,
+    )
 
 
 # Raw-ssh / raw-scp DENY rules (anti-vendor-lockout ruling (a), 2026-07-10;
@@ -763,75 +724,41 @@ def _merge_deny_rules(
     rules actually dropped (both empty on ``"already-present"``); on dry-run,
     the strings that *would* have been added / removed.
     """
-    settings_path = claude_dir / "settings.json"
 
-    settings: dict[str, Any]
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "added": [],
-                "removed": [],
-                "wrote": False,
-            }
-        if not isinstance(loaded, dict):
-            return {
-                "settings_path": str(settings_path),
-                "action": "skipped-unparseable",
-                "added": [],
-                "removed": [],
-                "wrote": False,
-            }
-        settings = loaded
-    else:
-        settings = {}
+    def plan(settings: dict[str, Any]) -> _MergeOutcome:
+        permissions = settings.get("permissions")
+        if not isinstance(permissions, dict):
+            permissions = {}
+        deny = permissions.get("deny")
+        if not isinstance(deny, list):
+            deny = []
 
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-    deny = permissions.get("deny")
-    if not isinstance(deny, list):
-        deny = []
+        missing = [rule for rule in deny_rules if rule not in deny]
+        stale = [rule for rule in remove_rules if rule in deny]
+        if not missing and not stale:
+            return _MergeOutcome(False, settings, "", "", {}, {"added": [], "removed": []})
 
-    missing = [rule for rule in deny_rules if rule not in deny]
-    stale = [rule for rule in remove_rules if rule in deny]
+        # Drop the blanket rules (exact-string only), keep every other entry,
+        # then append the host-scoped rules that were missing.
+        deny = [rule for rule in deny if rule not in remove_rules] + missing
+        permissions["deny"] = deny
+        settings["permissions"] = permissions
+        return _MergeOutcome(
+            True,
+            settings,
+            "added" if missing else "updated",
+            "dry-run-would-add",
+            {"added": missing, "removed": stale},
+            {"added": [], "removed": []},
+        )
 
-    if not missing and not stale:
-        return {
-            "settings_path": str(settings_path),
-            "action": "already-present",
-            "added": [],
-            "removed": [],
-            "wrote": False,
-        }
-
-    if dry_run:
-        return {
-            "settings_path": str(settings_path),
-            "action": "dry-run-would-add",
-            "added": missing,
-            "removed": stale,
-            "wrote": False,
-        }
-
-    # Drop the blanket rules (exact-string only), keep every other entry, then
-    # append the host-scoped rules that were missing.
-    deny = [rule for rule in deny if rule not in remove_rules] + missing
-    permissions["deny"] = deny
-    settings["permissions"] = permissions
-
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(settings_path, json.dumps(settings, indent=2, sort_keys=False) + "\n")
-    return {
-        "settings_path": str(settings_path),
-        "action": "added" if missing else "updated",
-        "added": missing,
-        "removed": stale,
-        "wrote": True,
-    }
+    return _merge_json(
+        claude_dir / "settings.json",
+        path_key="settings_path",
+        unparseable_extra={"added": [], "removed": []},
+        plan=plan,
+        dry_run=dry_run,
+    )
 
 
 def _resolve_dir_collision(target: Path, kind_phrase: str, *, dry_run: bool) -> str | None:
@@ -1058,6 +985,7 @@ def install_agent_assets(
     skill-return ``Stop`` guard — see :func:`_merge_hook_entry`. Each
     ``action`` is ``"added"`` / ``"already-present"`` / ``"updated"`` /
     ``"skipped-unparseable"`` / ``"dry-run-would-add"`` / ``"dry-run-would-update"``.
+    The full set of hooks wired (in order) is enumerated in :data:`_HOOK_SPECS`.
 
     ``settings_permissions`` reports the additive, idempotent merge of
     ``Skill(<name>)`` allow rules for every installed skill into
@@ -1096,99 +1024,19 @@ def install_agent_assets(
         agents.update(plugin_agents)
         cleared.extend(plugin_cleared)
 
-    # Wire the skill-return hooks into settings.json — additive + idempotent,
-    # never clobbering existing hooks/keys. Two entries: the PostToolUse
-    # autofetch (injects the envelope the moment emit-skill-return commits it)
-    # and the Stop guard (blocks ending the turn while an envelope sits
-    # unfetched — the deterministic backstop for the advisory hand-back prose).
-    settings_hook = _merge_hook_entry(
-        target,
-        event="PostToolUse",
-        entry=_SKILL_RETURN_HOOK_ENTRY,
-        needle=_AUTOFETCH_NEEDLE,
-        dry_run=dry_run,
-    )
-    settings_stop_hook = _merge_hook_entry(
-        target,
-        event="Stop",
-        entry=_SKILL_RETURN_STOP_ENTRY,
-        needle=_STOP_GUARD_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the block-drive decision-rendezvous pair (§5): the PostToolUse
-    # autofetch injects the brief a block-drive tick just parked; the Stop guard
-    # forces the driver to advance once a human y is committed but unconsumed.
-    # Same additive + idempotent merge, matched on their own module-path needles.
-    settings_rendezvous_hook = _merge_hook_entry(
-        target,
-        event="PostToolUse",
-        entry=_RENDEZVOUS_AUTOFETCH_ENTRY,
-        needle=_RENDEZVOUS_AUTOFETCH_NEEDLE,
-        dry_run=dry_run,
-    )
-    settings_rendezvous_stop_hook = _merge_hook_entry(
-        target,
-        event="Stop",
-        entry=_RENDEZVOUS_STOP_ENTRY,
-        needle=_RENDEZVOUS_STOP_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the scheduler write-fence (conduct rule 7): PreToolUse on Bash,
-    # blocking mutating scheduler verbs (ssh transport included) while leaving
-    # read-only probes untouched. Same additive + idempotent merge.
-    settings_write_fence_hook = _merge_hook_entry(
-        target,
-        event="PreToolUse",
-        entry=_WRITE_FENCE_ENTRY,
-        needle=_WRITE_FENCE_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the watchdog alert-count SessionStart hook (proving run #3: alert
-    # delivery, not just detection) — prints the unacknowledged alert count into
-    # session context. Same additive + idempotent merge.
-    settings_alert_count_hook = _merge_hook_entry(
-        target,
-        event="SessionStart",
-        entry=_ALERT_COUNT_ENTRY,
-        needle=_ALERT_COUNT_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the human-utterance capture (proving run #4: harness-captured
-    # authorship evidence for the append-decision gate) — UserPromptSubmit,
-    # no matcher. Same additive + idempotent merge.
-    settings_utterance_hook = _merge_hook_entry(
-        target,
-        event="UserPromptSubmit",
-        entry=_UTTERANCE_CAPTURE_ENTRY,
-        needle=_UTTERANCE_CAPTURE_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the AskUserQuestion answer capture (proving run #5: typed selector
-    # answers are human-authored evidence too) — PostToolUse, matched on the
-    # tool name. Same additive + idempotent merge.
-    settings_answer_capture_hook = _merge_hook_entry(
-        target,
-        event="PostToolUse",
-        entry=_ANSWER_CAPTURE_ENTRY,
-        needle=_ANSWER_CAPTURE_NEEDLE,
-        dry_run=dry_run,
-    )
-
-    # Wire the relay-audit Stop hook (conduct rule 10 staged → active): audits
-    # the final assistant text against the journal via verify-relay and blocks
-    # the stop once on a contradiction. Same additive + idempotent merge.
-    settings_relay_audit_hook = _merge_hook_entry(
-        target,
-        event="Stop",
-        entry=_RELAY_AUDIT_ENTRY,
-        needle=_RELAY_AUDIT_NEEDLE,
-        dry_run=dry_run,
-    )
+    # Wire every hook in _HOOK_SPECS into settings.json — additive + idempotent,
+    # never clobbering existing hooks/keys, matched on each hook's module-path
+    # needle. Order is load-bearing (entries append per event in spec order), so
+    # iterate the tuple as-is and key each merge report by the spec's result_key.
+    hook_reports: dict[str, Any] = {}
+    for spec in _HOOK_SPECS:
+        hook_reports[spec.result_key] = _merge_hook_entry(
+            target,
+            event=spec.event,
+            entry=_hook_entry(_hook_command(spec.needle, spec.prefilter), matcher=spec.matcher),
+            needle=spec.needle,
+            dry_run=dry_run,
+        )
 
     # Register the registry-projected MCP server (hpc-agent mcp-serve) as the
     # preferred shell-free block-invocation surface (design §3) — additive +
@@ -1223,15 +1071,7 @@ def install_agent_assets(
         "skills_installed": sorted(skills),
         "agents_installed": sorted(agents),
         "cleared_collisions": cleared,
-        "settings_hook": settings_hook,
-        "settings_stop_hook": settings_stop_hook,
-        "settings_rendezvous_hook": settings_rendezvous_hook,
-        "settings_rendezvous_stop_hook": settings_rendezvous_stop_hook,
-        "settings_write_fence_hook": settings_write_fence_hook,
-        "settings_alert_count_hook": settings_alert_count_hook,
-        "settings_utterance_hook": settings_utterance_hook,
-        "settings_answer_capture_hook": settings_answer_capture_hook,
-        "settings_relay_audit_hook": settings_relay_audit_hook,
+        **hook_reports,
         "settings_permissions": settings_permissions,
         "settings_deny": settings_deny,
         "mcp_server": mcp_server,

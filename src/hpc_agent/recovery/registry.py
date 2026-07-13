@@ -317,11 +317,148 @@ _NODE_FAILURE = RecoveryMenu(
 )
 
 
+_GPU_OOM = RecoveryMenu(
+    kind="gpu_oom",
+    summary=(
+        "A task exhausted GPU memory (CUDA OOM). The right fix depends on whether "
+        "the model is already sharded across GPUs: if it is not, give it more "
+        "memory per GPU; if it already spans multiple GPUs, more per-GPU memory "
+        "will not clear the wall — widen the tensor-parallel shard instead."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: gpu_oom, submit_to_cluster: true, "
+                "overrides: {mem_per_gpu: <~1.5x>}}>"
+            ),
+            when_to_use=(
+                "The model is NOT already sharded across GPUs (tp_size == 1). The "
+                "deterministic catalog fix is ~1.5x more memory per GPU "
+                "(``infra/failure_signatures.py`` gpu_oom row; "
+                "``ops/recover/resolve.py::_gpu_oom_action`` fall-through)."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: gpu_oom, submit_to_cluster: true, "
+                "overrides: {tp_size: <2x>}}>"
+            ),
+            when_to_use=(
+                "The model already spans multiple GPUs (tp_size > 1). More memory "
+                "per GPU cannot fix a per-GPU-capacity wall, so double the "
+                "tensor-parallel degree to reshard "
+                "(``ops/recover/resolve.py::_gpu_oom_action`` sharded branch)."
+            ),
+            safety_rank=1,
+        ),
+    ),
+    references=("infra/failure_signatures.py", "ops/recover/resolve.py"),
+)
+
+
+_SYSTEM_OOM = RecoveryMenu(
+    kind="system_oom",
+    summary=(
+        "A task exhausted host (system RAM) memory and was killed by the kernel "
+        "OOM-killer (exit 137). Unlike gpu_oom this is CPU-side memory; the "
+        "deterministic fix is more host memory per task."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: system_oom, submit_to_cluster: true, "
+                "overrides: {mem: <~1.5x>}}>"
+            ),
+            when_to_use=(
+                "Give the failed tasks ~1.5x more host memory and rerun them "
+                "(``infra/failure_signatures.py`` system_oom row; "
+                "``ops/recover/resolve.py::_deterministic_fix`` increase-mem)."
+            ),
+            safety_rank=0,
+        ),
+    ),
+    references=("infra/failure_signatures.py", "ops/recover/resolve.py"),
+)
+
+
+_COMBINER_FAILED = RecoveryMenu(
+    kind="combiner_failed",
+    summary=(
+        "The per-wave combiner returned non-zero on the cluster — typically a "
+        "task's metrics.json was missing or malformed, so the aggregation step "
+        "could not complete."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command="cat <experiment_dir>/.hpc/runs/<run_id>.json",
+            when_to_use=(
+                "Inspect the stderr_tail in the JSON payload to find which task's "
+                "metrics.json was missing or malformed."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: combiner_failed, submit_to_cluster: true}> "
+                "&& /aggregate"
+            ),
+            when_to_use=(
+                "After identifying the offending tasks, resubmit just those and re-run /aggregate."
+            ),
+            safety_rank=1,
+        ),
+    ),
+    references=("errors.py::CombinerFailed",),
+)
+
+
+_OUTPUTS_MISSING = RecoveryMenu(
+    kind="outputs_missing",
+    summary=(
+        "Per-task output files declared by --require-outputs are absent, so "
+        "aggregate refused to combine on partial data before the combiner ran."
+    ),
+    options=(
+        RecoveryOption(
+            cli_command=(
+                "hpc-agent resubmit --run-id <run_id> --experiment-dir <experiment_dir> "
+                "--spec <{failed_task_ids, category: outputs_missing, submit_to_cluster: true}> "
+                "&& /aggregate"
+            ),
+            when_to_use=(
+                "Resubmit the listed task ids and re-run aggregate — the primary "
+                "fix when the declared outputs were simply never produced."
+            ),
+            safety_rank=0,
+        ),
+        RecoveryOption(
+            cli_command="ssh <ssh_target> 'ls <remote_path>/logs/ && cat <remote_path>/logs/*.o*'",
+            when_to_use=(
+                "If the resubmit does not produce the expected output, inspect "
+                "<remote_path>/logs/ for the per-task stderr that explains why "
+                "the output is missing."
+            ),
+            safety_rank=1,
+        ),
+    ),
+    references=("errors.py::OutputsMissing",),
+)
+
+
 REGISTRY: dict[str, RecoveryMenu] = {
     _ALREADY_IN_FLIGHT.kind: _ALREADY_IN_FLIGHT,
     _SUBMISSION_INCOMPLETE.kind: _SUBMISSION_INCOMPLETE,
     _WALLTIME.kind: _WALLTIME,
     _NODE_FAILURE.kind: _NODE_FAILURE,
+    _GPU_OOM.kind: _GPU_OOM,
+    _SYSTEM_OOM.kind: _SYSTEM_OOM,
+    _COMBINER_FAILED.kind: _COMBINER_FAILED,
+    _OUTPUTS_MISSING.kind: _OUTPUTS_MISSING,
 }
 
 

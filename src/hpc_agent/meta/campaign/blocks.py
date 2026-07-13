@@ -71,7 +71,7 @@ _CAMPAIGN_IDENTITY_FIELDS: tuple[str, ...] = (
 )
 
 
-def _campaign_spec_identity(manifest: dict[str, Any] | None) -> str:
+def campaign_spec_identity(manifest: dict[str, Any] | None) -> str:
     """The greenlit-spec identity a campaign standing consent binds to.
 
     Reuses ``block_drive._spec_sha`` — the ONE definition of an input-spec identity
@@ -435,7 +435,7 @@ def campaign_watch(experiment_dir: Path, *, spec: CampaignWatchSpec) -> Campaign
             scope_kind="campaign",
             scope_id=cid,
             boundary_block="campaign-watch",
-            current_cmd_sha=_campaign_spec_identity(manifest),
+            current_cmd_sha=campaign_spec_identity(manifest),
             event_kind="anomaly",
             detail={"anomaly": decision, "reason": adv.get("reason")},
         )

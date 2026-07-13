@@ -160,6 +160,27 @@ def test_wire_citation_kind_equals_citation_kinds() -> None:
 
 # ── toy-domain fixtures only ───────────────────────────────────────────────────
 
+_CHALLENGE_BANNED = ("harxhar",)  # a model name, never a fixture noun (MEMORY rule)
+
+
+def _banned_word_hits(text: str, banned: tuple[str, ...]) -> list[str]:
+    """Return ``"<lineno>: <word>"`` per banned word on a NON-rule-statement line.
+
+    Rule-STATEMENT lines ("never harxhar") name the boundary — they do not cross it
+    — and are excluded. Extracted so the fire-path test can feed synthetic source
+    instead of a real fixture file (the "verify a guard can fire" discipline); the
+    predicate is defined once and shared, never reimplemented in the test.
+    """
+    hits: list[str] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        low = line.lower()
+        if "never" in low:  # a rule-statement line names the boundary, never crosses it
+            continue
+        for word in banned:
+            if word in low:
+                hits.append(f"{lineno}: {word}")
+    return hits
+
 
 def test_challenge_fixtures_use_toy_vocabulary_only() -> None:
     """No real domain word lands in a challenge FIXTURE (the domain-packs rule).
@@ -171,7 +192,6 @@ def test_challenge_fixtures_use_toy_vocabulary_only() -> None:
     as an opaque ``ref`` to prove core never interprets it) are its own concern and
     not scanned here — that IS the opacity guarantee, not a violation of it.
     """
-    banned = ("harxhar",)
     test_root = pathlib.Path(__file__).parent.parent
     files = [
         test_root / "ops" / "attention" / "test_challenge_attention.py",
@@ -181,11 +201,25 @@ def test_challenge_fixtures_use_toy_vocabulary_only() -> None:
     for f in files:
         if not f.is_file():
             continue
-        for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), start=1):
-            low = line.lower()
-            if "never" in low:  # a rule-statement line names the boundary, never crosses it
-                continue
-            for word in banned:
-                if word in low:
-                    offenders.append(f"{f.name}:{lineno}: {word}")
+        for hit in _banned_word_hits(f.read_text(encoding="utf-8"), _CHALLENGE_BANNED):
+            offenders.append(f"{f.name}:{hit}")
     assert not offenders, f"a real domain word landed in a challenge fixture: {offenders}"
+
+
+def test_challenge_toy_vocabulary_scan_fires() -> None:
+    """Fire path: the ``harxhar`` scan flags a planted fixture noun, and the
+    "never …" rule-statement exclusion suppresses ONLY the boundary line — the same
+    banned word on a live fixture line still fires (the exclusion is not over-broad).
+    """
+    # A planted fixture noun on an ordinary line is caught …
+    assert _banned_word_hits("target = build_fixture(name='harxhar')\n", _CHALLENGE_BANNED), (
+        "the scan must flag a planted harxhar fixture noun"
+    )
+    # … the rule-statement line naming the boundary is exempt (as production honors) …
+    assert not _banned_word_hits("# never name harxhar in a fixture\n", _CHALLENGE_BANNED), (
+        "a 'never …' rule-statement line names the boundary and must not fire"
+    )
+    # … yet the SAME word on a non-exempt line is NOT over-suppressed.
+    assert _banned_word_hits("noun = 'harxhar'  # planted\n", _CHALLENGE_BANNED), (
+        "the 'never' exclusion must not suppress a real violation on another line"
+    )

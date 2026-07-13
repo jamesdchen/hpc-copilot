@@ -16,12 +16,10 @@ audit (#289) flagged it as a strict data-dependent chain; a focused
 source-walk verified no ``~/.claude`` reads anywhere in load-context's
 transitive call tree. Fanning saves ~50-150 ms per status poll.
 
-**Scaffold only.** Not registered as a CLI verb yet — the dispatcher
-registration is held until WS2 (sub-skill return file primitive) lands
-to avoid a dispatcher race. After WS2 lands, follow the same checklist
-as for ``submit_preflight``: register in :mod:`hpc_agent.cli.dispatch`;
-regenerate ``operations.json``; update ``hpc-status/SKILL.md`` to
-invoke ``hpc-agent status-preflight`` instead of the two separate calls.
+Registered as the agent-facing ``status-preflight`` CLI/MCP verb via the
+:func:`~hpc_agent._kernel.registry.primitive.primitive` decorator below;
+it is present in the live registry and in ``operations.json``. The
+earlier WS2 dispatcher-race hold has been lifted.
 
 I/O contracts:
 

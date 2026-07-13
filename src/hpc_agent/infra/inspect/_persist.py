@@ -7,12 +7,11 @@ in reverse-chronological order.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import tempfile
 from typing import TYPE_CHECKING
 
+from hpc_agent.infra.io import atomic_write_json
 from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
 
 from ._common import ClusterSnapshot, _snapshot_from_dict
@@ -43,9 +42,12 @@ def _history_dir(experiment_dir: Path, cluster: str) -> Path:
 def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
     """Persist *snap* under ``<exp>/.hpc/cluster_history/<cluster>/<unix_ts>.json``.
 
-    Atomic write (``tempfile`` + :func:`os.replace`) so a reader that
-    arrives mid-write either sees the previous snapshot list or the new
-    one — never a partial JSON document. Returns the file path written.
+    Atomic + durable write via :func:`hpc_agent.infra.io.atomic_write_json`
+    (tempfile + fsync + :func:`os.replace` + parent-dir fsync) so a reader
+    that arrives mid-write either sees the previous snapshot list or the new
+    one — never a partial JSON document. The canonical writer serializes with
+    ``indent=2, sort_keys=True`` — byte-identical to the inline copy this
+    replaced. Returns the file path written.
 
     Bounded growth: after writing, the directory is trimmed to the
     most-recent :data:`MAX_HISTORY_SNAPSHOTS` files (oldest-first
@@ -65,28 +67,7 @@ def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
     while target.exists():
         target = d / f"{unix_ts}-{counter}.json"
         counter += 1
-    payload = json.dumps(snap.to_dict(), indent=2, sort_keys=True)
-    tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
-        "w",
-        delete=False,
-        dir=str(d),
-        prefix=target.name + ".",
-        suffix=".tmp",
-        encoding="utf-8",
-    )
-    try:
-        tmp.write(payload)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, target)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp.name)
-        raise
-    finally:
-        if not tmp.closed:
-            tmp.close()
+    atomic_write_json(target, snap.to_dict())
     # Read the cap through the package so tests that monkeypatch
     # ``infra.inspect.MAX_HISTORY_SNAPSHOTS`` (the public re-export)
     # still take effect — direct module-local lookup would freeze the

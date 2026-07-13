@@ -37,7 +37,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdStrict
+from hpc_agent._wire._shared import DetachedHandleFields, RunIdStrict
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 
 # The union of every terminator an aggregate block can stop at, modelled as data
@@ -59,7 +59,7 @@ AggregateBlockStage = Literal[
 ]
 
 
-class AggregateBlockResult(BaseModel):
+class AggregateBlockResult(DetachedHandleFields):
     """Shared ``data`` block for every aggregate block (check / run).
 
     The ``brief`` is the code-digested evidence the LLM drafts a proposal over
@@ -112,30 +112,6 @@ class AggregateBlockResult(BaseModel):
             "(run_id etc.). Surfaced, greenlit, journaled under "
             "``resolved.next_block``, and enforced by the successor gate — never "
             "free-prose."
-        ),
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3): True when aggregate-run spawned a "
-            "durable detached worker (which owns the combine SSH + rsync harvest) and "
-            "returned immediately instead of harvesting in-process. The results brief "
-            "is read from the journal on completion. False on the synchronous "
-            "(detach=False) path."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached harvest\'s outcome — ``"journal"`` when '
-            "``started`` is True. None on the synchronous path."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description=(
-            "The detached worker's OS process id (informational — do NOT wait on it; "
-            "read the journal). None on the synchronous path."
         ),
     )
 

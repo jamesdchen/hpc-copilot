@@ -11,8 +11,8 @@ Pins the three ruling-mandated properties as PURE-planner assertions:
 
 from __future__ import annotations
 
-from hpc_agent.ops.transfer.manifest import FileEntry
-from hpc_agent.ops.transfer.prune import (
+from hpc_agent.infra.manifest import FileEntry
+from hpc_agent.infra.prune import (
     DEFAULT_PRUNE_MAX_BYTES,
     DEFAULT_PRUNE_MAX_FILES,
     plan_prune,

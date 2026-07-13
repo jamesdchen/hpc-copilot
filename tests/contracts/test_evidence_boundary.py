@@ -276,16 +276,19 @@ def test_no_code_path_mechanically_writes_the_conclusion_block() -> None:
     assert not offenders, f"a code path mechanically writes block=conclusion: {offenders}"
 
 
-def test_render_has_no_interpretation_vocabulary() -> None:
-    """The digest render composes counts/dates/shas only — no urgency / recommendation
-    vocabulary in its source literals (the D6 no-fabricated-urgency rule).
-    """
-    from hpc_agent.ops import evidence_render
+_RENDER_BANNED = ("urgent", "recommend", "should", "promising", "stale", "must ", "don't")
 
-    banned = ("urgent", "recommend", "should", "promising", "stale", "must ", "don't")
-    tree = ast.parse(inspect.getsource(evidence_render))
-    # Exclude docstrings / bare-expression strings (prose ABOUT the rule, not render
-    # output) — only string constants that actually flow into the digest count.
+
+def _render_vocab_hits(source: str, banned: tuple[str, ...]) -> list[str]:
+    """Return ``"<word> in <literal>"`` per banned word found in a NON-docstring
+    string literal of ``source``.
+
+    Docstrings / bare-expression strings are prose ABOUT the rule, not render output,
+    so they are excluded — only string constants that actually flow into the digest
+    are scanned. Extracted so the fire-path test can feed synthetic source instead of
+    reimplementing the AST walk (the "verify a guard can fire" discipline).
+    """
+    tree = ast.parse(source)
     docstrings = {
         stmt.value
         for node in ast.walk(tree)
@@ -298,11 +301,51 @@ def test_render_has_no_interpretation_vocabulary() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
     ]
+    hits: list[str] = []
     for text in literals:
         for word in banned:
-            assert word not in text, (
-                f"interpretation vocabulary {word!r} in a render literal: {text!r}"
-            )
+            if word in text:
+                hits.append(f"{word!r} in {text!r}")
+    return hits
+
+
+def test_render_has_no_interpretation_vocabulary() -> None:
+    """The digest render composes counts/dates/shas only — no urgency / recommendation
+    vocabulary in its source literals (the D6 no-fabricated-urgency rule).
+    """
+    from hpc_agent.ops import evidence_render
+
+    hits = _render_vocab_hits(inspect.getsource(evidence_render), _RENDER_BANNED)
+    assert not hits, f"interpretation vocabulary in a render literal: {hits}"
+
+
+def test_render_vocab_scan_fires() -> None:
+    """Fire path: the render-vocab scan flags an interpretation word in a LIVE string
+    literal, while the same word inside a DOCSTRING (prose about the rule) is not
+    scanned — the docstring exclusion does not over-suppress a real literal violation.
+    """
+    # A banned word only inside a docstring is prose ABOUT the rule — not a violation.
+    clean = textwrap.dedent(
+        '''
+        def render() -> str:
+            """This digest must never sound urgent or recommend anything."""
+            return "3 conclusions, 2 dates"
+        '''
+    )
+    assert not _render_vocab_hits(clean, _RENDER_BANNED), (
+        "a banned word confined to a docstring must not fire (it is prose about the rule)"
+    )
+    # The SAME word in a live literal that flows into the digest is caught.
+    planted = textwrap.dedent(
+        '''
+        def render() -> str:
+            """Composes counts only."""
+            return "urgent: recommend re-running now"
+        '''
+    )
+    assert _render_vocab_hits(planted, _RENDER_BANNED), (
+        "the docstring exclusion must not suppress interpretation vocabulary in a live literal"
+    )
 
 
 def test_index_is_disposable_render_and_embed_write_nothing(tmp_path: Path) -> None:

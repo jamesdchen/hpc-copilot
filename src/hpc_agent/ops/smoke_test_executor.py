@@ -31,8 +31,10 @@ I/O contracts:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -126,11 +128,14 @@ def _tail(text: str) -> str:
             CliArg(
                 "--output-file",
                 type=str,
-                default="/tmp/smoke.csv",
+                default=None,
                 help=(
-                    "Path passed to compute() as Namespace.output_file. Defaults "
-                    "to a throwaway under /tmp; the smoke test only checks the "
-                    "module imports and compute() runs clean, not the artifact."
+                    "Path passed to compute() as Namespace.output_file. When "
+                    "omitted, a throwaway file inside a private per-invocation "
+                    "temp directory is used (0700, unique name) — never a fixed "
+                    "shared path, so a co-tenant on a login node can't pre-plant "
+                    "a symlink or collide. The smoke test only checks the module "
+                    "imports and compute() runs clean, not the artifact."
                 ),
             ),
         ),
@@ -141,7 +146,7 @@ def _tail(text: str) -> str:
 def smoke_test_executor(
     *,
     module_path: str | Path,
-    output_file: str = "/tmp/smoke.csv",
+    output_file: str | None = None,
     timeout_sec: float = 60.0,
 ) -> dict[str, Any]:
     """Import *module_path* and call its ``compute`` in a child process.
@@ -151,6 +156,13 @@ def smoke_test_executor(
     accepts both ``str`` (the CLI path) and ``Path`` (the in-process
     path) and is coerced internally.
 
+    When *output_file* is ``None`` (the default), the probe writes to a
+    throwaway file inside a private per-invocation temp directory
+    (``tempfile.mkdtemp`` — mode 0700, unique name) removed on return. A
+    fixed shared path like ``/tmp/smoke.csv`` was a symlink/collision
+    hazard on multi-tenant login nodes; a private dir closes it. An
+    explicit *output_file* is honoured verbatim (the caller owns it).
+
     The probe never raises on a failing executor — a crash, non-zero
     ``sys.exit``, or timeout all surface in the returned ``exit_code`` +
     ``stderr_tail`` so the skill branches deterministically. A timeout
@@ -158,37 +170,47 @@ def smoke_test_executor(
     marker appended to ``stderr_tail``.
     """
     module_path_str = str(module_path)
+    scratch_dir: str | None = None
+    if output_file is None:
+        scratch_dir = tempfile.mkdtemp(prefix="hpc-smoke-")
+        output_file = str(Path(scratch_dir) / "smoke.csv")
     argv = build_probe_argv(module_path=module_path_str, output_file=str(output_file))
 
     started = time.monotonic()
     try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout_sec,
-        )
-    except subprocess.TimeoutExpired as exc:
-        # A module that spins (or blocks on input) must not hang the CLI.
-        # Surface the partial output the child managed to emit before the
-        # kill so a traceback-before-hang is still actionable.
-        stdout_tail = _tail(_decode(exc.stdout))
-        stderr_tail = _tail(
-            _decode(exc.stderr) + f"\n[smoke-test-executor] timed out after {timeout_sec}s"
-        )
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # A module that spins (or blocks on input) must not hang the CLI.
+            # Surface the partial output the child managed to emit before the
+            # kill so a traceback-before-hang is still actionable.
+            stdout_tail = _tail(_decode(exc.stdout))
+            stderr_tail = _tail(
+                _decode(exc.stderr) + f"\n[smoke-test-executor] timed out after {timeout_sec}s"
+            )
+            return {
+                "exit_code": None,
+                "stdout_tail": stdout_tail,
+                "stderr_tail": stderr_tail,
+                "timed_out": True,
+                "elapsed_sec": time.monotonic() - started,
+            }
+
         return {
-            "exit_code": None,
-            "stdout_tail": stdout_tail,
-            "stderr_tail": stderr_tail,
-            "timed_out": True,
+            "exit_code": proc.returncode,
+            "stdout_tail": _tail(proc.stdout or ""),
+            "stderr_tail": _tail(proc.stderr or ""),
+            "timed_out": False,
             "elapsed_sec": time.monotonic() - started,
         }
-
-    return {
-        "exit_code": proc.returncode,
-        "stdout_tail": _tail(proc.stdout or ""),
-        "stderr_tail": _tail(proc.stderr or ""),
-        "timed_out": False,
-        "elapsed_sec": time.monotonic() - started,
-    }
+    finally:
+        # Remove the private scratch dir we minted (a caller-supplied
+        # output_file is theirs to keep — only our own temp dir is cleaned).
+        if scratch_dir is not None:
+            shutil.rmtree(scratch_dir, ignore_errors=True)

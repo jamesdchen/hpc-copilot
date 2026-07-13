@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent.infra.io import append_jsonl_line, atomic_write_json
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.state import determinism
+from hpc_agent.state.interview_doc import iter_interview_docs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -118,17 +119,7 @@ def declared_input_roots(experiment_dir: Path | str) -> list[str] | None:
     Returns a NON-EMPTY list, or ``None`` — an empty ``input_roots`` reads as
     "declared nothing", which is not a usable default either.
     """
-    base = Path(experiment_dir)
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = base / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("audited_source")
         if not isinstance(block, dict):
             continue

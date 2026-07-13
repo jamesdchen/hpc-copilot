@@ -210,7 +210,7 @@ def _chain(experiment_dir: Path) -> list[dict[str, Any]]:
     module_sha = sha256_normalized(source_on_disk)
     receipt = prereqs._newest_receipt(experiment_dir, REPRO_RUN)
     assert receipt is not None, "toy substrate: reproduction receipt missing"
-    receipt_sha = prereqs._canonical_sha(receipt)
+    receipt_sha = prereqs.canonical_sha(receipt)
     return [
         {
             "slot": AUDIT_SLOT,

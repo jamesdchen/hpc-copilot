@@ -24,8 +24,10 @@ through its ONE existing definition:
 * ``scope-budget`` → :func:`~hpc_agent.state.scopes.count_prior_looks` +
   :func:`~hpc_agent.state.scopes.is_scope_locked`; the recomputed ``content_sha``
   is the canonical-JSON sha of ``{prior_looks, distinct_lineages, locked}``.
-* ``pack-receipt`` → a LOUD not-yet-available refusal until domain-packs lands
-  (the S6 reserved-seam posture; never a silent pass).
+* ``pack-receipt`` → :func:`~hpc_agent.state.pack_receipts.slot_status` over the
+  pack journal addressed by ``subject_id = "<pack>:<slot>"`` (the ONE reduction
+  the submit gate also uses); the recomputed ``content_sha`` is the current
+  composite receipt sha (bind manifest sha + on-disk checked-file shas).
 * ``attestation`` → :func:`~hpc_agent.state.attestation.reduce` over a named
   journal addressed by ``subject_id = "<scope_kind>:<scope_id>"``; the satisfying
   record's ``{block, attestor}`` are echoed VERBATIM into the evidence note.
@@ -34,24 +36,24 @@ Behavioral contract: a checker returning ``"stale"`` ALWAYS carries the
 recorded-vs-recomputed sha pair; ``"absent"`` means the substrate/record does not
 exist. :func:`check_chain` raises :class:`~hpc_agent.errors.SpecInvalid` ONLY for
 structurally invalid input (an unknown kind, a bad ``requires`` key, ``requires``
-on a kind that forbids it, or one of the not-yet-available kinds) — never for a
-merely failing slot, which is a verdict, not an exception.
+on a kind that forbids it, a malformed address, or a ``reproduction`` demand
+floor that is not yet wired) — never for a merely failing slot, which is a
+verdict, not an exception.
 
 Pure local reads — no SSH, no ``_wire`` import, no scheduler.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent.state import attestation, code_drift, notebook_audit, scopes
+from hpc_agent.state import attestation, code_drift, notebook_audit, pack_receipts, scopes
 from hpc_agent.state.audit_source import parse_percent_source, sha256_normalized
 from hpc_agent.state.decision_journal import read_decisions
-from hpc_agent.state.determinism import evidence_meets, validate_sample
+from hpc_agent.state.determinism import canonical_sha, evidence_meets, validate_sample
 from hpc_agent.state.fingerprint_store import load_evidence
 from hpc_agent.state.registration import (
     KIND_ATTESTATION,
@@ -127,21 +129,6 @@ class SlotVerdict:
     recorded_sha: str
     recomputed_sha: str | None
     evidence_note: str
-
-
-def _canonical_sha(obj: Any) -> str:
-    """sha256 hexdigest of *obj*'s canonical JSON (harness-contract form).
-
-    ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`` per
-    ``docs/internals/harness-contract.md`` "The sha canonicalization" — the ONE
-    local canonicalization this module uses for the ``reproduction`` /
-    ``scope-budget`` recomputed-evidence shas (no ``infra``/``state`` helper of
-    this exact form exists to reuse; the ``ops/notebook/audit_view`` /
-    ``ops/story_render`` copies are private view-sha helpers, not a shared seam).
-    """
-    return hashlib.sha256(
-        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
 
 
 def _verdict(
@@ -408,7 +395,7 @@ def _check_reproduction(
             ),
         )
 
-    recomputed = _canonical_sha(receipt)
+    recomputed = canonical_sha(receipt)
     overall = receipt.get("overall")
     repro_raw = receipt.get("repro")
     repro_ident: dict[str, Any] = repro_raw if isinstance(repro_raw, dict) else {}
@@ -520,7 +507,7 @@ def _check_scope_budget(
         "distinct_lineages": counts["distinct_lineages"],
         "locked": locked,
     }
-    recomputed = _canonical_sha(projection)
+    recomputed = canonical_sha(projection)
     within_budget = counts["prior_looks"] <= max_looks
     sha_ok = recomputed == entry.content_sha
     if within_budget and not locked and sha_ok:
@@ -550,23 +537,71 @@ def _check_scope_budget(
     )
 
 
-# --- pack-receipt (reserved) -------------------------------------------------
+# --- pack-receipt ------------------------------------------------------------
 
 
 def _check_pack_receipt(
     experiment_dir: Path, entry: ChainEntry, *, dossier_run_ids: Collection[str] | None
 ) -> SlotVerdict:
-    """RESERVED (R3): the domain-packs substrate has not landed.
+    """Currency of a domain-pack receipt slot (R3): the named slot reduces
+    CURRENT with ``passed=true`` under the pack's current bind + on-disk bytes,
+    AND the recomputed composite ``content_sha`` equals the asserted one.
 
-    A LOUD not-yet-available refusal exactly as domain-packs S6 reserved this seam
-    — never a silent pass. Lands as a real checker when
-    ``state/pack_receipts.py`` ships.
+    Routes through the ONE reduction
+    (:func:`~hpc_agent.state.pack_receipts.slot_status`) — the same definition
+    :func:`~hpc_agent.ops.pack_gate.assert_pack_receipts_current` uses at submit
+    — never a re-inlined receipt scan. The entry's ``subject_id`` is the full
+    address ``"<pack>:<slot>"`` (the pack journal to read + the slot slug within
+    it); a malformed address is structurally invalid (a loud
+    :class:`errors.SpecInvalid`, the dangling-reference posture).
+
+    The verdict maps the slot's clearance onto the prereq vocabulary:
+
+    * :data:`~hpc_agent.state.pack_receipts.MISSING` → :data:`ABSENT` (no receipt
+      to compare).
+    * current+passed AND recomputed composite sha == asserted → :data:`CURRENT`.
+    * current+passed but the composite sha MOVED (a re-bind/byte drift since the
+      registrant reviewed), current+failed, or stale → :data:`STALE`, carrying the
+      recorded-vs-recomputed pair.
     """
-    raise errors.SpecInvalid(
-        f"registration chain entry {entry.slot!r} (kind {entry.kind!r}): the pack-receipt "
-        "substrate (state/pack_receipts.py, domain-packs) has not landed yet, so this kind "
-        "cannot be checked — a reserved seam refused LOUDLY, never a silent pass. See "
-        "docs/design/domain-packs.md."
+    pack, sep, slot = entry.subject_id.partition(":")
+    if not sep or not pack or not slot:
+        raise errors.SpecInvalid(
+            f"registration chain entry {entry.slot!r} (kind {entry.kind!r}): a pack-receipt "
+            f"subject_id must be the full address '<pack>:<slot>'; got {entry.subject_id!r}."
+        )
+    records = read_decisions(experiment_dir, "pack", pack)
+    status = pack_receipts.slot_status(records, experiment_dir=experiment_dir, slot=slot)
+    if status.status == pack_receipts.MISSING:
+        return _verdict(
+            entry,
+            status=ABSENT,
+            recomputed_sha=None,
+            evidence_note=(
+                f"pack {pack!r} slot {slot!r}: no receipt recorded — nothing to compare"
+            ),
+        )
+    sha_ok = status.current_sha == entry.content_sha
+    if status.passing and sha_ok:
+        return _verdict(
+            entry,
+            status=CURRENT,
+            recomputed_sha=status.current_sha,
+            evidence_note=(
+                f"pack {pack!r} slot {slot!r}: receipt current+passed at the asserted sha"
+            ),
+        )
+    reasons = []
+    if not status.passing:
+        # slot_status.reason names the clearance failure ('failed' / 'stale').
+        reasons.append(status.reason or "not current+passed")
+    if not sha_ok:
+        reasons.append("receipt composite sha moved (re-bind or checked-byte drift since)")
+    return _verdict(
+        entry,
+        status=STALE,
+        recomputed_sha=status.current_sha,
+        evidence_note=f"pack {pack!r} slot {slot!r} stale: {'; '.join(reasons)}",
     )
 
 
@@ -682,11 +717,11 @@ def check_chain(
 
     Raises :class:`~hpc_agent.errors.SpecInvalid` ONLY for STRUCTURALLY invalid
     input — an unknown kind, an unknown ``requires`` key, a ``requires`` a kind
-    forbids, a not-yet-available kind (``pack-receipt``, or ``reproduction`` with a
-    ``requires`` floor), or a malformed address. A merely failing prerequisite is
-    a :data:`STALE` / :data:`ABSENT` verdict, never an exception (R4: partial
-    registration is refused by the GATE reading these verdicts, not by a raise
-    here).
+    forbids, a not-yet-wired demand (``reproduction`` with a ``requires`` floor),
+    or a malformed address (including a pack-receipt ``subject_id`` that is not
+    ``"<pack>:<slot>"``). A merely failing prerequisite is a :data:`STALE` /
+    :data:`ABSENT` verdict, never an exception (R4: partial registration is
+    refused by the GATE reading these verdicts, not by a raise here).
     """
     verdicts: list[SlotVerdict] = []
     for entry in entries:

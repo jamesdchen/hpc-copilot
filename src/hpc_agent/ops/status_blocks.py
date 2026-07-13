@@ -59,6 +59,7 @@ from hpc_agent.state.block_terminal import terminal_block_key
 from hpc_agent.state.index import find_in_flight_runs, find_stalled_runs
 from hpc_agent.state.journal import load_run, mark_seen_by_human
 from hpc_agent.state.run_record import TERMINAL_STATUSES
+from hpc_agent.state.runs import read_run_cmd_sha
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -461,24 +462,6 @@ def _detached_spec_dict(spec: StatusWatchSpec) -> dict[str, Any]:
     return spec.model_copy(update={"detach": False}).model_dump(mode="json")
 
 
-def _watch_cmd_sha(experiment_dir: Path, run_id: str) -> str:
-    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
-
-    The identity a terminal replay is keyed on (mirrors
-    ``ops/submit_blocks._current_cmd_sha``): a nudge that re-resolves the run
-    rewrites the sidecar ``cmd_sha``, so a mismatch is "the tree moved → do not
-    replay a stale watch outcome". A run with no sidecar (a fleet/status-only run)
-    yields ``""`` → the replay refuses (re-execute), never a false hit.
-    """
-    from hpc_agent.state.runs import read_run_sidecar
-
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, ValueError, errors.HpcError):
-        return ""
-    return str((sidecar or {}).get("cmd_sha") or "")
-
-
 def _replay_watch_terminal(experiment_dir: Path, run_id: str) -> StatusBlockResult | None:
     """Return a finished watch's recorded terminal for the CURRENT tree, else None.
 
@@ -495,7 +478,7 @@ def _replay_watch_terminal(experiment_dir: Path, run_id: str) -> StatusBlockResu
     record = read_terminal(experiment_dir, run_id, _WATCH_BLOCK_KEY)
     if record is None:
         return None
-    current_sha = _watch_cmd_sha(experiment_dir, run_id)
+    current_sha = read_run_cmd_sha(experiment_dir, run_id)
     if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
         return None
     try:
@@ -520,7 +503,7 @@ def _record_watch_terminal(experiment_dir: Path, result: StatusBlockResult) -> N
         experiment_dir,
         run_id=result.run_id,
         block=_WATCH_BLOCK_KEY,
-        cmd_sha=_watch_cmd_sha(experiment_dir, result.run_id),
+        cmd_sha=read_run_cmd_sha(experiment_dir, result.run_id),
         result_dump=result.model_dump(mode="json"),
     )
 

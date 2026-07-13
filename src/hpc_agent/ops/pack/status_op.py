@@ -37,7 +37,6 @@ every call — no cache, no second source of truth.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -55,6 +54,7 @@ from hpc_agent._wire.actions.pack_status import (
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.state import decision_journal
+from hpc_agent.state.interview_doc import iter_interview_docs
 from hpc_agent.state.pack import PackManifest, load_manifest, verify_manifest_integrity
 from hpc_agent.state.pack_receipts import (
     CURRENT_FAILED,
@@ -97,16 +97,7 @@ def _read_packs_optin(experiment_dir: Path) -> list[dict[str, Any]] | None:
     # This raw read is intentionally shape-tolerant (it is the D7 gate probe, not
     # the writer) but agrees with the typed shape exactly: same keys, same nesting.
     """
-    for rel in ("interview.json", ".hpc/interview.json"):
-        path = experiment_dir / rel
-        if not path.is_file():
-            continue
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(doc, dict):
-            continue
+    for doc in iter_interview_docs(experiment_dir):
         block = doc.get("packs")
         if isinstance(block, list):
             return [e for e in block if isinstance(e, dict)]

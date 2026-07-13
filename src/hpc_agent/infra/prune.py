@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
-from hpc_agent.ops.transfer.manifest import FileEntry
+from hpc_agent.infra.manifest import FileEntry
 
 __all__ = [
     "DEFAULT_PRUNE_MAX_BYTES",

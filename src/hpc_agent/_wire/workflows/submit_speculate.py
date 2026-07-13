@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hpc_agent._wire._shared import RunIdStrict
+from hpc_agent._wire._shared import DetachedHandleFields, RunIdStrict
 from hpc_agent._wire.workflows.submit_and_verify import SubmitAndVerifySpec
 
 
@@ -63,7 +63,7 @@ class SubmitSpeculateSpec(BaseModel):
     )
 
 
-class SubmitSpeculateResult(BaseModel):
+class SubmitSpeculateResult(DetachedHandleFields):
     """Result of ``submit-speculate``.
 
     ``speculated`` is False on the budget-dedup no-op path (a validated-fresh
@@ -94,25 +94,4 @@ class SubmitSpeculateResult(BaseModel):
     )
     failure_kind: str | None = Field(
         default=None, description="The verify failure kind when the speculative canary failed."
-    )
-    started: bool = Field(
-        default=False,
-        description=(
-            "Detach-by-contract handle (design §3): True when the speculative canary "
-            "was handed to a durable detached worker and this call returned "
-            "immediately. ``verified`` is not yet known (the poll runs in the "
-            "worker) — read the outcome from the journal. False on the synchronous "
-            "path and on the budget no-op."
-        ),
-    )
-    watch: str | None = Field(
-        default=None,
-        description=(
-            'How to learn the detached canary\'s outcome — ``"journal"`` when '
-            "``started`` is True. None otherwise."
-        ),
-    )
-    detached_pid: int | None = Field(
-        default=None,
-        description="The detached worker's OS process id (informational). None otherwise.",
     )

@@ -243,7 +243,7 @@ def _repro_entry(content_sha: str, requires: dict | None = None) -> ChainEntry:
 def test_reproduction_current(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={_ORIG})
     assert v.status == "current"
     assert v.recomputed_sha == sha
@@ -252,7 +252,7 @@ def test_reproduction_current(tmp_path: Path) -> None:
 def test_reproduction_stale_on_code_drift(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code-v2")  # tree moved
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={_ORIG})
     assert v.status == "stale"
     assert "code drifted" in v.evidence_note
@@ -261,7 +261,7 @@ def test_reproduction_stale_on_code_drift(tmp_path: Path) -> None:
 def test_reproduction_dossier_cross_link_refusal(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     # The dossier names a DIFFERENT run — the receipt's original is not in it.
     [v] = prereqs.check_chain(tmp_path, [_repro_entry(sha)], dossier_run_ids={"some-other-run"})
     assert v.status == "stale"
@@ -280,7 +280,7 @@ def test_reproduction_requires_floor_met(tmp_path: Path) -> None:
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     for _ in range(3):
         _write_fingerprint_sample(tmp_path, scale="main", cluster="widget-cluster")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     demand = {"min_n": 3, "scales": ["main"], "clusters": ["widget-cluster"]}
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires=demand)], dossier_run_ids={_ORIG}
@@ -294,7 +294,7 @@ def test_reproduction_requires_floor_unmet_n(tmp_path: Path) -> None:
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     _write_fingerprint_sample(tmp_path, scale="main")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires={"min_n": 3})], dossier_run_ids={_ORIG}
     )
@@ -309,7 +309,7 @@ def test_reproduction_requires_floor_unmet_scale(tmp_path: Path) -> None:
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
     for _ in range(3):
         _write_fingerprint_sample(tmp_path, scale="canary")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path,
         [_repro_entry(sha, requires={"min_n": 3, "scales": ["main"]})],
@@ -324,7 +324,7 @@ def test_reproduction_requires_floor_missing_ledger_is_shortfall(tmp_path: Path)
     # No ledger at all → an ordinary n=0 shortfall, NOT a fabricated pass / crash.
     receipt = _write_receipt(tmp_path, tasks_py_sha="widget-code")
     _write_repro_sidecar(tmp_path, tasks_py_sha="widget-code")
-    sha = prereqs._canonical_sha(receipt)
+    sha = prereqs.canonical_sha(receipt)
     [v] = prereqs.check_chain(
         tmp_path, [_repro_entry(sha, requires={"min_n": 1})], dossier_run_ids={_ORIG}
     )
@@ -355,7 +355,7 @@ def _budget_entry(content_sha: str, max_looks: int) -> ChainEntry:
 def _budget_sha(tmp_path: Path) -> str:
     counts = scopes.count_prior_looks(tmp_path, _SCOPE)
     locked = scopes.is_scope_locked(tmp_path, _SCOPE)
-    sha: str = prereqs._canonical_sha(
+    sha: str = prereqs.canonical_sha(
         {
             "prior_looks": counts["prior_looks"],
             "distinct_lineages": counts["distinct_lineages"],
@@ -408,14 +408,138 @@ def test_scope_budget_missing_max_looks_is_spec_invalid(tmp_path: Path) -> None:
         prereqs.check_chain(tmp_path, [bad])
 
 
-# ── pack-receipt (reserved) ──────────────────────────────────────────────────
+# ── pack-receipt ─────────────────────────────────────────────────────────────
+
+_PACK = "widget-pack"
+_PACK_SLOT = "widget-slot"
 
 
-def test_pack_receipt_is_loud_not_yet_available(tmp_path: Path) -> None:
-    entry = ChainEntry(
-        slot="pack-slot", kind="pack-receipt", subject_id="widget-pack:slot-1", content_sha="x"
+def _pack_journal(tmp_path: Path, pack: str = _PACK) -> Path:
+    from hpc_agent._kernel.contract.layout import RepoLayout
+
+    path = RepoLayout(tmp_path).hpc / "packs" / f"{pack}.decisions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _seed_pack_receipt(
+    tmp_path: Path,
+    *,
+    pack: str = _PACK,
+    slot: str = _PACK_SLOT,
+    passed: bool = True,
+) -> str:
+    """Journal a current pack-bind + a receipt for *slot*; return the composite sha.
+
+    Uses the module's OWN one-definition :func:`receipt_content_sha` so the fixture
+    computes the exact form :func:`slot_status` recomputes on read.
+    """
+    import hashlib
+
+    from hpc_agent.state.pack_receipts import (
+        PACK_BIND_BLOCK,
+        PACK_RECEIPT_BLOCK,
+        receipt_content_sha,
     )
-    with pytest.raises(errors.SpecInvalid, match="pack-receipt substrate"):
+
+    manifest_sha = hashlib.sha256(f"{pack}-manifest".encode()).hexdigest()
+    rel = "data/widget.csv"
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"widget,rows\n1,2\n")
+    on_disk = {rel: hashlib.sha256(p.read_bytes()).hexdigest()}
+    content_sha = receipt_content_sha(manifest_sha, on_disk)
+    path = _pack_journal(tmp_path, pack)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "block": PACK_BIND_BLOCK,
+                    "resolved": {
+                        "pack": pack,
+                        "version": "1.0.0",
+                        "manifest_sha": manifest_sha,
+                        "files": [{"path": "vocab.json", "sha256": manifest_sha}],
+                        "seams": ["reader_calls"],
+                    },
+                }
+            )
+            + "\n"
+        )
+        fh.write(
+            json.dumps(
+                {
+                    "block": PACK_RECEIPT_BLOCK,
+                    "resolved": {
+                        "pack": pack,
+                        "version": "1.0.0",
+                        "manifest_sha": manifest_sha,
+                        "slot": slot,
+                        "checked": [rel],
+                        "passed": passed,
+                        "content_sha": content_sha,
+                        "attestor": "code",
+                    },
+                }
+            )
+            + "\n"
+        )
+    return content_sha
+
+
+def test_pack_receipt_current_passed(tmp_path: Path) -> None:
+    content_sha = _seed_pack_receipt(tmp_path, passed=True)
+    entry = ChainEntry(
+        slot="pack-slot",
+        kind="pack-receipt",
+        subject_id=f"{_PACK}:{_PACK_SLOT}",
+        content_sha=content_sha,
+    )
+    (verdict,) = prereqs.check_chain(tmp_path, [entry])
+    assert verdict.status == prereqs.CURRENT
+    assert verdict.recomputed_sha == content_sha
+
+
+def test_pack_receipt_failed_check_is_stale(tmp_path: Path) -> None:
+    content_sha = _seed_pack_receipt(tmp_path, passed=False)
+    entry = ChainEntry(
+        slot="pack-slot",
+        kind="pack-receipt",
+        subject_id=f"{_PACK}:{_PACK_SLOT}",
+        content_sha=content_sha,
+    )
+    (verdict,) = prereqs.check_chain(tmp_path, [entry])
+    assert verdict.status == prereqs.STALE
+    assert "failed" in verdict.evidence_note
+
+
+def test_pack_receipt_moved_sha_is_stale(tmp_path: Path) -> None:
+    _seed_pack_receipt(tmp_path, passed=True)
+    entry = ChainEntry(
+        slot="pack-slot",
+        kind="pack-receipt",
+        subject_id=f"{_PACK}:{_PACK_SLOT}",
+        content_sha="a-sha-the-registrant-reviewed-that-no-longer-holds",
+    )
+    (verdict,) = prereqs.check_chain(tmp_path, [entry])
+    assert verdict.status == prereqs.STALE
+    assert "moved" in verdict.evidence_note
+
+
+def test_pack_receipt_missing_is_absent(tmp_path: Path) -> None:
+    entry = ChainEntry(
+        slot="pack-slot", kind="pack-receipt", subject_id=f"{_PACK}:{_PACK_SLOT}", content_sha="x"
+    )
+    (verdict,) = prereqs.check_chain(tmp_path, [entry])
+    assert verdict.status == prereqs.ABSENT
+    assert verdict.recomputed_sha is None
+
+
+def test_pack_receipt_malformed_address_is_loud(tmp_path: Path) -> None:
+    entry = ChainEntry(
+        slot="pack-slot", kind="pack-receipt", subject_id="no-colon-here", content_sha="x"
+    )
+    with pytest.raises(errors.SpecInvalid, match="<pack>:<slot>"):
         prereqs.check_chain(tmp_path, [entry])
 
 

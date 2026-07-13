@@ -70,6 +70,7 @@ TargetResolution = Literal["found-current", "found-superseded", "unresolvable"]
 # BOTH the challenge's target address and each cited evidence line. Mirrors
 # ``state/evidence.py::CITATION_KINDS``; the contract suite pins the two equal so
 # adding a kind is a reviewed vocabulary change in ONE place.
+# MIRROR: hpc_agent.state.evidence::CITATION_KINDS pinned-by tests/contracts/test_challenge_boundary.py::test_wire_citation_kind_equals_citation_kinds
 CitationKind = Literal["dossier", "run", "fingerprint", "attestation"]
 
 # The verdict a resolution record carries (C4). ``upheld`` = the refutation

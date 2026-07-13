@@ -49,6 +49,7 @@ from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.status_pipeline import status_pipeline
 from hpc_agent.ops.submit_pipeline import submit_pipeline
 from hpc_agent.state.block_terminal import terminal_block_key
+from hpc_agent.state.runs import read_run_cmd_sha
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,23 +64,6 @@ __all__ = ["campaign_run"]
 # campaign spec carries no ``submit.submit.run_id``). Sourced from the ONE key
 # derivation so this recorder can never drift from the replay reader / doctor scan.
 _CAMPAIGN_BLOCK_KEY = terminal_block_key("campaign-run")
-
-
-def _campaign_cmd_sha(experiment_dir: Path, run_id: str) -> str:
-    """The run's tree fingerprint (``cmd_sha``) from its sidecar, or ``""``.
-
-    The identity a terminal replay is keyed on. Pre-submit (the parent's first
-    detach) there is no sidecar → ``""`` → the replay refuses and the parent
-    spawns; post-completion the submitted run's sidecar carries the sha so a
-    re-invoke replays. A moved sha (a nudge) also refuses.
-    """
-    from hpc_agent.state.runs import read_run_sidecar
-
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (OSError, ValueError, errors.HpcError):
-        return ""
-    return str((sidecar or {}).get("cmd_sha") or "")
 
 
 def _detached_campaign_spec_dict(spec: CampaignRunSpec) -> dict[str, Any]:
@@ -106,7 +90,7 @@ def _replay_campaign_terminal(experiment_dir: Path, run_id: str) -> CampaignRunR
     record = read_terminal(experiment_dir, run_id, _CAMPAIGN_BLOCK_KEY)
     if record is None:
         return None
-    current_sha = _campaign_cmd_sha(experiment_dir, run_id)
+    current_sha = read_run_cmd_sha(experiment_dir, run_id)
     if not current_sha or str(record.get("cmd_sha") or "") != current_sha:
         return None
     try:
@@ -135,7 +119,7 @@ def _record_campaign_terminal(
         experiment_dir,
         run_id=key_run_id,
         block=_CAMPAIGN_BLOCK_KEY,
-        cmd_sha=_campaign_cmd_sha(experiment_dir, key_run_id),
+        cmd_sha=read_run_cmd_sha(experiment_dir, key_run_id),
         result_dump=result.model_dump(mode="json"),
     )
 

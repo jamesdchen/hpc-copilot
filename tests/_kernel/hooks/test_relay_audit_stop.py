@@ -158,7 +158,7 @@ def test_unverifiable_claims_are_not_surfaced(
             sources_consulted=["run_record"],
         )
 
-    monkeypatch.setattr("hpc_agent.ops.decision.verify_relay.verify_relay", _fake_verify)
+    monkeypatch.setattr("hpc_agent.ops.decision.journal.verify_relay.verify_relay", _fake_verify)
     transcript = _transcript(tmp_path, f"Run {RUN_ID}: 42 files changed.")
     assert relay_audit_stop.build_hook_output(_payload(tmp_path, transcript)) is None
 
@@ -313,7 +313,9 @@ def test_no_notebook_work_when_no_audit_mentioned(
         calls["n"] += 1
         raise AssertionError("verify_notebook_relay must not run when no audit is named")
 
-    monkeypatch.setattr("hpc_agent.ops.decision.verify_relay.verify_notebook_relay", _counting)
+    monkeypatch.setattr(
+        "hpc_agent.ops.decision.journal.verify_relay.verify_notebook_relay", _counting
+    )
 
     # ...but the relay names only the run, not the audit id.
     transcript = _transcript(tmp_path, f"Run {RUN_ID} is running.")
