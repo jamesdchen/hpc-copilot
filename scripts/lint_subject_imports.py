@@ -294,20 +294,26 @@ _INFRA_TO_OPS = DirectionalRule(
     temporary=False,
 )
 
-# incorporation feeds submit; the reverse edge into ops/meta is a cycle.
+# incorporation feeds submit; the reverse EAGER edge into ops/meta is a cycle.
+# The submit_spec<->submit_flow cycle was broken (the executor-shape guards
+# moved to infra/executor_guard.py). One sanctioned LAZY exception remains:
+# the auto-classifier invokes the classify-axis preflight VERB at call time
+# (imports nested in function bodies, not import-time), the same call-time
+# posture the state->ops run-story reader is sanctioned under.
 _INCORPORATION_TO_OPS_META = DirectionalRule(
     source_role="incorporation",
     target_roles=("ops", "meta"),
     allow=frozenset(
         {
-            # TEMP: CLEARS once layering-submit lands (the submit cycle is
-            # broken). Remove these three entries and re-run after that lane.
-            ("incorporation/build/submit_spec.py", "hpc_agent.ops.submit_flow"),
-            ("incorporation/build/submit_spec.py", "hpc_agent.meta.campaign"),
             ("incorporation/classify_axis_auto.py", "hpc_agent.ops.classify_axis_preflight"),
+            # Lazy call-time read of the campaign manifest for campaign-shaped
+            # submits (nested in a function try-block; a non-campaign submit
+            # never reaches it) — the same sanctioned posture as the two edges
+            # above, not the eager submit_spec<->submit_flow cycle (broken).
+            ("incorporation/build/submit_spec.py", "hpc_agent.meta.campaign.manifest"),
         }
     ),
-    temporary=True,
+    temporary=False,
 )
 
 # _kernel must not import ops, EXCEPT the enumerated inherent seams:
@@ -323,9 +329,11 @@ _KERNEL_TO_OPS = DirectionalRule(
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.field_ownership"),
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.overnight"),
             ("_kernel/lifecycle/block_drive.py", "hpc_agent.ops.block_gate"),
-            # MCP surface exposes a few ops atoms directly.
-            ("_kernel/extension/mcp_server.py", "hpc_agent.ops.overnight"),
-            ("_kernel/extension/mcp_server.py", "hpc_agent.ops.notebook_view"),
+            # MCP surface exposes a few ops atoms directly; the elicitation /
+            # render-digest half (which reaches these two) split into
+            # mcp_elicitation.py.
+            ("_kernel/extension/mcp_elicitation.py", "hpc_agent.ops.overnight"),
+            ("_kernel/extension/mcp_elicitation.py", "hpc_agent.ops.notebook_view"),
             # Stop-hook / alert guards probe ops capability + notify helpers.
             ("_kernel/hooks/alert_count.py", "hpc_agent.ops.recover.notify"),
             (
