@@ -73,12 +73,13 @@ import contextlib
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 # The elicitation prompt + render-digest composition half lives in a separable,
@@ -387,13 +388,21 @@ def _is_response(item: Any) -> bool:
     )
 
 
-# Server-level cap on one isolated-runner tool call. Generous: the blocking
-# watch/wait invocations are refused at the seam (conduct rule 11 —
-# :func:`_refuse_blocking_over_mcp` requires detach for submit-s2/s3 and rejects
-# blocking status-watch polls), so a legitimate call is minutes, not hours; 1 h
-# still covers a slow stage/harvest with wide margin while guaranteeing the
-# wedge class (an unbounded piped wait) cannot recur through this runner.
+# Server-level cap on one tool call, enforced by BOTH runners: the subprocess
+# runner kills its child on expiry, and the default in-process runner arms a
+# SIGALRM backstop (:func:`_in_process_deadline`) over the same ceiling — so the
+# wedge class (an unbounded piped/poll wait) cannot recur through EITHER runner.
+# Generous: the blocking watch/wait invocations are refused at the seam (conduct
+# rule 11 — :func:`_refuse_blocking_over_mcp` requires detach for
+# submit-s2/s3/status-watch and refuses monitor-flow/verify-canary/submit-flow
+# outright), so a legitimate call is minutes, not hours; 1 h still covers a slow
+# stage/harvest with wide margin.
 _SUBPROCESS_RUNNER_TIMEOUT_SEC: float = 3600.0
+
+# Cadence of the mid-call liveness heartbeat (run-#12 finding 3). A module
+# constant so a test can shrink it to observe a heartbeat without a real 15 s
+# wait.
+_HEARTBEAT_INTERVAL_SEC: float = 15.0
 
 
 def _isolated_runner_argv(argv: list[str]) -> list[str]:
@@ -439,6 +448,58 @@ def _subprocess_cli_runner(argv: list[str]) -> tuple[int, str, str]:
             ),
         )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+class _InProcessDeadlineExceeded(Exception):
+    """Raised inside the in-process runner when its SIGALRM backstop fires."""
+
+
+@contextlib.contextmanager
+def _in_process_deadline(argv: list[str]) -> Iterator[None]:
+    """Arm a SIGALRM backstop so a wedged in-process call cannot hold this
+    single-threaded server forever (the same ceiling the subprocess runner
+    enforces, :data:`_SUBPROCESS_RUNNER_TIMEOUT_SEC`, now applied to the DEFAULT
+    runner too).
+
+    The blocking verbs are already refused at the seam
+    (:func:`_refuse_blocking_over_mcp`), so this only fires if an UNFENCED
+    blocking verb reaches the default runner — a bug this backstops. A killable
+    timeout cannot be built with an abandonable worker thread here: the
+    in-process call writes to the server's REAL ``sys.stdout`` — the JSON-RPC
+    channel — so a leaked worker would corrupt the transport (and hold journal
+    locks). SIGALRM instead raises IN the wedged call, unwinding the
+    ``redirect_stdout``/``redirect_stderr`` contexts (which restore the real
+    streams) before control returns — no leaked thread, no corrupted transport,
+    no per-call subprocess latency.
+
+    Armed only on POSIX (``setitimer``/``SIGALRM``) from the main thread
+    (``setitimer`` can be set nowhere else); elsewhere it is a no-op and the
+    pre-existing unbounded behavior stands — the seam is the load-bearing guard
+    either way. Any handler + pending timer already installed (e.g. a signal-mode
+    ``pytest-timeout``) is saved and restored on exit.
+    """
+    can_arm = (
+        hasattr(signal, "setitimer")
+        and hasattr(signal, "SIGALRM")
+        and threading.current_thread() is threading.main_thread()
+        and _SUBPROCESS_RUNNER_TIMEOUT_SEC > 0
+    )
+    if not can_arm:
+        yield
+        return
+
+    def _fire(_signum: int, _frame: Any) -> None:
+        raise _InProcessDeadlineExceeded
+
+    prev_handler = signal.signal(signal.SIGALRM, _fire)
+    prev_delay, prev_interval = signal.setitimer(signal.ITIMER_REAL, _SUBPROCESS_RUNNER_TIMEOUT_SEC)
+    try:
+        yield
+    finally:
+        # Restore the prior timer + handler (best effort: elapsed time under a
+        # ms-scale call is negligible against any outer second-scale deadline).
+        signal.setitimer(signal.ITIMER_REAL, prev_delay, prev_interval)
+        signal.signal(signal.SIGALRM, prev_handler)
 
 
 def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
@@ -498,8 +559,29 @@ def _in_process_cli_runner(argv: list[str]) -> tuple[int, str, str]:
 
     out, err = io.StringIO(), io.StringIO()
     try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        # ``_in_process_deadline`` is the OUTERMOST context: it is entered first
+        # and exited last, so a SIGALRM raised mid-call unwinds the redirect
+        # contexts (restoring the real streams) before the timer is disarmed.
+        with (
+            _in_process_deadline(argv),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             code = _cli_main(list(argv))
+    except _InProcessDeadlineExceeded:
+        # The SIGALRM backstop fired: a call blew past the runner ceiling (should
+        # be impossible — every blocking verb is refused at the seam). The
+        # redirect contexts restored the real streams as the exception unwound,
+        # so the process/transport is uncorrupted. Map to 124 like the
+        # subprocess runner's timeout.
+        return (
+            124,
+            "",
+            (
+                f"hpc-agent {' '.join(argv)} exceeded the in-process runner's "
+                f"{_SUBPROCESS_RUNNER_TIMEOUT_SEC:.0f}s deadline — interrupted"
+            ),
+        )
     except SystemExit as exc:  # argparse / explicit sys.exit inside a verb
         code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
     except Exception:  # noqa: BLE001 — parity: an uncaught crash is exit 1 + traceback on stderr
@@ -549,6 +631,41 @@ _DETACH_REQUIRED_VERBS = frozenset(
 # ``wait-detached`` via backgrounded Bash OUTSIDE this server.
 _BLOCKING_WAIT_VERBS = frozenset({"wait-detached"})
 
+# Blocking WORKFLOW verbs whose spec has NO ``detach`` escape hatch (unlike the
+# ``_DETACH_REQUIRED_VERBS``, whose specs carry ``detach``). Each is a
+# poll-to-terminal loop that would hold this synchronous server for its whole
+# budget — the same proving-run-3 head-of-line class — but cannot be
+# detach-gated because their specs are ``extra='forbid'`` with no ``detach``
+# field to set:
+#   * ``monitor-flow``  — polls a run to terminal or ``wall_clock_budget_seconds``
+#     (DEFAULT 86400 = 24h).
+#   * ``verify-canary``  — waits on a 1-task canary to terminal (30-min default
+#     poll, ``wait_budget_sec`` raisable arbitrarily).
+#   * ``submit-flow``    — runs submit→(canary/record) synchronously; its canary
+#     leg blocks the same way and it has no detach field to grow into.
+# They are refused OUTRIGHT (like ``_BLOCKING_WAIT_VERBS``), each naming the
+# MCP-safe alternative that IS detachable/instant. Curated excludes them; this
+# backstops the ``full``/``tiered`` catalogs (all three are ``verb='workflow'``,
+# invocable there under ``--allow-mutations``).
+_BLOCKING_NO_DETACH_ALTERNATIVES: dict[str, str] = {
+    "monitor-flow": (
+        "for an instant read call `status-snapshot`; to watch to terminal set "
+        '{"detach": true} on `status-watch` (the monitor poll runs in a '
+        "detached worker) and run `hpc-agent wait-detached` via backgrounded "
+        "Bash to be woken"
+    ),
+    "verify-canary": (
+        'launch the canary via `submit-s2` with {"detach": true} (the '
+        "sanctioned S2 detached canary) and run `hpc-agent wait-detached` via "
+        "backgrounded Bash to be woken at completion"
+    ),
+    "submit-flow": (
+        "drive the campaign through the block chain instead: `submit-s1` / "
+        "`block-drive` return a brief immediately; for a detached submit+watch "
+        'set {"detach": true} on `submit-s2`'
+    ),
+}
+
 
 def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     """Raise ``_Invalid`` for tool calls that would block the server.
@@ -567,6 +684,12 @@ def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
     synchronous server any invocation wedges the line. Curated already excludes
     it; this backstops the ``full``/``tiered`` catalogs where it is otherwise
     invocable.
+
+    The ``monitor-flow`` / ``verify-canary`` / ``submit-flow`` workflow verbs are
+    likewise refused outright (:data:`_BLOCKING_NO_DETACH_ALTERNATIVES`): they are
+    poll-to-terminal loops with no ``detach`` field in their (``extra='forbid'``)
+    specs, so — unlike the detach-gated verbs above — there is no ``detach=true``
+    remedy; each refusal names the detachable/instant MCP-safe path instead.
     """
     if name in _BLOCKING_WAIT_VERBS:
         raise _Invalid(
@@ -576,6 +699,14 @@ def _refuse_blocking_over_mcp(name: str, arguments: Mapping[str, Any]) -> None:
             "(head-of-line; an abandoned turn does not stop it). For an instant "
             "status read call `poll-detached`; to be woken at completion run "
             "`hpc-agent wait-detached` via backgrounded Bash OUTSIDE this server."
+        )
+    alt = _BLOCKING_NO_DETACH_ALTERNATIVES.get(name)
+    if alt is not None:
+        raise _Invalid(
+            f"{name} is a BLOCKING poll-to-terminal workflow with no detach=true "
+            "remedy — over this synchronous server it wedges every later tool "
+            "call (head-of-line; an abandoned turn does not stop it). Instead: "
+            f"{alt}."
         )
     spec = arguments.get("spec")
     spec_dict = spec if isinstance(spec, dict) else {}
@@ -1080,11 +1211,22 @@ class McpServer:
             # "is it hung?" investigations in one night. One stderr line every
             # ~15s on the same tail-able surface as the per-call telemetry;
             # the daemon timer dies with the call.
+            #
+            # Capture the REAL stderr handle HERE, before the runner runs: the
+            # default ``_in_process_cli_runner`` wraps dispatch in
+            # ``contextlib.redirect_stderr``, which rebinds ``sys.stderr``
+            # PROCESS-WIDE across every thread for the call's duration. A
+            # heartbeat that resolved ``sys.stderr`` at write time would land in
+            # that captured StringIO (then be discarded by ``_tool_result``) —
+            # swallowing exactly the lines this feature exists to emit. Binding
+            # the pre-redirect handle keeps the heartbeat on the tail-able MCP
+            # log where the human is watching.
+            real_err = sys.stderr
             _hb_stop = threading.Event()
 
             def _heartbeat() -> None:
-                while not _hb_stop.wait(15.0):
-                    sys.stderr.write(
+                while not _hb_stop.wait(_HEARTBEAT_INTERVAL_SEC):
+                    real_err.write(
                         f"[mcp] {name} still running ({int(time.perf_counter() - started)}s)\n"
                     )
 
@@ -1280,21 +1422,26 @@ class McpServer:
         if name not in _PROMPT_NAMES:
             raise _Invalid(f"unknown prompt {name!r}")
         entry = WORKFLOW_ENTRIES_BY_PROMPT[str(name)]
+        # The MESSAGE BODY is ALWAYS the canonical entry's executable
+        # ``start_instruction`` (§6): it drives ``block-drive`` + commits via
+        # ``append-decision`` — the curated verbs an MCP-only client actually
+        # has. The packaged slash ``.md`` body is authored for Claude-Code: it
+        # instructs the agent to invoke the Skill tool, run Bash, and call
+        # CronCreate, none of which exist over MCP ("An MCP client has no shell"
+        # — module docstring). Serving that verbatim dead-ends the client or
+        # pushes it to hand-author specs (the finding-13/17 spec-corruption
+        # class). So the ``.md`` only supplies the human-readable ``description``;
+        # the table stays the source of truth for what to RUN.
         body = _read_command_md(str(name))
-        if body is None:
-            # No packaged slash body in this install — project the canonical
-            # entry's thin start-the-driver instruction from the table instead
-            # (§6: the MCP prompt is a projection of the same one source).
-            return {
-                "description": f"/{name} — start the {entry.name} workflow",
-                "messages": [
-                    {"role": "user", "content": {"type": "text", "text": entry.start_instruction}}
-                ],
-            }
-        front, rest = _strip_frontmatter(body)
+        description = f"/{name} — start the {entry.name} workflow"
+        if body is not None:
+            front, _rest = _strip_frontmatter(body)
+            description = front.get("description", description)
         return {
-            "description": front.get("description", f"/{name}"),
-            "messages": [{"role": "user", "content": {"type": "text", "text": rest}}],
+            "description": description,
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": entry.start_instruction}}
+            ],
         }
 
     # -- JSON-RPC -----------------------------------------------------------
