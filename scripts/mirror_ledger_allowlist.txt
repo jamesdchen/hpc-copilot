@@ -26,7 +26,6 @@ src/hpc_agent/_kernel/hooks/alert_count.py
 src/hpc_agent/_kernel/hooks/answer_capture.py
 src/hpc_agent/_kernel/hooks/decision_rendezvous_autofetch.py
 src/hpc_agent/_kernel/hooks/decision_rendezvous_stop_guard.py
-src/hpc_agent/_kernel/hooks/relay_audit_stop.py
 src/hpc_agent/_kernel/hooks/skill_return_autofetch.py
 src/hpc_agent/_kernel/hooks/utterance_capture.py
 src/hpc_agent/_kernel/lifecycle/block_drive.py
@@ -167,3 +166,6 @@ src/hpc_agent/state/run_story.py
 src/hpc_agent/state/snapshot_cache.py
 src/hpc_agent/state/stages.py
 src/hpc_agent/state/user_profiles.py
+src/hpc_agent/_kernel/extension/mcp_elicitation.py
+src/hpc_agent/_kernel/hooks/relay_audit_stop/__init__.py
+src/hpc_agent/_kernel/hooks/relay_audit_stop/_shared.py

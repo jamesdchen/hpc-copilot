@@ -343,8 +343,14 @@ _KERNEL_TO_OPS = DirectionalRule(
             ("_kernel/hooks/skill_return_stop_guard.py", "hpc_agent.ops.harness_capabilities"),
             # relay_audit_stop is a subpackage; the two sanctioned seams live in
             # the entry (__init__) and the contradiction audit submodule.
-            ("_kernel/hooks/relay_audit_stop/__init__.py", "hpc_agent.ops.harness_capabilities"),
-            ("_kernel/hooks/relay_audit_stop/_contradiction.py", "hpc_agent.ops.decision.verify_relay"),
+            (
+                "_kernel/hooks/relay_audit_stop/__init__.py",
+                "hpc_agent.ops.harness_capabilities",
+            ),
+            (
+                "_kernel/hooks/relay_audit_stop/_contradiction.py",
+                "hpc_agent.ops.decision.verify_relay",
+            ),
         }
     ),
     temporary=False,
