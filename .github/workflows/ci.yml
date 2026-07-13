@@ -170,6 +170,8 @@ jobs:
       - name: Lint telemetry fields declare cumulative vs per-tick delta
         if: matrix.python-version == '3.12'
         run: python scripts/lint_telemetry_labels.py
+      - name: Lint every schema file is reachable from schema_for
+        run: python scripts/lint_schema_reachability.py
       - name: Check JSON schemas regenerated from Pydantic
         if: matrix.python-version == '3.12'
         run: python scripts/build_schemas.py --check

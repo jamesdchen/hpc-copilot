@@ -34,6 +34,7 @@ __all__ = [
     "operations_bootstrap",
     "operations_catalog",
     "render_llms_full",
+    "schema_candidate_ladder",
     "schema_for",
 ]
 
@@ -81,27 +82,66 @@ def _cli_subcommand(backed_by: dict) -> str | None:
     return tokens[0] if tokens else None
 
 
+def schema_candidate_ladder(
+    name: str,
+    side: str,
+    *,
+    override: str | None = None,
+    cli_name: str | None = None,
+) -> list[str]:
+    """Ordered candidate schema filenames for a primitive's *side* I/O.
+
+    The single source of truth for the schema-resolution ladder shared by
+    :func:`schema_for` (catalog / ``describe`` / ``capabilities``) and
+    :func:`hpc_agent._kernel.contract.schema._output_schema_for` (the runtime
+    ``validate_output`` gate). Both consume this identical ordered list so
+    the two resolvers can never silently disagree about which file backs a
+    primitive — the drift the two hand-maintained copies used to invite.
+
+    Order (first existing file wins at the call site):
+
+    1. an explicit ``override`` — a shape-named shared file the naming
+       convention can't reach (from ``CliShape.schema_ref``, e.g. the
+       ``submit-s1..s4`` blocks → ``submit_block.output.json``);
+    2. ``<name>.<side>.json`` with hyphens folded to underscores;
+    3. ``<name>.<side>.json`` verbatim;
+    4. the CLI-subcommand form (``<cli_name>.<side>.json``) for
+       CLI-renamed primitives (e.g. ``check-preflight`` →
+       ``preflight.output.json``).
+
+    Only the ORDER lives here; each caller applies its own existence check
+    per candidate (``_PACKAGE_ROOT/schemas`` on-disk vs importlib-resources).
+    The list is de-duplicated preserving order (``name`` equals its
+    hyphen-folded form when it carries no hyphen).
+    """
+    candidates: list[str] = []
+    if override:
+        candidates.append(override)
+    candidates.append(f"{name.replace('-', '_')}.{side}.json")
+    candidates.append(f"{name}.{side}.json")
+    if cli_name:
+        candidates.append(f"{cli_name.replace('-', '_')}.{side}.json")
+    seen: set[str] = set()
+    return [c for c in candidates if not (c in seen or seen.add(c))]
+
+
 def schema_for(name: str, side: str, backed_by: dict) -> str | None:
     """Return the schema filename for a primitive, if one exists.
 
-    Resolution order: an explicit ``{side}_schema_override`` in *backed_by*
-    (from ``CliShape.schema_ref.output`` — a shape-named file the naming
-    convention can't reach, e.g. the shared ``submit_block.output.json``)
-    wins when it exists on disk; otherwise fall back to the convention
-    (``<name>.<side>.json`` / CLI-subcommand form).
+    Resolution order follows :func:`schema_candidate_ladder`: an explicit
+    ``{side}_schema_override`` in *backed_by* (from ``CliShape.schema_ref`` —
+    a shape-named file the naming convention can't reach, e.g. the shared
+    ``submit_block.output.json``) wins when it exists on disk; otherwise fall
+    back to the convention (``<name>.<side>.json`` / CLI-subcommand form).
     """
     schemas_dir = _PACKAGE_ROOT / "schemas"
     override = backed_by.get(f"{side}_schema_override")
-    if isinstance(override, str) and (schemas_dir / override).is_file():
-        return override
-    candidates = [
-        f"{name.replace('-', '_')}.{side}.json",
-        f"{name}.{side}.json",
-    ]
-    cli_name = _cli_subcommand(backed_by)
-    if cli_name:
-        candidates.append(f"{cli_name.replace('-', '_')}.{side}.json")
-    for fname in candidates:
+    for fname in schema_candidate_ladder(
+        name,
+        side,
+        override=override if isinstance(override, str) else None,
+        cli_name=_cli_subcommand(backed_by),
+    ):
         if (schemas_dir / fname).is_file():
             return fname
     return None
