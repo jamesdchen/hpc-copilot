@@ -1,0 +1,78 @@
+{
+ "gaps": [
+  {
+   "area": "Onboarding on-ramp (incorporation/) never swept",
+   "why_it_matters": "src/hpc_agent/incorporation/ (wrap_entry_point, decorate_entry_point, classify_axis[_auto/_easy], build/scaffold_strategy, export_package) plus the hpc-wrap-entry-point / hpc-build-executor / hpc-classify-axis skills are the mandatory step-0 for any real user, and no lens touched them \u2014 a bug here blocks the campaign before submit and is invisible to all 57 findings. The axis classifier's verdict silently determines aggregation correctness downstream (F05/F06 territory).",
+   "suggested_probe": "Adversarially drive wrap-entry-point/build-executor/classify-axis against awkward repos: an @hydra.main entry point (signature-rewrite fallback), a percent-format notebook, vendored/read-only code, a non-Python entry, and a frozen-YAML config; assert the scaffolded tasks.py + interview.json + axes.yaml are self-consistent and that a misclassified DataAxis is caught, not silently persisted."
+  },
+  {
+   "area": "Task-level checkpoint/resume durability (experiment_kit/checkpoint)",
+   "why_it_matters": "The sweep's 'submit-resume' lens covered control-plane resume only; experiment_kit/checkpoint.py + checkpoint_formats.py + the HPC_RESUME_FROM_CHECKPOINT dispatch path (dispatch.py:1038) are the mechanism that lets a multi-day task survive preemption/walltime kills \u2014 exactly the campaign framing \u2014 yet no finding probes a task killed mid-checkpoint-write.",
+   "suggested_probe": "Fault-inject: kill a task during a checkpoint write (torn/partial checkpoint file), then re-dispatch with HPC_RESUME_FROM_CHECKPOINT=1 and assert it neither crashes on the corrupt checkpoint nor double-counts already-completed work; repeat across each format in checkpoint_formats.py."
+  },
+  {
+   "area": "Version-skew: persisted-state schema migration across a code upgrade",
+   "why_it_matters": "run_record.py pins SCHEMA_VERSION=1 with no migration/downgrade reader, while axes.py already jumped AXES_SCHEMA_VERSION 1->2 and conformance/block_terminal have hard schema_version equality checks that raise on mismatch. A campaign spanning weeks will straddle a pip upgrade, and new code reading an old run record (or vice-versa) can wedge or silently misread \u2014 a failure class no lens hunted.",
+   "suggested_probe": "Write journal artifacts (run_record, axes.yaml, conformance receipts) at the older schema shape, bump/mutate the version constant, and read them back with HEAD code; enumerate every reader that does `== SCHEMA_VERSION` and confirm whether it raises, migrates, or silently drops fields."
+  },
+  {
+   "area": "Scale limits at 10k-task arrays and month-long journals",
+   "why_it_matters": "No finder probed scale. The census walks one file per task under .hpc/announce/<run_id>/ every ~10-60s poll (dispatch writes per-task markers), SLURM --export ALL packs job_env into an argv/env with OS-level size caps (_engine.py:601-612), MaxArraySize/argv limits aren't checked, and the append-only utterance log / decision journal grow unbounded per-record even though each record is capped at 4096 bytes.",
+   "suggested_probe": "Synthesize a 10k-task run: measure the per-tick census directory-walk cost and memory, exercise --export with a large job_env against ARG_MAX, and confirm array-size limits are validated pre-submit; run a campaign that appends ~10^5 decision/utterance records and check read latency and any O(n) rescans."
+  },
+  {
+   "area": "Conformance / capability negotiation on non-Claude MCP clients",
+   "why_it_matters": "src/hpc_agent/conformance/ (capability_backgrounding, capability_relay, utterance_log, negotiation, attestation) is the harness<->client contract that the whole detach/relay MCP posture (F01-F04) rests on, but the agent-surface lens only probed the server-side blocking fence \u2014 never a client that declines backgrounding or relay. An MCP-only client (F04) that lacks detach cannot escape a detach-required verb, and the negotiation fallback is untested against a hostile/degraded peer.",
+   "suggested_probe": "Drive the conformance negotiation with a synthetic client advertising no-backgrounding and no-utterance-relay, then invoke a detach-required verb and an authorship-gated append-decision; assert graceful refusal/degradation rather than deadlock or a silently unlogged human authorship."
+  },
+  {
+   "area": "Security: secrets in deployed trees/logs and batch-script/log-path injection",
+   "why_it_matters": "Transport relies on MANDATORY_RSYNC_EXCLUDES to keep the credential file out of the deploy, but job_name and param/env fields flow into generated #SBATCH/#$ -N directives and stderr_log_path templates as script text (not shlex-quoted the way the SSH boundary is), and env values are only comma-checked. A metachar/newline/non-ASCII job_name or experiment-dir name can corrupt the batch script or log path, and secrets can leak into fetched stderr digests.",
+   "suggested_probe": "Submit with a job_name / experiment-dir containing shell metachars, a newline, and non-ASCII codepoints; inspect the rendered submit script and stderr_log_path for breakage or injection, and audit whether any pass_env_keys secret or clusters.yaml credential reaches a deployed file, a fetched log digest, or the archive-dossier S3 export."
+  },
+  {
+   "area": "Domain packs (packs/quant) shipped cluster-side, plus pack_bind/refresh trust",
+   "why_it_matters": "packs/quant ships check_quant.py, a quant_skeleton template, and reducers that run on the cluster under the pack_bind/pack_refresh machinery \u2014 the same 'stdlib-only / any python3' and reduce-correctness classes that produced F18/F05/F07 apply here, but no lens looked at packs at all, and pack_refresh mutates bound state mid-campaign.",
+   "suggested_probe": "Run the quant pack's reducer/check under a Python 3.8 interpreter and the aggregate path to catch version-floor and run_id-filter parity with core; audit pack_bind/pack_refresh for whether a refresh can silently change a reducer under a live campaign's already-combined waves."
+  },
+  {
+   "area": "Clock skew and locale between control-plane and cluster",
+   "why_it_matters": "TTL caches (canary #249 in F41/F50), the setup '24h cache marker' (F31), and monitor wall_clock_budget all compare local time.time()/utcnow against remote-produced timestamps, and scheduler-output parsers assume a C/en_US locale for dates and numbers \u2014 a login node in a different TZ, a skewed clock, or LC_ALL!=C can expire caches early/late or misparse qstat/sacct fields, a cross-cutting class no finder hunted.",
+   "suggested_probe": "Skew the local clock relative to a mock remote and drive the canary TTL, the 24h setup cache, and the monitor wall-clock budget; separately set LC_ALL to a comma-decimal locale and feed localized qstat/sacct/date output through the state/time parsers to check for silent misparse."
+  }
+ ],
+ "live_cluster_checks": [
+  {
+   "finding": "F35",
+   "what_to_check": "Confirm a down slurmctld / dead squeue actually returns nonzero rc on real slurm/pbspro/torque so ran_ok=True-on-any-rc is genuinely a bug and not masking a different exit convention."
+  },
+  {
+   "finding": "F36",
+   "what_to_check": "Verify real PBS Pro/TORQUE qsub array-submit output format and whether the '[]' is present at capture, so JOB_ID_REGEX group-1-digits-only truly loses the array suffix."
+  },
+  {
+   "finding": "F37",
+   "what_to_check": "On a real federated SLURM, confirm sbatch --clusters=X routing vs squeue/scancel needing the same --clusters for liveness/cancel, and what plain squeue returns for a foreign-cluster job."
+  },
+  {
+   "finding": "F38",
+   "what_to_check": "Confirm TORQUE completed jobs linger in qstat as state 'C' for keep_completed and that the classifier maps 'C' to running rather than terminal."
+  },
+  {
+   "finding": "F40",
+   "what_to_check": "Confirm real SGE qstat suspended-state letters (s/S/T) under subordinate-queue preemption and that classify treats them as alive vs a terminal misread."
+  },
+  {
+   "finding": "F18",
+   "what_to_check": "Check the actual python3 version on the target login and compute nodes (RHEL/Rocky system python vs activated conda env) to confirm zip(strict=)/removeprefix would fault."
+  },
+  {
+   "finding": "F17",
+   "what_to_check": "Observe real preemption/walltime-kill/node-crash behavior on SLURM/SGE \u2014 exit codes 130/143, whether a terminal marker is ever written, and whether requeue vs hard-kill changes the census evidence."
+  },
+  {
+   "finding": "F51",
+   "what_to_check": "Confirm real scheduler afterok dependency behavior when the gating job id is stale/already-terminal, to validate the canary-replay afterok reuse hazard."
+  }
+ ]
+}
